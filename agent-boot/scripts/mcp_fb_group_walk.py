@@ -31,7 +31,7 @@ def _mcp_hierarchy(serial: str, refresh: bool = True) -> tuple[str | None, dict[
     import urllib.request
 
     base = os.environ.get("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
-    token = (os.environ.get("DEVICE_FARM_MCP_TOKEN") or os.environ.get("MCP_AUTH_TOKEN") or "").strip()
+    token = (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
     suffix = "?refresh=1" if refresh else ""
     url = f"{base}/api/devices/{serial}/hierarchy{suffix}"
     req = urllib.request.Request(url, method="GET")

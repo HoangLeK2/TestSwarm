@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
@@ -96,6 +97,7 @@ class TestTapFallbackFlow:
         d._agent_send = MagicMock()
         mock_u2 = MagicMock()
         d._u2 = mock_u2
+        d._u2_last_ok_at = time.monotonic()
         d.ensure_u2_healthy = MagicMock(return_value=True)
 
         class _Relay:
@@ -130,6 +132,49 @@ class TestTapFallbackFlow:
 
         mock_u2.click.assert_called_once_with(100, 200)
         assert relay.actions is None
+        d._agent_send.assert_not_called()
+
+    def test_tap_skips_stale_u2_proxy_probe_when_relay_u2_batch_available(self):
+        d = _make_device()
+        d._loop = object()
+        d._adb_serial = "172.16.0.83:5555"
+        d._agent_send = MagicMock()
+        mock_u2 = MagicMock()
+        d._u2 = mock_u2
+        d._u2_last_ok_at = 0.0
+        d.ensure_u2_healthy = MagicMock(return_value=False)
+
+        class _Relay:
+            def relay_for_serial(self, serial):
+                return object() if serial == "172.16.0.83:5555" else None
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            async def u2_batch(self, serial, actions, timeout=30.0):
+                self.actions = actions
+                return {"ok": True, "results": [{"op": "click", "ok": True}]}
+
+        relay = _Relay()
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return SimpleNamespace(result=lambda timeout=None: result["value"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d.tap(100, 200)
+
+        d.ensure_u2_healthy.assert_not_called()
+        mock_u2.click.assert_not_called()
+        assert relay.actions == [{"op": "click", "x": 100, "y": 200}]
         d._agent_send.assert_not_called()
 
     def test_tap_logs_warning_when_no_u2_no_scrcpy_no_agent(self):

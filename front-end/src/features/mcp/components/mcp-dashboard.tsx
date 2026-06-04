@@ -2,17 +2,9 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  AlertTriangle,
-  Copy,
-  KeyRound,
-  Plus,
-  ShieldAlert,
-  Wrench
-} from 'lucide-react';
+import { Copy, KeyRound, Plus, ShieldAlert } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -25,13 +17,6 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Table,
@@ -45,25 +30,9 @@ import {
   createMcpToken,
   getMcpAuditLog,
   getMcpTokens,
-  getMcpTools,
   revokeMcpToken
 } from '@/features/mcp/services/api';
-
-function PreviewBanner({ contractVersion }: { contractVersion?: string }) {
-  const t = useTranslations('mcpFeature');
-  return (
-    <Alert className='border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100'>
-      <AlertTriangle className='size-4' />
-      <AlertTitle>{t('previewTitle')}</AlertTitle>
-      <AlertDescription>
-        {t('previewDescription')}
-        {contractVersion ? (
-          <span className='ml-2 font-mono text-xs'>{contractVersion}</span>
-        ) : null}
-      </AlertDescription>
-    </Alert>
-  );
-}
+import { usePermission } from '@/features/auth/hooks/use-permission';
 
 function TokenDialog({
   open,
@@ -75,8 +44,6 @@ function TokenDialog({
   const t = useTranslations('mcpFeature');
   const qc = useQueryClient();
   const [name, setName] = useState('');
-  const [scopeType, setScopeType] = useState<'device' | 'user'>('device');
-  const [scopeRef, setScopeRef] = useState('');
   const [consent, setConsent] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
 
@@ -84,8 +51,7 @@ function TokenDialog({
     mutationFn: () =>
       createMcpToken({
         name,
-        scope_type: scopeType,
-        scope_ref: scopeRef || undefined,
+        scope_type: 'user',
         preview_consent: consent
       }),
     onSuccess: (result) => {
@@ -96,7 +62,6 @@ function TokenDialog({
 
   const close = () => {
     setName('');
-    setScopeRef('');
     setConsent(false);
     setCreatedToken(null);
     onOpenChange(false);
@@ -135,25 +100,6 @@ function TokenDialog({
               onChange={(event) => setName(event.target.value)}
               placeholder={t('tokenName')}
             />
-            <Select
-              value={scopeType}
-              onValueChange={(value) =>
-                setScopeType(value as 'device' | 'user')
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value='device'>{t('scopeDevice')}</SelectItem>
-                <SelectItem value='user'>{t('scopeUser')}</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              value={scopeRef}
-              onChange={(event) => setScopeRef(event.target.value)}
-              placeholder={t('scopeRef')}
-            />
             <label className='flex items-start gap-2 text-sm'>
               <Checkbox
                 checked={consent}
@@ -170,7 +116,7 @@ function TokenDialog({
           {!createdToken ? (
             <Button
               type='button'
-              disabled={!consent || isPending}
+              disabled={!name.trim() || !consent || isPending}
               onClick={() => mutate()}
             >
               <Plus className='mr-2 size-4' />
@@ -183,10 +129,28 @@ function TokenDialog({
   );
 }
 
-type McpTab = 'tools' | 'tokens' | 'audit';
+type McpTab = 'tokens' | 'audit';
+
+function tokenStatusLabel(
+  status: string,
+  t: ReturnType<typeof useTranslations<'mcpFeature'>>
+) {
+  if (status === 'active') return t('statusActive');
+  if (status === 'revoked') return t('statusRevoked');
+  return status;
+}
+
+function auditResultLabel(
+  code: string,
+  t: ReturnType<typeof useTranslations<'mcpFeature'>>
+) {
+  if (code === 'success') return t('resultSuccess');
+  if (code === 'error' || code === 'failure') return t('resultFailure');
+  return code;
+}
 
 export function McpDashboard({
-  initialTab = 'tools'
+  initialTab = 'tokens'
 }: {
   initialTab?: McpTab;
 }) {
@@ -194,7 +158,7 @@ export function McpDashboard({
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [tab, setTab] = useState<McpTab>(initialTab);
-  const tools = useQuery({ queryKey: ['mcp-tools'], queryFn: getMcpTools });
+  const canManageMcp = usePermission('mcp', 'manage');
   const tokens = useQuery({ queryKey: ['mcp-tokens'], queryFn: getMcpTokens });
   const audit = useQuery({ queryKey: ['mcp-audit'], queryFn: getMcpAuditLog });
 
@@ -203,10 +167,8 @@ export function McpDashboard({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mcp-tokens'] })
   });
 
-  const contractVersion =
-    tools.data?.contract_version ||
-    tokens.data?.contract_version ||
-    audit.data?.contract_version;
+  const tokenRows = tokens.data?.tokens ?? [];
+  const auditRows = audit.data?.entries ?? [];
 
   return (
     <div className='space-y-4'>
@@ -217,60 +179,19 @@ export function McpDashboard({
           </h1>
           <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className='mr-2 size-4' />
-          {t('createToken')}
-        </Button>
+        {canManageMcp ? (
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className='mr-2 size-4' />
+            {t('createToken')}
+          </Button>
+        ) : null}
       </div>
-
-      <PreviewBanner contractVersion={contractVersion} />
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as McpTab)}>
         <TabsList>
-          <TabsTrigger value='tools'>{t('tabs.tools')}</TabsTrigger>
           <TabsTrigger value='tokens'>{t('tabs.tokens')}</TabsTrigger>
           <TabsTrigger value='audit'>{t('tabs.audit')}</TabsTrigger>
         </TabsList>
-        <TabsContent value='tools' className='mt-4'>
-          <div className='rounded-lg border'>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('tool')}</TableHead>
-                  <TableHead>{t('route')}</TableHead>
-                  <TableHead>{t('scope')}</TableHead>
-                  <TableHead>{t('stability')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(tools.data?.tools || []).map((tool) => (
-                  <TableRow key={tool.name}>
-                    <TableCell className='max-w-[420px]'>
-                      <div className='flex items-center gap-2 font-medium'>
-                        <Wrench className='size-4 text-muted-foreground' />
-                        {tool.name}
-                      </div>
-                      <p className='mt-1 line-clamp-2 text-xs text-muted-foreground'>
-                        {tool.description}
-                      </p>
-                    </TableCell>
-                    <TableCell className='font-mono text-xs'>
-                      {tool.metadata.route}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant='secondary'>
-                        {tool.metadata.token_scope}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant='outline'>{tool.metadata.stability}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
         <TabsContent value='tokens' className='mt-4'>
           <div className='rounded-lg border'>
             <Table>
@@ -283,40 +204,53 @@ export function McpDashboard({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(tokens.data?.tokens || []).map((token) => (
-                  <TableRow key={token.id}>
-                    <TableCell>
-                      <div className='flex items-center gap-2 font-medium'>
-                        <KeyRound className='size-4 text-muted-foreground' />
-                        {token.name}
-                      </div>
-                      <code className='text-xs text-muted-foreground'>
-                        {token.prefix}
-                      </code>
-                    </TableCell>
-                    <TableCell>{token.scope_type}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          token.status === 'active' ? 'secondary' : 'outline'
-                        }
-                      >
-                        {token.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className='text-right'>
-                      {token.status === 'active' && token.source !== 'env' ? (
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() => revoke.mutate(token.id)}
-                        >
-                          {t('revoke')}
-                        </Button>
-                      ) : null}
+                {tokenRows.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={4}
+                      className='py-8 text-center text-sm text-muted-foreground'
+                    >
+                      {t('emptyTokens')}
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  tokenRows.map((token) => (
+                    <TableRow key={token.id}>
+                      <TableCell>
+                        <div className='flex items-center gap-2 font-medium'>
+                          <KeyRound className='size-4 text-muted-foreground' />
+                          {token.name}
+                        </div>
+                        <code className='text-xs text-muted-foreground'>
+                          {token.prefix}
+                        </code>
+                      </TableCell>
+                      <TableCell>{t('scopeUser')}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            token.status === 'active' ? 'secondary' : 'outline'
+                          }
+                        >
+                          {tokenStatusLabel(token.status, t)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className='text-right'>
+                        {canManageMcp &&
+                        token.status === 'active' &&
+                        token.source !== 'env' ? (
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            onClick={() => revoke.mutate(token.id)}
+                          >
+                            {t('revoke')}
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
@@ -326,38 +260,53 @@ export function McpDashboard({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('tool')}</TableHead>
+                  <TableHead>{t('auditAction')}</TableHead>
                   <TableHead>{t('result')}</TableHead>
                   <TableHead>{t('session')}</TableHead>
                   <TableHead>{t('latency')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(audit.data?.entries || []).map((entry, index) => (
-                  <TableRow
-                    key={`${entry.started_at}-${entry.tool_name}-${index}`}
-                  >
-                    <TableCell>{entry.tool_name}</TableCell>
-                    <TableCell>
-                      <div className='flex items-center gap-2'>
-                        <ShieldAlert className='size-4 text-muted-foreground' />
-                        <Badge
-                          variant={
-                            entry.result_code === 'success'
-                              ? 'secondary'
-                              : 'destructive'
-                          }
-                        >
-                          {entry.result_code}
-                        </Badge>
-                      </div>
+                {auditRows.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={4}
+                      className='py-8 text-center text-sm text-muted-foreground'
+                    >
+                      {t('emptyAudit')}
                     </TableCell>
-                    <TableCell className='font-mono text-xs'>
-                      {entry.session_id || '-'}
-                    </TableCell>
-                    <TableCell>{entry.latency_ms}ms</TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  auditRows.map((entry, index) => (
+                    <TableRow
+                      key={`${entry.started_at}-${entry.tool_name}-${index}`}
+                    >
+                      <TableCell className='font-mono text-xs'>
+                        {entry.tool_name}
+                      </TableCell>
+                      <TableCell>
+                        <div className='flex items-center gap-2'>
+                          <ShieldAlert className='size-4 text-muted-foreground' />
+                          <Badge
+                            variant={
+                              entry.result_code === 'success'
+                                ? 'secondary'
+                                : 'destructive'
+                            }
+                          >
+                            {auditResultLabel(entry.result_code, t)}
+                          </Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell className='font-mono text-xs'>
+                        {entry.session_id || t('sessionNone')}
+                      </TableCell>
+                      <TableCell>
+                        {t('latencyMs', { ms: entry.latency_ms })}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>

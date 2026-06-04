@@ -112,13 +112,6 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
       icon: 'history',
       permission: { object: 'analytics', action: 'read' }
     },
-    {
-      // Temporary: MCP tools — superadmin platform accounts only.
-      titleKey: 'mcp_agent_tools',
-      url: ROUTES.MCP.ROOT,
-      icon: 'server',
-      roles: ['superadmin']
-    }
   ]
 };
 
@@ -154,6 +147,12 @@ const INFRASTRUCTURE_GROUP: NavGroupDef = {
       url: ROUTES.RELAY_AGENTS.ROOT,
       icon: 'server',
       permission: { object: 'relay-agents', action: 'read' }
+    },
+    {
+      titleKey: 'mcp_tokens',
+      url: ROUTES.MCP.ROOT,
+      icon: 'key',
+      permission: { object: 'mcp', action: 'read' }
     }
   ]
 };

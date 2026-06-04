@@ -100,23 +100,25 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:24]
 
 
+def _scope_allows(token_scope: str, required_scope: str) -> bool:
+    if required_scope == "any":
+        return True
+    if token_scope == "user":
+        return True
+    return token_scope == required_scope
+
+
 def _runtime_token_context(required_scope: str = "any") -> TokenContext:
-    device_token = (os.environ.get("DEVICE_FARM_MCP_TOKEN") or "").strip()
-    user_token = (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
-
-    if required_scope == "device":
-        return _token_context_from_value(device_token, fallback_scope="device")
-    elif required_scope == "user":
-        return _token_context_from_value(user_token, fallback_scope="user")
-    return _token_context_from_value(user_token or device_token, fallback_scope="any")
+    token = (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
+    return _token_context_from_value(token, required_scope=required_scope)
 
 
-def _token_context_from_value(token: str, *, fallback_scope: str) -> TokenContext:
+def _token_context_from_value(token: str, *, required_scope: str) -> TokenContext:
     if not token:
         raise McpToolError(
             "df.unauthorized",
-            f"Tool requires {fallback_scope} MCP token",
-            details={"required_scope": fallback_scope},
+            "Tool requires MCP_AUTH_TOKEN",
+            details={"required_scope": required_scope},
         )
     if token.startswith("dfmcp_"):
         from mcp.token_store import lookup_token
@@ -124,11 +126,11 @@ def _token_context_from_value(token: str, *, fallback_scope: str) -> TokenContex
         record = lookup_token(token)
         if record is None:
             raise McpToolError("df.unauthorized", "MCP token is invalid or revoked")
-        if fallback_scope in {"device", "user"} and record.scope_type != fallback_scope:
+        if not _scope_allows(record.scope_type, required_scope):
             raise McpToolError(
                 "df.permission_denied",
                 "MCP token scope does not allow this tool",
-                details={"required_scope": fallback_scope, "token_scope": record.scope_type},
+                details={"required_scope": required_scope, "token_scope": record.scope_type},
             )
         return TokenContext(
             token=token,
@@ -149,22 +151,17 @@ def _token_context_from_value(token: str, *, fallback_scope: str) -> TokenContex
             owner_user_id = ctx.user_id
     except Exception:
         pass
-    scope = fallback_scope if fallback_scope in {"device", "user"} else None
     return TokenContext(
         token=token,
         token_id_hash=_hash_token(token),
-        scope=scope,
+        scope="user",
         owner_user_id=owner_user_id,
         org_id=org_id,
     )
 
 
 def _mcp_token() -> Optional[str]:
-    return (
-        (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
-        or (os.environ.get("DEVICE_FARM_MCP_TOKEN") or "").strip()
-        or None
-    )
+    return (os.environ.get("MCP_AUTH_TOKEN") or "").strip() or None
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -333,7 +330,7 @@ def validate_startup_config() -> None:
     if _mcp_token():
         return
     print(
-        "Device Farm MCP server requires DEVICE_FARM_MCP_TOKEN or MCP_AUTH_TOKEN. "
+        "Device Farm MCP server requires MCP_AUTH_TOKEN. "
         "Set DEVICE_FARM_MCP_ALLOW_UNAUTH=1 only for local contract tests.",
         file=sys.stderr,
     )
@@ -1529,7 +1526,7 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     },
     # ── Campaign management (requires JWT) ────────────────────────────────────
     "df_list_campaigns": {
-        "description": "List campaigns of the authenticated user. Requires DEVICE_FARM_MCP_TOKEN.",
+        "description": "List campaigns of the authenticated user. Requires MCP_AUTH_TOKEN.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
         "fn": _df_list_campaigns,
     },

@@ -77,9 +77,12 @@ export const DASHBOARD_ROUTE_ACCESS: readonly RouteAccessRule[] = [
     permission: { object: 'notifications', action: 'read' }
   },
   {
-    // Temporary: MCP tools — superadmin platform accounts only.
     prefix: ROUTES.MCP.ROOT,
-    roles: ['superadmin']
+    permission: { object: 'mcp', action: 'read' }
+  },
+  {
+    prefix: ROUTES.MCP.LEGACY_ROOT,
+    permission: { object: 'mcp', action: 'read' }
   },
   {
     prefix: ROUTES.RELAY_AGENTS.ROOT,

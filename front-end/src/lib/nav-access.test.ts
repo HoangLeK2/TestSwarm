@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -105,6 +106,43 @@ test('filterNavItemsByAccess shows execute nav for org supervisors', () => {
 
   assert.equal(filtered.length, 1);
   assert.equal(filtered[0]?.items?.length, 2);
+});
+
+test('MCP token settings route uses RBAC and stays out of tools navigation', () => {
+  const ownerChecker = createPermissionChecker(
+    identityFromSession({ role: 'operator', orgRole: 'owner' })
+  );
+  const memberChecker = createPermissionChecker(
+    identityFromSession({ role: 'operator', orgRole: 'member' })
+  );
+
+  const routeRules = readFileSync(
+    new URL('./rbac/route-permissions.ts', import.meta.url),
+    'utf8'
+  );
+  const navConfig = readFileSync(
+    new URL('../config/dashboard-nav.ts', import.meta.url),
+    'utf8'
+  );
+  const mcpRouteRule = routeRules.match(
+    /\{\s*prefix:\s*ROUTES\.MCP\.ROOT,[\s\S]*?\n\s*\}/
+  )?.[0] ?? '';
+  const mcpNavItem = navConfig.match(
+    /\{\s*titleKey:\s*'mcp_tokens',[\s\S]*?\n\s*\}/
+  )?.[0] ?? '';
+  const mainNav = navConfig.match(
+    /export const DASHBOARD_MAIN_NAV_GROUPS = \[[\s\S]*?\] as const;/
+  )?.[0] ?? '';
+
+  assert.match(mcpRouteRule, /permission:\s*\{\s*object:\s*'mcp',\s*action:\s*'read'\s*\}/);
+  assert.doesNotMatch(mcpRouteRule, /roles:\s*\['superadmin'\]/);
+  assert.match(mcpNavItem, /permission:\s*\{\s*object:\s*'mcp',\s*action:\s*'read'\s*\}/);
+  assert.match(mcpNavItem, /url:\s*ROUTES\.MCP\.ROOT/);
+  assert.doesNotMatch(mainNav, /titleKey:\s*'mcp_tokens'/);
+  assert.doesNotMatch(navConfig, /titleKey:\s*'mcp_agent_tools'/);
+  assert.doesNotMatch(mcpNavItem, /roles:\s*\['superadmin'\]/);
+  assert.equal(ownerChecker.can('mcp', 'manage'), true);
+  assert.equal(memberChecker.can('mcp', 'manage'), false);
 });
 
 test('filterNavItemsByRole hides admin-only leaves for operators', () => {

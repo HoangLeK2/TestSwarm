@@ -110,11 +110,14 @@ export const ROUTES = {
     AUDIT: '/dashboard/analytics?tab=audit'
   },
   MCP: {
-    ROOT: '/dashboard/mcp',
-    TOKENS: '/dashboard/mcp/tokens',
-    AUDIT: '/dashboard/mcp/audit-log',
-    TOOLS: '/dashboard/mcp/tools',
-    SANDBOX: '/dashboard/mcp/sandbox'
+    ROOT: '/dashboard/settings/mcp',
+    TOKENS: '/dashboard/settings/mcp',
+    AUDIT: '/dashboard/settings/mcp/audit-log',
+    LEGACY_ROOT: '/dashboard/mcp',
+    LEGACY_TOKENS: '/dashboard/mcp/tokens',
+    LEGACY_AUDIT: '/dashboard/mcp/audit-log',
+    LEGACY_TOOLS: '/dashboard/mcp/tools',
+    LEGACY_SANDBOX: '/dashboard/mcp/sandbox'
   },
   DASHBOARD: {
     ROOT: '/dashboard',

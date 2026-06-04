@@ -75,8 +75,8 @@ flowchart LR
 - L3 assigns one AI agent to one device/session at a time. A single agent should
   not own multiple active devices concurrently unless a future PRD explicitly
   changes that rule.
-- Campaign and content tools that require user context must use
-  `DEVICE_FARM_MCP_TOKEN` or `MCP_AUTH_TOKEN`.
+- MCP tools that require auth use `MCP_AUTH_TOKEN`; token scope is enforced by
+  the generated `dfmcp_*` token record.
 - L3 social automation uses MCP as the agent-facing control surface; it must
   still respect backend session, auth, device, and artifact rules.
 

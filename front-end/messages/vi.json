@@ -275,7 +275,7 @@
     "infrastructure": "Hạ tầng",
     "relay_agents": "Máy kết nối điện thoại",
     "notifications": "Thông báo",
-    "mcp_agent_tools": "MCP Agent Tools"
+    "mcp_tokens": "Token truy cập MCP"
   },
   "contentFeature": {
     "detail": {
@@ -2098,10 +2098,13 @@
       "flowFlowLabel": "Flow",
       "multiControl": {
         "banner": "{count} máy cùng lúc",
-        "buttonLabel": "Nhiều máy",
+        "buttonLabel": "Đồng bộ máy",
         "selectAllReady": "Chọn tất cả máy sẵn sàng",
         "selectUpToLimit": "Chọn tối đa {count} máy",
         "clearSelection": "Bỏ chọn",
+        "pickerTitle": "Chọn máy đồng bộ",
+        "pickerHint": "Thao tác trên máy chính được áp dụng cho các máy đã chọn.",
+        "selectedSummary": "{selected} / {max}",
         "pickerLabel": "Máy đồng bộ",
         "noReadyDevices": "Không có máy sẵn sàng khác",
         "promoteHint": "Chạm máy phụ bên dưới để đổi primary",
@@ -3410,36 +3413,37 @@
     }
   },
   "mcpFeature": {
-    "title": "MCP Agent Tools",
-    "subtitle": "Mặt phẳng Preview cho AI agent thao tác Device Farm.",
-    "previewTitle": "Preview / Experimental",
-    "previewDescription": "MCP Agent Tools chưa phải GA. Contract có thể thay đổi giữa các release.",
-    "createToken": "Tạo MCP token",
-    "createTokenDescription": "Cấp token Preview dạng hash cho AI agent. Token plaintext chỉ hiển thị một lần.",
+    "title": "Token truy cập MCP",
+    "subtitle": "Tạo và thu hồi token cho tác nhân AI, đồng thời xem nhật ký sử dụng MCP.",
+    "createToken": "Tạo token",
+    "createTokenDescription": "Cấp token xem trước cho tác nhân AI. Giá trị đầy đủ chỉ hiển thị một lần.",
     "tokenName": "Tên token",
-    "scopeDevice": "Scope thiết bị",
-    "scopeUser": "Scope người dùng",
-    "scopeRef": "Serial thiết bị hoặc scope reference tùy chọn",
-    "consent": "Tôi hiểu tính năng MCP này đang Preview và có thể thay đổi giữa các release.",
+    "scopeUser": "Người dùng tổ chức",
+    "consent": "Tôi hiểu tính năng MCP đang ở giai đoạn xem trước và có thể thay đổi giữa các phiên bản.",
     "create": "Tạo",
     "close": "Đóng",
     "copyToken": "Sao chép token",
     "copied": "Đã sao chép token",
     "revoke": "Thu hồi",
     "tabs": {
-      "tools": "Tools",
-      "tokens": "Tokens",
-      "audit": "Audit log"
+      "tokens": "Token",
+      "audit": "Nhật ký kiểm tra"
     },
-    "tool": "Tool",
-    "route": "HTTP route",
-    "scope": "Scope",
-    "stability": "Stability",
+    "scope": "Phạm vi",
     "token": "Token",
     "status": "Trạng thái",
+    "statusActive": "Đang hoạt động",
+    "statusRevoked": "Đã thu hồi",
     "result": "Kết quả",
-    "session": "Session",
-    "latency": "Độ trễ"
+    "resultSuccess": "Thành công",
+    "resultFailure": "Thất bại",
+    "auditAction": "Thao tác",
+    "session": "Phiên",
+    "sessionNone": "Không có",
+    "latency": "Độ trễ",
+    "latencyMs": "{ms} ms",
+    "emptyTokens": "Chưa có token. Tạo token để kết nối tác nhân AI.",
+    "emptyAudit": "Chưa có bản ghi nhật ký."
   },
   "errors": {
     "403": {

@@ -208,6 +208,16 @@ def test_casbin_rbac_domain_allows_owner_execution_management():
     assert enforcer.enforce("operator-user", "org-1", "executions", "execute")
 
 
+def test_casbin_rbac_domain_allows_owner_mcp_token_management():
+    user = _user("operator")
+    user.org_role = "owner"
+
+    enforcer = build_enforcer_for_user(user, domain="org-1")
+
+    assert enforcer.enforce("operator-user", "org-1", "mcp", "read")
+    assert enforcer.enforce("operator-user", "org-1", "mcp", "manage")
+
+
 def test_casbin_rbac_domain_allows_member_scenario_template_read_only():
     user = _user("operator")
     user.org_role = "member"

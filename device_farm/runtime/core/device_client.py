@@ -940,6 +940,8 @@ class DeviceClient:
         # present, then falls through to the next route if it is not.
         if self._u2 is None:
             return False
+        if self._should_skip_stale_u2_proxy_probe_for_relay_batch():
+            return False
         if not self.ensure_u2_healthy(ping_timeout=0.8) or self._u2 is None:
             return False
         return self._try_u2_tap_impl(action)
@@ -948,6 +950,7 @@ class DeviceClient:
         u2_snap = self._u2
         try:
             action()
+            self._u2_last_ok_at = time.monotonic()
             return True
         except Exception as exc:
             self._log(f"u2 touch failed: {exc}", level=logging.WARNING)
@@ -977,6 +980,21 @@ class DeviceClient:
             if relay.relay_for_serial(actual):
                 return actual
         return None
+
+    def _should_skip_stale_u2_proxy_probe_for_relay_batch(self) -> bool:
+        """Avoid blocking manual input on a stale proxy ping when batch is ready."""
+        if self._loop is None:
+            return False
+        last_ok = float(self._u2_last_ok_at or 0.0)
+        if last_ok > 0 and time.monotonic() - last_ok <= self._U2_STALE_CHECK_INTERVAL:
+            return False
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            return relay is not None and self._relay_u2_control_serial(relay) is not None
+        except Exception:
+            return False
 
     def _try_relay_u2_batch_touch(self, actions: list[dict], timeout: float = 1.5) -> bool:
         """Run coordinate touch through agent-boot u2_batch without inline reconnect."""
@@ -1011,7 +1029,7 @@ class DeviceClient:
             if ok:
                 self._log(
                     f"touch route=agent_boot_u2_batch serial={actual} ops={len(actions)}",
-                    level=logging.INFO,
+                    level=logging.DEBUG,
                 )
                 self.hierarchy_invalidate_cache()
                 return True
@@ -2139,6 +2157,9 @@ class DeviceClient:
                 level=logging.WARNING,
             )
             self._note_hierarchy_relay_u2_failure(relay_u2_error)
+        xml = self._hierarchy_via_u2_batch(timeout=min(timeout, self._U2_HIERARCHY_TIMEOUT))
+        if xml:
+            return xml
         if self._agent_send is None:
             return None
         self._ws_hierarchy_xml = None
@@ -2162,6 +2183,87 @@ class DeviceClient:
         else:
             self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
         return xml
+
+    def _hierarchy_via_u2_batch(self, timeout: float = 2.5) -> Optional[str]:
+        """Fallback hierarchy through agent-boot u2_batch when a11y is unavailable."""
+        xml = self._hierarchy_via_relay_http_dump(timeout=timeout)
+        if xml:
+            return xml
+        if not self._batch_enabled():
+            return None
+        action = {
+            "op": "dump_hierarchy",
+            "compressed": self._U2_HIERARCHY_COMPRESSED,
+            "timeout": self._U2_HIERARCHY_TIMEOUT,
+        }
+        try:
+            results = self.u2_batch([action], timeout=max(1.0, float(timeout)))
+        except Exception as exc:
+            self._log(f"u2_batch dump_hierarchy failed: {exc}", level=logging.WARNING)
+            return None
+        if not results:
+            self._log("u2_batch dump_hierarchy returned no results", level=logging.WARNING)
+            return None
+        first = results[0]
+        if not isinstance(first, dict) or not bool(first.get("ok")):
+            err = first.get("error") if isinstance(first, dict) else first
+            self._log(f"u2_batch dump_hierarchy failed: {err}", level=logging.WARNING)
+            return None
+        xml_norm = self._normalize_hierarchy_xml(first.get("value"))
+        if not xml_norm:
+            self._log("u2_batch dump_hierarchy returned empty/invalid xml", level=logging.WARNING)
+            return None
+        self._log(f"hierarchy: route=u2_batch bytes={len(xml_norm)}", level=logging.DEBUG)
+        self._hierarchy_cache = (time.time(), xml_norm)
+        self._reset_hierarchy_relay_u2_failures()
+        self._hierarchy_last_u2_failure_kind = ""
+        return xml_norm
+
+    def _hierarchy_via_relay_http_dump(self, timeout: float = 2.5) -> Optional[str]:
+        """Fast hierarchy fallback: direct atx-agent HTTP dump through relay."""
+        if self._loop is None:
+            return None
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return None
+            actual = self._relay_u2_control_serial(relay)
+            if not actual:
+                return None
+            path = "/dump/hierarchy"
+            if self._U2_HIERARCHY_COMPRESSED:
+                path = f"{path}?compressed=1"
+            http_timeout = max(1.0, min(float(timeout), self._U2_HIERARCHY_TIMEOUT))
+            fut = asyncio.run_coroutine_threadsafe(
+                relay.u2_http(
+                    actual,
+                    "GET",
+                    path,
+                    "",
+                    "application/json",
+                    http_timeout,
+                ),
+                self._loop,
+            )
+            res = fut.result(timeout=http_timeout + 0.5)
+            if not isinstance(res, dict) or not bool(res.get("ok")):
+                err = res.get("body") if isinstance(res, dict) else res
+                self._log(f"relay http dump_hierarchy failed: {err}", level=logging.WARNING)
+                return None
+            xml_norm = self._normalize_hierarchy_xml(res.get("body"))
+            if not xml_norm:
+                self._log("relay http dump_hierarchy returned empty/invalid xml", level=logging.WARNING)
+                return None
+            self._log(f"hierarchy: route=relay_http_dump bytes={len(xml_norm)}", level=logging.DEBUG)
+            self._hierarchy_cache = (time.time(), xml_norm)
+            self._reset_hierarchy_relay_u2_failures()
+            self._hierarchy_last_u2_failure_kind = ""
+            return xml_norm
+        except Exception as exc:
+            self._log(f"relay http dump_hierarchy unavailable: {exc}", level=logging.DEBUG)
+            return None
 
     _HIERARCHY_RELAY_U2_RESTART_FAILS = max(1, _env_int("HIERARCHY_RELAY_U2_RESTART_FAILS", 2))
     _HIERARCHY_RELAY_U2_FAIL_WINDOW_S = max(5.0, _env_float("HIERARCHY_RELAY_U2_FAIL_WINDOW_S", 30.0))
@@ -2319,15 +2421,12 @@ class DeviceClient:
                 self._reset_hierarchy_relay_u2_failures()
                 return xml
 
-            # Fallback: a11y query / WS direct.
-            # Always retry when agent channel exists so we can auto-recover
-            # after transient a11y/u2 outages without requiring reconnect.
-            if self._agent_send is not None:
-                xml = self._hierarchy_via_ws(timeout=self._A11Y_HIERARCHY_TIMEOUT)
-                if xml and not self._is_empty_hierarchy(xml):
-                    self._log(f"hierarchy: route=a11y bytes={len(xml)}", level=logging.DEBUG)
-                    self._hierarchy_cache = (now, xml)
-                    return xml
+            # Fallback: agent-boot u2_batch. A11y is intentionally skipped
+            # here because it is unreliable on this fleet and adds seconds of
+            # dead wait when the accessibility service is not bound.
+            xml = self._hierarchy_via_u2_batch(timeout=self._U2_HIERARCHY_TIMEOUT)
+            if xml and not self._is_empty_hierarchy(xml):
+                return xml
 
             if self._hierarchy_cache is not None:
                 ts, cached_xml = self._hierarchy_cache
@@ -2338,7 +2437,7 @@ class DeviceClient:
                     )
                     return cached_xml
 
-            self._log("hierarchy: route=u2->a11y failed", level=logging.WARNING)
+            self._log("hierarchy: route=u2->u2_batch failed", level=logging.WARNING)
             self._note_hierarchy_failure("route_failed")
             if self._hierarchy_last_u2_failure_kind == "timeout":
                 self._log(

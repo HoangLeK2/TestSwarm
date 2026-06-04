@@ -16,9 +16,9 @@ from mcp import token_store
 
 
 @pytest.fixture(autouse=True)
-def _reset_mcp_runtime(monkeypatch):
+def _reset_mcp_runtime(monkeypatch, tmp_path):
     server._rate_windows.clear()
-    monkeypatch.delenv("DEVICE_FARM_MCP_AUDIT_LOG_PATH", raising=False)
+    monkeypatch.setenv("DEVICE_FARM_MCP_AUDIT_LOG_PATH", str(tmp_path / "mcp-audit.jsonl"))
     monkeypatch.delenv("DEVICE_FARM_MCP_TOKEN_STORE", raising=False)
     monkeypatch.delenv("DEVICE_FARM_MCP_RATE_LIMIT", raising=False)
     yield
@@ -44,7 +44,6 @@ def _content_json(response: dict) -> dict:
 
 
 def test_tools_list_exposes_epic10_preview_contract(monkeypatch):
-    monkeypatch.setenv("DEVICE_FARM_MCP_TOKEN", "device-token")
     monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
 
     response = server.handle_tools_list(
@@ -81,7 +80,6 @@ def test_tools_list_exposes_epic10_preview_contract(monkeypatch):
 
 
 def test_stdio_startup_requires_at_least_one_token(monkeypatch):
-    monkeypatch.delenv("DEVICE_FARM_MCP_TOKEN", raising=False)
     monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("DEVICE_FARM_MCP_ALLOW_UNAUTH", raising=False)
     monkeypatch.setattr(sys, "stderr", io.StringIO())
@@ -90,13 +88,12 @@ def test_stdio_startup_requires_at_least_one_token(monkeypatch):
         server.validate_startup_config()
 
     assert exc.value.code == 2
-    assert "DEVICE_FARM_MCP_TOKEN" in sys.stderr.getvalue()
     assert "MCP_AUTH_TOKEN" in sys.stderr.getvalue()
 
 
 def test_tool_error_contract_has_df_code_without_traceback(monkeypatch, tmp_path):
     audit_path = tmp_path / "mcp-audit.jsonl"
-    monkeypatch.setenv("DEVICE_FARM_MCP_TOKEN", "device-token")
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
     monkeypatch.setenv("DEVICE_FARM_MCP_AUDIT_LOG_PATH", str(audit_path))
 
     response = _tool_call("df_tap", {"x": 1, "y": 2})
@@ -111,11 +108,11 @@ def test_tool_error_contract_has_df_code_without_traceback(monkeypatch, tmp_path
     entries = [json.loads(line) for line in audit_path.read_text().splitlines()]
     assert entries[-1]["tool_name"] == "df_tap"
     assert entries[-1]["result_code"] == "df.invalid_argument"
-    assert entries[-1]["token_id_hash"] != "device-token"
+    assert entries[-1]["token_id_hash"] != "user-token"
 
 
 def test_rate_limit_returns_retryable_df_rate_limited(monkeypatch):
-    monkeypatch.setenv("DEVICE_FARM_MCP_TOKEN", "device-token")
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
     monkeypatch.setenv("DEVICE_FARM_MCP_RATE_LIMIT", "1/minute")
 
     first = _tool_call("df_mcp_registry")
@@ -244,13 +241,12 @@ async def test_mcp_api_filters_tokens_audit_and_revoke_by_org(monkeypatch, tmp_p
     assert exc.value.status_code == 404
 
 
-def test_scope_specific_token_is_forwarded_to_downstream(monkeypatch):
-    monkeypatch.setenv("DEVICE_FARM_MCP_TOKEN", "device-token")
+def test_mcp_auth_token_is_forwarded_to_device_and_user_tools(monkeypatch):
     monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
     monkeypatch.setenv("DEVICE_FARM_MCP_RATE_LIMIT", "100/minute")
 
     def fake_http_post(path: str, body: dict, timeout: int = 30):
-        assert server._auth_headers()["Authorization"] == "Bearer device-token"
+        assert server._auth_headers()["Authorization"] == "Bearer user-token"
         return {}
 
     monkeypatch.setattr(server, "_http_post_json", fake_http_post)
@@ -258,6 +254,42 @@ def test_scope_specific_token_is_forwarded_to_downstream(monkeypatch):
     response = _tool_call("df_tap", {"device": "SER-1", "x": 1, "y": 2})
 
     assert response["result"].get("isError") is not True
+
+
+def test_dfmcp_user_scope_covers_device_tools_but_device_scope_cannot_call_user_tools(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVICE_FARM_MCP_TOKEN_STORE", str(tmp_path / "tokens.json"))
+    monkeypatch.setenv("DEVICE_FARM_MCP_RATE_LIMIT", "100/minute")
+    _user_record, user_plaintext = token_store.create_token(
+        name="user-agent",
+        scope_type="user",
+        owner_user_id="user-1",
+        org_id="org-1",
+    )
+    _device_record, device_plaintext = token_store.create_token(
+        name="device-agent",
+        scope_type="device",
+        scope_ref="SER-1",
+        owner_user_id="user-1",
+        org_id="org-1",
+    )
+
+    def fake_http_post(path: str, body: dict, timeout: int = 30):
+        assert server._auth_headers()["Authorization"] == f"Bearer {user_plaintext}"
+        return {}
+
+    monkeypatch.setattr(server, "_http_post_json", fake_http_post)
+    monkeypatch.setenv("MCP_AUTH_TOKEN", user_plaintext)
+
+    user_response = _tool_call("df_tap", {"device": "SER-1", "x": 1, "y": 2})
+
+    assert user_response["result"].get("isError") is not True
+
+    monkeypatch.setenv("MCP_AUTH_TOKEN", device_plaintext)
+    device_response = _tool_call("df_campaign_create", {"name": "blocked"})
+    payload = _content_json(device_response)
+
+    assert device_response["result"]["isError"] is True
+    assert payload["error"]["code"] == "df.permission_denied"
 
 
 def test_save_extraction_requires_artifact_refs(monkeypatch):

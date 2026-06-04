@@ -14,6 +14,7 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { ControlRecordMirror } from './control-record/control-record-mirror';
+import { MultiDevicePicker } from './control-record/multi-device-picker';
 import { MultiDeviceStage } from './control-record/multi-device-stage';
 import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
@@ -34,15 +35,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
 import {
   Circle,
   Square,
@@ -181,6 +173,10 @@ import { isSelectorPickableStep } from '@/features/campaigns/components/flow-edi
 import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import {
+  deviceSelectFullTitle,
+  formatDeviceSelectLabel
+} from '@/features/devices/lib/device-select-label';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -218,31 +214,6 @@ function mergeTemplateVariablesIntoEditor(
     ...prev,
     ...flattenVarDefs(templateVars)
   });
-}
-
-/** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
-function formatDeviceSelectLabel(d: {
-  brand: string;
-  model: string;
-  serial: string;
-}) {
-  const left = `${d.brand} ${d.model}`.trim().replace(/\s+/g, ' ');
-  const s = d.serial;
-  const serialShort = s.length > 16 ? `${s.slice(0, 7)}…${s.slice(-6)}` : s;
-  if (!left) return serialShort;
-  const maxLeft = 26;
-  const leftShort =
-    left.length > maxLeft ? `${left.slice(0, maxLeft - 1)}…` : left;
-  return `${leftShort} — ${serialShort}`;
-}
-
-function deviceSelectFullTitle(d: {
-  brand: string;
-  model: string;
-  serial: string;
-}) {
-  const left = `${d.brand} ${d.model}`.trim();
-  return left ? `${left} — ${d.serial}` : d.serial;
 }
 
 function isManualControlEligible(d: {
@@ -1815,120 +1786,21 @@ export function ControlRecordView({
             </Select>
           </div>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type='button'
-                size='sm'
-                variant={
-                  multiFollowerSerials.length > 0 ? 'default' : 'outline'
-                }
-                className='h-8 shrink-0 gap-1.5 text-xs'
-                disabled={
-                  !selectedDevice ||
-                  !canExecuteDevice ||
-                  multiFollowerOptions.length === 0
-                }
-                title={
-                  !canExecuteDevice
-                    ? safeReadOnly
-                      ? t('safeModeReadOnly')
-                      : t('noControlPermission')
-                    : multiFollowerOptions.length === 0
-                      ? t('multiControl.noReadyDevices')
-                      : undefined
-                }
-              >
-                <SlidersHorizontal className='size-3.5' />
-                {t('multiControl.buttonLabel')}
-                {multiFollowerSerials.length > 0 ? (
-                  <Badge
-                    variant='secondary'
-                    className='ml-0.5 h-4 rounded px-1 text-[10px]'
-                  >
-                    {multiFollowerSerials.length + 1}
-                  </Badge>
-                ) : null}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align='end' className='w-72'>
-              <DropdownMenuLabel className='text-[11px] font-normal text-muted-foreground'>
-                {t('multiControl.pickerLabel')}
-              </DropdownMenuLabel>
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  setMultiFollowerSerials(
-                    multiFollowerOptions
-                      .map((d) => d.serial)
-                      .slice(0, MAX_MULTI_FOLLOWER_DEVICES)
-                  );
-                }}
-                disabled={multiFollowerOptions.length === 0}
-                className='text-xs'
-              >
-                {multiFollowerOptions.length > MAX_MULTI_FOLLOWER_DEVICES
-                  ? t('multiControl.selectUpToLimit', {
-                      count: MAX_MULTI_CONTROL_DEVICES
-                    })
-                  : t('multiControl.selectAllReady')}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  setMultiFollowerSerials([]);
-                }}
-                disabled={multiFollowerSerials.length === 0}
-                className='text-xs'
-              >
-                {t('multiControl.clearSelection')}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {multiFollowerOptions.length === 0 ? (
-                <DropdownMenuItem
-                  disabled
-                  className='text-xs text-muted-foreground'
-                >
-                  {t('multiControl.noReadyDevices')}
-                </DropdownMenuItem>
-              ) : (
-                multiFollowerOptions.map((d) => {
-                  const checked = multiFollowerSerials.includes(d.serial);
-                  const limitReached =
-                    !checked &&
-                    multiFollowerSerials.length >= MAX_MULTI_FOLLOWER_DEVICES;
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={d.serial}
-                      checked={checked}
-                      disabled={limitReached}
-                      onCheckedChange={(nextChecked) => {
-                        setMultiFollowerSerials((prev) => {
-                          if (!nextChecked) {
-                            return prev.filter((serial) => serial !== d.serial);
-                          }
-                          if (
-                            prev.includes(d.serial) ||
-                            prev.length >= MAX_MULTI_FOLLOWER_DEVICES
-                          ) {
-                            return prev;
-                          }
-                          return [...prev, d.serial];
-                        });
-                      }}
-                      onSelect={(event) => event.preventDefault()}
-                      className='min-w-0 text-xs'
-                      title={deviceSelectFullTitle(d)}
-                    >
-                      <span className='min-w-0 truncate'>
-                        {formatDeviceSelectLabel(d)}
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  );
-                })
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <MultiDevicePicker
+            options={multiFollowerOptions}
+            selectedSerials={multiFollowerSerials}
+            onSelectedChange={setMultiFollowerSerials}
+            maxFollowers={MAX_MULTI_FOLLOWER_DEVICES}
+            maxTotalDevices={MAX_MULTI_CONTROL_DEVICES}
+            disabled={!selectedDevice || !canExecuteDevice}
+            disabledTitle={
+              !canExecuteDevice
+                ? safeReadOnly
+                  ? t('safeModeReadOnly')
+                  : t('noControlPermission')
+                : undefined
+            }
+          />
         </div>
 
         {/* WS status */}

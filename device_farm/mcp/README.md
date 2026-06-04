@@ -12,15 +12,15 @@ MCP (Model Context Protocol) stdio server, expose API device_farm dưới dạng
 - **Device:** `df_device_list` / `df_list_devices` (có `usage_state`), `df_tap`, `df_swipe`, `df_shell`, `df_screenshot`, `df_hierarchy`, `df_tap_selector`, …
 - **Scenario:** `df_run_scenario` — chạy chuỗi bước (tap_ratio, wait, input_text, …).
 - **Task:** `df_enqueue_task`, `df_list_tasks`.
-- **Campaign (cần user-scoped token):** `df_campaign_create` / `df_create_campaign`, `df_campaign_run` / `df_run_campaign`, `df_list_campaigns`, `df_get_campaign`, `df_update_campaign_scenario`, `df_compile_campaign_scenario`, `df_add_devices_to_campaign`, `df_get_campaign_devices`, `df_update_campaign_status`, `df_delete_campaign`.
-- **Content/account (cần user-scoped token):** `df_content_query`, `df_save_extraction`, `df_account_list`.
+- **Campaign:** `df_campaign_create` / `df_create_campaign`, `df_campaign_run` / `df_run_campaign`, `df_list_campaigns`, `df_get_campaign`, `df_update_campaign_scenario`, `df_compile_campaign_scenario`, `df_add_devices_to_campaign`, `df_get_campaign_devices`, `df_update_campaign_status`, `df_delete_campaign`.
+- **Content/account:** `df_content_query`, `df_save_extraction`, `df_account_list`.
 
-Mọi tool dùng device đều nhận **device** (serial) hoặc **session_id** (sau khi `df_start_session`).  
-Tool device-level dùng **DEVICE_FARM_MCP_TOKEN**. Tool campaign/content/account dùng **MCP_AUTH_TOKEN**. Cả hai được forward sang HTTP API bằng bearer auth.
+Mọi tool dùng device đều nhận **device** (serial) hoặc **session_id** (sau khi `df_start_session`).
+MCP server dùng một bearer env duy nhất: **MCP_AUTH_TOKEN**. Token `dfmcp_*` user-scoped gọi được cả tool device/session và campaign/content/account/scenario; token device-scoped chỉ gọi được tool device/session.
 
 ## Guardrails Preview
 
-- Server từ chối khởi động nếu thiếu cả `DEVICE_FARM_MCP_TOKEN` và `MCP_AUTH_TOKEN`; chỉ dùng `DEVICE_FARM_MCP_ALLOW_UNAUTH=1` cho local contract test.
+- Server từ chối khởi động nếu thiếu `MCP_AUTH_TOKEN`; chỉ dùng `DEVICE_FARM_MCP_ALLOW_UNAUTH=1` cho local contract test.
 - Mọi `tools/call` ghi audit JSONL, mặc định tại `device_farm/mcp/mcp_audit_log.jsonl`; override bằng `DEVICE_FARM_MCP_AUDIT_LOG_PATH`.
 - Audit redact các field nhạy cảm (`token`, `password`, `secret`, `cookie`) và chỉ lưu token hash prefix.
 - API token/audit trên dashboard chỉ trả dữ liệu cùng tenant cho non-superadmin; token tạo từ dashboard dùng prefix `dfmcp_`, lưu hash-at-rest, và được backend auth chấp nhận như bearer token.
@@ -51,8 +51,7 @@ python -m mcp.server
 MCP server tự load `device_farm/.env` khi chạy. Copy `device_farm/.env.example` → `device_farm/.env` và sửa:
 
 - `DEVICE_FARM_URL` — URL backend (mặc định `http://localhost:8081`).
-- `DEVICE_FARM_MCP_TOKEN` — token device-scoped cho thao tác device/session.
-- `MCP_AUTH_TOKEN` — token user-scoped cho campaign/content/account/scenario.
+- `MCP_AUTH_TOKEN` — bearer token cho toàn bộ MCP server. Dùng token `dfmcp_*` user-scoped cho agent cần cả device/session và campaign/content/account/scenario; dùng token device-scoped nếu chỉ muốn cấp quyền device/session.
 - `DEVICE_FARM_MCP_TOKEN_STORE` — optional path cho token tạo từ dashboard; token lưu dạng hash-at-rest.
 
 ## Tích hợp Cursor

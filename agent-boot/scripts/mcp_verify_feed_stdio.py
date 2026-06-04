@@ -85,7 +85,7 @@ def _fetch_jwt() -> str:
 
 
 def _ensure_mcp_auth_token() -> str:
-    token = (os.environ.get("DEVICE_FARM_MCP_TOKEN") or "").strip()
+    token = (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
     if token.startswith("eyJ"):
         return token
     if token.startswith("dfmcp_"):
@@ -153,7 +153,7 @@ def main() -> int:
 
     os.environ.setdefault("DEVICE_FARM_URL", "http://localhost:8081")
     token = _ensure_mcp_auth_token()
-    os.environ["DEVICE_FARM_MCP_TOKEN"] = token
+    os.environ["MCP_AUTH_TOKEN"] = token
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     client = StdIoMcpClient(MCP_CMD)

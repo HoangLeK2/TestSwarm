@@ -1,7 +1,13 @@
-'use client';
+import { redirect } from '@/i18n/navigation';
+import { ROUTES } from '@/config/routes';
 
-import { McpDashboard } from '@/features/mcp/components/mcp-dashboard';
+type PageProps = {
+  params: Promise<{ locale: string }>;
+};
 
-export default function McpAuditLogPage() {
-  return <McpDashboard initialTab='audit' />;
+export default async function LegacyMcpAuditRedirectPage({
+  params
+}: PageProps) {
+  const { locale } = await params;
+  redirect({ href: ROUTES.MCP.AUDIT, locale });
 }

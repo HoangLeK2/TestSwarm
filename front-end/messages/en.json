@@ -275,7 +275,7 @@
     "infrastructure": "Infrastructure",
     "relay_agents": "Connection hosts",
     "notifications": "Notifications",
-    "mcp_agent_tools": "MCP Agent Tools"
+    "mcp_tokens": "MCP access tokens"
   },
   "contentFeature": {
     "detail": {
@@ -2096,10 +2096,13 @@
       "flowFlowLabel": "Flow",
       "multiControl": {
         "banner": "Multi · {count} devices",
-        "buttonLabel": "Multi",
-        "selectAllReady": "Select all ready devices",
-        "selectUpToLimit": "Select up to {count} devices",
-        "clearSelection": "Clear selection",
+        "buttonLabel": "Sync devices",
+        "selectAllReady": "Select all ready",
+        "selectUpToLimit": "Select up to {count}",
+        "clearSelection": "Clear",
+        "pickerTitle": "Sync follower devices",
+        "pickerHint": "Actions on the primary device are mirrored to selected devices.",
+        "selectedSummary": "{selected} / {max}",
         "pickerLabel": "Follower devices",
         "noReadyDevices": "No other ready devices",
         "promoteHint": "Tap a follower below to switch primary",
@@ -3875,36 +3878,37 @@
     }
   },
   "mcpFeature": {
-    "title": "MCP Agent Tools",
-    "subtitle": "Preview control surface for AI agents operating Device Farm tools.",
-    "previewTitle": "Preview / Experimental",
-    "previewDescription": "MCP Agent Tools are not GA. Contracts may change between releases.",
-    "createToken": "Create MCP token",
-    "createTokenDescription": "Issue a hashed Preview token for an AI agent. The plaintext value is shown once.",
+    "title": "MCP access tokens",
+    "subtitle": "Create and revoke tokens for AI agents, and review MCP usage in the audit log.",
+    "createToken": "Create token",
+    "createTokenDescription": "Issue a preview token for an AI agent. The plaintext value is shown only once.",
     "tokenName": "Token name",
-    "scopeDevice": "Device scoped",
-    "scopeUser": "User scoped",
-    "scopeRef": "Optional device serial or scope reference",
-    "consent": "I understand this MCP feature is Preview and may change between releases.",
+    "scopeUser": "Organization user",
+    "consent": "I understand this MCP feature is in preview and may change between releases.",
     "create": "Create",
     "close": "Close",
     "copyToken": "Copy token",
     "copied": "Token copied",
     "revoke": "Revoke",
     "tabs": {
-      "tools": "Tools",
       "tokens": "Tokens",
       "audit": "Audit log"
     },
-    "tool": "Tool",
-    "route": "HTTP route",
     "scope": "Scope",
-    "stability": "Stability",
     "token": "Token",
     "status": "Status",
+    "statusActive": "Active",
+    "statusRevoked": "Revoked",
     "result": "Result",
+    "resultSuccess": "Success",
+    "resultFailure": "Failed",
+    "auditAction": "Action",
     "session": "Session",
-    "latency": "Latency"
+    "sessionNone": "None",
+    "latency": "Latency",
+    "latencyMs": "{ms} ms",
+    "emptyTokens": "No tokens yet. Create one to connect an AI agent.",
+    "emptyAudit": "No audit entries yet."
   },
   "errors": {
     "403": {

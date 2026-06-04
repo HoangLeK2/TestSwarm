@@ -290,6 +290,117 @@ class TestDeviceClientHierarchyRecoveryPolicy:
         d.tap(11, 22)
         assert live_u2.clicks == [(11, 22)]
 
+    def test_a11y_unavailable_uses_u2_batch_hierarchy_fallback(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._agent_send = lambda msg: None
+        d.ensure_u2_healthy = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        d._a11y_query = Mock(return_value={"ok": False, "error": "accessibility_not_available"})  # type: ignore[method-assign]
+        d._recover_u2_ws_mode = Mock()  # type: ignore[method-assign]
+        d._request_u2_start_services = Mock()  # type: ignore[method-assign]
+
+        class _HardFailedHierarchyU2:
+            def page_source(self, timeout=None, compressed=False):
+                raise RuntimeError("signal: killed")
+
+        class _Batch:
+            def __init__(self):
+                self.actions: list[list[dict]] = []
+
+            def batch(self, actions, timeout=30.0):
+                self.actions.append(actions)
+                return [{
+                    "op": "dump_hierarchy",
+                    "ok": True,
+                    "value": "<hierarchy><node text=\"OK\" /></hierarchy>",
+                }]
+
+        batch = _Batch()
+        d._u2 = _HardFailedHierarchyU2()
+        d._u2_batch = batch
+
+        def _send_a11y_unavailable(_msg):
+            d._ws_hierarchy_error = "accessibility_not_available"
+            d._ws_hierarchy_event.set()
+
+        d._send_to_agent = _send_a11y_unavailable  # type: ignore[method-assign]
+
+        xml = d.hierarchy_xml(force_refresh=True)
+
+        assert xml is not None
+        assert "<hierarchy" in xml
+        assert batch.actions == [[{
+            "op": "dump_hierarchy",
+            "compressed": True,
+            "timeout": d._U2_HIERARCHY_TIMEOUT,
+        }]]
+        d._a11y_query.assert_not_called()
+        d._recover_u2_ws_mode.assert_not_called()
+        d._request_u2_start_services.assert_not_called()
+
+    def test_hierarchy_prefers_direct_relay_http_dump_before_u2_batch(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._loop = object()
+        d.ensure_u2_healthy = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        d._a11y_query = Mock(return_value={"ok": False, "error": "accessibility_not_available"})  # type: ignore[method-assign]
+
+        class _HardFailedHierarchyU2:
+            def page_source(self, timeout=None, compressed=False):
+                raise RuntimeError("signal: killed")
+
+        class _Batch:
+            def batch(self, actions, timeout=30.0):
+                raise AssertionError("u2_batch should not be called when direct HTTP dump works")
+
+        class _Relay:
+            def __init__(self):
+                self.calls: list[tuple[str, str, str, float]] = []
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            def relay_for_serial(self, serial):
+                return object()
+
+            async def u2_http(self, serial, method, path, body="", content_type="application/json", timeout=30.0):
+                self.calls.append((serial, method, path, timeout))
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "body": "<hierarchy><node text=\"HTTP\" /></hierarchy>",
+                    "content_type": "text/xml",
+                }
+
+        relay = _Relay()
+        d._u2 = _HardFailedHierarchyU2()
+        d._u2_batch = _Batch()
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return Mock(result=lambda timeout=None: result["value"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            xml = d.hierarchy_xml(force_refresh=True)
+
+        assert xml is not None
+        assert "HTTP" in xml
+        assert relay.calls == [(
+            "172.16.0.83:5555",
+            "GET",
+            "/dump/hierarchy?compressed=1",
+            d._U2_HIERARCHY_TIMEOUT,
+        )]
+        d._a11y_query.assert_not_called()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # U2 relay selection: current host must beat stale _adb_serial

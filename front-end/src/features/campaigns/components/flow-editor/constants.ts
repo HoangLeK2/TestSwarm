@@ -175,7 +175,15 @@ function hasFbCommentExtract(steps: unknown): boolean {
 /** Set `true` to show hierarchy / OCR / AI / auto screen-extract in the "+" insert menu again. */
 export const INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS = false;
 
+/** Quick actions on device control rail (control-record) — not scenario nodes. */
+export const DEVICE_RAIL_STEP_TYPES = new Set<string>([
+  'adb_shell',
+  'clear_app',
+  'install_apk'
+]);
+
 const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
+  'pull_file',
   'extract_text_hierarchy',
   'extract_text_ocr',
   'extract_text_ai',

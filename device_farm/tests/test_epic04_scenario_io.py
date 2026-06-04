@@ -118,6 +118,36 @@ async def test_ac2_import_valid_yaml_creates_draft_scenario(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_import_edited_file_checksum_mismatch_still_imports_with_warning(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory, org_id=ORG_B, user_id=USER_OTHER)
+    transport = ASGITransport(app=app)
+    payload = {
+        "schema_version": EXPORT_SCHEMA_VERSION,
+        "scenario": {
+            "name": "EditedChecksum",
+            "description": "",
+            "kind": "sequence",
+            "tags": [],
+            "scenario_version": 1,
+            "body": {"steps": [_sequence_step("w", "input_wait.wait", seconds=1)]},
+        },
+    }
+    payload["checksum"] = compute_checksum(payload)
+    payload["scenario"]["description"] = "edited after export"
+    content = yaml.safe_dump(payload).encode("utf-8")
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/scenarios/import",
+            files={"file": ("edited.yaml", content, "application/x-yaml")},
+        )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "EditedChecksum"
+    assert any("checksum" in w.lower() for w in (data.get("warnings") or []))
+
+
+@pytest.mark.asyncio
 async def test_ac3_import_invalid_graph_rejected_without_row(session_factory):
     await _seed_orgs(session_factory)
     app = _build_app(session_factory, org_id=ORG_B, user_id=USER_OTHER)
@@ -265,6 +295,42 @@ async def test_ac6_schema_version_migration_and_unsupported(session_factory):
     assert migrated.json()["warnings"] == ["migrated from 1.0"]
     assert unsupported.status_code == 400
     assert unsupported.json()["detail"]["code"] == "SCHEMA_VERSION_UNSUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_import_body_into_existing_allows_same_name(session_factory):
+    """Import into open scenario must not fail when export name matches an existing row."""
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/scenarios",
+            json={"name": "SameNameTarget", "kind": "sequence"},
+        )
+        scenario_id = created.json()["id"]
+        await client.post(
+            f"/api/scenarios/{scenario_id}/body",
+            json={"steps": [_sequence_step("old", "input_wait.wait", seconds=1)]},
+        )
+        exported = await client.get(f"/api/scenarios/{scenario_id}/export?format=yaml")
+        before = await _count_org_scenarios(session_factory, ORG_A)
+        imported = await client.post(
+            f"/api/scenarios/{scenario_id}/import-body",
+            files={"file": ("same.yaml", exported.content, "application/x-yaml")},
+        )
+        after = await _count_org_scenarios(session_factory, ORG_A)
+        detail = await client.get(f"/api/scenarios/{scenario_id}")
+    assert imported.status_code == 200
+    assert imported.json()["scenario_id"] == scenario_id
+    assert after == before
+    assert detail.json()["body_json"]["steps"][0]["id"] == "old"
+    dup_via_create = await client.post(
+        "/api/scenarios/import",
+        files={"file": ("same.yaml", exported.content, "application/x-yaml")},
+    )
+    assert dup_via_create.status_code == 409
+    assert dup_via_create.json()["detail"]["code"] == "SCENARIO_NAME_DUPLICATE"
 
 
 @pytest.mark.asyncio

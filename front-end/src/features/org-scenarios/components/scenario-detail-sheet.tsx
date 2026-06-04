@@ -45,7 +45,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Can } from '@/features/auth';
 import { useUser } from '@/features/auth/hooks/use-auth';
-import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import {
+  formatFarmApiError,
+  formatFarmApiErrorAsync
+} from '@/lib/format-farm-api-error';
 import { isSuperadminRole } from '@/lib/nav-access';
 import { cn } from '@/lib/utils';
 import {
@@ -59,9 +62,11 @@ import {
 import type { OrgScenarioOut, OrgScenarioValidationOut } from '../services/api';
 import type { ScenarioLibraryItem } from '../lib/scenario-library-item';
 import { isSystemTemplateItem } from '../lib/constants';
+import { extractPreviewSteps } from '../lib/parse-scenario-body';
 import { CloneTemplateDialog } from './clone-template-dialog';
 import { CreateCampaignFromScenarioButton } from './create-campaign-from-scenario-button';
 import { RunPreviewDialog } from './run-preview-dialog';
+import { ImportOrgScenarioDialog } from './import-scenario-dialog';
 import { ScenarioBodyPreview } from './scenario-body-preview';
 
 type ValidationIssue = {
@@ -235,12 +240,23 @@ export function ScenarioDetailSheet({
 
   const handleExport = (format: 'yaml' | 'json') => {
     if (!scenarioId) return;
+    const stepCount = extractPreviewSteps(bodyPayload).length;
+    if (stepCount === 0) {
+      toast.warning(t('exportEmptyBody'));
+    }
     exportMutation.mutate(
       { scenarioId, format },
       {
-        onSuccess: () => toast.success(t('exportSuccess')),
-        onError: (error) =>
-          toast.error(formatFarmApiError(error, t('exportFailed')))
+        onSuccess: (result) => {
+          toast.success(
+            stepCount > 0
+              ? t('exportSuccess')
+              : t('exportSuccessMetadataOnly', { size: result?.size ?? 0 })
+          );
+        },
+        onError: async (error) => {
+          toast.error(await formatFarmApiErrorAsync(error, t('exportFailed')));
+        }
       }
     );
   };
@@ -447,6 +463,7 @@ export function ScenarioDetailSheet({
 
                 <ScenarioBodyActions
                   t={t}
+                  scenarioId={scenarioId}
                   isRunnable={
                     isTemplate
                       ? (item?.is_runnable ?? false)
@@ -459,6 +476,7 @@ export function ScenarioDetailSheet({
                   onValidate={handleValidate}
                   onExport={handleExport}
                   onCopy={handleCopyBody}
+                  onImported={() => setValidation(null)}
                   validating={validateMutation.isPending}
                   exporting={exportMutation.isPending}
                 />
@@ -470,6 +488,10 @@ export function ScenarioDetailSheet({
                     body={bodyPayload}
                     kind={previewKind}
                     rawJson={bodyPreview !== '{}' ? bodyPreview : undefined}
+                    importTargetScenarioId={
+                      !isTemplate && !readOnly ? scenarioId : undefined
+                    }
+                    onImported={() => setValidation(null)}
                   />
                 )}
 
@@ -554,6 +576,7 @@ function ScenarioStatusBadges({
 
 function ScenarioBodyActions({
   t,
+  scenarioId,
   isRunnable,
   readOnly,
   showOrgActions,
@@ -562,10 +585,12 @@ function ScenarioBodyActions({
   onValidate,
   onExport,
   onCopy,
+  onImported,
   validating,
   exporting
 }: {
   t: DetailT;
+  scenarioId: string;
   isRunnable: boolean;
   readOnly: boolean;
   showOrgActions: boolean;
@@ -574,13 +599,19 @@ function ScenarioBodyActions({
   onValidate: () => void;
   onExport: (format: 'yaml' | 'json') => void;
   onCopy: () => void;
+  onImported?: () => void;
   validating: boolean;
   exporting: boolean;
 }) {
   return (
     <div className='flex flex-wrap items-center gap-2'>
-      {showOrgActions && !readOnly ? (
+      {showOrgActions && !readOnly && scenarioId ? (
         <Can object='scenarios' action='update'>
+          <ImportOrgScenarioDialog
+            targetScenarioId={scenarioId}
+            onImported={onImported}
+            triggerLabel={t('importIntoScenario')}
+          />
           <Button type='button' size='sm' variant='outline' onClick={onRecord}>
             {t('recordInControl')}
           </Button>

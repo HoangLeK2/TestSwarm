@@ -26,7 +26,7 @@ from services.org_scenario_io.errors import (
 )
 from services.org_scenario_io.parser import parse_import_bytes
 from services.org_scenario_io.schema_registry import migrate_export_payload
-from services.org_scenario_io.serializer import verify_checksum as verify_export_checksum
+from services.org_scenario_io.serializer import checksum_mismatch_warning
 from services.org_scenario_validation.validator import validate_org_scenario
 
 
@@ -59,9 +59,9 @@ class ScenarioImporter:
 
     async def import_bytes(self, content: bytes, *, filename: str | None = None) -> ImportResult:
         payload = parse_import_bytes(content, filename=filename)
-        verify_export_checksum(payload)
         migrated, migration_warnings = migrate_export_payload(payload)
-        return await self.import_payload(migrated, migration_warnings=migration_warnings)
+        warnings = _prepend_checksum_warning(payload, migration_warnings)
+        return await self.import_payload(migrated, migration_warnings=warnings)
 
     async def import_payload(
         self,
@@ -71,6 +71,8 @@ class ScenarioImporter:
         verify_checksum: bool = False,
     ) -> ImportResult:
         if verify_checksum:
+            from services.org_scenario_io.serializer import verify_checksum as verify_export_checksum
+
             verify_export_checksum(payload)
         if migration_warnings is None:
             payload, migration_warnings = migrate_export_payload(payload)
@@ -169,6 +171,99 @@ class ScenarioImporter:
         )
 
 
+    async def import_body_into_existing(
+        self,
+        migrated: dict[str, Any],
+        *,
+        scenario_id: str,
+        migration_warnings: list[str] | None = None,
+        is_superadmin: bool = False,
+    ) -> ImportResult:
+        """Apply portable export body onto an existing org scenario (no new row)."""
+        from services.org_scenario.service import save_scenario_body
+
+        scenario_data = migrated["scenario"]
+        body = scenario_data.get("body")
+        if not isinstance(body, dict):
+            raise OrgScenarioIOError("Import payload missing scenario.body", code="IMPORT_PAYLOAD_INVALID")
+
+        row = await repo.get_org_scenario(self.db, scenario_id)
+        if row is None:
+            from services.org_scenario.errors import OrgScenarioNotFoundError
+
+            raise OrgScenarioNotFoundError()
+        if row.org_id != self.org_id:
+            from services.org_scenario.errors import OrgScenarioNotFoundError
+
+            raise OrgScenarioNotFoundError()
+
+        kind = str(row.kind or "sequence").strip()
+        missing, name_to_id = await resolve_dependency_names(
+            self.db, org_id=self.org_id, body=body, kind=kind
+        )
+        created_stubs: list[str] = []
+        if missing:
+            if self.resolve != "create_stub":
+                raise OrgScenarioMissingReferencesError(missing)
+            stub_map = await create_stub_scenarios(
+                self.db,
+                org_id=self.org_id,
+                names=missing,
+                created_by=self.created_by,
+            )
+            name_to_id.update(stub_map)
+            created_stubs = list(missing)
+
+        resolved_body = resolve_import_body(body, kind, name_to_id=name_to_id)
+        view = await save_scenario_body(
+            self.db,
+            org_id=self.org_id,
+            scenario_id=scenario_id,
+            body=resolved_body,
+            user_id=self.created_by,
+            is_superadmin=is_superadmin,
+        )
+        warnings = list(migration_warnings or [])
+        return ImportResult(
+            scenario_id=view.id,
+            name=view.name,
+            kind=view.kind,
+            status=view.status,
+            scenario_version=int(view.scenario_version or 1),
+            warnings=warnings,
+            created_stub_names=created_stubs,
+        )
+
+    async def import_bytes_into_existing(
+        self,
+        content: bytes,
+        *,
+        scenario_id: str,
+        filename: str | None = None,
+        is_superadmin: bool = False,
+    ) -> ImportResult:
+        payload = parse_import_bytes(content, filename=filename)
+        migrated, migration_warnings = migrate_export_payload(payload)
+        warnings = _prepend_checksum_warning(payload, migration_warnings)
+        return await self.import_body_into_existing(
+            migrated,
+            scenario_id=scenario_id,
+            migration_warnings=warnings,
+            is_superadmin=is_superadmin,
+        )
+
+
+def _prepend_checksum_warning(
+    payload: dict[str, Any],
+    migration_warnings: list[str] | None,
+) -> list[str]:
+    warnings = list(migration_warnings or [])
+    mismatch = checksum_mismatch_warning(payload)
+    if mismatch and mismatch not in warnings:
+        warnings.insert(0, mismatch)
+    return warnings
+
+
 async def import_scenario_bytes(
     db: AsyncSession,
     *,
@@ -185,3 +280,28 @@ async def import_scenario_bytes(
         resolve=resolve,
     )
     return await importer.import_bytes(content, filename=filename)
+
+
+async def import_scenario_bytes_into_existing(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    scenario_id: str,
+    content: bytes,
+    filename: str | None = None,
+    created_by: str | None = None,
+    resolve: str = "reject",
+    is_superadmin: bool = False,
+) -> ImportResult:
+    importer = ScenarioImporter(
+        db,
+        org_id=org_id,
+        created_by=created_by,
+        resolve=resolve,
+    )
+    return await importer.import_bytes_into_existing(
+        content,
+        scenario_id=scenario_id,
+        filename=filename,
+        is_superadmin=is_superadmin,
+    )

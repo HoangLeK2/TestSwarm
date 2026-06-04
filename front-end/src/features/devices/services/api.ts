@@ -109,6 +109,29 @@ export async function restartDevice(serial: string): Promise<unknown> {
   return data;
 }
 
+export type AgentShellResult = {
+  ok: boolean;
+  cmd: string;
+  output?: string | null;
+  error?: string;
+  note?: string;
+};
+
+export async function runAgentShell(
+  serial: string,
+  cmd: string
+): Promise<AgentShellResult> {
+  const { normalizeDeviceShellCommand } = await import(
+    '@/features/devices/lib/normalize-device-shell-cmd'
+  );
+  const normalized = normalizeDeviceShellCommand(cmd);
+  const { data } = await farmApi.post<AgentShellResult>(
+    `/agent/${encodeURIComponent(serial)}/shell`,
+    { cmd: normalized }
+  );
+  return { ...data, cmd: cmd.trim() };
+}
+
 /** UI hierarchy XML (uiautomator2 page source). refresh=true skips backend cache (force fresh dump). On 503 returns "". */
 export async function fetchHierarchy(
   serial: string,

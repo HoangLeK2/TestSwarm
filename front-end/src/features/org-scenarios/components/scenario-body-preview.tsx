@@ -10,6 +10,7 @@ import {
   countScenarioVariables,
   extractPreviewSteps
 } from '../lib/parse-scenario-body';
+import { ImportOrgScenarioInlineTrigger } from './import-scenario-dialog';
 
 const FlowEditor = dynamic(
   () =>
@@ -27,11 +28,15 @@ const FlowEditor = dynamic(
 export function ScenarioBodyPreview({
   body,
   kind,
-  rawJson
+  rawJson,
+  importTargetScenarioId,
+  onImported
 }: {
   body: Record<string, unknown> | null | undefined;
   kind?: string;
   rawJson?: string;
+  importTargetScenarioId?: string;
+  onImported?: () => void;
 }) {
   const t = useTranslations('orgScenariosFeature.detail');
   const [showRaw, setShowRaw] = useState(false);
@@ -76,9 +81,23 @@ export function ScenarioBodyPreview({
           />
         </div>
       ) : (
-        <p className='rounded-lg border border-dashed bg-muted/20 px-3 py-4 text-sm text-muted-foreground'>
-          {t('emptyBodyPreview')}
-        </p>
+        <div className='rounded-lg border border-dashed bg-muted/20 px-3 py-4 text-sm text-muted-foreground'>
+          <p>{t('emptyBodyPreview')}</p>
+          {importTargetScenarioId ? (
+            <p className='mt-2'>
+              <ImportOrgScenarioInlineTrigger
+                targetScenarioId={importTargetScenarioId}
+                onImported={onImported}
+              >
+                <span className='cursor-pointer font-medium text-primary underline-offset-4 hover:underline'>
+                  {t('emptyBodyImportLink')}
+                </span>
+              </ImportOrgScenarioInlineTrigger>
+              {' · '}
+              <span>{t('emptyBodyOrRecord')}</span>
+            </p>
+          ) : null}
+        </div>
       )}
 
       {rawJson ? (

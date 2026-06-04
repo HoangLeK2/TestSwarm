@@ -3,6 +3,7 @@
 import { memo, type ReactNode } from 'react';
 import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
+import type { DeviceOpsConfig } from '../device-ops-rail';
 
 type Props = {
   device: Device;
@@ -26,6 +27,7 @@ type Props = {
   busyBanner?: ReactNode;
   /** Mirror scale in multi-phone layouts. */
   mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
+  deviceOps?: DeviceOpsConfig;
 };
 
 function deviceMirrorPropsEqual(prev: Props, next: Props) {
@@ -40,6 +42,7 @@ function deviceMirrorPropsEqual(prev: Props, next: Props) {
   if (prev.readOnlyPreview !== next.readOnlyPreview) return false;
   if (prev.busyBanner !== next.busyBanner) return false;
   if (prev.mirrorSize !== next.mirrorSize) return false;
+  if (prev.deviceOps !== next.deviceOps) return false;
   if (prev.highlightBounds !== next.highlightBounds) {
     const pb = prev.highlightBounds;
     const nb = next.highlightBounds;
@@ -84,7 +87,8 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   hideDeviceFunctions,
   readOnlyPreview,
   busyBanner,
-  mirrorSize = 'default'
+  mirrorSize = 'default',
+  deviceOps
 }: Props) {
   const mockupScreenWidth =
     mirrorSize === 'multiFocus'
@@ -95,16 +99,15 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   const compactPadding = mirrorSize !== 'default';
 
   return (
-    <>
-      {busyBanner}
+    <div className='flex min-h-0 w-full flex-1 flex-col'>
       <div
         className={
           compactPadding
-            ? 'flex w-full min-w-0 justify-center px-2 py-2'
-            : 'flex w-full justify-center p-3'
+            ? 'flex w-full min-w-0 flex-1 justify-center px-2 pt-2'
+            : 'flex w-full flex-1 justify-center px-3 pt-3'
         }
       >
-        <div className='mx-auto w-fit max-w-full'>
+        <div className='mx-auto flex w-fit max-w-full flex-col items-stretch gap-0.5'>
           <div className='mx-auto w-fit'>
             <DeviceTile
               device={device}
@@ -125,10 +128,14 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
               mockupScreenWidth={mockupScreenWidth}
               streamFetchPriority='high'
               hideAppCaption={compactPadding}
+              deviceOps={deviceOps}
             />
           </div>
+          {busyBanner ? (
+            <div className='-mt-2 w-full'>{busyBanner}</div>
+          ) : null}
         </div>
       </div>
-    </>
+    </div>
   );
 }, deviceMirrorPropsEqual);

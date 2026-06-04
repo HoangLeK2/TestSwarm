@@ -13,6 +13,8 @@ import {
   templateToLibraryItem,
   type ScenarioLibraryItem
 } from '../lib/scenario-library-item';
+import { importOrgScenarioFileIntoExisting } from '../lib/import-org-scenario-into-existing';
+import { prepareImportScenarioFile } from '../lib/prepare-import-scenario-file';
 import {
   orgScenariosApi,
   type OrgScenarioBodyIn,
@@ -203,12 +205,28 @@ export function useImportOrgScenario() {
   return useMutation({
     mutationFn: ({
       file,
-      resolve
+      resolve,
+      targetScenarioId
     }: {
       file: File;
       resolve?: 'reject' | 'create_stub';
-    }) => orgScenariosApi.importFile(file, resolve),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.list })
+      /** When set, import file content into this scenario instead of keeping a new row. */
+      targetScenarioId?: string;
+    }) =>
+      prepareImportScenarioFile(file).then(({ file: prepared }) => {
+        const mode = resolve ?? 'create_stub';
+        if (targetScenarioId) {
+          return importOrgScenarioFileIntoExisting(prepared, targetScenarioId, mode);
+        }
+        return orgScenariosApi.importFile(prepared, resolve);
+      }),
+    onSuccess: (_, { targetScenarioId }) => {
+      qc.invalidateQueries({ queryKey: KEYS.list });
+      if (targetScenarioId) {
+        qc.invalidateQueries({ queryKey: KEYS.detail(targetScenarioId) });
+        qc.invalidateQueries({ queryKey: KEYS.body(targetScenarioId) });
+      }
+    }
   });
 }
 

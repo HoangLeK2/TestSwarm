@@ -870,10 +870,24 @@
     "importDialog": {
       "trigger": "Import",
       "title": "Import scenario",
-      "hint": "Upload a portable YAML or JSON export file.",
-      "resolveLabel": "Missing references",
-      "resolveReject": "Reject import",
-      "resolveCreateStub": "Create stub scenarios",
+      "hint": "Choose a scenario file exported from the library (YAML or JSON). Files you edited after download can still be imported.",
+      "intoExistingTitle": "Import into this scenario",
+      "intoExistingHint": "The YAML/JSON file replaces the steps in the open scenario (name and description stay the same).",
+      "intoExistingSuccess": "Scenario content imported",
+      "intoExistingFailed": "Import into scenario failed",
+      "resolveSectionTitle": "Child scenarios referenced in the file",
+      "resolveSectionIntro": "Only matters if the file runs other scenarios by name. Simple device-only files can keep the default and import as usual.",
+      "resolveRecommended": "Recommended",
+      "resolveCreateStubTitle": "Create empty drafts for missing names",
+      "resolveCreateStubDesc": "Import the main scenario now; each missing name gets a new draft scenario with no steps. Open those drafts later to fill in content.",
+      "resolveRejectTitle": "Import only when every name already exists",
+      "resolveRejectDesc": "If any referenced name is missing, import stops with a list of names — nothing new is added to the library.",
+      "selectFile": "Choose YAML or JSON file",
+      "selectedFile": "Selected: {name}",
+      "importing": "Importing…",
+      "submit": "Import",
+      "cancel": "Cancel",
+      "importSuccess": "Scenario imported",
       "importFailed": "Import failed"
     },
     "cloneDialog": {
@@ -912,7 +926,9 @@
       "exportMenu": "Download",
       "exportYaml": "Download YAML",
       "exportJson": "Download JSON",
-      "exportSuccess": "File downloaded",
+      "exportSuccess": "Scenario file downloaded",
+      "exportSuccessMetadataOnly": "Downloaded ({size} bytes) — metadata only, no steps. Import or record steps first.",
+      "exportEmptyBody": "No steps yet — export will be nearly empty (body: {}). Add steps before exporting.",
       "exportFailed": "Download failed",
       "runnable": "Runnable",
       "notRunnable": "Not runnable",
@@ -923,11 +939,14 @@
       "statusLabel": "Status",
       "statusHint": "Set Active when the scenario is ready for campaigns. Use Draft while still editing.",
       "bodyHint": "Read-only preview of saved content.",
-      "bodyFlowHint": "Step flow matches Control & record — read-only here.",
+      "bodyFlowHint": "Preview of saved content. Use Import file or Control & record to edit steps.",
       "stepsPreviewCount": "{count} steps",
       "noStepsPreview": "No steps in body yet",
       "variablesCount": "{count} variables",
-      "emptyBodyPreview": "No steps to display. Record on Control & record, or import YAML/JSON.",
+      "emptyBodyPreview": "No steps to display.",
+      "emptyBodyImportLink": "Import YAML/JSON file",
+      "emptyBodyOrRecord": "or use Control & record to capture steps on a device.",
+      "importIntoScenario": "Import file",
       "toggleRawJson": "Show raw JSON",
       "copyBody": "Copy",
       "copySuccess": "Copied to clipboard",
@@ -1470,7 +1489,7 @@
         "intro": "Pick a shared template or another scenario from this campaign. At runtime the worker resolves by scenario ID (campaign row) first, then by name (campaign name beats template name if both match)."
       },
       "adbShell": {
-        "hint": "Runs on the real phone — enter the shell command (no adb shell prefix).",
+        "hint": "Runs on the real phone — enter the full command (e.g. adb shell getprop …) or shell-only (getprop …).",
         "commandLabel": "Shell command",
         "timeoutLabel": "Timeout (seconds)",
         "saveAsLabel": "Save output as variable",
@@ -2043,7 +2062,14 @@
       "loadOrgScenarioFailed": "Failed to load organization scenario"
     },
     "takeover": {
-      "manualControlBlocked": "Device busy or campaign running — manual input blocked"
+      "manualControlBlocked": "Device busy or campaign running — manual input blocked",
+      "takeControlButton": "Take manual control",
+      "confirmTitle": "Take manual control?",
+      "confirmDesc": "Any campaign or scenario running on this device will be stopped. You can use manual input right after confirming.",
+      "confirmCancel": "Cancel",
+      "confirmAction": "Stop & take control",
+      "success": "Manual control restored",
+      "failed": "Could not take manual control"
     },
     "deviceVarsDialog": {
       "title": "Device variables for scenario",
@@ -2064,7 +2090,17 @@
     },
     "view": {
       "takeover": {
-        "manualControlBlocked": "Device busy or campaign running — manual input blocked"
+        "manualControlBlocked": "Device busy or campaign running — manual input blocked",
+        "blockedTitle": "Campaign running",
+        "blockedHint": "Manual input is locked.",
+        "takeControlLink": "Take over",
+        "takeControlButton": "Take manual control",
+        "confirmTitle": "Take manual control?",
+        "confirmDesc": "Any campaign or scenario running on this device will be stopped. You can use manual input right after confirming.",
+        "confirmCancel": "Cancel",
+        "confirmAction": "Stop & take control",
+        "success": "Manual control restored",
+        "failed": "Could not take manual control"
       },
       "noDeviceConnected": "No connected devices",
       "addDevice": "Add device",
@@ -2266,6 +2302,28 @@
       "power": "Power",
       "restart": "Restart",
       "restartTitle": "Restart control session (ADB / scrcpy)"
+    },
+    "deviceOps": {
+      "cancel": "Cancel",
+      "run": "Run",
+      "running": "Running…",
+      "send": "Send",
+      "clear": "Clear terminal",
+      "installUrlRequired": "Enter APK URL",
+      "shellRequired": "Enter shell command",
+      "packageRequired": "Enter app package",
+      "shellEmpty": "Run a command to see output here.",
+      "shellWelcome": "Type the full command (adb shell …) or shell-only. Enter run · Ctrl+C cancel · Ctrl+L clear.",
+      "shellShortcuts": "Enter: run · Ctrl+C: cancel · Ctrl+L: clear screen",
+      "shellStepSubmitted": "Command submitted through scenario preview.",
+      "rail": {
+        "adb_shell": "ADB shell command",
+        "adb_shellHint": "Run a shell command on the device",
+        "install_apk": "Install APK from URL",
+        "install_apkHint": "Download and install APK via atx-agent",
+        "clear_app": "Clear app data",
+        "clear_appHint": "Clear app cache/data (pm clear)"
+      }
     },
     "scenarioPlayer": {
       "back": "Back",

@@ -1,4 +1,9 @@
+import {
+  filenameFromContentDisposition,
+  triggerBlobDownload
+} from '@/features/content/lib/download';
 import { farmApi } from '@/lib/farm-api';
+import { blobFromExportResponse } from '@/lib/parse-export-blob';
 import type {
   OrgScenarioBodyIn,
   OrgScenarioBodyOut,
@@ -30,15 +35,6 @@ export type {
   PreviewStartRequest,
   PreviewStartResponse
 };
-
-function triggerBlobDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
 
 export const orgScenariosApi = {
   list: (query?: { include_archived?: boolean; tag?: string; org?: string }) =>
@@ -98,7 +94,22 @@ export const orgScenariosApi = {
     return farmApi
       .post<OrgScenarioImportOut>('/scenarios/import', form, {
         params: { resolve },
-        headers: { 'Content-Type': 'multipart/form-data' }
+        timeout: 120_000
+      })
+      .then((r) => r.data);
+  },
+
+  importFileIntoExisting: (
+    scenarioId: string,
+    file: File,
+    resolve: 'reject' | 'create_stub' = 'reject'
+  ) => {
+    const form = new FormData();
+    form.append('file', file);
+    return farmApi
+      .post<OrgScenarioImportOut>(`/scenarios/${scenarioId}/import-body`, form, {
+        params: { resolve },
+        timeout: 120_000
       })
       .then((r) => r.data);
   },
@@ -123,12 +134,13 @@ export const orgScenariosApi = {
         responseType: 'blob'
       }
     );
+    const blob = await blobFromExportResponse(response, format);
     const disposition = String(response.headers['content-disposition'] ?? '');
-    const match = /filename="([^"]+)"/.exec(disposition);
     const filename =
-      match?.[1] ??
+      filenameFromContentDisposition(disposition) ??
       `scenario-${scenarioId}.${format === 'yaml' ? 'yaml' : 'json'}`;
-    triggerBlobDownload(response.data, filename);
+    triggerBlobDownload(blob, filename);
+    return { size: blob.size, filename };
   },
 
   startPreview: (scenarioId: string, data: PreviewStartRequest) =>

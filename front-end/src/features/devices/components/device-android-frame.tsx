@@ -27,12 +27,20 @@ function screenContentInsetPx(screenWidth: number): number {
 }
 
 /** Portrait screen height inside react-device-mockup bezel (matches lib formula). */
-function mockupPortraitScreenHeightPx(screenWidth: number): number {
+export function mockupPortraitScreenHeightPx(screenWidth: number): number {
   return Math.floor((screenWidth / 9) * 19.5);
 }
 
-function mockupFrameWidthPx(screenWidth: number): number {
+export function mockupFrameWidthPx(screenWidth: number): number {
   return Math.max(1, Math.floor((screenWidth * 32) / 1080));
+}
+
+/** Approximate outer height of frameOnly AndroidMockup — pairs with control rail stretch. */
+export function mockupOuterHeightPx(screenWidth: number): number {
+  const screenH = mockupPortraitScreenHeightPx(screenWidth);
+  const frame = mockupFrameWidthPx(screenWidth);
+  const inset = screenContentInsetPx(screenWidth);
+  return screenH + frame * 2 + inset * 2;
 }
 
 /** Android phone frame for farm tiles — stream fills the mock screen (status/nav hidden). */

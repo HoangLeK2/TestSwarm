@@ -230,6 +230,10 @@ def _attach_edge_content_screenshots(
             log.debug("edge extra_data screenshot attach skipped: %s", exc)
             return
     if not jpeg:
+        log.warning(
+            "edge extra_data: screenshot attach skipped — no framebuffer "
+            "(ingest screenshot_b64 missing and device capture failed)"
+        )
         return
     try:
         from db.database import run_activity_coro
@@ -561,6 +565,8 @@ def request_edge_extra_data(
         "return_items": return_items,
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
+    if _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False):
+        context["capture_screenshot"] = True
     for key, val in comment_defaults.items():
         context.setdefault(key, val)
     for key in (

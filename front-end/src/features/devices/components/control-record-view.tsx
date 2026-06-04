@@ -14,6 +14,11 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { ControlRecordMirror } from './control-record/control-record-mirror';
+import {
+  packageFromCurrentApp,
+  type DeviceOpsConfig
+} from './device-ops-rail';
+import { ManualControlBlockedBanner } from './control-record/manual-control-blocked-banner';
 import { MultiDevicePicker } from './control-record/multi-device-picker';
 import { MultiDeviceStage } from './control-record/multi-device-stage';
 import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
@@ -21,7 +26,6 @@ import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import {
   DeviceVarsJsonPanel,
   formatInitialDeviceVars,
@@ -55,7 +59,6 @@ import {
   Timer,
   Keyboard,
   CheckSquare,
-  PackagePlus,
   Code2,
   GitBranch,
   List
@@ -153,7 +156,8 @@ import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import {
   previewScenarioStream,
   cancelPreviewStream,
-  interruptDevice
+  interruptDevice,
+  runAgentShell
 } from '../services/api';
 import {
   createPreviewRunSession,
@@ -476,8 +480,6 @@ export function ControlRecordView({
   const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<
     string | null
   >(null);
-  const [installDialogOpen, setInstallDialogOpen] = useState(false);
-  const [installUrl, setInstallUrl] = useState('');
   const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
 
   // Scenario-player running state + stop handle. Used by the Farm back button
@@ -485,6 +487,8 @@ export function ControlRecordView({
   const [playerPlaying, setPlayerPlaying] = useState(false);
   const stopPlayerRef = useRef<(() => void) | null>(null);
   const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
+  const [takeoverDialogOpen, setTakeoverDialogOpen] = useState(false);
+  const [takeoverPending, setTakeoverPending] = useState(false);
 
   const setCoordinatePickTargetSafe = useCallback(
     (next: CoordinatePickTarget | null) => {
@@ -653,11 +657,29 @@ export function ControlRecordView({
       (d.scenario_active ?? 0) > 0;
     if (!blocked) return null;
     return (
-      <div className='flex w-full shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
-        <span>{t('takeover.manualControlBlocked')}</span>
-      </div>
+      <ManualControlBlockedBanner
+        canTakeControl={canExecuteDevice}
+        onTakeControl={() => setTakeoverDialogOpen(true)}
+      />
     );
-  }, [device.selectedDevice, t]);
+  }, [canExecuteDevice, device.selectedDevice]);
+
+  const handleTakeoverConfirm = useCallback(async () => {
+    const serial = device.selectedDevice?.serial?.trim();
+    if (!serial || takeoverPending) return;
+    setTakeoverPending(true);
+    try {
+      await interruptDevice(serial);
+      toast.success(t('takeover.success'));
+      setTakeoverDialogOpen(false);
+    } catch (err) {
+      toast.error(
+        formatFarmApiError(err, t('takeover.failed')) ?? t('takeover.failed')
+      );
+    } finally {
+      setTakeoverPending(false);
+    }
+  }, [device.selectedDevice?.serial, takeoverPending, t]);
 
   // Farm back button, device switch, player close — confirm before leaving while preview runs.
   const guardWhilePreviewActive = useCallback(
@@ -1302,6 +1324,49 @@ export function ControlRecordView({
     ]
   );
 
+  const runDeviceOpStep = useCallback(
+    async (step: FlowStep) => {
+      if (!device.selectedDevice) {
+        toast.warning('Chưa chọn thiết bị');
+        return;
+      }
+      const runId = previewSession.beginRun();
+      const serial = device.selectedDevice.serial;
+      try {
+        await previewScenarioStream(
+          serial,
+          [step as Record<string, any>],
+          previewSession.makeStreamHandler(runId, serial, (event) => {
+            if (event.event === 'step_done' && !event.ok) {
+              toast.error(
+                typeof event.message === 'string'
+                  ? event.message
+                  : 'Thao tác thất bại'
+              );
+            }
+          }),
+          undefined,
+          scenarioVariables,
+          null,
+          activeScenarioId,
+          inlineScenarioDeviceVars
+        );
+      } catch (e) {
+        toast.error(String(e));
+        throw e;
+      } finally {
+        previewSession.onStreamEnd(runId);
+      }
+    },
+    [
+      activeScenarioId,
+      device.selectedDevice,
+      inlineScenarioDeviceVars,
+      previewSession,
+      scenarioVariables
+    ]
+  );
+
   const addStepFromSelector = useCallback(
     (
       stepType:
@@ -1649,10 +1714,26 @@ export function ControlRecordView({
       (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
       (d.scenario_active ?? 0) > 0;
     return { hideControls: blocked, readOnlyPreview: blocked };
+  }, [device.selectedDevice]);
+
+  const mirrorDeviceOps = useMemo((): DeviceOpsConfig | undefined => {
+    const d = device.selectedDevice;
+    if (!d) return undefined;
+    return {
+      disabled: mirrorInputLocked.hideControls,
+      defaultPackage: packageFromCurrentApp(d.current_app),
+      onRunStep: runDeviceOpStep,
+      onRunShell: (cmd) => runAgentShell(d.serial, cmd),
+      onInstallApk: (url) => {
+        record.wsSend({ type: 'install', serial: d.serial, url });
+        toast.info(`Đang cài APK lên ${d.serial}…`);
+      }
+    };
   }, [
-    device.selectedDevice?.serial,
-    device.selectedDevice?.state,
-    device.selectedDevice?.scenario_active
+    device.selectedDevice,
+    mirrorInputLocked.hideControls,
+    record,
+    runDeviceOpStep
   ]);
 
   // ── Error / empty states ─────────────────────────────────────────────────
@@ -2127,6 +2208,7 @@ export function ControlRecordView({
                     readOnlyPreview={mirrorInputLocked.readOnlyPreview}
                     busyBanner={mirrorBusyBanner}
                     mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
+                    deviceOps={mirrorDeviceOps}
                   />
                 }
                 devices={selectedMultiFollowerDevices}
@@ -2150,6 +2232,7 @@ export function ControlRecordView({
                   hideDeviceFunctions={mirrorInputLocked.hideControls}
                   readOnlyPreview={mirrorInputLocked.readOnlyPreview}
                   busyBanner={mirrorBusyBanner}
+                  deviceOps={mirrorDeviceOps}
                 />
               </div>
             )
@@ -2633,48 +2716,6 @@ export function ControlRecordView({
         ) : null}
       </div>
 
-      {/* ── Install APK dialog ──────────────────────────────────────────────── */}
-      <Dialog open={installDialogOpen} onOpenChange={setInstallDialogOpen}>
-        <DialogContent className='max-w-md'>
-          <DialogHeader>
-            <DialogTitle className='flex items-center gap-2 text-base'>
-              <PackagePlus className='size-4' />
-              Cài APK từ URL
-            </DialogTitle>
-          </DialogHeader>
-          <p className='-mt-1 text-[12px] text-muted-foreground'>
-            Nhập URL APK công khai. atx-agent trên thiết bị sẽ tải và cài đặt tự
-            động.
-          </p>
-          <div className='flex gap-2'>
-            <Input
-              placeholder='https://example.com/app.apk'
-              value={installUrl}
-              onChange={(e) => setInstallUrl(e.target.value)}
-              className='h-8 font-mono text-xs'
-            />
-            <Button
-              size='sm'
-              className='h-8 shrink-0'
-              disabled={!installUrl.trim() || !selectedDevice}
-              onClick={() => {
-                if (!selectedDevice || !installUrl.trim()) return;
-                record.wsSend({
-                  type: 'install',
-                  serial: selectedDevice.serial,
-                  url: installUrl.trim()
-                });
-                toast.info(`Đang cài APK lên ${selectedDevice.serial}…`);
-                setInstallDialogOpen(false);
-                setInstallUrl('');
-              }}
-            >
-              Cài
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* ── Variables dialog ────────────────────────────────────────────────── */}
       <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
         <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden'>
@@ -3061,6 +3102,37 @@ export function ControlRecordView({
               }}
             >
               {t('exitConfirmConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={takeoverDialogOpen}
+        onOpenChange={(o) => {
+          if (!takeoverPending) setTakeoverDialogOpen(o);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('takeover.confirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('takeover.confirmDesc')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={takeoverPending}>
+              {t('takeover.confirmCancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={takeoverPending}
+              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              onClick={(e) => {
+                e.preventDefault();
+                void handleTakeoverConfirm();
+              }}
+            >
+              {t('takeover.confirmAction')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

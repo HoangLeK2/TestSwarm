@@ -762,6 +762,61 @@ export function ScenarioDialog({
     [scheduleGraphSync]
   );
 
+  const applyPreviewStepRunEvent = useCallback(
+    (
+      runKey: string,
+      ev: { event: string; ok?: boolean; success?: boolean; message?: string; error?: string; failed_message?: string },
+      setStates: React.Dispatch<
+        React.SetStateAction<Record<string, 'idle' | 'running' | 'ok' | 'error'>>
+      >
+    ) => {
+      if (ev.event === 'step_done') {
+        setStates((s) => ({
+          ...s,
+          [runKey]: ev.ok ? 'ok' : 'error'
+        }));
+        if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
+        return;
+      }
+      if (ev.event === 'done') {
+        setStates((s) => {
+          if (s[runKey] !== 'running') return s;
+          const ok = ev.success !== false;
+          return { ...s, [runKey]: ok ? 'ok' : 'error' };
+        });
+        if (ev.success === false) {
+          toast.error(
+            String(ev.failed_message ?? ev.message ?? 'Kịch bản lỗi')
+          );
+        }
+        return;
+      }
+      if (ev.event === 'error') {
+        setStates((s) => ({ ...s, [runKey]: 'error' }));
+        toast.error(String(ev.error ?? 'Lỗi chạy thử'));
+      }
+    },
+    []
+  );
+
+  const clearPreviewRunStateAfterDelay = useCallback(
+    (
+      runKey: string,
+      setStates: React.Dispatch<
+        React.SetStateAction<Record<string, 'idle' | 'running' | 'ok' | 'error'>>
+      >
+    ) => {
+      setTimeout(() => {
+        setStates((s) => {
+          const n = { ...s };
+          if (n[runKey] !== 'running') delete n[runKey];
+          return n;
+        });
+      }, 2800);
+    },
+    []
+  );
+
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
       const serial = previewSerial?.trim();
@@ -785,13 +840,7 @@ export function ScenarioDialog({
           serial,
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
-            if (ev.event === 'step_done') {
-              setFlowRunStates((s) => ({
-                ...s,
-                [fgId]: ev.ok ? 'ok' : 'error'
-              }));
-              if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
-            }
+            applyPreviewStepRunEvent(fgId, ev, setFlowRunStates);
           }),
           ctrl.signal,
           flattenVarDefs(variables)
@@ -804,16 +853,22 @@ export function ScenarioDialog({
       } finally {
         previewSession.onStreamEnd(runId);
         flowRunningIdsRef.current.delete(fgId);
-        setTimeout(() => {
+        if (!ctrl.signal.aborted) {
           setFlowRunStates((s) => {
-            const n = { ...s };
-            if (n[fgId] !== 'running') delete n[fgId];
-            return n;
+            if (s[fgId] !== 'running') return s;
+            return { ...s, [fgId]: 'error' };
           });
-        }, 2800);
+          clearPreviewRunStateAfterDelay(fgId, setFlowRunStates);
+        }
       }
     },
-    [previewSerial, variables, previewSession]
+    [
+      previewSerial,
+      variables,
+      previewSession,
+      applyPreviewStepRunEvent,
+      clearPreviewRunStateAfterDelay
+    ]
   );
 
   const handleFlowDetailChange = useCallback(
@@ -880,13 +935,7 @@ export function ScenarioDialog({
           serial,
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
-            if (ev.event === 'step_done') {
-              setStepRunStates((s) => ({
-                ...s,
-                [runKey]: ev.ok ? 'ok' : 'error'
-              }));
-              if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
-            }
+            applyPreviewStepRunEvent(runKey, ev, setStepRunStates);
           }),
           ctrl.signal,
           flattenVarDefs(variables)
@@ -905,17 +954,23 @@ export function ScenarioDialog({
       } finally {
         previewSession.onStreamEnd(runId);
         if (!ctrl.signal.aborted) {
-          setTimeout(() => {
-            setStepRunStates((s) => {
-              const n = { ...s };
-              if (n[runKey] !== 'running') delete n[runKey];
-              return n;
-            });
-          }, 2800);
+          setStepRunStates((s) => {
+            if (s[runKey] !== 'running') return s;
+            return { ...s, [runKey]: 'error' };
+          });
+          clearPreviewRunStateAfterDelay(runKey, setStepRunStates);
         }
       }
     },
-    [previewSerial, devices, stepRunStates, variables, previewSession]
+    [
+      previewSerial,
+      devices,
+      stepRunStates,
+      variables,
+      previewSession,
+      applyPreviewStepRunEvent,
+      clearPreviewRunStateAfterDelay
+    ]
   );
 
   const handleFetchXml = async () => {

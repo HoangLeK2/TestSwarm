@@ -1,9 +1,40 @@
+import { farmApiDetailFromError } from './parse-export-blob';
+
+/** FastAPI/Pydantic `detail` from axios response — always a display string for UI. */
+export async function formatFarmApiErrorAsync(
+  err: unknown,
+  fallback: string
+): Promise<string> {
+  const e = err as {
+    response?: { data?: { detail?: unknown; code?: string } };
+    message?: string;
+    code?: string;
+  };
+  const blobDetail = await farmApiDetailFromError(err);
+  if (blobDetail !== undefined) {
+    return formatFarmApiError(
+      { ...e, response: { ...e.response, data: { detail: blobDetail } } },
+      fallback
+    );
+  }
+  return formatFarmApiError(err, fallback);
+}
+
 /** FastAPI/Pydantic `detail` from axios response — always a display string for UI. */
 export function formatFarmApiError(err: unknown, fallback: string): string {
   const e = err as {
     response?: { data?: { detail?: unknown; code?: string } };
     message?: string;
+    code?: string;
   };
+  if (
+    e.code === 'ERR_NETWORK' ||
+    (typeof e.message === 'string' &&
+      /network error/i.test(e.message) &&
+      !e.response)
+  ) {
+    return 'Không kết nối được API. Kiểm tra backend (docker compose / uv run) đang chạy, DEVICE_FARM_BACKEND_URL trong front-end/.env trỏ đúng máy chủ farm, và mở dashboard cùng địa chỉ với Next (vd. http://IP:3000).';
+  }
   const d = e.response?.data?.detail;
   if (typeof d === 'string' && d.trim()) return d.trim();
   if (d != null && typeof d === 'object' && !Array.isArray(d)) {
@@ -38,7 +69,17 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
       );
     }
     if (code === 'SCENARIO_NAME_DUPLICATE') {
-      return 'Tên kịch bản đã tồn tại trong thư viện — hãy chọn tên khác.';
+      return 'Tên kịch bản trong file đã trùng với một kịch bản khác trong thư viện. Dùng «Nhập vào kịch bản này» từ chi tiết kịch bản, hoặc đổi tên trong file export.';
+    }
+    if (code === 'CHECKSUM_MISMATCH') {
+      return 'Không nhập được file này vì nội dung đã thay đổi so với bản export gốc. Hãy chọn lại file và bấm Nhập, hoặc tải bản export mới từ thư viện kịch bản.';
+    }
+    if (code === 'MISSING_SCENARIO_REFERENCES') {
+      const names = (d as { missing_scenarios?: string[] }).missing_scenarios;
+      if (Array.isArray(names) && names.length > 0) {
+        return `File có bước gọi kịch bản con chưa có trong thư viện: ${names.join(', ')}. Hãy tạo/sao chép các kịch bản đó trước, hoặc chọn «Tự tạo bản nháp trống» rồi nhập lại.`;
+      }
+      return 'File có bước gọi kịch bản con chưa có trong thư viện. Tạo các kịch bản đó trước, hoặc chọn «Tự tạo bản nháp trống».';
     }
     if (code === 'NO_ORGANIZATION') {
       return 'Tài khoản chưa thuộc tổ chức — không thể tạo chiến dịch theo thư viện kịch bản.';
@@ -105,5 +146,17 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
       return fallback;
     }
   }
-  return typeof e.message === 'string' && e.message ? e.message : fallback;
+  if (typeof e.message === 'string') {
+    if (e.message === 'EXPORT_EMPTY_FILE') {
+      return 'File export trống — máy chủ không trả nội dung. Kiểm tra kịch bản đã có bước và thử lại.';
+    }
+    if (e.message === 'EXPORT_HTML_ERROR') {
+      return 'Không tải được file kịch bản — máy chủ trả về trang lỗi. Kiểm tra địa chỉ API trong cấu hình hoặc đăng nhập lại.';
+    }
+    if (e.message === 'EXPORT_API_ERROR' || e.message === 'EXPORT_INVALID_RESPONSE') {
+      return 'Không tải được file kịch bản. Thử đăng nhập lại; nếu vẫn lỗi, kiểm tra máy chủ farm đang chạy.';
+    }
+    if (e.message.trim()) return e.message.trim();
+  }
+  return fallback;
 }

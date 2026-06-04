@@ -25,18 +25,26 @@ function resolveDeviceFarmBackendBase(): string {
     return configured;
   }
 
-  const isDev =
-    (process.env.NEXT_PUBLIC_ENVIRONMENT || '').trim().toLowerCase() === 'dev';
-  if (!isDev) {
-    return configured;
-  }
-
   try {
-    const apiHost = new URL(configured).host;
-    const pageHost = window.location.host;
-    if (apiHost && pageHost && apiHost !== pageHost) {
-      // `next.config` rewrites `/api/*` → DEVICE_FARM_BACKEND_URL (same-origin, no CORS).
-      return window.location.origin.replace(/\/+$/, '');
+    const configuredUrl = new URL(configured);
+    const pageOrigin = window.location.origin.replace(/\/+$/, '');
+    const pageHost = new URL(pageOrigin).host;
+    if (configuredUrl.host === pageHost) {
+      return configured;
+    }
+
+    const isDev =
+      (process.env.NEXT_PUBLIC_ENVIRONMENT || '').trim().toLowerCase() ===
+      'dev';
+    const pointsAtNextDevServer =
+      configuredUrl.port === '3000' ||
+      configuredUrl.hostname === 'localhost' ||
+      configuredUrl.hostname === '127.0.0.1';
+
+    // `next.config` rewrites `/api/*` → DEVICE_FARM_BACKEND_URL on the Next host.
+    // Use the tab origin when env still says localhost:3000 but the user opened via LAN IP.
+    if (isDev || pointsAtNextDevServer) {
+      return pageOrigin;
     }
   } catch {
     // keep configured
@@ -216,6 +224,10 @@ farmApi.interceptors.request.use((config) => {
   }
   if (backendBase.includes('ngrok')) {
     config.headers['ngrok-skip-browser-warning'] = '1';
+  }
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    // Let the browser set multipart boundary (manual Content-Type breaks uploads).
+    delete config.headers['Content-Type'];
   }
   return config;
 });

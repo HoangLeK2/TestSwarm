@@ -7,16 +7,32 @@ const withNextIntl = createNextIntlPlugin();
 // Backend URL for server-side proxy (only used during Next.js dev / SSR)
 const BACKEND = process.env.DEVICE_FARM_BACKEND_URL ?? 'http://localhost:8081';
 
+function extraDevOrigins(): string[] {
+  const origins = new Set<string>([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ]);
+  try {
+    const backend = new URL(BACKEND);
+    if (
+      backend.hostname &&
+      backend.hostname !== 'localhost' &&
+      backend.hostname !== '127.0.0.1'
+    ) {
+      origins.add(`http://${backend.hostname}:3000`);
+    }
+  } catch {
+    // ignore
+  }
+  return [...origins];
+}
+
 // Define the base Next.js configuration
 const baseConfig: NextConfig = {
   reactStrictMode: false, // Disable to prevent InversifyJS double-registration in flowgram.ai
   output: 'standalone',
   // Cho phép truy cập dev từ IP nội bộ (vd. 172.16.0.86) tránh cảnh báo cross-origin _next/*
-  allowedDevOrigins: [
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-    'http://172.16.0.86:3000'
-  ],
+  allowedDevOrigins: extraDevOrigins(),
   async rewrites() {
     return [
       {

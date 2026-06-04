@@ -8,6 +8,7 @@ from fastapi.responses import Response
 
 from api.auth.rbac import is_superadmin
 from api.deps import CurrentUser, DB, require_permission
+from api.http_headers import content_disposition_attachment
 from api.org_scope import org_member_user_ids
 from api.schemas.preview import PreviewStartRequest, PreviewStartResponse
 from api.schemas.org_scenario import (
@@ -45,7 +46,10 @@ from services.org_scenario_io.errors import (
     OrgScenarioImportValidationError,
     OrgScenarioMissingReferencesError,
 )
-from services.org_scenario_io.importer import import_scenario_bytes
+from services.org_scenario_io.importer import (
+    import_scenario_bytes,
+    import_scenario_bytes_into_existing,
+)
 from services.org_scenario_io.service import clone_system_template, export_scenario_for_org
 from db.crud.scenario_template import list_templates as list_scenario_template_rows
 
@@ -255,6 +259,47 @@ async def import_scenario_route(
 
 
 @router.post(
+    "/{scenario_id}/import-body",
+    response_model=OrgScenarioImportOut,
+    dependencies=[Depends(require_permission("scenarios", "update"))],
+)
+async def import_scenario_body_into_existing_route(
+    scenario_id: str,
+    db: DB,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    resolve: str = Query(default="reject", pattern="^(reject|create_stub)$"),
+):
+    """Replace steps on an existing scenario from a portable export file."""
+    org_id = _resolve_org_id(user, None)
+    content = await file.read()
+    try:
+        result = await import_scenario_bytes_into_existing(
+            db,
+            org_id=org_id,
+            scenario_id=scenario_id,
+            content=content,
+            filename=file.filename,
+            created_by=user.id,
+            resolve=resolve,
+            is_superadmin=is_superadmin(user),
+        )
+    except OrgScenarioError as exc:
+        raise _map_error(exc) from exc
+    except OrgScenarioIOError as exc:
+        raise _map_error(exc) from exc
+    return OrgScenarioImportOut(
+        scenario_id=result.scenario_id,
+        name=result.name,
+        kind=result.kind,
+        status=result.status,
+        scenario_version=result.scenario_version,
+        warnings=result.warnings,
+        created_stub_names=result.created_stub_names,
+    )
+
+
+@router.post(
     "/templates/{template_id}/clone",
     response_model=OrgScenarioImportOut,
     status_code=status.HTTP_201_CREATED,
@@ -353,7 +398,7 @@ async def export_scenario_route(
     return Response(
         content=bundle.content,
         media_type=bundle.media_type,
-        headers={"Content-Disposition": f'attachment; filename="{bundle.filename}"'},
+        headers=content_disposition_attachment(bundle.filename),
     )
 
 

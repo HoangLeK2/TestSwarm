@@ -48,12 +48,13 @@ async def export_scenario_for_org(
     payload = await serializer.build_payload(row, tags=tags, version=version)
     content, media_type = serialize_payload(payload, fmt=export_format)
     ext = "json" if export_format == "json" else "yaml"
-    safe_name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in row.name)[:80]
+    base = (row.name or "").strip() or "scenario"
+    base = "".join("_" if ch in '/\\"\r\n' else ch for ch in base)[:80]
     return ExportBundle(
         payload=payload,
         content=content,
         media_type=media_type,
-        filename=f"{safe_name}.{ext}",
+        filename=f"{base}.{ext}",
     )
 
 

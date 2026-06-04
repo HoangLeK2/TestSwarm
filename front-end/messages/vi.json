@@ -870,11 +870,26 @@
     "importDialog": {
       "trigger": "Nhập file",
       "title": "Nhập kịch bản",
-      "hint": "Tải lên file xuất dạng YAML hoặc JSON.",
-      "resolveLabel": "Kịch bản tham chiếu thiếu",
-      "resolveReject": "Từ chối nhập",
-      "resolveCreateStub": "Tạo kịch bản tạm",
-      "importFailed": "Nhập kịch bản thất bại"
+      "hint": "Chọn file kịch bản đã tải từ hệ thống (YAML hoặc JSON). File bạn chỉnh sửa sau khi tải về vẫn nhập được.",
+      "intoExistingTitle": "Nhập nội dung vào kịch bản này",
+      "intoExistingHint": "File YAML/JSON sẽ thay thế các bước hiện tại của kịch bản đang mở (tên và mô tả giữ nguyên).",
+      "intoExistingSuccess": "Đã nhập nội dung vào kịch bản",
+      "intoExistingFailed": "Nhập nội dung thất bại",
+      "resolveSectionTitle": "Kịch bản con được gọi trong file",
+      "resolveSectionIntro": "Chỉ cần chọn khi file có bước «chạy kịch bản khác» (theo tên). File chỉ có bước thao tác trên thiết bị có thể giữ mặc định và nhập bình thường.",
+      "resolveRecommended": "Đề xuất",
+      "resolveCreateStubTitle": "Tự tạo bản nháp trống cho tên còn thiếu",
+      "resolveCreateStubDesc": "Nhập ngay kịch bản chính; mỗi tên thiếu được tạo một kịch bản draft không có bước. Sau đó mở từng kịch bản con để bổ sung nội dung.",
+      "resolveRejectTitle": "Chỉ nhập khi thư viện đã đủ kịch bản",
+      "resolveRejectDesc": "Nếu còn thiếu tên, hệ thống dừng và báo danh sách tên — không tạo thêm kịch bản trong thư viện.",
+      "selectFile": "Chọn file YAML hoặc JSON",
+      "selectedFile": "Đã chọn: {name}",
+      "importing": "Đang nhập…",
+      "submit": "Nhập",
+      "cancel": "Huỷ",
+      "importSuccess": "Đã nhập kịch bản",
+      "importFailed": "Nhập kịch bản thất bại",
+      "networkErrorHint": "Không kết nối được máy chủ. Kiểm tra backend đang chạy và front-end/.env (DEVICE_FARM_BACKEND_URL) đúng IP farm."
     },
     "cloneDialog": {
       "trigger": "Sao chép vào thư viện",
@@ -912,7 +927,9 @@
       "exportMenu": "Tải xuống",
       "exportYaml": "Tải file YAML",
       "exportJson": "Tải file JSON",
-      "exportSuccess": "Đã tải file",
+      "exportSuccess": "Đã tải file kịch bản",
+      "exportSuccessMetadataOnly": "Đã tải file ({size} byte) — chỉ có thông tin, chưa có bước. Hãy nhập nội dung hoặc Điều khiển & ghi trước.",
+      "exportEmptyBody": "Kịch bản chưa có bước — file export sẽ gần như trống (body: {}). Nhập file hoặc ghi bước trước khi export.",
       "exportFailed": "Tải file thất bại",
       "runnable": "Chạy được",
       "notRunnable": "Chưa chạy được",
@@ -923,11 +940,14 @@
       "statusLabel": "Trạng thái",
       "statusHint": "Chọn «Đang dùng» khi kịch bản sẵn sàng gắn vào chiến dịch. «Bản nháp» để tiếp tục chỉnh sửa.",
       "bodyHint": "Xem trước nội dung đã lưu — chỉ đọc.",
-      "bodyFlowHint": "Luồng bước giống màn Điều khiển & ghi kịch bản — chỉ xem tại đây.",
+      "bodyFlowHint": "Xem trước nội dung đã lưu. Dùng Nhập file hoặc Điều khiển & ghi để chỉnh nội dung.",
       "stepsPreviewCount": "{count} bước",
       "noStepsPreview": "Chưa có bước nào trong nội dung",
       "variablesCount": "{count} biến",
-      "emptyBodyPreview": "Chưa có bước để hiển thị. Ghi hoặc nhập kịch bản trên màn Điều khiển, hoặc nhập file YAML/JSON.",
+      "emptyBodyPreview": "Chưa có bước để hiển thị.",
+      "emptyBodyImportLink": "Nhập file YAML/JSON",
+      "emptyBodyOrRecord": "hoặc dùng Điều khiển & ghi để ghi thao tác trên thiết bị.",
+      "importIntoScenario": "Nhập file",
       "toggleRawJson": "Xem JSON thô",
       "copyBody": "Sao chép",
       "copySuccess": "Đã sao chép vào clipboard",
@@ -1470,7 +1490,7 @@
         "intro": "Chọn mẫu dùng chung (template) hoặc một kịch bản khác trong cùng campaign. Khi chạy, hệ thống ưu tiên theo ID kịch bản (bản ghi campaign), sau đó theo tên — nếu trùng tên, kịch bản trong campaign được ưu tiên hơn template."
       },
       "adbShell": {
-        "hint": "Chạy trên phone thật — nhập lệnh shell (không cần gõ tiền tố adb shell).",
+        "hint": "Chạy trên phone thật — nhập lệnh đầy đủ (vd. adb shell getprop …) hoặc chỉ phần shell (getprop …).",
         "commandLabel": "Lệnh shell",
         "timeoutLabel": "Timeout (giây)",
         "saveAsLabel": "Lưu output vào biến",
@@ -2045,7 +2065,14 @@
       "loadOrgScenarioFailed": "Không tải được kịch bản tổ chức"
     },
     "takeover": {
-      "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
+      "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn",
+      "takeControlButton": "Chiếm quyền điều khiển",
+      "confirmTitle": "Chiếm quyền điều khiển thủ công?",
+      "confirmDesc": "Kịch bản hoặc chiến dịch đang chạy trên thiết bị này sẽ bị dừng. Sau khi xác nhận bạn có thể thao tác thủ công.",
+      "confirmCancel": "Hủy",
+      "confirmAction": "Dừng & chiếm quyền",
+      "success": "Đã chiếm quyền điều khiển thủ công",
+      "failed": "Không chiếm được quyền điều khiển"
     },
     "deviceVarsDialog": {
       "title": "Biến thiết bị cho kịch bản",
@@ -2066,7 +2093,17 @@
     },
     "view": {
       "takeover": {
-        "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
+        "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn",
+        "blockedTitle": "Thiết bị đang bận",
+        "blockedHint": "Thao tác thủ công bị ngăn.",
+        "takeControlLink": "Chiếm quyền",
+        "takeControlButton": "Chiếm quyền điều khiển",
+        "confirmTitle": "Chiếm quyền điều khiển thủ công?",
+        "confirmDesc": "Kịch bản hoặc chiến dịch đang chạy trên thiết bị này sẽ bị dừng. Sau khi xác nhận bạn có thể thao tác thủ công.",
+        "confirmCancel": "Hủy",
+        "confirmAction": "Dừng & chiếm quyền",
+        "success": "Đã chiếm quyền điều khiển thủ công",
+        "failed": "Không chiếm được quyền điều khiển"
       },
       "noDeviceConnected": "Chưa có thiết bị nào kết nối",
       "addDevice": "Thêm thiết bị",
@@ -2268,6 +2305,28 @@
       "power": "Nguồn",
       "restart": "Khởi động lại",
       "restartTitle": "Khởi động lại phiên điều khiển (ADB / scrcpy)"
+    },
+    "deviceOps": {
+      "cancel": "Hủy",
+      "run": "Chạy",
+      "running": "Đang chạy…",
+      "send": "Gửi",
+      "clear": "Xóa terminal",
+      "installUrlRequired": "Nhập URL APK",
+      "shellRequired": "Nhập lệnh shell",
+      "packageRequired": "Nhập package app",
+      "shellEmpty": "Nhập lệnh để xem kết quả ở đây.",
+      "shellWelcome": "Gõ lệnh đầy đủ (adb shell …) hoặc chỉ phần shell. Enter chạy · Ctrl+C hủy · Ctrl+L xóa.",
+      "shellShortcuts": "Enter: chạy · Ctrl+C: hủy · Ctrl+L: xóa màn hình",
+      "shellStepSubmitted": "Đã gửi lệnh qua luồng chạy thử kịch bản.",
+      "rail": {
+        "adb_shell": "Lệnh ADB shell",
+        "adb_shellHint": "Chạy lệnh shell trên thiết bị",
+        "install_apk": "Cài APK từ URL",
+        "install_apkHint": "Tải và cài APK qua atx-agent",
+        "clear_app": "Xóa dữ liệu app",
+        "clear_appHint": "Xóa cache/dữ liệu app (pm clear)"
+      }
     },
     "scenarioPlayer": {
       "back": "Quay lại",

@@ -23,16 +23,31 @@ def compute_checksum(payload_without_checksum: dict[str, Any]) -> str:
     return f"sha256:{digest}"
 
 
-def verify_checksum(payload: dict[str, Any]) -> None:
-    from services.org_scenario_io.errors import OrgScenarioIOError
-
+def checksum_mismatch_warning(payload: dict[str, Any]) -> str | None:
+    """Return a user-facing warning when export checksum does not match body (edited file)."""
     expected = payload.get("checksum")
     if not expected:
-        return
+        return None
     body = {k: v for k, v in payload.items() if k != "checksum"}
     actual = compute_checksum(body)
-    if str(expected) != actual:
-        raise OrgScenarioIOError("Export checksum mismatch; file may have been edited", code="CHECKSUM_MISMATCH")
+    if str(expected) == actual:
+        return None
+    return (
+        "File có thể đã chỉnh sửa sau khi tải xuống từ hệ thống. "
+        "Đã nhập theo nội dung trong file."
+    )
+
+
+def verify_checksum(payload: dict[str, Any]) -> None:
+    """Strict checksum gate (tests / callers that require tamper detection)."""
+    from services.org_scenario_io.errors import OrgScenarioIOError
+
+    warning = checksum_mismatch_warning(payload)
+    if warning:
+        raise OrgScenarioIOError(
+            "Export checksum mismatch; file may have been edited",
+            code="CHECKSUM_MISMATCH",
+        )
 
 
 class ScenarioSerializer:

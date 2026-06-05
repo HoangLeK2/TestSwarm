@@ -729,7 +729,8 @@ export function useControlRecord(
 
   useEffect(() => {
     if (!initialOrgScenarioId) return;
-    if (initialCampaignId || initialScenarioId || initialTemplateId) return;
+    // campaignId may accompany orgScenarioId (Epic 04) for per-device overrides.
+    if (initialScenarioId || initialTemplateId) return;
     Promise.all([
       orgScenariosApi.get(initialOrgScenarioId),
       orgScenariosApi.getBody(initialOrgScenarioId)

@@ -24,7 +24,7 @@ function extraDevOrigins(): string[] {
   } catch {
     // ignore
   }
-  return [...origins];
+  return Array.from(origins);
 }
 
 // Define the base Next.js configuration

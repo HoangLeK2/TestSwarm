@@ -168,8 +168,8 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   }, [artifact.id, detail.id]);
 
   const imageSrc = needsProxyImage
-    ? proxyImageSrc ?? null
-    : directImageUrl ?? null;
+    ? (proxyImageSrc ?? null)
+    : (directImageUrl ?? null);
   const imageLoadFailed =
     shouldShowImagePreview &&
     !artifactExpired &&
@@ -215,7 +215,14 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [artifact.id, detail.id, isImage, artifactExpired, resolvedUrl, showFullText]);
+  }, [
+    artifact.id,
+    detail.id,
+    isImage,
+    artifactExpired,
+    resolvedUrl,
+    showFullText
+  ]);
 
   const displayText = useMemo(() => {
     if (!textPreview) return null;
@@ -282,7 +289,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
               asChild
             >
               <a
-                href={directImageUrl}
+                href={directImageUrl ?? undefined}
                 target='_blank'
                 rel='noopener noreferrer'
               >
@@ -318,7 +325,11 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
                 alt={artifact.label}
                 className='max-h-[min(60vh,520px)] w-full object-contain'
                 onError={() => {
-                  if (directImageUrl && !directImageFailed && !needsProxyImage) {
+                  if (
+                    directImageUrl &&
+                    !directImageFailed &&
+                    !needsProxyImage
+                  ) {
                     setDirectImageFailed(true);
                   }
                 }}

@@ -111,7 +111,7 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
       url: ROUTES.DASHBOARD.ACTIVITY_HISTORY.ROOT,
       icon: 'history',
       permission: { object: 'analytics', action: 'read' }
-    },
+    }
   ]
 };
 

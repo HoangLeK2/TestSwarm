@@ -199,47 +199,47 @@ services:
   #   #   network ADB (adb connect) or run agent-boot on the host.
   #   command: ["--relay-only"]
 
-  # frontend:
-  #   build:
-  #     context: ./front-end
-  #     dockerfile: Dockerfile
-  #     args:
-  #       NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
-  #       NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
-  #       NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
-  #       NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
-  #       NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
-  #   env_file:
-  #     - ./.env
-  #   restart: unless-stopped
-  #   depends_on:
-  #     farm:
-  #       condition: service_healthy
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
-  #     NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
-  #     NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
-  #     DEVICE_FARM_BACKEND_URL: ${DEVICE_FARM_BACKEND_URL:-http://farm:8081}
-  #     LOW_BW_MODE: ${LOW_BW_MODE:-true}
-  #     LOW_BW_FRAME_SKIP: ${LOW_BW_FRAME_SKIP:-2}
-  #     NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
-  #     NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
-
-  minio:
-    profiles: [minio]
-    image: minio/minio:latest
+  frontend:
+    build:
+      context: ./front-end
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
+        NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
+        NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+    env_file:
+      - ./.env
     restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    depends_on:
+      farm:
+        condition: service_healthy
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    volumes:
-      - minio_data:/data
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
+      NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
+      NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
+      DEVICE_FARM_BACKEND_URL: ${DEVICE_FARM_BACKEND_URL:-http://farm:8081}
+      LOW_BW_MODE: ${LOW_BW_MODE:-true}
+      LOW_BW_FRAME_SKIP: ${LOW_BW_FRAME_SKIP:-2}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+
+  # minio:
+  #   profiles: [minio]
+  #   image: minio/minio:latest
+  #   restart: unless-stopped
+  #   command: server /data --console-address ":9001"
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+  #   ports:
+  #     - "${MINIO_API_PORT:-9000}:9000"
+  #     - "${MINIO_CONSOLE_PORT:-9001}:9001"
+  #   volumes:
+  #     - minio_data:/data
 
   # Dev only: public GET on buckets (giống R2 public). Chạy tay sau khi bật profile minio:
   #   docker compose --profile minio up -d && docker compose --profile minio run --rm minio-init

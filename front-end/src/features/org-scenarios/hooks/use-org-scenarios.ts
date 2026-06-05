@@ -216,7 +216,11 @@ export function useImportOrgScenario() {
       prepareImportScenarioFile(file).then(({ file: prepared }) => {
         const mode = resolve ?? 'create_stub';
         if (targetScenarioId) {
-          return importOrgScenarioFileIntoExisting(prepared, targetScenarioId, mode);
+          return importOrgScenarioFileIntoExisting(
+            prepared,
+            targetScenarioId,
+            mode
+          );
         }
         return orgScenariosApi.importFile(prepared, resolve);
       }),

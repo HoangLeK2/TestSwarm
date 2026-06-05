@@ -207,11 +207,13 @@ export function DlqEntryDetailDrawer({
   const reasonRaw = entry.failure_reason?.trim() || '';
   const showReason = Boolean(reasonRaw && reasonRaw !== errorRaw);
   const showError = Boolean(errorRaw);
-  const refs = Object.entries(entry.artifact_refs ?? {}).filter(
-    ([, url]) => Boolean(url)
+  const refs = Object.entries(entry.artifact_refs ?? {}).filter(([, url]) =>
+    Boolean(url)
   );
   const previewUrl =
-    refs.find(([k]) => k === 'screenshot_post' || k === 'screenshot_pre')?.[1] ??
+    refs.find(
+      ([k]) => k === 'screenshot_post' || k === 'screenshot_pre'
+    )?.[1] ??
     refs.find(([k]) => k === 'url')?.[1] ??
     null;
 
@@ -233,7 +235,9 @@ export function DlqEntryDetailDrawer({
               </Badge>
             ) : null}
           </div>
-          <SheetTitle className='text-lg'>{t('monitorDlqDetailTitle')}</SheetTitle>
+          <SheetTitle className='text-lg'>
+            {t('monitorDlqDetailTitle')}
+          </SheetTitle>
           <SheetDescription className='text-sm'>
             {t('monitorDlqDetailSubtitle', {
               device: entry.device_serial,
@@ -326,7 +330,10 @@ export function DlqEntryDetailDrawer({
                     <DetailRow
                       label={t('monitorDlqDetailFailedStepLabel')}
                       value={
-                        <Badge variant='secondary' className='font-mono text-xs'>
+                        <Badge
+                          variant='secondary'
+                          className='font-mono text-xs'
+                        >
                           {entry.failed_step_id}
                         </Badge>
                       }
@@ -448,7 +455,9 @@ export function DlqEntryDetailDrawer({
                     >
                       <a href={url} target='_blank' rel='noreferrer'>
                         <span className='min-w-0 flex-1 truncate text-xs font-medium'>
-                          {t(ARTIFACT_LABEL_KEYS[key] ?? 'monitorDlqArtifactUrl')}
+                          {t(
+                            ARTIFACT_LABEL_KEYS[key] ?? 'monitorDlqArtifactUrl'
+                          )}
                         </span>
                         <ExternalLink className='size-3.5 shrink-0 opacity-60' />
                       </a>

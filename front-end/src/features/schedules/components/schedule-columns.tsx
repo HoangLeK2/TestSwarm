@@ -48,14 +48,17 @@ export function getScheduleColumns(
       header: tList('colCron'),
       cell: ({ row }) => {
         const s = row.original;
-        const human = cronExpressionToHumanReadable(s.cron_expression, tCron);
-        const parsed = human !== s.cron_expression;
+        const cronExpression = s.cron_expression ?? '';
+        const human = cronExpression
+          ? cronExpressionToHumanReadable(cronExpression, tCron)
+          : '-';
+        const parsed = human !== cronExpression;
         return (
           <div className='space-y-0.5'>
             <div className='truncate text-sm'>{human}</div>
-            {!parsed && (
+            {cronExpression && !parsed && (
               <div className='truncate font-mono text-[11px] text-muted-foreground'>
-                {s.cron_expression}
+                {cronExpression}
               </div>
             )}
           </div>

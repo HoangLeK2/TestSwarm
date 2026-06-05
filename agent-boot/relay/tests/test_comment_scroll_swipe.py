@@ -13,10 +13,11 @@ def test_resolve_comment_scroll_swipe_uses_scrollable_bounds() -> None:
     assert swipe is not None
     fx, fy, tx, ty = swipe
     # RecyclerView in _sheet_xml: [0,200][720,1550] — swipe in body column, not avatar strip.
-    assert fx >= int(720 * 0.60)
+    assert fx >= int(720 * 0.72)
     assert fx <= 720
     assert 200 < fy < 1550
     assert 200 <= ty < fy
+    assert fy - ty >= 220
 
 
 def test_resolve_comment_scroll_swipe_missing_scrollable_returns_none() -> None:
@@ -61,9 +62,11 @@ async def test_collect_comment_snapshots_swipe_inside_scrollable_node() -> None:
     # RecyclerView swipe first; if hierarchy yields no new comment rows, one screen-fallback swipe.
     assert 1 <= len(swipes) <= 2
     fx, fy, tx, ty = swipes[0]["fx"], swipes[0]["fy"], swipes[0]["tx"], swipes[0]["ty"]
-    assert 0 <= fx <= 720
+    assert int(720 * 0.72) <= fx <= 720
     assert 200 < fy < 1550
     assert ty < fy
+    assert fy - ty >= 220
+    assert swipes[0]["duration"] >= 0.32
     assert len(snapshots) >= 1
 
 
@@ -112,3 +115,37 @@ async def test_collect_comment_snapshots_keeps_distinct_xml_frames() -> None:
     assert len(snapshots) >= 3
     joined = "\n".join(snapshots)
     assert "frame-b" in joined and "frame-d" in joined
+
+
+@pytest.mark.asyncio
+async def test_collect_comment_snapshots_reuses_swipe_coords_within_batch(monkeypatch) -> None:
+    xml = _sheet_xml()
+    exec_ = _CommentScrollExecutor(xml)
+    calls = 0
+
+    def fake_resolve(xml_arg: str, *, distance_ratio: float = 0.22):
+        nonlocal calls
+        calls += 1
+        assert xml_arg == xml
+        return 540, 1100, 540, 760
+
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.resolve_comment_scroll_swipe_from_xml",
+        fake_resolve,
+    )
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 3,
+            "comment_swipes_per_dump": 3,
+            "min_comment_scan_passes": 0,
+            "comment_scroll_pause_s": 0,
+        },
+    )
+
+    assert err is None
+    assert snapshots
+    assert calls == 1

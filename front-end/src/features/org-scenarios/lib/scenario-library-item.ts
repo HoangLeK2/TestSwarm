@@ -22,6 +22,11 @@ export type ScenarioLibraryItem = {
   template?: ScenarioTemplateOut;
 };
 
+type TemplateGraphPayload = ScenarioTemplateOut & {
+  nodes?: unknown[];
+  edges?: unknown[];
+};
+
 function parseTemplateTags(tags: string | undefined): string[] {
   return String(tags ?? '')
     .split(',')
@@ -34,8 +39,9 @@ function templateKind(template: ScenarioTemplateOut): string {
   if (Array.isArray(steps) && steps.length > 0) {
     return 'sequence';
   }
-  const nodes = template.nodes ?? [];
-  const edges = template.edges ?? [];
+  const graph = template as TemplateGraphPayload;
+  const nodes = graph.nodes ?? [];
+  const edges = graph.edges ?? [];
   if (
     (Array.isArray(nodes) && nodes.length > 0) ||
     (Array.isArray(edges) && edges.length > 0)
@@ -57,7 +63,7 @@ export function orgScenarioToLibraryItem(
     scenario_version: scenario.scenario_version,
     tags: scenario.tags ?? [],
     updated_at: String(scenario.updated_at),
-    is_runnable: scenario.is_runnable,
+    is_runnable: scenario.is_runnable ?? false,
     source: 'org',
     is_system_template: false,
     orgSummary: scenario
@@ -68,7 +74,8 @@ export function templateToLibraryItem(
   template: ScenarioTemplateOut
 ): ScenarioLibraryItem {
   const steps = template.steps ?? [];
-  const nodes = template.nodes ?? [];
+  const graph = template as TemplateGraphPayload;
+  const nodes = graph.nodes ?? [];
   return {
     id: template.id,
     name: templateDisplayLabel(template),

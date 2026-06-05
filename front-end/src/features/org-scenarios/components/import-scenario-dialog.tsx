@@ -91,7 +91,9 @@ export function ImportOrgScenarioDialog({
   const title = intoExisting ? t('intoExistingTitle') : t('title');
   const hint = intoExisting ? t('intoExistingHint') : t('hint');
   const triggerText = triggerLabel ?? t('trigger');
-  const failedMessage = intoExisting ? t('intoExistingFailed') : t('importFailed');
+  const failedMessage = intoExisting
+    ? t('intoExistingFailed')
+    : t('importFailed');
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>

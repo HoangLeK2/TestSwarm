@@ -6,7 +6,7 @@ export function normalizeDeviceShellCommand(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return trimmed;
 
-  const adbShell = trimmed.match(/^adb(?:\s+-s\s+\S+)?\s+shell\s+(.*)$/is);
+  const adbShell = trimmed.match(/^adb(?:\s+-s\s+\S+)?\s+shell\s+([\s\S]*)$/i);
   if (adbShell) {
     return adbShell[1]?.trim() ?? '';
   }

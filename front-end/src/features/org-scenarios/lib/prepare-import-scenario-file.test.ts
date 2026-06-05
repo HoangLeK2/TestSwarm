@@ -9,7 +9,8 @@ test('prepareImportScenarioFile strips checksum from JSON', async () => {
     scenario: { name: 'A', body: { steps: [] } }
   });
   const file = new File([raw], 's.json', { type: 'application/json' });
-  const { file: next, strippedChecksum } = await prepareImportScenarioFile(file);
+  const { file: next, strippedChecksum } =
+    await prepareImportScenarioFile(file);
   assert.equal(strippedChecksum, true);
   const parsed = JSON.parse(await next.text()) as Record<string, unknown>;
   assert.equal('checksum' in parsed, false);
@@ -23,7 +24,8 @@ scenario:
   name: B
 `;
   const file = new File([raw], 's.yaml', { type: 'application/x-yaml' });
-  const { file: next, strippedChecksum } = await prepareImportScenarioFile(file);
+  const { file: next, strippedChecksum } =
+    await prepareImportScenarioFile(file);
   assert.equal(strippedChecksum, true);
   const text = await next.text();
   assert.equal(text.includes('checksum:'), false);

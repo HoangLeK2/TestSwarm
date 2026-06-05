@@ -110,6 +110,14 @@ export function campaignVariables(
   return (value.variables ?? {}) as Record<string, unknown>;
 }
 
+export function campaignPerDeviceOverrides(
+  value: CampaignOut | CampaignEntityOut | null | undefined
+): Record<string, Record<string, unknown>> {
+  if (!value) return {};
+  const raw = (value as CampaignEntityOut & CampaignOut).per_device_overrides;
+  return (raw ?? {}) as Record<string, Record<string, unknown>>;
+}
+
 /** Map Epic-04 entity payloads to the shape list/detail UI expects (`scenario_refs`, `variables`, …). */
 export function normalizeCampaignOut(
   raw:
@@ -140,7 +148,11 @@ export function normalizeCampaignOut(
       user_id: row.created_by ?? row.user_id ?? null,
       devices: row.devices,
       target_group_id: row.target_group_id,
-      scenario: row.scenario
+      scenario: row.scenario,
+      per_device_overrides: (row.per_device_overrides ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >
     };
   }
 

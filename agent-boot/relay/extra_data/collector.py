@@ -17,7 +17,7 @@ _COMMENT_SCROLL_MAX_SWIPES = 4
 _COMMENT_SWIPES_PER_DUMP = 1
 _COMMENT_NO_GROWTH_BREAK = 1
 _COMMENT_MIN_SCAN_PASSES = 1
-_COMMENT_SCROLL_DURATION_MS = 180
+_COMMENT_SCROLL_DURATION_MS = 360
 _COMMENT_SCROLL_PAUSE_S = 0.05
 _COMMENT_DEEP_SCROLL_MAX_SWIPES = 80
 _COMMENT_DEEP_SWIPES_PER_DUMP = 6
@@ -219,7 +219,7 @@ async def _u2_click_comment_target(
     cand: dict[str, Any],
     context: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Prefer U2 node click (xpath/spec/selector); fall back to coordinate tap."""
+    """Prefer bounds-pinned U2 node click; fall back to coordinate tap."""
     from relay.extra_data.parsers.facebook.comment_pipeline import comment_tap_point
 
     use_u2 = _bool_context(context, "comment_target_u2_click", True)
@@ -233,8 +233,9 @@ async def _u2_click_comment_target(
         xpath = u2_click.get("xpath")
         if xpath and await _u2_click_spec(executor, serial, {"xpath": xpath}, timeout=timeout):
             return True, "click_spec_xpath"
+        allow_selector = _bool_context(context, "comment_target_selector_fallback", False)
         selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
-        if selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
+        if allow_selector and selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
             return True, "click_selector"
 
     bounds = cand.get("bounds")
@@ -268,8 +269,9 @@ async def _u2_click_post_open_target(
         xpath = u2_click.get("xpath")
         if xpath and await _u2_click_spec(executor, serial, {"xpath": xpath}, timeout=timeout):
             return True, "click_spec_xpath"
+        allow_selector = _bool_context(context, "post_open_selector_fallback", False)
         selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
-        if selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
+        if allow_selector and selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
             return True, "click_selector"
 
     bounds = target.get("bounds")
@@ -1018,15 +1020,15 @@ async def _collect_comment_snapshots(
     unchanged_dumps = 0
     scroll_xml = initial_xml
     # Slightly longer than minimum so Android treats the gesture as scroll, not tap.
-    duration_s = max(0.12, duration_ms / 1000.0)
+    duration_s = max(0.32, duration_ms / 1000.0)
     settle_after_batch_s = max(swipe_pause_s, 0.14)
     use_screen_swipe = False
     swipes_done = 0
 
     async def _screen_swipe_coords() -> tuple[int, int, int, int]:
         width, height = await _window_size(executor, serial)
-        x = int(width * 0.68)
-        ratio = max(0.12, min(0.75, float(distance)))
+        x = int(width * 0.76)
+        ratio = max(0.26, min(0.75, float(distance)))
         fy = int(height * 0.58)
         ty = int(height * max(0.22, 0.58 - ratio))
         return x, fy, x, ty
@@ -1039,8 +1041,8 @@ async def _collect_comment_snapshots(
             return node_swipe
         return await _screen_swipe_coords()
 
-    async def _do_swipe() -> bool:
-        fx, fy, tx, ty = await _swipe_coords()
+    async def _do_swipe(coords: tuple[int, int, int, int] | None = None) -> bool:
+        fx, fy, tx, ty = coords if coords is not None else await _swipe_coords()
         swipe_result = await executor.run_batch(
             serial,
             [{
@@ -1062,8 +1064,9 @@ async def _collect_comment_snapshots(
 
         batch_swipes = min(swipes_per_dump, swipe_budget - swipes_done)
         swipes_before_batch = swipes_done
+        batch_coords = await _swipe_coords()
         for _ in range(batch_swipes):
-            if not await _do_swipe():
+            if not await _do_swipe(batch_coords):
                 logger.warning(
                     "[%s] extra_data comment swipe failed at swipe %d",
                     serial,

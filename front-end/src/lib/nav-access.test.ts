@@ -124,19 +124,25 @@ test('MCP token settings route uses RBAC and stays out of tools navigation', () 
     new URL('../config/dashboard-nav.ts', import.meta.url),
     'utf8'
   );
-  const mcpRouteRule = routeRules.match(
-    /\{\s*prefix:\s*ROUTES\.MCP\.ROOT,[\s\S]*?\n\s*\}/
-  )?.[0] ?? '';
-  const mcpNavItem = navConfig.match(
-    /\{\s*titleKey:\s*'mcp_tokens',[\s\S]*?\n\s*\}/
-  )?.[0] ?? '';
-  const mainNav = navConfig.match(
-    /export const DASHBOARD_MAIN_NAV_GROUPS = \[[\s\S]*?\] as const;/
-  )?.[0] ?? '';
+  const mcpRouteRule =
+    routeRules.match(/\{\s*prefix:\s*ROUTES\.MCP\.ROOT,[\s\S]*?\n\s*\}/)?.[0] ??
+    '';
+  const mcpNavItem =
+    navConfig.match(/\{\s*titleKey:\s*'mcp_tokens',[\s\S]*?\n\s*\}/)?.[0] ?? '';
+  const mainNav =
+    navConfig.match(
+      /export const DASHBOARD_MAIN_NAV_GROUPS = \[[\s\S]*?\] as const;/
+    )?.[0] ?? '';
 
-  assert.match(mcpRouteRule, /permission:\s*\{\s*object:\s*'mcp',\s*action:\s*'read'\s*\}/);
+  assert.match(
+    mcpRouteRule,
+    /permission:\s*\{\s*object:\s*'mcp',\s*action:\s*'read'\s*\}/
+  );
   assert.doesNotMatch(mcpRouteRule, /roles:\s*\['superadmin'\]/);
-  assert.match(mcpNavItem, /permission:\s*\{\s*object:\s*'mcp',\s*action:\s*'read'\s*\}/);
+  assert.match(
+    mcpNavItem,
+    /permission:\s*\{\s*object:\s*'mcp',\s*action:\s*'read'\s*\}/
+  );
   assert.match(mcpNavItem, /url:\s*ROUTES\.MCP\.ROOT/);
   assert.doesNotMatch(mainNav, /titleKey:\s*'mcp_tokens'/);
   assert.doesNotMatch(navConfig, /titleKey:\s*'mcp_agent_tools'/);

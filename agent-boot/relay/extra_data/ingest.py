@@ -872,6 +872,10 @@ class ExtraDataIngestServer:
             if post_id_map:
                 result["post_id_map"] = post_id_map
             active_parent = _active_parent_from_opened_post(context, row_items, rows)
+            if active_parent is None and context.get("open_post_detail") and row_items and rows:
+                active_parent = _active_parent_post_payload(row_items[0], rows[0])
+                if active_parent:
+                    active_parent["selection_reason"] = "post_detail_first_parsed"
             if active_parent is None and len(row_items) == 1 and len(rows) == 1:
                 active_parent = _active_parent_post_payload(row_items[0], rows[0])
             if active_parent:

@@ -4,7 +4,10 @@ import React from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ProtoOrganization } from '@/features/device-farm';
 import { useAuthContext } from '@/features/auth/providers/auth-provider';
-import { DEVICES_LIST_KEY, FLEET_STATS_KEY } from '@/features/devices/lib/device-query-keys';
+import {
+  DEVICES_LIST_KEY,
+  FLEET_STATS_KEY
+} from '@/features/devices/lib/device-query-keys';
 import { pickDefaultOrganization } from '../lib/pick-default-organization';
 import { useOrganizationsQuery } from '../hooks/use-organizations';
 
@@ -88,7 +91,9 @@ export function OrganizationProvider({
     void queryClient.invalidateQueries({ queryKey: DEVICES_LIST_KEY });
     void queryClient.invalidateQueries({ queryKey: FLEET_STATS_KEY });
     void queryClient.invalidateQueries({ queryKey: ['notifications'] });
-    void queryClient.invalidateQueries({ queryKey: ['control-record-device-map'] });
+    void queryClient.invalidateQueries({
+      queryKey: ['control-record-device-map']
+    });
     void queryClient.invalidateQueries({ queryKey: ['relay-agents'] });
   }, [currentOrg?.id, queryClient]);
 

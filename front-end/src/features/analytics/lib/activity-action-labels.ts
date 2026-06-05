@@ -333,7 +333,7 @@ export function resolveDomainActivityDescription(
   const campaignId = detailString(details, 'campaign_id');
   const executionId = detailString(details, 'execution_id');
   const scenarioId = detailString(details, 'scenario_id');
-  const reason = item.reason?.trim() || detailString(details, 'reason');
+  const reason = detailString(details, 'reason');
   const releaseReason = detailString(details, 'release_reason');
 
   const scheduleId = detailString(details, 'schedule_id');
@@ -380,8 +380,7 @@ export function resolveDomainActivityDescription(
     parts.push(deviceSerialLine(item.device_serial.trim()));
   } else if (item.action.startsWith('session.')) {
     const serial =
-      detailString(details, 'device_serial') ||
-      nestedPathSerial(details);
+      detailString(details, 'device_serial') || nestedPathSerial(details);
     if (serial) parts.push(deviceSerialLine(serial));
   }
 

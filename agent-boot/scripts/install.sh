@@ -42,4 +42,7 @@ fi
 echo ""
 echo "Done. Next:"
 echo "  adb devices"
+if [[ "$(uname -s)" == "Linux" ]]; then
+  echo "  ./scripts/run.sh              # keep host awake + relay (recommended on Linux)"
+fi
 echo "  uv run main.py --relay-only"

@@ -37,11 +37,12 @@ export const ROUTES = {
     /** Mở trang điều khiển để ghi và lưu vào kịch bản tổ chức. */
     CONTROL_RECORD_EDIT_ORG_SCENARIO: (
       orgScenarioId: string,
-      opts?: { serial?: string; returnTo?: string }
+      opts?: { serial?: string; returnTo?: string; campaignId?: string }
     ) => {
       const params = new URLSearchParams({ orgScenarioId });
       if (opts?.serial) params.set('serial', opts.serial);
       if (opts?.returnTo) params.set('returnTo', opts.returnTo);
+      if (opts?.campaignId) params.set('campaignId', opts.campaignId);
       return `/dashboard/device-farm/control?${params.toString()}`;
     }
   },

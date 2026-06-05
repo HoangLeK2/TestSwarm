@@ -216,9 +216,7 @@ export function DeviceTile({
                   ? 'flex flex-col items-center gap-2'
                   : 'inline-flex items-stretch gap-2.5'
               )}
-              style={
-                compact ? undefined : { height: mirrorRowHeightPx }
-              }
+              style={compact ? undefined : { height: mirrorRowHeightPx }}
             >
               <DeviceAndroidFrame
                 screenWidth={mockupScreenWidth}

@@ -496,11 +496,7 @@ export function StepRetryPolicySection({
                 value={policy.jitter}
                 onChange={(e) =>
                   updateRetry(
-                    withRetryField(
-                      step.retry,
-                      'jitter',
-                      Number(e.target.value)
-                    )
+                    withRetryField(step.retry, 'jitter', Number(e.target.value))
                   )
                 }
               />

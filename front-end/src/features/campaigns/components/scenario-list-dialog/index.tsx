@@ -118,7 +118,10 @@ export function ScenarioListDialog({
     onOpenChange(false);
     const returnTo = ROUTES.CAMPAIGNS.DETAIL(campaign.id);
     router.push(
-      ROUTES.DEVICES.CONTROL_RECORD_EDIT_ORG_SCENARIO(scenarioId, { returnTo })
+      ROUTES.DEVICES.CONTROL_RECORD_EDIT_ORG_SCENARIO(scenarioId, {
+        returnTo,
+        campaignId: campaign.id
+      })
     );
   };
 

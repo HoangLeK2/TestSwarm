@@ -35,7 +35,9 @@ const DESCRIPTION_SELECTOR_BYS = new Set([
   'content-desc'
 ]);
 
-function normalizeSelectorByForUi(by: string): (typeof SELECTOR_BY_OPTIONS)[number] {
+function normalizeSelectorByForUi(
+  by: string
+): (typeof SELECTOR_BY_OPTIONS)[number] {
   if (by === 'content-desc') return 'description';
   if ((SELECTOR_BY_OPTIONS as readonly string[]).includes(by)) {
     return by as (typeof SELECTOR_BY_OPTIONS)[number];
@@ -151,8 +153,7 @@ const SELECTOR_BY_I18N_KEY: Record<
   'class name': 'byOptions.class_name',
   description: 'byOptions.description',
   descriptionContains: 'byOptions.descriptionContains',
-  descriptionStartsWith: 'byOptions.descriptionStartsWith',
-  'content-desc': 'byOptions.content_desc'
+  descriptionStartsWith: 'byOptions.descriptionStartsWith'
 };
 
 function SelectorBySelect({

@@ -14,8 +14,7 @@ test('rewriteLegacyObjectStorageUrl maps localhost MinIO to R2 public base', () 
   process.env.NEXT_PUBLIC_OBJECT_STORAGE_PUBLIC_BASE_URL =
     'https://pub.example.r2.dev';
   try {
-    const raw =
-      'http://localhost:9000/content-screenshots/abc123.jpg';
+    const raw = 'http://localhost:9000/content-screenshots/abc123.jpg';
     assert.equal(
       rewriteLegacyObjectStorageUrl(raw),
       'https://pub.example.r2.dev/content-screenshots/abc123.jpg'

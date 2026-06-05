@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { pickDefaultOrganization } from './pick-default-organization';
-import type { ProtoOrganization } from '@/features/device-farm';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import type { ProtoOrganization } from '../../device-farm/services/client.ts';
+import { pickDefaultOrganization } from './pick-default-organization.ts';
 
 function org(
   id: string,
@@ -15,27 +17,25 @@ function org(
   };
 }
 
-describe('pickDefaultOrganization', () => {
-  it('prefers defaultOrgId over stored personal workspace', () => {
-    const orgs = [
-      org('team', "Hoang Le's Workspace", 'dev@gmail.com'),
-      org('mine', "Hoang Le's Workspace", 'guest@gmail.com')
-    ];
-    const picked = pickDefaultOrganization(orgs, 'mine', {
-      preferredOrgId: 'team',
-      userEmail: 'guest@gmail.com'
-    });
-    expect(picked.id).toBe('team');
+test('pickDefaultOrganization prefers defaultOrgId over stored personal workspace', () => {
+  const orgs = [
+    org('team', "Hoang Le's Workspace", 'dev@gmail.com'),
+    org('mine', "Hoang Le's Workspace", 'guest@gmail.com')
+  ];
+  const picked = pickDefaultOrganization(orgs, 'mine', {
+    preferredOrgId: 'team',
+    userEmail: 'guest@gmail.com'
   });
+  assert.equal(picked.id, 'team');
+});
 
-  it('prefers collaboration org when no defaultOrgId', () => {
-    const orgs = [
-      org('team', "Hoang Le's Workspace", 'dev@gmail.com'),
-      org('mine', "Hoang Le's Workspace", 'guest@gmail.com')
-    ];
-    const picked = pickDefaultOrganization(orgs, 'mine', {
-      userEmail: 'guest@gmail.com'
-    });
-    expect(picked.id).toBe('team');
+test('pickDefaultOrganization prefers collaboration org when no defaultOrgId', () => {
+  const orgs = [
+    org('team', "Hoang Le's Workspace", 'dev@gmail.com'),
+    org('mine', "Hoang Le's Workspace", 'guest@gmail.com')
+  ];
+  const picked = pickDefaultOrganization(orgs, 'mine', {
+    userEmail: 'guest@gmail.com'
   });
+  assert.equal(picked.id, 'team');
 });

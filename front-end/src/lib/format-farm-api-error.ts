@@ -153,7 +153,10 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
     if (e.message === 'EXPORT_HTML_ERROR') {
       return 'Không tải được file kịch bản — máy chủ trả về trang lỗi. Kiểm tra địa chỉ API trong cấu hình hoặc đăng nhập lại.';
     }
-    if (e.message === 'EXPORT_API_ERROR' || e.message === 'EXPORT_INVALID_RESPONSE') {
+    if (
+      e.message === 'EXPORT_API_ERROR' ||
+      e.message === 'EXPORT_INVALID_RESPONSE'
+    ) {
       return 'Không tải được file kịch bản. Thử đăng nhập lại; nếu vẫn lỗi, kiểm tra máy chủ farm đang chạy.';
     }
     if (e.message.trim()) return e.message.trim();

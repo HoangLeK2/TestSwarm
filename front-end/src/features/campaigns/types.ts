@@ -110,6 +110,8 @@ export type CampaignOut = {
   scenario_refs?: CampaignScenarioRefOut[];
   vars?: Record<string, unknown>;
   tags?: string[];
+  /** Epic 04 per-device variable overrides keyed by device_id. */
+  per_device_overrides?: Record<string, Record<string, unknown>>;
 };
 
 export type CampaignDeviceOut = {

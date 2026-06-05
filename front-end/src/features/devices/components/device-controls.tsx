@@ -29,10 +29,7 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import {
-  DeviceOpsRailSection,
-  type DeviceOpsConfig
-} from './device-ops-rail';
+import { DeviceOpsRailSection, type DeviceOpsConfig } from './device-ops-rail';
 
 interface DeviceControlsProps {
   serial: string;

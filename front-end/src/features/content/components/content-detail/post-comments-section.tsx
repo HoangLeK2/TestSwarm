@@ -85,8 +85,7 @@ export function PostCommentsSection({ post }: Props) {
   };
 
   const visibleComments = useMemo(
-    () =>
-      comments.filter((c) => Boolean(resolveCommentDisplayBody(c).trim())),
+    () => comments.filter((c) => Boolean(resolveCommentDisplayBody(c).trim())),
     [comments]
   );
 

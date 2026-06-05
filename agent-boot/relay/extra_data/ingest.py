@@ -344,6 +344,12 @@ def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
     )
 
 
+def _requires_verified_comment_parent(context: dict[str, Any]) -> bool:
+    if context.get("require_verified_parent") is not None:
+        return bool(context.get("require_verified_parent"))
+    return str(context.get("collection") or "").strip() == "fb_group_posts"
+
+
 def _parsed_comment_parent_post_ids(items: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -759,7 +765,7 @@ class ExtraDataIngestServer:
                     items=items,
                 )
                 parent_id_scoped = bool(parent_id)
-            require_verified_parent = bool(context.get("require_verified_parent"))
+            require_verified_parent = _requires_verified_comment_parent(context)
             has_verified_parent_context = _has_verified_comment_parent_context(context)
             if (
                 is_comment_strategy

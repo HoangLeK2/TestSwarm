@@ -4,6 +4,57 @@ from __future__ import annotations
 from sqlalchemy import text
 
 
+async def _normalize_execution_events_org_column(conn) -> str:
+    """Ensure execution_events has org_id (create_all may have created org_id already)."""
+    await conn.execute(
+        text(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                     WHERE table_schema = 'public' AND table_name = 'execution_events'
+                ) THEN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                         WHERE table_name = 'execution_events' AND column_name = 'organization_id'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                         WHERE table_name = 'execution_events' AND column_name = 'org_id'
+                    ) THEN
+                        ALTER TABLE execution_events
+                            RENAME COLUMN organization_id TO org_id;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                         WHERE table_name = 'execution_events'
+                           AND column_name IN ('org_id', 'organization_id')
+                    ) THEN
+                        ALTER TABLE execution_events
+                            ADD COLUMN org_id VARCHAR(36);
+                    END IF;
+                END IF;
+            END $$;
+            """
+        )
+    )
+    result = await conn.execute(
+        text(
+            """
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'execution_events'
+               AND column_name IN ('org_id', 'organization_id')
+             ORDER BY CASE column_name WHEN 'org_id' THEN 0 ELSE 1 END
+             LIMIT 1
+            """
+        )
+    )
+    row = result.first()
+    return row[0] if row is not None else "org_id"
+
+
 async def upgrade(conn) -> None:
     await conn.execute(
         text(
@@ -13,7 +64,7 @@ async def upgrade(conn) -> None:
                 event_id         VARCHAR(36)  NOT NULL UNIQUE,
                 event_type       VARCHAR(64)  NOT NULL,
                 schema_version   VARCHAR(16)  NOT NULL DEFAULT '1',
-                organization_id  VARCHAR(36)  NOT NULL,
+                org_id           VARCHAR(36)  NOT NULL,
                 campaign_id      VARCHAR(36),
                 execution_id     VARCHAR(36)  NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
                 step_id          VARCHAR(128),
@@ -26,6 +77,7 @@ async def upgrade(conn) -> None:
             """
         )
     )
+    org_column = await _normalize_execution_events_org_column(conn)
     await conn.execute(
         text(
             """
@@ -45,9 +97,9 @@ async def upgrade(conn) -> None:
     )
     await conn.execute(
         text(
-            """
+            f"""
             CREATE INDEX IF NOT EXISTS idx_execution_events_org_type
-            ON execution_events (organization_id, event_type, occurred_at DESC);
+            ON execution_events ({org_column}, event_type, occurred_at DESC);
             """
         )
     )

@@ -21,7 +21,12 @@ export const DEFAULT_STEP_RETRY_POLICY: StepRetryPolicy = {
 const MAX_ATTEMPTS = 10;
 const MAX_BACKOFF_MS = 60_000;
 
-function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+function clampNumber(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number
+) {
   const n =
     typeof value === 'number'
       ? value
@@ -57,12 +62,11 @@ export function formatRetryReasons(raw: unknown): string {
 
 export function coerceStepRetryPolicy(raw: unknown): StepRetryPolicy {
   const policy =
-    raw && typeof raw === 'object'
-      ? (raw as Record<string, unknown>)
-      : {};
+    raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const strategy =
-    String(policy.backoff_strategy ?? DEFAULT_STEP_RETRY_POLICY.backoff_strategy) ===
-    'fixed'
+    String(
+      policy.backoff_strategy ?? DEFAULT_STEP_RETRY_POLICY.backoff_strategy
+    ) === 'fixed'
       ? 'fixed'
       : 'exponential';
 
@@ -90,12 +94,7 @@ export function coerceStepRetryPolicy(raw: unknown): StepRetryPolicy {
       )
     ),
     backoff_strategy: strategy,
-    jitter: clampNumber(
-      policy.jitter,
-      DEFAULT_STEP_RETRY_POLICY.jitter,
-      0,
-      1
-    )
+    jitter: clampNumber(policy.jitter, DEFAULT_STEP_RETRY_POLICY.jitter, 0, 1)
   };
 
   if (policy.backoff_cap_ms != null) {

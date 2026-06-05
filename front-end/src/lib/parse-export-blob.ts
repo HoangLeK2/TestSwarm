@@ -65,7 +65,9 @@ export async function blobFromExportResponse(
     throw new Error('EXPORT_EMPTY_FILE');
   }
 
-  const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
+  const contentType = String(
+    response.headers['content-type'] ?? ''
+  ).toLowerCase();
   if (contentType.includes('yaml') || contentType.includes('x-yaml')) {
     return data;
   }
@@ -88,7 +90,10 @@ export async function blobFromExportResponse(
     return throwFromApiErrorBlob(data);
   }
 
-  if (format === 'yaml' && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+  if (
+    format === 'yaml' &&
+    (trimmed.startsWith('{') || trimmed.startsWith('['))
+  ) {
     return throwFromApiErrorBlob(data);
   }
 

@@ -2,7 +2,7 @@ import type { ContentItem } from '../services/api';
 import {
   resolveCommentDisplayBody,
   shouldHideParentSecondary
-} from './comment-display.ts';
+} from './comment-display';
 
 export interface CommentParentSummary {
   primary: string;

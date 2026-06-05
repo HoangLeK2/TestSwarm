@@ -17,8 +17,8 @@ const t = (key: string, values?: Record<string, string | number>) => {
     'statusLabels.running': 'Running',
     'statusLabels.cancelled': 'Cancelled',
     'releaseReasonLabels.execution_terminal': 'Run finished',
-    'contextCampaign': 'Campaign {id}',
-    'deviceSerial': 'Device {serial}'
+    contextCampaign: 'Campaign {id}',
+    deviceSerial: 'Device {serial}'
   };
   let out = table[key] ?? key;
   if (values) {
@@ -29,7 +29,9 @@ const t = (key: string, values?: Record<string, string | number>) => {
   return out;
 };
 
-function item(partial: Partial<ActivityLogItem> & Pick<ActivityLogItem, 'action'>): ActivityLogItem {
+function item(
+  partial: Partial<ActivityLogItem> & Pick<ActivityLogItem, 'action'>
+): ActivityLogItem {
   return {
     id: '1',
     action: partial.action,
@@ -94,7 +96,10 @@ test('resolveDedicatedActivityTitle for schedule.run.terminal', () => {
   };
   assert.equal(
     resolveDedicatedActivityTitle(
-      item({ action: 'schedule.run.terminal', details: { status: 'completed' } }),
+      item({
+        action: 'schedule.run.terminal',
+        details: { status: 'completed' }
+      }),
       t2
     ),
     'Scheduled run finished (Completed)'

@@ -1,9 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { DeviceOut, FleetStatsOut } from '../services/manage-api';
-import {
-  devicesListQueryKey,
-  fleetStatsQueryKey
-} from './device-query-keys';
+import { devicesListQueryKey, fleetStatsQueryKey } from './device-query-keys';
 import {
   lifecycleMessageNeedsRefresh,
   type DeviceLifecycleEventPayload,
@@ -72,7 +69,9 @@ export function applyLifecycleMessage(
   }
 
   for (const target of result.invalidate) {
-    void queryClient.invalidateQueries({ queryKey: queryKeyFor(target, orgId) });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeyFor(target, orgId)
+    });
   }
 
   for (const event of result.notifyEvents) {

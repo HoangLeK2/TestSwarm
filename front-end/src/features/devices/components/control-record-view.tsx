@@ -14,10 +14,7 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { ControlRecordMirror } from './control-record/control-record-mirror';
-import {
-  packageFromCurrentApp,
-  type DeviceOpsConfig
-} from './device-ops-rail';
+import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
 import { ManualControlBlockedBanner } from './control-record/manual-control-blocked-banner';
 import { MultiDevicePicker } from './control-record/multi-device-picker';
 import { MultiDeviceStage } from './control-record/multi-device-stage';
@@ -30,7 +27,8 @@ import {
   DeviceVarsJsonPanel,
   formatInitialDeviceVars,
   mergeCampaignScenarioVariables,
-  parseDeviceVarsJson
+  parseDeviceVarsJson,
+  splitDeviceOverridesFromMerged
 } from '@/components/device-vars-json-panel';
 import {
   Select,
@@ -129,6 +127,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
 import {
+  campaignPerDeviceOverrides,
   campaignVariables,
   campaignsApi
 } from '@/features/campaigns/services/api';
@@ -208,6 +207,13 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
     }
   }
   return out;
+}
+
+function deviceSerialMatches(a: string, b: string): boolean {
+  const left = a.trim().toLowerCase();
+  const right = b.trim().toLowerCase();
+  if (!left || !right) return false;
+  return left === right || left.endsWith(right) || right.endsWith(left);
 }
 
 function mergeTemplateVariablesIntoEditor(
@@ -477,6 +483,7 @@ export function ControlRecordView({
   const flowRunningFgIdsRef = useRef<Set<string>>(new Set());
   const [varDialogOpen, setVarDialogOpen] = useState(false);
   const [deviceVarDialogOpen, setDeviceVarDialogOpen] = useState(false);
+  const deviceVarsHydratedKeyRef = useRef<string | null>(null);
   const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<
     string | null
   >(null);
@@ -758,8 +765,16 @@ export function ControlRecordView({
     pendingScenarioDeviceVarsDraftMap,
     setPendingScenarioDeviceVarsDraftMap
   ] = useState<Record<string, Record<string, any>> | null>(null);
-  const activeCampaignId = save.editingContext?.campaignId ?? null;
+  const activeCampaignId =
+    save.editingContext?.campaignId ??
+    (savingOrgScenario ? (initialCampaignId ?? null) : null);
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
+  const usesCampaignDeviceOverrides = Boolean(
+    activeCampaignId && savingOrgScenario && !activeScenarioId
+  );
+  const canManageDeviceVars = Boolean(
+    activeCampaignId && (activeScenarioId || usesCampaignDeviceOverrides)
+  );
   const selectedSerial = device.selectedDevice?.serial ?? null;
   const { currentOrg } = useOrganization();
   const controlRecordOrgId = currentOrg?.id ?? null;
@@ -769,12 +784,25 @@ export function ControlRecordView({
     enabled: Boolean(controlRecordOrgId),
     staleTime: 15_000
   });
+  const campaignDevicesQuery = useQuery({
+    queryKey: ['campaign-devices', activeCampaignId],
+    enabled: !!activeCampaignId,
+    queryFn: () => campaignsApi.getDevices(activeCampaignId!)
+  });
   const selectedDeviceId = useMemo(() => {
     if (!selectedSerial) return null;
+    const matchBySerial = (
+      rows: Array<{ id: string; serial: string }> | undefined
+    ) =>
+      rows?.find((d) => deviceSerialMatches(d.serial, selectedSerial))?.id ??
+      null;
     return (
-      devicesQuery.data?.find((d) => d.serial === selectedSerial)?.id ?? null
+      matchBySerial(devicesQuery.data) ??
+      matchBySerial(campaignDevicesQuery.data)
     );
-  }, [devicesQuery.data, selectedSerial]);
+  }, [devicesQuery.data, campaignDevicesQuery.data, selectedSerial]);
+  const hasCampaignDevices = (campaignDevicesQuery.data ?? []).length > 0;
+  const canOpenDeviceVarsDialog = canManageDeviceVars && hasCampaignDevices;
   const deviceVarsParseMsgs = useMemo(
     () => ({
       invalidJson: tDv('parseInvalidJson'),
@@ -803,32 +831,30 @@ export function ControlRecordView({
     () => Object.values(deviceVarEnabledByDevice).some(Boolean),
     [deviceVarEnabledByDevice]
   );
-  const campaignDevicesQuery = useQuery({
-    queryKey: ['campaign-devices', activeCampaignId],
-    enabled: !!activeCampaignId,
-    queryFn: () => campaignsApi.getDevices(activeCampaignId!)
-  });
   const campaignForGlobalVarsQuery = useQuery({
     queryKey: ['campaign', activeCampaignId, 'global-vars-preview'],
-    enabled: deviceVarDialogOpen && !!activeCampaignId,
+    enabled: !!activeCampaignId && (deviceVarDialogOpen || canManageDeviceVars),
     queryFn: () => campaignsApi.get(activeCampaignId!),
     staleTime: 30_000
   });
   useEffect(() => {
     if (!deviceVarDialogOpen) return;
-    if (selectedScenarioDeviceId) return;
-    if (selectedDeviceId) {
-      setSelectedScenarioDeviceId(selectedDeviceId);
-      return;
+    const pickId =
+      selectedDeviceId ?? campaignDevicesQuery.data?.[0]?.id ?? null;
+    if (!pickId) return;
+    setSelectedScenarioDeviceId(pickId);
+    if (deviceVarEnabledByDevice[pickId] !== true) {
+      setDeviceVarEnabledByDevice((prev) => ({ ...prev, [pickId]: true }));
+      setDeviceVarJsonDrafts((prev) => ({
+        ...prev,
+        [pickId]: prev[pickId] ?? formatInitialDeviceVars({}, scenarioVariables)
+      }));
     }
-    const firstCampaignDeviceId = campaignDevicesQuery.data?.[0]?.id ?? null;
-    if (firstCampaignDeviceId)
-      setSelectedScenarioDeviceId(firstCampaignDeviceId);
   }, [
     deviceVarDialogOpen,
-    selectedScenarioDeviceId,
     selectedDeviceId,
-    campaignDevicesQuery.data
+    campaignDevicesQuery.data,
+    scenarioVariables
   ]);
   const selectedDeviceLabel = useMemo(() => {
     const source = campaignDevicesQuery.data ?? devicesQuery.data ?? [];
@@ -920,9 +946,62 @@ export function ControlRecordView({
       )
   });
   useEffect(() => {
-    if (!deviceVarDialogOpen) return;
+    if (!canManageDeviceVars) return;
     const devices = campaignDevicesQuery.data ?? [];
     if (devices.length === 0) return;
+
+    if (usesCampaignDeviceOverrides && !campaignForGlobalVarsQuery.data) {
+      return;
+    }
+
+    const hydrationKey = usesCampaignDeviceOverrides
+      ? `campaign:${activeCampaignId}:${campaignForGlobalVarsQuery.dataUpdatedAt}`
+      : `scenario:${activeCampaignId}:${activeScenarioId}:${deviceVarDialogOpen ? 'open' : 'bg'}`;
+
+    if (
+      !deviceVarDialogOpen &&
+      deviceVarsHydratedKeyRef.current === hydrationKey
+    ) {
+      return;
+    }
+    if (deviceVarDialogOpen) {
+      deviceVarsHydratedKeyRef.current = null;
+    }
+
+    const applySeeds = (
+      entries: Array<readonly [string, Record<string, any>]>
+    ) => {
+      setDeviceVarJsonDrafts(
+        Object.fromEntries(
+          entries.map(([deviceId, vars]) => [
+            deviceId,
+            formatInitialDeviceVars(vars, scenarioVariables)
+          ])
+        )
+      );
+      if (!deviceVarDialogOpen) {
+        setDeviceVarEnabledByDevice(
+          Object.fromEntries(
+            entries.map(([deviceId, vars]) => [
+              deviceId,
+              Object.keys(vars).length > 0
+            ])
+          )
+        );
+      }
+      deviceVarsHydratedKeyRef.current = hydrationKey;
+    };
+
+    if (usesCampaignDeviceOverrides) {
+      const overrides = campaignPerDeviceOverrides(
+        campaignForGlobalVarsQuery.data
+      );
+      applySeeds(
+        devices.map((d) => [d.id, { ...(overrides[d.id] ?? {}) }] as const)
+      );
+      return;
+    }
+
     if (!activeScenarioId) {
       const seeded: Record<string, string> = {};
       const enabled: Record<string, boolean> = {};
@@ -934,8 +1013,10 @@ export function ControlRecordView({
       }
       setDeviceVarJsonDrafts(seeded);
       setDeviceVarEnabledByDevice(enabled);
+      deviceVarsHydratedKeyRef.current = hydrationKey;
       return;
     }
+
     let cancelled = false;
     (async () => {
       const entries = await Promise.all(
@@ -949,20 +1030,7 @@ export function ControlRecordView({
         })
       );
       if (cancelled) return;
-      const seeded: Record<string, string> = Object.fromEntries(
-        entries.map(([deviceId, vars]) => [
-          deviceId,
-          formatInitialDeviceVars(vars, scenarioVariables)
-        ])
-      );
-      const enabled: Record<string, boolean> = Object.fromEntries(
-        entries.map(([deviceId, vars]) => [
-          deviceId,
-          Object.keys(vars).length > 0
-        ])
-      );
-      setDeviceVarJsonDrafts(seeded);
-      setDeviceVarEnabledByDevice(enabled);
+      applySeeds(entries);
     })().catch((err) =>
       toast.error(tDvDlg('loadVarsError', { message: String(err) }))
     );
@@ -970,18 +1038,61 @@ export function ControlRecordView({
       cancelled = true;
     };
   }, [
+    canManageDeviceVars,
     deviceVarDialogOpen,
     campaignDevicesQuery.data,
+    campaignForGlobalVarsQuery.data,
+    campaignForGlobalVarsQuery.dataUpdatedAt,
     activeCampaignId,
     activeScenarioId,
+    usesCampaignDeviceOverrides,
     pendingScenarioDeviceVarsDraftMap,
     scenarioVariables,
     tDvDlg
   ]);
   const saveScenarioDeviceVarsMutation = useMutation({
     mutationFn: async (drafts: Record<string, string>) => {
-      if (!activeCampaignId || !activeScenarioId) return;
+      if (!activeCampaignId) return;
       const devices = campaignDevicesQuery.data ?? [];
+
+      if (usesCampaignDeviceOverrides) {
+        const existing = campaignPerDeviceOverrides(
+          campaignForGlobalVarsQuery.data
+        );
+        const nextOverrides: Record<string, Record<string, unknown>> = {
+          ...existing
+        };
+        for (const d of devices) {
+          if (deviceVarEnabledByDevice[d.id] !== true) {
+            delete nextOverrides[d.id];
+            continue;
+          }
+          let merged: Record<string, unknown>;
+          try {
+            merged = parseDeviceVarsJson(
+              drafts[d.id] ?? '{}',
+              deviceVarsParseMsgs
+            );
+          } catch {
+            throw new Error(tDv('invalidAtDevice', { serial: d.serial }));
+          }
+          const delta = splitDeviceOverridesFromMerged(
+            merged,
+            deviceVarGlobalPreview
+          );
+          if (Object.keys(delta).length) {
+            nextOverrides[d.id] = delta;
+          } else {
+            delete nextOverrides[d.id];
+          }
+        }
+        await campaignsApi.patchEntity(activeCampaignId, {
+          per_device_overrides: nextOverrides
+        });
+        return;
+      }
+
+      if (!activeScenarioId) return;
       await Promise.all(
         devices.map((d) => {
           let vars: Record<string, any> = {};
@@ -1007,39 +1118,64 @@ export function ControlRecordView({
       );
     },
     onSuccess: async () => {
-      if (!activeCampaignId || !activeScenarioId) {
+      if (!activeCampaignId) {
         toast.success(tDvDlg('saveAllSuccess'));
         setDeviceVarDialogOpen(false);
         return;
       }
       try {
         const devices = campaignDevicesQuery.data ?? [];
-        const entries = await Promise.all(
-          devices.map(async (d) => {
-            const res = await campaignsApi.getScenarioDeviceVariables(
-              activeCampaignId,
-              activeScenarioId,
-              d.id
-            );
-            return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
-          })
-        );
-        setDeviceVarJsonDrafts(
-          Object.fromEntries(
-            entries.map(([deviceId, vars]) => [
-              deviceId,
-              formatInitialDeviceVars(vars, scenarioVariables)
-            ])
-          )
-        );
-        setDeviceVarEnabledByDevice(
-          Object.fromEntries(
-            entries.map(([deviceId, vars]) => [
-              deviceId,
-              Object.keys(vars).length > 0
-            ])
-          )
-        );
+        if (usesCampaignDeviceOverrides) {
+          const detail = await campaignsApi.get(activeCampaignId);
+          const overrides = campaignPerDeviceOverrides(detail);
+          deviceVarsHydratedKeyRef.current = null;
+          setDeviceVarJsonDrafts(
+            Object.fromEntries(
+              devices.map((d) => [
+                d.id,
+                formatInitialDeviceVars(
+                  { ...(overrides[d.id] ?? {}) },
+                  scenarioVariables
+                )
+              ])
+            )
+          );
+          setDeviceVarEnabledByDevice(
+            Object.fromEntries(
+              devices.map((d) => [
+                d.id,
+                Object.keys(overrides[d.id] ?? {}).length > 0
+              ])
+            )
+          );
+        } else if (activeScenarioId) {
+          const entries = await Promise.all(
+            devices.map(async (d) => {
+              const res = await campaignsApi.getScenarioDeviceVariables(
+                activeCampaignId,
+                activeScenarioId,
+                d.id
+              );
+              return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
+            })
+          );
+          setDeviceVarJsonDrafts(
+            Object.fromEntries(
+              entries.map(([deviceId, vars]) => [
+                deviceId,
+                formatInitialDeviceVars(vars, scenarioVariables)
+              ])
+            )
+          );
+          setDeviceVarEnabledByDevice(
+            Object.fromEntries(
+              entries.map(([deviceId, vars]) => [
+                deviceId,
+                Object.keys(vars).length > 0
+              ])
+            )
+          );
+        }
       } catch {
         /* drafts may be stale until dialog reopens; server still has saved vars */
       }
@@ -1802,7 +1938,9 @@ export function ControlRecordView({
               ? save.templateContext.name
               : save.editingContext
                 ? save.editingContext.name
-                : t('pageTitle')}
+                : save.orgScenarioContext
+                  ? save.orgScenarioContext.name
+                  : t('pageTitle')}
           </p>
           <p className='text-[10px] text-muted-foreground'>
             {save.templateContext ? t('templateEyebrow') : t('pageEyebrow')}
@@ -2515,11 +2653,11 @@ export function ControlRecordView({
                           size='sm'
                           variant='outline'
                           onClick={() => setDeviceVarDialogOpen(true)}
-                          disabled={!activeCampaignId || !selectedDeviceId}
+                          disabled={!canOpenDeviceVarsDialog}
                           className={cn(
                             'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
                             hasEnabledDeviceVars &&
-                              activeCampaignId &&
+                              canManageDeviceVars &&
                               selectedDeviceId
                               ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
                               : ''
@@ -2530,10 +2668,12 @@ export function ControlRecordView({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side='bottom' className='text-xs'>
-                        {!activeCampaignId
-                          ? 'Mở trong ngữ cảnh chiến dịch để thiết lập'
-                          : !selectedScenarioDeviceId
-                            ? 'Chọn thiết bị trước'
+                        {!canManageDeviceVars
+                          ? savingOrgScenario
+                            ? 'Mở lại từ Campaign → Mở (URL cần orgScenarioId + campaignId)'
+                            : 'Mở trong ngữ cảnh chiến dịch để thiết lập'
+                          : !hasCampaignDevices
+                            ? 'Thêm thiết bị vào chiến dịch trước'
                             : `Đang gắn cho: ${selectedDeviceLabel}`}
                       </TooltipContent>
                     </Tooltip>
@@ -2838,7 +2978,7 @@ export function ControlRecordView({
             <Button
               size='sm'
               onClick={() => {
-                if (activeScenarioId) {
+                if (activeScenarioId || usesCampaignDeviceOverrides) {
                   saveScenarioDeviceVarsMutation.mutate(deviceVarJsonDrafts);
                   return;
                 }
@@ -2870,7 +3010,7 @@ export function ControlRecordView({
             >
               {saveScenarioDeviceVarsMutation.isPending
                 ? tDvDlg('saveLoading')
-                : activeScenarioId
+                : activeScenarioId || usesCampaignDeviceOverrides
                   ? tDvDlg('save')
                   : tDvDlg('saveDraft')}
             </Button>

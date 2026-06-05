@@ -301,9 +301,7 @@ export function WorkflowStepList({
 
   const current = liveProgress?.current_step ?? 0;
   const total =
-    liveProgress?.total_steps ??
-    scenarioDefs.length ??
-    executedSteps.length;
+    liveProgress?.total_steps ?? scenarioDefs.length ?? executedSteps.length;
   const stepType = liveProgress?.current_step_type ?? '';
   const message = liveProgress?.message ?? '';
   const loopIter =

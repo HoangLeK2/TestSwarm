@@ -87,7 +87,9 @@ export const accountsApi = {
     const form = new FormData();
     form.append('file', file);
     return farmApi
-      .post<BulkImportResult>('/accounts/import-csv', form, { timeout: 120_000 })
+      .post<BulkImportResult>('/accounts/import-csv', form, {
+        timeout: 120_000
+      })
       .then((r) => r.data);
   },
   roundRobin: (data: RoundRobinBody) =>

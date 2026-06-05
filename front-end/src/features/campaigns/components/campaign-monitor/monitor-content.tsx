@@ -156,10 +156,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
     return (
       <div>
         {filterBar}
-        <MonitorSidePanels
-          campaignId={campaignId}
-          pollAggressive={isRunning}
-        />
+        <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
       </div>
     );
   }
@@ -171,10 +168,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
           {t('monitorTemporalUnavailableMessage')}
         </p>
         {filterBar}
-        <MonitorSidePanels
-          campaignId={campaignId}
-          pollAggressive={isRunning}
-        />
+        <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
       </div>
     );
   }
@@ -185,10 +179,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
         <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorNoRunningWorkflowsMessage')}
         </p>
-        <MonitorSidePanels
-          campaignId={campaignId}
-          pollAggressive={isRunning}
-        />
+        <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
       </div>
     );
   }
@@ -213,10 +204,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
           ))
         )}
       </div>
-      <MonitorSidePanels
-        campaignId={campaignId}
-        pollAggressive={isRunning}
-      />
+      <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
     </div>
   );
 }

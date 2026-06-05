@@ -55,10 +55,7 @@ function artifactIsImage(
   return isImageArtifact(kind, href);
 }
 
-export function ArtifactPanel({
-  campaignId,
-  pollAggressive = true
-}: Props) {
+export function ArtifactPanel({ campaignId, pollAggressive = true }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const { data, isLoading } = useLatestExecutionArtifacts(
     campaignId,

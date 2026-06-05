@@ -71,12 +71,15 @@ export function DeviceShellTerminal({
     term.write(`\x1b[32m${PROMPT}\x1b[0m`);
   }, []);
 
-  const writeln = useCallback((term: Terminal, text: string, color?: string) => {
-    const prefix = color ? `\x1b[${color}m` : '';
-    const suffix = color ? '\x1b[0m' : '';
-    const normalized = text.replace(/\r?\n/g, '\r\n');
-    term.write(`${prefix}${normalized}${suffix}\r\n`);
-  }, []);
+  const writeln = useCallback(
+    (term: Terminal, text: string, color?: string) => {
+      const prefix = color ? `\x1b[${color}m` : '';
+      const suffix = color ? '\x1b[0m' : '';
+      const normalized = text.replace(/\r?\n/g, '\r\n');
+      term.write(`${prefix}${normalized}${suffix}\r\n`);
+    },
+    []
+  );
 
   const clearTerminal = useCallback(() => {
     const term = termRef.current;
@@ -225,7 +228,7 @@ export function DeviceShellTerminal({
     >
       <div
         ref={containerRef}
-        className='h-full min-h-[320px] w-full [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto'
+        className='h-full min-h-[320px] w-full [&_.xterm-viewport]:!overflow-y-auto [&_.xterm]:h-full'
       />
     </div>
   );

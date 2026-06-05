@@ -226,15 +226,13 @@ export function ContentTable({
                 ) : null}
               </div>
             </TableCell>
-            <TableCell className='max-w-[380px] px-4 py-3.5 align-top whitespace-normal'>
+            <TableCell className='max-w-[380px] whitespace-normal px-4 py-3.5 align-top'>
               <p className='line-clamp-3 whitespace-pre-wrap leading-snug text-foreground/90'>
-                {resolveCommentDisplayBody(item) ||
-                  item.title ||
-                  item.body || (
-                    <span className='italic text-muted-foreground'>
-                      {t('emptyContent')}
-                    </span>
-                  )}
+                {resolveCommentDisplayBody(item) || item.title || item.body || (
+                  <span className='italic text-muted-foreground'>
+                    {t('emptyContent')}
+                  </span>
+                )}
               </p>
               {item.url ? (
                 <a
@@ -252,7 +250,7 @@ export function ContentTable({
                 <CommentParentLine item={item} onViewParent={onViewParent} />
               ) : null}
             </TableCell>
-            <TableCell className='px-4 py-3.5 align-top whitespace-normal text-foreground/90'>
+            <TableCell className='whitespace-normal px-4 py-3.5 align-top text-foreground/90'>
               {resolveCommentDisplayAuthor(item) || item.author || (
                 <span className='text-muted-foreground'>–</span>
               )}
@@ -262,7 +260,7 @@ export function ContentTable({
                 .filter((v) => v != null)
                 .join(' / ') || '–'}
             </TableCell>
-            <TableCell className='px-4 py-3.5 align-top whitespace-normal'>
+            <TableCell className='whitespace-normal px-4 py-3.5 align-top'>
               <span className='inline-flex items-center rounded-md border border-border/60 bg-background px-2 py-0.5 text-[11px] font-medium text-foreground/80'>
                 {item.collection}
               </span>

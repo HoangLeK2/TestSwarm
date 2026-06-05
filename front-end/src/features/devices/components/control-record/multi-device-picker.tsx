@@ -112,7 +112,10 @@ export function MultiDevicePicker({
             <p className='min-w-0 text-sm font-medium leading-snug'>
               {t('pickerTitle')}
             </p>
-            <Badge variant='outline' className='shrink-0 text-[10px] tabular-nums'>
+            <Badge
+              variant='outline'
+              className='shrink-0 text-[10px] tabular-nums'
+            >
               {t('selectedSummary', {
                 selected: selectedSerials.length,
                 max: maxFollowers
@@ -153,7 +156,11 @@ export function MultiDevicePicker({
               {t('noReadyDevices')}
             </p>
           ) : (
-            <ul className='space-y-0.5' role='listbox' aria-label={t('pickerTitle')}>
+            <ul
+              className='space-y-0.5'
+              role='listbox'
+              aria-label={t('pickerTitle')}
+            >
               {options.map((d) => {
                 const checked = selectedSet.has(d.serial);
                 const limitReached =

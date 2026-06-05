@@ -131,9 +131,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
               deviceOps={deviceOps}
             />
           </div>
-          {busyBanner ? (
-            <div className='-mt-2 w-full'>{busyBanner}</div>
-          ) : null}
+          {busyBanner ? <div className='-mt-2 w-full'>{busyBanner}</div> : null}
         </div>
       </div>
     </div>

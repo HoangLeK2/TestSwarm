@@ -73,10 +73,7 @@ export function DeviceFarm() {
 
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_GRID_PAGE_SIZE);
-  const pageCount = Math.max(
-    1,
-    Math.ceil(activeDevices.length / pageSize)
-  );
+  const pageCount = Math.max(1, Math.ceil(activeDevices.length / pageSize));
 
   useEffect(() => {
     setPageIndex((prev) => Math.min(prev, pageCount - 1));

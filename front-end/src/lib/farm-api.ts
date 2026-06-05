@@ -333,6 +333,7 @@ farmApi.interceptors.response.use(
         const { data } = await axios.post<{
           access_token: string;
           refresh_token: string;
+          expires_in?: number;
         }>(`${API_BASE_URL}/auth/refresh`, { refresh_token: refreshToken });
         tokenStorage.setTokens({
           idToken: data.access_token,

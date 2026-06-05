@@ -3,11 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { FileCode2, Loader2 } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { contentApi } from '@/features/content/services/api';
 import {
   directObjectStorageUrl,
@@ -53,7 +49,9 @@ export function ArtifactMonitorTile({ artifact, href, label }: Props) {
     };
   }, [authImageSrc]);
 
-  const imageSrc = needsAuthFetch ? authImageSrc ?? null : publicUrl ?? href;
+  const imageSrc = needsAuthFetch
+    ? (authImageSrc ?? undefined)
+    : (publicUrl ?? href);
   const showFailed = failed || (needsAuthFetch && authFetchError);
   const showLoading = needsAuthFetch ? authLoading && !imageSrc : !imageSrc;
 

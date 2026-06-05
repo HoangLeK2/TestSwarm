@@ -36,8 +36,9 @@ export function removeDeviceFromCache(
   orgId: string | null | undefined
 ) {
   if (!orgId) return;
-  qc.setQueryData<DeviceOut[]>(devicesListQueryKey(orgId), (old) =>
-    old?.filter((d) => d.id !== deviceId) ?? old
+  qc.setQueryData<DeviceOut[]>(
+    devicesListQueryKey(orgId),
+    (old) => old?.filter((d) => d.id !== deviceId) ?? old
   );
   void qc.invalidateQueries({ queryKey: fleetStatsQueryKey(orgId) });
 }

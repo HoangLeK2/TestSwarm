@@ -765,9 +765,18 @@ export function ScenarioDialog({
   const applyPreviewStepRunEvent = useCallback(
     (
       runKey: string,
-      ev: { event: string; ok?: boolean; success?: boolean; message?: string; error?: string; failed_message?: string },
+      ev: {
+        event: string;
+        ok?: boolean;
+        success?: boolean;
+        message?: string;
+        error?: string;
+        failed_message?: string;
+      },
       setStates: React.Dispatch<
-        React.SetStateAction<Record<string, 'idle' | 'running' | 'ok' | 'error'>>
+        React.SetStateAction<
+          Record<string, 'idle' | 'running' | 'ok' | 'error'>
+        >
       >
     ) => {
       if (ev.event === 'step_done') {
@@ -803,7 +812,9 @@ export function ScenarioDialog({
     (
       runKey: string,
       setStates: React.Dispatch<
-        React.SetStateAction<Record<string, 'idle' | 'running' | 'ok' | 'error'>>
+        React.SetStateAction<
+          Record<string, 'idle' | 'running' | 'ok' | 'error'>
+        >
       >
     ) => {
       setTimeout(() => {

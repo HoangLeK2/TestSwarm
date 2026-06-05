@@ -107,10 +107,14 @@ export const orgScenariosApi = {
     const form = new FormData();
     form.append('file', file);
     return farmApi
-      .post<OrgScenarioImportOut>(`/scenarios/${scenarioId}/import-body`, form, {
-        params: { resolve },
-        timeout: 120_000
-      })
+      .post<OrgScenarioImportOut>(
+        `/scenarios/${scenarioId}/import-body`,
+        form,
+        {
+          params: { resolve },
+          timeout: 120_000
+        }
+      )
       .then((r) => r.data);
   },
 

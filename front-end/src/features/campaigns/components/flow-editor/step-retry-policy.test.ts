@@ -8,7 +8,7 @@ import {
   parseRetryReasons,
   retryPatchForEnabledState,
   withRetryField
-// @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
+  // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './step-retry-policy.ts';
 
 test('retryPatchForEnabledState enables retry with backend-safe defaults', () => {

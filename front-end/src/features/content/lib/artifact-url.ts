@@ -28,7 +28,7 @@ export function resolveArtifactUrl(
   backendBase: string = DEFAULT_BACKEND_BASE
 ): string | null {
   if (!url) return null;
-  let value = url.trim();
+  const value = url.trim();
   if (!value) return null;
   if (value.startsWith('http://') || value.startsWith('https://')) {
     return rewriteLegacyObjectStorageUrl(value);

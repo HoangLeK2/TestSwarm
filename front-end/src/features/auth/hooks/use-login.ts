@@ -33,10 +33,7 @@ export function useLogin() {
         defaultOrgId: user.defaultOrgId ?? null
       });
       if (typeof window !== 'undefined' && user.defaultOrgId?.trim()) {
-        localStorage.setItem(
-          CURRENT_ORG_STORAGE_KEY,
-          user.defaultOrgId.trim()
-        );
+        localStorage.setItem(CURRENT_ORG_STORAGE_KEY, user.defaultOrgId.trim());
       }
       await acceptPendingOrgInviteAfterAuth();
       const returnTo = consumeAuthReturnTo();

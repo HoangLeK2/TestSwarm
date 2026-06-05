@@ -52,6 +52,11 @@ fi
 echo "== Host devices =="
 adb -P "$ADB_PORT" devices || true
 
+if [[ "$(uname -s)" == "Linux" ]]; then
+  echo "== keep host awake (Linux) =="
+  "$(dirname "$0")/keep-awake.sh" start || true
+fi
+
 compose_subcommands=(up run build down ps logs exec pull stop restart config)
 
 if [[ $# -eq 0 ]]; then

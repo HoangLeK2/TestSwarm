@@ -408,6 +408,58 @@ async def test_process_payload_does_not_return_active_parent_for_multiple_fb_pos
 
 
 @pytest.mark.asyncio
+async def test_process_payload_post_detail_uses_first_post_when_diagnostic_missing(monkeypatch) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_payload_items",
+        lambda strategy, xml_in, context, payload: (
+            [
+                {"_pid": "pid-detail", "post_key": "post-detail", "text": "opened detail post"},
+                {"_pid": "pid-noise", "post_key": "post-noise", "text": "detail chrome noise"},
+            ],
+            {"reason_code": "ok"},
+            [xml_in],
+        ),
+    )
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": '<hierarchy><node text="post detail" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert len(inserted) == 2
+    assert result["active_parent_post"]["parent_id"] == inserted[0]["content_hash"]
+    assert result["active_parent_post"]["pid"] == "pid-detail"
+    assert result["active_parent_post"]["source"] == "post_detail"
+    assert result["active_parent_post"]["selection_reason"] == "post_detail_first_parsed"
+
+
+@pytest.mark.asyncio
 async def test_process_payload_uses_opened_post_diagnostic_to_pick_active_parent(monkeypatch) -> None:
     server = ExtraDataIngestServer()
     inserted: list[dict[str, Any]] = []

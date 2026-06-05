@@ -1629,8 +1629,9 @@ def resolve_comment_scroll_swipe_from_xml(
         return None
 
     on_sheet = _hierarchy_is_fb_comment_sheet(root)
-    # Swipe in the comment body column — left column (avatar/name) opens profiles on short swipes.
-    safe_x = x1 + int(width * (0.68 if on_sheet else 0.55))
+    # Swipe in the right-side body gutter; left/avatar and center text columns can
+    # open profiles or focus the composer when Android classifies a weak gesture as a tap.
+    safe_x = x1 + int(width * (0.76 if on_sheet else 0.62))
     pad_y = max(8, int(height * 0.06))
     inner_top = y1 + pad_y
     inner_bottom = y2 - pad_y
@@ -1642,9 +1643,12 @@ def resolve_comment_scroll_swipe_from_xml(
     inner_h = max(1, inner_bottom - inner_top)
     if inner_h < 48:
         return None
-    ratio = max(0.08, min(0.75, float(distance_ratio)))
+    ratio = max(0.26 if on_sheet else 0.18, min(0.75, float(distance_ratio)))
     fy = inner_top + int(inner_h * 0.70)
     ty = inner_top + int(inner_h * max(0.15, 0.70 - ratio))
+    min_travel = min(int(inner_h * 0.55), max(160, int(inner_h * 0.24)))
+    if fy - ty < min_travel:
+        ty = max(inner_top, fy - min_travel)
     if ty >= fy:
         ty = max(inner_top, fy - max(48, int(inner_h * ratio)))
     return safe_x, fy, safe_x, ty
@@ -1684,4 +1688,3 @@ __all__ = [
     "interrupt_reason_allows_back",
     "_post_id_from_ctx",
 ]
-

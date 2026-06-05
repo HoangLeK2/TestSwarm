@@ -66,6 +66,24 @@ class _FakeExecutor:
         return self.window
 
 
+class _SpecMissExecutor(_FakeExecutor):
+    async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        if actions and actions[0].get("op") == "click_spec":
+            self.batches.append(actions)
+            return {
+                "ok": True,
+                "results": [{"op": "click_spec", "ok": True, "value": False}],
+            }
+        if actions and actions[0].get("op") == "click_selector":
+            self.batches.append(actions)
+            self.selector_clicks += 1
+            return {
+                "ok": True,
+                "results": [{"op": "click_selector", "ok": True, "value": True}],
+            }
+        return await super().run_batch(serial, actions, early_exit=early_exit)
+
+
 class _SessionFakeExecutor(_FakeExecutor):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -468,6 +486,25 @@ async def test_comment_target_default_u2_click_timeout_is_fast() -> None:
     assert ok is True
     assert route == "click_spec"
     assert exec_.batches[0][0]["timeout"] == 0.35
+
+
+@pytest.mark.asyncio
+async def test_comment_target_does_not_use_global_selector_fallback_by_default() -> None:
+    exec_ = _SpecMissExecutor()
+    cand = {
+        "bounds": [100, 200, 300, 250],
+        "u2_click": {
+            "spec": {"xpath": '//*[@bounds="[100,200][300,250]"]'},
+            "selector": {"text": "Bình luận", "clickable": True},
+        },
+    }
+
+    ok, route = await _u2_click_comment_target(exec_, "dev1", cand, {})
+
+    assert ok is True
+    assert route == "click_coord"
+    assert exec_.selector_clicks == 0
+    assert exec_.clicks == [(244, 225)]
 
 
 @pytest.mark.asyncio

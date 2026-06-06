@@ -1817,17 +1817,27 @@ def _run_scenario_task_legacy(
 
                 typed = False
 
-                # Strategy 1: u2 setFastInputText — atx-agent IME injection.
+                # Strategy 1: u2 send_keys — setText on focused field, then IME (Unicode OK on Android 14).
                 if d is not None:
                     try:
-                        d._rpc("setFastInputText", text)  # type: ignore[union-attr]
+                        d.send_keys(text)  # type: ignore[union-attr]
                         typed = True
-                        step_result["message"] = "input_text via u2 setFastInputText"
-                        log.info(f"[{serial}] input_text: strategy 1 (setFastInputText) OK")
-                    except Exception as fast_exc:
-                        log.info(f"[{serial}] input_text: strategy 1 failed: {fast_exc}")
+                        step_result["message"] = "input_text via u2 send_keys"
+                        log.info(f"[{serial}] input_text: strategy 1 (send_keys) OK")
+                    except Exception as u2_exc:
+                        log.info(f"[{serial}] input_text: strategy 1 failed: {u2_exc}")
 
-                # Strategy 3: adb shell input text via relay (agent-boot path).
+                # Strategy 2: a11y ACTION_SET_TEXT (Unicode OK; no shell INJECT_EVENTS on Android 14+).
+                if not typed:
+                    try:
+                        if device._a11y_mutate("type", {"text": text}, timeout=6.0):  # type: ignore[attr-defined]
+                            typed = True
+                            step_result["message"] = "input_text via a11y type"
+                            log.info(f"[{serial}] input_text: strategy 2 (a11y type) OK")
+                    except Exception as a11y_exc:
+                        log.info(f"[{serial}] input_text: strategy 2 failed: {a11y_exc}")
+
+                # Strategy 3: adb shell input text via relay (ASCII only).
                 # This executes as shell UID on the relay side, avoiding app-UID
                 # INJECT_EVENTS restrictions seen in WsAgentService shell fallback.
                 if not typed:
@@ -1872,13 +1882,13 @@ def _run_scenario_task_legacy(
                         except Exception as shell_exc:
                             log.info(f"[{serial}] input_text: strategy 3 failed: {shell_exc}")
 
-                # Strategy 4: agent paste (clipboard + ACTION_SET_TEXT/PASTE).
+                # Strategy 4: agent type (a11y; avoids paste→shell Unicode path on Android 14+).
                 if not typed and getattr(device, "_agent_send", None) is not None:
-                    log.info(f"[{serial}] input_text: trying strategy 4 (agent paste)")
-                    device._send_to_agent({"type": "paste", "text": text})  # type: ignore[attr-defined]
+                    log.info(f"[{serial}] input_text: trying strategy 4 (agent type)")
+                    device._send_to_agent({"type": "type", "text": text})  # type: ignore[attr-defined]
                     time.sleep(0.7)
                     typed = True
-                    step_result["message"] = "input_text via agent paste"
+                    step_result["message"] = "input_text via agent type"
 
                 if not typed:
                     log.warning(f"[{serial}] input_text: all strategies failed for {text!r}")

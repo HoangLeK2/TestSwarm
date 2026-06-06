@@ -40,17 +40,27 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
 
     typed = False
 
-    # Strategy 1: u2 setFastInputText
+    # Strategy 1: u2 send_keys — setText on focused field, then IME (Unicode OK on Android 14).
     if d is not None:
         try:
-            d._rpc("setFastInputText", text)
+            d.send_keys(text)
             typed = True
-            result["message"] = "input_text via u2 setFastInputText"
-            log.info(f"[{serial}] input_text: strategy 1 (setFastInputText) OK")
-        except Exception as fast_exc:
-            log.info(f"[{serial}] input_text: strategy 1 failed: {fast_exc}")
+            result["message"] = "input_text via u2 send_keys"
+            log.info(f"[{serial}] input_text: strategy 1 (send_keys) OK")
+        except Exception as u2_exc:
+            log.info(f"[{serial}] input_text: strategy 1 failed: {u2_exc}")
 
-    # Strategy 3: adb shell input text via relay
+    # Strategy 2: a11y ACTION_SET_TEXT via relay/STF (Unicode OK; no shell INJECT_EVENTS).
+    if not typed:
+        try:
+            if device._a11y_mutate("type", {"text": text}, timeout=6.0):
+                typed = True
+                result["message"] = "input_text via a11y type"
+                log.info(f"[{serial}] input_text: strategy 2 (a11y type) OK")
+        except Exception as a11y_exc:
+            log.info(f"[{serial}] input_text: strategy 2 failed: {a11y_exc}")
+
+    # Strategy 3: adb shell input text via relay (ASCII only)
     if not typed:
         is_ascii = all(ord(c) < 128 for c in text)
         if is_ascii:
@@ -81,13 +91,13 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
             except Exception as shell_exc:
                 log.info(f"[{serial}] input_text: strategy 3 failed: {shell_exc}")
 
-    # Strategy 4: agent paste
+    # Strategy 4: agent type (a11y ACTION_SET_TEXT; avoids paste→shell Unicode path on Android 14+).
     if not typed and getattr(device, "_agent_send", None) is not None:
-        log.info(f"[{serial}] input_text: trying strategy 4 (agent paste)")
-        device._send_to_agent({"type": "paste", "text": text})
+        log.info(f"[{serial}] input_text: trying strategy 4 (agent type)")
+        device._send_to_agent({"type": "type", "text": text})
         time.sleep(0.7)
         typed = True
-        result["message"] = "input_text via agent paste"
+        result["message"] = "input_text via agent type"
 
     if not typed:
         result["ok"] = False

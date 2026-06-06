@@ -13,6 +13,7 @@ from typing import Any
 logger = logging.getLogger("relay.extra_data.collector")
 
 _collect_locks: dict[str, asyncio.Lock] = {}
+_CANCEL_EVENT_CONTEXT_KEY = "_cancel_event"
 _COMMENT_SCROLL_MAX_SWIPES = 4
 _COMMENT_SWIPES_PER_DUMP = 1
 _COMMENT_NO_GROWTH_BREAK = 1
@@ -37,6 +38,42 @@ def _collect_lock(serial: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _collect_locks[serial] = lock
     return lock
+
+
+def _cancel_event_from_context(context: dict[str, Any] | None) -> asyncio.Event | None:
+    if not isinstance(context, dict):
+        return None
+    event = context.get(_CANCEL_EVENT_CONTEXT_KEY)
+    if isinstance(event, asyncio.Event):
+        return event
+    return None
+
+
+def _raise_if_cancelled(context: dict[str, Any] | None) -> None:
+    event = _cancel_event_from_context(context)
+    if event is not None and event.is_set():
+        raise asyncio.CancelledError("extra_data_cancelled")
+
+
+async def _sleep_cancelable(context: dict[str, Any] | None, seconds: float) -> None:
+    if seconds <= 0:
+        return
+    event = _cancel_event_from_context(context)
+    if event is None:
+        await asyncio.sleep(seconds)
+        return
+    if event.is_set():
+        raise asyncio.CancelledError("extra_data_cancelled")
+    try:
+        await asyncio.wait_for(event.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        return
+    raise asyncio.CancelledError("extra_data_cancelled")
+
+
+def strip_private_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe context for parser/ingest payloads."""
+    return {key: value for key, value in context.items() if not str(key).startswith("_cancel_")}
 
 
 def release_collect_lock(serial: str) -> None:
@@ -848,6 +885,7 @@ async def _dump_hierarchy(
     context: dict[str, Any] | None = None,
 ) -> str | None:
     ctx = context or {}
+    _raise_if_cancelled(ctx)
     compressed = _bool_context(ctx, "hierarchy_compressed", False)
     dump_timeout = _float_context(ctx, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
     started = time.monotonic()
@@ -860,6 +898,7 @@ async def _dump_hierarchy(
         }],
         early_exit=True,
     )
+    _raise_if_cancelled(ctx)
     elapsed = time.monotonic() - started
     if not result.get("ok"):
         logger.warning(
@@ -898,6 +937,7 @@ async def _collect_comment_snapshots(
     initial_xml: str,
 ) -> list[str]:
     """Swipe through the comment list, dumping hierarchy every N swipes (not every swipe)."""
+    _raise_if_cancelled(context)
     explicit_scroll_budget = "comment_scroll_passes" in context
     swipe_budget = _int_context(
         context,
@@ -968,16 +1008,18 @@ async def _collect_comment_snapshots(
     from relay.extra_data.parsers.facebook.parser import _parse_xml
 
     async def _wait_sort_sheet_closed(xml: str) -> str:
+        _raise_if_cancelled(context)
         wait_s = _float_context(context, "comment_filter_sheet_wait_s", 2.5, 0.0, 8.0)
         if wait_s <= 0:
             return xml
         deadline = time.monotonic() + wait_s
         current = xml
         while time.monotonic() < deadline:
+            _raise_if_cancelled(context)
             root = _parse_xml(current)
             if root is None or not _is_sort_bottom_sheet_open(root):
                 return current
-            await asyncio.sleep(0.28)
+            await _sleep_cancelable(context, 0.28)
             fresh = await _dump_hierarchy(executor, serial, context)
             if fresh:
                 current = fresh
@@ -986,6 +1028,7 @@ async def _collect_comment_snapshots(
     initial_xml = await _wait_sort_sheet_closed(initial_xml)
 
     async def _recover_comment_chrome(xml: str) -> tuple[str, bool]:
+        _raise_if_cancelled(context)
         if not recover_chrome:
             return xml, False
         reason = detect_comment_sheet_interrupt_from_xml(xml)
@@ -1002,7 +1045,7 @@ async def _collect_comment_snapshots(
         await _press_back_unless_group_locked(
             executor, serial, context, xml=xml, reason=f"comment_recovery:{reason}"
         )
-        await asyncio.sleep(0.22)
+        await _sleep_cancelable(context, 0.22)
         fresh = await _dump_hierarchy(executor, serial, context)
         return (fresh if fresh else xml), False
 
@@ -1026,6 +1069,7 @@ async def _collect_comment_snapshots(
     swipes_done = 0
 
     async def _screen_swipe_coords() -> tuple[int, int, int, int]:
+        _raise_if_cancelled(context)
         width, height = await _window_size(executor, serial)
         x = int(width * 0.76)
         ratio = max(0.26, min(0.75, float(distance)))
@@ -1034,6 +1078,7 @@ async def _collect_comment_snapshots(
         return x, fy, x, ty
 
     async def _swipe_coords() -> tuple[int, int, int, int]:
+        _raise_if_cancelled(context)
         if use_screen_swipe:
             return await _screen_swipe_coords()
         node_swipe = resolve_comment_scroll_swipe_from_xml(scroll_xml, distance_ratio=distance)
@@ -1042,6 +1087,7 @@ async def _collect_comment_snapshots(
         return await _screen_swipe_coords()
 
     async def _do_swipe(coords: tuple[int, int, int, int] | None = None) -> bool:
+        _raise_if_cancelled(context)
         fx, fy, tx, ty = coords if coords is not None else await _swipe_coords()
         swipe_result = await executor.run_batch(
             serial,
@@ -1055,10 +1101,12 @@ async def _collect_comment_snapshots(
             }],
             early_exit=True,
         )
+        _raise_if_cancelled(context)
         return bool(swipe_result.get("ok"))
 
     cycle = 0
     while cycle < dump_cycles:
+        _raise_if_cancelled(context)
         if len(snapshots) >= max_snapshots or swipes_done >= swipe_budget:
             break
 
@@ -1066,6 +1114,7 @@ async def _collect_comment_snapshots(
         swipes_before_batch = swipes_done
         batch_coords = await _swipe_coords()
         for _ in range(batch_swipes):
+            _raise_if_cancelled(context)
             if not await _do_swipe(batch_coords):
                 logger.warning(
                     "[%s] extra_data comment swipe failed at swipe %d",
@@ -1075,11 +1124,12 @@ async def _collect_comment_snapshots(
                 return snapshots
             swipes_done += 1
             if swipe_pause_s > 0:
-                await asyncio.sleep(swipe_pause_s)
+                await _sleep_cancelable(context, swipe_pause_s)
 
         if settle_after_batch_s > 0:
-            await asyncio.sleep(settle_after_batch_s)
+            await _sleep_cancelable(context, settle_after_batch_s)
 
+        _raise_if_cancelled(context)
         next_xml = await _dump_hierarchy(executor, serial, context)
         if not next_xml:
             break

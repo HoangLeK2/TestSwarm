@@ -512,6 +512,7 @@
     "addDevicesDialog": {
       "trigger": "Add Devices",
       "title": "Add Devices to Group",
+      "loading": "Loading...",
       "noDevices": "No available devices",
       "adding": "Adding...",
       "submit": "Add {count} device(s)"

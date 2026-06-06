@@ -181,6 +181,12 @@ import {
   deviceSelectFullTitle,
   formatDeviceSelectLabel
 } from '@/features/devices/lib/device-select-label';
+import {
+  getActiveMultiSerials,
+  getRenderSafeFollowerSerials,
+  resetFollowersAfterPrimaryChange,
+  sanitizeMultiFollowerSerials
+} from '../lib/control-record-multi';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -368,37 +374,49 @@ export function ControlRecordView({
   const [multiFollowerSerials, setMultiFollowerSerials] = useState<string[]>(
     []
   );
+  const previousPrimarySerialRef = useRef<string | null>(null);
   const [stepPickerOpen, setStepPickerOpen] = useState(true);
+  const selectedPrimarySerial = device.selectedDevice?.serial ?? null;
   const multiFollowerOptions = useMemo(
     () =>
       device.connectedDevices.filter(
-        (d) =>
-          d.serial !== device.selectedDevice?.serial &&
-          isManualControlEligible(d)
+        (d) => d.serial !== selectedPrimarySerial && isManualControlEligible(d)
       ),
-    [device.connectedDevices, device.selectedDevice?.serial]
+    [device.connectedDevices, selectedPrimarySerial]
   );
   useEffect(() => {
-    const allowed = new Set(multiFollowerOptions.map((d) => d.serial));
+    const allowed = multiFollowerOptions.map((d) => d.serial);
     setMultiFollowerSerials((prev) =>
-      prev
-        .filter((serial) => allowed.has(serial))
-        .slice(0, MAX_MULTI_FOLLOWER_DEVICES)
+      sanitizeMultiFollowerSerials(prev, allowed, MAX_MULTI_FOLLOWER_DEVICES)
     );
   }, [multiFollowerOptions]);
-  const activeMultiSerials = useMemo(() => {
-    const primary = device.selectedDevice?.serial;
-    if (!primary) return [];
-    return [
-      primary,
-      ...multiFollowerSerials.filter((serial) => serial !== primary)
-    ];
-  }, [device.selectedDevice?.serial, multiFollowerSerials]);
+  const renderSafeFollowerSerials = useMemo(
+    () =>
+      getRenderSafeFollowerSerials(
+        previousPrimarySerialRef.current,
+        selectedPrimarySerial,
+        multiFollowerSerials
+      ),
+    [selectedPrimarySerial, multiFollowerSerials]
+  );
+  useEffect(() => {
+    const nextPrimary = selectedPrimarySerial;
+    const previousPrimary = previousPrimarySerialRef.current;
+    setMultiFollowerSerials((prev) =>
+      resetFollowersAfterPrimaryChange(previousPrimary, nextPrimary, prev)
+    );
+    previousPrimarySerialRef.current = nextPrimary;
+  }, [selectedPrimarySerial]);
+  const activeMultiSerials = useMemo(
+    () =>
+      getActiveMultiSerials(selectedPrimarySerial, renderSafeFollowerSerials),
+    [selectedPrimarySerial, renderSafeFollowerSerials]
+  );
   const selectedMultiFollowerDevices = useMemo(() => {
-    const selected = new Set(multiFollowerSerials);
+    const selected = new Set(renderSafeFollowerSerials);
     return device.connectedDevices.filter((d) => selected.has(d.serial));
-  }, [device.connectedDevices, multiFollowerSerials]);
-  const hasMultiFollowers = multiFollowerSerials.length > 0;
+  }, [device.connectedDevices, renderSafeFollowerSerials]);
+  const hasMultiFollowers = renderSafeFollowerSerials.length > 0;
   const multiFocusMode = hasMultiFollowers && !stepPickerOpen && !playerMode;
   const showEditorPanel = !hasMultiFollowers || stepPickerOpen || playerMode;
   const treePanelOpen = safeHierarchy && !leftCollapsed && !hasMultiFollowers;
@@ -623,6 +641,13 @@ export function ControlRecordView({
     [stepRunStates, flowRunStates]
   );
   const previewBlocking = playerPlaying || inlinePreviewRunning;
+  const stopPreviewIfActive = useCallback(() => {
+    if (!playerPlaying && !inlinePreviewRunning && !activePreviewRef.current) {
+      return;
+    }
+    stopPlayerRef.current?.();
+    handleStopInlineRun();
+  }, [handleStopInlineRun, inlinePreviewRunning, playerPlaying]);
 
   const deviceSelectValue = useMemo(() => {
     const serial = device.selectedSerial;
@@ -3282,7 +3307,10 @@ export function ControlRecordView({
       <Dialog
         open={previewTemplate !== null}
         onOpenChange={(o) => {
-          if (!o) setPreviewTemplate(null);
+          if (!o) {
+            stopPreviewIfActive();
+            setPreviewTemplate(null);
+          }
         }}
       >
         <DialogContent className='max-w-xl'>
@@ -3361,13 +3389,17 @@ export function ControlRecordView({
                 <Button
                   variant='outline'
                   size='sm'
-                  onClick={() => setPreviewTemplate(null)}
+                  onClick={() => {
+                    stopPreviewIfActive();
+                    setPreviewTemplate(null);
+                  }}
                 >
                   {t('emptyNodePicker.templateCancel')}
                 </Button>
                 <Button
                   size='sm'
                   onClick={() => {
+                    stopPreviewIfActive();
                     const tpl = previewTemplate;
                     if (!tpl) return;
                     setScenarioVariables((prev) =>

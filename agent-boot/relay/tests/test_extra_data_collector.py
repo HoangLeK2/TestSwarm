@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from unittest.mock import patch
@@ -92,6 +94,20 @@ class _SessionFakeExecutor(_FakeExecutor):
     async def with_session(self, serial: str, coro):
         self.session_scope_calls += 1
         return await coro()
+
+
+class _CancelAfterFirstSwipeExecutor(_FakeExecutor):
+    def __init__(self, cancel_event: asyncio.Event, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.cancel_event = cancel_event
+        self.swipes = 0
+
+    async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        result = await super().run_batch(serial, actions, early_exit=early_exit)
+        if any(action.get("op") == "swipe" for action in actions):
+            self.swipes += 1
+            self.cancel_event.set()
+        return result
 
 
 def test_looks_like_hierarchy_xml() -> None:
@@ -366,6 +382,32 @@ async def test_collect_fb_comments_honors_explicit_deep_scroll_context() -> None
     ]
     assert len(swipes) == 9
     assert len(dumps) == 4
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_stops_when_cancel_event_is_set() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    cancel_event = asyncio.Event()
+    exec_ = _CancelAfterFirstSwipeExecutor(cancel_event, xml=_sheet_xml())
+
+    with pytest.raises(asyncio.CancelledError):
+        await collect_xml_snapshots(
+            exec_,
+            "dev1",
+            "fb_comments",
+            {
+                "_cancel_event": cancel_event,
+                "comment_scroll_passes": 48,
+                "comment_swipes_per_dump": 3,
+                "comment_no_growth_break": 3,
+                "min_comment_scan_passes": 2,
+                "comment_scroll_pause_s": 0,
+                "comment_recover_chrome": False,
+            },
+        )
+
+    assert exec_.swipes == 1
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,9 @@
 import type { WsMessage } from '../types';
 import { tokenStorage } from '@/lib/token-storage';
+import {
+  DEVICE_FARM_WS_CLIENT_PING_INTERVAL_MS,
+  shouldReconnectStaleSocketOnFocus
+} from './ws-keepalive';
 
 function normalizeWsUrl(raw: string, fallbackScheme: 'ws' | 'wss') {
   const trimmed = raw.trim().replace(/^['"]|['"]$/g, '');
@@ -89,6 +93,7 @@ const STALE_KEY_MS = 5000;
 let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let clientHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let lastMessageTime = 0;
 let lastForcedReconnectAt = 0;
 const lastIdrRequestBySerial = new Map<string, number>();
@@ -120,7 +125,7 @@ if (typeof window !== 'undefined') {
     }
     // Don't force-close too aggressively: low-FPS periods can legitimately exceed
     // 10s without traffic and this creates reconnect churn (visible stutter).
-    if (Date.now() - lastMessageTime > 45_000) {
+    if (shouldReconnectStaleSocketOnFocus(lastMessageTime)) {
       sharedSocket.close(); // onclose handler triggers reconnect
     }
   });
@@ -145,6 +150,31 @@ function sendPong(ts: unknown) {
   } catch {
     // socket may be closing; the normal onclose path reconnects
   }
+}
+
+function sendPing() {
+  if (sharedSocket?.readyState !== WebSocket.OPEN) return;
+  if (listeners.size === 0 && binaryListeners.size === 0) return;
+  try {
+    sharedSocket.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+  } catch {
+    // socket may be closing; the normal onclose path reconnects
+  }
+}
+
+function stopClientHeartbeat() {
+  if (clientHeartbeatTimer !== undefined) {
+    clearInterval(clientHeartbeatTimer);
+    clientHeartbeatTimer = undefined;
+  }
+}
+
+function startClientHeartbeat() {
+  stopClientHeartbeat();
+  clientHeartbeatTimer = setInterval(
+    sendPing,
+    DEVICE_FARM_WS_CLIENT_PING_INTERVAL_MS
+  );
 }
 
 function handleTextMessage(raw: string) {
@@ -201,10 +231,12 @@ function connectShared() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    lastMessageTime = Date.now();
     if (reconnectTimer !== undefined) {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
     }
+    startClientHeartbeat();
     // Re-assert watched serials after reconnect.
     watchRefCountBySerial.forEach((_count, serial) => {
       sendWatchSerial(serial);
@@ -213,6 +245,7 @@ function connectShared() {
   };
 
   ws.onclose = () => {
+    stopClientHeartbeat();
     sharedSocket = null;
     lastConfigBySerial.clear();
     lastKeyBySerial.clear(); // stale after disconnect — server will re-send bootstrap on reconnect

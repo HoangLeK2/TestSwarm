@@ -71,7 +71,7 @@ async def test_handle_extra_data_success() -> None:
         "id": "extra-1",
         "serial": "dev1",
         "strategy": "ig_posts",
-        "context": {"collection": "ig", "persist": True},
+        "context": {"collection": "ig", "persist": True, "_cancel_event": asyncio.Event()},
     }, queue)
 
     raw = await asyncio.wait_for(queue.get(), timeout=2.0)
@@ -84,6 +84,7 @@ async def test_handle_extra_data_success() -> None:
     assert "screenshot" not in agent._u2_executor.ops
     assert "screenshot_b64" not in agent._extra_ingest.payloads[0].get("evidence", {})
     assert "screenshot_b64" not in msg["ingest"]
+    assert "_cancel_event" not in agent._extra_ingest.payloads[0]["context"]
 
 
 @pytest.mark.asyncio
@@ -146,10 +147,14 @@ async def test_cancel_extra_data_task_by_request_id() -> None:
         extra_ingest=_FakeIngest({"ok": True}),
     )
     task = asyncio.create_task(asyncio.sleep(30))
+    cancel_event = asyncio.Event()
     agent._extra_data_tasks["extra-cancel"] = task
+    agent._extra_data_cancel_events["extra-cancel"] = cancel_event
 
     assert agent._cancel_extra_data_task("extra-cancel") is True
     await asyncio.sleep(0)
 
+    assert cancel_event.is_set()
     assert task.cancelled()
     assert "extra-cancel" not in agent._extra_data_tasks
+    assert "extra-cancel" not in agent._extra_data_cancel_events

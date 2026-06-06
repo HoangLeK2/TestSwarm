@@ -512,6 +512,7 @@
     "addDevicesDialog": {
       "trigger": "Thêm thiết bị",
       "title": "Thêm thiết bị vào nhóm",
+      "loading": "Đang tải...",
       "noDevices": "Không có thiết bị khả dụng",
       "adding": "Đang thêm...",
       "submit": "Thêm {count} thiết bị"

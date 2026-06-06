@@ -1010,6 +1010,8 @@ def _build_post_open_candidate(
     )
     if not tap:
         return None
+    if not author_bounds and tap.get("tap_kind") in _UNSAFE_POST_OPEN_TAP_KINDS:
+        return None
 
     fb_pid, fb_gid, perms = _extract_fb_link_meta(element)
     post = _extract_post(
@@ -1354,6 +1356,7 @@ def resolve_post_open_targets_from_xml(
         "tap_label": top.get("tap_label"),
         "u2_click": top.get("u2_click"),
         "post_key": (top.get("post") or {}).get("post_key"),
+        "post": top.get("post"),
         "feed_item_index": top.get("feed_item_index"),
         "score": top.get("score"),
     }
@@ -1364,6 +1367,7 @@ def resolve_post_open_targets_from_xml(
             "tap_label": c.get("tap_label"),
             "u2_click": c.get("u2_click"),
             "post_key": (c.get("post") or {}).get("post_key"),
+            "post": c.get("post"),
             "feed_item_index": c.get("feed_item_index"),
             "score": c.get("score"),
         }

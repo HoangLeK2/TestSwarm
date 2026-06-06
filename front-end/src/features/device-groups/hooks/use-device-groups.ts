@@ -15,11 +15,14 @@ export function useDeviceGroups() {
   return useQuery({ queryKey: KEYS.list, queryFn: deviceGroupsApi.list });
 }
 
-export function useDeviceGroup(groupId: string) {
+export function useDeviceGroup(
+  groupId: string,
+  options?: { enabled?: boolean }
+) {
   return useQuery({
     queryKey: KEYS.detail(groupId),
     queryFn: () => deviceGroupsApi.get(groupId),
-    enabled: !!groupId
+    enabled: !!groupId && (options?.enabled ?? true)
   });
 }
 

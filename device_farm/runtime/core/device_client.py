@@ -2057,6 +2057,7 @@ class DeviceClient:
         strategy: str,
         context: Dict[str, Any],
         timeout: float,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         from runtime.transports.adb_relay_server import get_relay_manager
 
@@ -2071,6 +2072,7 @@ class DeviceClient:
             strategy=strategy,
             context=context,
             timeout=timeout,
+            cancel_event=cancel_event,
         )
         if not result.get("ok"):
             return {
@@ -2110,13 +2112,18 @@ class DeviceClient:
                     strategy=strategy,
                     context=context,
                     timeout=timeout,
+                    cancel_event=cancel_event,
                 ),
                 self._loop,
             )
             deadline = time.monotonic() + timeout + 15.0
             while True:
                 if cancel_event is not None and cancel_event.is_set():
-                    fut.cancel()
+                    try:
+                        result = fut.result(timeout=0.75)
+                        return result
+                    except concurrent.futures.TimeoutError:
+                        fut.cancel()
                     return {"ok": False, "error": "cancelled", "cancelled": True}
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

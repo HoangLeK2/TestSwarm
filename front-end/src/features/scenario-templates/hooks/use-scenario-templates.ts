@@ -11,13 +11,19 @@ const KEYS = {
   detail: (id: string) => ['scenario-templates', id] as const
 };
 
-export function useScenarioTemplates(query?: {
-  category?: string;
-  tags?: string;
-}) {
+export function useScenarioTemplates(
+  query?: {
+    category?: string;
+    tags?: string;
+  },
+  options?: {
+    enabled?: boolean;
+  }
+) {
   return useQuery({
     queryKey: [...KEYS.list, query] as const,
-    queryFn: () => scenarioTemplatesApi.list(query)
+    queryFn: () => scenarioTemplatesApi.list(query),
+    enabled: options?.enabled ?? true
   });
 }
 

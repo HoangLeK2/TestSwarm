@@ -130,7 +130,11 @@ def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any])
             _clear_active_comment_parent(ctx)
             return
         pid, parent_hash = next(iter(pid_map.items()))
-        active_parent = {"pid": pid, "parent_id": parent_hash}
+        active_parent = {
+            "pid": pid,
+            "parent_id": parent_hash,
+            "source": "post_detail",
+        }
 
     parent_id = (
         active_parent.get("parent_id")
@@ -144,6 +148,8 @@ def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any])
     if pid:
         ctx["_fb_comment_parent_pid"] = pid
     source = str(active_parent.get("source") or "").strip()
+    if not source and (parent_id or pid):
+        source = "post_detail"
     if source:
         ctx["_active_comment_parent_source"] = source
     anchor = _clean_comment_parent_anchor(active_parent)
@@ -622,6 +628,28 @@ def request_edge_extra_data(
             context.setdefault("expand_see_more_fast", True)
             context.setdefault("expand_completion_retries", 1)
             context.setdefault("expand_see_more_wall_s", 18)
+    if (
+        strategy == "fb_comments"
+        and _coerce_bool(step.get("comment_filter_on_extract"), default=True)
+    ):
+        target_filter = resolve_step_comment_filter(step)
+        if target_filter and ctx.get("_fb_comment_filter_applied") != target_filter:
+            filter_report = run_edge_comment_filter_switch(
+                device=device,
+                serial=serial,
+                scenario=scenario,
+                step=step,
+                result=result,
+                cancel_event=cancel_event,
+            )
+            reason = str(filter_report.get("reason_code") or "")
+            if filter_report.get("switched") or reason in _COMMENT_FILTER_APPLIED_REASONS:
+                ctx["_fb_comment_filter_applied"] = target_filter
+            if cancel_event is not None and cancel_event.is_set():
+                result["ok"] = False
+                result["message"] = f"edge extra_data {strategy}: cancelled"
+                result["cancelled"] = True
+                return True
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
@@ -695,6 +723,12 @@ def request_edge_extra_data(
 
 
 _COMMENT_FILTER_MODES = frozenset({"most_relevant", "newest", "all_comments"})
+_COMMENT_FILTER_APPLIED_REASONS = frozenset({
+    "already_on_filter",
+    "already_all_comments",
+    "ok",
+    "filter_not_verified",
+})
 
 
 def resolve_step_comment_filter(step: Dict[str, Any]) -> Optional[str]:
@@ -870,6 +904,11 @@ def run_edge_comment_filter_switch(
         return report
 
     for _ in range(3):
+        if cancel_event is not None and cancel_event.is_set():
+            report["reason_code"] = "cancelled"
+            report["cancelled"] = True
+            result["edge_filter_summary"] = report
+            return report
         try:
             summary = device.request_extra_data_xml(
                 strategy="fb_comment_filter_next",
@@ -915,7 +954,10 @@ def run_edge_comment_filter_switch(
             report["reason_code"] = reason or "ok"
             break
         if step_pause > 0:
-            time.sleep(step_pause)
+            if cancel_event is not None:
+                cancel_event.wait(step_pause)
+            else:
+                time.sleep(step_pause)
     else:
         if "reason_code" not in report:
             report["reason_code"] = "max_steps"

@@ -16,7 +16,9 @@ const DISPATCHABLE = new Set<string>([
   'draft',
   'idle',
   'scheduled',
-  'cancelled'
+  'cancelled',
+  'completed',
+  'failed'
 ]);
 const ACTIVE_EXECUTION = new Set<string>(['running', 'paused']);
 const BODY_EDITABLE = new Set<string>(['draft', 'idle', 'cancelled']);
@@ -259,6 +261,8 @@ export type DlqEntry = {
   close_reason?: string | null;
   replayed_to_execution_id?: string | null;
   artifact_refs?: Record<string, string>;
+  /** Server-resolved message (includes execution_steps backfill). */
+  display_message?: string;
 };
 
 export type DlqBulkRetryResult = {

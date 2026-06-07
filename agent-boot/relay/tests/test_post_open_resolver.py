@@ -119,6 +119,33 @@ def test_resolve_skips_partial_media_card_above_visible_author_post() -> None:
     assert all((alt.get("post") or {}).get("author") != "" for alt in alternates)
 
 
+def test_resolve_visible_author_post_when_action_bar_below_viewport() -> None:
+    """Regression: do not latch onto a previous post's visible comment row."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1080,1200]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,100][1080,1150]">
+      <node class="android.view.ViewGroup" bounds="[0,0][1080,520]">
+        <node class="android.widget.ImageView" content-desc="Ảnh có thể có: Working for 9h 30m 48s" bounds="[0,80][1080,390]" clickable="true"/>
+        <node class="android.widget.Button" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." text="Bình luận" bounds="[210,420][360,490]" clickable="true"/>
+      </node>
+      <node class="android.view.ViewGroup" bounds="[0,500][1080,1120]">
+        <node class="android.widget.TextView" text="Lê Chung" bounds="[132,530][420,574]" clickable="false"/>
+        <node class="android.widget.TextView" text="5 giờ" bounds="[132,578][240,614]" clickable="true"/>
+        <node content-desc="Lựa chọn khác cho bài viết này" bounds="[980,522][1060,582]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="Openclaw đang ngon lành thì bị thế này ạ, ai giải thích giúp em với" bounds="[36,650][1044,860]" clickable="true" focusable="true"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, alternates = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["feed_item_index"] == 1
+    assert (top.get("post") or {}).get("author") == "Lê Chung"
+    assert top["tap_kind"] in {"timestamp", "author_row_gap", "metadata"}
+    assert all((alt.get("post") or {}).get("author") != "" for alt in alternates)
+
+
 def test_detail_detection_single_card() -> None:
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <hierarchy>

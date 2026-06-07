@@ -112,6 +112,7 @@ class DeviceActionBatchResult:
     results: list[dict[str, Any]] = field(default_factory=list)   # per-step StepResult dicts
     first_failure_index: int = -1   # index into results of first failed step, -1 if all ok
     paused_mid_batch: bool = False
+    cancelled_mid_batch: bool = False
 
 
 @dataclass

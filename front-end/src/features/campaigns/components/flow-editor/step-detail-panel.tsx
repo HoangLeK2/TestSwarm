@@ -1179,23 +1179,33 @@ export function StepDetailPanel({
                   value={step.count ?? '10'}
                   onChange={(e) => update({ count: e.target.value })}
                 />
-              </F>
-              <F label='max_iterations'>
-                <Input
-                  type='number'
-                  min={1}
-                  className='h-8 w-28 text-xs'
-                  value={step.max_iterations ?? 100}
-                  onChange={(e) =>
-                    update({ max_iterations: Number(e.target.value) || 100 })
-                  }
-                />
+                <p className='mt-1 text-[10px] text-muted-foreground'>
+                  Chạy đúng N lần. Có thể dừng sớm bằng break_if hoặc extract stop_if_no_new.
+                </p>
               </F>
               <JsonTextarea
                 label='while condition (JSON, optional)'
                 value={step.while}
                 onCommit={(next) => update({ while: next })}
               />
+              {step.while != null &&
+                typeof step.while === 'object' &&
+                Object.keys(step.while).length > 0 && (
+                  <F label='max_iterations (giới hạn khi dùng while)'>
+                    <Input
+                      type='number'
+                      min={1}
+                      className='h-8 w-28 text-xs'
+                      value={step.max_iterations ?? 100}
+                      onChange={(e) =>
+                        update({ max_iterations: Number(e.target.value) || 100 })
+                      }
+                    />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>
+                      Chỉ áp dụng khi không có count và dùng while condition.
+                    </p>
+                  </F>
+                )}
             </>
           )}
 

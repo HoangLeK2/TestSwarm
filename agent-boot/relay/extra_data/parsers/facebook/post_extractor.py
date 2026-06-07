@@ -24,6 +24,7 @@ from .dedup import (
     _TRUNCATION_MARKERS,
 )
 from .constants import (
+    _CMT_EMPTY_BODY_JUNK_AUTHOR,
     _MAX_TS_ANCHOR_NODE_LEN,
     _NOISE_CONTAINS,
     _NOISE_PREFIXES,
@@ -316,6 +317,89 @@ def _is_hashtag_chip(text: str) -> bool:
     return len(s) < 48
 
 
+_RE_STORY_OPENER = re.compile(
+    r"^mở tin của\s+(.+?)(?:,\s*tin chưa xem)?\.?$",
+    re.IGNORECASE,
+)
+_GROUP_COVER_MARKERS = (
+    "ảnh bìa của nhóm",
+    "group cover photo",
+)
+
+
+def _split_author_prefix_from_timestamp(timestamp: str) -> Tuple[Optional[str], str]:
+    """FB comment sheet often embeds author in the timestamp row: 'Kent Juno•1 ngày•…'."""
+    raw = (timestamp or "").strip()
+    if not raw:
+        return None, raw
+    for sep in ("•", "·"):
+        if sep not in raw:
+            continue
+        head, _, tail = raw.partition(sep)
+        head = head.strip()
+        tail = tail.strip()
+        if not head or not tail:
+            continue
+        tail_lower = tail.lower()
+        if _RE_TS.search(tail) or "chia sẻ với" in tail_lower or "shared with" in tail_lower:
+            if not _RE_TS.search(head) and 2 <= len(head) <= 60:
+                return head, tail
+    return None, raw
+
+
+def _author_from_story_opener(cluster: List[Dict[str, Any]]) -> Optional[str]:
+    for node in cluster:
+        raw = (node.get("text") or "").strip()
+        match = _RE_STORY_OPENER.match(raw)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        if 2 <= len(name) <= 60:
+            return name
+    return None
+
+
+def _cluster_has_group_cover(cluster: List[Dict[str, Any]]) -> bool:
+    for node in cluster:
+        blob = f"{node.get('text') or ''} {node.get('content-desc') or ''}".lower()
+        if any(marker in blob for marker in _GROUP_COVER_MARKERS):
+            return True
+    return False
+
+
+def _looks_like_group_header_author(author: Optional[str], cluster: List[Dict[str, Any]]) -> bool:
+    if not author:
+        return False
+    if author.strip().lower() in _CMT_EMPTY_BODY_JUNK_AUTHOR:
+        return True
+    if not _cluster_has_group_cover(cluster):
+        return False
+    name = author.strip()
+    hits = 0
+    for node in cluster:
+        if (node.get("text") or "").strip() == name:
+            hits += 1
+    return hits >= 1
+
+
+def _refine_comment_sheet_post_author(
+    cluster: List[Dict[str, Any]],
+    author: Optional[str],
+    timestamp: str,
+) -> Tuple[Optional[str], str]:
+    """Prefer real poster over group title chrome on comment-sheet post headers."""
+    embedded, ts_clean = _split_author_prefix_from_timestamp(timestamp)
+    story_author = _author_from_story_opener(cluster)
+    if embedded:
+        author = embedded
+        timestamp = ts_clean
+    elif story_author and _looks_like_group_header_author(author, cluster):
+        author = story_author
+    elif story_author and not author:
+        author = story_author
+    return author, timestamp
+
+
 def _find_post_time_anchor(cluster: List[Dict[str, Any]]) -> Tuple[int, str]:
     for i, n in enumerate(cluster):
         raw = n["text"].strip()
@@ -464,6 +548,7 @@ def _extract_post(
 
     comment_preview = " ".join(comment_preview_parts).strip() or None
     body = " ".join(body_parts).strip()
+    author, timestamp = _refine_comment_sheet_post_author(cluster, author, timestamp)
     if not body and image_desc:
         body = image_desc.strip()
     if body and "chia sẻ với: nhóm công khai" in body.lower() and len(body) < 60:

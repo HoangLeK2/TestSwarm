@@ -250,6 +250,14 @@ public class IdentityActivity extends AppCompatActivity {
         refreshWifiIp();
         checkServiceStatus();
 
+        // Intent-injected QR from relay/ADB is an explicit connect request. Handle it
+        // before saved-url auto reconnect so one Activity launch cannot start WS twice.
+        String injectedQr = getIntent().getStringExtra(EXTRA_QR_CONTENT);
+        if (injectedQr != null && !injectedQr.isEmpty()) {
+            handleQrContent(injectedQr);
+            return;
+        }
+
         // Auto-reconnect with saved URL (works across different WiFi networks).
         // If the service already holds a valid MediaProjection token (same process lifetime),
         // skip the system dialog — just restart the service with the stored URL.
@@ -291,12 +299,6 @@ public class IdentityActivity extends AppCompatActivity {
             if (jsonPayload != null) {
                 handleAdbRegisterQr(jsonPayload);
             }
-        }
-
-        // Intent-injected QR (e.g. from adb shell am start --es qr_content "ws://...")
-        String injectedQr = getIntent().getStringExtra(EXTRA_QR_CONTENT);
-        if (injectedQr != null && !injectedQr.isEmpty()) {
-            handleQrContent(injectedQr);
         }
     }
 

@@ -162,6 +162,14 @@ async def test_matrix_campaign1_running_then_campaign2_cancel_and_force_run_path
         patch.object(campaigns_route, "_get_campaign_or_404", new=AsyncMock(return_value=_campaign("camp-1"))),
         patch.object(campaigns_route.repo, "update_campaign_status", new=AsyncMock()),
         patch("temporal.worker.get_temporal_client", new=AsyncMock(return_value=temporal_client)),
+        patch(
+            "db.crud.execution.list_running_executions_for_campaign",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "services.execution_control._resolve_workflow_ids_for_campaign",
+            new=AsyncMock(return_value=[]),
+        ),
     ):
         cancelled = await campaigns_route.update_status(
             "camp-1",
@@ -180,8 +188,8 @@ async def test_matrix_campaign1_running_then_campaign2_cancel_and_force_run_path
 
     assert cancelled["tasks_cancelled"] == 3
     assert cancelled["status"] == "idle"
-    temporal_client.handle.cancel.assert_awaited()
-    temporal_client.handle.signal.assert_awaited()  # running => resume signal path
+    temporal_client.handle.signal.assert_awaited()
+    temporal_client.handle.cancel.assert_not_awaited()
     assert resumed["status"] == "running"
 
 

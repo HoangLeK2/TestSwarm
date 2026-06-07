@@ -2423,7 +2423,8 @@ def _run_scenario_task_legacy(
             else:
                 # Determine iteration count
                 if count is not None:
-                    iterations = min(int(count), max_iterations)
+                    # count is explicit — max_iterations applies to while-only loops.
+                    iterations = int(count)
                     use_while = False
                 elif while_cond:
                     iterations = max_iterations

@@ -14,6 +14,14 @@ from db.models.execution import Execution
 from db.models.utils import _uuid
 
 
+def _normalize_dlq_message(error: Optional[str], failure_reason: Optional[str]) -> tuple[str, str]:
+    from services.campaign.dlq_message import coalesce_dlq_text, pick_richer_message
+
+    resolved = coalesce_dlq_text(error, failure_reason)
+    reason = pick_richer_message(failure_reason, resolved) or resolved
+    return resolved, reason
+
+
 def _execution_scope_where(
     org_id: str | None,
     user_id: str | None,
@@ -42,16 +50,17 @@ async def create_dlq_entry(
     """Create a new DLQ entry for a failed execution."""
     if failed_at is None:
         failed_at = datetime.now(timezone.utc)
+    resolved_error, resolved_reason = _normalize_dlq_message(error, failure_reason)
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         payload = {
             "id": _uuid(),
             "execution_id": execution_id,
             "device_serial": device_serial,
-            "error": error,
+            "error": resolved_error,
             "status": "pending",
             "retry_count": 0,
             "failed_step_id": failed_step_id,
-            "failure_reason": failure_reason or error,
+            "failure_reason": resolved_reason,
             "failed_at": failed_at,
             "campaign_id": campaign_id,
             "artifact_refs": artifact_refs or {},
@@ -64,11 +73,17 @@ async def create_dlq_entry(
                 # Keep this predicate literal so Postgres can match the partial unique index.
                 index_where=text("status IN ('pending','retrying')"),
                 set_={
-                    "error": error if error is not None else ExecutionDLQ.error,
-                    "failure_reason": (
-                        failure_reason
-                        or error
-                        or ExecutionDLQ.failure_reason
+                    "error": func.coalesce(
+                        func.nullif(func.trim(ExecutionDLQ.error), ""),
+                        resolved_error,
+                    ),
+                    "failure_reason": func.coalesce(
+                        func.nullif(func.trim(ExecutionDLQ.failure_reason), ""),
+                        resolved_reason,
+                    ),
+                    "failed_step_id": func.coalesce(
+                        ExecutionDLQ.failed_step_id,
+                        failed_step_id,
                     ),
                 },
             )
@@ -91,18 +106,24 @@ async def create_dlq_entry(
     )
     existing = existing_q.scalar_one_or_none()
     if existing is not None:
-        if error:
-            existing.error = error
-            await db.flush()
+        from services.campaign.dlq_message import pick_richer_message
+
+        existing.error = pick_richer_message(existing.error, resolved_error) or resolved_error
+        existing.failure_reason = (
+            pick_richer_message(existing.failure_reason, resolved_reason) or resolved_reason
+        )
+        if failed_step_id and not existing.failed_step_id:
+            existing.failed_step_id = failed_step_id
+        await db.flush()
         return existing
 
     entry = ExecutionDLQ(
         execution_id=execution_id,
         device_serial=device_serial,
-        error=error,
+        error=resolved_error,
         status="pending",
         failed_step_id=failed_step_id,
-        failure_reason=failure_reason or error,
+        failure_reason=resolved_reason,
         failed_at=failed_at,
         campaign_id=campaign_id,
         artifact_refs=artifact_refs or {},

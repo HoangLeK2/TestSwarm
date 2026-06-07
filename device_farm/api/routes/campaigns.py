@@ -802,7 +802,12 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
                     try:
                         handle = t_client.get_workflow_handle(wf_id)
                         if cancel_trigger:
-                            await handle.cancel()
+                            is_parent = not wf_id.endswith(":steps")
+                            await handle.signal(
+                                ScenarioWorkflow.cancel_scenario
+                                if is_parent
+                                else ScenarioStepsWorkflow.cancel_scenario
+                            )
                         elif pause_trigger:
                             is_parent = not wf_id.endswith(":steps")
                             await handle.signal(
@@ -1038,6 +1043,22 @@ async def remove_device(campaign_id: str, device_id: str, db: DB, user: CurrentU
     await repo.remove_device_from_campaign(db, campaign_id, device_id)
     await db.commit()
     return {"ok": True}
+
+
+# ── Cumulative run stats for this campaign ───────────────────────────────────
+
+@router.get(
+    "/{campaign_id}/run-stats",
+    dependencies=[Depends(require_permission("campaigns", "read"))],
+)
+async def campaign_run_stats_endpoint(campaign_id: str, db: DB, user: CurrentUser):
+    """Return cumulative device-run counts (passed/failed/…) across all executions."""
+    from api.schemas.execution import SummaryOut
+    from db.crud.execution import campaign_run_stats
+
+    await _get_campaign_or_404(campaign_id, user, db)
+    data = await campaign_run_stats(db, campaign_id)
+    return SummaryOut(**data)
 
 
 # ── Content stats for this campaign ──────────────────────────────────────────

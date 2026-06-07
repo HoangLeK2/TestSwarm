@@ -490,6 +490,10 @@ public class WsAgentService extends android.app.Service {
     private void connectWebSocket(String wsUrl) {
         mainHandler.removeCallbacks(reconnectRunnable);
         WebSocketManager oldManager = wsManager;
+        if (oldManager != null && oldManager.isConnectedTo(wsUrl)) {
+            Log.i(TAG, "connectWebSocket: already active for " + wsUrl);
+            return;
+        }
         if (oldManager != null) {
             oldManager.shutdown();
         }

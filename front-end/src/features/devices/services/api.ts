@@ -21,7 +21,7 @@ export interface AppConfig {
 
 const hierarchyInFlight = new Map<string, Promise<string>>();
 const hierarchyFailureUntil = new Map<string, number>();
-const HIERARCHY_503_COOLDOWN_MS = 2500;
+const HIERARCHY_503_COOLDOWN_MS = 12_000;
 
 export async function fetchDevices(): Promise<Device[]> {
   const { data } = await farmApi.get<Device[]>('/devices');
@@ -132,15 +132,17 @@ export async function runAgentShell(
   return { ...data, cmd: cmd.trim() };
 }
 
-/** UI hierarchy XML (uiautomator2 page source). refresh=true skips backend cache (force fresh dump). On 503 returns "". */
+/** UI hierarchy XML (uiautomator2 page source). On 503 returns "" and backs off per device. */
 export async function fetchHierarchy(
   serial: string,
   refresh = false
 ): Promise<string> {
   const key = serial;
   const now = Date.now();
-  // Allow refresh=true through during bootstrap even if a recent 503 set cooldown.
-  if (!refresh && (hierarchyFailureUntil.get(key) ?? 0) > now) return '';
+  // A failing hierarchy dump can block backend relay/u2 for seconds. Back off
+  // even for refresh=true so bootstrap/interaction pulses do not starve screen
+  // streaming while uiautomator2 is recovering.
+  if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
   const pending = hierarchyInFlight.get(key);
   if (pending) return pending;
 

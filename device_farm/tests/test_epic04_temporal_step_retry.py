@@ -74,6 +74,45 @@ def test_step_runner_retries_until_success():
     assert len(result.get("retry_attempts") or []) == 3
 
 
+class _CancelOnWait:
+    def __init__(self):
+        self._set = False
+
+    def is_set(self):
+        return self._set
+
+    def wait(self, _timeout):
+        self._set = True
+        return True
+
+
+def test_step_runner_stops_retry_backoff_when_cancelled():
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.trace_id = "t1"
+    sc.cancel_event = _CancelOnWait()
+
+    step = {
+        "type": "wait",
+        "seconds": 0,
+        "retry": {"max_attempts": 3, "backoff_ms": 1000, "retryable_reasons": ["timeout"]},
+    }
+
+    with patch(
+        "services.execution.step_runner.dispatch_step",
+        return_value={"ok": False, "reason_code": "timeout", "message": "timeout"},
+    ) as dispatch, patch("services.execution.step_runner.capture_pre_step"), patch(
+        "services.execution.step_runner.capture_post_step"
+    ), patch("services.execution.step_runner.time.sleep") as sleep:
+        result, attempts = execute_step_with_retry(sc, step, 0)
+
+    assert dispatch.call_count == 1
+    assert sleep.call_count == 0
+    assert attempts == 1
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+
+
 @pytest.mark.asyncio
 async def test_execute_device_action_materializes_dsl_before_executor():
     from temporalio.testing import ActivityEnvironment

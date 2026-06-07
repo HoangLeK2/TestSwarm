@@ -405,9 +405,9 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": ["count", "while", "max_iterations"],
         "description": (
             "Lặp lại steps theo count hoặc while-condition. "
-            "count: số lần lặp cố định. "
+            "count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). "
             "while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. "
-            "max_iterations: giới hạn an toàn (default 100). "
+            "max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). "
             "Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' "
             "với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. "
             "${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based)."

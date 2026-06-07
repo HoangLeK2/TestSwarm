@@ -131,6 +131,16 @@ def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _comment_item_dedupe_key(item: dict[str, Any]) -> str:
+    explicit = str(item.get("comment_key") or item.get("id") or item.get("content_hash") or "").strip()
+    if explicit:
+        return explicit
+    author = str(item.get("author") or "").strip().casefold()
+    text = str(item.get("text") or item.get("body") or "").strip().casefold()
+    parent = str(item.get("parent_post_id") or item.get("parent_id") or "").strip()
+    return _sha256_hex(f"{parent}\x00{author}\x00{text}") if text else ""
+
+
 def _int_context(context: dict[str, Any], key: str, default: int, lo: int, hi: int) -> int:
     try:
         value = int(context.get(key, default))
@@ -295,8 +305,26 @@ async def _u2_click_post_open_target(
     """Tap post header metadata (timestamp / badge row / geometric fallback)."""
     from relay.extra_data.parsers.facebook.post_open_pipeline import post_header_tap_point
 
-    use_u2 = _bool_context(context, "post_open_u2_click", True)
-    timeout = _float_context(context, "post_open_click_timeout_s", 0.35, 0.1, 4.0)
+    bounds = target.get("bounds")
+    if not (isinstance(bounds, list) and len(bounds) == 4):
+        return False, "invalid_bounds"
+    x1, y1, x2, y2 = [int(v) for v in bounds]
+    tap_kind = str(target.get("tap_kind") or "")
+    screen_w, _screen_h = await _window_size(executor, serial)
+    cx, cy = post_header_tap_point((x1, y1, x2, y2), tap_kind=tap_kind, screen_w=screen_w)
+    if target.get("has_see_more") and tap_kind == "post_body":
+        logger.info(
+            "[%s] open_post tap post_body (see-more present) at (%d,%d) bounds=%s",
+            serial,
+            cx,
+            cy,
+            bounds,
+        )
+    if await _u2_click(executor, serial, cx, cy):
+        return True, "click_coord"
+
+    use_u2 = _bool_context(context, "post_open_u2_click", False)
+    timeout = _float_context(context, "post_open_click_timeout_s", 0.25, 0.1, 4.0)
     u2_click = target.get("u2_click") if isinstance(target.get("u2_click"), dict) else {}
 
     if use_u2 and u2_click:
@@ -310,23 +338,6 @@ async def _u2_click_post_open_target(
         selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
         if allow_selector and selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
             return True, "click_selector"
-
-    bounds = target.get("bounds")
-    if not (isinstance(bounds, list) and len(bounds) == 4):
-        return False, "invalid_bounds"
-    x1, y1, x2, y2 = [int(v) for v in bounds]
-    tap_kind = str(target.get("tap_kind") or "")
-    cx, cy = post_header_tap_point((x1, y1, x2, y2), tap_kind=tap_kind)
-    if target.get("has_see_more") and tap_kind == "post_body":
-        logger.info(
-            "[%s] open_post tap post_body (see-more present) at (%d,%d) bounds=%s",
-            serial,
-            cx,
-            cy,
-            bounds,
-        )
-    if await _u2_click(executor, serial, cx, cy):
-        return True, "click_coord"
     return False, "tap_failed"
 
 
@@ -429,6 +440,7 @@ async def _maybe_open_fb_post_detail(
             await asyncio.sleep(settle_s)
         detail_xml = await _dump_hierarchy(executor, serial, context)
         opened = bool(detail_xml and hierarchy_is_fb_post_detail_from_xml(detail_xml))
+        comment_sheet_opened = bool(detail_xml and _diag_sheet_opened(detail_xml))
         attempts.append(
             {
                 "index": idx,
@@ -436,6 +448,7 @@ async def _maybe_open_fb_post_detail(
                 "verified": opened if verify else "skipped",
                 "route": route,
                 "tap_kind": target.get("tap_kind"),
+                "comment_sheet_opened": comment_sheet_opened,
             }
         )
         if opened or not verify:
@@ -449,6 +462,25 @@ async def _maybe_open_fb_post_detail(
             opened_post = _opened_post_payload_from_target(target)
             if opened_post:
                 diagnostic["opened_post"] = opened_post
+            return (detail_xml or feed_xml), diagnostic
+        if comment_sheet_opened:
+            # Timestamp/metadata taps on vivo often open the comment sheet directly.
+            # Keep the sheet for extract; backing would drop parent/comment context.
+            context["open_post_detail"] = True
+            context["open_post_detail_tap_kind"] = target.get("tap_kind")
+            diagnostic = {
+                "reason_code": "comment_sheet",
+                "attempts": attempts,
+                "tap_kind": target.get("tap_kind"),
+            }
+            opened_post = _opened_post_payload_from_target(target)
+            if opened_post:
+                diagnostic["opened_post"] = opened_post
+            logger.info(
+                "[%s] open_post_before_extract tap #%d opened comment sheet — using for extract",
+                serial,
+                idx,
+            )
             return (detail_xml or feed_xml), diagnostic
         # Verify heuristic missed detail chrome but tap may still have navigated — keep post-tap XML.
         if detail_xml and detail_xml != feed_xml:
@@ -973,6 +1005,14 @@ async def _collect_comment_snapshots(
         0,
         _COMMENT_DEEP_NO_GROWTH_BREAK if explicit_no_growth else _COMMENT_NO_GROWTH_BREAK,
     )
+    stop_if_no_new_comments = _bool_context(context, "comment_stop_if_no_new", True)
+    no_new_comment_threshold = _int_context(
+        context,
+        "comment_no_new_threshold",
+        _int_context(context, "no_new_threshold", 4, 1, 1000),
+        1,
+        1000,
+    )
     max_snapshots = _int_context(
         context, "comment_max_snapshots", max(20, dump_cycles + 1), 1, 50
     )
@@ -1005,7 +1045,29 @@ async def _collect_comment_snapshots(
 
     note_fb_group_navigation(context, initial_xml)
     from relay.extra_data.parsers.facebook.comment_filter import _is_sort_bottom_sheet_open
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        parse_fb_comments_from_xml_with_diagnostic,
+    )
     from relay.extra_data.parsers.facebook.parser import _parse_xml
+
+    def _visible_comment_keys(xml: str) -> set[str]:
+        try:
+            items, _diag = parse_fb_comments_from_xml_with_diagnostic(
+                xml,
+                parent_post_id=str(context.get("parent_post_id") or "") or None,
+                max_items=120,
+            )
+        except Exception as exc:
+            logger.debug("[%s] comment no-new probe parse failed: %s", serial, exc)
+            return set()
+        keys: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict) or item.get("_type") == "post_stats":
+                continue
+            key = _comment_item_dedupe_key(item)
+            if key:
+                keys.add(key)
+        return keys
 
     async def _wait_sort_sheet_closed(xml: str) -> str:
         _raise_if_cancelled(context)
@@ -1058,9 +1120,13 @@ async def _collect_comment_snapshots(
         return [initial_xml]
     snapshots: list[str] = [initial_xml]
     seen_xml: set[str] = {_sha256_hex(initial_xml)}
+    seen_comment_keys: set[str] = (
+        _visible_comment_keys(initial_xml) if stop_if_no_new_comments else set()
+    )
     total_xml_bytes = len(initial_xml.encode("utf-8"))
     # Stop after N consecutive dumps with identical hierarchy (end of list / scroll stuck).
     unchanged_dumps = 0
+    no_new_comment_dumps = 0
     scroll_xml = initial_xml
     # Slightly longer than minimum so Android treats the gesture as scroll, not tap.
     duration_s = max(0.32, duration_ms / 1000.0)
@@ -1148,6 +1214,28 @@ async def _collect_comment_snapshots(
 
         digest = _sha256_hex(next_xml)
         duplicate_xml = digest in seen_xml
+        if stop_if_no_new_comments and not duplicate_xml:
+            current_comment_keys = _visible_comment_keys(next_xml)
+            new_comment_keys = current_comment_keys - seen_comment_keys
+            if new_comment_keys:
+                seen_comment_keys.update(new_comment_keys)
+                no_new_comment_dumps = 0
+            else:
+                no_new_comment_dumps += 1
+                if (
+                    no_new_comment_dumps >= no_new_comment_threshold
+                    and (cycle + 1) >= min_dumps
+                ):
+                    logger.info(
+                        "[%s] extra_data comment no-new break after %d dump cycles "
+                        "(%d swipes, %d no-new comment dumps, snapshots=%d)",
+                        serial,
+                        cycle + 1,
+                        swipes_done,
+                        no_new_comment_dumps,
+                        len(snapshots),
+                    )
+                    break
 
         if not duplicate_xml:
             seen_xml.add(digest)
@@ -1623,6 +1711,16 @@ async def collect_xml_snapshots(
             expand_default = strategy in _POST_STRATEGIES or str(strategy).endswith("_posts")
             cached_xml: str | None = detail_xml
             expand_requested = _bool_context(context, "expand_see_more", expand_default)
+            if (
+                strategy == "fb_posts"
+                and isinstance(open_diag, dict)
+                and open_diag.get("reason_code") == "comment_sheet"
+            ):
+                # The post-open tap already landed on the comment sheet. Running the
+                # post "see more" expander here can tap/scroll the sheet before the
+                # following fb_comments step gets a stable XML.
+                expand_requested = False
+                context["expand_see_more_skipped"] = "comment_sheet"
             if strategy in _COMMENT_STRATEGIES:
                 if expand_requested:
                     logger.info(

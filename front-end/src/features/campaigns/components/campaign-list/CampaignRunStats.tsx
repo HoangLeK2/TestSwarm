@@ -16,7 +16,7 @@ import {
   PopoverTrigger
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { executionsApi } from '../../services/api';
+import { campaignsApi } from '../../services/api';
 
 type ExecutionSummary = {
   total_devices: number;
@@ -225,25 +225,13 @@ function RunStatsPopoverBody({
 
 export function CampaignRunStats({ campaignId }: { campaignId: string }) {
   const t = useTranslations('campaignsFeature.list');
-  const latest = useQuery({
-    queryKey: ['campaign-latest-execution', campaignId],
-    queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
-    staleTime: 10_000,
-    refetchInterval: 15_000
-  });
-
-  const ex = latest.data?.items?.[0];
   const summary = useQuery({
-    queryKey: ['execution-summary', ex?.id],
-    queryFn: () => executionsApi.summary(ex!.id),
-    enabled: !!ex?.id,
+    queryKey: ['campaign-run-stats', campaignId],
+    queryFn: () => campaignsApi.runStats(campaignId),
     staleTime: 10_000,
     refetchInterval: 15_000
   });
 
-  if (!ex && !latest.isLoading)
-    return <span className='text-[11px] text-muted-foreground'>—</span>;
-  if (!ex) return <span className='text-[11px] text-muted-foreground'>…</span>;
   if (!summary.data && summary.isLoading)
     return <span className='text-[11px] text-muted-foreground'>…</span>;
   if (!summary.data)

@@ -184,14 +184,7 @@ async def _signal_workflow_ids(
         async with sem:
             try:
                 handle = temporal_client.get_workflow_handle(target_id)
-                if action == "cancel":
-                    await handle.signal(sig)
-                    try:
-                        await handle.cancel()
-                    except Exception:
-                        pass
-                else:
-                    await handle.signal(sig)
+                await handle.signal(sig)
             except Exception as exc:
                 log.debug("workflow %s %s: %s", target_id, action, exc)
 
@@ -561,9 +554,10 @@ async def cancel_execution(
     assert execution is not None
 
     if transitioned:
-        from services.execution_pause_flags import clear_execution_paused
+        from services.execution_pause_flags import clear_execution_paused, set_execution_cancelled
 
         await clear_execution_paused(execution_id)
+        await set_execution_cancelled(execution_id)
 
     wf_count = 0
     if signal_temporal and transitioned:

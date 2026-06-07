@@ -13,10 +13,14 @@ const KEYS = {
   members: (id: string) => ['account-groups', id, 'members'] as const
 };
 
-export function useAccountGroups(query?: { platform?: string }) {
+export function useAccountGroups(
+  query?: { platform?: string },
+  options?: { enabled?: boolean }
+) {
   return useQuery({
     queryKey: [...KEYS.list, query] as const,
-    queryFn: () => accountGroupsApi.list(query)
+    queryFn: () => accountGroupsApi.list(query),
+    enabled: options?.enabled ?? true
   });
 }
 

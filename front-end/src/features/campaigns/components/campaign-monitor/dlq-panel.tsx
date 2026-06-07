@@ -42,11 +42,17 @@ import {
   useDismissDlqEntry,
   useDlqEntries,
   useDlqSummary,
-  useRetryDlqEntry
+  useRetryDlqEntry,
+  useCampaignDevices
 } from '../../hooks/use-campaigns';
 import { MonitorSectionHeader } from './monitor-section-header';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
-import { dlqDisplayMessage } from './dlq-message';
+import { dlqDisplayMessage, dlqHasExplicitMessage } from './dlq-message';
+import {
+  humanizeDlqMessage,
+  resolveDlqDeviceLabel
+} from './dlq-user-message';
+import { formatTs } from './dlq-run-summary';
 import {
   dlqReplayBlockedReason,
   isDlqEntryReplayable
@@ -97,6 +103,7 @@ export function DlqPanel({
     pollAggressive
   );
   const { data: summary } = useDlqSummary(true, campaignId, pollAggressive);
+  const { data: campaignDevices = [] } = useCampaignDevices(campaignId ?? '');
   const retryMut = useRetryDlqEntry();
   const closeMut = useCloseDlqEntry();
   const dismissMut = useDismissDlqEntry();
@@ -127,8 +134,10 @@ export function DlqPanel({
         return false;
       }
       if (errorNeedle) {
-        const msg = dlqDisplayMessage(entry, '').toLowerCase();
-        if (!msg.includes(errorNeedle)) return false;
+        const raw = dlqDisplayMessage(entry, '');
+        const user = humanizeDlqMessage(raw, t).summary;
+        const haystack = `${raw} ${user}`.toLowerCase();
+        if (!haystack.includes(errorNeedle)) return false;
       }
       return true;
     });
@@ -290,9 +299,20 @@ export function DlqPanel({
                 dismissMut.isPending ||
                 closeMut.isPending);
             const previewUrl = artifactPreviewUrl(entry);
-            const reason = dlqDisplayMessage(
+            const rawMessage = dlqDisplayMessage(
               entry,
               t('monitorDlqNoErrorMessage')
+            );
+            const { summary: reason, technical } = humanizeDlqMessage(
+              rawMessage,
+              t
+            );
+            const hasExplicitMessage =
+              dlqHasExplicitMessage(entry) || Boolean(technical);
+            const device = resolveDlqDeviceLabel(
+              entry.device_serial,
+              campaignDevices,
+              t
             );
             const replayable = isDlqEntryReplayable(entry);
             const blockedReason = dlqReplayBlockedReason(entry, t);
@@ -308,41 +328,34 @@ export function DlqPanel({
                   onClick={() => setDetailEntry(entry)}
                 >
                   <div className='flex flex-wrap items-center gap-2'>
-                    <code
-                      className='text-sm font-semibold'
-                      title={entry.execution_id}
+                    <span
+                      className='text-sm font-semibold text-foreground'
+                      title={device.title}
                     >
-                      {entry.device_serial}
-                    </code>
+                      {device.label}
+                    </span>
                     <Badge
                       variant={dlqStatusVariant(entry.status)}
                       className='px-2.5 py-0.5 text-xs'
                     >
                       {dlqStatusLabel(entry.status, t)}
                     </Badge>
-                    {entry.failed_step_id ? (
-                      <span className='text-xs text-muted-foreground'>
-                        {t('monitorDlqFailedStep', {
-                          step: entry.failed_step_id
-                        })}
-                      </span>
-                    ) : null}
                   </div>
                   <p
                     className={cn(
-                      'line-clamp-3 text-sm leading-relaxed',
-                      reason !== t('monitorDlqNoErrorMessage')
+                      'max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed',
+                      hasExplicitMessage
                         ? 'text-foreground/90'
                         : 'italic text-muted-foreground'
                     )}
-                    title={reason}
+                    title={technical || reason}
                   >
                     {reason}
                   </p>
                   <div className='flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground'>
                     <span>
-                      {t('monitorDlqExecutionShort', {
-                        id: entry.execution_id.slice(0, 8)
+                      {t('monitorDlqFailedAt', {
+                        time: formatTs(entry.created_at)
                       })}
                     </span>
                     {entry.retry_count > 0 ? (

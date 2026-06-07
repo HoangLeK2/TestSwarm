@@ -40,3 +40,36 @@ def test_cancel_all_previews_respects_owner():
     finally:
         with preview_mod._ACTIVE_PREVIEWS_LOCK:
             preview_mod._ACTIVE_PREVIEWS.clear()
+
+
+def test_preview_stream_abort_sets_event_before_unregistering():
+    ev = threading.Event()
+    worker_done = threading.Event()
+    with preview_mod._ACTIVE_PREVIEWS_LOCK:
+        preview_mod._ACTIVE_PREVIEWS.clear()
+        preview_mod._ACTIVE_PREVIEWS[("dev-a", "t1")] = {"event": ev, "user_id": None}
+    try:
+        preview_mod._finish_preview_stream(
+            "dev-a",
+            "t1",
+            ev,
+            worker_done,
+            completed=False,
+        )
+        assert ev.is_set()
+        with preview_mod._ACTIVE_PREVIEWS_LOCK:
+            assert ("dev-a", "t1") in preview_mod._ACTIVE_PREVIEWS
+
+        worker_done.set()
+        preview_mod._finish_preview_stream(
+            "dev-a",
+            "t1",
+            ev,
+            worker_done,
+            completed=True,
+        )
+        with preview_mod._ACTIVE_PREVIEWS_LOCK:
+            assert ("dev-a", "t1") not in preview_mod._ACTIVE_PREVIEWS
+    finally:
+        with preview_mod._ACTIVE_PREVIEWS_LOCK:
+            preview_mod._ACTIVE_PREVIEWS.clear()

@@ -195,6 +195,7 @@ class ScenarioWorkflow:
                 await self._finalize(
                     inp.campaign_id, inp.run_id, success=False,
                     execution_id=inp.execution_id, device_serial=inp.device_serial,
+                    failed_message="Cancelled during execution",
                 )
                 return StepsResult(
                     success=False, steps_executed=result.steps_executed,
@@ -209,6 +210,7 @@ class ScenarioWorkflow:
                 inp.campaign_id, inp.run_id, success=result.success,
                 execution_id=inp.execution_id, device_serial=inp.device_serial,
                 step_results=result.step_results,
+                failed_message=None if result.success else result.failed_message,
             )
             return result
 
@@ -220,6 +222,7 @@ class ScenarioWorkflow:
                 await self._finalize(
                     inp.campaign_id, inp.run_id, success=False,
                     execution_id=inp.execution_id, device_serial=inp.device_serial,
+                    failed_message="Cancelled by Temporal",
                 )
             except Exception:
                 pass
@@ -233,6 +236,7 @@ class ScenarioWorkflow:
             await self._finalize(
                 inp.campaign_id, inp.run_id, success=False,
                 execution_id=inp.execution_id, device_serial=inp.device_serial,
+                failed_message=f"Workflow error: {exc}",
             )
             return StepsResult(
                 success=False,
@@ -306,20 +310,24 @@ class ScenarioWorkflow:
         execution_id: str | None = None,
         device_serial: str | None = None,
         step_results: list | None = None,
+        failed_message: str | None = None,
     ) -> None:
         """Call finalize_campaign activity to update DB status when this workflow ends."""
         if not campaign_id:
             return
+        payload: dict[str, Any] = {
+            "campaign_id": campaign_id,
+            "run_id": run_id,
+            "success": success,
+            "execution_id": execution_id,
+            "device_serial": device_serial,
+            "step_results": step_results or [],
+        }
+        if failed_message:
+            payload["failed_message"] = failed_message
         await workflow.execute_activity(
             "finalize_campaign",
-            {
-                "campaign_id": campaign_id,
-                "run_id": run_id,
-                "success": success,
-                "execution_id": execution_id,
-                "device_serial": device_serial,
-                "step_results": step_results or [],
-            },
+            payload,
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
@@ -677,6 +685,8 @@ class ScenarioStepsWorkflow:
                 if self._cancelled:
                     return False, "Cancelled during execution", -1
                 return True, "", -1
+            if batch_result.cancelled_mid_batch or self._cancelled:
+                return False, "Cancelled during execution", -1
             if batch_result.first_failure_index >= 0:
                 failed = batch_result.results[batch_result.first_failure_index]
                 failed_orig_idx = orig_indices[batch_result.first_failure_index]
@@ -1118,7 +1128,8 @@ class ScenarioStepsWorkflow:
 
         if count_raw is not None:
             try:
-                iterations = min(int(count_raw), max_iterations)
+                # count is explicit — max_iterations applies to while-only loops.
+                iterations = int(count_raw)
             except (TypeError, ValueError):
                 return False, f"loop: invalid count={count_raw!r}", [], runtime_context
             use_while = False

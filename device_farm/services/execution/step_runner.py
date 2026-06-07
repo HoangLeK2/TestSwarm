@@ -21,6 +21,19 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _cancel_event(sc: "ScenarioContext") -> Any:
+    ev = getattr(sc, "cancel_event", None)
+    if ev is not None and callable(getattr(ev, "is_set", None)):
+        try:
+            state = ev.is_set()
+        except Exception:
+            return None
+        if not isinstance(state, bool):
+            return None
+        return ev
+    return None
+
+
 def execute_step_with_retry(
     sc: "ScenarioContext",
     step: Dict[str, Any],
@@ -42,6 +55,15 @@ def execute_step_with_retry(
     attempts_used = 0
     attempt_records: list[Dict[str, Any]] = []
     for attempt in range(1, max_attempts + 1):
+        cancel_event = _cancel_event(sc)
+        if cancel_event is not None and cancel_event.is_set():
+            return {
+                "index": idx,
+                "type": t,
+                "ok": False,
+                "message": f"{t}: cancelled by user",
+                "cancelled": True,
+            }, attempts_used
         attempts_used = attempt
         try:
             handler_result = dispatch_step(sc, step, idx)
@@ -101,7 +123,22 @@ def execute_step_with_retry(
                 backoff_ms=wait.wait_ms,
                 stale_frame=stale_raised,
             )
-            time.sleep(wait.wait_ms / 1000.0)
+            wait_s = wait.wait_ms / 1000.0
+            cancel_event = _cancel_event(sc)
+            if cancel_event is not None:
+                if cancel_event.wait(wait_s):
+                    merged["cancelled"] = True
+                    merged["ok"] = False
+                    merged["message"] = f"{t}: cancelled by user"
+                    step_result = merged
+                    if attempt_records:
+                        attempt_records[-1]["wait_ms_before_next"] = None
+                        attempt_records[-1]["cancelled"] = True
+                    if attempt_records:
+                        step_result["retry_attempts"] = attempt_records
+                    break
+            else:
+                time.sleep(wait_s)
             step_result = {"index": idx, "type": t, "ok": True}
             capture_pre_step(sc, step, idx, step_result, attempt_index=attempt + 1)
             step_start_t = time.monotonic()

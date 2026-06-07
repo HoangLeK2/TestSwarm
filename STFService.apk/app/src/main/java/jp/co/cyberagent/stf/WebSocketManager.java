@@ -25,6 +25,7 @@ public class WebSocketManager {
     private volatile WebSocket webSocket;
     private volatile Callback callback;
     private volatile boolean destroyed = false;
+    private volatile String currentUrl;
 
     public WebSocketManager() {
         // Client-side ping detects dead sockets (Doze, WiFi sleep, OEM kill) within ~30s.
@@ -53,6 +54,7 @@ public class WebSocketManager {
                 callback.onError("Invalid URL: " + e.getMessage());
             return;
         }
+        currentUrl = url;
         webSocket = client.newWebSocket(request, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket ws, Response response) {
@@ -70,7 +72,10 @@ public class WebSocketManager {
 
             @Override
             public void onFailure(WebSocket ws, Throwable t, Response response) {
-                webSocket = null;
+                if (webSocket == ws) {
+                    webSocket = null;
+                    currentUrl = null;
+                }
                 if (response != null) {
                     try { response.close(); } catch (Exception ignored) {}
                 }
@@ -82,7 +87,10 @@ public class WebSocketManager {
 
             @Override
             public void onClosed(WebSocket ws, int code, String reason) {
-                webSocket = null;
+                if (webSocket == ws) {
+                    webSocket = null;
+                    currentUrl = null;
+                }
                 if (destroyed || callback == null)
                     return;
                 try { callback.onDisconnected(reason); } catch (Exception ignored) {}
@@ -94,11 +102,16 @@ public class WebSocketManager {
         if (webSocket != null) {
             webSocket.close(1000, "User disconnected");
             webSocket = null;
+            currentUrl = null;
         }
     }
 
     public boolean isConnected() {
         return webSocket != null;
+    }
+
+    public boolean isConnectedTo(String url) {
+        return webSocket != null && currentUrl != null && currentUrl.equals(url);
     }
 
     public boolean send(String message) {

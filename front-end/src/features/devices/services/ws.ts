@@ -4,6 +4,7 @@ import { shouldReplayCachedKeyFrameAge } from './h264-cache';
 import { isCurrentTabNetworkActive } from '../lib/tab-network-activity';
 import {
   DEVICE_FARM_WS_CLIENT_PING_INTERVAL_MS,
+  isCurrentDeviceFarmWsEvent,
   nextReconnectDelayMs,
   shouldReconnectStaleSocketOnFocus
 } from './ws-keepalive';
@@ -304,6 +305,14 @@ function connectShared() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
+    if (!isCurrentDeviceFarmWsEvent(sharedSocket, ws)) {
+      try {
+        ws.close();
+      } catch {
+        // stale socket; current socket owns reconnect state
+      }
+      return;
+    }
     lastMessageTime = Date.now();
     reconnectAttempt = 0;
     if (reconnectTimer !== undefined) {
@@ -321,6 +330,7 @@ function connectShared() {
   };
 
   ws.onclose = () => {
+    if (!isCurrentDeviceFarmWsEvent(sharedSocket, ws)) return;
     stopClientHeartbeat();
     sharedSocket = null;
     lastConfigBySerial.clear();
@@ -331,15 +341,23 @@ function connectShared() {
       isCurrentTabNetworkActive() &&
       (listeners.size > 0 || binaryListeners.size > 0)
     ) {
+      if (reconnectTimer !== undefined) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
       const delay = nextReconnectDelayMs(reconnectAttempt);
       reconnectAttempt += 1;
       reconnectTimer = setTimeout(connectShared, delay);
     }
   };
 
-  ws.onerror = () => ws.close();
+  ws.onerror = () => {
+    if (!isCurrentDeviceFarmWsEvent(sharedSocket, ws)) return;
+    ws.close();
+  };
 
   ws.onmessage = (evt) => {
+    if (!isCurrentDeviceFarmWsEvent(sharedSocket, ws)) return;
     lastMessageTime = Date.now();
     if (typeof evt.data === 'string') {
       handleTextMessage(evt.data);

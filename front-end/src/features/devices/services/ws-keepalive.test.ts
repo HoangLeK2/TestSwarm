@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   DEVICE_FARM_WS_FOCUS_STALE_MS,
+  DEVICE_FARM_WS_RECONNECT_MAX_MS,
+  isCurrentDeviceFarmWsEvent,
   nextReconnectDelayMs,
   shouldReconnectStaleSocketOnFocus
 } from './ws-keepalive.ts';
@@ -39,8 +41,16 @@ test('cached H264 keyframes are replayed only while very fresh', () => {
 });
 
 test('reconnect delay backs off and caps after repeated failed closes', () => {
-  assert.equal(nextReconnectDelayMs(0), 2_000);
-  assert.equal(nextReconnectDelayMs(1), 4_000);
-  assert.equal(nextReconnectDelayMs(2), 8_000);
-  assert.equal(nextReconnectDelayMs(10), 30_000);
+  assert.equal(nextReconnectDelayMs(0), 500);
+  assert.equal(nextReconnectDelayMs(1), 1_000);
+  assert.equal(nextReconnectDelayMs(2), 2_000);
+  assert.equal(nextReconnectDelayMs(10), DEVICE_FARM_WS_RECONNECT_MAX_MS);
+});
+
+test('socket lifecycle ignores stale events after a replacement socket exists', () => {
+  const currentSocket = { id: 'new' };
+  const staleSocket = { id: 'old' };
+
+  assert.equal(isCurrentDeviceFarmWsEvent(currentSocket, currentSocket), true);
+  assert.equal(isCurrentDeviceFarmWsEvent(currentSocket, staleSocket), false);
 });

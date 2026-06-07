@@ -110,6 +110,34 @@ function getDeviceBackendBase(): string {
   return backendBase.replace(/\/+$/, '');
 }
 
+function resolveDeviceFarmMediaBase(): string {
+  const explicit = (process.env.NEXT_PUBLIC_DEVICE_FARM_MEDIA_URL || '').trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+
+  const deviceBase = getDeviceBackendBase();
+  try {
+    const u = new URL(deviceBase);
+    if (u.port && u.port !== '3000') return deviceBase;
+  } catch {
+    // fall through
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const page = new URL(window.location.origin);
+      if (page.port === '3000') {
+        page.port = '8081';
+        return page.toString().replace(/\/+$/, '');
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return deviceBase;
+}
+
+export const deviceFarmMediaBase = resolveDeviceFarmMediaBase();
+
 // Chỉ dùng cho các API call từ frontend (axios baseURL đã đúng). getRuntimeBase giữ cho tương thích nếu có chỗ dùng.
 function getRuntimeBase(): string {
   if (typeof window !== 'undefined' && window.location?.origin) {

@@ -871,6 +871,19 @@ def create_app(
                     except Exception as exc:
                         log.debug("relay u2 bind failed serial=%s: %s", serial, exc)
 
+                def _mark_relay_runtime_ready(device) -> None:
+                    if device is None:
+                        return
+                    from runtime.core.device_client import DeviceState
+
+                    if device.state in (
+                        DeviceState.DISCONNECTED,
+                        DeviceState.CONNECTING,
+                        DeviceState.ERROR,
+                        DeviceState.DEAD,
+                    ):
+                        device.on_agent_status({"state": "READY"})
+
                 async def _bootstrap_relay_device(serial: str, device) -> None:
                     """Bootstrap atx+u2 on agent-boot, then (re)bind cloud u2 session."""
                     if _relay_mgr_ref is None or device is None:
@@ -954,6 +967,7 @@ def create_app(
                                 "relay device online %s — skip scrcpy reattach (auto_attach_scrcpy_on_relay_online=false)",
                                 serial,
                             )
+                        _mark_relay_runtime_ready(ws_device)
                         _bind_relay_u2(ws_device, serial, caps=caps)
                         _schedule_relay_bootstrap(serial, ws_device, is_new=False)
                         return
@@ -964,9 +978,7 @@ def create_app(
                     # Set READY immediately — relay reports it as online.
                     # Relay-only devices have no WS-Agent APK to call on_agent_status(),
                     # so without this the device stays DISCONNECTED and frontend shows "Offline".
-                    from runtime.core.device_client import DeviceState
-                    if device.state in (DeviceState.DISCONNECTED, DeviceState.CONNECTING):
-                        device.on_agent_status({"state": "READY"})
+                    _mark_relay_runtime_ready(device)
                     _bind_relay_u2(device, serial, caps=caps)
                     _schedule_relay_bootstrap(serial, device, is_new=is_new)
                     if is_new:

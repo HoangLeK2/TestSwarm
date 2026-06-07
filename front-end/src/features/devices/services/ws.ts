@@ -1,7 +1,10 @@
 import type { WsMessage } from '../types';
 import { tokenStorage } from '@/lib/token-storage';
+import { shouldReplayCachedKeyFrameAge } from './h264-cache';
+import { isCurrentTabNetworkActive } from '../lib/tab-network-activity';
 import {
   DEVICE_FARM_WS_CLIENT_PING_INTERVAL_MS,
+  nextReconnectDelayMs,
   shouldReconnectStaleSocketOnFocus
 } from './ws-keepalive';
 
@@ -86,20 +89,68 @@ const lastKeyTsBySerial = new Map<string, number>();
 const waitForKeyBySerial = new Set<string>();
 // Keyframes older than this are considered stale. Replaying a stale IDR while
 // live P-frames reference a newer one (arrived while tab hidden) drifts the
-// decoder into a black state. Skip replay when stale — server-side forced IDR
+// decoder into a black state. Skip replay when stale � server-side forced IDR
 // fills the gap within ~100ms.
-const STALE_KEY_MS = 5000;
-
 let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let clientHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let lastMessageTime = 0;
 let lastForcedReconnectAt = 0;
+let reconnectAttempt = 0;
 const lastIdrRequestBySerial = new Map<string, number>();
 // Backend can spawn per-serial sender tasks on demand. Track refs so we only
 // watch serials that at least one component is decoding.
 const watchRefCountBySerial = new Map<string, number>();
+const pendingIdrSerials = new Set<string>();
+type WsReadyCallback = () => void;
+const wsReadyQueue: WsReadyCallback[] = [];
+
+function flushPendingIdrRequests() {
+  if (sharedSocket?.readyState !== WebSocket.OPEN) return;
+  if (pendingIdrSerials.size === 0) return;
+  const serials = Array.from(pendingIdrSerials);
+  pendingIdrSerials.clear();
+  serials.forEach((serial) => requestIdr(serial, 0));
+}
+
+function flushWsReadyQueue() {
+  if (sharedSocket?.readyState !== WebSocket.OPEN) return;
+  const queued = wsReadyQueue.splice(0);
+  queued.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      // isolate subscriber errors
+    }
+  });
+}
+
+/** Run callback once the shared socket is open (now or on next onopen). */
+export function runWhenDeviceFarmWsOpen(fn: () => void): () => void {
+  if (sharedSocket?.readyState === WebSocket.OPEN) {
+    queueMicrotask(() => {
+      try {
+        fn();
+      } catch {
+        // isolate subscriber errors
+      }
+    });
+    return () => {};
+  }
+  wsReadyQueue.push(fn);
+  if (
+    !sharedSocket ||
+    sharedSocket.readyState === WebSocket.CLOSED ||
+    sharedSocket.readyState === WebSocket.CLOSING
+  ) {
+    connectShared();
+  }
+  return () => {
+    const idx = wsReadyQueue.indexOf(fn);
+    if (idx >= 0) wsReadyQueue.splice(idx, 1);
+  };
+}
 
 function decodeSerial(buf: ArrayBuffer, slen: number): string {
   if (!textDecoder || slen <= 0 || buf.byteLength < 2 + slen) return '';
@@ -117,7 +168,28 @@ function isH264KeyFrame(
 
 // Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
 if (typeof window !== 'undefined') {
+  window.addEventListener('visibilitychange', () => {
+    if (!isCurrentTabNetworkActive()) {
+      if (
+        sharedSocket?.readyState === WebSocket.OPEN ||
+        sharedSocket?.readyState === WebSocket.CONNECTING
+      ) {
+        sharedSocket.close();
+      }
+      return;
+    }
+    if (
+      (listeners.size > 0 || binaryListeners.size > 0) &&
+      (!sharedSocket ||
+        sharedSocket.readyState === WebSocket.CLOSED ||
+        sharedSocket.readyState === WebSocket.CLOSING)
+    ) {
+      connectShared();
+    }
+  });
+
   window.addEventListener('focus', () => {
+    if (!isCurrentTabNetworkActive()) return;
     if (listeners.size === 0) return;
     if (!sharedSocket || sharedSocket.readyState !== WebSocket.OPEN) {
       connectShared();
@@ -213,6 +285,7 @@ export function ensureWatchSerial(serial: string) {
 }
 
 function connectShared() {
+  if (!isCurrentTabNetworkActive()) return;
   if (
     sharedSocket?.readyState === WebSocket.CONNECTING ||
     sharedSocket?.readyState === WebSocket.OPEN
@@ -232,6 +305,7 @@ function connectShared() {
 
   ws.onopen = () => {
     lastMessageTime = Date.now();
+    reconnectAttempt = 0;
     if (reconnectTimer !== undefined) {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
@@ -241,6 +315,8 @@ function connectShared() {
     watchRefCountBySerial.forEach((_count, serial) => {
       sendWatchSerial(serial);
     });
+    flushPendingIdrRequests();
+    flushWsReadyQueue();
     broadcast({ type: 'ws_status', connected: true });
   };
 
@@ -248,11 +324,16 @@ function connectShared() {
     stopClientHeartbeat();
     sharedSocket = null;
     lastConfigBySerial.clear();
-    lastKeyBySerial.clear(); // stale after disconnect — server will re-send bootstrap on reconnect
+    lastKeyBySerial.clear(); // stale after disconnect � server will re-send bootstrap on reconnect
     lastKeyTsBySerial.clear();
     broadcast({ type: 'ws_status', connected: false });
-    if (listeners.size > 0 || binaryListeners.size > 0) {
-      reconnectTimer = setTimeout(connectShared, 2000);
+    if (
+      isCurrentTabNetworkActive() &&
+      (listeners.size > 0 || binaryListeners.size > 0)
+    ) {
+      const delay = nextReconnectDelayMs(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = setTimeout(connectShared, delay);
     }
   };
 
@@ -267,7 +348,7 @@ function connectShared() {
       // Always cache H264 config frames (0x10) for late-arriving binary listeners.
       // The WS text listener connects first (for device status); the H264 hook
       // mounts later. Without caching, the bootstrap config frame arrives when
-      // binaryListeners is empty and is silently dropped — decoder never initialises.
+      // binaryListeners is empty and is silently dropped � decoder never initialises.
       if (buf.byteLength >= 3) {
         const view = new DataView(buf);
         const ft = view.getUint8(0);
@@ -354,7 +435,9 @@ export function subscribeBinaryFrames(
   // config must come before keyframe so the decoder can initialise.
   if (serial) {
     const cfg = lastConfigBySerial.get(serial);
-    const key = lastKeyBySerial.get(serial);
+    const key = isCachedKeyFrameStale(serial)
+      ? undefined
+      : lastKeyBySerial.get(serial);
     const toReplay: ArrayBuffer[] = [];
     if (cfg) toReplay.push(cfg);
     if (key) toReplay.push(key);
@@ -443,7 +526,7 @@ export function getLastKeyFrameAge(serial: string): number {
 }
 
 export function isCachedKeyFrameStale(serial: string): boolean {
-  return getLastKeyFrameAge(serial) > STALE_KEY_MS;
+  return !shouldReplayCachedKeyFrameAge(getLastKeyFrameAge(serial));
 }
 
 /**
@@ -462,8 +545,17 @@ export function requestIdr(serial: string, minIntervalMs = 700): void {
       lastIdrRequestBySerial.set(serial, now);
       sharedSocket.send(JSON.stringify({ type: 'request_idr', serial }));
     } catch {
-      // socket raced into closing — next viewer event will retry
+      pendingIdrSerials.add(serial);
     }
+    return;
+  }
+  pendingIdrSerials.add(serial);
+  if (
+    !sharedSocket ||
+    sharedSocket.readyState === WebSocket.CLOSED ||
+    sharedSocket.readyState === WebSocket.CLOSING
+  ) {
+    connectShared();
   }
 }
 

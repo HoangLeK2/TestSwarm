@@ -422,10 +422,13 @@ export function useH264Video(
 
       // Packets are arriving but no frame has rendered recently: reset the
       // browser decoder and request a keyframe to rebuild the reference chain.
+      // Static screens may decode few visible frames while packets still flow;
+      // tolerate longer gaps once we have rendered at least one good frame.
+      const renderedStaleMs = lastRenderedAt ? 12_000 : 1800;
       if (
         packetAgeMs < 2000 &&
-        renderedAgeMs > 1800 &&
-        now - lastRecoveryAtRef.current > 1500
+        renderedAgeMs > renderedStaleMs &&
+        now - lastRecoveryAtRef.current > 3000
       ) {
         lastRecoveryAtRef.current = now;
         onStallRef.current?.('decoder_stalled');

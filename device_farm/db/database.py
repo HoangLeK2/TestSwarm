@@ -70,11 +70,18 @@ def _env_int(name: str, default: int) -> int:
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=max(1, _env_int("DB_POOL_SIZE", 5)),
-    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 5)),
-    pool_timeout=max(1, _env_int("DB_POOL_TIMEOUT", 10)),
+    pool_size=max(1, _env_int("DB_POOL_SIZE", 15)),
+    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 15)),
+    pool_timeout=max(1, _env_int("DB_POOL_TIMEOUT", 5)),
     pool_pre_ping=True,
     pool_recycle=300,
+    connect_args={
+        "server_settings": {
+            "idle_in_transaction_session_timeout": str(
+                _env_int("DB_IDLE_TRANSACTION_TIMEOUT_MS", 30_000)
+            ),
+        },
+    },
 )
 
 AsyncSessionLocal = async_sessionmaker(

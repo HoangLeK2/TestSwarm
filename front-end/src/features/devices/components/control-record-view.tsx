@@ -125,6 +125,7 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
+import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   campaignPerDeviceOverrides,
   campaignVariables,
@@ -657,10 +658,10 @@ export function ControlRecordView({
 
   const deviceSelectValue = useMemo(() => {
     const serial = device.selectedSerial;
-    if (!serial) return undefined;
+    if (!serial) return '';
     return device.connectedDevices.some((d) => d.serial === serial)
       ? serial
-      : undefined;
+      : '';
   }, [device.selectedSerial, device.connectedDevices]);
 
   const handleFlowStepsChange = useCallback(
@@ -790,15 +791,16 @@ export function ControlRecordView({
   const selectedSerial = device.selectedDevice?.serial ?? null;
   const { currentOrg } = useOrganization();
   const controlRecordOrgId = currentOrg?.id ?? null;
+  const tabActive = useTabNetworkActive();
   const devicesQuery = useQuery({
     queryKey: ['control-record-device-map', controlRecordOrgId],
     queryFn: devicesApi.list,
-    enabled: Boolean(controlRecordOrgId),
+    enabled: Boolean(controlRecordOrgId) && tabActive,
     staleTime: 15_000
   });
   const campaignDevicesQuery = useQuery({
     queryKey: ['campaign-devices', activeCampaignId],
-    enabled: !!activeCampaignId,
+    enabled: !!activeCampaignId && tabActive,
     queryFn: () => campaignsApi.getDevices(activeCampaignId!)
   });
   const selectedDeviceId = useMemo(() => {
@@ -845,7 +847,10 @@ export function ControlRecordView({
   );
   const campaignForGlobalVarsQuery = useQuery({
     queryKey: ['campaign', activeCampaignId, 'global-vars-preview'],
-    enabled: !!activeCampaignId && (deviceVarDialogOpen || canManageDeviceVars),
+    enabled:
+      tabActive &&
+      !!activeCampaignId &&
+      (deviceVarDialogOpen || canManageDeviceVars),
     queryFn: () => campaignsApi.get(activeCampaignId!),
     staleTime: 30_000
   });
@@ -946,6 +951,7 @@ export function ControlRecordView({
       selectedScenarioDeviceId
     ],
     enabled:
+      tabActive &&
       deviceVarDialogOpen &&
       !!activeCampaignId &&
       !!activeScenarioId &&

@@ -15,6 +15,7 @@ import {
   cropBase64
 } from '../services/api';
 import { useDeviceFarm } from './use-device-farm';
+import { useTabNetworkActive } from './use-tab-network-active';
 import {
   findSelectorInXml,
   getScreenSignature,
@@ -31,6 +32,7 @@ import { useTranslations } from 'next-intl';
 import { orgScenariosApi } from '@/features/org-scenarios/services/api';
 import { extractPreviewSteps } from '@/features/org-scenarios/lib/parse-scenario-body';
 import { normalizeScenarioVariables } from '@/lib/scenario-variables';
+import { canApplyDeviceScopedResult } from '../lib/control-record-multi';
 
 let _stepIdCounter = 0;
 function nextStepId() {
@@ -155,6 +157,7 @@ export function useControlRecord(
     wsConnected,
     error
   } = useDeviceFarm();
+  const tabActive = useTabNetworkActive();
 
   // ── Device ───────────────────────────────────────────────────────────────
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
@@ -175,6 +178,9 @@ export function useControlRecord(
       null,
     [connectedDevices, selectedSerial]
   );
+  const selectedDeviceSerial = selectedDevice?.serial ?? null;
+  const selectedDeviceSerialRef = useRef<string | null>(selectedDeviceSerial);
+  selectedDeviceSerialRef.current = selectedDeviceSerial;
 
   useEffect(() => {
     if (connectedDevices.length === 0) return;
@@ -199,6 +205,7 @@ export function useControlRecord(
   /** While true, tap/swipe/drag still go to device but do not append recorded steps (selector / coordinate pick). */
   const skipTapRecordingWhilePickRef = useRef(false);
   const recordXmlRef = useRef<string | null>(null);
+  const recordXmlSerialRef = useRef<string | null>(null);
   const [recordXml, setRecordXml] = useState<string | null>(null);
   const [pollingXml, setPollingXml] = useState(false);
   const pollingXmlRef = useRef(false);
@@ -216,9 +223,15 @@ export function useControlRecord(
   const refreshRecordXml = useCallback(async (serial: string) => {
     try {
       const xml = await fetchHierarchy(serial, true);
+      if (
+        !canApplyDeviceScopedResult(serial, selectedDeviceSerialRef.current)
+      ) {
+        return null;
+      }
       if (xml?.trim()) {
         setRecordXml(xml);
         recordXmlRef.current = xml;
+        recordXmlSerialRef.current = serial;
         return xml;
       }
     } catch {
@@ -256,6 +269,9 @@ export function useControlRecord(
       } else {
         setRecordXml(null);
         recordXmlRef.current = null;
+        recordXmlSerialRef.current = null;
+        pollingXmlRef.current = false;
+        setPollingXml(false);
       }
       setRecording(next);
     } finally {
@@ -389,7 +405,11 @@ export function useControlRecord(
       ) {
         const rx = parseFloat((m.x / w).toFixed(4));
         const ry = parseFloat((m.y / h).toFixed(4));
-        const xml = pollingXmlRef.current ? null : recordXmlRef.current;
+        const xml =
+          pollingXmlRef.current ||
+          recordXmlSerialRef.current !== selectedDevice.serial
+            ? null
+            : recordXmlRef.current;
 
         if (xml) {
           const sel = findSelectorInXml(xml, rx, ry);
@@ -497,19 +517,40 @@ export function useControlRecord(
             pollingXmlRef.current = true;
             setPollingXml(true);
             pollUntilUiChange(
-              selectedDevice.serial,
+              stepSerial,
               oldHash,
               RECORD_XML_POLL_INTERVAL_MS,
               RECORD_XML_POLL_TIMEOUT_MS
-            ).then((newXml) => {
-              if (!recordingRef.current) return;
-              if (newXml) {
-                setRecordXml(newXml);
-                recordXmlRef.current = newXml;
-              }
-              pollingXmlRef.current = false;
-              setPollingXml(false);
-            });
+            )
+              .then((newXml) => {
+                if (!recordingRef.current) return;
+                if (
+                  !canApplyDeviceScopedResult(
+                    stepSerial,
+                    selectedDeviceSerialRef.current
+                  )
+                )
+                  return;
+                if (newXml) {
+                  setRecordXml(newXml);
+                  recordXmlRef.current = newXml;
+                  recordXmlSerialRef.current = stepSerial;
+                }
+              })
+              .catch(() => {
+                /* keep recording usable even when hierarchy refresh fails */
+              })
+              .finally(() => {
+                if (
+                  !canApplyDeviceScopedResult(
+                    stepSerial,
+                    selectedDeviceSerialRef.current
+                  )
+                )
+                  return;
+                pollingXmlRef.current = false;
+                setPollingXml(false);
+              });
           }
           return;
         }
@@ -1015,12 +1056,34 @@ export function useControlRecord(
 
   const fetchAndSetHierarchy = useCallback(
     async (serial: string, refresh: boolean): Promise<string> => {
+      if (!tabActive) return '';
       const xml = (await fetchHierarchy(serial, refresh)) ?? '';
+      if (
+        !canApplyDeviceScopedResult(serial, selectedDeviceSerialRef.current)
+      ) {
+        return '';
+      }
       queryClient.setQueryData(['device-hierarchy', serial], xml);
       return xml;
     },
-    [queryClient]
+    [queryClient, tabActive]
   );
+
+  useEffect(() => {
+    setRecordXml(null);
+    recordXmlRef.current = null;
+    recordXmlSerialRef.current = null;
+    pollingXmlRef.current = false;
+    setPollingXml(false);
+    lastHierarchyFetchAtRef.current = 0;
+    lastHierarchyAppRef.current = '';
+    if (selectedHierarchySerial) {
+      queryClient.setQueryData(
+        ['device-hierarchy', selectedHierarchySerial],
+        ''
+      );
+    }
+  }, [queryClient, selectedHierarchySerial]);
 
   const refreshHierarchy = useCallback(() => {
     if (!selectedHierarchySerial) return;
@@ -1042,7 +1105,12 @@ export function useControlRecord(
   // first request after client-side navigation — retry until XML arrives instead
   // of leaving the tree blank until a full page refresh.
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
+    if (
+      !tabActive ||
+      !autoRefreshHierarchy ||
+      !selectedHierarchySerial ||
+      hierarchyPaused
+    )
       return;
     if (hierarchyXml?.trim()) return;
     lastHierarchyAppRef.current = selectedHierarchyApp;
@@ -1085,6 +1153,7 @@ export function useControlRecord(
     };
   }, [
     autoRefreshHierarchy,
+    tabActive,
     selectedHierarchySerial,
     selectedHierarchyApp,
     hierarchyPaused,
@@ -1095,7 +1164,12 @@ export function useControlRecord(
 
   // Refresh hierarchy when the foreground app changes.
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
+    if (
+      !tabActive ||
+      !autoRefreshHierarchy ||
+      !selectedHierarchySerial ||
+      hierarchyPaused
+    )
       return;
     const app = selectedHierarchyApp;
     if (lastHierarchyAppRef.current === app) return;
@@ -1111,6 +1185,7 @@ export function useControlRecord(
     return () => clearTimeout(tid);
   }, [
     autoRefreshHierarchy,
+    tabActive,
     selectedHierarchySerial,
     selectedHierarchyApp,
     hierarchyPaused,
@@ -1122,7 +1197,12 @@ export function useControlRecord(
 
   // Refresh hierarchy on interaction pulses (tap/swipe/drag/key...).
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
+    if (
+      !tabActive ||
+      !autoRefreshHierarchy ||
+      !selectedHierarchySerial ||
+      hierarchyPaused
+    )
       return;
     if (hierarchyRefreshPulse <= 0) return;
     const now = Date.now();
@@ -1147,6 +1227,7 @@ export function useControlRecord(
     return () => clearTimeout(tid);
   }, [
     hierarchyRefreshPulse,
+    tabActive,
     autoRefreshHierarchy,
     selectedHierarchySerial,
     hierarchyPaused,

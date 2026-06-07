@@ -15,7 +15,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
@@ -140,9 +139,9 @@ export function GroupMembersDialog({
             {t('membersTitle')} — {group.name}
           </DialogTitle>
         </DialogHeader>
-        <div className='grid gap-4 pt-2 md:grid-cols-2'>
+        <div className='grid gap-4 pt-2 md:grid-cols-2 md:items-stretch'>
           {/* Left: current members */}
-          <div className='rounded-lg border border-border bg-card'>
+          <section className='flex min-h-[480px] flex-col overflow-hidden rounded-lg border border-border bg-card'>
             <div className='flex items-center justify-between border-b border-border px-3 py-2'>
               <div className='flex items-center gap-2 text-sm font-medium'>
                 <Users size={14} className='text-muted-foreground' />
@@ -152,7 +151,7 @@ export function GroupMembersDialog({
                 </Badge>
               </div>
             </div>
-            <ScrollArea className='h-[420px]'>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
               <div className='divide-y divide-border'>
                 {membersLoading && (
                   <p className='p-4 text-sm text-muted-foreground'>
@@ -167,16 +166,16 @@ export function GroupMembersDialog({
                 {(members ?? []).map((m) => (
                   <div
                     key={m.account_id}
-                    className='flex items-center justify-between gap-2 px-3 py-2'
+                    className='flex items-center gap-2 px-3 py-2'
                   >
                     <div className='min-w-0 flex-1'>
-                      <div className='flex items-center gap-2'>
+                      <div className='flex min-w-0 items-center gap-2'>
                         <span className='truncate text-sm font-medium'>
                           {m.username}
                         </span>
                         <Badge
                           variant={statusVariant(m.status)}
-                          className='text-[10px]'
+                          className='shrink-0 text-[10px]'
                         >
                           {accountStatusLabel(m.status, tStatus)}
                         </Badge>
@@ -190,7 +189,7 @@ export function GroupMembersDialog({
                     <Button
                       size='icon'
                       variant='ghost'
-                      className='size-7 text-destructive hover:text-destructive'
+                      className='size-7 shrink-0 text-destructive hover:text-destructive'
                       title={t('membersRemove')}
                       onClick={() => handleRemove(m.account_id)}
                       disabled={removeMember.isPending}
@@ -200,11 +199,11 @@ export function GroupMembersDialog({
                   </div>
                 ))}
               </div>
-            </ScrollArea>
-          </div>
+            </div>
+          </section>
 
           {/* Right: eligible accounts */}
-          <div className='rounded-lg border border-border bg-card'>
+          <section className='flex min-h-[480px] flex-col overflow-hidden rounded-lg border border-border bg-card'>
             <div className='space-y-2 border-b border-border px-3 py-2'>
               <div className='flex items-center gap-2 text-sm font-medium'>
                 <Users size={14} className='text-muted-foreground' />
@@ -226,7 +225,7 @@ export function GroupMembersDialog({
                 />
               </div>
             </div>
-            <ScrollArea className='h-[360px]'>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
               <div className='divide-y divide-border'>
                 {accountsLoading && (
                   <p className='p-4 text-sm text-muted-foreground'>
@@ -251,15 +250,16 @@ export function GroupMembersDialog({
                       <Checkbox
                         checked={checked}
                         onCheckedChange={() => toggleStaged(acc.id)}
+                        className='shrink-0'
                       />
                       <div className='min-w-0 flex-1'>
-                        <div className='flex items-center gap-2'>
+                        <div className='flex min-w-0 items-center gap-2'>
                           <span className='truncate text-sm font-medium'>
                             {acc.username}
                           </span>
                           <Badge
                             variant={statusVariant(acc.status)}
-                            className='text-[10px]'
+                            className='shrink-0 text-[10px]'
                           >
                             {accountStatusLabel(acc.status, tStatus)}
                           </Badge>
@@ -274,7 +274,7 @@ export function GroupMembersDialog({
                   );
                 })}
               </div>
-            </ScrollArea>
+            </div>
             <div className='border-t border-border px-3 py-2'>
               <Button
                 size='sm'
@@ -286,7 +286,7 @@ export function GroupMembersDialog({
                 {staged.size > 0 && ` (${staged.size})`}
               </Button>
             </div>
-          </div>
+          </section>
         </div>
       </DialogContent>
     </Dialog>

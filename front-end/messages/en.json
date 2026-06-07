@@ -902,7 +902,8 @@
       "cloning": "Cloning...",
       "submit": "Clone",
       "cancel": "Cancel",
-      "cloneFailed": "Clone failed"
+      "cloneFailed": "Clone failed",
+      "cloneSuccess": "Template cloned to your organization library"
     },
     "detail": {
       "title": "Scenario detail",

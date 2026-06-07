@@ -895,7 +895,7 @@
       "networkErrorHint": "Không kết nối được máy chủ. Kiểm tra backend đang chạy và front-end/.env (DEVICE_FARM_BACKEND_URL) đúng IP farm."
     },
     "cloneDialog": {
-      "trigger": "Sao chép vào thư viện",
+      "trigger": "Sử dụng",
       "title": "Sao chép mẫu hệ thống",
       "sourceHint": "Sao chép \"{name}\" vào thư viện tổ chức của bạn.",
       "nameLabel": "Tên kịch bản mới",
@@ -903,7 +903,8 @@
       "cloning": "Đang sao chép...",
       "submit": "Sao chép",
       "cancel": "Huỷ",
-      "cloneFailed": "Sao chép thất bại"
+      "cloneFailed": "Sao chép thất bại",
+      "cloneSuccess": "Đã sao chép mẫu vào thư viện tổ chức của bạn"
     },
     "detail": {
       "title": "Chi tiết kịch bản",

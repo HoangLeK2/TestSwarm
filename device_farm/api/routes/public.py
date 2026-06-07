@@ -29,7 +29,11 @@ def _apply_realtime_connectivity(
 ) -> None:
     """Downshift stale runtime entries that no longer have any live transport."""
     state = str(device.get("state") or "").upper()
+    agent_connected = bool(device.get("agent_connected"))
+    u2_ready = bool(device.get("u2_ready"))
     if state in _OFFLINE_LIVE_STATES:
+        if agent_connected or u2_ready or relay_online:
+            device["state"] = "READY"
         return
 
     if requires_relay and not relay_online:
@@ -38,8 +42,6 @@ def _apply_realtime_connectivity(
         device["stf_connected"] = False
         return
 
-    agent_connected = bool(device.get("agent_connected"))
-    u2_ready = bool(device.get("u2_ready"))
     if agent_connected or u2_ready or relay_online:
         return
 
@@ -72,24 +74,30 @@ async def _get_live_device_map(request: Request, db_enabled: bool) -> Optional[d
     if not db_enabled:
         return None
 
-    auth = request.headers.get("authorization", "")
-    if not auth.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = auth[7:].strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    state = getattr(request, "state", None)
+    cached_auth = getattr(state, "auth", None)
+    user_id = str(getattr(cached_auth, "user_id", "") or "").strip()
+    if not user_id:
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        token = auth[7:].strip()
+        if not token:
+            raise HTTPException(status_code=401, detail="Not authenticated")
 
-    try:
-        payload = jwt.decode(token, jwt_secret_key(), algorithms=[jwt_algorithm()])
-        user_id = str(payload.get("sub") or "").strip()
-        token_type = payload.get("type")
-        if not user_id or token_type == "refresh":
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        try:
+            payload = jwt.decode(token, jwt_secret_key(), algorithms=[jwt_algorithm()])
+            user_id = str(payload.get("sub") or "").strip()
+            token_type = payload.get("type")
+            if not user_id or token_type == "refresh":
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Not authenticated")
 
     async with AsyncSessionLocal() as db:
-        org_id = await resolve_effective_org_id_for_user_id(request, db, user_id)
+        org_id = getattr(state, "org_id", None)
+        if org_id is None:
+            org_id = await resolve_effective_org_id_for_user_id(request, db, user_id)
         db_devices = await repo.list_devices(db, org_id=org_id, user_id=user_id)
         out: dict[str, dict[str, str]] = {}
         for device in db_devices:

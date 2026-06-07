@@ -112,6 +112,7 @@ async def test_bootstrap_all_route_skips_pending_serials():
     fake_db = AsyncMock()
     fake_user = MagicMock()
     fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
 
     with patch("api.routes.relay_agents.repo") as mock_repo, \
          patch("api.routes.relay_agents._get_ctrl", return_value=fake_ctrl), \
@@ -156,6 +157,7 @@ async def test_list_relay_agents_dedupes_same_hostname_rows():
     fake_db = AsyncMock()
     fake_user = MagicMock()
     fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
 
     with patch("api.routes.relay_agents.repo") as mock_repo, \
          patch("api.routes.relay_agents._get_live_caps", return_value={"wlan_ip": "172.16.0.182"}), \
@@ -163,16 +165,16 @@ async def test_list_relay_agents_dedupes_same_hostname_rows():
         mock_repo.list_relay_agents = AsyncMock(
             return_value=[_row("relay-old", "offline", 0), _row("relay-new", "online", 10)]
         )
-        mock_repo.list_devices = AsyncMock(return_value=[])
 
         result = await list_relay_agents(db=fake_db, user=fake_user)
 
+    mock_repo.list_relay_agents.assert_awaited_once_with(fake_db, org_id="org-a")
     assert len(result) == 1
     assert result[0].relay_id == "relay-new"
 
 
 @pytest.mark.asyncio
-async def test_list_relay_agents_uses_alias_owner_map_and_cached_caps():
+async def test_list_relay_agents_uses_org_scope_and_cached_caps():
     from unittest.mock import AsyncMock, MagicMock, patch
     from datetime import datetime, timezone
 
@@ -191,16 +193,10 @@ async def test_list_relay_agents_uses_alias_owner_map_and_cached_caps():
     fake_row.user_id = "user-a"
     fake_row.enrollment_token_id = "tok-a"
 
-    owned_by_other = MagicMock()
-    owned_by_other.serial = "logical-other"
-    owned_by_other.adb_serial = "192.168.1.21:5555"
-    owned_by_other.adb_ip = None
-    owned_by_other.adb_port = 5555
-    owned_by_other.user_id = "user-b"
-
     fake_db = AsyncMock()
     fake_user = MagicMock()
     fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
 
     caps_calls: list[str] = []
 
@@ -217,14 +213,14 @@ async def test_list_relay_agents_uses_alias_owner_map_and_cached_caps():
          patch(
              "api.routes.relay_agents._live_relay_serials",
              return_value={"192.168.1.20:5555", "192.168.1.21:5555"},
-         ):
+        ):
         mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
-        mock_repo.list_devices = AsyncMock(return_value=[owned_by_other])
 
         result = await list_relay_agents(db=fake_db, user=fake_user)
 
+    mock_repo.list_relay_agents.assert_awaited_once_with(fake_db, org_id="org-a")
     assert len(result) == 1
-    assert result[0].serials == ["192.168.1.20:5555"]
+    assert result[0].serials == ["192.168.1.20:5555", "192.168.1.21:5555"]
     assert caps_calls == ["192.168.1.20:5555", "192.168.1.21:5555"]
 
 
@@ -251,14 +247,15 @@ async def test_list_relay_agents_hides_serials_when_control_channel_offline():
     fake_db = AsyncMock()
     fake_user = MagicMock()
     fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
 
     with patch("api.routes.relay_agents.repo") as mock_repo, \
          patch("api.routes.relay_agents._live_relay_serials", return_value=None):
         mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
-        mock_repo.list_devices = AsyncMock(return_value=[])
 
         result = await list_relay_agents(db=fake_db, user=fake_user)
 
+    mock_repo.list_relay_agents.assert_awaited_once_with(fake_db, org_id="org-a")
     assert len(result) == 1
     assert result[0].status == "offline"
     assert result[0].live_connected is False

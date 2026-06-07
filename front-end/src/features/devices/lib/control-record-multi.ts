@@ -41,3 +41,10 @@ export function getActiveMultiSerials(
     ...followerSerials.filter((serial) => serial !== primarySerial)
   ];
 }
+
+export function canApplyDeviceScopedResult(
+  requestSerial: string,
+  currentSerial: string | null | undefined
+) {
+  return Boolean(currentSerial && requestSerial === currentSerial);
+}

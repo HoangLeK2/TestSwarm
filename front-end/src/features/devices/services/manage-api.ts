@@ -1,4 +1,7 @@
 import { farmApi } from '@/lib/farm-api';
+import { createSingleFlight } from '../lib/single-flight';
+
+const DEVICE_POLL_TIMEOUT_MS = 10_000;
 
 export type DeviceOut = {
   id: string;
@@ -80,8 +83,14 @@ export type PairPollOut = {
   device?: Record<string, unknown>;
 };
 
+const listDevices = createSingleFlight(() =>
+  farmApi
+    .get<DeviceOut[]>('/devices', { timeout: DEVICE_POLL_TIMEOUT_MS })
+    .then((r) => r.data)
+);
+
 export const devicesApi = {
-  list: () => farmApi.get<DeviceOut[]>('/devices').then((r) => r.data),
+  list: listDevices,
   create: (data: DeviceCreate) =>
     farmApi.post<DeviceOut>('/devices', data).then((r) => r.data),
   register: (body?: { name?: string; description?: string }) =>

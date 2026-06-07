@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  canApplyDeviceScopedResult,
   getActiveMultiSerials,
   getRenderSafeFollowerSerials,
   resetFollowersAfterPrimaryChange,
@@ -51,4 +52,10 @@ test('getRenderSafeFollowerSerials hides stale followers during primary switch r
     getRenderSafeFollowerSerials('phone-A', 'phone-A', ['phone-B']),
     ['phone-B']
   );
+});
+
+test('canApplyDeviceScopedResult rejects stale async results after primary switch', () => {
+  assert.equal(canApplyDeviceScopedResult('phone-A', 'phone-A'), true);
+  assert.equal(canApplyDeviceScopedResult('phone-A', 'phone-B'), false);
+  assert.equal(canApplyDeviceScopedResult('phone-A', null), false);
 });

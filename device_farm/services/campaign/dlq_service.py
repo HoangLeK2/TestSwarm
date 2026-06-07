@@ -54,19 +54,12 @@ _CLOSED_DLQ = frozenset({
 })
 
 
-def _failure_from_step_results(
-    step_results: list[dict[str, Any]],
-    error_msg: str | None,
-) -> tuple[str | None, str | None]:
-    from services.execution.step_store import normalize_workflow_step_result
-
-    failed = [s for s in step_results if not s.get("ok", True)]
-    if not failed:
-        return None, error_msg
-    last = normalize_workflow_step_result(failed[-1])
-    step_id = str(last.get("step_id") or last.get("id") or last.get("index") or "") or None
-    reason = str(last.get("reason_code") or last.get("message") or error_msg or "") or None
-    return step_id, reason
+from services.campaign.dlq_message import (
+    coalesce_dlq_text,
+    failure_from_step_results,
+    last_failed_step_for_execution,
+    pick_richer_message,
+)
 
 
 def uses_epic04_replay(execution: Any) -> bool:
@@ -125,7 +118,13 @@ async def open_dlq_for_failed_execution(
     """Create/open DLQ entry and mark execution dlq_open (Epic 04 path)."""
     execution = await get_execution(db, execution_id)
     step_results = step_results or []
-    failed_step_id, failure_reason = _failure_from_step_results(step_results, error_msg)
+    failed_step_id, failure_reason = failure_from_step_results(step_results, error_msg)
+    if not failure_reason:
+        step_msg, step_id_from_row = await last_failed_step_for_execution(db, execution_id)
+        failure_reason = step_msg
+        failed_step_id = failed_step_id or step_id_from_row
+    resolved_error = coalesce_dlq_text(error_msg, failure_reason)
+    resolved_reason = pick_richer_message(failure_reason, resolved_error) or resolved_error
     artifact_refs = _artifact_refs_from_steps(step_results)
     now = datetime.now(timezone.utc)
 
@@ -133,9 +132,9 @@ async def open_dlq_for_failed_execution(
         db,
         execution_id=execution_id,
         device_serial=device_serial,
-        error=error_msg or failure_reason,
+        error=resolved_error,
         failed_step_id=failed_step_id,
-        failure_reason=failure_reason,
+        failure_reason=resolved_reason,
         failed_at=now,
         campaign_id=execution.campaign_id if execution else None,
         artifact_refs=artifact_refs,

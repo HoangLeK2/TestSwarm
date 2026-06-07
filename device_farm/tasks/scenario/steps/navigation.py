@@ -18,14 +18,40 @@ _ADB_SHELL_DEFAULT_MAX_OUTPUT_CHARS = 8000
 _ADB_SHELL_MAX_OUTPUT_CHARS = 50000
 
 
-def _poll_u2_ready(device: Any, serial: str, pkg: str) -> None:
+def _cancelled(sc: ScenarioContext) -> bool:
+    return sc.cancel_event is not None and sc.cancel_event.is_set()
+
+
+def _mark_cancelled(result: Dict[str, Any], message: str) -> None:
+    result["ok"] = False
+    result["message"] = message
+    result["cancelled"] = True
+
+
+def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
+    if seconds <= 0:
+        return _cancelled(sc)
+    if sc.cancel_event is not None:
+        return bool(sc.cancel_event.wait(seconds))
+    time.sleep(seconds)
+    return False
+
+
+def _poll_u2_ready(device: Any, serial: str, pkg: str, cancel_event: Any = None) -> bool:
     _u2_poll_start = time.monotonic()
     while time.monotonic() - _u2_poll_start < 8.0:
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         if getattr(device, "_u2", None) is not None:
-            break
-        time.sleep(0.5)
+            return True
+        if cancel_event is not None:
+            cancel_event.wait(0.5)
+        else:
+            time.sleep(0.5)
     if getattr(device, "_u2", None) is None:
         log.warning("[%s] launch_app %s: u2 not ready after 8s poll", serial, pkg)
+        return False
+    return True
 
 
 def _bounded_float(raw: Any, default: float, *, min_value: float, max_value: float) -> float:
@@ -84,10 +110,16 @@ def handle_launch_app(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
             stop_before=bool(step.get("stop_before") or step.get("stop")),
             use_monkey=bool(step.get("use_monkey")),
         )
+        if _cancelled(sc):
+            _mark_cancelled(result, "launch_app: cancelled by user")
+            return
         launch_wait = float(step.get("wait_after", 2.0) or 2.0)
-        time.sleep(launch_wait)
+        if _wait_or_cancel(sc, launch_wait):
+            _mark_cancelled(result, "launch_app: cancelled by user")
+            return
         log.info("[%s] launch_app %s: waited %ss", sc.serial, pkg, launch_wait)
-        _poll_u2_ready(sc.device, sc.serial, pkg)
+        if not _poll_u2_ready(sc.device, sc.serial, pkg, sc.cancel_event) and _cancelled(sc):
+            _mark_cancelled(result, "launch_app: cancelled by user")
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"launch_app({pkg}) failed: {exc}"
@@ -353,6 +385,11 @@ def handle_scroll_down(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     sy2 = int(sc.h * end_y_ratio)
     failed = False
     for i in range(max(1, repeats)):
+        if sc.cancel_event is not None and sc.cancel_event.is_set():
+            result["ok"] = False
+            result["message"] = "scroll_down: cancelled by user"
+            result["cancelled"] = True
+            break
         log.info(f"[{sc.serial}] scroll swipe #{i + 1}: ({sx},{sy1})→({sx},{sy2})")
         try:
             sc.device.swipe(sx, sy1, sx, sy2, duration_ms=duration_ms)
@@ -361,9 +398,13 @@ def handle_scroll_down(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
             result["message"] = f"swipe scroll #{i + 1} failed: {exc}"
             failed = True
             break
-        time.sleep(max(0.1, pause_seconds))
+        pause_s = max(0.1, pause_seconds)
+        if sc.cancel_event is not None:
+            sc.cancel_event.wait(pause_s)
+        else:
+            time.sleep(pause_s)
     if not failed:
-        result["ok"] = True
+        result["ok"] = not bool(result.get("cancelled"))
 
 
 @register_step("scroll_to")
@@ -388,6 +429,11 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
     found = False
     swipes_done = 0
     for i in range(max_swipes):
+        if sc.cancel_event is not None and sc.cancel_event.is_set():
+            result["ok"] = False
+            result["message"] = "scroll_to: cancelled by user"
+            result["cancelled"] = True
+            break
         try:
             u2 = sc.device.u2
             if u2 is not None:
@@ -405,8 +451,13 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
             sc.device.swipe(sx, sy1, sx, sy2, duration_ms=500)
         except Exception:
             pass
-        time.sleep(0.3)
+        if sc.cancel_event is not None:
+            sc.cancel_event.wait(0.3)
+        else:
+            time.sleep(0.3)
         swipes_done = i + 1
+    if result.get("cancelled"):
+        return
     if not found:
         result["ok"] = False
         result["message"] = f"scroll_to {lbl} not found after {max_swipes} swipes"

@@ -410,6 +410,34 @@ async def execution_summary(db: AsyncSession, execution_id: str) -> dict:
     }
 
 
+async def campaign_run_stats(db: AsyncSession, campaign_id: str) -> dict:
+    """Cumulative run stats across all executions for a campaign."""
+    status_counts = await db.execute(
+        select(ExecutionResult.status, func.count().label("cnt"))
+        .join(Execution, ExecutionResult.execution_id == Execution.id)
+        .where(Execution.campaign_id == campaign_id)
+        .group_by(ExecutionResult.status)
+    )
+    counts: dict[str, int] = {row.status: row.cnt for row in status_counts}
+
+    from db.models.content import ContentItem
+    content_count_result = await db.execute(
+        select(func.count()).where(ContentItem.campaign_id == campaign_id)
+    )
+    total_content = content_count_result.scalar_one()
+
+    total_runs = sum(counts.values())
+    return {
+        "total_devices": total_runs,
+        "passed": counts.get("passed", 0),
+        "failed": counts.get("failed", 0),
+        "running": counts.get("running", 0),
+        "pending": counts.get("pending", 0),
+        "error": counts.get("error", 0),
+        "total_content_items": total_content,
+    }
+
+
 __all__ = [
     # Execution
     "create_execution",
@@ -433,4 +461,5 @@ __all__ = [
     "get_execution_result",
     "list_execution_results",
     "execution_summary",
+    "campaign_run_stats",
 ]

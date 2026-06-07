@@ -1,6 +1,12 @@
 import { farmApi } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import type { Device, DeviceEvent, Task } from '../types';
+import {
+  HIERARCHY_FAILURE_COOLDOWN_MS,
+  HIERARCHY_REQUEST_TIMEOUT_MS,
+  shouldBackoffHierarchyError
+} from '../lib/hierarchy-request';
+import { createSingleFlight } from '../lib/single-flight';
 
 export type PreviewStepResult = {
   index: number;
@@ -21,12 +27,14 @@ export interface AppConfig {
 
 const hierarchyInFlight = new Map<string, Promise<string>>();
 const hierarchyFailureUntil = new Map<string, number>();
-const HIERARCHY_503_COOLDOWN_MS = 2500;
+const DEVICE_POLL_TIMEOUT_MS = 10_000;
 
-export async function fetchDevices(): Promise<Device[]> {
-  const { data } = await farmApi.get<Device[]>('/devices');
+export const fetchDevices = createSingleFlight(async (): Promise<Device[]> => {
+  const { data } = await farmApi.get<Device[]>('/devices', {
+    timeout: DEVICE_POLL_TIMEOUT_MS
+  });
   return data;
-}
+});
 
 export type LiveDevicesResponse = {
   total: number;
@@ -36,26 +44,36 @@ export type LiveDevicesResponse = {
 };
 
 /** Live device list from WebSocket agent registry (no-ADB dashboard). Use this for device farm grid. */
-export async function fetchLiveDevices(opts?: {
-  state?: string;
-  model?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<Device[]> {
-  const params = new URLSearchParams();
-  if (opts?.state) params.set('state', opts.state);
-  if (opts?.model) params.set('model', opts.model);
-  if (opts?.limit != null) params.set('limit', String(opts.limit));
-  if (opts?.offset) params.set('offset', String(opts.offset));
-  const qs = params.toString() ? `?${params.toString()}` : '';
-  const { data } = await farmApi.get<LiveDevicesResponse | Device[]>(
-    `/devices/live${qs}`
-  );
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray((data as LiveDevicesResponse).devices))
-    return (data as LiveDevicesResponse).devices;
-  return [];
-}
+export const fetchLiveDevices = createSingleFlight(
+  async (opts?: {
+    state?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<Device[]> => {
+    const params = new URLSearchParams();
+    if (opts?.state) params.set('state', opts.state);
+    if (opts?.model) params.set('model', opts.model);
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.offset) params.set('offset', String(opts.offset));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const { data } = await farmApi.get<LiveDevicesResponse | Device[]>(
+      `/devices/live${qs}`,
+      { timeout: DEVICE_POLL_TIMEOUT_MS }
+    );
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray((data as LiveDevicesResponse).devices))
+      return (data as LiveDevicesResponse).devices;
+    return [];
+  },
+  (opts) =>
+    JSON.stringify({
+      limit: opts?.limit ?? null,
+      model: opts?.model ?? null,
+      offset: opts?.offset ?? null,
+      state: opts?.state ?? null
+    })
+);
 
 export type FleetRunResult = {
   run_id: string;
@@ -97,10 +115,12 @@ export async function fleetStatus(runId?: string): Promise<FleetStatusResult> {
   return data;
 }
 
-export async function fetchTasks(): Promise<Task[]> {
-  const { data } = await farmApi.get<Task[]>('/tasks');
+export const fetchTasks = createSingleFlight(async (): Promise<Task[]> => {
+  const { data } = await farmApi.get<Task[]>('/tasks', {
+    timeout: DEVICE_POLL_TIMEOUT_MS
+  });
   return Array.isArray(data) ? data : [];
-}
+});
 
 export async function restartDevice(serial: string): Promise<unknown> {
   const { data } = await farmApi.post(
@@ -132,15 +152,17 @@ export async function runAgentShell(
   return { ...data, cmd: cmd.trim() };
 }
 
-/** UI hierarchy XML (uiautomator2 page source). refresh=true skips backend cache (force fresh dump). On 503 returns "". */
+/** UI hierarchy XML (uiautomator2 page source). On 503 returns "" and backs off per device. */
 export async function fetchHierarchy(
   serial: string,
   refresh = false
 ): Promise<string> {
   const key = serial;
   const now = Date.now();
-  // Allow refresh=true through during bootstrap even if a recent 503 set cooldown.
-  if (!refresh && (hierarchyFailureUntil.get(key) ?? 0) > now) return '';
+  // A failing hierarchy dump can block backend relay/u2 for seconds. Back off
+  // even for refresh=true so bootstrap/interaction pulses do not starve screen
+  // streaming while uiautomator2 is recovering.
+  if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
   const pending = hierarchyInFlight.get(key);
   if (pending) return pending;
 
@@ -159,14 +181,18 @@ export async function fetchHierarchy(
       ? `/devices/${encodeURIComponent(serial)}/hierarchy?refresh=1`
       : `/devices/${encodeURIComponent(serial)}/hierarchy`;
     try {
-      const { data } = await farmApi.get<string>(url, { responseType: 'text' });
+      const { data } = await farmApi.get<string>(url, {
+        responseType: 'text',
+        timeout: HIERARCHY_REQUEST_TIMEOUT_MS
+      });
       hierarchyFailureUntil.delete(key);
       return typeof data === 'string' ? data : '';
     } catch (err: unknown) {
-      const status = (err as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 503) {
-        hierarchyFailureUntil.set(key, Date.now() + HIERARCHY_503_COOLDOWN_MS);
+      if (shouldBackoffHierarchyError(err)) {
+        hierarchyFailureUntil.set(
+          key,
+          Date.now() + HIERARCHY_FAILURE_COOLDOWN_MS
+        );
         return '';
       }
       throw err;

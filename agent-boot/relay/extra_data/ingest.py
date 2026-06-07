@@ -340,7 +340,7 @@ def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
     source = _comment_parent_source(context)
     return bool(
         context.get("parent_id")
-        and source in {"post_detail", "tap_fb_comment_button"}
+        and source in {"post_detail", "tap_fb_comment_button", "latest_post_in_execution"}
     )
 
 
@@ -488,6 +488,33 @@ def _opened_post_from_context(context: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(opened, dict):
         return None
     return opened
+
+
+def _synthetic_post_from_opened_post(context: dict[str, Any]) -> dict[str, Any] | None:
+    opened = _opened_post_from_context(context)
+    if not opened:
+        return None
+    text = (
+        opened.get("text")
+        or opened.get("body")
+        or opened.get("text_prefix")
+        or ""
+    )
+    item = {
+        "_pid": opened.get("pid"),
+        "post_key": opened.get("post_key"),
+        "stable_post_id": opened.get("stable_post_id"),
+        "fb_post_id": opened.get("fb_post_id"),
+        "author": opened.get("author"),
+        "timestamp": opened.get("timestamp"),
+        "text": text,
+        "selection_reason": "opened_post_diagnostic",
+    }
+    cleaned = {key: value for key, value in item.items() if value is not None and str(value).strip()}
+    has_identity = any(cleaned.get(key) for key in ("_pid", "post_key", "stable_post_id", "fb_post_id"))
+    if not has_identity and not str(cleaned.get("text") or "").strip():
+        return None
+    return cleaned
 
 
 def _post_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
@@ -790,11 +817,38 @@ class ExtraDataIngestServer:
                     context["_active_comment_parent_hash"] = canonical_parent_id
                     context["parent_id_already_scoped"] = True
                 else:
-                    diagnostic["parent_context_required"] = True
-                    diagnostic["parent_post_row_missing"] = True
-                    should_persist = False
-                    parent_id = None
-                    parent_id_scoped = False
+                    # PID relink missed (vivo often lands on comment sheet). Keep scoped
+                    # parent hash from the fb_posts step in the same loop when verified.
+                    if parent_id and parent_id_scoped:
+                        diagnostic["parent_lookup_fallback"] = True
+                    else:
+                        diagnostic["parent_context_required"] = True
+                        diagnostic["parent_post_row_missing"] = True
+                        should_persist = False
+                        parent_id = None
+                        parent_id_scoped = False
+            if (
+                is_comment_strategy
+                and require_verified_parent
+                and not has_verified_parent_context
+                and not parent_id
+                and hasattr(self._writer, "lookup_latest_parent_hash_for_context")
+            ):
+                latest_parent_id = await self._writer.lookup_latest_parent_hash_for_context(
+                    collection=str(context.get("collection") or ""),
+                    execution_id=context.get("execution_id") or context.get("hash_scope"),
+                    device_serial=context.get("device_serial") or serial,
+                )
+                if latest_parent_id:
+                    parent_id = latest_parent_id
+                    parent_id_scoped = True
+                    context["parent_id"] = latest_parent_id
+                    context["_active_comment_parent_hash"] = latest_parent_id
+                    context["parent_id_already_scoped"] = True
+                    context["parent_context_source"] = "latest_post_in_execution"
+                    has_verified_parent_context = True
+                    diagnostic["parent_context_latest_post_fallback"] = True
+                    diagnostic["latest_parent_hash"] = str(latest_parent_id)
             if (
                 is_comment_strategy
                 and require_verified_parent
@@ -836,6 +890,27 @@ class ExtraDataIngestServer:
                 for item in items
                 if isinstance(item, dict) and item.get("_type") != "post_stats"
             ]
+            if strategy == "fb_posts" and not row_items and context.get("open_post_detail"):
+                synthetic_parent = _synthetic_post_from_opened_post(context)
+                if synthetic_parent:
+                    items.append(synthetic_parent)
+                    row_context = {
+                        **context,
+                        "device_serial": context.get("device_serial") or serial,
+                        "content_type": content_type,
+                        "parent_id_already_scoped": parent_id_scoped,
+                    }
+                    rows = [
+                        build_content_item_row(
+                            merge_evidence_into_item(synthetic_parent, evidence),
+                            row_context,
+                            parent_id=parent_id,
+                            item_level=item_level,
+                            captured_at=payload.get("captured_at") or payload.get("captured_at_ms"),
+                        )
+                    ]
+                    row_items = [synthetic_parent]
+                    diagnostic["opened_post_synthetic_parent"] = True
             db_started = time.perf_counter()
             write = await self._insert_rows_with_retry(rows) if should_persist else {
                 "attempted": 0,
@@ -886,7 +961,7 @@ class ExtraDataIngestServer:
                 active_parent = _active_parent_post_payload(row_items[0], rows[0])
             if active_parent:
                 if context.get("open_post_detail"):
-                    active_parent["source"] = "post_detail"
+                    active_parent.setdefault("source", "post_detail")
                 result["active_parent_post"] = active_parent
         return result
 

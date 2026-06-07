@@ -42,7 +42,17 @@ const baseConfig: NextConfig = {
       // Proxy all /api/* calls to FastAPI backend
       { source: '/api/:path*', destination: `${BACKEND}/api/:path*` },
       // Proxy MJPEG stream and screenshot endpoints
+      { source: '/vi/stream/:path*', destination: `${BACKEND}/stream/:path*` },
+      { source: '/en/stream/:path*', destination: `${BACKEND}/stream/:path*` },
       { source: '/stream/:path*', destination: `${BACKEND}/stream/:path*` },
+      {
+        source: '/vi/screenshot/:path*',
+        destination: `${BACKEND}/screenshot/:path*`
+      },
+      {
+        source: '/en/screenshot/:path*',
+        destination: `${BACKEND}/screenshot/:path*`
+      },
       {
         source: '/screenshot/:path*',
         destination: `${BACKEND}/screenshot/:path*`

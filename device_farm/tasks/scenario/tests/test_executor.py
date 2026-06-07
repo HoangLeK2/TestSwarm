@@ -68,6 +68,34 @@ class TestScenarioExecutor:
             result = ScenarioExecutor(sc).run()
         assert result["steps_executed"] == 2
 
+    def test_root_executor_flushes_pending_captures(self):
+        from tasks.scenario.executor import ScenarioExecutor
+        from tasks.scenario.steps import _STEP_HANDLERS
+
+        sc = _make_sc(steps=[{"type": "wait", "seconds": 0}], depth=0)
+
+        with patch.dict(_STEP_HANDLERS, {"wait": lambda sc, step, idx, result: None}), patch(
+            "services.execution.capture_service.flush_pending_captures"
+        ) as flush:
+            result = ScenarioExecutor(sc).run()
+
+        assert result["success"] is True
+        flush.assert_called_once()
+
+    def test_nested_executor_does_not_flush_pending_captures(self):
+        from tasks.scenario.executor import ScenarioExecutor
+        from tasks.scenario.steps import _STEP_HANDLERS
+
+        sc = _make_sc(steps=[{"type": "wait", "seconds": 0}], depth=1)
+
+        with patch.dict(_STEP_HANDLERS, {"wait": lambda sc, step, idx, result: None}), patch(
+            "services.execution.capture_service.flush_pending_captures"
+        ) as flush:
+            result = ScenarioExecutor(sc).run()
+
+        assert result["success"] is True
+        flush.assert_not_called()
+
     def test_unknown_step_fails_gracefully(self):
         from tasks.scenario.executor import ScenarioExecutor
         sc = _make_sc(steps=[{"type": "unknown_step_xyz"}])

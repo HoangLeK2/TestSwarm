@@ -35,9 +35,13 @@ import {
 import { ROUTES } from '@/config/routes';
 import { Z_CAMPAIGN_MONITOR_NESTED } from '@/lib/z-index';
 import { cn } from '@/lib/utils';
-import { useCampaignExecutions } from '../../hooks/use-campaigns';
+import { useCampaignExecutions, useCampaignDevices } from '../../hooks/use-campaigns';
 import type { DlqEntry, ExecutionOut } from '../../types';
-import { dlqDisplayMessage } from './dlq-message';
+import { dlqDisplayMessage, dlqHasExplicitMessage } from './dlq-message';
+import {
+  humanizeDlqMessage,
+  resolveDlqDeviceLabel
+} from './dlq-user-message';
 import {
   executionRunTypeLabel,
   executionScenarioLabel,
@@ -179,6 +183,7 @@ export function DlqEntryDetailDrawer({
     campaignId ?? '',
     open && Boolean(campaignId)
   );
+  const { data: campaignDevices = [] } = useCampaignDevices(campaignId ?? '');
 
   const execution = useMemo(
     () =>
@@ -201,12 +206,11 @@ export function DlqEntryDetailDrawer({
   if (!entry) return null;
 
   const fallback = t('monitorDlqNoErrorMessage');
-  const message = dlqDisplayMessage(entry, fallback);
-  const hasMessage = message !== fallback;
-  const errorRaw = entry.error?.trim() || '';
-  const reasonRaw = entry.failure_reason?.trim() || '';
-  const showReason = Boolean(reasonRaw && reasonRaw !== errorRaw);
-  const showError = Boolean(errorRaw);
+  const rawMessage = dlqDisplayMessage(entry, fallback);
+  const { summary: userMessage, technical } = humanizeDlqMessage(rawMessage, t);
+  const hasMessage =
+    dlqHasExplicitMessage(entry) || Boolean(technical) || Boolean(userMessage);
+  const device = resolveDlqDeviceLabel(entry.device_serial, campaignDevices, t);
   const refs = Object.entries(entry.artifact_refs ?? {}).filter(([, url]) =>
     Boolean(url)
   );
@@ -240,7 +244,7 @@ export function DlqEntryDetailDrawer({
           </SheetTitle>
           <SheetDescription className='text-sm'>
             {t('monitorDlqDetailSubtitle', {
-              device: entry.device_serial,
+              device: device.label,
               runShort: runSubtitle
             })}
           </SheetDescription>
@@ -256,39 +260,24 @@ export function DlqEntryDetailDrawer({
                 <Alert variant='destructive'>
                   <AlertCircle className='size-4' />
                   <AlertTitle className='text-sm'>
-                    {entry.failed_step_id
-                      ? t('monitorDlqFailedStep', {
-                          step: entry.failed_step_id
-                        })
-                      : t('monitorDlqDetailError')}
+                    {t('monitorDlqDetailError')}
                   </AlertTitle>
-                  <AlertDescription className='space-y-2'>
-                    {showReason ? (
-                      <div>
-                        <p className='text-xs font-medium text-destructive/90'>
-                          {t('monitorDlqDetailFailureReason')}
-                        </p>
-                        <p className='whitespace-pre-wrap break-words text-sm'>
-                          {reasonRaw}
-                        </p>
-                      </div>
-                    ) : null}
-                    {showError ? (
-                      <div>
-                        {showReason ? (
-                          <p className='text-xs font-medium text-destructive/90'>
-                            {t('monitorDlqDetailErrorDetail')}
+                  <AlertDescription className='space-y-3'>
+                    <p className='whitespace-pre-wrap break-words text-sm leading-relaxed'>
+                      {userMessage}
+                    </p>
+                    {technical && technical !== userMessage ? (
+                      <Collapsible>
+                        <CollapsibleTrigger className='flex w-full items-center gap-2 text-left text-xs font-medium text-destructive/90 hover:underline'>
+                          <ChevronDown className='size-3.5' />
+                          {t('monitorDlqDetailTechnicalLog')}
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className='pt-2'>
+                          <p className='whitespace-pre-wrap break-all rounded-md bg-destructive/5 p-2 font-mono text-[11px] leading-relaxed text-destructive/90'>
+                            {technical}
                           </p>
-                        ) : null}
-                        <p className='whitespace-pre-wrap break-words text-sm'>
-                          {errorRaw}
-                        </p>
-                      </div>
-                    ) : null}
-                    {!showReason && !showError && hasMessage ? (
-                      <p className='whitespace-pre-wrap break-words text-sm'>
-                        {message}
-                      </p>
+                        </CollapsibleContent>
+                      </Collapsible>
                     ) : null}
                   </AlertDescription>
                 </Alert>
@@ -315,9 +304,8 @@ export function DlqEntryDetailDrawer({
               <CardContent className='p-0'>
                 <DetailRow
                   label={t('monitorDlqDetailDevice')}
-                  value={entry.device_serial}
-                  mono
-                  copyValue={entry.device_serial}
+                  value={device.label}
+                  copyValue={entry.device_serial || undefined}
                 />
                 <Separator />
                 <DetailRow

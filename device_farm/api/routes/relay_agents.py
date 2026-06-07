@@ -475,12 +475,11 @@ async def _dispatch_relay_job(
     dependencies=[Depends(require_permission("relay-agents", "read"))],
 )
 async def list_relay_agents(db: DB, user: CurrentUser):
-    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, user_id=user.id))
-    devices = await repo.list_devices(db)
-    owner_by_alias = _device_owner_aliases(devices)
+    org_id = getattr(user, "org_id", None)
+    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, org_id=org_id))
     caps_by_serial: dict[str, dict] = {}
     return [
-        _relay_to_out_same_wifi(row, owner_by_alias, user.id, caps_by_serial)
+        _relay_to_out_same_wifi(row, {}, user.id, caps_by_serial)
         for row in rows
     ]
 
@@ -671,12 +670,14 @@ async def _relay_token_user_id_from_request(request: Request, db: DB) -> str:
     dependencies=[Depends(require_permission("relay-agents", "read"))],
 )
 async def get_relay_agent(relay_id: str, db: DB, user: CurrentUser):
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(
+        db,
+        relay_id,
+        org_id=getattr(user, "org_id", None),
+    )
     if not row:
         raise HTTPException(status_code=404, detail="relay agent not found")
-    devices = await repo.list_devices(db)
-    owner_by_alias = _device_owner_aliases(devices)
-    return _relay_to_out_same_wifi(row, owner_by_alias, user.id, {})
+    return _relay_to_out_same_wifi(row, {}, user.id, {})
 
 
 @router.post(

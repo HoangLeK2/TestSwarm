@@ -94,6 +94,15 @@ class TestErrorClassifier:
         result = {"ok": False, "reason_code": "timeout", "retryable": True}
         assert is_step_failure_retryable(result, policy) is True
 
+    def test_cancelled_result_is_never_retryable(self, policy):
+        result = {
+            "ok": False,
+            "reason_code": "timeout",
+            "retryable": True,
+            "cancelled": True,
+        }
+        assert is_step_failure_retryable(result, policy) is False
+
 
 class TestBackoffCalculator:
     def test_exponential_attempt_one_near_base(self):

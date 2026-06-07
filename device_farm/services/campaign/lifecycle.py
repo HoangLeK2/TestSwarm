@@ -123,6 +123,11 @@ async def apply_campaign_transition(
         current.cancelled_at = ts
     if from_status == CampaignStatus.CANCELLED and target == CampaignStatus.RUNNING:
         current.cancelled_at = None
+    if target == CampaignStatus.RUNNING and from_status in (
+        CampaignStatus.COMPLETED,
+        CampaignStatus.FAILED,
+    ):
+        current.completed_at = None
     if target == CampaignStatus.ARCHIVED:
         current.deleted_at = ts
 

@@ -22,6 +22,7 @@ import {
   LIFECYCLE_WS_OFFLINE_POLL_MS,
   useLifecycleWsConnected
 } from '../lib/lifecycle-ws-store';
+import { useTabNetworkActive } from './use-tab-network-active';
 
 export { DEVICES_LIST_KEY, FLEET_STATS_KEY } from '../lib/device-query-keys';
 
@@ -45,30 +46,36 @@ export function removeDeviceFromCache(
 
 export function useDevices() {
   const wsLive = useLifecycleWsConnected();
+  const tabActive = useTabNetworkActive();
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id ?? null;
   return useQuery({
     queryKey: devicesListQueryKey(orgId),
     queryFn: devicesApi.list,
-    enabled: Boolean(orgId),
-    refetchInterval: wsLive
-      ? LIFECYCLE_WS_LIVE_POLL_MS
-      : LIFECYCLE_WS_OFFLINE_POLL_MS
+    enabled: Boolean(orgId) && tabActive,
+    refetchInterval: tabActive
+      ? wsLive
+        ? LIFECYCLE_WS_LIVE_POLL_MS
+        : LIFECYCLE_WS_OFFLINE_POLL_MS
+      : false
   });
 }
 
 export function useFleetStats() {
   const wsLive = useLifecycleWsConnected();
+  const tabActive = useTabNetworkActive();
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id ?? null;
   return useQuery({
     queryKey: fleetStatsQueryKey(orgId),
     queryFn: () => devicesApi.fleetStats(),
-    enabled: Boolean(orgId),
+    enabled: Boolean(orgId) && tabActive,
     staleTime: 15_000,
-    refetchInterval: wsLive
-      ? LIFECYCLE_WS_LIVE_POLL_MS
-      : LIFECYCLE_WS_OFFLINE_POLL_MS
+    refetchInterval: tabActive
+      ? wsLive
+        ? LIFECYCLE_WS_LIVE_POLL_MS
+        : LIFECYCLE_WS_OFFLINE_POLL_MS
+      : false
   });
 }
 

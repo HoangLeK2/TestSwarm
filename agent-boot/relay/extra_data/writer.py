@@ -489,6 +489,52 @@ class ContentItemWriter:
                 return str(row["content_hash"])
         return None
 
+    async def lookup_latest_parent_hash_for_context(
+        self,
+        *,
+        collection: str,
+        execution_id: str | None,
+        device_serial: str | None,
+    ) -> str | None:
+        """Find the latest post in the same crawl context for comment-sheet rows."""
+        collection_text = str(collection or "").strip()
+        execution_text = str(execution_id or "").strip()
+        serial_text = str(device_serial or "").strip()
+        if not collection_text or not execution_text:
+            return None
+        lookback_seconds = max(
+            1,
+            int(os.getenv("AGENT_BOOT_COMMENT_PARENT_LOOKBACK_SECONDS", "900")),
+        )
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            args: list[Any] = [collection_text, execution_text, float(lookback_seconds)]
+            serial_filter = ""
+            if serial_text:
+                args.append(serial_text)
+                serial_filter = f"AND device_serial = ${len(args)}"
+            row = await conn.fetchrow(
+                f"""
+                SELECT content_hash
+                FROM content_items
+                WHERE collection = $1
+                  AND execution_id = $2
+                  AND item_level = 0
+                  AND (
+                    content_type IN ('fb_post', 'fb_group_posts', 'post')
+                    OR content_type IS NULL
+                  )
+                  AND created_at >= now() - ($3::double precision * interval '1 second')
+                  {serial_filter}
+                ORDER BY extracted_at DESC NULLS LAST, created_at DESC
+                LIMIT 1
+                """,
+                *args,
+            )
+            if row and row.get("content_hash"):
+                return str(row["content_hash"])
+        return None
+
     async def _insert_rows_once(self, conn, rows: list[dict[str, Any]]) -> dict[str, Any]:
         payload = json.dumps(rows, ensure_ascii=False, default=str)
         sql = """

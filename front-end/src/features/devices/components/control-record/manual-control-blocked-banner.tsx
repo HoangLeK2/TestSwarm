@@ -2,44 +2,75 @@
 
 import { AlertTriangle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 type Props = {
   canTakeControl: boolean;
   onTakeControl: () => void;
+  /** Smaller copy for multi-phone / compact mirror layouts. */
+  compact?: boolean;
 };
 
-/** Shown below the device mirror when campaign/scenario blocks manual input. */
+/** Overlay strip at the bottom of the device mirror when manual input is blocked. */
 export function ManualControlBlockedBanner({
   canTakeControl,
-  onTakeControl
+  onTakeControl,
+  compact = false
 }: Props) {
   const t = useTranslations('devicesControlRecord.view.takeover');
 
   return (
     <div
       role='status'
-      className='flex w-full shrink-0 items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-50/90 px-2.5 py-1.5 text-amber-950 shadow-sm dark:border-amber-500/25 dark:bg-amber-950/50 dark:text-amber-100'
+      className={cn(
+        'absolute inset-x-0 bottom-0 z-20 border-t border-amber-500/50',
+        'bg-amber-50 dark:bg-amber-950',
+        compact ? 'px-2.5 py-2' : 'px-3 py-2.5'
+      )}
     >
-      <AlertTriangle
-        className='size-3.5 shrink-0 text-amber-600 dark:text-amber-400'
-        aria-hidden
-      />
-      <p className='min-w-0 flex-1 text-[11px] leading-snug text-amber-950 dark:text-amber-100'>
-        <span className='font-medium'>{t('blockedTitle')}</span>
-        <span className='text-amber-800/75 dark:text-amber-200/75'>
-          {' '}
-          {t('blockedHint')}
-        </span>
-      </p>
-      {canTakeControl ? (
-        <button
-          type='button'
-          onClick={onTakeControl}
-          className='shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold text-amber-900 ring-1 ring-amber-500/30 transition-colors hover:bg-amber-200/70 dark:text-amber-50 dark:hover:bg-amber-900/50'
-        >
-          {t('takeControlLink')}
-        </button>
-      ) : null}
+      <div className='flex items-center gap-2.5'>
+        <AlertTriangle
+          className={cn(
+            'shrink-0 text-amber-600 dark:text-amber-400',
+            compact ? 'size-3.5' : 'size-4'
+          )}
+          aria-hidden
+        />
+        <div className='min-w-0 flex-1'>
+          <p
+            className={cn(
+              'font-semibold leading-tight text-amber-950 dark:text-amber-50',
+              compact ? 'text-[11px]' : 'text-xs'
+            )}
+          >
+            {t('blockedTitle')}
+          </p>
+          <p
+            className={cn(
+              'leading-snug text-amber-800 dark:text-amber-200/90',
+              compact ? 'text-[10px]' : 'text-[11px]'
+            )}
+          >
+            {t('blockedHint')}
+          </p>
+        </div>
+        {canTakeControl ? (
+          <Button
+            type='button'
+            size='sm'
+            variant='secondary'
+            className={cn(
+              'shrink-0 border-amber-600/30 bg-white font-semibold text-amber-950 hover:bg-amber-100',
+              'dark:border-amber-400/30 dark:bg-amber-900 dark:text-amber-50 dark:hover:bg-amber-800',
+              compact ? 'h-7 px-2.5 text-[10px]' : 'h-8 px-3 text-xs'
+            )}
+            onClick={onTakeControl}
+          >
+            {t('takeControlLink')}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

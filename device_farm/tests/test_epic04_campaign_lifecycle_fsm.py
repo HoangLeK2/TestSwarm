@@ -89,8 +89,10 @@ def _build_superadmin_app(session_factory):
         (CampaignStatus.RUNNING, CampaignStatus.COMPLETED, True),
         (CampaignStatus.RUNNING, CampaignStatus.FAILED, True),
         (CampaignStatus.RUNNING, CampaignStatus.CANCELLED, True),
+        (CampaignStatus.COMPLETED, CampaignStatus.RUNNING, True),
         (CampaignStatus.COMPLETED, CampaignStatus.CANCELLED, False),
         (CampaignStatus.COMPLETED, CampaignStatus.ARCHIVED, True),
+        (CampaignStatus.FAILED, CampaignStatus.RUNNING, True),
         (CampaignStatus.CANCELLED, CampaignStatus.ARCHIVED, True),
         (CampaignStatus.ARCHIVED, CampaignStatus.DRAFT, False),
     ],
@@ -114,8 +116,8 @@ def test_fsm_all_pairs_cover_enum():
         (CampaignStatus.SCHEDULED, True),
         (CampaignStatus.RUNNING, False),
         (CampaignStatus.PAUSED, False),
-        (CampaignStatus.COMPLETED, False),
-        (CampaignStatus.FAILED, False),
+        (CampaignStatus.COMPLETED, True),
+        (CampaignStatus.FAILED, True),
         (CampaignStatus.CANCELLED, True),
         (CampaignStatus.ARCHIVED, False),
     ],
@@ -154,6 +156,33 @@ async def test_ac1_dispatch_transitions_draft_to_running(session_factory):
             )
         ).scalar_one()
     assert events >= 1
+
+
+@pytest.mark.asyncio
+async def test_redispatch_from_completed_transitions_to_running(session_factory):
+    await _seed_orgs(session_factory)
+    device_id = await _online_device(session_factory, serial="FSM-RED1")
+
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        campaign_id = await _create_campaign(client, name="FsmRedispatch")
+        async with session_factory() as db:
+            row = await campaign_repo.get_campaign_entity(db, campaign_id)
+            row.status = CampaignStatus.COMPLETED.value
+            row.completed_at = row.updated_at
+            await db.commit()
+
+        resp = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={"target": {"device_ids": [device_id]}},
+        )
+        assert resp.status_code == 200
+
+    async with session_factory() as db:
+        row = await campaign_repo.get_campaign_entity(db, campaign_id)
+        assert row.status == CampaignStatus.RUNNING.value
+        assert row.completed_at is None
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
@@ -62,6 +62,8 @@ interface DeviceTileProps {
   hideAppCaption?: boolean;
   /** ADB / APK / file ops on the control rail (control-record). */
   deviceOps?: DeviceOpsConfig;
+  /** Absolute overlay rendered over the live screen (e.g. busy-state banner). */
+  screenOverlay?: ReactNode;
 }
 
 export function DeviceTile({
@@ -85,7 +87,8 @@ export function DeviceTile({
   minimalRailControls = false,
   streamFetchPriority = 'auto',
   hideAppCaption = false,
-  deviceOps
+  deviceOps,
+  screenOverlay
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -224,7 +227,7 @@ export function DeviceTile({
                 deviceHeight={device.screen_height}
                 className='h-full shrink-0'
               >
-                <div className='flex h-full min-h-0 w-full flex-col'>
+                <div className='relative flex h-full min-h-0 w-full flex-col'>
                   {isActive ? (
                     <DeviceScreen
                       device={device}
@@ -244,6 +247,7 @@ export function DeviceTile({
                       {t('deviceInactive')}
                     </div>
                   )}
+                  {isActive ? screenOverlay : null}
                 </div>
               </DeviceAndroidFrame>
               {!hideControls && !compact ? (

@@ -10,7 +10,7 @@ import React, {
 import { useGesture } from '@use-gesture/react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
-import { deviceFarmBackendBase, farmApi } from '@/lib/farm-api';
+import { deviceFarmMediaBase, farmApi } from '@/lib/farm-api';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { tokenStorage } from '@/lib/token-storage';
@@ -24,6 +24,11 @@ import {
 import { useTranslations } from 'next-intl';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 import { Badge } from '@/components/ui/badge';
+import { useTabNetworkActive } from '../hooks/use-tab-network-active';
+import {
+  attachScrcpyStream,
+  detachScrcpyStream
+} from '../services/scrcpy-stream';
 
 type Size = { width: number; height: number };
 
@@ -148,6 +153,7 @@ export function DeviceScreen({
   onDragGestureRef.current = onDragGesture;
   const [hasFrame, setHasFrame] = useState(false);
   const [mjpegFailed, setMjpegFailed] = useState(false);
+  const [mjpegAttempt, setMjpegAttempt] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
   const [streamSize, setStreamSize] = useState<Size | null>(null);
@@ -183,6 +189,7 @@ export function DeviceScreen({
   );
   const [mjpegEnabled, setMjpegEnabled] = useState(true);
   const [h264Stalled, setH264Stalled] = useState(false);
+  const [h264Suppressed, setH264Suppressed] = useState(false);
   const [h264RestartKey, setH264RestartKey] = useState(0);
   const lastInputIdrRef = useRef(0);
 
@@ -192,6 +199,8 @@ export function DeviceScreen({
   } | null>(null);
   const [screenStreamOn, setScreenStreamOn] = useState(true);
   const [streamToggleBusy, setStreamToggleBusy] = useState(false);
+  const attachedScrcpySerialRef = useRef<string | null>(null);
+  const tabActive = useTabNetworkActive();
   const streamingMode = streamingFlags?.mode;
   const streamingAutoAttach = streamingFlags?.autoAttach;
 
@@ -280,48 +289,66 @@ export function DeviceScreen({
   /** Subscribe relay H.264 + honor server detach; MJPEG below stays on so you always see picture. */
   const relayH264Allowed =
     streamingFlags === null || !isContinuous || screenStreamOn;
-  const h264PrimaryMode = isContinuous && relayH264Allowed;
+  const h264DecodeAllowed = relayH264Allowed && !h264Suppressed;
+  const h264PrimaryMode = isContinuous && h264DecodeAllowed;
 
-  // Viewer-gated streaming: when the server no longer auto-attaches scrcpy, the
-  // device screen should attach on mount and detach on unmount.
+  // Control is an explicit viewer: always ask the backend to attach scrcpy in
+  // continuous mode. If auto-attach is disabled server-side, this starts video;
+  // if it is already running, the backend treats it as idempotent.
   useEffect(() => {
-    if (!isContinuous || !isActive) return;
-    if (streamingAutoAttach !== false) return;
-    if (!screenStreamOn) return;
+    const onPageHide = () => {
+      const serial = attachedScrcpySerialRef.current;
+      if (!serial) return;
+      attachedScrcpySerialRef.current = null;
+      detachScrcpyStream(serial).catch(() => {});
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, []);
 
-    let detachScheduled = false;
+  useEffect(() => {
+    const shouldAttach =
+      tabActive && isContinuous && isActive && screenStreamOn;
+    if (!shouldAttach) {
+      const attachedSerial = attachedScrcpySerialRef.current;
+      attachedScrcpySerialRef.current = null;
+      if (attachedSerial) {
+        detachScrcpyStream(attachedSerial).catch(() => {});
+      }
+      return;
+    }
+
     const serial = device.serial;
+    if (attachedScrcpySerialRef.current === serial) return;
+    attachedScrcpySerialRef.current = serial;
 
     ensureWatchSerial(serial);
-    farmApi
-      .post(`/devices/${encodeURIComponent(serial)}/scrcpy/attach`, {})
+    attachScrcpyStream(serial)
       .then(() => {
         ensureWatchSerial(serial);
+        setMjpegFailed(false);
+        setMjpegAttempt((n) => n + 1);
+        setH264Suppressed(false);
         requestIdr(serial);
       })
-      .catch(() => {});
+      .catch((err) => {
+        const msg =
+          err && typeof err === 'object' && 'response' in err
+            ? String(
+                (err as { response?: { data?: { error?: string } } }).response
+                  ?.data?.error ?? ''
+              )
+            : '';
+        toast.error(t('screenStreamAttachError'), {
+          description: msg || undefined
+        });
+      });
 
-    const onPageHide = () => {
-      if (detachScheduled) return;
-      detachScheduled = true;
-      farmApi
-        .post(`/devices/${encodeURIComponent(serial)}/scrcpy/detach`, {})
-        .catch(() => {});
-    };
-
-    window.addEventListener('pagehide', onPageHide);
     return () => {
-      window.removeEventListener('pagehide', onPageHide);
       // Do not detach on React effect re-runs (config load, screenStreamOn sync).
       // Server auto-stops after idle; pagehide handles tab close / navigation.
     };
-  }, [
-    device.serial,
-    isActive,
-    isContinuous,
-    screenStreamOn,
-    streamingAutoAttach
-  ]);
+  }, [device.serial, isActive, isContinuous, screenStreamOn, t, tabActive]);
 
   const onScreenStreamChange = useCallback(
     async (checked: boolean) => {
@@ -329,25 +356,23 @@ export function DeviceScreen({
       setStreamToggleBusy(true);
       try {
         if (checked) {
-          await farmApi.post(
-            `/devices/${encodeURIComponent(device.serial)}/scrcpy/attach`,
-            {}
-          );
+          await attachScrcpyStream(device.serial);
+          attachedScrcpySerialRef.current = device.serial;
         } else {
-          await farmApi.post(
-            `/devices/${encodeURIComponent(device.serial)}/scrcpy/detach`,
-            {}
-          );
+          await detachScrcpyStream(device.serial);
+          attachedScrcpySerialRef.current = null;
         }
         setScreenStreamOn(checked);
         if (!checked) {
           setHasFrame(false);
           setH264Active(false);
           setH264Stalled(false);
+          setH264Suppressed(false);
           setH264RestartKey((key) => key + 1);
           setMjpegEnabled(false);
         } else {
           setH264Stalled(false);
+          setH264Suppressed(false);
           setH264RestartKey((key) => key + 1);
           setMjpegEnabled(true);
         }
@@ -373,15 +398,21 @@ export function DeviceScreen({
   // In continuous mode, keep MJPEG visible until H264 is actually rendering.
   // Otherwise the canvas can be black during decoder warm-up or IDR recovery.
   const mjpegUrl = React.useMemo(() => {
+    if (!tabActive) return null;
     if (!isActive || !mjpegEnabled) return null;
     if (h264PrimaryMode && h264Active && !h264Stalled) return null;
     const fps = h264PrimaryMode ? 5 : 30;
-    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${fps}`;
+    const base = `${deviceFarmMediaBase}/stream/${encodeURIComponent(device.serial)}?fps=${fps}`;
     const token = tokenStorage.getAuthToken();
-    return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+    const withAuth = token
+      ? `${base}&token=${encodeURIComponent(token)}`
+      : base;
+    return mjpegAttempt > 0 ? `${withAuth}&_r=${mjpegAttempt}` : withAuth;
   }, [
     isActive,
+    tabActive,
     mjpegEnabled,
+    mjpegAttempt,
     device.serial,
     h264PrimaryMode,
     h264Active,
@@ -392,111 +423,146 @@ export function DeviceScreen({
     setMjpegFailed(false);
   }, [mjpegUrl]);
 
+  useEffect(() => {
+    if (!mjpegFailed || !tabActive || !isActive || !mjpegEnabled) return;
+    const retry = window.setTimeout(() => {
+      setMjpegFailed(false);
+      setMjpegAttempt((n) => n + 1);
+    }, 3000);
+    return () => window.clearTimeout(retry);
+  }, [isActive, mjpegEnabled, mjpegFailed, tabActive]);
+
   // Always pass real serial so binary frames are subscribed immediately on mount.
   // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
-  useH264Video(isActive && relayH264Allowed ? device.serial : '', canvasRef, {
-    restartKey: h264RestartKey,
-    onFrame: useCallback(
-      (frame?: { mostlyBlack: boolean }) => {
-        const canvas = canvasRef.current;
-        if (canvas?.width && canvas?.height) {
-          updateStreamSize(canvas.width, canvas.height);
-        }
-        if (h264StallFallbackTimerRef.current) {
-          clearTimeout(h264StallFallbackTimerRef.current);
-          h264StallFallbackTimerRef.current = null;
-        }
-        if (frame?.mostlyBlack) {
+  useH264Video(
+    tabActive && isActive && h264DecodeAllowed ? device.serial : '',
+    canvasRef,
+    {
+      restartKey: h264RestartKey,
+      onFrame: useCallback(
+        (frame?: { mostlyBlack: boolean }) => {
+          const canvas = canvasRef.current;
+          if (canvas?.width && canvas?.height) {
+            updateStreamSize(canvas.width, canvas.height);
+          }
+          if (h264StallFallbackTimerRef.current) {
+            clearTimeout(h264StallFallbackTimerRef.current);
+            h264StallFallbackTimerRef.current = null;
+          }
+          if (frame?.mostlyBlack) {
+            setH264Active(false);
+            setH264Stalled(true);
+            h264WarmupRef.current = { startedAt: 0, frames: 0 };
+            return;
+          }
+          if (!hasFrame) setHasFrame(true);
+
+          // Once a frame has rendered, the canvas is no longer black. Switch back
+          // to H264 immediately; staying on low-FPS MJPEG makes the stream feel
+          // frozen even though the decoder has recovered.
+          const now = Date.now();
+          const warm = h264WarmupRef.current;
+          if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
+            warm.startedAt = now;
+            warm.frames = 1;
+          } else {
+            warm.frames += 1;
+          }
+          if (!h264Active && warm.frames >= 1) {
+            setH264Active(true);
+            if (h264Stalled) setH264Stalled(false);
+          }
+
+          // In H264-primary mode, keep showing the last decoded frame on static scenes.
+          // Some devices emit very few frames while idle; timing out to "inactive"
+          // causes a false black screen even though stream is still healthy.
+          if (h264PrimaryMode) {
+            if (h264TimeoutRef.current) {
+              clearTimeout(h264TimeoutRef.current);
+              h264TimeoutRef.current = null;
+            }
+          } else {
+            if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+            h264TimeoutRef.current = setTimeout(
+              () => setH264Active(false),
+              8000
+            );
+          }
+        },
+        [hasFrame, h264Active, h264PrimaryMode, h264Stalled, updateStreamSize]
+      ),
+      onStall: useCallback(
+        (reason: 'no_packets' | 'decoder_stalled') => {
+          const now = Date.now();
+          const burst = h264RecoveryBurstRef.current;
+          if (burst.firstAt === 0 || now - burst.firstAt > 45_000) {
+            burst.firstAt = now;
+            burst.count = 1;
+          } else {
+            burst.count += 1;
+          }
+          if (reason === 'decoder_stalled' && hasFrame) {
+            // The hook already resets WebCodecs and requests a fresh IDR. Keep the
+            // last good canvas visible so recovery does not flash between H264/MJPEG.
+            setH264Stalled(true);
+            h264WarmupRef.current = { startedAt: 0, frames: 0 };
+            setMjpegEnabled(true);
+            if (h264StallFallbackTimerRef.current) {
+              clearTimeout(h264StallFallbackTimerRef.current);
+            }
+            h264StallFallbackTimerRef.current = setTimeout(() => {
+              setH264Active(false);
+              setHasFrame(false);
+            }, 3000);
+            if (burst.count >= 3) {
+              burst.firstAt = now;
+              burst.count = 0;
+              setH264Suppressed(true);
+              reconnectDeviceFarmSocket('repeated_h264_stall');
+            }
+            return;
+          }
           setH264Active(false);
           setH264Stalled(true);
           h264WarmupRef.current = { startedAt: 0, frames: 0 };
-          return;
-        }
-        if (!hasFrame) setHasFrame(true);
-
-        // Once a frame has rendered, the canvas is no longer black. Switch back
-        // to H264 immediately; staying on low-FPS MJPEG makes the stream feel
-        // frozen even though the decoder has recovered.
-        const now = Date.now();
-        const warm = h264WarmupRef.current;
-        if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
-          warm.startedAt = now;
-          warm.frames = 1;
-        } else {
-          warm.frames += 1;
-        }
-        if (!h264Active && warm.frames >= 1) {
-          setH264Active(true);
-          if (h264Stalled) setH264Stalled(false);
-        }
-
-        // In H264-primary mode, keep showing the last decoded frame on static scenes.
-        // Some devices emit very few frames while idle; timing out to "inactive"
-        // causes a false black screen even though stream is still healthy.
-        if (h264PrimaryMode) {
-          if (h264TimeoutRef.current) {
-            clearTimeout(h264TimeoutRef.current);
-            h264TimeoutRef.current = null;
-          }
-        } else {
-          if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
-          h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
-        }
-      },
-      [hasFrame, h264Active, h264PrimaryMode, h264Stalled, updateStreamSize]
-    ),
-    onStall: useCallback(
-      (reason: 'no_packets' | 'decoder_stalled') => {
-        const now = Date.now();
-        const burst = h264RecoveryBurstRef.current;
-        if (burst.firstAt === 0 || now - burst.firstAt > 45_000) {
-          burst.firstAt = now;
-          burst.count = 1;
-        } else {
-          burst.count += 1;
-        }
-        if (reason === 'decoder_stalled' && hasFrame) {
-          // The hook already resets WebCodecs and requests a fresh IDR. Keep the
-          // last good canvas visible so recovery does not flash between H264/MJPEG.
-          setH264Stalled(true);
-          h264WarmupRef.current = { startedAt: 0, frames: 0 };
+          setH264RestartKey((key) => key + 1);
+          setHasFrame(false);
           setMjpegEnabled(true);
-          if (h264StallFallbackTimerRef.current) {
-            clearTimeout(h264StallFallbackTimerRef.current);
-          }
-          h264StallFallbackTimerRef.current = setTimeout(() => {
-            setH264Active(false);
-            setHasFrame(false);
-          }, 3000);
           if (burst.count >= 3) {
             burst.firstAt = now;
             burst.count = 0;
+            setH264Suppressed(true);
             reconnectDeviceFarmSocket('repeated_h264_stall');
           }
-          return;
-        }
-        setH264Active(false);
-        setH264Stalled(true);
-        h264WarmupRef.current = { startedAt: 0, frames: 0 };
-        setH264RestartKey((key) => key + 1);
-        setHasFrame(false);
-        setMjpegEnabled(true);
-        if (burst.count >= 3) {
-          burst.firstAt = now;
-          burst.count = 0;
-          reconnectDeviceFarmSocket('repeated_h264_stall');
-        }
-      },
-      [hasFrame]
-    )
-  });
+        },
+        [hasFrame]
+      )
+    }
+  );
 
   // Reset h264Active when device changes or goes offline
   useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d', {
+      alpha: false,
+      willReadFrequently: true
+    });
+    if (canvas && ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    if (imageRef.current) {
+      imageRef.current.removeAttribute('src');
+    }
+    setHasFrame(false);
     setH264Active(false);
     setH264Stalled(false);
+    setH264Suppressed(false);
     h264RecoveryBurstRef.current = { firstAt: 0, count: 0 };
     setH264RestartKey((key) => key + 1);
+    setLoadingElapsedSec(0);
+    setStreamSize(null);
+    setMjpegFailed(false);
+    setMjpegAttempt(0);
     setMjpegEnabled(true);
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
@@ -539,11 +605,15 @@ export function DeviceScreen({
   // Track shared WS connectivity so loading UI can distinguish
   // "socket not up yet" vs "stream waiting first frame".
   useEffect(() => {
+    if (!tabActive) {
+      setWsConnected(false);
+      return;
+    }
     const unsub = subscribeDeviceFarm((msg) => {
       if (msg.type === 'ws_status') setWsConnected(Boolean(msg.connected));
     });
     return () => unsub();
-  }, []);
+  }, [tabActive]);
 
   // Loading elapsed timer while waiting first frame.
   useEffect(() => {
@@ -734,12 +804,12 @@ export function DeviceScreen({
   }, [resolvedAlign, resolvedStreamFit]);
 
   const requestStreamRefreshAfterInput = useCallback(() => {
-    if (!isActive || !relayH264Allowed) return;
+    if (!isActive || !h264DecodeAllowed) return;
     const now = Date.now();
     if (now - lastInputIdrRef.current < 900) return;
     lastInputIdrRef.current = now;
     requestIdr(device.serial, 0);
-  }, [device.serial, isActive, relayH264Allowed]);
+  }, [device.serial, h264DecodeAllowed, isActive]);
 
   const bind = useGesture(
     {
@@ -826,9 +896,9 @@ export function DeviceScreen({
       }
     },
     {
-      drag: { threshold: 5 },
-      pointer: { touch: true },
-      event: { passive: false }
+      drag: { threshold: 5, pointer: { touch: true } },
+      pinch: { pointer: { touch: true } },
+      eventOptions: { passive: false }
     }
   );
 
@@ -947,6 +1017,7 @@ export function DeviceScreen({
         {mjpegUrl && !mjpegFailed && (
           // eslint-disable-next-line @next/next/no-img-element -- MJPEG stream endpoint must stay as a native img.
           <img
+            key={`mjpeg-${device.serial}`}
             ref={imageRef}
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}

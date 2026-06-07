@@ -1,9 +1,10 @@
 'use client';
 
-import { memo, type ReactNode } from 'react';
+import { memo, useMemo } from 'react';
 import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
 import type { DeviceOpsConfig } from '../device-ops-rail';
+import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
 
 type Props = {
   device: Device;
@@ -24,11 +25,19 @@ type Props = {
   hideControls?: boolean;
   hideDeviceFunctions?: boolean;
   readOnlyPreview?: boolean;
-  busyBanner?: ReactNode;
+  canTakeControl?: boolean;
+  onTakeControl?: () => void;
   /** Mirror scale in multi-phone layouts. */
   mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
   deviceOps?: DeviceOpsConfig;
 };
+
+function isManualControlBlocked(device: Device): boolean {
+  return (
+    (device.state || '').replace('DeviceState.', '') === 'BUSY' ||
+    (device.scenario_active ?? 0) > 0
+  );
+}
 
 function deviceMirrorPropsEqual(prev: Props, next: Props) {
   if (prev.mode !== next.mode) return false;
@@ -40,7 +49,8 @@ function deviceMirrorPropsEqual(prev: Props, next: Props) {
   if (prev.hideControls !== next.hideControls) return false;
   if (prev.hideDeviceFunctions !== next.hideDeviceFunctions) return false;
   if (prev.readOnlyPreview !== next.readOnlyPreview) return false;
-  if (prev.busyBanner !== next.busyBanner) return false;
+  if (prev.canTakeControl !== next.canTakeControl) return false;
+  if (prev.onTakeControl !== next.onTakeControl) return false;
   if (prev.mirrorSize !== next.mirrorSize) return false;
   if (prev.deviceOps !== next.deviceOps) return false;
   if (prev.highlightBounds !== next.highlightBounds) {
@@ -86,7 +96,8 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   hideControls,
   hideDeviceFunctions,
   readOnlyPreview,
-  busyBanner,
+  canTakeControl = false,
+  onTakeControl,
   mirrorSize = 'default',
   deviceOps
 }: Props) {
@@ -97,6 +108,18 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
         ? 252
         : 262;
   const compactPadding = mirrorSize !== 'default';
+  const compactOverlay = mirrorSize !== 'default';
+
+  const screenOverlay = useMemo(() => {
+    if (!isManualControlBlocked(device)) return undefined;
+    return (
+      <ManualControlBlockedBanner
+        compact={compactOverlay}
+        canTakeControl={canTakeControl}
+        onTakeControl={onTakeControl ?? (() => {})}
+      />
+    );
+  }, [canTakeControl, compactOverlay, device, onTakeControl]);
 
   return (
     <div className='flex min-h-0 w-full flex-1 flex-col'>
@@ -107,31 +130,29 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
             : 'flex w-full flex-1 justify-center px-3 pt-3'
         }
       >
-        <div className='mx-auto flex w-fit max-w-full flex-col items-stretch gap-0.5'>
-          <div className='mx-auto w-fit'>
-            <DeviceTile
-              device={device}
-              logLines={logLines}
-              mode={mode}
-              wsSend={wsSend}
-              onToggleMode={onToggleMode}
-              onRestart={onRestart}
-              onTap={onTap}
-              onSwipe={onSwipe}
-              highlightBounds={highlightBounds}
-              hideHeader
-              hideStepMonitor
-              minimalRailControls
-              hideControls={hideControls}
-              hideDeviceFunctions={hideDeviceFunctions}
-              readOnlyPreview={readOnlyPreview}
-              mockupScreenWidth={mockupScreenWidth}
-              streamFetchPriority='high'
-              hideAppCaption={compactPadding}
-              deviceOps={deviceOps}
-            />
-          </div>
-          {busyBanner ? <div className='-mt-2 w-full'>{busyBanner}</div> : null}
+        <div className='mx-auto flex w-fit max-w-full flex-col items-stretch'>
+          <DeviceTile
+            device={device}
+            logLines={logLines}
+            mode={mode}
+            wsSend={wsSend}
+            onToggleMode={onToggleMode}
+            onRestart={onRestart}
+            onTap={onTap}
+            onSwipe={onSwipe}
+            highlightBounds={highlightBounds}
+            hideHeader
+            hideStepMonitor
+            minimalRailControls
+            hideControls={hideControls}
+            hideDeviceFunctions={hideDeviceFunctions}
+            readOnlyPreview={readOnlyPreview}
+            mockupScreenWidth={mockupScreenWidth}
+            streamFetchPriority='high'
+            hideAppCaption={compactPadding}
+            deviceOps={deviceOps}
+            screenOverlay={screenOverlay}
+          />
         </div>
       </div>
     </div>

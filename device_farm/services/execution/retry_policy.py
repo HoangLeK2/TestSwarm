@@ -124,6 +124,8 @@ def is_step_failure_retryable(
 ) -> bool:
     if step_result.get("ok", True):
         return False
+    if step_result.get("cancelled") is True:
+        return False
     code = str(step_result.get("reason_code") or "")
     if code in NON_RETRYABLE:
         return False

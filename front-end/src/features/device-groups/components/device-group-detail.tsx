@@ -31,8 +31,6 @@ export function DeviceGroupDetail({ groupId, onBack }: Props) {
     return <p className='text-sm text-destructive'>{t('notFound')}</p>;
   }
 
-  const existingDeviceIds = (group.devices ?? []).map((d) => d.id);
-
   return (
     <div className='space-y-6'>
       <div className='flex items-center gap-3'>
@@ -55,10 +53,7 @@ export function DeviceGroupDetail({ groupId, onBack }: Props) {
       <div className='flex items-center justify-between'>
         <h3 className='text-sm font-medium'>{t('devicesTitle')}</h3>
         {perms.canUpdate ? (
-          <AddDevicesToGroupDialog
-            groupId={groupId}
-            existingDeviceIds={existingDeviceIds}
-          />
+          <AddDevicesToGroupDialog groupId={groupId} />
         ) : null}
       </div>
 

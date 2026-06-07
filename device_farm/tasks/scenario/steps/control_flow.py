@@ -19,6 +19,12 @@ def _cancelled(sc: ScenarioContext) -> bool:
     return sc.cancel_event is not None and sc.cancel_event.is_set()
 
 
+def _mark_cancelled(result: Dict[str, Any], message: str) -> None:
+    result["ok"] = False
+    result["message"] = message
+    result["cancelled"] = True
+
+
 # Per-execution asyncio.Lock for serializing loop_state writes.
 # Keyed by execution_id; leaks are bounded since executions finish.
 _LOOP_PERSIST_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -62,7 +68,8 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         return
 
     if count is not None:
-        iterations = min(int(count), max_iterations)
+        # count is explicit — do not cap with max_iterations (that field is while-only).
+        iterations = int(count)
         use_while = False
     elif while_cond:
         iterations = max_iterations
@@ -88,8 +95,7 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     actual_iters = 0
     for i in range(resume_from, iterations):
         if _cancelled(sc):
-            result["ok"] = False
-            result["message"] = "loop: cancelled by user"
+            _mark_cancelled(result, "loop: cancelled by user")
             break
         if use_while and not _evaluate_condition(sc.device, while_cond, sc.ctx):
             break
@@ -97,6 +103,9 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         nested_result = _run_nested(sc, nested_steps)
         sub_results.append({"iteration": i, "result": nested_result})
         actual_iters += 1
+        if _cancelled(sc):
+            _mark_cancelled(result, "loop: cancelled by user")
+            break
         # F4.1 — persist mid-loop iteration index so resume picks up cleanly.
         _persist_loop_iter(sc, i + 1)
         if not nested_result.get("success"):
@@ -239,18 +248,26 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
     sub_results: List[Dict[str, Any]] = []
     for i in range(n):
         if _cancelled(sc):
-            result["ok"] = False
-            result["message"] = "repeat: cancelled by user"
+            _mark_cancelled(result, "repeat: cancelled by user")
             break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         iter_res = _run_nested(sc, sub_steps)
         sub_results.append({"iteration": i, "result": iter_res})
+        if _cancelled(sc):
+            _mark_cancelled(result, "repeat: cancelled by user")
+            break
         if not iter_res.get("success"):
             result["ok"] = False
             result["message"] = f"repeat: iteration {i} failed — {iter_res.get('failed_message', '')}"
             break
         if delay > 0 and i < n - 1:
-            time.sleep(delay)
+            if sc.cancel_event is not None:
+                sc.cancel_event.wait(delay)
+                if _cancelled(sc):
+                    _mark_cancelled(result, "repeat: cancelled by user")
+                    break
+            else:
+                time.sleep(delay)
     else:
         result["message"] = f"repeat: {n} iteration(s) completed"
     result["iterations"] = len(sub_results)
@@ -276,8 +293,7 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     condition_met = False
     for i in range(max_iter):
         if _cancelled(sc):
-            result["ok"] = False
-            result["message"] = "repeat_until: cancelled by user"
+            _mark_cancelled(result, "repeat_until: cancelled by user")
             break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         if _eval_ru_condition(sc.device, condition, sc.var_ctx):
@@ -285,6 +301,9 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
             break
         iter_res = _run_nested(sc, sub_steps)
         actual_iters += 1
+        if _cancelled(sc):
+            _mark_cancelled(result, "repeat_until: cancelled by user")
+            break
         if not iter_res.get("success"):
             result["ok"] = False
             result["message"] = f"repeat_until: iteration {i} failed — {iter_res.get('failed_message', '')}"
@@ -352,7 +371,25 @@ def handle_tap_fb_comment_button(
         request_edge_comment_target,
     )
 
-    if step.get("pre_scroll"):
+    target = None
+    precheck_before_scroll = bool(
+        step.get("pre_scroll")
+        and sc.ctx.get("_active_comment_parent_source") == "post_detail"
+    )
+    if precheck_before_scroll:
+        target = request_edge_comment_target(
+            device=sc.device,
+            serial=sc.serial,
+            ctx=sc.ctx,
+            scenario=sc.scenario,
+            step=step,
+            result=result,
+            cancel_event=sc.cancel_event,
+        )
+        if target or result.get("reason_code") == "already_on_comment_sheet":
+            result["pre_scroll_skipped"] = "post_detail_target_precheck"
+
+    if step.get("pre_scroll") and not target and result.get("reason_code") != "already_on_comment_sheet":
         try:
             distance = float(step.get("pre_scroll_distance", 0.24) or 0.24)
             duration_ms = int(step.get("pre_scroll_duration_ms", 520) or 520)
@@ -383,15 +420,16 @@ def handle_tap_fb_comment_button(
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: pre_scroll failed: %s", sc.serial, exc)
 
-    target = request_edge_comment_target(
-        device=sc.device,
-        serial=sc.serial,
-        ctx=sc.ctx,
-        scenario=sc.scenario,
-        step=step,
-        result=result,
-        cancel_event=sc.cancel_event,
-    )
+    if target is None and result.get("reason_code") != "already_on_comment_sheet":
+        target = request_edge_comment_target(
+            device=sc.device,
+            serial=sc.serial,
+            ctx=sc.ctx,
+            scenario=sc.scenario,
+            step=step,
+            result=result,
+            cancel_event=sc.cancel_event,
+        )
     ignore_error = bool(step.get("ignore_error", True))
     then_steps = step.get("then") or []
     else_steps = step.get("else") or []
@@ -494,6 +532,14 @@ def handle_tap_fb_comment_button(
                 result=result,
                 cancel_event=sc.cancel_event,
             )
+            filter_report = result["filter_switch"] if isinstance(result.get("filter_switch"), dict) else {}
+            target_filter = filter_report.get("target_filter")
+            reason = str(filter_report.get("reason_code") or "")
+            if target_filter and (
+                filter_report.get("switched")
+                or reason in {"already_on_filter", "already_all_comments", "ok", "filter_not_verified"}
+            ):
+                sc.ctx["_fb_comment_filter_applied"] = target_filter
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
         settle_s = float(

@@ -43,6 +43,59 @@ log = logging.getLogger(__name__)
 api_trace_log = importlib.import_module("structlog").get_logger("api_trace")
 
 
+def _relay_device_ip(serial: str) -> str:
+    serial = str(serial or "").strip()
+    return serial.rsplit(":", 1)[0] if ":" in serial else serial
+
+
+def _relay_cap_hardware_serial(caps: dict | None) -> str:
+    return str((caps or {}).get("hardware_serial") or "").strip()
+
+
+def _relay_serial_matches_ws_device(
+    device,
+    relay_serial: str,
+    *,
+    caps: dict | None = None,
+) -> bool:
+    """Return True only for explicit relay-to-logical device matches."""
+    if device is None:
+        return False
+    relay_serial = str(relay_serial or "").strip()
+    if not relay_serial or getattr(device, "serial", None) == relay_serial:
+        return False
+
+    hardware_serial = _relay_cap_hardware_serial(caps)
+    if hardware_serial and getattr(device, "serial", None) == hardware_serial:
+        return True
+
+    device_ip = _relay_device_ip(relay_serial)
+    adb_serial = str(getattr(device, "_adb_serial", "") or "").strip()
+    u2_host = str(getattr(device, "_u2_host", "") or "").strip()
+    return bool(
+        adb_serial == relay_serial
+        or (device_ip and adb_serial.startswith(device_ip + ":"))
+        or (device_ip and u2_host == device_ip)
+    )
+
+
+def _find_ws_device_for_relay_serial(
+    devices,
+    relay_serial: str,
+    *,
+    caps: dict | None = None,
+):
+    """Find the WS logical DeviceClient for a relay serial without guessing."""
+    return next(
+        (
+            device
+            for device in devices
+            if _relay_serial_matches_ws_device(device, relay_serial, caps=caps)
+        ),
+        None,
+    )
+
+
 class RequestLogMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
@@ -798,27 +851,13 @@ def create_app(
                             return ip
                     return None
 
-                def _find_device_for_relay_serial(serial: str):
+                def _find_device_for_relay_serial(serial: str, *, caps: dict | None = None):
                     """Resolve DeviceClient for a relay ADB serial (WS logical or relay slot)."""
-                    device_ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
-                    ws_device = next(
-                        (d for d in _manager_ref.all_devices()
-                         if d.serial != serial
-                         and (
-                             getattr(d, "_adb_serial", "").startswith(device_ip + ":")
-                             or getattr(d, "_adb_serial", "") == serial
-                             or getattr(d, "_u2_host", None) == device_ip
-                         )),
-                        None,
+                    ws_device = _find_ws_device_for_relay_serial(
+                        _manager_ref.all_devices(),
+                        serial,
+                        caps=caps,
                     )
-                    if ws_device is None:
-                        agents = [
-                            d for d in _manager_ref.all_devices()
-                            if d.serial != serial
-                            and getattr(d, "_agent_send", None) is not None
-                        ]
-                        if len(agents) == 1:
-                            ws_device = agents[0]
                     if ws_device is not None:
                         return ws_device
                     return _manager_ref.get_device(serial)
@@ -831,6 +870,19 @@ def create_app(
                         device.bind_relay_u2(serial, host=host)
                     except Exception as exc:
                         log.debug("relay u2 bind failed serial=%s: %s", serial, exc)
+
+                def _mark_relay_runtime_ready(device) -> None:
+                    if device is None:
+                        return
+                    from runtime.core.device_client import DeviceState
+
+                    if device.state in (
+                        DeviceState.DISCONNECTED,
+                        DeviceState.CONNECTING,
+                        DeviceState.ERROR,
+                        DeviceState.DEAD,
+                    ):
+                        device.on_agent_status({"state": "READY"})
 
                 async def _bootstrap_relay_device(serial: str, device) -> None:
                     """Bootstrap atx+u2 on agent-boot, then (re)bind cloud u2 session."""
@@ -860,47 +912,19 @@ def create_app(
 
                 def _on_relay_device_online(serial: str) -> None:
                     _emit_relay_fsm_online(serial)
-                    device_ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
+                    caps = (_relay_mgr_ref.get_capabilities(serial) or {}) if _relay_mgr_ref else {}
                     # Check if a WS-Agent device already exists for this IP.
                     # If so, reattach scrcpy for it (relay reconnect case).
-                    ws_device = next(
-                        (d for d in _manager_ref.all_devices()
-                         if d.serial != serial
-                         and (
-                             # Cloud/Docker (u2_always_tunnel=True): _u2_host is None,
-                             # match by _adb_serial which is set to "device_ip:5555".
-                             getattr(d, "_adb_serial", "").startswith(device_ip + ":")
-                             # Exact match for USB ADB serials (no colon in serial).
-                             or getattr(d, "_adb_serial", "") == serial
-                             # Local/LAN fallback: _u2_host == device_ip (legacy).
-                             or getattr(d, "_u2_host", None) == device_ip
-                         )),
-                        None,
+                    ws_device = _find_ws_device_for_relay_serial(
+                        _manager_ref.all_devices(),
+                        serial,
+                        caps=caps,
                     )
-                    # Relay often registers before NAT hello copies hardware serial onto
-                    # _adb_serial; tunnel mode leaves _u2_host=None — primary matcher misses.
-                    # Scrcpy would then attach only to a relay-slot client (wrong serial);
-                    # the dashboard shows the QR/logical device → black video.
-                    if ws_device is None:
-                        agents = [
-                            d for d in _manager_ref.all_devices()
-                            if d.serial != serial
-                            and getattr(d, "_agent_send", None) is not None
-                        ]
-                        if len(agents) == 1:
-                            ws_device = agents[0]
-                            log.info(
-                                "relay device online %s — lone WS-Agent match %s "
-                                "(pre-NAT _adb_serial / tunnel u2 host)",
-                                serial,
-                                ws_device.serial,
-                            )
                     if ws_device is not None:
                         current_adb_serial = str(getattr(ws_device, "_adb_serial", "") or "")
-                        # Sticky mapping: when one WS device is "lone match" for multiple
-                        # relay serials (e.g. dual devices .83/.86), do not thrash scrcpy
-                        # attach between serials. Keep whichever relay serial is already
-                        # selected on the device unless this is the first bind.
+                        # Sticky mapping: if a logical device already has an explicit
+                        # relay identity, do not thrash scrcpy attach between serials.
+                        # Keep the selected relay serial unless this is the first bind.
                         if current_adb_serial and current_adb_serial != serial:
                             log.info(
                                 "relay device online %s — skip reattach for WS device %s "
@@ -943,7 +967,7 @@ def create_app(
                                 "relay device online %s — skip scrcpy reattach (auto_attach_scrcpy_on_relay_online=false)",
                                 serial,
                             )
-                        caps = (_relay_mgr_ref.get_capabilities(serial) or {}) if _relay_mgr_ref else {}
+                        _mark_relay_runtime_ready(ws_device)
                         _bind_relay_u2(ws_device, serial, caps=caps)
                         _schedule_relay_bootstrap(serial, ws_device, is_new=False)
                         return
@@ -954,10 +978,7 @@ def create_app(
                     # Set READY immediately — relay reports it as online.
                     # Relay-only devices have no WS-Agent APK to call on_agent_status(),
                     # so without this the device stays DISCONNECTED and frontend shows "Offline".
-                    from runtime.core.device_client import DeviceState
-                    if device.state in (DeviceState.DISCONNECTED, DeviceState.CONNECTING):
-                        device.on_agent_status({"state": "READY"})
-                    caps = (_relay_mgr_ref.get_capabilities(serial) or {}) if _relay_mgr_ref else {}
+                    _mark_relay_runtime_ready(device)
                     _bind_relay_u2(device, serial, caps=caps)
                     _schedule_relay_bootstrap(serial, device, is_new=is_new)
                     if is_new:
@@ -995,7 +1016,7 @@ def create_app(
                     hw = str(caps.get("hardware_serial") or "").strip() or None
                     _emit_relay_fsm_online(serial, hardware_serial=hw)
 
-                    device = _find_device_for_relay_serial(serial)
+                    device = _find_device_for_relay_serial(serial, caps=caps)
                     if device is None:
                         return
                     device.on_agent_status({

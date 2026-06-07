@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/alert-dialog';
 import { ControlRecordMirror } from './control-record/control-record-mirror';
 import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
-import { ManualControlBlockedBanner } from './control-record/manual-control-blocked-banner';
 import { MultiDevicePicker } from './control-record/multi-device-picker';
 import { MultiDeviceStage } from './control-record/multi-device-stage';
 import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
@@ -126,6 +125,7 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
+import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   campaignPerDeviceOverrides,
   campaignVariables,
@@ -181,6 +181,12 @@ import {
   deviceSelectFullTitle,
   formatDeviceSelectLabel
 } from '@/features/devices/lib/device-select-label';
+import {
+  getActiveMultiSerials,
+  getRenderSafeFollowerSerials,
+  resetFollowersAfterPrimaryChange,
+  sanitizeMultiFollowerSerials
+} from '../lib/control-record-multi';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -258,6 +264,7 @@ export function ControlRecordView({
   returnTo
 }: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
+  const tDeviceOps = useTranslations('devicesControlRecord.deviceOps');
   const tOrg = useTranslations('orgScenariosFeature.detail');
   const tDv = useTranslations('components.deviceVarsJson');
   const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
@@ -273,6 +280,7 @@ export function ControlRecordView({
       initialOrgScenarioId
     );
   const hierarchyXml = hierarchy.xml;
+  const setHierarchyPaused = hierarchy.setPaused;
   const handleScreenTapRef = useRef<(rx: number, ry: number) => void>(() => {});
   const handleScreenSwipeRef = useRef<
     (
@@ -368,37 +376,49 @@ export function ControlRecordView({
   const [multiFollowerSerials, setMultiFollowerSerials] = useState<string[]>(
     []
   );
+  const previousPrimarySerialRef = useRef<string | null>(null);
   const [stepPickerOpen, setStepPickerOpen] = useState(true);
+  const selectedPrimarySerial = device.selectedDevice?.serial ?? null;
   const multiFollowerOptions = useMemo(
     () =>
       device.connectedDevices.filter(
-        (d) =>
-          d.serial !== device.selectedDevice?.serial &&
-          isManualControlEligible(d)
+        (d) => d.serial !== selectedPrimarySerial && isManualControlEligible(d)
       ),
-    [device.connectedDevices, device.selectedDevice?.serial]
+    [device.connectedDevices, selectedPrimarySerial]
   );
   useEffect(() => {
-    const allowed = new Set(multiFollowerOptions.map((d) => d.serial));
+    const allowed = multiFollowerOptions.map((d) => d.serial);
     setMultiFollowerSerials((prev) =>
-      prev
-        .filter((serial) => allowed.has(serial))
-        .slice(0, MAX_MULTI_FOLLOWER_DEVICES)
+      sanitizeMultiFollowerSerials(prev, allowed, MAX_MULTI_FOLLOWER_DEVICES)
     );
   }, [multiFollowerOptions]);
-  const activeMultiSerials = useMemo(() => {
-    const primary = device.selectedDevice?.serial;
-    if (!primary) return [];
-    return [
-      primary,
-      ...multiFollowerSerials.filter((serial) => serial !== primary)
-    ];
-  }, [device.selectedDevice?.serial, multiFollowerSerials]);
+  const renderSafeFollowerSerials = useMemo(
+    () =>
+      getRenderSafeFollowerSerials(
+        previousPrimarySerialRef.current,
+        selectedPrimarySerial,
+        multiFollowerSerials
+      ),
+    [selectedPrimarySerial, multiFollowerSerials]
+  );
+  useEffect(() => {
+    const nextPrimary = selectedPrimarySerial;
+    const previousPrimary = previousPrimarySerialRef.current;
+    setMultiFollowerSerials((prev) =>
+      resetFollowersAfterPrimaryChange(previousPrimary, nextPrimary, prev)
+    );
+    previousPrimarySerialRef.current = nextPrimary;
+  }, [selectedPrimarySerial]);
+  const activeMultiSerials = useMemo(
+    () =>
+      getActiveMultiSerials(selectedPrimarySerial, renderSafeFollowerSerials),
+    [selectedPrimarySerial, renderSafeFollowerSerials]
+  );
   const selectedMultiFollowerDevices = useMemo(() => {
-    const selected = new Set(multiFollowerSerials);
+    const selected = new Set(renderSafeFollowerSerials);
     return device.connectedDevices.filter((d) => selected.has(d.serial));
-  }, [device.connectedDevices, multiFollowerSerials]);
-  const hasMultiFollowers = multiFollowerSerials.length > 0;
+  }, [device.connectedDevices, renderSafeFollowerSerials]);
+  const hasMultiFollowers = renderSafeFollowerSerials.length > 0;
   const multiFocusMode = hasMultiFollowers && !stepPickerOpen && !playerMode;
   const showEditorPanel = !hasMultiFollowers || stepPickerOpen || playerMode;
   const treePanelOpen = safeHierarchy && !leftCollapsed && !hasMultiFollowers;
@@ -441,17 +461,19 @@ export function ControlRecordView({
   const [flowSelectedFgId, setFlowSelectedFgId] = useState<string | null>(null);
   const [flowDetailStep, setFlowDetailStep] = useState<FlowStep | null>(null);
 
-  // Template picker: fetched lazily only when the empty-state view is shown
-  // (see below — hook is called unconditionally; React-Query is cheap to keep
-  // alive). `previewTemplate` holds the template being inspected before load.
-  const templatesQuery = useScenarioTemplates();
+  const showTemplatePicker = steps.items.length === 0;
+  const templatesQuery = useScenarioTemplates(undefined, {
+    enabled: showTemplatePicker
+  });
   const [previewTemplate, setPreviewTemplate] =
     useState<ScenarioTemplateOut | null>(null);
 
   // Account-group picker for the Save dialog. `'_none'` = do not bind.
   // On open, we hydrate from editingContext so a user returning to edit a
   // scenario sees the already-bound group pre-selected.
-  const { data: accountGroups = [] } = useAccountGroups();
+  const { data: accountGroups = [] } = useAccountGroups(undefined, {
+    enabled: save.dialogOpen
+  });
   const [saveAccountGroupId, setSaveAccountGroupId] = useState<string>('');
   useEffect(() => {
     if (save.editingContext?.accountGroupId) {
@@ -549,8 +571,6 @@ export function ControlRecordView({
   // Hard stop on unmount: abort in-flight previews and cancel server-side.
   useEffect(() => {
     const hardStop = () => {
-      stepRunAbortRef.current?.abort();
-      flowRunLeafAbortRef.current?.abort();
       const active = previewSession.takeActiveForCancel();
       const serial = selectedSerialForStopRef.current;
       if (active) {
@@ -561,6 +581,8 @@ export function ControlRecordView({
       } else if (serial) {
         interruptDevice(serial).catch(() => undefined);
       }
+      stepRunAbortRef.current?.abort();
+      flowRunLeafAbortRef.current?.abort();
     };
     const onPageHide = () => hardStop();
     window.addEventListener('pagehide', onPageHide);
@@ -573,11 +595,9 @@ export function ControlRecordView({
   const handleStopInlineRun = useCallback(() => {
     // Three-pronged stop so the scenario exits quickly regardless of where
     // the executor is stuck:
-    //   1) abort() closes the SSE fetch → server notices disconnect (~100ms)
-    //   2) explicit cancel route sets cancel_event immediately (no polling lag)
-    //   3) interrupt also cancels any preview without a captured trace_id
-    stepRunAbortRef.current?.abort();
-    flowRunLeafAbortRef.current?.abort();
+    //   1) explicit cancel route sets cancel_event immediately (no polling lag)
+    //   2) interrupt also cancels any preview without a captured trace_id
+    //   3) abort() closes the SSE fetch after the server has been signalled
     const serial = device.selectedDevice?.serial?.trim();
     const active = previewSession.takeActiveForCancel();
     if (active) {
@@ -586,6 +606,8 @@ export function ControlRecordView({
     } else if (serial) {
       interruptDevice(serial).catch(() => undefined);
     }
+    stepRunAbortRef.current?.abort();
+    flowRunLeafAbortRef.current?.abort();
     flowRunningFgIdsRef.current.clear();
     const hadRunning =
       Object.values(stepRunStates).some((st) => st === 'running') ||
@@ -623,13 +645,23 @@ export function ControlRecordView({
     [stepRunStates, flowRunStates]
   );
   const previewBlocking = playerPlaying || inlinePreviewRunning;
+  useEffect(() => {
+    setHierarchyPaused(previewBlocking);
+  }, [setHierarchyPaused, previewBlocking]);
+  const stopPreviewIfActive = useCallback(() => {
+    if (!playerPlaying && !inlinePreviewRunning && !activePreviewRef.current) {
+      return;
+    }
+    stopPlayerRef.current?.();
+    handleStopInlineRun();
+  }, [handleStopInlineRun, inlinePreviewRunning, playerPlaying]);
 
   const deviceSelectValue = useMemo(() => {
     const serial = device.selectedSerial;
-    if (!serial) return undefined;
+    if (!serial) return '';
     return device.connectedDevices.some((d) => d.serial === serial)
       ? serial
-      : undefined;
+      : '';
   }, [device.selectedSerial, device.connectedDevices]);
 
   const handleFlowStepsChange = useCallback(
@@ -644,32 +676,13 @@ export function ControlRecordView({
     [steps]
   );
 
-  const handlePlayerPlayingChange = useCallback(
-    (playing: boolean) => {
-      hierarchy.setPaused(playing);
-      setPlayerPlaying(playing);
-    },
-    [hierarchy.setPaused]
-  );
+  const handlePlayerPlayingChange = useCallback((playing: boolean) => {
+    setPlayerPlaying(playing);
+  }, []);
 
   const registerPlayerStop = useCallback((fn: (() => void) | null) => {
     stopPlayerRef.current = fn;
   }, []);
-
-  const mirrorBusyBanner = useMemo(() => {
-    const d = device.selectedDevice;
-    if (!d) return null;
-    const blocked =
-      (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
-      (d.scenario_active ?? 0) > 0;
-    if (!blocked) return null;
-    return (
-      <ManualControlBlockedBanner
-        canTakeControl={canExecuteDevice}
-        onTakeControl={() => setTakeoverDialogOpen(true)}
-      />
-    );
-  }, [canExecuteDevice, device.selectedDevice]);
 
   const handleTakeoverConfirm = useCallback(async () => {
     const serial = device.selectedDevice?.serial?.trim();
@@ -778,15 +791,16 @@ export function ControlRecordView({
   const selectedSerial = device.selectedDevice?.serial ?? null;
   const { currentOrg } = useOrganization();
   const controlRecordOrgId = currentOrg?.id ?? null;
+  const tabActive = useTabNetworkActive();
   const devicesQuery = useQuery({
     queryKey: ['control-record-device-map', controlRecordOrgId],
     queryFn: devicesApi.list,
-    enabled: Boolean(controlRecordOrgId),
+    enabled: Boolean(controlRecordOrgId) && tabActive,
     staleTime: 15_000
   });
   const campaignDevicesQuery = useQuery({
     queryKey: ['campaign-devices', activeCampaignId],
-    enabled: !!activeCampaignId,
+    enabled: !!activeCampaignId && tabActive,
     queryFn: () => campaignsApi.getDevices(activeCampaignId!)
   });
   const selectedDeviceId = useMemo(() => {
@@ -833,7 +847,10 @@ export function ControlRecordView({
   );
   const campaignForGlobalVarsQuery = useQuery({
     queryKey: ['campaign', activeCampaignId, 'global-vars-preview'],
-    enabled: !!activeCampaignId && (deviceVarDialogOpen || canManageDeviceVars),
+    enabled:
+      tabActive &&
+      !!activeCampaignId &&
+      (deviceVarDialogOpen || canManageDeviceVars),
     queryFn: () => campaignsApi.get(activeCampaignId!),
     staleTime: 30_000
   });
@@ -934,6 +951,7 @@ export function ControlRecordView({
       selectedScenarioDeviceId
     ],
     enabled:
+      tabActive &&
       deviceVarDialogOpen &&
       !!activeCampaignId &&
       !!activeScenarioId &&
@@ -1849,27 +1867,29 @@ export function ControlRecordView({
     const blocked =
       (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
       (d.scenario_active ?? 0) > 0;
-    return { hideControls: blocked, readOnlyPreview: blocked };
+    // Keep the control rail visible; only block tap/swipe on the live mirror.
+    return { hideControls: false, readOnlyPreview: blocked };
   }, [device.selectedDevice]);
 
   const mirrorDeviceOps = useMemo((): DeviceOpsConfig | undefined => {
     const d = device.selectedDevice;
     if (!d) return undefined;
     return {
-      disabled: mirrorInputLocked.hideControls,
+      disabled: mirrorInputLocked.readOnlyPreview,
       defaultPackage: packageFromCurrentApp(d.current_app),
       onRunStep: runDeviceOpStep,
       onRunShell: (cmd) => runAgentShell(d.serial, cmd),
       onInstallApk: (url) => {
         record.wsSend({ type: 'install', serial: d.serial, url });
-        toast.info(`Đang cài APK lên ${d.serial}…`);
+        toast.info(tDeviceOps('installApkRunning', { serial: d.serial }));
       }
     };
   }, [
     device.selectedDevice,
-    mirrorInputLocked.hideControls,
+    mirrorInputLocked.readOnlyPreview,
     record,
-    runDeviceOpStep
+    runDeviceOpStep,
+    tDeviceOps
   ]);
 
   // ── Error / empty states ─────────────────────────────────────────────────
@@ -2344,7 +2364,8 @@ export function ControlRecordView({
                     hideControls={mirrorInputLocked.hideControls}
                     hideDeviceFunctions={mirrorInputLocked.hideControls}
                     readOnlyPreview={mirrorInputLocked.readOnlyPreview}
-                    busyBanner={mirrorBusyBanner}
+                    canTakeControl={canExecuteDevice}
+                    onTakeControl={() => setTakeoverDialogOpen(true)}
                     mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
                     deviceOps={mirrorDeviceOps}
                   />
@@ -2369,7 +2390,8 @@ export function ControlRecordView({
                   hideControls={mirrorInputLocked.hideControls}
                   hideDeviceFunctions={mirrorInputLocked.hideControls}
                   readOnlyPreview={mirrorInputLocked.readOnlyPreview}
-                  busyBanner={mirrorBusyBanner}
+                  canTakeControl={canExecuteDevice}
+                  onTakeControl={() => setTakeoverDialogOpen(true)}
                   deviceOps={mirrorDeviceOps}
                 />
               </div>
@@ -3282,7 +3304,10 @@ export function ControlRecordView({
       <Dialog
         open={previewTemplate !== null}
         onOpenChange={(o) => {
-          if (!o) setPreviewTemplate(null);
+          if (!o) {
+            stopPreviewIfActive();
+            setPreviewTemplate(null);
+          }
         }}
       >
         <DialogContent className='max-w-xl'>
@@ -3361,13 +3386,17 @@ export function ControlRecordView({
                 <Button
                   variant='outline'
                   size='sm'
-                  onClick={() => setPreviewTemplate(null)}
+                  onClick={() => {
+                    stopPreviewIfActive();
+                    setPreviewTemplate(null);
+                  }}
                 >
                   {t('emptyNodePicker.templateCancel')}
                 </Button>
                 <Button
                   size='sm'
                   onClick={() => {
+                    stopPreviewIfActive();
                     const tpl = previewTemplate;
                     if (!tpl) return;
                     setScenarioVariables((prev) =>

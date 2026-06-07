@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from unittest.mock import patch
@@ -92,6 +94,20 @@ class _SessionFakeExecutor(_FakeExecutor):
     async def with_session(self, serial: str, coro):
         self.session_scope_calls += 1
         return await coro()
+
+
+class _CancelAfterFirstSwipeExecutor(_FakeExecutor):
+    def __init__(self, cancel_event: asyncio.Event, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.cancel_event = cancel_event
+        self.swipes = 0
+
+    async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        result = await super().run_batch(serial, actions, early_exit=early_exit)
+        if any(action.get("op") == "swipe" for action in actions):
+            self.swipes += 1
+            self.cancel_event.set()
+        return result
 
 
 def test_looks_like_hierarchy_xml() -> None:
@@ -369,6 +385,32 @@ async def test_collect_fb_comments_honors_explicit_deep_scroll_context() -> None
 
 
 @pytest.mark.asyncio
+async def test_collect_fb_comments_stops_when_cancel_event_is_set() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    cancel_event = asyncio.Event()
+    exec_ = _CancelAfterFirstSwipeExecutor(cancel_event, xml=_sheet_xml())
+
+    with pytest.raises(asyncio.CancelledError):
+        await collect_xml_snapshots(
+            exec_,
+            "dev1",
+            "fb_comments",
+            {
+                "_cancel_event": cancel_event,
+                "comment_scroll_passes": 48,
+                "comment_swipes_per_dump": 3,
+                "comment_no_growth_break": 3,
+                "min_comment_scan_passes": 2,
+                "comment_scroll_pause_s": 0,
+                "comment_recover_chrome": False,
+            },
+        )
+
+    assert exec_.swipes == 1
+
+
+@pytest.mark.asyncio
 async def test_expand_xml_fallback_when_selector_misses() -> None:
     exec_ = _SeeMoreOnceExecutor(xml=_SEE_MORE_XML)
 
@@ -508,7 +550,7 @@ async def test_comment_target_does_not_use_global_selector_fallback_by_default()
 
 
 @pytest.mark.asyncio
-async def test_post_open_default_u2_click_timeout_is_fast() -> None:
+async def test_post_open_defaults_to_coordinate_tap() -> None:
     exec_ = _FakeExecutor()
     target = {
         "bounds": [100, 200, 500, 260],
@@ -519,8 +561,36 @@ async def test_post_open_default_u2_click_timeout_is_fast() -> None:
     ok, route = await _u2_click_post_open_target(exec_, "dev1", target, {})
 
     assert ok is True
-    assert route == "click_spec"
-    assert exec_.batches[0][0]["timeout"] == 0.35
+    assert route == "click_coord"
+    assert exec_.clicks == [(240, 230)]
+
+
+@pytest.mark.asyncio
+async def test_post_open_u2_click_is_explicit_fallback_only() -> None:
+    exec_ = _SpecMissExecutor()
+    target = {
+        "bounds": [100, 200, 500, 260],
+        "tap_kind": "timestamp",
+        "u2_click": {"spec": {"text": "5 giờ"}},
+    }
+
+    async def _coord_miss(_executor, serial: str, x: int, y: int) -> bool:
+        exec_.clicks.append((x, y))
+        return False
+
+    with patch("relay.extra_data.collector._u2_click", side_effect=_coord_miss):
+        ok, route = await _u2_click_post_open_target(
+            exec_,
+            "dev1",
+            target,
+            {"post_open_u2_click": True},
+        )
+
+    assert ok is False
+    assert route == "tap_failed"
+    assert exec_.clicks == [(240, 230)]
+    assert exec_.batches[0][0]["op"] == "click_spec"
+    assert exec_.batches[0][0]["timeout"] == 0.25
 
 
 @pytest.mark.asyncio
@@ -795,6 +865,100 @@ async def test_open_post_success_returns_opened_post_metadata() -> None:
         "timestamp": "5 ngày",
         "text_prefix": "opened post body",
     }
+
+
+@pytest.mark.asyncio
+async def test_open_post_uses_comment_sheet_for_extract_without_marking_detail_ok() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][280,504]" clickable="true"/>
+      <node content-desc="Post body" bounds="[36,520][1044,700]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    comment_sheet_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Quay lại" bounds="[0,80][120,160]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,400][1080,2350]">
+    <node bounds="[0,420][1080,900]">
+      <node text="Phù hợp nhất" bounds="[40,450][400,500]" />
+      <node text="Commenter" bounds="[40,520][300,560]" />
+      <node text="Comment body" bounds="[40,560][1000,620]" />
+    </node>
+  </node>
+</hierarchy>"""
+    exec_._dump_xml = comment_sheet_xml
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+    }
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        return_value=False,
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == comment_sheet_xml
+    assert diag["reason_code"] == "comment_sheet"
+    assert diag["attempts"][0]["comment_sheet_opened"] is True
+    assert ctx.get("open_post_detail") is True
+    assert exec_.press_back_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_collect_post_open_comment_sheet_skips_post_expand() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node text="feed"/>
+  </node>
+</hierarchy>"""
+    comment_sheet_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Quay lại" bounds="[0,80][120,160]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,400][1080,2350]">
+    <node text="Phù hợp nhất" bounds="[40,450][400,500]" />
+    <node text="Commenter" bounds="[40,520][300,560]" />
+    <node text="Comment body" bounds="[40,560][1000,620]" />
+  </node>
+</hierarchy>"""
+    exec_._dump_xml = feed_xml
+    ctx: dict = {"open_post_before_extract": True, "expand_see_more": True}
+
+    async def _opened_comment_sheet(*args, **kwargs):
+        return comment_sheet_xml, {"reason_code": "comment_sheet"}
+
+    async def _unexpected_expand(*args, **kwargs):
+        raise AssertionError("post expand should be skipped on comment sheet")
+
+    with patch(
+        "relay.extra_data.collector._maybe_open_fb_post_detail",
+        new=_opened_comment_sheet,
+    ), patch(
+        "relay.extra_data.collector.expand_see_more_via_u2",
+        new=_unexpected_expand,
+    ):
+        snapshots, err = await collect_xml_snapshots(exec_, "dev1", "fb_posts", ctx)
+
+    assert err is None
+    assert snapshots == [comment_sheet_xml]
+    assert ctx["expand_see_more_skipped"] == "comment_sheet"
 
 
 @pytest.mark.asyncio

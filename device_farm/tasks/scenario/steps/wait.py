@@ -29,8 +29,16 @@ def handle_wait(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     _CHUNK = 0.2
     while time.monotonic() < deadline:
         if sc.cancel_event is not None and sc.cancel_event.is_set():
-            break
-        time.sleep(min(_CHUNK, max(0.0, deadline - time.monotonic())))
+            result["ok"] = False
+            result["message"] = "wait: cancelled by user"
+            result["cancelled"] = True
+            return
+        wait_s = min(_CHUNK, max(0.0, deadline - time.monotonic()))
+        if sc.cancel_event is not None and sc.cancel_event.wait(wait_s):
+            result["ok"] = False
+            result["message"] = "wait: cancelled by user"
+            result["cancelled"] = True
+            return
 
 
 @register_step("wait_element")
@@ -85,7 +93,17 @@ def handle_assert_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, r
 def handle_wait_stable(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     ws_timeout = float(step.get("timeout", 5.0) or 5.0)
     ws_stable = float(step.get("stable_duration", 0.4) or 0.4)
-    stable = _wait_screen_stable(sc.device, timeout=ws_timeout, stable_duration=ws_stable)
+    stable = _wait_screen_stable(
+        sc.device,
+        timeout=ws_timeout,
+        stable_duration=ws_stable,
+        cancel_event=sc.cancel_event,
+    )
+    if sc.cancel_event is not None and sc.cancel_event.is_set():
+        result["ok"] = False
+        result["message"] = "wait_stable: cancelled by user"
+        result["cancelled"] = True
+        return
     result["message"] = f"wait_stable: {'stable' if stable else 'timed_out'}"
 
 
@@ -94,9 +112,17 @@ def handle_dismiss_popup(sc: ScenarioContext, step: Dict[str, Any], idx: int, re
     retries = int(step.get("retries", 3) or 3)
     dismissed_count = 0
     for _ in range(retries):
+        if sc.cancel_event is not None and sc.cancel_event.is_set():
+            result["ok"] = False
+            result["message"] = "dismiss_popup: cancelled by user"
+            result["cancelled"] = True
+            return
         if _auto_dismiss_popup(sc.device):
             dismissed_count += 1
-            time.sleep(0.3)
+            if sc.cancel_event is not None:
+                sc.cancel_event.wait(0.3)
+            else:
+                time.sleep(0.3)
         else:
             break
     result["message"] = f"dismiss_popup: dismissed {dismissed_count} popup(s)"

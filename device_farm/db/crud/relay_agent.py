@@ -216,17 +216,32 @@ async def mark_relay_offline(db: AsyncSession, relay_id: str) -> None:
     )
 
 
-async def list_relay_agents(db: AsyncSession, *, user_id: Optional[str] = None) -> list[RelayAgent]:
+async def list_relay_agents(
+    db: AsyncSession,
+    *,
+    user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+) -> list[RelayAgent]:
     stmt = select(RelayAgent).order_by(RelayAgent.connected_at.desc())
     if user_id is not None:
         stmt = stmt.where(RelayAgent.user_id == user_id)
+    if org_id is not None:
+        stmt = stmt.where(RelayAgent.org_id == org_id)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
-async def get_relay_agent(db: AsyncSession, relay_id: str, *, user_id: Optional[str] = None) -> Optional[RelayAgent]:
+async def get_relay_agent(
+    db: AsyncSession,
+    relay_id: str,
+    *,
+    user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+) -> Optional[RelayAgent]:
     stmt = select(RelayAgent).where(RelayAgent.relay_id == relay_id)
     if user_id is not None:
         stmt = stmt.where(RelayAgent.user_id == user_id)
+    if org_id is not None:
+        stmt = stmt.where(RelayAgent.org_id == org_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()

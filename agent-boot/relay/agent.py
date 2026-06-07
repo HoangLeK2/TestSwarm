@@ -209,6 +209,7 @@ class RelayAgent:
         # first stream is established (e.g. during the brief startup window).
         self._stream_tasks: TaskRegistry = TaskRegistry()
         self._extra_data_tasks: dict[str, asyncio.Task] = {}
+        self._extra_data_cancel_events: dict[str, asyncio.Event] = {}
         self._loop_watchdog: Optional[LoopWatchdog] = None
         self._runtime_stats: Optional[RuntimeStats] = None
 
@@ -908,6 +909,14 @@ class RelayAgent:
 
         elif mtype == "extra_data":
             req_id = str(msg.get("id", "") or "")
+            if req_id:
+                context = msg.get("context") if isinstance(msg.get("context"), dict) else {}
+                context = dict(context)
+                cancel_event = asyncio.Event()
+                context["_cancel_event"] = cancel_event
+                msg = dict(msg)
+                msg["context"] = context
+                self._extra_data_cancel_events[req_id] = cancel_event
             task = self._stream_tasks.add(
                 self._guarded(extra_data_sem(), self._handle_extra_data(msg, send_queue)),
                 name="extra-data",
@@ -915,7 +924,10 @@ class RelayAgent:
             if req_id:
                 self._extra_data_tasks[req_id] = task
                 task.add_done_callback(
-                    lambda _task, _req_id=req_id: self._extra_data_tasks.pop(_req_id, None)
+                    lambda _task, _req_id=req_id: (
+                        self._extra_data_tasks.pop(_req_id, None),
+                        self._extra_data_cancel_events.pop(_req_id, None),
+                    )
                 )
 
         elif mtype == "extra_data_cancel":
@@ -1562,6 +1574,7 @@ class RelayAgent:
             collect_fb_comment_filter_apply,
             collect_fb_comment_target_with_tap,
             collect_xml_snapshots,
+            strip_private_context,
         )
         from relay.extra_data.ingest import _parse_items
 
@@ -1626,7 +1639,7 @@ class RelayAgent:
                 # lxml parsing for ~MB hierarchies is pure-CPU; keep it off
                 # the event loop so heartbeats / gRPC sends are not delayed.
                 _, diagnostic = await loop.run_in_executor(
-                    cpu_executor(), _parse_items, parse_strategy, primary, context,
+                    cpu_executor(), _parse_items, parse_strategy, primary, strip_private_context(context),
                 )
                 reply["ok"] = True
                 reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
@@ -1658,10 +1671,11 @@ class RelayAgent:
             if screenshot_b64:
                 evidence["screenshot_b64"] = screenshot_b64
 
+            ingest_context = strip_private_context(context)
             payload = build_ingest_payload(
                 serial=serial,
                 strategy=strategy,
-                context=context,
+                context=ingest_context,
                 snapshots=snapshots,
                 request_id=req_id,
             )
@@ -1674,7 +1688,7 @@ class RelayAgent:
                 reply_ingest.pop("evidence_pending", None)
                 if screenshot_b64:
                     reply_ingest["screenshot_b64"] = screenshot_b64
-                if not bool(context.get("return_items")):
+                if not bool(ingest_context.get("return_items")):
                     reply_ingest.pop("items", None)
                 reply["ingest"] = reply_ingest
             else:
@@ -1688,9 +1702,12 @@ class RelayAgent:
     def _cancel_extra_data_task(self, req_id: str) -> bool:
         if not req_id:
             return False
+        event = self._extra_data_cancel_events.pop(req_id, None)
+        if event is not None:
+            event.set()
         task = self._extra_data_tasks.pop(req_id, None)
         if task is None or task.done():
-            return False
+            return event is not None
         task.cancel()
         logger.info("extra_data cancelled request_id=%s", req_id)
         return True

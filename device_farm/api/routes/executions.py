@@ -203,8 +203,26 @@ class DLQEntryOut(_BaseModel):
     close_reason: _Optional[str] = None
     replayed_to_execution_id: _Optional[str] = None
     artifact_refs: dict = Field(default_factory=dict)
+    display_message: str = ""
 
     model_config = {"from_attributes": True}
+
+
+async def _dlq_entries_to_out(db, entries) -> list[DLQEntryOut]:
+    from services.campaign.dlq_message import enrich_dlq_display_messages
+
+    messages = await enrich_dlq_display_messages(db, entries)
+    out: list[DLQEntryOut] = []
+    for entry, display_message in zip(entries, messages, strict=True):
+        row = DLQEntryOut.model_validate(entry)
+        row.display_message = display_message
+        out.append(row)
+    return out
+
+
+async def _dlq_entry_to_out(db, entry) -> DLQEntryOut:
+    rows = await _dlq_entries_to_out(db, [entry])
+    return rows[0]
 
 
 class DLQRetryBody(_BaseModel):
@@ -425,7 +443,7 @@ async def list_dlq(
         offset=max(offset, 0),
         limit=min(max(limit, 1), 200),
     )
-    return [DLQEntryOut.model_validate(e) for e in entries]
+    return await _dlq_entries_to_out(db, entries)
 
 
 @router.get(
@@ -497,7 +515,7 @@ async def get_dlq_by_execution(execution_id: str, db: DB, user: CurrentUser):
         )
     except DLQNotFoundError as exc:
         _raise_dlq_http(exc)
-    return DLQEntryOut.model_validate(entry)
+    return await _dlq_entry_to_out(db, entry)
 
 
 @router.post(
@@ -599,7 +617,7 @@ async def retry_dlq(
         _raise_dlq_http(exc)
 
     await db.commit()
-    return DLQEntryOut.model_validate(entry)
+    return await _dlq_entry_to_out(db, entry)
 
 
 @router.post(
@@ -625,7 +643,7 @@ async def close_dlq(dlq_id: str, body: DLQCloseBody, db: DB, user: CurrentUser):
     except DLQError as exc:
         _raise_dlq_http(exc)
     await db.commit()
-    return DLQEntryOut.model_validate(entry)
+    return await _dlq_entry_to_out(db, entry)
 
 
 @router.delete(

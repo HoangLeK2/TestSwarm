@@ -237,6 +237,18 @@ export const campaignsApi = {
         }
         return row;
       }),
+  runStats: (id: string) =>
+    farmApi
+      .get<{
+        total_devices: number;
+        passed: number;
+        failed: number;
+        running: number;
+        pending: number;
+        error: number;
+        total_content_items: number;
+      }>(`/campaigns/${encodeURIComponent(id)}/run-stats`)
+      .then((r) => r.data),
   patchEntity: (id: string, data: CampaignEntityUpdate) =>
     farmApi
       .patch<CampaignEntityOut>(`/campaigns/${id}`, data)

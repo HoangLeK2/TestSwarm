@@ -16,6 +16,25 @@ from services.scenario_selector import selector_summary, spec_eid
 log = logging.getLogger(__name__)
 
 
+def _cancelled(sc: ScenarioContext) -> bool:
+    return sc.cancel_event is not None and sc.cancel_event.is_set()
+
+
+def _mark_cancelled(result: Dict[str, Any], message: str) -> None:
+    result["ok"] = False
+    result["message"] = message
+    result["cancelled"] = True
+
+
+def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
+    if seconds <= 0:
+        return _cancelled(sc)
+    if sc.cancel_event is not None:
+        return bool(sc.cancel_event.wait(seconds))
+    time.sleep(seconds)
+    return False
+
+
 @register_step("input_text")
 def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     text = str(step.get("text") or "")
@@ -37,20 +56,39 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
     if d is None:
         device.ensure_u2_healthy()
         d = device.u2
+    if _cancelled(sc):
+        _mark_cancelled(result, "input_text: cancelled by user")
+        return
 
     typed = False
 
-    # Strategy 1: u2 setFastInputText
+    # Strategy 1: u2 send_keys — setText on focused field, then IME (Unicode OK on Android 14).
     if d is not None:
         try:
-            d._rpc("setFastInputText", text)
+            d.send_keys(text)
             typed = True
-            result["message"] = "input_text via u2 setFastInputText"
-            log.info(f"[{serial}] input_text: strategy 1 (setFastInputText) OK")
-        except Exception as fast_exc:
-            log.info(f"[{serial}] input_text: strategy 1 failed: {fast_exc}")
+            result["message"] = "input_text via u2 send_keys"
+            log.info(f"[{serial}] input_text: strategy 1 (send_keys) OK")
+        except Exception as u2_exc:
+            log.info(f"[{serial}] input_text: strategy 1 failed: {u2_exc}")
 
-    # Strategy 3: adb shell input text via relay
+    # Strategy 2: a11y ACTION_SET_TEXT via relay/STF (Unicode OK; no shell INJECT_EVENTS).
+    if _cancelled(sc):
+        _mark_cancelled(result, "input_text: cancelled by user")
+        return
+    if not typed:
+        try:
+            if device._a11y_mutate("type", {"text": text}, timeout=6.0):
+                typed = True
+                result["message"] = "input_text via a11y type"
+                log.info(f"[{serial}] input_text: strategy 2 (a11y type) OK")
+        except Exception as a11y_exc:
+            log.info(f"[{serial}] input_text: strategy 2 failed: {a11y_exc}")
+
+    # Strategy 3: adb shell input text via relay (ASCII only)
+    if _cancelled(sc):
+        _mark_cancelled(result, "input_text: cancelled by user")
+        return
     if not typed:
         is_ascii = all(ord(c) < 128 for c in text)
         if is_ascii:
@@ -81,13 +119,18 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
             except Exception as shell_exc:
                 log.info(f"[{serial}] input_text: strategy 3 failed: {shell_exc}")
 
-    # Strategy 4: agent paste
+    # Strategy 4: agent type (a11y ACTION_SET_TEXT; avoids paste→shell Unicode path on Android 14+).
+    if _cancelled(sc):
+        _mark_cancelled(result, "input_text: cancelled by user")
+        return
     if not typed and getattr(device, "_agent_send", None) is not None:
-        log.info(f"[{serial}] input_text: trying strategy 4 (agent paste)")
-        device._send_to_agent({"type": "paste", "text": text})
-        time.sleep(0.7)
+        log.info(f"[{serial}] input_text: trying strategy 4 (agent type)")
+        device._send_to_agent({"type": "type", "text": text})
+        if _wait_or_cancel(sc, 0.7):
+            _mark_cancelled(result, "input_text: cancelled by user")
+            return
         typed = True
-        result["message"] = "input_text via agent paste"
+        result["message"] = "input_text via agent type"
 
     if not typed:
         result["ok"] = False
@@ -120,11 +163,24 @@ def handle_input_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, r
             raise RuntimeError(f"element not visible after {iw_timeout:.0f}s: {lbl}")
         if isinstance(eid, dict):
             eid = eid.get("eid", spec_eid(spec))
+        if _cancelled(sc):
+            _mark_cancelled(result, "input_selector: cancelled by user")
+            return
         u2.element_click(eid)
-        time.sleep(0.3)
+        if _wait_or_cancel(sc, 0.3):
+            _mark_cancelled(result, "input_selector: cancelled by user")
+            return
         if clear_first:
+            if _cancelled(sc):
+                _mark_cancelled(result, "input_selector: cancelled by user")
+                return
             u2.clear_text()
-            time.sleep(0.3)
+            if _wait_or_cancel(sc, 0.3):
+                _mark_cancelled(result, "input_selector: cancelled by user")
+                return
+        if _cancelled(sc):
+            _mark_cancelled(result, "input_selector: cancelled by user")
+            return
         u2.send_keys(text)
         result["message"] = f"input_selector {lbl} → {text!r}"
     except Exception as exc:
@@ -136,8 +192,13 @@ def handle_input_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, r
 def handle_set_clipboard(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     text = str(step.get("text") or "")
     try:
+        if _cancelled(sc):
+            _mark_cancelled(result, "set_clipboard: cancelled by user")
+            return
         sc.device.set_clipboard(text)
-        time.sleep(0.3)
+        if _wait_or_cancel(sc, 0.3):
+            _mark_cancelled(result, "set_clipboard: cancelled by user")
+            return
         log.info(f"[{sc.serial}] set_clipboard: {len(text)} chars")
     except Exception as exc:
         result["ok"] = False

@@ -103,12 +103,22 @@ def _safe_activity_heartbeat(detail: str = "") -> None:
         activity.heartbeat(detail or "running")
 
 
+def _is_cancellation_exc(exc: BaseException) -> bool:
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+    with contextlib.suppress(ImportError):
+        from temporalio.exceptions import CancelledError as _TemporalCancelledError
+        return isinstance(exc, _TemporalCancelledError)
+    return False
+
+
 async def _to_thread_with_heartbeat(
     fn: Callable,
     *args: Any,
     heartbeat_interval: float = 5.0,
     cooperative_cancel_event: threading.Event | None = None,
     cancel_grace_s: float = 5.0,
+    execution_id: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Run a sync blocking function in the thread pool while sending Temporal heartbeats.
@@ -118,37 +128,81 @@ async def _to_thread_with_heartbeat(
     with CancelledError because no heartbeat arrives within the timeout window.
 
     heartbeat_interval should be well under heartbeat_timeout (default 5s vs 60s batch).
+
+    When *execution_id* is set, cooperative cancel also polls the runtime cancel flag
+    (set by execution_control on cancel) so activities can finish gracefully without
+    Temporal force-cancelling the asyncio task.
     """
+    thread_task: asyncio.Task[Any] | None = None
+
+    async def _maybe_signal_cancel() -> bool:
+        if cooperative_cancel_event is None:
+            return False
+        if cooperative_cancel_event.is_set():
+            return True
+        with contextlib.suppress(Exception):
+            if activity.is_cancelled():
+                cooperative_cancel_event.set()
+                return True
+        if execution_id:
+            with contextlib.suppress(Exception):
+                from services.execution_pause_flags import is_execution_cancelled_async
+                if await is_execution_cancelled_async(execution_id):
+                    cooperative_cancel_event.set()
+                    return True
+        return False
+
     async def _heartbeat_loop() -> None:
         n = 0
         while True:
             await asyncio.sleep(heartbeat_interval)
             _safe_activity_heartbeat(f"running:{n}")
+            await _maybe_signal_cancel()
             n += 1
+
+    async def _cancel_watcher() -> None:
+        while True:
+            await asyncio.sleep(0.25)
+            if await _maybe_signal_cancel():
+                return
+
+    async def _wait_for_thread_after_cancel() -> Any:
+        nonlocal thread_task
+        if cooperative_cancel_event is not None:
+            cooperative_cancel_event.set()
+        if thread_task is None:
+            raise asyncio.CancelledError()
+        return await asyncio.wait_for(asyncio.shield(thread_task), timeout=cancel_grace_s)
 
     # Emit one heartbeat immediately so short timeout windows don't expire
     # before the first sleep tick under high worker load.
     _safe_activity_heartbeat("running:start")
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    cancel_watch_task = asyncio.create_task(_cancel_watcher())
     thread_task = asyncio.create_task(asyncio.to_thread(functools.partial(fn, *args, **kwargs)))
     try:
-        return await thread_task
+        while not thread_task.done():
+            done, _pending = await asyncio.wait(
+                {thread_task, cancel_watch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if thread_task in done:
+                return thread_task.result()
+            # Cancel watcher fired — give the worker thread time to stop cooperatively.
+            return await _wait_for_thread_after_cancel()
+        return thread_task.result()
     except BaseException as exc:
-        try:
-            from temporalio.exceptions import CancelledError as _TemporalCancelledError
-            is_cancelled = isinstance(exc, (asyncio.CancelledError, _TemporalCancelledError))
-        except ImportError:
-            is_cancelled = isinstance(exc, asyncio.CancelledError)
-
-        if is_cancelled and cooperative_cancel_event is not None:
-            cooperative_cancel_event.set()
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                await asyncio.wait_for(asyncio.shield(thread_task), timeout=cancel_grace_s)
+        if _is_cancellation_exc(exc):
+            with contextlib.suppress(Exception, asyncio.CancelledError, asyncio.TimeoutError):
+                return await _wait_for_thread_after_cancel()
         raise
     finally:
         heartbeat_task.cancel()
+        cancel_watch_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await cancel_watch_task
 
 
 def _validate_serial(serial: str) -> None:
@@ -350,6 +404,7 @@ class DeviceActivities:
                 _var_ctx=var_ctx,
                 cancel_event=cancel_event,
                 cooperative_cancel_event=cancel_event,
+                execution_id=inp.execution_id,
             )
 
             # Extract the single step result
@@ -385,16 +440,8 @@ class DeviceActivities:
             )
 
         except BaseException as exc:
-            # Re-raise cancellation signals so Temporal can propagate them correctly.
-            # temporalio.exceptions.CancelledError inherits from Exception, so it must
-            # be explicitly re-raised before the generic handler converts it to StepResult.
-            try:
-                from temporalio.exceptions import CancelledError as _TemporalCancelledError
-                if isinstance(exc, (asyncio.CancelledError, _TemporalCancelledError)):
-                    raise
-            except ImportError:
-                if isinstance(exc, _asyncio.CancelledError):
-                    raise
+            if _is_cancellation_exc(exc):
+                raise
             if not isinstance(exc, Exception):
                 raise  # re-raise other BaseException (KeyboardInterrupt, SystemExit, etc.)
             log.error(
@@ -453,12 +500,22 @@ class DeviceActivities:
         )
         cancel_event = threading.Event()
 
-        from services.execution_pause_flags import is_execution_paused_async
+        from services.execution_pause_flags import is_execution_cancelled_async, is_execution_paused_async
 
         for batch_pos, (step, step_idx) in enumerate(zip(inp.steps, inp.step_indices)):
             _safe_activity_heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
             if activity.is_cancelled():
-                break
+                return DeviceActionBatchResult(
+                    results=results,
+                    first_failure_index=-1,
+                    cancelled_mid_batch=True,
+                )
+            if inp.execution_id and await is_execution_cancelled_async(inp.execution_id):
+                return DeviceActionBatchResult(
+                    results=results,
+                    first_failure_index=-1,
+                    cancelled_mid_batch=True,
+                )
             with contextlib.suppress(Exception):
                 device.ensure_u2_healthy(ping_timeout=2.0)
             if inp.execution_id and await is_execution_paused_async(inp.execution_id):
@@ -484,7 +541,20 @@ class DeviceActivities:
                     _var_ctx=var_ctx,
                     cancel_event=cancel_event,
                     cooperative_cancel_event=cancel_event,
+                    execution_id=inp.execution_id,
                 )
+                if cancel_event.is_set() or (
+                    inp.execution_id and await is_execution_cancelled_async(inp.execution_id)
+                ):
+                    log.info(
+                        "[%s] batch cooperatively cancelled at step#%d (%s) pos=%d/%d",
+                        inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
+                    )
+                    return DeviceActionBatchResult(
+                        results=results,
+                        first_failure_index=-1,
+                        cancelled_mid_batch=True,
+                    )
                 step_results = result.get("step_results", [])
                 if step_results:
                     sr = step_results[0]
@@ -506,30 +576,16 @@ class DeviceActivities:
                         "message": result.get("failed_message") or "",
                     }
             except BaseException as exc:
-                # Keep Temporal cancellation semantics (timeout/cancel) intact.
-                try:
-                    from temporalio.exceptions import CancelledError as _TemporalCancelledError
-                    if isinstance(exc, (asyncio.CancelledError, _TemporalCancelledError)):
-                        log.warning(
-                            "[%s] batch activity cancelled at step#%d (%s) pos=%d/%d",
-                            inp.device_serial,
-                            step_idx,
-                            step_type,
-                            batch_pos,
-                            len(inp.steps),
-                        )
-                        raise
-                except ImportError:
-                    if isinstance(exc, asyncio.CancelledError):
-                        log.warning(
-                            "[%s] batch activity cancelled at step#%d (%s) pos=%d/%d",
-                            inp.device_serial,
-                            step_idx,
-                            step_type,
-                            batch_pos,
-                            len(inp.steps),
-                        )
-                        raise
+                if _is_cancellation_exc(exc):
+                    log.info(
+                        "[%s] batch activity cooperatively cancelled at step#%d (%s) pos=%d/%d",
+                        inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
+                    )
+                    return DeviceActionBatchResult(
+                        results=results,
+                        first_failure_index=-1,
+                        cancelled_mid_batch=True,
+                    )
                 if not isinstance(exc, Exception):
                     raise
                 log.error("[%s] batch step#%d (%s): %s", inp.device_serial, step_idx, step_type, exc)
@@ -665,10 +721,17 @@ class DeviceActivities:
                 async def _pause_monitor() -> None:
                     if not inp.execution_id:
                         return
-                    from services.execution_pause_flags import is_execution_paused_async
+                    from services.execution_pause_flags import (
+                        is_execution_cancelled_async,
+                        is_execution_paused_async,
+                    )
 
                     while not cancel_event.is_set():
                         if activity.is_cancelled():
+                            stop_reason["reason"] = "cancelled"
+                            cancel_event.set()
+                            return
+                        if await is_execution_cancelled_async(inp.execution_id):
                             stop_reason["reason"] = "cancelled"
                             cancel_event.set()
                             return
@@ -691,6 +754,7 @@ class DeviceActivities:
                         result=edge_result,
                         cancel_event=cancel_event,
                         cooperative_cancel_event=cancel_event,
+                        execution_id=inp.execution_id,
                     )
                 finally:
                     pause_task.cancel()
@@ -895,6 +959,7 @@ class DeviceActivities:
             execution_id = inp.get("execution_id") or inp.get("run_id")
             device_serial = inp.get("device_serial")
             step_results = inp.get("step_results") or []
+            workflow_failed_message = (inp.get("failed_message") or "").strip() or None
 
         activity.heartbeat("finalize_campaign")
 
@@ -961,7 +1026,7 @@ class DeviceActivities:
                                 from services.campaign.dlq_service import open_dlq_for_failed_execution
 
                                 error_msg = (
-                                    failed_steps[-1].get("message") if failed_steps else None
+                                    failed_steps[-1].get("message") if failed_steps else workflow_failed_message
                                 )
                                 await open_dlq_for_failed_execution(
                                     db,

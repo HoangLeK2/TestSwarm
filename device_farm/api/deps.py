@@ -36,6 +36,16 @@ async def _get_db() -> AsyncGenerator[AsyncSession, None]:
 DB = Annotated[AsyncSession, Depends(_get_db)]
 
 
+async def _release_request_read_transaction(db: AsyncSession) -> None:
+    """Return a read-only auth/RBAC connection to the pool before route work."""
+    try:
+        in_transaction = bool(db.in_transaction())
+    except Exception:
+        return
+    if in_transaction:
+        await db.commit()
+
+
 def _auth_http_401(exc: AuthError) -> HTTPException:
     detail: str | dict = (
         {"code": exc.code}
@@ -149,6 +159,7 @@ async def _get_current_user(
     except Exception:
         # Still scope ORM to default workspace when role resolution fails.
         _apply_user_org_context(user, get_user_default_org_id(user))
+    await _release_request_read_transaction(db)
     return user
 
 
@@ -189,6 +200,7 @@ def require_permission(obj: str, act: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"code": "FORBIDDEN_ROLE", "required": f"{obj}:{act}"},
             )
+        await _release_request_read_transaction(db)
 
     return _require_permission
 
@@ -239,6 +251,8 @@ async def _current_user_from_request(request: Request, db: AsyncSession) -> User
     try:
         org_id = await _resolve_effective_org_id(request, db, user)
         _apply_user_org_context(user, org_id)
+        request.state.user_id = str(user.id)
+        request.state.org_id = org_id
         user.org_role = await repo.get_organization_role_for_user(  # type: ignore[attr-defined]
             db, user.id, org_id
         )
@@ -246,6 +260,7 @@ async def _current_user_from_request(request: Request, db: AsyncSession) -> User
         raise
     except Exception:
         pass
+    await _release_request_read_transaction(db)
     return user
 
 
@@ -270,6 +285,7 @@ def require_request_permission(db_enabled: bool, obj: str, act: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Permission denied",
             )
+        await _release_request_read_transaction(db)
 
     return _require_request_permission
 

@@ -12,7 +12,7 @@ import {
 import Link from 'next/link';
 import type { Device, DeviceFarmStreamingConfig } from '../types';
 import { serialToId } from '../helpers';
-import { deviceFarmBackendBase, farmApi } from '@/lib/farm-api';
+import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import { ROUTES } from '@/config/routes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,10 +30,15 @@ import {
   subscribeDeviceFarm
 } from '../services/ws';
 import { Badge } from '@/components/ui/badge';
+import { useTabNetworkActive } from '../hooks/use-tab-network-active';
+import {
+  attachScrcpyStream,
+  detachScrcpyStream
+} from '../services/scrcpy-stream';
 
-/** When true (default), grid tiles load MJPEG/H264 immediately for active devices (no scroll-to-load). Set NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER=0 to restore lazy viewport loading. */
+/** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
-  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '1').trim() !==
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '0').trim() !==
   '0';
 
 const gridH264Slots = new Set<string>();
@@ -117,6 +122,8 @@ function DeviceTilePreviewInner({
   }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const attachedScrcpySerialRef = useRef<string | null>(null);
+  const tabActive = useTabNetworkActive();
   const [hasFrame, setHasFrame] = useState(false);
   const [mjpegFailed, setMjpegFailed] = useState(false);
   const [mjpegAttempt, setMjpegAttempt] = useState(0);
@@ -124,11 +131,12 @@ function DeviceTilePreviewInner({
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
   const [h264Active, setH264Active] = useState(false);
   const [hasH264Slot, setHasH264Slot] = useState(false);
-  const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [h264Suppressed, setH264Suppressed] = useState(false);
   const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({
     startedAt: 0,
     frames: 0
   });
+  const h264BlackStreakRef = useRef(0);
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -140,7 +148,8 @@ function DeviceTilePreviewInner({
     return undefined;
   }, [inView]);
 
-  const loadStream = GRID_PREVIEW_EAGER ? isActive : lazyLoadStream;
+  const loadStream =
+    tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
 
   const previewFps = useMemo(() => {
     const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 8);
@@ -167,6 +176,7 @@ function DeviceTilePreviewInner({
   const wantsH264 =
     isActive &&
     loadStream &&
+    !h264Suppressed &&
     (streamingConfig === null ||
       streamingConfig.mode !== 'continuous' ||
       relayStreamOn);
@@ -191,13 +201,14 @@ function DeviceTilePreviewInner({
     };
   }, [device.serial, gridH264Limit, wantsH264]);
 
-  const allowH264 = wantsH264 && hasH264Slot;
+  const allowH264 = wantsH264 && hasH264Slot && !h264Suppressed;
 
   const mjpegUrl = useMemo(() => {
+    if (!tabActive) return null;
     if (!isActive || !serverAllowPreviewMjpeg) return null;
     // Keep MJPEG as fallback until H264 is actually rendering (same as control mirror).
     if (allowH264 && h264Active) return null;
-    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
+    const base = `${deviceFarmMediaBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
     const token = tokenStorage.getAuthToken();
     const withAuth = token
       ? `${base}&token=${encodeURIComponent(token)}`
@@ -210,6 +221,7 @@ function DeviceTilePreviewInner({
     isActive,
     mjpegAttempt,
     previewFps,
+    tabActive,
     serverAllowPreviewMjpeg
   ]);
 
@@ -252,25 +264,30 @@ function DeviceTilePreviewInner({
 
   // Viewer-gated streaming: attach on mount (when we have an H264 slot), detach on cleanup.
   useEffect(() => {
-    if (!isContinuous || !isActive) return;
-    if (!allowH264) return;
-    if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
-    if (streamingConfig.autoAttachScrcpy !== false) return;
-    if (!relayStreamOn) return;
+    const shouldAttach =
+      tabActive &&
+      isContinuous &&
+      isActive &&
+      allowH264 &&
+      streamingConfig?.mode === 'continuous' &&
+      streamingConfig?.autoAttachScrcpy === false &&
+      relayStreamOn;
+    if (!shouldAttach) return;
 
     let detachScheduled = false;
     const serial = device.serial;
+    if (attachedScrcpySerialRef.current === serial) return;
+    attachedScrcpySerialRef.current = serial;
 
-    farmApi
-      .post(`/devices/${encodeURIComponent(serial)}/scrcpy/attach`, {})
-      .catch(() => {});
+    attachScrcpyStream(serial).catch(() => {});
 
     return () => {
       if (detachScheduled) return;
       detachScheduled = true;
-      farmApi
-        .post(`/devices/${encodeURIComponent(serial)}/scrcpy/detach`, {})
-        .catch(() => {});
+      if (attachedScrcpySerialRef.current === serial) {
+        attachedScrcpySerialRef.current = null;
+      }
+      detachScrcpyStream(serial).catch(() => {});
     };
   }, [
     allowH264,
@@ -280,7 +297,7 @@ function DeviceTilePreviewInner({
     relayStreamOn,
     streamingConfig?.autoAttachScrcpy,
     streamingConfig?.mode,
-    streamingConfig
+    tabActive
   ]);
 
   const onRelayStreamChange = useCallback(
@@ -289,15 +306,11 @@ function DeviceTilePreviewInner({
       setRelayStreamBusy(true);
       try {
         if (checked) {
-          await farmApi.post(
-            `/devices/${encodeURIComponent(device.serial)}/scrcpy/attach`,
-            {}
-          );
+          await attachScrcpyStream(device.serial);
+          attachedScrcpySerialRef.current = device.serial;
         } else {
-          await farmApi.post(
-            `/devices/${encodeURIComponent(device.serial)}/scrcpy/detach`,
-            {}
-          );
+          await detachScrcpyStream(device.serial);
+          attachedScrcpySerialRef.current = null;
         }
         setRelayStreamOn(checked);
       } catch (err) {
@@ -319,14 +332,20 @@ function DeviceTilePreviewInner({
     [device.serial, isActive, isContinuous, t]
   );
 
-  useH264Video(allowH264 ? device.serial : '', canvasRef, {
+  useH264Video(tabActive && allowH264 ? device.serial : '', canvasRef, {
     onFrame: useCallback(
       (frame?: { mostlyBlack: boolean }) => {
         if (frame?.mostlyBlack) {
+          // Decoder reset/recovery often emits 1–2 black frames. Dropping H264
+          // immediately crossfades to MJPEG and causes visible grid flicker.
+          if (!h264Active) return;
+          h264BlackStreakRef.current += 1;
+          if (h264BlackStreakRef.current < 4) return;
           setH264Active(false);
           h264WarmupRef.current = { startedAt: 0, frames: 0 };
           return;
         }
+        h264BlackStreakRef.current = 0;
         setHasFrame(true);
         const now = Date.now();
         const warm = h264WarmupRef.current;
@@ -339,23 +358,39 @@ function DeviceTilePreviewInner({
         if (!h264Active && warm.frames >= 1) {
           setH264Active(true);
         }
-        if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
-        h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
+        // Keep the last decoded frame on static scenes — timing out to MJPEG
+        // makes idle devices look like they are blinking every few seconds.
       },
       [h264Active]
-    )
+    ),
+    onStall: useCallback(() => {
+      // Soft recovery: keep canvas visible when possible; only nudge MJPEG
+      // when we never got a first frame.
+      h264WarmupRef.current = { startedAt: 0, frames: 0 };
+      h264BlackStreakRef.current = 0;
+      if (!hasFrame) {
+        setMjpegFailed(false);
+        setMjpegAttempt((n) => n + 1);
+      }
+    }, [hasFrame])
   });
 
   useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d', {
+      alpha: false,
+      willReadFrequently: true
+    });
+    if (canvas && ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
     setHasFrame(false);
     setMjpegFailed(false);
     setMjpegAttempt(0);
     setH264Active(false);
+    setH264Suppressed(false);
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
-    if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
-    return () => {
-      if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
-    };
+    h264BlackStreakRef.current = 0;
   }, [device.serial, allowH264]);
 
   useEffect(() => {
@@ -363,18 +398,28 @@ function DeviceTilePreviewInner({
   }, [mjpegUrl]);
 
   useEffect(() => {
-    if (!mjpegFailed || !isActive || !loadStream || !serverAllowPreviewMjpeg)
+    if (
+      !mjpegFailed ||
+      !tabActive ||
+      !isActive ||
+      !loadStream ||
+      !serverAllowPreviewMjpeg
+    )
       return;
     const retry = window.setTimeout(() => setMjpegAttempt((n) => n + 1), 3000);
     return () => window.clearTimeout(retry);
-  }, [mjpegFailed, isActive, loadStream, serverAllowPreviewMjpeg]);
+  }, [mjpegFailed, tabActive, isActive, loadStream, serverAllowPreviewMjpeg]);
 
   useEffect(() => {
+    if (!tabActive) {
+      setWsConnected(false);
+      return;
+    }
     const unsub = subscribeDeviceFarm((msg) => {
       if (msg.type === 'ws_status') setWsConnected(Boolean(msg.connected));
     });
     return () => unsub();
-  }, []);
+  }, [tabActive]);
 
   useEffect(() => {
     if (!isActive || !loadStream) return;

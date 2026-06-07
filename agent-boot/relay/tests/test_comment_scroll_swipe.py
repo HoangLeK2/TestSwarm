@@ -117,6 +117,52 @@ async def test_collect_comment_snapshots_keeps_distinct_xml_frames() -> None:
     assert "frame-b" in joined and "frame-d" in joined
 
 
+def _comment_sheet_with_body(body: str, marker: str) -> str:
+    return f"""<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]" marker="{marker}">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Quay lại" bounds="[0,80][120,160]" />
+  <node package="com.facebook.katana" text="Phù hợp nhất" bounds="[40,450][400,500]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,400][1080,2200]">
+    <node bounds="[0,720][1080,900]">
+      <node text="Nguyễn A" bounds="[180,740][300,780]" />
+      <node text="{body}" bounds="[180,780][1000,840]" />
+    </node>
+  </node>
+  <node package="com.facebook.katana" text="Viết bình luận…" bounds="[40,2280][1040,2340]" />
+</hierarchy>"""
+
+
+@pytest.mark.asyncio
+async def test_collect_comment_snapshots_breaks_when_xml_changes_without_new_comments() -> None:
+    frames = [
+        _comment_sheet_with_body("Đúng bài này", "frame-a"),
+        _comment_sheet_with_body("Đúng bài này", "frame-b"),
+        _comment_sheet_with_body("Đúng bài này", "frame-c"),
+        _comment_sheet_with_body("Đúng bài này", "frame-d"),
+    ]
+    exec_ = _RotatingCommentScrollExecutor(frames)
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 12,
+            "comment_swipes_per_dump": 1,
+            "comment_no_new_threshold": 2,
+            "min_comment_scan_passes": 0,
+            "comment_scroll_pause_s": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    assert err is None
+    assert len(snapshots) == 2
+    swipes = [a for batch in exec_.batches for a in batch if a.get("op") == "swipe"]
+    assert len(swipes) == 2
+
+
 @pytest.mark.asyncio
 async def test_collect_comment_snapshots_reuses_swipe_coords_within_batch(monkeypatch) -> None:
     xml = _sheet_xml()

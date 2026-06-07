@@ -84,6 +84,7 @@ async def create_account_group(
             description=body.description,
             platform=body.platform,
             rotation_strategy=body.rotation_strategy,
+            org_id=getattr(user, "org_id", None),
         )
         await db.commit()
     except IntegrityError:

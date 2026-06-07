@@ -14,6 +14,7 @@ import {
 import { hasOperationalRelayAgent } from '../lib/relay-agent-status';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
+import { useTabNetworkActive } from './use-tab-network-active';
 
 function isRelayManagedDevice(device: DeviceOut): boolean {
   return Boolean(
@@ -38,6 +39,7 @@ export function useDeviceFarm() {
   const confirm = useConfirm();
   const { currentOrg } = useOrganization();
   const currentOrgId = currentOrg?.id ?? null;
+  const tabActive = useTabNetworkActive();
 
   const registeredSerials = useMemo(
     () => new Set(registeredDevices.map((d) => d.serial)),
@@ -56,28 +58,31 @@ export function useDeviceFarm() {
   const { data: relayAgents = [] } = useQuery({
     queryKey: ['relay-agents', currentOrgId],
     queryFn: relayAgentsApi.list,
+    enabled: Boolean(currentOrgId) && tabActive,
     staleTime: 10_000,
-    refetchInterval: 15_000
+    refetchInterval: tabActive ? 15_000 : false
   });
   const relayLive = hasOperationalRelayAgent(relayAgents);
 
   const wsSend = useCallback((obj: object) => wsRef.current?.send(obj), []);
   const refreshTasks = useCallback(() => {
+    if (!tabActive) return;
     fetchTasks()
       .then((data) => setTasks(Array.isArray(data) ? data : []))
       .catch(() => {});
-  }, []);
+  }, [tabActive]);
 
   const refreshDevices = useCallback(() => {
+    if (!tabActive) return;
     if (!currentOrgId) return;
-    fetchLiveDevices()
+    fetchLiveDevices(undefined)
       .then((live) => setDevices(live))
       .catch(() => {});
     devicesApi
       .list()
       .then((list) => setRegisteredDevices(list))
       .catch(() => {});
-  }, [currentOrgId]);
+  }, [currentOrgId, tabActive]);
 
   useEffect(() => {
     setDevices([]);
@@ -113,6 +118,12 @@ export function useDeviceFarm() {
   }, [refreshTasks]);
 
   useEffect(() => {
+    if (!tabActive) {
+      wsRef.current?.close();
+      wsRef.current = null;
+      setWsConnected(false);
+      return;
+    }
     wsRef.current = createWs((msg: WsMessage) => {
       if (msg.type === 'ws_status') {
         setWsConnected(msg.connected);
@@ -201,8 +212,11 @@ export function useDeviceFarm() {
       }
     });
 
-    return () => wsRef.current?.close();
-  }, []);
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [tabActive]);
 
   const handleToggleMode = useCallback((serial: string) => {
     setModes((prev) => ({

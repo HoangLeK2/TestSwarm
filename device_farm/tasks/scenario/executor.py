@@ -174,16 +174,17 @@ class ScenarioExecutor:
 
             sc.step_results.append(step_result)
 
-            from services.execution.step_store import schedule_persist_step
+            if sc.depth == 0 and sc.execution_id:
+                from services.execution.step_store import schedule_persist_step
 
-            schedule_persist_step(
-                sc,
-                step,
-                step_result,
-                started_at=step_started_at,
-                ended_at=step_ended_at,
-                duration_ms=step_dur_ms,
-            )
+                schedule_persist_step(
+                    sc,
+                    step,
+                    step_result,
+                    started_at=step_started_at,
+                    ended_at=step_ended_at,
+                    duration_ms=step_dur_ms,
+                )
 
             if step_result.get("ok", True):
                 _persist_checkpoint(sc, idx + 1)
@@ -208,11 +209,14 @@ class ScenarioExecutor:
                 time.sleep(delay_ms / 1000.0)
 
         result = self._build_result()
-        from services.execution.capture_service import flush_pending_captures
-        from services.execution.step_store import schedule_sync_step_artifacts
+        if sc.depth == 0:
+            from services.execution.capture_service import flush_pending_captures
 
-        flush_pending_captures()
-        schedule_sync_step_artifacts(sc)
+            flush_pending_captures()
+            if sc.execution_id and sc.step_results:
+                from services.execution.step_store import schedule_sync_step_artifacts
+
+                schedule_sync_step_artifacts(sc)
         total_dur_ms = (time.monotonic() - scenario_started_at) * 1000.0
         failed_step = next((r for r in sc.step_results if not r.get("ok", True)), None)
         trace_log.info(

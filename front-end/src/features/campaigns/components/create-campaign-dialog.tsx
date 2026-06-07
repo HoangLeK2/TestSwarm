@@ -248,7 +248,7 @@ export function CreateCampaignDialog({
         )}
       </DialogTrigger>
 
-      <DialogContent className='max-h-[90vh] max-w-lg gap-0 overflow-y-auto p-0'>
+      <DialogContent className='flex max-h-[92vh] min-w-[min(100%-2rem,720px)] max-w-3xl flex-col gap-0 overflow-y-auto p-0 sm:w-full'>
         <DialogHeader className='border-b px-5 py-4'>
           <div className='flex items-center gap-2'>
             <Layers size={15} className='text-primary' />
@@ -309,7 +309,14 @@ export function CreateCampaignDialog({
               <p className='mb-2 text-[11px] text-muted-foreground'>
                 {t('libraryVariablesHint')}
               </p>
-              <VariableEditor variables={variables} onChange={setVariables} />
+              <VariableEditor
+                variables={variables}
+                onChange={setVariables}
+                allowAdd={false}
+                lockKeys
+                allowRemove={false}
+                disabled={effectiveScenarioIds.length === 0}
+              />
             </Section>
             <hr className='border-border' />
             <Section icon={Layers} title={t('accountBindingSection')}>

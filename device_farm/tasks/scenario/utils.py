@@ -265,7 +265,10 @@ def _retry_find_element(
         chunk = min(poll, max(0.0, deadline - time.monotonic()))
         if chunk <= 0:
             return None
-        time.sleep(chunk)
+        if cancel_event is not None:
+            cancel_event.wait(chunk)
+        else:
+            time.sleep(chunk)
 
 
 def resolve_step_selector_fields(
@@ -373,6 +376,7 @@ def _wait_screen_stable(
     timeout: float = 3.0,
     stable_duration: float = 0.25,
     poll: float = 0.3,
+    cancel_event: Optional[threading.Event] = None,
 ) -> bool:
     """Wait until UI hierarchy hash stops changing for `stable_duration` seconds."""
     deadline = time.monotonic() + timeout
@@ -380,6 +384,8 @@ def _wait_screen_stable(
     stable_since: Optional[float] = None
 
     while time.monotonic() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         h = _hash_hierarchy(device)
         now = time.monotonic()
         if h is None:
@@ -392,7 +398,10 @@ def _wait_screen_stable(
         else:
             last_hash = h
             stable_since = None
-        time.sleep(poll)
+        if cancel_event is not None:
+            cancel_event.wait(poll)
+        else:
+            time.sleep(poll)
 
     return False
 
@@ -646,7 +655,10 @@ def _execute_tap(
             return False, f"tap ({result.x},{result.y}) failed: {exc}", None
 
     if result.method == "fallback_position":
-        time.sleep(0.3)
+        if cancel_event is not None:
+            cancel_event.wait(0.3)
+        else:
+            time.sleep(0.3)
 
     return True, result.message, result.bounds
 

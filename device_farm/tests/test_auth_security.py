@@ -34,8 +34,15 @@ def _jwt_patch():
     with (
         patch("api.routes.public.jwt_secret_key", return_value=_SECRET),
         patch("api.routes.public.jwt_algorithm", return_value=_ALG),
-        patch("api.auth.context.jwt_secret_key", return_value=_SECRET),
         patch("api.auth.context.jwt_algorithm", return_value=_ALG),
+        patch(
+            "api.auth.context.all_verify_materials",
+            return_value=[SimpleNamespace(secret=_SECRET)],
+        ),
+        patch(
+            "api.auth.context.verify_material_for_kid",
+            return_value=SimpleNamespace(secret=_SECRET),
+        ),
     ):
         yield
 
@@ -65,6 +72,29 @@ class _FakeDevice:
     def __init__(self, serial: str, user_id: str = "user-1") -> None:
         self.serial = serial
         self.user_id = user_id
+
+
+class _FakeRuntimeDevice:
+    def __init__(
+        self,
+        serial: str,
+        *,
+        state: str = "READY",
+        agent_connected: bool = False,
+        u2_ready: bool = False,
+    ) -> None:
+        self._status = {
+            "type": "status",
+            "serial": serial,
+            "state": state,
+            "agent_connected": agent_connected,
+            "u2_ready": u2_ready,
+            "touch_method": "u2" if u2_ready else "none",
+            "stf_connected": False,
+        }
+
+    def status_dict(self) -> dict[str, Any]:
+        return dict(self._status)
 
 
 class _FakeUser(SimpleNamespace):
@@ -101,9 +131,9 @@ def _mock_queue(tasks: list[_FakeTask] | None = None):
     return q
 
 
-def _mock_manager():
+def _mock_manager(devices: list[_FakeRuntimeDevice] | None = None):
     m = MagicMock()
-    m.all_devices.return_value = []
+    m.all_devices.return_value = devices or []
     return m
 
 
@@ -151,6 +181,11 @@ def _db_patch(
     async def fake_get_organization_role_for_user(db, user_id: str, org_id: str | None):
         return user_roles.get(user_id, "owner")
 
+    async def fake_load_policy_snapshot_from_db(db):
+        from api.auth.rbac import _load_seed_policy_rows
+
+        return 0, tuple(_load_seed_policy_rows())
+
     with (
         patch("api.routes.public.AsyncSessionLocal", mock_session_cls),
         patch("api.deps.AsyncSessionLocal", mock_session_cls),
@@ -162,6 +197,10 @@ def _db_patch(
             "api.deps.repo.get_organization_role_for_user",
             side_effect=fake_get_organization_role_for_user,
         ),
+        patch(
+            "api.auth.rbac.load_policy_snapshot_from_db",
+            side_effect=fake_load_policy_snapshot_from_db,
+        ),
     ):
         yield
 
@@ -170,12 +209,12 @@ def _db_patch(
 # App factories
 # ---------------------------------------------------------------------------
 
-def _make_public_app(db_enabled: bool, queue=None):
+def _make_public_app(db_enabled: bool, queue=None, manager=None):
     from core.config import Config
     from api.routes.public import build_public_router
     app = FastAPI()
     q = queue or _mock_queue()
-    router = build_public_router(_mock_manager(), q, Config(), db_enabled)
+    router = build_public_router(manager or _mock_manager(), q, Config(), db_enabled)
     app.include_router(router)
     return app
 
@@ -227,6 +266,38 @@ def _make_real_device_control_app(db_enabled: bool):
     )
     app.include_router(router, dependencies=[Depends(make_device_auth_dependency(db_enabled))])
     return app
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Live device status normalization
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestLiveDevices:
+
+    @pytest.mark.anyio
+    async def test_stale_dead_state_is_visible_when_transport_is_live(self):
+        """Relay/u2 liveness should revive stale DEAD status for the dashboard grid."""
+        db_devices = [_FakeDevice("serial-live", user_id="user-1")]
+        manager = _mock_manager(
+            [
+                _FakeRuntimeDevice(
+                    "serial-live",
+                    state="DEAD",
+                    u2_ready=True,
+                )
+            ]
+        )
+
+        with _jwt_patch(), _db_patch(db_devices):
+            app = _make_public_app(db_enabled=True, manager=manager)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.get("/api/devices/live", headers=_auth("user-1"))
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["devices"][0]["serial"] == "serial-live"
+        assert data["devices"][0]["state"] == "READY"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

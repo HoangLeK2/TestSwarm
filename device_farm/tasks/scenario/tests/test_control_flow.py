@@ -66,3 +66,68 @@ def test_loop_step_stops_when_cancel_event_set():
     assert result["ok"] is False
     assert "cancelled" in result["message"]
     assert result["iterations"] == 0
+
+
+def test_loop_step_stops_when_cancel_event_set_after_iteration_body():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    sc.cancel_event = threading.Event()
+    step = {"type": "loop", "count": 5, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    def _run_and_cancel(_sc, _steps, extra_scenario_keys=None):
+        sc.cancel_event.set()
+        return {"success": True}
+
+    with patch("tasks.scenario.steps.control_flow._run_nested", side_effect=_run_and_cancel) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert run_nested.call_count == 1
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["iterations"] == 1
+
+
+def test_repeat_step_stops_when_cancel_event_set_after_iteration_body():
+    from tasks.scenario.steps.control_flow import handle_repeat
+
+    sc = _make_sc()
+    sc.cancel_event = threading.Event()
+    step = {"type": "repeat", "count": 5, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "repeat", "ok": True}
+
+    def _run_and_cancel(_sc, _steps, extra_scenario_keys=None):
+        sc.cancel_event.set()
+        return {"success": True}
+
+    with patch("tasks.scenario.steps.control_flow._run_nested", side_effect=_run_and_cancel) as run_nested:
+        handle_repeat(sc, step, 0, result)
+
+    assert run_nested.call_count == 1
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["iterations"] == 1
+
+
+def test_loop_count_not_capped_by_max_iterations():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {
+        "type": "loop",
+        "count": 7,
+        "max_iterations": 3,
+        "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        return_value={"success": True},
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True
+    assert result["iterations"] == 7
+    assert run_nested.call_count == 7

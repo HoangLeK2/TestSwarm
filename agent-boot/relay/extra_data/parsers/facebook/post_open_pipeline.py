@@ -1010,6 +1010,8 @@ def _build_post_open_candidate(
     )
     if not tap:
         return None
+    if not author_bounds and tap.get("tap_kind") in _UNSAFE_POST_OPEN_TAP_KINDS:
+        return None
 
     fb_pid, fb_gid, perms = _extract_fb_link_meta(element)
     post = _extract_post(
@@ -1154,6 +1156,30 @@ def _post_cards_anchored_on_comment_buttons(container) -> List[Any]:
     return cards
 
 
+def _card_has_post_open_anchor(element) -> bool:
+    """True when a visible feed card has enough header/body structure to open detail."""
+    from .parser import _collect_text_nodes, _parse_bounds
+
+    card_bounds = _parse_bounds(element)
+    if not card_bounds:
+        return False
+    nodes = _collect_text_nodes(element, toolbar_cutoff_y=0)
+    if not nodes:
+        return False
+    author_bounds = _find_author_bounds(nodes, card_bounds)
+    if not author_bounds:
+        return False
+    tap = _pick_header_tap_for_card(
+        element,
+        card_bounds=card_bounds,
+        nodes=nodes,
+        author_bounds=author_bounds,
+    )
+    if not tap:
+        return False
+    return tap.get("tap_kind") not in _UNSAFE_POST_OPEN_TAP_KINDS
+
+
 def _is_viable_feed_post_card(element) -> bool:
     """Skip comment-thread slivers and partial off-screen stubs."""
     from .parser import _parse_bounds
@@ -1163,7 +1189,7 @@ def _is_viable_feed_post_card(element) -> bool:
         return False
     if bounds[3] - bounds[1] < 280:
         return False
-    return _card_has_action_bar(element)
+    return _card_has_action_bar(element) or _card_has_post_open_anchor(element)
 
 
 def _discover_post_open_scan_elements(root) -> List[Tuple[int, Any]]:
@@ -1354,6 +1380,7 @@ def resolve_post_open_targets_from_xml(
         "tap_label": top.get("tap_label"),
         "u2_click": top.get("u2_click"),
         "post_key": (top.get("post") or {}).get("post_key"),
+        "post": top.get("post"),
         "feed_item_index": top.get("feed_item_index"),
         "score": top.get("score"),
     }
@@ -1364,6 +1391,7 @@ def resolve_post_open_targets_from_xml(
             "tap_label": c.get("tap_label"),
             "u2_click": c.get("u2_click"),
             "post_key": (c.get("post") or {}).get("post_key"),
+            "post": c.get("post"),
             "feed_item_index": c.get("feed_item_index"),
             "score": c.get("score"),
         }

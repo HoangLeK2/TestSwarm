@@ -16,6 +16,25 @@ from tasks.scenario.utils import (
 log = logging.getLogger(__name__)
 
 
+def _cancelled(sc: ScenarioContext) -> bool:
+    return sc.cancel_event is not None and sc.cancel_event.is_set()
+
+
+def _mark_cancelled(result: Dict[str, Any], message: str) -> None:
+    result["ok"] = False
+    result["message"] = message
+    result["cancelled"] = True
+
+
+def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
+    if seconds <= 0:
+        return _cancelled(sc)
+    if sc.cancel_event is not None:
+        return bool(sc.cancel_event.wait(seconds))
+    time.sleep(seconds)
+    return False
+
+
 @register_step("tap")
 def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     spec, sel_by, sel_value, (fallback_rx, fallback_ry) = resolve_step_selector_fields(step)
@@ -63,11 +82,17 @@ def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
 
     # Auto-dismiss popup on failure
     if not ok:
+        if _cancelled(sc):
+            _mark_cancelled(result, "tap: cancelled by user")
+            return
         now_t = time.monotonic()
         if now_t - sc.last_popup_t >= 5.0:
             dismissed = _auto_dismiss_popup(sc.device)
             sc.last_popup_t = time.monotonic()
             if dismissed:
+                if _cancelled(sc):
+                    _mark_cancelled(result, "tap: cancelled by user")
+                    return
                 result["popup_dismissed"] = True
                 ok, msg, tap_bounds = _execute_tap(
                     sc.device, by=sel_by, value=sel_value,
@@ -115,7 +140,8 @@ def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
             log.debug("[%s] selector healing failed: %s", sc.serial, exc)
 
     if ok:
-        time.sleep(0.3)
+        if _wait_or_cancel(sc, 0.3):
+            _mark_cancelled(result, "tap: cancelled by user")
 
 
 @register_step("tap_ratio")
@@ -129,7 +155,8 @@ def handle_tap_ratio(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
     y = max(0, min(sc.h - 1, int(ry * sc.h)))
     try:
         sc.device.tap(x, y)
-        time.sleep(0.3)
+        if _wait_or_cancel(sc, 0.3):
+            _mark_cancelled(result, "tap_ratio: cancelled by user")
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"tap_ratio at ({x},{y}) failed: {exc}"
@@ -149,6 +176,9 @@ def handle_tap_position(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     x = max(0, min(sc.w - 1, int(rx * sc.w)))
     y = max(0, min(sc.h - 1, int(ry * sc.h)))
     try:
+        if _cancelled(sc):
+            _mark_cancelled(result, "tap_position: cancelled by user")
+            return
         sc.device.tap(x, y)
     except Exception as exc:
         result["ok"] = False
@@ -168,6 +198,9 @@ def handle_swipe_ratio(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     x2 = max(0, min(sc.w - 1, int(rx2 * sc.w)))
     y2 = max(0, min(sc.h - 1, int(ry2 * sc.h)))
     try:
+        if _cancelled(sc):
+            _mark_cancelled(result, "swipe_ratio: cancelled by user")
+            return
         sc.device.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
     except Exception as exc:
         result["ok"] = False
@@ -196,11 +229,17 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     )
 
     if not ok:
+        if _cancelled(sc):
+            _mark_cancelled(result, "tap_selector: cancelled by user")
+            return
         now_t = time.monotonic()
         if now_t - sc.last_popup_t >= 5.0:
             dismissed = _auto_dismiss_popup(sc.device)
             sc.last_popup_t = time.monotonic()
             if dismissed:
+                if _cancelled(sc):
+                    _mark_cancelled(result, "tap_selector: cancelled by user")
+                    return
                 result["popup_dismissed"] = True
                 ok, msg, tap_bounds = _execute_tap(
                     sc.device, by=by, value=value,
@@ -219,7 +258,8 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     if tap_bounds:
         result["_bounds"] = tap_bounds
     if ok:
-        time.sleep(0.3)
+        if _wait_or_cancel(sc, 0.3):
+            _mark_cancelled(result, "tap_selector: cancelled by user")
 
 
 @register_step("long_tap_selector")
@@ -241,8 +281,12 @@ def handle_long_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int
             raise RuntimeError("u2 not available")
         iw_timeout, iw_poll = _get_implicit_wait_config(step, sc.scenario_iw_config)
         found = _retry_find_element(
-            u2, by, value, timeout=iw_timeout, poll=iw_poll, spec=spec, device=sc.device,
+            u2, by, value, timeout=iw_timeout, poll=iw_poll, spec=spec,
+            device=sc.device, cancel_event=sc.cancel_event,
         )
+        if _cancelled(sc):
+            _mark_cancelled(result, "long_tap_selector: cancelled by user")
+            return
         if found is None:
             raise RuntimeError(f"element not visible: {selector_summary(spec)}")
         if hasattr(u2, "find_element_with_bounds_spec"):
@@ -256,6 +300,9 @@ def handle_long_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int
             raise RuntimeError(f"element bounds not found: {selector_summary(spec)}")
         cx = (bounds.get("left", 0) + bounds.get("right", 0)) // 2
         cy = (bounds.get("top", 0) + bounds.get("bottom", 0)) // 2
+        if _cancelled(sc):
+            _mark_cancelled(result, "long_tap_selector: cancelled by user")
+            return
         u2.long_click(cx, cy, duration_ms / 1000.0)
         result["message"] = f"long_tap_selector {selector_summary(spec)} ({duration_ms}ms)"
     except Exception as exc:
@@ -277,7 +324,8 @@ def handle_double_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         sc.device.double_tap(px, py)
         wait_after = float(step.get("wait_after", 0.5) or 0.5)
         if wait_after > 0:
-            time.sleep(wait_after)
+            if _wait_or_cancel(sc, wait_after):
+                _mark_cancelled(result, "double_tap: cancelled by user")
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"double_tap failed: {exc}"
@@ -296,8 +344,12 @@ def handle_pinch(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Di
             cy = int(step.get("cy", sc.h // 2))
         scale = float(step.get("scale", 0.5) or 0.5)
         duration_ms = int(step.get("duration_ms", 400) or 400)
+        if _cancelled(sc):
+            _mark_cancelled(result, "pinch: cancelled by user")
+            return
         sc.device.pinch(cx, cy, scale, duration_ms)
-        time.sleep(0.4)
+        if _wait_or_cancel(sc, 0.4):
+            _mark_cancelled(result, "pinch: cancelled by user")
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"pinch failed: {exc}"
@@ -317,8 +369,12 @@ def handle_drag(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
             x2 = int(step.get("x2", 0))
             y2 = int(step.get("y2", 0))
         duration_ms = int(step.get("duration_ms", 1000) or 1000)
+        if _cancelled(sc):
+            _mark_cancelled(result, "drag: cancelled by user")
+            return
         sc.device.drag(x1, y1, x2, y2, duration_ms)
-        time.sleep(0.4)
+        if _wait_or_cancel(sc, 0.4):
+            _mark_cancelled(result, "drag: cancelled by user")
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"drag failed: {exc}"
@@ -344,5 +400,4 @@ def handle_take_screenshot(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"take_screenshot failed: {exc}"
-
 

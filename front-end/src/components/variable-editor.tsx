@@ -243,6 +243,8 @@ function VarCard({
   entry,
   index,
   disabled,
+  lockKey,
+  allowRemove,
   copiedKey,
   onUpdate,
   onRemove,
@@ -253,6 +255,8 @@ function VarCard({
   entry: VarEntry;
   index: number;
   disabled?: boolean;
+  lockKey?: boolean;
+  allowRemove?: boolean;
   copiedKey: string | null;
   onUpdate: (index: number, patch: Partial<VarEntry>) => void;
   onRemove: (index: number) => void;
@@ -270,29 +274,35 @@ function VarCard({
           value={entry.key}
           onChange={(e) => onUpdate(index, { key: e.target.value })}
           placeholder={t('keyPlaceholder')}
-          disabled={disabled}
+          disabled={disabled || lockKey}
+          readOnly={lockKey}
           title={entry.key}
-          className='h-8 min-w-0 flex-1 font-mono text-xs'
+          className={cn(
+            'h-8 min-w-0 flex-1 font-mono text-xs',
+            lockKey && 'bg-muted/40'
+          )}
         />
         <TypeSelect
           value={entry.type}
           onChange={(type) =>
             onUpdate(index, { type, strVal: '', listVal: [] })
           }
-          disabled={disabled}
+          disabled={disabled || lockKey}
           t={t}
         />
-        <Button
-          type='button'
-          size='icon'
-          variant='ghost'
-          className='size-8 shrink-0 text-muted-foreground hover:text-destructive'
-          disabled={disabled}
-          onClick={() => onRemove(index)}
-          title={t('removeVariable')}
-        >
-          <Trash2 size={14} />
-        </Button>
+        {allowRemove !== false ? (
+          <Button
+            type='button'
+            size='icon'
+            variant='ghost'
+            className='size-8 shrink-0 text-muted-foreground hover:text-destructive'
+            disabled={disabled}
+            onClick={() => onRemove(index)}
+            title={t('removeVariable')}
+          >
+            <Trash2 size={14} />
+          </Button>
+        ) : null}
       </div>
 
       <div className='mt-2'>
@@ -404,6 +414,12 @@ interface Props {
   variables: Record<string, any>;
   onChange: (variables: Record<string, any>) => void;
   disabled?: boolean;
+  /** Allow creating new variable keys (scenario editor). Off for campaign create. */
+  allowAdd?: boolean;
+  /** Lock variable names/types — only values are editable. */
+  lockKeys?: boolean;
+  /** Allow removing rows from the list. */
+  allowRemove?: boolean;
   /** Show built-in variables reference panel */
   showBuiltins?: boolean;
   /** Toolbar: add, guide, builtins toggle */
@@ -416,6 +432,9 @@ export function VariableEditor({
   variables,
   onChange,
   disabled,
+  allowAdd = true,
+  lockKeys = false,
+  allowRemove = true,
   showBuiltins = true,
   showToolbar = true,
   showFooterTip = true
@@ -433,7 +452,12 @@ export function VariableEditor({
       internalChange.current = false;
       return;
     }
-    setEntries(toEntries(variables));
+    setEntries((prev) => {
+      const fromParent = toEntries(variables);
+      const drafts = prev.filter((e) => !e.key.trim());
+      if (drafts.length === 0) return fromParent;
+      return [...fromParent, ...drafts];
+    });
   }, [variables]);
 
   const commit = useCallback(
@@ -453,8 +477,11 @@ export function VariableEditor({
   );
 
   const add = useCallback(() => {
-    commit([...entries, { key: '', type: 'string', strVal: '', listVal: [] }]);
-  }, [entries, commit]);
+    setEntries((prev) => [
+      ...prev,
+      { key: '', type: 'string', strVal: '', listVal: [] }
+    ]);
+  }, []);
 
   const remove = useCallback(
     (index: number) => commit(entries.filter((_, i) => i !== index)),
@@ -525,16 +552,18 @@ export function VariableEditor({
     <div className='space-y-3'>
       {showToolbar ? (
         <div className='flex flex-wrap items-center gap-2'>
-          <Button
-            type='button'
-            size='sm'
-            disabled={disabled}
-            onClick={add}
-            className='h-8 gap-1 text-xs'
-          >
-            <Plus size={14} />
-            {t('addVariable')}
-          </Button>
+          {allowAdd ? (
+            <Button
+              type='button'
+              size='sm'
+              disabled={disabled}
+              onClick={add}
+              className='h-8 gap-1 text-xs'
+            >
+              <Plus size={14} />
+              {t('addVariable')}
+            </Button>
+          ) : null}
           {showBuiltins ? (
             <Button
               type='button'
@@ -600,26 +629,34 @@ export function VariableEditor({
           </div>
           <div className='space-y-1'>
             <p className='text-sm font-medium text-foreground'>
-              {t('emptyTitle')}
+              {allowAdd ? t('emptyTitle') : t('emptyFromScenarioTitle')}
             </p>
             <p className='text-[11px] text-muted-foreground'>
-              {t('emptyHintPrefix')}{' '}
-              <code className='rounded bg-muted px-1 font-mono'>
-                {'${ten_bien}'}
-              </code>
-              .
+              {allowAdd ? (
+                <>
+                  {t('emptyHintPrefix')}{' '}
+                  <code className='rounded bg-muted px-1 font-mono'>
+                    {'${ten_bien}'}
+                  </code>
+                  .
+                </>
+              ) : (
+                t('emptyFromScenarioHint')
+              )}
             </p>
           </div>
-          <Button
-            type='button'
-            size='sm'
-            disabled={disabled}
-            onClick={add}
-            className='h-8 gap-1 text-xs'
-          >
-            <Plus size={14} />
-            {t('emptyCreateFirst')}
-          </Button>
+          {allowAdd ? (
+            <Button
+              type='button'
+              size='sm'
+              disabled={disabled}
+              onClick={add}
+              className='h-8 gap-1 text-xs'
+            >
+              <Plus size={14} />
+              {t('emptyCreateFirst')}
+            </Button>
+          ) : null}
         </div>
       ) : (
         <div className='space-y-2'>
@@ -629,6 +666,8 @@ export function VariableEditor({
               entry={entry}
               index={i}
               disabled={disabled}
+              lockKey={lockKeys}
+              allowRemove={allowRemove}
               copiedKey={copiedKey}
               onUpdate={update}
               onRemove={remove}

@@ -44,6 +44,20 @@ def _get_preview_entry(serial: str, trace_id: str) -> Optional[dict]:
         return _ACTIVE_PREVIEWS.get((serial, trace_id))
 
 
+def _finish_preview_stream(
+    serial: str,
+    trace_id: str,
+    event: "threading.Event",
+    worker_done: "threading.Event",
+    *,
+    completed: bool,
+) -> None:
+    if not completed or not worker_done.is_set():
+        event.set()
+    if worker_done.is_set():
+        _unregister_preview(serial, trace_id)
+
+
 def cancel_all_previews_for_serial(
     serial: str,
     user_id: Optional[str] = None,
@@ -351,6 +365,7 @@ def build_scenarios_router(
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)
 
         q: queue.Queue[Dict[str, Any] | None] = queue.Queue()
+        worker_done = threading.Event()
 
         def on_step_done(result: Dict[str, Any]) -> None:
             q.put(result)
@@ -372,6 +387,8 @@ def build_scenarios_router(
             except Exception as exc:
                 q.put({"_event": "error", "error": str(exc)})
             finally:
+                worker_done.set()
+                _unregister_preview(serial, trace_id)
                 q.put(None)  # sentinel
 
         threading.Thread(target=run_in_thread, daemon=True).start()
@@ -379,6 +396,7 @@ def build_scenarios_router(
         async def event_generator():
             total_steps = len(body.steps)
             yield f"data: {json.dumps({'event': 'start', 'trace_id': trace_id, 'total_steps': total_steps})}\n\n"
+            completed = False
             try:
                 while True:
                     if await request.is_disconnected():
@@ -389,6 +407,7 @@ def build_scenarios_router(
                     except queue.Empty:
                         continue
                     if item is None:
+                        completed = True
                         break
                     if "_event" in item:
                         evt_type = item.pop("_event")
@@ -396,7 +415,13 @@ def build_scenarios_router(
                     else:
                         yield f"data: {json.dumps({'event': 'step_done', **item})}\n\n"
             finally:
-                _unregister_preview(serial, trace_id)
+                _finish_preview_stream(
+                    serial,
+                    trace_id,
+                    cancel_event,
+                    worker_done,
+                    completed=completed,
+                )
 
         return StreamingResponse(
             event_generator(),

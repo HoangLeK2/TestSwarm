@@ -1074,6 +1074,7 @@ class AdbRelayManager:
         strategy: str,
         context: dict,
         timeout: float = 45.0,
+        cancel_event: Any = None,
     ) -> dict:
         """PA B: relay-only edge extract — u2 dump + ingest on agent-boot."""
         conn = self.relay_for_serial(serial)
@@ -1090,13 +1091,32 @@ class AdbRelayManager:
             "context": context or {},
             "timeout_s": timeout,
         }
-        try:
-            result = await conn.send_json_request(
+        request_task = asyncio.create_task(
+            conn.send_json_request(
                 msg=msg,
                 reply_id=req_id,
                 timeout=timeout,
                 timeout_grace=grace,
             )
+        )
+        try:
+            while True:
+                if request_task.done():
+                    result = await request_task
+                    break
+                if cancel_event is not None and cancel_event.is_set():
+                    with contextlib.suppress(Exception):
+                        await conn.send_json_message({
+                            "type": "extra_data_cancel",
+                            "id": req_id,
+                            "serial": actual,
+                            "strategy": strategy,
+                        })
+                    request_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await request_task
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
+                await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             with contextlib.suppress(Exception):
                 await conn.send_json_message({
@@ -1105,6 +1125,7 @@ class AdbRelayManager:
                     "serial": actual,
                     "strategy": strategy,
                 })
+            request_task.cancel()
             raise
         if result.get("type") != "extra_data_result":
             with contextlib.suppress(Exception):

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.account import Account
 from db.models.account_group import AccountGroup, AccountGroupMember
 from db.models.utils import _now
+from tenancy.context import get_current_org_id
 
 
 # ── Groups ──────────────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ async def create_group(
         description=description,
         platform=platform,
         rotation_strategy=rotation_strategy,
-        org_id=org_id,
+        org_id=org_id or get_current_org_id(),
     )
     db.add(group)
     await db.flush()

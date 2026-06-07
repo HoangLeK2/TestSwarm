@@ -54,8 +54,18 @@ _TRANSITIONS: Final[dict[CampaignStatus, frozenset[CampaignStatus]]] = {
             CampaignStatus.CANCELLED,
         }
     ),
-    CampaignStatus.COMPLETED: frozenset({CampaignStatus.ARCHIVED}),
-    CampaignStatus.FAILED: frozenset({CampaignStatus.ARCHIVED}),
+    CampaignStatus.COMPLETED: frozenset(
+        {
+            CampaignStatus.RUNNING,
+            CampaignStatus.ARCHIVED,
+        }
+    ),
+    CampaignStatus.FAILED: frozenset(
+        {
+            CampaignStatus.RUNNING,
+            CampaignStatus.ARCHIVED,
+        }
+    ),
     CampaignStatus.CANCELLED: frozenset(
         {
             CampaignStatus.RUNNING,
@@ -128,6 +138,8 @@ _DISPATCHABLE_FROM: Final[frozenset[CampaignStatus]] = frozenset(
         CampaignStatus.IDLE,
         CampaignStatus.SCHEDULED,
         CampaignStatus.CANCELLED,
+        CampaignStatus.COMPLETED,
+        CampaignStatus.FAILED,
     }
 )
 

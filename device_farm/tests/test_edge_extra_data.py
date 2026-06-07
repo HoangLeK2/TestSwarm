@@ -21,6 +21,27 @@ class _FakeDevice:
         return self.response
 
 
+class _SwipeTrackingFakeDevice(_FakeDevice):
+    def __init__(self, response):
+        super().__init__(response)
+        self.swipes = []
+
+    def swipe(self, *args, **kwargs):
+        self.swipes.append((args, kwargs))
+
+
+class _SequenceFakeDevice(_FakeDevice):
+    def __init__(self, responses):
+        super().__init__(responses[0] if responses else {"ok": True})
+        self.responses = list(responses)
+
+    def request_extra_data_xml(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.responses:
+            return self.responses.pop(0)
+        return self.response
+
+
 def _ctx(device):
     return SimpleNamespace(
         serial="serial-1",
@@ -364,6 +385,58 @@ def test_fb_posts_active_parent_metadata_wins_over_multi_post_map(monkeypatch) -
     }
 
 
+def test_fb_posts_pid_map_single_entry_forwards_post_detail_source(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+            "post_id_map": {"pid-opened": "scoped-parent-opened"},
+        },
+    })
+    sc = _ctx(device)
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb_group_posts", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+
+    assert handled is True
+    assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-opened"
+    assert sc.ctx["_fb_comment_parent_pid"] == "pid-opened"
+    assert sc.ctx["_active_comment_parent_source"] == "post_detail"
+    assert sc.ctx["_active_comment_anchor_verified"] is True
+
+    device.response = {
+        "ok": True,
+        "ingest": {
+            "parsed_count": 2,
+            "inserted_count": 2,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    }
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb_group_posts",
+            "edge_extra_data": True,
+            "require_verified_parent": True,
+        },
+        "fb_comments",
+        {},
+    )
+    comment_context = device.calls[-1]["context"]
+    assert comment_context["parent_context_source"] == "post_detail"
+    assert comment_context["parent_id"] == "scoped-parent-opened"
+    assert comment_context["parent_post_id"] == "pid-opened"
+
+
 def test_fb_comments_without_active_parent_does_not_forward_stale_parent_context(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
@@ -384,7 +457,9 @@ def test_fb_comments_without_active_parent_does_not_forward_stale_parent_context
     )
 
     assert handled is True
-    context = device.calls[0]["context"]
+    request = device.calls[-1]
+    assert request["strategy"] == "fb_comments"
+    context = request["context"]
     assert context["parent_id"] is None
     assert context["parent_id_already_scoped"] is False
     assert context["parent_post_id"] is None
@@ -710,6 +785,36 @@ def test_tap_fb_comment_button_already_on_sheet_preserves_verified_parent_contex
     assert sc.ctx["_active_comment_anchor_verified"] is True
 
 
+def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_sheet() -> None:
+    device = _SwipeTrackingFakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "already_on_comment_sheet",
+                "verified": True,
+                "target": None,
+            },
+        },
+    })
+    sc = _ctx(device)
+    sc.ctx["_fb_comment_parent_pid"] = "pid-detail"
+    sc.ctx["_active_comment_parent_hash"] = "detail-parent-hash"
+    sc.ctx["_active_comment_parent_source"] = "post_detail"
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {"pre_scroll": True}, 0, result)
+
+    assert result["ok"] is True
+    assert result["tapped"] is True
+    assert result["pre_scroll_skipped"] == "post_detail_target_precheck"
+    assert result["parent_context_preserved"] is True
+    assert device.swipes == []
+    assert [call["strategy"] for call in device.calls] == [
+        "fb_comment_target_tap",
+        "fb_comment_filter_apply",
+    ]
+
+
 def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
@@ -812,9 +917,11 @@ def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch
     )
 
     assert handled is True
-    assert device.calls[0]["context"]["parent_id"] == "scoped-hash"
-    assert device.calls[0]["context"]["parent_id_already_scoped"] is True
-    assert device.calls[0]["context"]["parent_post_id"] == "pid-1"
+    request = device.calls[-1]
+    assert request["strategy"] == "fb_comments"
+    assert request["context"]["parent_id"] == "scoped-hash"
+    assert request["context"]["parent_id_already_scoped"] is True
+    assert request["context"]["parent_post_id"] == "pid-1"
 
 
 def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> None:
@@ -836,7 +943,9 @@ def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> Non
     )
 
     assert handled is True
-    context = device.calls[0]["context"]
+    request = device.calls[-1]
+    assert request["strategy"] == "fb_comments"
+    context = request["context"]
     assert context["comment_scroll_passes"] == 4
     assert context["comment_scroll_distance"] == 0.25
     assert context["comment_scroll_duration_ms"] == 400
@@ -859,7 +968,77 @@ def test_try_edge_extra_data_forwards_require_verified_parent(monkeypatch) -> No
     )
 
     assert handled is True
-    assert device.calls[0]["context"]["require_verified_parent"] is True
+    request = device.calls[-1]
+    assert request["strategy"] == "fb_comments"
+    assert request["context"]["require_verified_parent"] is True
+
+
+def test_fb_comments_applies_filter_before_direct_extract(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _SequenceFakeDevice([
+        {
+            "ok": True,
+            "ingest": {
+                "diagnostic": {
+                    "reason_code": "ok",
+                    "switched": True,
+                    "steps": [{"phase": "select_all", "reason_code": "ok"}],
+                }
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 2,
+                "inserted_count": 2,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+    ])
+    sc = _ctx(device)
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_comments",
+        result,
+    )
+
+    assert handled is True
+    assert [call["strategy"] for call in device.calls] == [
+        "fb_comment_filter_apply",
+        "fb_comments",
+    ]
+    assert device.calls[0]["context"]["comment_filter"] == "all_comments"
+    assert sc.ctx["_fb_comment_filter_applied"] == "all_comments"
+    assert result["extracted"] == 2
+
+
+def test_fb_comments_skips_filter_when_context_already_applied(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    })
+    sc = _ctx(device)
+    sc.ctx["_fb_comment_filter_applied"] = "all_comments"
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_comments",
+        {},
+    )
+
+    assert handled is True
+    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
 
 
 def test_tap_fb_comment_button_ignore_error_keeps_step_ok(monkeypatch) -> None:

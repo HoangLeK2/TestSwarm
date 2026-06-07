@@ -14,6 +14,15 @@ from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
+_SCRCPY_OP_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _scrcpy_op_lock(serial: str) -> asyncio.Lock:
+    lock = _SCRCPY_OP_LOCKS.get(serial)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SCRCPY_OP_LOCKS[serial] = lock
+    return lock
 
 
 def build_scrcpy_router(manager: DeviceManager, *, db_enabled: bool) -> APIRouter:
@@ -21,6 +30,10 @@ def build_scrcpy_router(manager: DeviceManager, *, db_enabled: bool) -> APIRoute
 
     @router.post("/devices/{serial}/scrcpy/attach")
     async def api_scrcpy_attach(serial: str, body: ScrcpyAttachRequest):
+        lock = _scrcpy_op_lock(serial)
+        if lock.locked():
+            return {"ok": True, "serial": serial, "coalesced": True}
+
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": "Device not found"}, status_code=404)
@@ -37,16 +50,17 @@ def build_scrcpy_router(manager: DeviceManager, *, db_enabled: bool) -> APIRoute
                     status_code=400,
                 )
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, device.attach_scrcpy_stream, device_ip, adb_port, body.enable_control
-        )
-        if db_enabled:
-            try:
-                async with AsyncSessionLocal() as db:
-                    await repo.set_relay_scrcpy_enabled(db, serial, True)
-            except Exception as exc:
-                log.warning("persist relay_scrcpy_enabled=True for %s: %s", serial, exc)
+        async with lock:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, device.attach_scrcpy_stream, device_ip, adb_port, body.enable_control
+            )
+            if db_enabled:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await repo.set_relay_scrcpy_enabled(db, serial, True)
+                except Exception as exc:
+                    log.warning("persist relay_scrcpy_enabled=True for %s: %s", serial, exc)
         return {
             "ok": True,
             "serial": serial,
@@ -56,16 +70,21 @@ def build_scrcpy_router(manager: DeviceManager, *, db_enabled: bool) -> APIRoute
 
     @router.post("/devices/{serial}/scrcpy/detach")
     async def api_scrcpy_detach(serial: str):
+        lock = _scrcpy_op_lock(serial)
+        if lock.locked():
+            return {"ok": True, "serial": serial, "coalesced": True}
+
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": "Device not found"}, status_code=404)
-        device.detach_scrcpy_stream()
-        if db_enabled:
-            try:
-                async with AsyncSessionLocal() as db:
-                    await repo.set_relay_scrcpy_enabled(db, serial, False)
-            except Exception as exc:
-                log.warning("persist relay_scrcpy_enabled=False for %s: %s", serial, exc)
+        async with lock:
+            device.detach_scrcpy_stream()
+            if db_enabled:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await repo.set_relay_scrcpy_enabled(db, serial, False)
+                except Exception as exc:
+                    log.warning("persist relay_scrcpy_enabled=False for %s: %s", serial, exc)
         return {"ok": True, "serial": serial}
 
     return router

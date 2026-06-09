@@ -272,6 +272,29 @@ def _recvall(sock: socket.socket, n: int) -> bytes:
     return bytes(buf)
 
 
+def _adb_forward_host() -> str:
+    """Host for the local end of `adb forward tcp:N localabstract:scrcpy`.
+
+    With a remote adb server (Docker → host.docker.internal:5037), the forward
+    binds on the *server* machine — connecting to 127.0.0.1 inside the
+    container always fails with connection refused.
+    """
+    override = os.environ.get("SCRCPY_FORWARD_HOST", "").strip()
+    if override:
+        return override
+    sock = os.environ.get("ADB_SERVER_SOCKET", "").strip()
+    if sock.startswith("tcp:"):
+        rest = sock[4:]
+        if ":" in rest:
+            host = rest.rsplit(":", 1)[0].strip()
+            if host:
+                return host
+    adb_host = os.environ.get("ADB_HOST", "").strip()
+    if adb_host and adb_host not in ("127.0.0.1", "localhost"):
+        return adb_host
+    return "127.0.0.1"
+
+
 def _adb(*args: str, serial: Optional[str] = None, timeout: int = 15) -> tuple[str, int]:
     """Run `adb [-s serial] <args>`. Returns (output, returncode). Never raises."""
     cmd = [_ADB]
@@ -759,17 +782,22 @@ class ScrcpyRelaySession:
         if rc != 0:
             raise RuntimeError(f"adb forward failed: {out.strip()}")
 
-        logger.info("[%s] scrcpy-server started, forward tcp:%d → localabstract:scrcpy",
-                    self._serial, self._port)
+        fwd_host = _adb_forward_host()
+        logger.info(
+            "[%s] scrcpy-server started, forward %s:%d → localabstract:scrcpy",
+            self._serial, fwd_host, self._port,
+        )
 
     # ── Socket connect + stream ──────────────────────────────────────────────
 
     def _connect_and_stream(self) -> None:
         """Connect sockets, read handshake, then stream H264 frames until error."""
 
+        fwd_host = _adb_forward_host()
+
         # 1. Connect video socket — poll until scrcpy binds localabstract:scrcpy.
         #    _connect_with_retry retries until scrcpy accepts OR timeout expires.
-        video_sock = self._connect_with_retry("127.0.0.1", self._port, timeout=10.0)
+        video_sock = self._connect_with_retry(fwd_host, self._port, timeout=10.0)
         video_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         _enable_tcp_keepalive(video_sock)
         # Frame-timeout: socket.recv raises socket.timeout after _FRAME_TIMEOUT seconds
@@ -781,7 +809,7 @@ class ScrcpyRelaySession:
         # 2. Connect control socket before reading handshake.
         #    scrcpy sends the dummy byte only AFTER all expected sockets connect.
         if self._enable_control_channel:
-            ctrl_sock = self._connect_with_retry("127.0.0.1", self._port, timeout=5.0)
+            ctrl_sock = self._connect_with_retry(fwd_host, self._port, timeout=5.0)
             ctrl_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             _enable_tcp_keepalive(ctrl_sock)
             ctrl_sock.settimeout(None)

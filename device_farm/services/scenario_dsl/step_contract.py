@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.execution.capture_policy import default_capture_enabled_for_step
+
 _VALID_ERROR_POLICIES = frozenset({"stop", "ignore", "on_error"})
 
 # FR-04-20: normalization must never inject implicit recovery/retry.
@@ -31,10 +33,11 @@ def normalize_step(step: dict[str, Any]) -> dict[str, Any]:
     config = out.get("config")
     out["config"] = dict(config) if isinstance(config, dict) else {}
     out["error_policy"] = effective_error_policy(out)
+    default_capture = default_capture_enabled_for_step(out)
     if "pre_capture" not in out:
-        out["pre_capture"] = True
+        out["pre_capture"] = default_capture
     if "post_capture" not in out:
-        out["post_capture"] = True
+        out["post_capture"] = default_capture
     if "retry" not in out:
         out["retry"] = None
     return out

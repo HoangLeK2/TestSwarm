@@ -13,6 +13,8 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
 
+from services.execution.capture_policy import default_capture_enabled_for_step
+
 log = logging.getLogger(__name__)
 
 _MAX_JPEG_KB = 200
@@ -38,8 +40,8 @@ except Exception:  # pragma: no cover — metrics optional in unit tests
 
 @dataclass
 class StepCaptureConfig:
-    pre_capture: bool = True
-    post_capture: bool = True
+    pre_capture: bool = False
+    post_capture: bool = False
     require_capture: bool = False
 
     @classmethod
@@ -52,10 +54,12 @@ class StepCaptureConfig:
                 return default
             return bool(val)
 
+        require_capture = _bool("require_capture", False)
+        default_capture = default_capture_enabled_for_step(step) or require_capture
         return cls(
-            pre_capture=_bool("pre_capture", True),
-            post_capture=_bool("post_capture", True),
-            require_capture=_bool("require_capture", False),
+            pre_capture=_bool("pre_capture", default_capture),
+            post_capture=_bool("post_capture", default_capture),
+            require_capture=require_capture,
         )
 
 

@@ -29,23 +29,31 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 interval = 1.0 / max(0.1, min(fps, 30))
             else:
                 interval = 1.0 if low_bw_mode else 0.033
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             while True:
                 # Normal mode uses cached scrcpy frame (fast path). Stall fallback
                 # can opt into fresh screencap at low FPS so the UI has a way out
                 # when the H264/cache path is frozen.
-                frame = None if fresh else device.take_screenshot()
+                frame = None
+                if not fresh:
+                    try:
+                        frame = device.take_screenshot()
+                    except Exception as exc:
+                        log.debug("mjpeg stream cache read failed for %s: %s", serial, exc)
                 if not frame:
-                    frame = await loop.run_in_executor(
-                        None,
-                        functools.partial(
-                            device.capture_screenshot,
-                            quality=70,
-                            max_width=800,
-                            allow_ws_u2_fallback=False,
-                            skip_cache=fresh,
-                        ),
-                    )
+                    try:
+                        frame = await loop.run_in_executor(
+                            None,
+                            functools.partial(
+                                device.capture_screenshot,
+                                quality=70,
+                                max_width=800,
+                                allow_ws_u2_fallback=False,
+                                skip_cache=fresh,
+                            ),
+                        )
+                    except Exception as exc:
+                        log.debug("mjpeg stream capture failed for %s: %s", serial, exc)
                 if frame:
                     yield (
                         b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"

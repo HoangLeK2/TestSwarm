@@ -657,6 +657,13 @@ def step_auto_connect(serial: str, ws_url: str, skip: bool) -> None:
     if not (ws_url.startswith("ws://") or ws_url.startswith("wss://")):
         console.print(f"    [red]✗[/red] Auto-connect skipped — ws_url must be ws:// or wss:// (got: {ws_url[:60]!r})")
         return
+    lowered = ws_url.lower()
+    if "127.0.0.1" in lowered or "localhost" in lowered:
+        console.print(
+            "    [yellow]⚠[/yellow] Auto-connect skipped — ws_url must be reachable from the phone "
+            f"(not localhost): {ws_url[:70]}"
+        )
+        return
     if not _is_pkg_installed(_STF_PKG, serial):
         console.print("    [dim]Auto-connect skipped — STFService not installed[/dim]")
         return

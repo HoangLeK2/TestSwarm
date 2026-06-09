@@ -15,6 +15,11 @@ function newRequestId(): string {
 /** Must match `OrganizationProvider` storage key. */
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
+function isLoopbackHost(host: string): boolean {
+  const h = (host || '').trim().toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+}
+
 /** Origin of the Device Farm HTTP API (no `/api` suffix). */
 function resolveDeviceFarmBackendBase(): string {
   const configured = (
@@ -59,32 +64,10 @@ const API_BASE_URL = `${backendBase}/api`;
 /**
  * Base URL the *phone* must reach for `/device-agent` WS (QR pairing).
  *
- * Resolution priority:
- *   1. Host/port parsed from NEXT_PUBLIC_DEVICE_FARM_WS_URL — already pinned
- *      to the deploy LAN IP (or public domain) by operators, and the phone
- *      needs to reach the same backend. Ignored if that env points at
- *      localhost/127.0.0.1 (useless to the phone).
- *   2. Browser tab hostname + API port (e.g. opening the dashboard as
- *      http://192.168.x.x:3000 yields ws://192.168.x.x:8081/...).
- *   3. NEXT_PUBLIC_PRODUCT_API_URL as-is.
+ * Set `NEXT_PUBLIC_DEVICE_FARM_WS_URL` to your LAN IP (e.g. ws://192.168.1.5:8081/ws).
+ * Otherwise uses browser hostname when not loopback, with farm port 8081.
  */
 function getDeviceBackendBase(): string {
-  let api: URL;
-  try {
-    api = new URL(deviceFarmBackendBase);
-  } catch {
-    return backendBase.replace(/\/+$/, '');
-  }
-  const scheme = api.protocol;
-  const port = api.port || (api.protocol === 'https:' ? '443' : '80');
-  const portPart =
-    (scheme === 'http:' && port === '80') ||
-    (scheme === 'https:' && port === '443')
-      ? ''
-      : `:${port}`;
-
-  // Reuse the already-configured farm WS URL so operators don't need a second
-  // env var. The agent WS lives on the same host:port, just a different path.
   const farmWsRaw = (process.env.NEXT_PUBLIC_DEVICE_FARM_WS_URL || '').trim();
   if (farmWsRaw) {
     try {
@@ -93,8 +76,7 @@ function getDeviceBackendBase(): string {
           .replace(/^ws:\/\//i, 'http://')
           .replace(/^wss:\/\//i, 'https://')
       );
-      const h = farmUrl.hostname;
-      if (h && h !== 'localhost' && h !== '127.0.0.1') {
+      if (!isLoopbackHost(farmUrl.hostname)) {
         const outScheme = farmUrl.protocol === 'https:' ? 'https:' : 'http:';
         return `${outScheme}//${farmUrl.host}`.replace(/\/+$/, '');
       }
@@ -103,9 +85,28 @@ function getDeviceBackendBase(): string {
     }
   }
 
+  let api: URL;
+  try {
+    api = new URL(deviceFarmBackendBase);
+  } catch {
+    return backendBase.replace(/\/+$/, '');
+  }
+  const scheme = api.protocol;
+  let port = api.port || (api.protocol === 'https:' ? '443' : '80');
+  if (port === '3000') {
+    port = '8081';
+  }
+  const portPart =
+    (scheme === 'http:' && port === '80') ||
+    (scheme === 'https:' && port === '443')
+      ? ''
+      : `:${port}`;
+
   if (typeof window !== 'undefined' && window.location?.hostname) {
     const host = window.location.hostname;
-    return `${scheme}//${host}${portPart}`.replace(/\/+$/, '');
+    if (!isLoopbackHost(host)) {
+      return `${scheme}//${host}${portPart}`.replace(/\/+$/, '');
+    }
   }
   return backendBase.replace(/\/+$/, '');
 }

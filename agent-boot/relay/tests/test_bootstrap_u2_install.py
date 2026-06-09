@@ -40,6 +40,40 @@ def test_bootstrap_step_install_u2_installs_only_missing_test_package(monkeypatc
     assert installed == [bootstrap._U2_TEST_PKG]
 
 
+def test_relay_bootstrap_skips_atx_u2_restart_when_healthy(monkeypatch) -> None:
+    monkeypatch.setattr(relay_adb, "_pkg_installed", lambda serial, package: True)
+    monkeypatch.setattr(relay_adb, "_install_u2_apks", lambda serial: ("u2 APKs already installed", 0))
+    monkeypatch.setattr(relay_adb, "_install_stf_apk", lambda serial: ("STFService already installed", 0))
+    monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: None)
+    monkeypatch.setattr(relay_adb, "_grant_stf_permissions", lambda serial: [])
+    monkeypatch.setattr(relay_adb, "_u2_atx_healthy", lambda serial: True)
+    monkeypatch.setattr(
+        relay_adb,
+        "_restart_atx",
+        lambda *args, **kwargs: _raise("_restart_atx should not run"),
+    )
+    monkeypatch.setattr(
+        relay_adb,
+        "_restart_u2",
+        lambda *args, **kwargs: _raise("_restart_u2 should not run"),
+    )
+    monkeypatch.setattr(relay_adb, "_probe_capabilities", lambda serial: {"wlan_ip": "192.168.1.6"})
+    monkeypatch.setattr(relay_adb, "lock_portrait_rotation", lambda serial: None)
+    monkeypatch.setattr(
+        relay_adb,
+        "_adb_shell",
+        lambda serial, cmd, timeout=30: ("arm64-v8a", 0)
+        if "ro.product.cpu.abi" in cmd
+        else ("present", 0),
+    )
+
+    output, rc = relay_adb._bootstrap_device("serial-1", timeout=60)
+
+    assert rc == 0
+    assert '"u2_ready": true' in output
+    assert '"atx_ready": true' in output
+
+
 def test_relay_bootstrap_u2_install_skips_when_packages_exist(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_BOOT_FORCE_U2_INSTALL", raising=False)
     monkeypatch.setattr(relay_adb, "_pkg_installed", lambda serial, package: True)

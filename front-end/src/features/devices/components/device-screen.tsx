@@ -40,6 +40,8 @@ type ObjectFitRect = {
   scale: number;
 };
 
+export type DeviceScreenTransport = 'auto' | 'h264-only';
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
 }
@@ -124,6 +126,8 @@ interface DeviceScreenProps {
   interactive?: boolean;
   /** Hint browser to prioritize MJPEG fetch (control-record mirror). */
   streamFetchPriority?: 'high' | 'low' | 'auto';
+  /** Stream policy. Control/record uses H264-only to avoid MJPEG screenshot latency. */
+  streamTransport?: DeviceScreenTransport;
 }
 
 export function DeviceScreen({
@@ -139,7 +143,8 @@ export function DeviceScreen({
   streamCoverAlign = 'bottom',
   streamFit,
   interactive = true,
-  streamFetchPriority = 'auto'
+  streamFetchPriority = 'auto',
+  streamTransport = 'auto'
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -187,7 +192,9 @@ export function DeviceScreen({
   const h264RecoveryBurstRef = React.useRef<{ firstAt: number; count: number }>(
     { firstAt: 0, count: 0 }
   );
-  const [mjpegEnabled, setMjpegEnabled] = useState(true);
+  const h264Only = streamTransport === 'h264-only';
+  const mjpegAllowed = !h264Only;
+  const [mjpegEnabled, setMjpegEnabled] = useState(mjpegAllowed);
   const [h264Stalled, setH264Stalled] = useState(false);
   const [h264Suppressed, setH264Suppressed] = useState(false);
   const [h264RestartKey, setH264RestartKey] = useState(0);
@@ -286,10 +293,10 @@ export function DeviceScreen({
   // Until /api/config returns, assume non-continuous (fail-open: keep legacy full stream).
   const isContinuous =
     streamingFlags !== null && streamingMode === 'continuous';
-  /** Subscribe relay H.264 + honor server detach; MJPEG below stays on so you always see picture. */
+  /** Subscribe relay H.264 + honor server detach; transport policy controls MJPEG fallback. */
   const relayH264Allowed =
     streamingFlags === null || !isContinuous || screenStreamOn;
-  const h264DecodeAllowed = relayH264Allowed && !h264Suppressed;
+  const h264DecodeAllowed = relayH264Allowed && (h264Only || !h264Suppressed);
   const h264PrimaryMode = isContinuous && h264DecodeAllowed;
 
   // Control is an explicit viewer: always ask the backend to attach scrcpy in
@@ -374,7 +381,7 @@ export function DeviceScreen({
           setH264Stalled(false);
           setH264Suppressed(false);
           setH264RestartKey((key) => key + 1);
-          setMjpegEnabled(true);
+          setMjpegEnabled(mjpegAllowed);
         }
       } catch (err) {
         const msg =
@@ -392,12 +399,13 @@ export function DeviceScreen({
         setStreamToggleBusy(false);
       }
     },
-    [device.serial, isActive, isContinuous, t]
+    [device.serial, isActive, isContinuous, mjpegAllowed, t]
   );
 
-  // In continuous mode, keep MJPEG visible until H264 is actually rendering.
+  // In auto transport, keep MJPEG visible until H264 is actually rendering.
   // Otherwise the canvas can be black during decoder warm-up or IDR recovery.
   const mjpegUrl = React.useMemo(() => {
+    if (!mjpegAllowed) return null;
     if (!tabActive) return null;
     if (!isActive || !mjpegEnabled) return null;
     if (h264PrimaryMode && h264Active && !h264Stalled) return null;
@@ -416,7 +424,8 @@ export function DeviceScreen({
     device.serial,
     h264PrimaryMode,
     h264Active,
-    h264Stalled
+    h264Stalled,
+    mjpegAllowed
   ]);
 
   useEffect(() => {
@@ -424,16 +433,17 @@ export function DeviceScreen({
   }, [mjpegUrl]);
 
   useEffect(() => {
-    if (!mjpegFailed || !tabActive || !isActive || !mjpegEnabled) return;
+    if (!mjpegAllowed || !mjpegFailed || !tabActive || !isActive || !mjpegEnabled)
+      return;
     const retry = window.setTimeout(() => {
       setMjpegFailed(false);
       setMjpegAttempt((n) => n + 1);
     }, 3000);
     return () => window.clearTimeout(retry);
-  }, [isActive, mjpegEnabled, mjpegFailed, tabActive]);
+  }, [isActive, mjpegAllowed, mjpegEnabled, mjpegFailed, tabActive]);
 
   // Always pass real serial so binary frames are subscribed immediately on mount.
-  // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
+  // H264-only surfaces intentionally skip the MJPEG screenshot fallback.
   useH264Video(
     tabActive && isActive && h264DecodeAllowed ? device.serial : '',
     canvasRef,
@@ -506,7 +516,7 @@ export function DeviceScreen({
             // last good canvas visible so recovery does not flash between H264/MJPEG.
             setH264Stalled(true);
             h264WarmupRef.current = { startedAt: 0, frames: 0 };
-            setMjpegEnabled(true);
+            setMjpegEnabled(mjpegAllowed);
             if (h264StallFallbackTimerRef.current) {
               clearTimeout(h264StallFallbackTimerRef.current);
             }
@@ -517,7 +527,13 @@ export function DeviceScreen({
             if (burst.count >= 3) {
               burst.firstAt = now;
               burst.count = 0;
-              setH264Suppressed(true);
+              if (h264Only) {
+                setH264Suppressed(false);
+                setH264RestartKey((key) => key + 1);
+                requestIdr(device.serial, 0);
+              } else {
+                setH264Suppressed(true);
+              }
               reconnectDeviceFarmSocket('repeated_h264_stall');
             }
             return;
@@ -527,15 +543,21 @@ export function DeviceScreen({
           h264WarmupRef.current = { startedAt: 0, frames: 0 };
           setH264RestartKey((key) => key + 1);
           setHasFrame(false);
-          setMjpegEnabled(true);
+          setMjpegEnabled(mjpegAllowed);
           if (burst.count >= 3) {
             burst.firstAt = now;
             burst.count = 0;
-            setH264Suppressed(true);
+            if (h264Only) {
+              setH264Suppressed(false);
+              setH264RestartKey((key) => key + 1);
+              requestIdr(device.serial, 0);
+            } else {
+              setH264Suppressed(true);
+            }
             reconnectDeviceFarmSocket('repeated_h264_stall');
           }
         },
-        [hasFrame]
+        [device.serial, h264Only, hasFrame, mjpegAllowed]
       )
     }
   );
@@ -563,17 +585,21 @@ export function DeviceScreen({
     setStreamSize(null);
     setMjpegFailed(false);
     setMjpegAttempt(0);
-    setMjpegEnabled(true);
+    setMjpegEnabled(mjpegAllowed);
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     if (h264StallFallbackTimerRef.current)
       clearTimeout(h264StallFallbackTimerRef.current);
-  }, [device.serial, isActive, relayH264Allowed]);
+  }, [device.serial, isActive, mjpegAllowed, relayH264Allowed]);
 
   // Once H264 is rendering, stop MJPEG network fetches entirely. Until then,
   // MJPEG remains the visible baseline so the user does not see a black canvas.
   useEffect(() => {
+    if (!mjpegAllowed) {
+      setMjpegEnabled((prev) => (prev ? false : prev));
+      return;
+    }
     if (h264PrimaryMode) {
       const next = !h264Active || h264Stalled;
       setMjpegEnabled((prev) => (prev === next ? prev : next));
@@ -600,7 +626,14 @@ export function DeviceScreen({
     return () => {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     };
-  }, [isActive, h264Active, relayH264Allowed, h264PrimaryMode, h264Stalled]);
+  }, [
+    isActive,
+    h264Active,
+    relayH264Allowed,
+    h264PrimaryMode,
+    h264Stalled,
+    mjpegAllowed
+  ]);
 
   // Track shared WS connectivity so loading UI can distinguish
   // "socket not up yet" vs "stream waiting first frame".
@@ -634,7 +667,7 @@ export function DeviceScreen({
     if (!isActive || !wsConnected || hasFrame) return;
     ensureWatchSerial(device.serial);
     const idr = setTimeout(() => requestIdr(device.serial), 100);
-    const armMjpeg = h264PrimaryMode
+    const armMjpeg = h264PrimaryMode && mjpegAllowed
       ? setTimeout(() => {
           setMjpegEnabled(true);
           setMjpegFailed(false);
@@ -644,7 +677,14 @@ export function DeviceScreen({
       clearTimeout(idr);
       if (armMjpeg) clearTimeout(armMjpeg);
     };
-  }, [isActive, h264PrimaryMode, hasFrame, device.serial, wsConnected]);
+  }, [
+    isActive,
+    h264PrimaryMode,
+    hasFrame,
+    device.serial,
+    wsConnected,
+    mjpegAllowed
+  ]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const getCoordinateSpace = useCallback(() => {
@@ -1013,7 +1053,7 @@ export function DeviceScreen({
         }`}
         id={`wrap-${id}`}
       >
-        {/* MJPEG baseline — always shown until H264 takes over */}
+        {/* MJPEG baseline for auto transport — omitted on H264-only control surfaces. */}
         {mjpegUrl && !mjpegFailed && (
           // eslint-disable-next-line @next/next/no-img-element -- MJPEG stream endpoint must stay as a native img.
           <img

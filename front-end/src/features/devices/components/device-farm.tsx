@@ -26,7 +26,7 @@ export function DeviceFarm() {
   const tHeader = useTranslations('devicesFarm.header');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [stepsSerial, setStepsSerial] = useState<string | null>(null);
-  const [serverAllowPreviewMjpeg, setServerAllowPreviewMjpeg] = useState(true);
+  const [serverAllowPreviewMjpeg, setServerAllowPreviewMjpeg] = useState(false);
   const [streamingConfig, setStreamingConfig] =
     useState<DeviceFarmStreamingConfig | null>(null);
 

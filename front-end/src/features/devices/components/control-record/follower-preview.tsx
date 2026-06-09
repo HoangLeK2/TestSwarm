@@ -69,6 +69,7 @@ export const FollowerPreview = memo(function FollowerPreview({
                 mode={mode}
                 interactive={false}
                 streamFetchPriority='low'
+                streamTransport='h264-only'
               />
             ) : (
               <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[10px] text-zinc-500'>

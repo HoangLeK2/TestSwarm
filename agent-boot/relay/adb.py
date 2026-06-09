@@ -654,6 +654,17 @@ def _grant_stf_permissions(serial: str) -> list[str]:
     return notes
 
 
+def _u2_atx_healthy(serial: str) -> bool:
+    """True when atx-agent and u2 instrumentation are already up (skip cold restart)."""
+    atx_host = _resolve_device_lan_ip(serial)
+    atx_ok, ping_err = _atx_http_ping(serial, host=atx_host)
+    if not atx_ok and not ping_err.startswith("device LAN IP unavailable"):
+        atx_ok = _device_port_listening(serial, 7912)
+    elif not atx_ok:
+        atx_ok = _device_port_listening(serial, 7912)
+    return atx_ok and _device_port_listening(serial, 9008)
+
+
 def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
     """
     Full device bootstrap via ADB (runs in agent-boot, close to the device):
@@ -724,21 +735,25 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
         summary["permissions_ok"] = False
         summary["errors"].extend(permission_notes)
 
-    # 6. Start atx-agent
-    msg, rc = _restart_atx(serial, timeout=min(timeout // 2, 45))
-    if rc != 0:
-        summary["errors"].append(f"atx-agent failed to start: {msg}")
-        return _json.dumps(summary), -1
-    logger.info("[%s] atx-agent ready", serial)
-    summary["atx_ready"] = True
-
-    # 7. Start u2 instrumentation
-    msg, rc = _restart_u2(serial, timeout=min(timeout // 2, 90))
-    if rc != 0:
-        logger.warning("[%s] u2 failed to start: %s", serial, msg)
-        summary["errors"].append(f"u2 failed to start: {msg}")
-        return _json.dumps(summary), -1
+    # 6–7. Start atx-agent + u2. When both are already healthy, skip force-stop
+    # cycles (~10–15s per device) — server re-bootstrap on reconnect is common.
+    if _u2_atx_healthy(serial):
+        logger.info("[%s] atx-agent and u2 already running — skip restart", serial)
+        summary["atx_ready"] = True
+        summary["u2_ready"] = True
     else:
+        msg, rc = _restart_atx(serial, timeout=min(timeout // 2, 45))
+        if rc != 0:
+            summary["errors"].append(f"atx-agent failed to start: {msg}")
+            return _json.dumps(summary), -1
+        logger.info("[%s] atx-agent ready", serial)
+        summary["atx_ready"] = True
+
+        msg, rc = _restart_u2(serial, timeout=min(timeout // 2, 90))
+        if rc != 0:
+            logger.warning("[%s] u2 failed to start: %s", serial, msg)
+            summary["errors"].append(f"u2 failed to start: {msg}")
+            return _json.dumps(summary), -1
         logger.info("[%s] u2 ready", serial)
         summary["u2_ready"] = True
 

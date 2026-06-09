@@ -152,8 +152,8 @@ function DeviceTilePreviewInner({
     tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
 
   const previewFps = useMemo(() => {
-    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 8);
-    if (!Number.isFinite(raw)) return 8;
+    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 1);
+    if (!Number.isFinite(raw)) return 1;
     return Math.max(1, Math.min(8, Math.round(raw)));
   }, []);
 
@@ -206,7 +206,7 @@ function DeviceTilePreviewInner({
   const mjpegUrl = useMemo(() => {
     if (!tabActive) return null;
     if (!isActive || !serverAllowPreviewMjpeg) return null;
-    // Keep MJPEG as fallback until H264 is actually rendering (same as control mirror).
+    // Optional low-FPS MJPEG fallback. Default backend config disables this on grid.
     if (allowH264 && h264Active) return null;
     const base = `${deviceFarmMediaBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
     const token = tokenStorage.getAuthToken();

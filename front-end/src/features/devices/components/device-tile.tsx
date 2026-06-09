@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
-import { DeviceScreen } from './device-screen';
+import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
 import { DeviceControls } from './device-controls';
 import {
   DeviceStepMonitorButton,
@@ -58,6 +58,7 @@ interface DeviceTileProps {
   /** Rail: ẩn pinch zoom + khởi động lại phiên ADB/scrcpy (trang ghi kịch bản). */
   minimalRailControls?: boolean;
   streamFetchPriority?: 'high' | 'low' | 'auto';
+  streamTransport?: DeviceScreenTransport;
   /** Hide current-app label under the mockup (filmstrip tiles). */
   hideAppCaption?: boolean;
   /** ADB / APK / file ops on the control rail (control-record). */
@@ -86,6 +87,7 @@ export function DeviceTile({
   mockupScreenWidth: mockupScreenWidthProp,
   minimalRailControls = false,
   streamFetchPriority = 'auto',
+  streamTransport = 'auto',
   hideAppCaption = false,
   deviceOps,
   screenOverlay
@@ -241,6 +243,7 @@ export function DeviceTile({
                       captionBelowFrame
                       interactive={!readOnlyPreview}
                       streamFetchPriority={streamFetchPriority}
+                      streamTransport={streamTransport}
                     />
                   ) : (
                     <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>

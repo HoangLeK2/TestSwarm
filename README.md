@@ -136,9 +136,9 @@ Important variables:
 | `SECRET_KEY` | Backend | Required for JWT auth outside throwaway local runs. |
 | `RELAY_API_KEY` | Backend, `agent-boot` | Must match on both sides when relay auth is enabled. |
 | `RELAY_SERVER` | `agent-boot` | Use `localhost:50051` for local gRPC relay. |
-| `NEXT_PUBLIC_PRODUCT_API_URL` | Frontend browser bundle | Must be reachable from the browser, usually `http://localhost:8081` for local Docker. Rebuild frontend if changed for Docker builds. |
+| `NEXT_PUBLIC_PRODUCT_API_URL` | Frontend browser bundle | Use `http://localhost:3000` for Docker Compose (same-origin proxy). Rebuild frontend if changed. |
 | `NEXT_PUBLIC_DEVICE_FARM_WS_URL` | Frontend browser bundle | Usually `ws://localhost:8081/ws` for local Docker. |
-| `DEVICE_FARM_BACKEND_URL` | Next.js server/proxy | Use `http://localhost:8081` locally or `http://farm:8081` inside Compose. |
+| `DEVICE_FARM_BACKEND_URL` | Next.js server/proxy | Use `http://localhost:8081` for host dev or `http://farm:8081` for Compose (must be set at **build** time for Docker). |
 | `DEVICE_FARM_URL` | MCP server | Backend URL, default `http://localhost:8081`. |
 | `MCP_AUTH_TOKEN` | MCP server | Bearer token for authenticated MCP device, session, campaign, content, account, and scenario tools. |
 

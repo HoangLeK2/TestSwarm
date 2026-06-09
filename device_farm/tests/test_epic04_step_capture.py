@@ -49,9 +49,30 @@ def test_epic04_capture_default_on_with_execution_id():
 
 def test_step_capture_config_defaults():
     cfg = StepCaptureConfig.from_step({"type": "wait"})
+    assert cfg.pre_capture is False
+    assert cfg.post_capture is False
+    assert cfg.require_capture is False
+
+
+def test_extract_step_capture_defaults_on():
+    cfg = StepCaptureConfig.from_step({"type": "extract"})
     assert cfg.pre_capture is True
     assert cfg.post_capture is True
     assert cfg.require_capture is False
+
+
+def test_llm_extract_step_capture_defaults_on():
+    cfg = StepCaptureConfig.from_step({"type": "llm_extract"})
+    assert cfg.pre_capture is True
+    assert cfg.post_capture is True
+
+
+def test_non_extract_can_opt_into_capture():
+    cfg = StepCaptureConfig.from_step(
+        {"type": "wait", "pre_capture": True, "post_capture": True}
+    )
+    assert cfg.pre_capture is True
+    assert cfg.post_capture is True
 
 
 def test_materialize_legacy_passes_capture_flags():
@@ -93,10 +114,10 @@ def test_compress_jpeg_reduces_large_payload():
     assert len(out) < len(raw)
 
 
-def test_pre_and_post_capture_default():
+def test_extract_pre_and_post_capture_default():
     sc = _make_sc()
-    step = {"type": "wait", "seconds": 0, "id": "w1"}
-    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+    step = {"type": "extract", "strategy": "fb_posts", "id": "x1"}
+    step_result: dict = {"index": 0, "type": "extract", "ok": True}
 
     with patch(
         "services.execution.capture_service._capture_payload",
@@ -117,10 +138,26 @@ def test_pre_and_post_capture_default():
     assert types == {"pre", "post"}
 
 
+def test_non_extract_capture_default_skips_pre_and_post():
+    sc = _make_sc()
+    step = {"type": "wait", "seconds": 0, "id": "w1"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    with patch("services.execution.capture_service._capture_payload") as cap:
+        from services.execution.capture_service import capture_before_step, capture_after_step
+
+        capture_before_step(sc, step, 0, step_result)
+        capture_after_step(sc, step, 0, step_result, 0.0, sync=True)
+
+    cap.assert_not_called()
+    assert "screenshot_pre" not in step_result
+    assert "screenshot" not in step_result
+
+
 def test_pre_capture_disabled_only_post():
     sc = _make_sc()
-    step = {"type": "wait", "pre_capture": False, "id": "w1"}
-    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+    step = {"type": "extract", "pre_capture": False, "id": "x1"}
+    step_result: dict = {"index": 0, "type": "extract", "ok": True}
 
     with patch(
         "services.execution.capture_service._capture_payload",
@@ -210,8 +247,8 @@ def test_step_runner_fail_capture_on_failed_step():
 
 def test_flush_pending_captures_waits_for_async_post():
     sc = _make_sc()
-    step = {"type": "wait", "id": "w1"}
-    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+    step = {"type": "extract", "id": "x1"}
+    step_result: dict = {"index": 0, "type": "extract", "ok": True}
 
     def fake_post(_sc, _step, _idx, result, _start, _attempt):
         result["screenshot"] = {"full": "http://minio/post.jpg"}

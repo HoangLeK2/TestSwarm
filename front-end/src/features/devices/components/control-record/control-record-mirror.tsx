@@ -149,6 +149,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
             readOnlyPreview={readOnlyPreview}
             mockupScreenWidth={mockupScreenWidth}
             streamFetchPriority='high'
+            streamTransport='h264-only'
             hideAppCaption={compactPadding}
             deviceOps={deviceOps}
             screenOverlay={screenOverlay}

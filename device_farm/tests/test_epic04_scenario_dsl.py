@@ -63,7 +63,7 @@ async def test_ac1_post_sequence_body_is_runnable(session_factory):
     assert data["is_runnable"] is True
     assert data["validation"]["status"] == "valid"
     assert data["body_json"]["steps"][0]["error_policy"] == "stop"
-    assert data["body_json"]["steps"][0]["pre_capture"] is True
+    assert data["body_json"]["steps"][0]["pre_capture"] is False
 
 
 @pytest.mark.asyncio
@@ -208,6 +208,12 @@ def test_fr04_20_guard_no_implicit_recovery_on_normalize():
     assert out["error_policy"] == "stop"
     assert out["retry"] is None
     assert_no_implicit_recovery([raw])
+
+
+def test_normalize_extract_defaults_capture_on():
+    out = normalize_step({"id": "x", "type": "extract", "config": {"strategy": "fb_posts"}})
+    assert out["pre_capture"] is True
+    assert out["post_capture"] is True
 
 
 def test_fr04_20_normalize_never_adds_on_error_branch():

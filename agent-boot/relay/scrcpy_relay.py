@@ -425,6 +425,11 @@ class ScrcpyRelaySession:
         """
         self._send_control_raw(bytes([_SC_CTRL_RESET_VIDEO]))
 
+    def _wake_display(self) -> None:
+        """Best-effort wake — Samsung/Exynos often ACK RESET_VIDEO but emit no frames while dozing."""
+        _adb("shell", "input keyevent KEYCODE_WAKEUP", serial=self._serial, timeout=5)
+        _adb("shell", "svc power stayon true", serial=self._serial, timeout=5)
+
     def _mark_idr_needed(self) -> None:
         """Called from asyncio thread when a P-frame is dropped from send_queue.
         Relay thread reads this flag and requests an IDR keyframe immediately."""
@@ -711,7 +716,7 @@ class ScrcpyRelaySession:
             f"video_codec={codec}{encoder_arg} max_fps={self._max_fps} max_size={self._max_width} "
             f"video_bit_rate={self._bitrate} "
             f"video_codec_options={','.join(codec_options)} "
-            f"stay_awake=true "
+            f"stay_awake=true turn_screen_on=true "
             f"send_device_meta=true send_frame_meta=true"
         )
 
@@ -848,6 +853,12 @@ class ScrcpyRelaySession:
                                 "[%s] scrcpy: %.1fs without frame — requested IDR keyframe",
                                 self._serial, elapsed,
                             )
+                        elif idr_request_count == 3:
+                            logger.info(
+                                "[%s] scrcpy: %.1fs without frame — waking display (IDR retry %d)",
+                                self._serial, elapsed, idr_request_count,
+                            )
+                            self._wake_display()
                         else:
                             logger.debug(
                                 "[%s] scrcpy: %.1fs without frame — IDR retry %d",

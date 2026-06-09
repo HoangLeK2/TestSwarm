@@ -15,7 +15,7 @@ export function SafeModeBanner({ className = '' }: { className?: string }) {
   const parts: string[] = [];
   if (safe_mode || !db_connected) {
     parts.push(
-      'Hệ thống đang ở chế độ giới hạn (safe mode). Một số chức năng tạm không dùng được. Auto-refresh trong 30s…'
+      'Hệ thống đang ở chế độ giới hạn . Một số chức năng tạm không dùng được. Auto-refresh trong 30s…'
     );
   }
   if (read_only) parts.push('Read-only (không cho sửa/điều khiển)');

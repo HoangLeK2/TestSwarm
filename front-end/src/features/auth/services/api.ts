@@ -24,14 +24,29 @@ export type UserOut = {
   defaultOrgId?: string | null;
 };
 
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
 export const authApi = {
   login: (data: LoginPayload) =>
-    farmApi.post<TokenResponse>('/auth/login', data).then((r) => r.data),
+    farmApi
+      .post<TokenResponse>('/auth/login', data, {
+        timeout: AUTH_REQUEST_TIMEOUT_MS,
+        _skip429Retry: true
+      })
+      .then((r) => r.data),
 
   register: (data: RegisterPayload) =>
-    farmApi.post<UserOut>('/auth/register', data).then((r) => r.data),
+    farmApi
+      .post<UserOut>('/auth/register', data, {
+        timeout: AUTH_REQUEST_TIMEOUT_MS,
+        _skip429Retry: true
+      })
+      .then((r) => r.data),
 
-  me: () => farmApi.get<UserOut>('/auth/me').then((r) => r.data),
+  me: () =>
+    farmApi
+      .get<UserOut>('/auth/me', { timeout: AUTH_REQUEST_TIMEOUT_MS })
+      .then((r) => r.data),
 
   logout: (refreshToken?: string | null) =>
     farmApi

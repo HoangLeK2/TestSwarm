@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  backup-postgres.sh
+#  Backrest "run before backup" hook — PostgreSQL / Patroni cluster
+#
+#  Output : /backup-staging/postgres/<dbname>_<timestamp>.dump
+#  Backrest plan trỏ vào: /backup-staging/postgres/
+#
+#  Backrest UI:
+#    Plan → Hooks → Run before backup:
+#      Command : /opt/backrest-scripts/backup-postgres.sh
+#      On error: cancel backup
+# =============================================================================
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 1 — CONFIG  ← CHỈNH section này
+# ─────────────────────────────────────────────────────────────────────────────
+
+STAGING_DIR="/backup-staging/postgres-ndatrace"
+LOG_FILE="/var/log/backrest/backup-postgres.log"
+AUDIT_LOG="/var/log/backrest/audit.log"
+
+# ── Kết nối PostgreSQL ────────────────────────────────────────────────────────
+PG_HOST="localhost"          # local docker: localhost (không dùng subnet/IP tĩnh)
+PG_PORT="5434"
+PG_USER="postgres"     # user có quyền SELECT + pg_dump
+export PGPASSWORD="pila_infra@2026#"
+# Password — chọn 1 trong 3 cách:
+#
+#   Cách 1 (khuyến nghị): file .pgpass — PostgreSQL native, không lộ password
+#     Format: hostname:port:database:username:password
+#     Đặt tại: /var/lib/postgresql/.pgpass  hoặc  ~/.pgpass
+#     chmod 600 ~/.pgpass
+#
+#   Cách 2: file riêng — script đọc và set PGPASSWORD
+#     Tạo: echo "strongpassword" > /etc/restic/pg-password && chmod 400 /etc/restic/pg-password
+#
+#   Cách 3: environment variable PGPASSWORD set từ ngoài (systemd EnvironmentFile)
+#
+# Chọn cách dùng bên dưới:
+PG_PASSWORD_METHOD="env"       # "pgpass" | "file" | "env"
+PG_PASSWORD_FILE="/etc/restic/pg-password"   # chỉ dùng khi METHOD=file
+
+# ── Databases ─────────────────────────────────────────────────────────────────
+PG_DATABASES=(
+    #"app_production"
+    "ndatrace-portal"
+    #""    # ← uncomment để pg_dumpall toàn bộ cluster
+)
+
+# ── pg_dump options ───────────────────────────────────────────────────────────
+# --format=custom : binary format, hỗ trợ parallel restore và chọn table riêng
+# --compress=9    : nén tối đa
+PG_DUMP_FORMAT="custom"
+PG_DUMP_COMPRESS="9"
+
+# ── Patroni ───────────────────────────────────────────────────────────────────
+# Chỉ dump khi node này là primary — bắt buộc với Patroni cluster
+CHECK_PATRONI_PRIMARY=false
+PATRONI_API="http://172.17.0.100:8008"
+
+# ── Staging retention ─────────────────────────────────────────────────────────
+# Giữ tối đa N dump file trong staging (per database)
+KEEP_STAGING_FILES=3
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 2 — HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+mkdir -p "$STAGING_DIR" "$(dirname "$LOG_FILE")"
+
+_ts()  { date '+%Y-%m-%dT%H:%M:%S%z'; }
+log()  { echo "$(_ts) [INFO]  $*" | tee -a "$LOG_FILE"; }
+err()  { echo "$(_ts) [ERROR] $*" | tee -a "$LOG_FILE" >&2; }
+ok()   { echo "$(_ts) [OK]    $*" | tee -a "$LOG_FILE"; }
+warn() { echo "$(_ts) [WARN]  $*" | tee -a "$LOG_FILE"; }
+
+audit() {
+    printf '{"ts":"%s","host":"%s","script":"backup-postgres","event":"%s","detail":"%s"}\n' \
+        "$(_ts)" "$(hostname -s)" "$1" "${2:-}" >> "$AUDIT_LOG"
+}
+
+cleanup() {
+    # Scrub password khỏi environment khi exit
+    unset PGPASSWORD 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+cleanup_staging() {
+    for db in "${PG_DATABASES[@]}"; do
+        local pattern
+        if [ "$db" = "ALL" ]; then
+            pattern="${STAGING_DIR}/pg_dumpall_*.sql.gz"
+        else
+            pattern="${STAGING_DIR}/${db}_*.dump"
+        fi
+        # shellcheck disable=SC2086
+        ls -t $pattern 2>/dev/null \
+            | tail -n +"$((KEEP_STAGING_FILES + 1))" \
+            | xargs -r rm -f
+    done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 3 — PASSWORD SETUP
+# ─────────────────────────────────────────────────────────────────────────────
+
+setup_password() {
+    case "$PG_PASSWORD_METHOD" in
+
+        pgpass)
+            # PostgreSQL đọc ~/.pgpass tự động — không cần set gì thêm
+            # Chỉ kiểm tra file tồn tại và đúng permissions
+            local pgpass_file="${PGPASSFILE:-${HOME}/.pgpass}"
+            if [ ! -f "$pgpass_file" ]; then
+                err ".pgpass file not found: ${pgpass_file}"
+                err "Create it:"
+                err "  echo '${PG_HOST}:${PG_PORT}:*:${PG_USER}:PASSWORD' > ${pgpass_file}"
+                err "  chmod 600 ${pgpass_file}"
+                exit 1
+            fi
+            local pgpass_perm
+            pgpass_perm=$(stat -c %a "$pgpass_file")
+            if [ "$pgpass_perm" != "600" ]; then
+                err ".pgpass permissions must be 600, got ${pgpass_perm}"
+                err "Fix: chmod 600 ${pgpass_file}"
+                exit 1
+            fi
+            log "Password method: .pgpass (${pgpass_file})"
+            ;;
+
+        file)
+            [ -f "$PG_PASSWORD_FILE" ] || {
+                err "Password file not found: ${PG_PASSWORD_FILE}"
+                err "Create it:"
+                err "  echo 'yourpassword' > ${PG_PASSWORD_FILE}"
+                err "  chmod 400 ${PG_PASSWORD_FILE}"
+                exit 1
+            }
+            local perm
+            perm=$(stat -c %a "$PG_PASSWORD_FILE")
+            if [ "$perm" != "400" ] && [ "$perm" != "600" ]; then
+                warn "Password file permissions ${perm} — recommend 400"
+            fi
+            export PGPASSWORD
+            PGPASSWORD=$(cat "$PG_PASSWORD_FILE")
+            log "Password method: file (${PG_PASSWORD_FILE})"
+            ;;
+
+        env)
+            [ -n "${PGPASSWORD:-}" ] || {
+                err "PGPASSWORD environment variable not set"
+                err "Set it in systemd EnvironmentFile or before calling this script"
+                exit 1
+            }
+            log "Password method: environment variable"
+            ;;
+
+        *)
+            err "Unknown PG_PASSWORD_METHOD: ${PG_PASSWORD_METHOD}"
+            err "Valid values: pgpass | file | env"
+            exit 1
+            ;;
+    esac
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 4 — CONNECTIVITY TEST
+# ─────────────────────────────────────────────────────────────────────────────
+
+test_connection() {
+    log "Testing connection to ${PG_HOST}:${PG_PORT} as ${PG_USER}..."
+    psql \
+        -h "$PG_HOST" \
+        -p "$PG_PORT" \
+        -U "$PG_USER" \
+        -d postgres \
+        -c "SELECT version();" \
+        -t --no-align \
+        2>>"$LOG_FILE" \
+        | head -1 \
+        | tee -a "$LOG_FILE" \
+    || {
+        err "Cannot connect to PostgreSQL"
+        err "  Host: ${PG_HOST}:${PG_PORT}"
+        err "  User: ${PG_USER}"
+        err "  Method: ${PG_PASSWORD_METHOD}"
+        err "Test manually: psql -h ${PG_HOST} -p ${PG_PORT} -U ${PG_USER} -d postgres"
+        exit 1
+    }
+    ok "Connection OK"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 5 — PATRONI CHECK
+# ─────────────────────────────────────────────────────────────────────────────
+
+check_patroni_primary() {
+    [ "$CHECK_PATRONI_PRIMARY" = "true" ] || return 0
+
+    log "Checking Patroni role at ${PATRONI_API}..."
+    local role
+    role=$(curl -sf "${PATRONI_API}" 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('role','unknown'))" \
+        2>/dev/null || echo "unknown")
+
+    log "  Patroni role: ${role}"
+
+    if [ "$role" != "master" ] && [ "$role" != "primary" ]; then
+        log "Node is '${role}' — not primary. Skipping dump."
+        log "Backrest will backup existing staging files (previous run's dumps)."
+        audit "skipped" "role=${role}"
+        exit 0
+    fi
+
+    ok "Node is primary — proceeding with dump"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 6 — DUMP
+# ─────────────────────────────────────────────────────────────────────────────
+
+run_dumps() {
+    local failed=0
+
+    for DB in "${PG_DATABASES[@]}"; do
+
+        if [ "$DB" = "ALL" ]; then
+            # ── pg_dumpall ───────────────────────────────────────────────────
+            local out="${STAGING_DIR}/pg_dumpall_${TIMESTAMP}.sql.gz"
+            log "pg_dumpall → $(basename "$out")"
+
+            pg_dumpall \
+                -h "$PG_HOST" \
+                -p "$PG_PORT" \
+                -U "$PG_USER" \
+                
+                --clean \
+                --if-exists \
+                2>>"$LOG_FILE" \
+            | gzip -9 > "$out" || {
+                err "pg_dumpall failed"
+                rm -f "$out"
+                (( failed++ )) || true
+                continue
+            }
+
+        else
+            local TABLE_NAME="public.ten_table"
+            local SAFE_TABLE_NAME
+            SAFE_TABLE_NAME=$(echo "$TABLE_NAME" | tr '.' '_')
+            # ── pg_dump single database ──────────────────────────────────────
+            local out="${STAGING_DIR}/${DB}_${TIMESTAMP}.dump"
+            log "pg_dump ${DB} → $(basename "$out")"
+            
+            pg_dump \
+                -h "$PG_HOST" \
+                -p "$PG_PORT" \
+                -U "$PG_USER" \
+                --format="$PG_DUMP_FORMAT" \
+                --compress="$PG_DUMP_COMPRESS" \
+                --dbname="$DB" \
+                --table="$TABLE_NAME" \
+                --file="$out" \
+                2>>"$LOG_FILE" || {
+                err "pg_dump failed for database: ${DB}"
+                rm -f "$out"
+                (( failed++ )) || true
+                continue
+            }
+        fi
+
+        local size
+        size=$(du -sh "$out" | cut -f1)
+        ok "  $(basename "$out")  (${size})"
+        audit "dump_ok" "db=${DB} file=$(basename "$out") size=${size}"
+    done
+
+    return "$failed"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 7 — MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+main() {
+    log "════════════════════════════════════════"
+    log " PostgreSQL backup hook — $(date)"
+    log " Host: ${PG_HOST}:${PG_PORT}  User: ${PG_USER}"
+    log "════════════════════════════════════════"
+
+    audit "start" "host=${PG_HOST} user=${PG_USER} databases=${PG_DATABASES[*]}"
+
+    command -v pg_dump  &>/dev/null || { err "pg_dump not found — install postgresql-client"; exit 1; }
+    command -v psql     &>/dev/null || { err "psql not found — install postgresql-client"; exit 1; }
+
+    setup_password
+    test_connection
+    check_patroni_primary
+
+    run_dumps
+    local dump_result=$?
+
+    cleanup_staging
+
+    if [ "$dump_result" -ne 0 ]; then
+        err "One or more dumps failed — Backrest backup cancelled"
+        audit "failed" "failed_count=${dump_result}"
+        exit 1
+    fi
+
+    log ""
+    log "Staging contents:"
+    ls -lh "$STAGING_DIR/" | tee -a "$LOG_FILE"
+
+    ok "All dumps ready → ${STAGING_DIR}"
+    audit "success" "staging=${STAGING_DIR}"
+    exit 0
+}
+
+main

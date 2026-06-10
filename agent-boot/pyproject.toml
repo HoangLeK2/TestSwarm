@@ -10,7 +10,6 @@ dependencies = [
     "rich>=13.0",
     # adb operations use subprocess (system adb binary) — no ppadb dependency
     "grpcio>=1.80.0",
-    "grpcio-tools>=1.80.0",
     "protobuf>=5.26.0",
     "uiautomator2>=3.0",
     # stability: retry + circuit-breaker for scrcpy / u2 / adb recovery loops
@@ -32,6 +31,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "grpcio-tools>=1.80.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23,<1.0",
 ]

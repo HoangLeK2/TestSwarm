@@ -30,7 +30,6 @@ dependencies = [
     { name = "dateparser" },
     { name = "ftfy" },
     { name = "grpcio" },
-    { name = "grpcio-tools" },
     { name = "lxml" },
     { name = "orjson" },
     { name = "protobuf" },
@@ -44,6 +43,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "grpcio-tools" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -55,7 +55,6 @@ requires-dist = [
     { name = "dateparser", specifier = ">=1.2" },
     { name = "ftfy", specifier = ">=6.2" },
     { name = "grpcio", specifier = ">=1.80.0" },
-    { name = "grpcio-tools", specifier = ">=1.80.0" },
     { name = "lxml", specifier = ">=5.0.0" },
     { name = "orjson", specifier = ">=3.10" },
     { name = "protobuf", specifier = ">=5.26.0" },
@@ -69,6 +68,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "grpcio-tools", specifier = ">=1.80.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23,<1.0" },
 ]

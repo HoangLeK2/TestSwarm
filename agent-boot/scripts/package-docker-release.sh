@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ship Docker image tar + compose bundle (no source code).
+# Ship universal Docker bundle: amd64 + arm64 images + compose + scripts.
 #
 # Usage:
 #   ./scripts/package-docker-release.sh
@@ -7,7 +7,8 @@
 #
 # Output:
 #   dist/agent-boot-docker-<version>.tar.gz
-#   dist/agent-boot-image-<version>.tar   (also copied inside bundle)
+#   dist/agent-boot-image-<version>-amd64.tar.gz
+#   dist/agent-boot-image-<version>-arm64.tar.gz
 
 set -euo pipefail
 
@@ -21,14 +22,15 @@ fi
 
 NAME="agent-boot-docker-${VERSION}"
 OUT_DIR="$ROOT/dist"
-IMAGE_TAR="$OUT_DIR/agent-boot-image-${VERSION}.tar"
+IMAGE_AMD64="$OUT_DIR/agent-boot-image-${VERSION}-amd64.tar.gz"
+IMAGE_ARM64="$OUT_DIR/agent-boot-image-${VERSION}-arm64.tar.gz"
 BUNDLE_TAR="$OUT_DIR/${NAME}.tar.gz"
 
 mkdir -p "$OUT_DIR"
 
-if [[ ! -f "$IMAGE_TAR" ]]; then
-  echo "== Building image tar (missing $IMAGE_TAR) =="
-  "$ROOT/scripts/docker-save-image.sh" "$VERSION" "$IMAGE_TAR"
+if [[ ! -f "$IMAGE_AMD64" ]] || [[ ! -f "$IMAGE_ARM64" ]]; then
+  echo "== Building multi-arch image tars (missing amd64 and/or arm64) =="
+  "$ROOT/scripts/docker-save-image.sh" "$VERSION"
 fi
 
 STAGING="$(mktemp -d)"
@@ -43,9 +45,9 @@ cp "$ROOT/.env.example" "$DEST/.env.example"
 cp "$ROOT/deploy/scripts/docker-up.sh" "$DEST/scripts/docker-up.sh"
 cp "$ROOT/deploy/scripts/docker-load.sh" "$DEST/scripts/docker-load.sh"
 chmod +x "$DEST/scripts/docker-up.sh" "$DEST/scripts/docker-load.sh"
-cp "$IMAGE_TAR" "$DEST/agent-boot-image-${VERSION}.tar"
+cp "$IMAGE_AMD64" "$DEST/agent-boot-image-${VERSION}-amd64.tar.gz"
+cp "$IMAGE_ARM64" "$DEST/agent-boot-image-${VERSION}-arm64.tar.gz"
 
-# Pin image tag in compose (must match docker-save-image.sh).
 sed -i '' "s|image: agent-boot:.*|image: agent-boot:${VERSION}|" "$DEST/docker-compose.yml" 2>/dev/null \
   || sed -i "s|image: agent-boot:.*|image: agent-boot:${VERSION}|" "$DEST/docker-compose.yml"
 
@@ -60,12 +62,13 @@ tar -cf "$BUNDLE_TAR_PLAIN" -C "$STAGING" "$NAME"
 
 echo "Created: $BUNDLE_TAR"
 echo "Created: $BUNDLE_TAR_PLAIN  (uncompressed, for scp/rsync)"
-ls -lh "$BUNDLE_TAR" "$BUNDLE_TAR_PLAIN"
+ls -lh "$BUNDLE_TAR" "$BUNDLE_TAR_PLAIN" "$IMAGE_AMD64" "$IMAGE_ARM64"
 echo ""
-echo "Ship to customer:"
+echo "Universal bundle (amd64 + arm64). Ship one file:"
+echo "  $(basename "$BUNDLE_TAR")"
+echo ""
+echo "Customer:"
 echo "  1) tar -xzf $(basename "$BUNDLE_TAR") && cd $NAME"
-echo "  2) ./scripts/docker-load.sh"
-echo "  3) cp .env.example .env && edit secrets"
+echo "  2) ./scripts/docker-load.sh     # auto-picks CPU arch"
+echo "  3) cp .env.example .env && edit RELAY_API_KEY + RELAY_ENROLLMENT_TOKEN"
 echo "  4) ./scripts/docker-up.sh up -d"
-echo ""
-echo "Image tar (standalone): $IMAGE_TAR"

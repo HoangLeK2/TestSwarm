@@ -108,6 +108,12 @@ CMD_PROBE_CAPS      = 6  # _probe_capabilities() → JSON dict in output
 CMD_RESTART_SCRCPY  = 7  # stop + resume scrcpy session for a device
 
 
+def _auto_bootstrap_enabled() -> bool:
+    return os.getenv("AGENT_BOOT_AUTO_BOOTSTRAP", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _load_or_create_relay_id() -> str:
     if os.path.exists(_RELAY_ID_FILE):
         rid = open(_RELAY_ID_FILE).read().strip()
@@ -168,8 +174,10 @@ class RelayAgent:
                 grpc_root_cert_file
                 or os.getenv("RELAY_GRPC_ROOT_CERT_FILE", "").strip()
             )
-            if self._grpc_root_cert_file:
-                self._grpc_tls_enabled = True
+            if self._grpc_tls_enabled and not self._grpc_root_cert_file:
+                bundled_root_cert = "/app/certs/grpc-relay-ca.pem"
+                if os.path.isfile(bundled_root_cert):
+                    self._grpc_root_cert_file = bundled_root_cert
         else:
             # WS mode: normalise URL
             if not server_url.startswith("ws://") and not server_url.startswith("wss://"):
@@ -202,6 +210,7 @@ class RelayAgent:
         self._scrcpy_logical_to_adb: dict[str, str] = {}
         # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
         self._atx_lan_host_cache: dict[str, str] = {}
+        self._bootstrap_inflight: set[str] = set()
 
         # Runtime: bounded executors + task registry + watchdog.
         # `_stream_tasks` is replaced per transport connect; this initial
@@ -665,6 +674,30 @@ class RelayAgent:
             return mapped
         return self._adb_serial_prefer_usb_over_tcp(server_serial)
 
+    async def _auto_bootstrap_online_device(self, serial: str) -> None:
+        if not _auto_bootstrap_enabled():
+            return
+        if serial in self._bootstrap_inflight:
+            return
+        self._bootstrap_inflight.add(serial)
+        try:
+            loop = asyncio.get_running_loop()
+            logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
+            output, rc = await loop.run_in_executor(
+                adb_executor(),
+                _bootstrap_device,
+                serial,
+                180,
+            )
+            if rc == 0:
+                logger.info("[%s] auto-bootstrap ok: %s", serial, output[:500])
+            else:
+                logger.warning("[%s] auto-bootstrap failed (rc=%s): %s", serial, rc, output[:500])
+        except Exception as exc:
+            logger.warning("[%s] auto-bootstrap error: %s", serial, exc)
+        finally:
+            self._bootstrap_inflight.discard(serial)
+
     async def _on_device_event(
         self, serial: str, adb_state: str, send_queue: asyncio.Queue
     ) -> None:
@@ -693,6 +726,11 @@ class RelayAgent:
             self._cleanup_serial_state(serial)
 
         if ctx.state == DeviceState.ONLINE:
+            if _auto_bootstrap_enabled():
+                asyncio.create_task(
+                    self._auto_bootstrap_online_device(serial),
+                    name=f"auto-bootstrap-{serial}",
+                )
             loop = asyncio.get_running_loop()
             await self._ensure_capabilities_for_serials([serial], loop)
             pairs = await loop.run_in_executor(

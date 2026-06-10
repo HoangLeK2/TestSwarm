@@ -1,4 +1,4 @@
-import { farmApi } from '@/lib/farm-api';
+import { deviceFarmBackendBase, farmApi } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import type { Device, DeviceEvent, Task } from '../types';
 import {
@@ -209,7 +209,8 @@ export async function fetchScreenshotB64(
   serial: string
 ): Promise<{ screenshot: string; width: number; height: number }> {
   const { data } = await farmApi.get(
-    `/screenshot-b64/${encodeURIComponent(serial)}`
+    `/screenshot-b64/${encodeURIComponent(serial)}`,
+    { baseURL: deviceFarmBackendBase }
   );
   return data as { screenshot: string; width: number; height: number };
 }

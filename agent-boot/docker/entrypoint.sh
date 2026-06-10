@@ -49,7 +49,8 @@ else
     fi
     if (( elapsed == 0 )); then
       echo "entrypoint: waiting for host ADB at ${ADB_HOST}:${ADB_PORT} ..."
-      echo "  On host: adb -a -P ${ADB_PORT} nodaemon server"
+      echo "  On host (required global -a, not default localhost-only):"
+      echo "    adb kill-server && adb -a -P ${ADB_PORT} nodaemon server"
       echo "  Or: ./scripts/docker-up.sh up -d"
     fi
     sleep 2
@@ -65,7 +66,7 @@ fi
 unset use_host
 
 if [[ $# -eq 0 ]]; then
-  set -- uv run main.py --relay-only
+  set -- /app/.venv/bin/python main.py --relay-only
 fi
 
 exec "$@"

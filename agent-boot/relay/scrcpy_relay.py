@@ -159,9 +159,7 @@ _HEVC_OEM_ALLOWLIST = {
     if s.strip()
 }
 # Qualcomm Vivo builds: prefer HW H.264 when codec stays h264 and encoder is unset.
-_VIVO_H264_ENCODER_DEFAULT = os.environ.get(
-    "SCRCPY_VIVO_H264_ENCODER", "c2.qti.avc.encoder"
-).strip()
+_VIVO_H264_ENCODER_DEFAULT = os.environ.get("SCRCPY_VIVO_H264_ENCODER", "").strip()
 
 
 def _per_serial_env(base: str, serial: str, fallback: str) -> str:
@@ -484,6 +482,7 @@ class ScrcpyRelaySession:
         window_start = time.monotonic()
         exit_reason: Optional[str] = None
 
+        stream_started = time.monotonic()
         try:
             while self._running:
                 try:
@@ -677,7 +676,10 @@ class ScrcpyRelaySession:
         # Samsung/Vivo Android 16 can repeatedly stall with this software encoder
         # in relay mode. Prefer scrcpy auto-pick so OEM-specific hardware encoders
         # (or HEVC fallback for allowlisted OEMs) can be selected.
-        if oem in {"samsung", "vivo"} and encoder == "c2.android.avc.encoder":
+        if oem in {"samsung", "vivo"} and encoder in {
+            "c2.android.avc.encoder",
+            "c2.qti.avc.encoder",
+        }:
             logger.warning(
                 "[%s] dropping unstable encoder override on %s (%s): %s -> auto",
                 self._serial,

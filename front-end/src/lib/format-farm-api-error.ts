@@ -33,7 +33,7 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
       /network error/i.test(e.message) &&
       !e.response)
   ) {
-    return 'Không kết nối được API. Kiểm tra backend (docker compose / uv run) đang chạy, DEVICE_FARM_BACKEND_URL trong front-end/.env trỏ đúng máy chủ farm, và mở dashboard cùng địa chỉ với Next (vd. http://IP:3000).';
+    return 'Không kết nối được API. Kiểm tra backend (docker compose / uv run) đang chạy và NEXT_PUBLIC_PRODUCT_API_URL trong front-end/.env trỏ đúng máy chủ farm (vd. http://IP:8081).';
   }
   const d = e.response?.data?.detail;
   if (typeof d === 'string' && d.trim()) return d.trim();

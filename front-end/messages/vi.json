@@ -892,7 +892,7 @@
       "cancel": "Huỷ",
       "importSuccess": "Đã nhập kịch bản",
       "importFailed": "Nhập kịch bản thất bại",
-      "networkErrorHint": "Không kết nối được máy chủ. Kiểm tra backend đang chạy và front-end/.env (DEVICE_FARM_BACKEND_URL) đúng IP farm."
+      "networkErrorHint": "Không kết nối được máy chủ. Kiểm tra backend đang chạy và NEXT_PUBLIC_PRODUCT_API_URL trong front-end/.env trỏ đúng IP farm (vd. http://IP:8081)."
     },
     "cloneDialog": {
       "trigger": "Sử dụng",

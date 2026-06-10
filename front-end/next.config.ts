@@ -4,16 +4,14 @@ import createNextIntlPlugin from 'next-intl/plugin';
 
 const withNextIntl = createNextIntlPlugin();
 
-// Backend URL for server-side proxy (only used during Next.js dev / SSR)
-const BACKEND = process.env.DEVICE_FARM_BACKEND_URL ?? 'http://localhost:8081';
-
 function extraDevOrigins(): string[] {
   const origins = new Set<string>([
     'http://localhost:3000',
     'http://127.0.0.1:3000'
   ]);
+  const apiUrl = process.env.NEXT_PUBLIC_PRODUCT_API_URL ?? '';
   try {
-    const backend = new URL(BACKEND);
+    const backend = new URL(apiUrl);
     if (
       backend.hostname &&
       backend.hostname !== 'localhost' &&
@@ -33,23 +31,6 @@ const baseConfig: NextConfig = {
   output: 'standalone',
   // Cho phép truy cập dev từ IP nội bộ (vd. 172.16.0.86) tránh cảnh báo cross-origin _next/*
   allowedDevOrigins: extraDevOrigins(),
-  async rewrites() {
-    return [
-      {
-        source: '/api/screenshot-b64/:path*',
-        destination: `${BACKEND}/screenshot-b64/:path*`
-      },
-      // Proxy REST /api/* to FastAPI. Long-lived media (/stream, /screenshot, /ws)
-      // must NOT go through Next — route them at the edge (Caddy/Cloudflare) to farm:8081.
-      { source: '/api/:path*', destination: `${BACKEND}/api/:path*` }
-      // { source: '/vi/stream/:path*', destination: `${BACKEND}/stream/:path*` },
-      // { source: '/en/stream/:path*', destination: `${BACKEND}/stream/:path*` },
-      // { source: '/stream/:path*', destination: `${BACKEND}/stream/:path*` },
-      // { source: '/vi/screenshot/:path*', destination: `${BACKEND}/screenshot/:path*` },
-      // { source: '/en/screenshot/:path*', destination: `${BACKEND}/screenshot/:path*` },
-      // { source: '/screenshot/:path*', destination: `${BACKEND}/screenshot/:path*` },
-    ];
-  },
   images: {
     remotePatterns: [
       {

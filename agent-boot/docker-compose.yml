@@ -4,8 +4,8 @@
 #   cp .env.example .env   # điền RELAY_*
 #   ./scripts/docker-up.sh up -d --build
 #
-# Hoặc tự bật ADB host rồi:
-#   adb -a nodaemon server &
+# Hoặc tự bật ADB host (bắt buộc -a = global, không dùng adb start-server):
+#   adb kill-server && adb -a -P 5037 nodaemon server &
 #   docker compose up -d --build
 #
 # Linux USB trực tiếp trong container (không cần host ADB):
@@ -30,6 +30,7 @@ services:
       ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
       ANDROID_ADB_SERVER_HOST: host.docker.internal
       ANDROID_ADB_SERVER_PORT: "5037"
+      # Trong container, localhost ≠ host — .env dùng host.docker.internal cho farm/Postgres
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # CMD from Dockerfile: uv run main.py --relay-only (via entrypoint)

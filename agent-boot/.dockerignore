@@ -14,3 +14,15 @@ plans/
 *.tar.gz
 *.zip
 agent-boot-image*.tar
+agent-boot-docker*.tar.gz
+
+# Root-level duplicate; canonical path is assets/apks/STFService.apk
+STFService.apk
+bootstrap.py
+pack_bundle.py
+README.md
+INSTALL.md
+docker-compose.yml
+scripts/
+deploy/
+relay/tests/

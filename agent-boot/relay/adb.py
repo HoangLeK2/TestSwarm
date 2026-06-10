@@ -581,12 +581,14 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
     out_m = "Success"
     out_t = "Success"
     if force_install or not installed_main:
+        logger.info("[%s] installing u2 main APK from %s", serial, main_apk)
         out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
                        serial=serial, timeout=120)
         if rc != 0:
             return f"push u2 main APK failed: {out}", -1
         out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
     if force_install or not installed_test:
+        logger.info("[%s] installing u2 test APK from %s", serial, test_apk)
         out, rc = _run("push", str(test_apk), "/data/local/tmp/u2-test.apk",
                        serial=serial, timeout=120)
         if rc != 0:
@@ -639,6 +641,7 @@ def _install_stf_apk(serial: str) -> tuple[str, int]:
             -1,
         )
 
+    logger.info("[%s] installing STFService APK from %s", serial, apk_path)
     out, rc = _run("install", "-r", str(apk_path), serial=serial, timeout=180)
     if rc != 0 or "Success" not in out:
         return f"STFService install failed: {out}", -1

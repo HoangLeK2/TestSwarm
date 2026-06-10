@@ -22,39 +22,7 @@ function isLoopbackHost(host: string): boolean {
 
 /** Origin of the Device Farm HTTP API (no `/api` suffix). */
 function resolveDeviceFarmBackendBase(): string {
-  const configured = (
-    process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
-  ).replace(/\/+$/, '');
-
-  if (typeof window === 'undefined') {
-    return configured;
-  }
-
-  try {
-    const configuredUrl = new URL(configured);
-    const pageOrigin = window.location.origin.replace(/\/+$/, '');
-    const pageHost = new URL(pageOrigin).host;
-    if (configuredUrl.host === pageHost) {
-      return configured;
-    }
-
-    const isDev =
-      (process.env.NEXT_PUBLIC_ENVIRONMENT || '').trim().toLowerCase() ===
-      'dev';
-    const pointsAtNextDevServer =
-      configuredUrl.port === '3000' ||
-      configuredUrl.hostname === 'localhost' ||
-      configuredUrl.hostname === '127.0.0.1';
-
-    // `next.config` rewrites `/api/*` → DEVICE_FARM_BACKEND_URL on the Next host.
-    // Use the tab origin when env still says localhost:3000 but the user opened via LAN IP.
-    if (isDev || pointsAtNextDevServer) {
-      return pageOrigin;
-    }
-  } catch {
-    // keep configured
-  }
-  return configured;
+  return (process.env.NEXT_PUBLIC_PRODUCT_API_URL ?? '').replace(/\/+$/, '');
 }
 
 export const deviceFarmBackendBase = resolveDeviceFarmBackendBase();
@@ -139,14 +107,6 @@ function resolveDeviceFarmMediaBase(): string {
 
 export const deviceFarmMediaBase = resolveDeviceFarmMediaBase();
 
-// Chỉ dùng cho các API call từ frontend (axios baseURL đã đúng). getRuntimeBase giữ cho tương thích nếu có chỗ dùng.
-function getRuntimeBase(): string {
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin.replace(/\/+$/, '');
-  }
-  return backendBase;
-}
-
 export function getStfApkDownloadUrl(): string {
   return `${API_BASE_URL}/devices/stf-apk`;
 }
@@ -165,13 +125,9 @@ export function getDeviceAgentWsUrl(query = ''): string {
   return `${getDeviceAgentWsBase()}/device-agent${suffix}`;
 }
 
-/** URL for connect-by-QR (ADB): app on phone POSTs its IP here after scanning QR.
- *  Uses the frontend origin (window.location.origin) so that the phone can always
- *  reach it — the same host:port the user opened the dashboard on — and Next.js
- *  proxies the request onward to the backend.
- */
+/** URL for connect-by-QR (ADB): app on phone POSTs its IP here after scanning QR. */
 export function getConnectRegisterUrl(): string {
-  return `${getRuntimeBase()}/api/connect/register`;
+  return `${getDeviceBackendBase()}/api/connect/register`;
 }
 
 export const farmApi = axios.create({

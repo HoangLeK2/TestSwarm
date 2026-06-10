@@ -97,9 +97,9 @@ docker load -i dist/agent-boot-image-0.1.0.tar
 # -> dist/agent-boot-docker-0.1.0.tar.gz
 ```
 
-Gói gồm: **image `.tar` + `docker-compose.yml` + `scripts/docker-up.sh` + `.env.example`**.
+Gói gồm: **image amd64 + arm64** + `docker-compose.yml` + scripts + `.env.example` (một file zip chạy mọi CPU).
 
-Khách giải nén → `./scripts/docker-load.sh` → `./scripts/docker-up.sh`.
+Khách giải nén → `./scripts/docker-load.sh` (tự chọn arch) → `./scripts/docker-up.sh`.
 
 ### Gói source `.tar.gz` vs image `.tar`
 
@@ -107,7 +107,8 @@ Khách giải nén → `./scripts/docker-load.sh` → `./scripts/docker-up.sh`.
 |------|----------|-----------|
 | `dist/agent-boot-docker-0.1.0.tar.gz` | Image + compose + scripts | `tar -xzf` → `docker-load.sh` |
 | `dist/agent-boot-0.1.0.tar.gz` | Source + Dockerfile | `tar -xzf` → `docker build` |
-| `dist/agent-boot-image-0.1.0.tar` | Chỉ Docker image | `docker load -i` |
+| `dist/agent-boot-image-0.1.0-amd64.tar` | Image PC/Linux | `docker load -i` |
+| `dist/agent-boot-image-0.1.0-arm64.tar` | Image Mac M-series | `docker load -i` |
 
 ADB server trên Mac host — dùng `./scripts/docker-up.sh` (tự bật `adb -a` khi cần).
 

@@ -35,18 +35,59 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-# If something already listens on 5037, assume host ADB is up (e.g. adb -a nodaemon server).
-if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$ADB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "== ADB server already listening on port ${ADB_PORT} =="
-else
-  echo "== Starting host ADB server (0.0.0.0:${ADB_PORT}) =="
+adb_port_listening() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN
+    return
+  fi
+  adb -P "$port" get-state >/dev/null 2>&1
+}
+
+adb_server_is_global() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null \
+      | grep -qE "(^|\s)\*:${port}\s|0\.0\.0\.0:${port}\s|\[::\]:${port}\s"
+    return
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$port" 2>/dev/null \
+      | grep -qE "0\.0\.0\.0:${port}|\[::\]:${port}"
+    return
+  fi
+  return 0
+}
+
+start_global_adb_server() {
+  echo "== Starting host ADB server (global 0.0.0.0:${ADB_PORT}, flag -a) =="
   adb kill-server 2>/dev/null || true
   nohup adb -a -P "$ADB_PORT" nodaemon server >/tmp/agent-boot-adb-server.log 2>&1 &
   sleep 1
-  if ! lsof -nP -iTCP:"$ADB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  if ! adb_port_listening "$ADB_PORT"; then
     echo "error: ADB server did not start; see /tmp/agent-boot-adb-server.log" >&2
     exit 1
   fi
+  if ! adb_server_is_global "$ADB_PORT"; then
+    echo "error: ADB is up but not listening globally — Docker cannot use host ADB" >&2
+    echo "  required: adb kill-server && adb -a -P ${ADB_PORT} nodaemon server" >&2
+    exit 1
+  fi
+}
+
+if adb_port_listening "$ADB_PORT"; then
+  if adb_server_is_global "$ADB_PORT"; then
+    echo "== ADB server already listening globally on port ${ADB_PORT} =="
+  else
+    echo "warning: ADB on :${ADB_PORT} is localhost-only — restarting with -a (global)" >&2
+    start_global_adb_server
+  fi
+else
+  start_global_adb_server
 fi
 
 echo "== Host devices =="

@@ -28,6 +28,8 @@ RUN chmod +x docker/entrypoint.sh
 ENV ADB_HOST=host.docker.internal \
     ADB_PORT=5037 \
     ADB_SERVER_SOCKET=tcp:host.docker.internal:5037 \
+    ANDROID_ADB_SERVER_HOST=host.docker.internal \
+    ANDROID_ADB_SERVER_PORT=5037 \
     ADB_WAIT_SECONDS=120
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-# Release packages (customer deliverables)
+# Release packages (customer deliverables) — never commit to git
 dist/
+*.tar
+*.tar.gz
+agent-boot-docker-*

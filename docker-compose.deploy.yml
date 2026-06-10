@@ -145,6 +145,7 @@ services:
         NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
         NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
         NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+        DEVICE_FARM_BACKEND_URL: ${DEVICE_FARM_BACKEND_URL:-http://farm:8081}
     env_file:
       - ./.env
     restart: unless-stopped

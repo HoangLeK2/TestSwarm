@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -140,6 +140,7 @@ import {
   applySelectorToSteps,
   applyTapPointToSteps,
   applySwipeSegmentToSteps,
+  resolveLatestStepForInlineRun,
   type SelectorPickTarget,
   type CoordinatePickTarget
 } from '@/features/campaigns/components/flow-editor';
@@ -147,10 +148,13 @@ import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon'
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import {
   findSelectorForTreeNode,
-  findSelectorInXml
+  findSelectorInXml,
+  listSelectorCandidatesInXml,
+  type XmlSelectorPick
 } from '../utils/control-record-xml';
 import type { ScenarioSelectorShape } from '../lib/scenario-selector-step';
 import { buildSelectorStep } from '../lib/scenario-selector-step';
+import { sanitizeScenarioStep } from '../lib/sanitize-scenario-steps-for-api';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import {
   previewScenarioStream,
@@ -243,6 +247,25 @@ function isManualControlEligible(d: {
   return state === 'READY' && (d.scenario_active ?? 0) <= 0;
 }
 
+function prepareInlinePreviewStep(
+  steps: FlowStep[],
+  runKey: string,
+  clickSnapshot: FlowStep
+): Record<string, any> {
+  const step = resolveLatestStepForInlineRun(steps, runKey, clickSnapshot);
+  return sanitizeScenarioStep(
+    JSON.parse(JSON.stringify(step)) as FlowStep
+  ) as Record<string, any>;
+}
+
+function preparePreviewStepPayload(step: FlowStep): Record<string, any> {
+  const payload = sanitizeScenarioStep(
+    JSON.parse(JSON.stringify(step)) as FlowStep
+  ) as Record<string, any>;
+  delete payload._fgId;
+  return payload;
+}
+
 type Props = {
   initialSerial?: string | null;
   initialCampaignId?: string | null;
@@ -266,6 +289,7 @@ export function ControlRecordView({
   const t = useTranslations('devicesControlRecord.view');
   const tDeviceOps = useTranslations('devicesControlRecord.deviceOps');
   const tOrg = useTranslations('orgScenariosFeature.detail');
+  const queryClient = useQueryClient();
   const tDv = useTranslations('components.deviceVarsJson');
   const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
   const tModal = useTranslations('components.modal');
@@ -281,6 +305,10 @@ export function ControlRecordView({
     );
   const hierarchyXml = hierarchy.xml;
   const setHierarchyPaused = hierarchy.setPaused;
+  const pickTargetPackage = useMemo(
+    () => packageFromCurrentApp(device.selectedDevice?.current_app) || undefined,
+    [device.selectedDevice?.current_app]
+  );
   const handleScreenTapRef = useRef<(rx: number, ry: number) => void>(() => {});
   const handleScreenSwipeRef = useRef<
     (
@@ -363,6 +391,15 @@ export function ControlRecordView({
   const [playerMode, setPlayerMode] = useState(false);
   const [selectorPickTarget, setSelectorPickTarget] =
     useState<SelectorPickTarget | null>(null);
+  // Candidate cycling: when several elements overlap the same tap point
+  // (common on Facebook), re-tapping the spot or using prev/next cycles them.
+  const pickCandidatesRef = useRef<XmlSelectorPick[]>([]);
+  const pickCycleIndexRef = useRef(0);
+  const lastPickSpotRef = useRef<{ rx: number; ry: number } | null>(null);
+  const [pickCycle, setPickCycle] = useState<{
+    index: number;
+    total: number;
+  } | null>(null);
   const [coordinatePickTarget, setCoordinatePickTarget] =
     useState<CoordinatePickTarget | null>(null);
   const mirrorColRef = useRef<HTMLDivElement>(null);
@@ -495,6 +532,7 @@ export function ControlRecordView({
   >(null);
   const flowCtxRef = useRef<FixedLayoutPluginContext | null>(null);
   const stepsItemsRef = useRef(steps.items);
+  stepsItemsRef.current = steps.items;
   const flowSelectedFgIdRef = useRef<string | null>(null);
   const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
@@ -506,6 +544,12 @@ export function ControlRecordView({
   const [varDialogOpen, setVarDialogOpen] = useState(false);
   const [deviceVarDialogOpen, setDeviceVarDialogOpen] = useState(false);
   const deviceVarsHydratedKeyRef = useRef<string | null>(null);
+  const deviceVarStateRef = useRef<{
+    drafts: Record<string, string>;
+    enabledByDevice: Record<string, boolean>;
+  }>({ drafts: {}, enabledByDevice: {} });
+  const deviceVarUserEditedRef = useRef<Set<string>>(new Set());
+  const deviceVarDialogInitRef = useRef(false);
   const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<
     string | null
   >(null);
@@ -774,6 +818,10 @@ export function ControlRecordView({
   const [deviceVarEnabledByDevice, setDeviceVarEnabledByDevice] = useState<
     Record<string, boolean>
   >({});
+  deviceVarStateRef.current = {
+    drafts: deviceVarJsonDrafts,
+    enabledByDevice: deviceVarEnabledByDevice
+  };
   const [
     pendingScenarioDeviceVarsDraftMap,
     setPendingScenarioDeviceVarsDraftMap
@@ -855,22 +903,56 @@ export function ControlRecordView({
     staleTime: 30_000
   });
   useEffect(() => {
+    if (!deviceVarDialogOpen) {
+      deviceVarUserEditedRef.current = new Set();
+      deviceVarDialogInitRef.current = false;
+    }
+  }, [deviceVarDialogOpen]);
+  const selectScenarioDeviceForVars = useCallback(
+    (deviceId: string, serial: string) => {
+      setSelectedScenarioDeviceId(deviceId);
+      setDeviceVarEnabledByDevice((prev) => ({ ...prev, [deviceId]: true }));
+      setDeviceVarJsonDrafts((prev) => ({
+        ...prev,
+        [deviceId]:
+          prev[deviceId] ?? formatInitialDeviceVars({}, scenarioVariables)
+      }));
+      if (device.connectedDevices.some((d) => d.serial === serial)) {
+        device.setSelectedSerial(serial);
+      }
+    },
+    [device.connectedDevices, device.setSelectedSerial, scenarioVariables]
+  );
+  useEffect(() => {
     if (!deviceVarDialogOpen) return;
+    if (deviceVarDialogInitRef.current) return;
+    deviceVarDialogInitRef.current = true;
     const pickId =
       selectedDeviceId ?? campaignDevicesQuery.data?.[0]?.id ?? null;
     if (!pickId) return;
-    setSelectedScenarioDeviceId(pickId);
-    if (deviceVarEnabledByDevice[pickId] !== true) {
-      setDeviceVarEnabledByDevice((prev) => ({ ...prev, [pickId]: true }));
-      setDeviceVarJsonDrafts((prev) => ({
-        ...prev,
-        [pickId]: prev[pickId] ?? formatInitialDeviceVars({}, scenarioVariables)
-      }));
+    const pickSerial =
+      campaignDevicesQuery.data?.find((d) => d.id === pickId)?.serial ??
+      selectedSerial;
+    if (pickSerial) {
+      selectScenarioDeviceForVars(pickId, pickSerial);
+    } else {
+      setSelectedScenarioDeviceId(pickId);
+      if (deviceVarEnabledByDevice[pickId] !== true) {
+        setDeviceVarEnabledByDevice((prev) => ({ ...prev, [pickId]: true }));
+        setDeviceVarJsonDrafts((prev) => ({
+          ...prev,
+          [pickId]:
+            prev[pickId] ?? formatInitialDeviceVars({}, scenarioVariables)
+        }));
+      }
     }
   }, [
     deviceVarDialogOpen,
     selectedDeviceId,
+    selectedSerial,
     campaignDevicesQuery.data,
+    selectScenarioDeviceForVars,
+    deviceVarEnabledByDevice,
     scenarioVariables
   ]);
   const selectedDeviceLabel = useMemo(() => {
@@ -920,6 +1002,7 @@ export function ControlRecordView({
   const setCurrentDeviceVarsEnabled = useCallback(
     (enabled: boolean) => {
       if (!selectedScenarioDeviceId) return;
+      deviceVarUserEditedRef.current.add(selectedScenarioDeviceId);
       setDeviceVarEnabledByDevice((prev) => ({
         ...prev,
         [selectedScenarioDeviceId]: enabled
@@ -936,6 +1019,7 @@ export function ControlRecordView({
   const setCurrentDeviceVarJsonDraft = useCallback(
     (value: string) => {
       if (!selectedScenarioDeviceId) return;
+      deviceVarUserEditedRef.current.add(selectedScenarioDeviceId);
       setDeviceVarJsonDrafts((prev) => ({
         ...prev,
         [selectedScenarioDeviceId]: value
@@ -943,26 +1027,12 @@ export function ControlRecordView({
     },
     [selectedScenarioDeviceId]
   );
-  const scenarioDeviceVarsQuery = useQuery({
-    queryKey: [
-      'scenario-device-vars',
-      activeCampaignId,
-      activeScenarioId,
-      selectedScenarioDeviceId
-    ],
-    enabled:
-      tabActive &&
-      deviceVarDialogOpen &&
-      !!activeCampaignId &&
-      !!activeScenarioId &&
-      !!selectedScenarioDeviceId,
-    queryFn: () =>
-      campaignsApi.getScenarioDeviceVariables(
-        activeCampaignId!,
-        activeScenarioId!,
-        selectedScenarioDeviceId!
-      )
-  });
+  const invalidateScenarioDeviceVars = useCallback(() => {
+    if (!activeCampaignId || !activeScenarioId) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['scenario-device-vars', activeCampaignId, activeScenarioId]
+    });
+  }, [activeCampaignId, activeScenarioId, queryClient]);
   useEffect(() => {
     if (!canManageDeviceVars) return;
     const devices = campaignDevicesQuery.data ?? [];
@@ -976,24 +1046,22 @@ export function ControlRecordView({
       ? `campaign:${activeCampaignId}:${campaignForGlobalVarsQuery.dataUpdatedAt}`
       : `scenario:${activeCampaignId}:${activeScenarioId}:${deviceVarDialogOpen ? 'open' : 'bg'}`;
 
-    if (
-      !deviceVarDialogOpen &&
-      deviceVarsHydratedKeyRef.current === hydrationKey
-    ) {
+    if (deviceVarsHydratedKeyRef.current === hydrationKey) {
       return;
-    }
-    if (deviceVarDialogOpen) {
-      deviceVarsHydratedKeyRef.current = null;
     }
 
     const applySeeds = (
       entries: Array<readonly [string, Record<string, any>]>
     ) => {
-      setDeviceVarJsonDrafts(
+      setDeviceVarJsonDrafts((prev) =>
         Object.fromEntries(
           entries.map(([deviceId, vars]) => [
             deviceId,
-            formatInitialDeviceVars(vars, scenarioVariables)
+            deviceVarDialogOpen &&
+            deviceVarUserEditedRef.current.has(deviceId) &&
+            prev[deviceId] !== undefined
+              ? prev[deviceId]
+              : formatInitialDeviceVars(vars, scenarioVariables)
           ])
         )
       );
@@ -1011,13 +1079,32 @@ export function ControlRecordView({
     };
 
     if (usesCampaignDeviceOverrides) {
-      const overrides = campaignPerDeviceOverrides(
-        campaignForGlobalVarsQuery.data
+      let cancelled = false;
+      (async () => {
+        const detail = await campaignsApi.get(activeCampaignId!);
+        if (cancelled) return;
+        queryClient.setQueryData(
+          ['campaign', activeCampaignId, 'global-vars-preview'],
+          detail
+        );
+        const overrides = campaignPerDeviceOverrides(detail);
+        applySeeds(
+          devices.map(
+            (d) => [d.id, { ...(overrides[d.id] ?? {}) }] as const
+          )
+        );
+        const dataUpdatedAt = queryClient.getQueryState([
+          'campaign',
+          activeCampaignId,
+          'global-vars-preview'
+        ])?.dataUpdatedAt;
+        deviceVarsHydratedKeyRef.current = `campaign:${activeCampaignId}:${dataUpdatedAt ?? 0}`;
+      })().catch((err) =>
+        toast.error(tDvDlg('loadVarsError', { message: String(err) }))
       );
-      applySeeds(
-        devices.map((d) => [d.id, { ...(overrides[d.id] ?? {}) }] as const)
-      );
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (!activeScenarioId) {
@@ -1032,6 +1119,10 @@ export function ControlRecordView({
       setDeviceVarJsonDrafts(seeded);
       setDeviceVarEnabledByDevice(enabled);
       deviceVarsHydratedKeyRef.current = hydrationKey;
+      return;
+    }
+
+    if (pendingScenarioDeviceVarsDraftMap) {
       return;
     }
 
@@ -1066,40 +1157,53 @@ export function ControlRecordView({
     usesCampaignDeviceOverrides,
     pendingScenarioDeviceVarsDraftMap,
     scenarioVariables,
-    tDvDlg
+    tDvDlg,
+    queryClient
   ]);
   const saveScenarioDeviceVarsMutation = useMutation({
-    mutationFn: async (drafts: Record<string, string>) => {
+    mutationFn: async ({
+      drafts,
+      enabledByDevice
+    }: {
+      drafts: Record<string, string>;
+      enabledByDevice: Record<string, boolean>;
+    }) => {
       if (!activeCampaignId) return;
       const devices = campaignDevicesQuery.data ?? [];
 
       if (usesCampaignDeviceOverrides) {
-        const existing = campaignPerDeviceOverrides(
-          campaignForGlobalVarsQuery.data
-        );
+        const detail = await campaignsApi.get(activeCampaignId);
+        const existing = campaignPerDeviceOverrides(detail);
         const nextOverrides: Record<string, Record<string, unknown>> = {
           ...existing
         };
         for (const d of devices) {
-          if (deviceVarEnabledByDevice[d.id] !== true) {
+          if (enabledByDevice[d.id] !== true) {
             delete nextOverrides[d.id];
             continue;
           }
-          let merged: Record<string, unknown>;
+          let deviceOnly: Record<string, unknown>;
           try {
-            merged = parseDeviceVarsJson(
+            const parsed = parseDeviceVarsJson(
               drafts[d.id] ?? '{}',
               deviceVarsParseMsgs
             );
+            // Draft stores device-only overrides; fall back to split when raw merged JSON was kept.
+            deviceOnly = splitDeviceOverridesFromMerged(
+              parsed,
+              deviceVarGlobalPreview
+            );
+            if (
+              Object.keys(deviceOnly).length === 0 &&
+              Object.keys(parsed).length > 0
+            ) {
+              deviceOnly = parsed;
+            }
           } catch {
             throw new Error(tDv('invalidAtDevice', { serial: d.serial }));
           }
-          const delta = splitDeviceOverridesFromMerged(
-            merged,
-            deviceVarGlobalPreview
-          );
-          if (Object.keys(delta).length) {
-            nextOverrides[d.id] = delta;
+          if (Object.keys(deviceOnly).length) {
+            nextOverrides[d.id] = deviceOnly;
           } else {
             delete nextOverrides[d.id];
           }
@@ -1114,7 +1218,7 @@ export function ControlRecordView({
       await Promise.all(
         devices.map((d) => {
           let vars: Record<string, any> = {};
-          if (deviceVarEnabledByDevice[d.id] === true) {
+          if (enabledByDevice[d.id] === true) {
             try {
               vars = parseDeviceVarsJson(
                 drafts[d.id] ?? '{}',
@@ -1145,8 +1249,11 @@ export function ControlRecordView({
         const devices = campaignDevicesQuery.data ?? [];
         if (usesCampaignDeviceOverrides) {
           const detail = await campaignsApi.get(activeCampaignId);
+          queryClient.setQueryData(
+            ['campaign', activeCampaignId, 'global-vars-preview'],
+            detail
+          );
           const overrides = campaignPerDeviceOverrides(detail);
-          deviceVarsHydratedKeyRef.current = null;
           setDeviceVarJsonDrafts(
             Object.fromEntries(
               devices.map((d) => [
@@ -1166,6 +1273,12 @@ export function ControlRecordView({
               ])
             )
           );
+          const dataUpdatedAt = queryClient.getQueryState([
+            'campaign',
+            activeCampaignId,
+            'global-vars-preview'
+          ])?.dataUpdatedAt;
+          deviceVarsHydratedKeyRef.current = `campaign:${activeCampaignId}:${dataUpdatedAt ?? 0}`;
         } else if (activeScenarioId) {
           const entries = await Promise.all(
             devices.map(async (d) => {
@@ -1193,12 +1306,15 @@ export function ControlRecordView({
               ])
             )
           );
+          deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeScenarioId}:bg`;
+          invalidateScenarioDeviceVars();
         }
-      } catch {
-        /* drafts may be stale until dialog reopens; server still has saved vars */
+        deviceVarUserEditedRef.current = new Set();
+        toast.success(tDvDlg('saveAllSuccess'));
+        setDeviceVarDialogOpen(false);
+      } catch (err) {
+        toast.error(tDvDlg('loadVarsError', { message: String(err) }));
       }
-      toast.success(tDvDlg('saveAllSuccess'));
-      setDeviceVarDialogOpen(false);
     },
     onError: (err) => toast.error(String(err))
   });
@@ -1207,9 +1323,10 @@ export function ControlRecordView({
     if (!activeCampaignId || !activeScenarioId) return;
     const devices = campaignDevicesQuery.data ?? [];
     if (devices.length === 0) return;
+    const draftMap = pendingScenarioDeviceVarsDraftMap;
     Promise.all(
       devices.map((d) => {
-        const vars = pendingScenarioDeviceVarsDraftMap[d.id] ?? {};
+        const vars = draftMap[d.id] ?? {};
         return campaignsApi.replaceScenarioDeviceVariables(
           activeCampaignId,
           activeScenarioId,
@@ -1221,6 +1338,26 @@ export function ControlRecordView({
       })
     )
       .then(() => {
+        const entries = devices.map(
+          (d) => [d.id, { ...(draftMap[d.id] ?? {}) }] as const
+        );
+        setDeviceVarJsonDrafts(
+          Object.fromEntries(
+            entries.map(([deviceId, vars]) => [
+              deviceId,
+              formatInitialDeviceVars(vars, scenarioVariables)
+            ])
+          )
+        );
+        setDeviceVarEnabledByDevice(
+          Object.fromEntries(
+            entries.map(([deviceId, vars]) => [
+              deviceId,
+              Object.keys(vars).length > 0
+            ])
+          )
+        );
+        deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeScenarioId}:bg`;
         toast.success('Đã áp dụng biến thiết bị vào scenario vừa lưu');
         setPendingScenarioDeviceVarsDraftMap(null);
       })
@@ -1233,7 +1370,8 @@ export function ControlRecordView({
     pendingScenarioDeviceVarsDraftMap,
     activeCampaignId,
     activeScenarioId,
-    campaignDevicesQuery.data
+    campaignDevicesQuery.data,
+    scenarioVariables
   ]);
 
   useEffect(() => {
@@ -1247,10 +1385,6 @@ export function ControlRecordView({
       setScenarioVariables(flattenVarDefs(save.orgScenarioContext.variables));
     }
   }, [save.orgScenarioContext]);
-
-  useEffect(() => {
-    stepsItemsRef.current = steps.items;
-  }, [steps.items]);
 
   useEffect(() => {
     flowSelectedFgIdRef.current = flowSelectedFgId;
@@ -1307,11 +1441,7 @@ export function ControlRecordView({
       const ctrl = new AbortController();
       flowRunLeafAbortRef.current = ctrl;
       const runId = previewSession.beginRun();
-      const payload = JSON.parse(JSON.stringify(step)) as Record<
-        string,
-        unknown
-      >;
-      delete payload._fgId;
+      const payload = preparePreviewStepPayload(step);
       try {
         await previewScenarioStream(
           serial,
@@ -1423,10 +1553,16 @@ export function ControlRecordView({
         : 'Bước';
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
       const serial = device.selectedDevice.serial;
+      // Ref synced every render — always read tree after mirror pick, not stale StepCard closure.
+      const payload = prepareInlinePreviewStep(
+        stepsItemsRef.current as FlowStep[],
+        runKey,
+        step
+      );
       try {
         await previewScenarioStream(
           serial,
-          [step as Record<string, any>],
+          [payload],
           previewSession.makeStreamHandler(runId, serial, (event) => {
             if (event.event === 'step_done') {
               setStepRunStates((s) => ({
@@ -1489,7 +1625,7 @@ export function ControlRecordView({
       try {
         await previewScenarioStream(
           serial,
-          [step as Record<string, any>],
+          [preparePreviewStepPayload(step)],
           previewSession.makeStreamHandler(runId, serial, (event) => {
             if (event.event === 'step_done' && !event.ok) {
               toast.error(
@@ -1578,7 +1714,8 @@ export function ControlRecordView({
   const applySelectorPick = useCallback(
     (
       pick: ScenarioSelectorShape,
-      fallback?: { rx: number; ry: number } | null
+      fallback?: { rx: number; ry: number } | null,
+      options?: { keepOpen?: boolean; silent?: boolean }
     ) => {
       if (!selectorPickTarget) return;
       const raw = steps.items as FlowStep[];
@@ -1600,7 +1737,8 @@ export function ControlRecordView({
       );
       selector.setBy(pick.by as typeof selector.by);
       selector.setValue(pick.value);
-      setSelectorPickTarget(null);
+      if (!options?.keepOpen) setSelectorPickTarget(null);
+      if (options?.silent) return;
       const condHint =
         pick.conditions && Object.keys(pick.conditions).length > 0
           ? ` · +${Object.keys(pick.conditions).length} điều kiện`
@@ -1619,6 +1757,73 @@ export function ControlRecordView({
     },
     [selectorPickTarget, steps, selector, t]
   );
+
+  // Apply the candidate at `index` to the active selector-pick step. With >1
+  // candidate we keep pick mode open so the user can keep cycling overlapping
+  // elements (Facebook-style nested layouts).
+  const applyCandidateAtIndex = useCallback(
+    (index: number) => {
+      const cands = pickCandidatesRef.current;
+      if (cands.length === 0) return;
+      const i = ((index % cands.length) + cands.length) % cands.length;
+      const cand = cands[i];
+      const multi = cands.length > 1;
+      pickCycleIndexRef.current = i;
+
+      const fallback = cand.bounds
+        ? {
+            rx: parseFloat(((cand.bounds.rx1 + cand.bounds.rx2) / 2).toFixed(3)),
+            ry: parseFloat(((cand.bounds.ry1 + cand.bounds.ry2) / 2).toFixed(3))
+          }
+        : null;
+
+      applySelectorPick(cand.selector, fallback, {
+        keepOpen: multi,
+        silent: multi
+      });
+
+      if (cand.bounds) {
+        setHighlightBounds([
+          cand.bounds.left,
+          cand.bounds.top,
+          cand.bounds.right,
+          cand.bounds.bottom
+        ]);
+        const tree = parseHierarchyTree(hierarchyXml);
+        if (tree && fallback) {
+          const nodeId = findNodeIdAtRatio(tree, fallback.rx, fallback.ry, {
+            targetPackage: pickTargetPackage
+          });
+          if (nodeId != null) setSelectedNodeId(nodeId);
+        }
+      }
+
+      if (multi) {
+        setPickCycle({ index: i + 1, total: cands.length });
+        toast.success(
+          t('pickSelectorCycle', {
+            index: i + 1,
+            total: cands.length,
+            by: cand.by,
+            value: cand.value.slice(0, 48)
+          })
+        );
+      } else {
+        setPickCycle(null);
+      }
+    },
+    [applySelectorPick, hierarchyXml, pickTargetPackage, t]
+  );
+
+  // Reset cycle bookkeeping whenever selector pick mode closes.
+  useEffect(() => {
+    if (!selectorPickTarget) {
+      pickCandidatesRef.current = [];
+      lastPickSpotRef.current = null;
+      pickCycleIndexRef.current = 0;
+      setPickCycle(null);
+    }
+  }, [selectorPickTarget]);
 
   const handleScreenSwipe = useCallback(
     (
@@ -1701,7 +1906,9 @@ export function ControlRecordView({
     (rx: number, ry: number) => {
       const tree = parseHierarchyTree(hierarchyXml);
       if (tree) {
-        const nodeId = findNodeIdAtRatio(tree, rx, ry);
+        const nodeId = findNodeIdAtRatio(tree, rx, ry, {
+          targetPackage: pickTargetPackage
+        });
         setSelectedNodeId(nodeId);
       }
 
@@ -1751,7 +1958,9 @@ export function ControlRecordView({
       }
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
-        const sel = findSelectorInXml(hierarchyXml, rx, ry);
+        const sel = findSelectorInXml(hierarchyXml, rx, ry, {
+          targetPackage: pickTargetPackage
+        });
         if (!sel?.value?.trim()) {
           toast.warning(t('pickSelectorNoElement'));
           return;
@@ -1812,11 +2021,25 @@ export function ControlRecordView({
       }
 
       if (selectorPickTarget) {
-        const sel = findSelectorInXml(hierarchyXml, rx, ry);
-        if (sel?.value) {
-          applySelectorPick(sel.selector, { rx: rx3, ry: ry3 });
-        } else {
+        const cands = listSelectorCandidatesInXml(hierarchyXml, rx, ry, {
+          targetPackage: pickTargetPackage
+        });
+        if (cands.length === 0) {
           toast.warning(t('pickSelectorNoElement'));
+          return;
+        }
+        const last = lastPickSpotRef.current;
+        const sameSpot =
+          last != null &&
+          Math.abs(last.rx - rx) < 0.015 &&
+          Math.abs(last.ry - ry) < 0.015 &&
+          pickCandidatesRef.current.length > 0;
+        if (sameSpot) {
+          applyCandidateAtIndex(pickCycleIndexRef.current + 1);
+        } else {
+          pickCandidatesRef.current = cands;
+          lastPickSpotRef.current = { rx, ry };
+          applyCandidateAtIndex(0);
         }
         return;
       }
@@ -1826,6 +2049,8 @@ export function ControlRecordView({
       selectorPickTarget,
       coordinatePickTarget,
       applySelectorPick,
+      applyCandidateAtIndex,
+      pickTargetPackage,
       steps,
       t,
       showFlowUi,
@@ -1864,12 +2089,26 @@ export function ControlRecordView({
   const mirrorInputLocked = useMemo(() => {
     const d = device.selectedDevice;
     if (!d) return { hideControls: true, readOnlyPreview: true };
+    const pickingFromMirror =
+      coordinatePickTarget != null ||
+      selectorPickTarget != null ||
+      flowCoordPick != null ||
+      flowSelectorPickFgId != null;
+    if (pickingFromMirror) {
+      return { hideControls: false, readOnlyPreview: false };
+    }
     const blocked =
       (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
       (d.scenario_active ?? 0) > 0;
     // Keep the control rail visible; only block tap/swipe on the live mirror.
     return { hideControls: false, readOnlyPreview: blocked };
-  }, [device.selectedDevice]);
+  }, [
+    device.selectedDevice,
+    coordinatePickTarget,
+    selectorPickTarget,
+    flowCoordPick,
+    flowSelectorPickFgId
+  ]);
 
   const mirrorDeviceOps = useMemo((): DeviceOpsConfig | undefined => {
     const d = device.selectedDevice;
@@ -2124,9 +2363,27 @@ export function ControlRecordView({
                   setHighlightBounds(bounds);
                   if (nodeId != null) setSelectedNodeId(nodeId);
                   if (selectorPickTarget) {
-                    const rich = findSelectorForTreeNode(hierarchy.xml, bounds);
+                    const rich = findSelectorForTreeNode(hierarchy.xml, bounds, {
+                      targetPackage: pickTargetPackage
+                    });
                     if (rich?.value?.trim()) {
-                      applySelectorPick(rich.selector);
+                      const fallback = rich.bounds
+                        ? {
+                            rx: parseFloat(
+                              (
+                                (rich.bounds.rx1 + rich.bounds.rx2) /
+                                2
+                              ).toFixed(3)
+                            ),
+                            ry: parseFloat(
+                              (
+                                (rich.bounds.ry1 + rich.bounds.ry2) /
+                                2
+                              ).toFixed(3)
+                            )
+                          }
+                        : null;
+                      applySelectorPick(rich.selector, fallback);
                     } else if (value?.trim()) {
                       applySelectorPick({
                         by: by as ScenarioSelectorShape['by'],
@@ -2444,8 +2701,40 @@ export function ControlRecordView({
                   <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
                     <Crosshair className='size-3.5 shrink-0 text-amber-600' />
                     <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                      {t('pickSelectorBanner')}
+                      {pickCycle && pickCycle.total > 1
+                        ? t('pickSelectorCycleHint', {
+                            index: pickCycle.index,
+                            total: pickCycle.total
+                          })
+                        : t('pickSelectorBanner')}
                     </p>
+                    {pickCycle && pickCycle.total > 1 && (
+                      <div className='flex shrink-0 items-center gap-0.5'>
+                        <button
+                          type='button'
+                          aria-label='prev'
+                          className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
+                          onClick={() =>
+                            applyCandidateAtIndex(pickCycleIndexRef.current - 1)
+                          }
+                        >
+                          <ChevronLeft className='size-3.5' />
+                        </button>
+                        <span className='min-w-[34px] text-center font-mono text-[10px] text-amber-800 dark:text-amber-300'>
+                          {pickCycle.index}/{pickCycle.total}
+                        </span>
+                        <button
+                          type='button'
+                          aria-label='next'
+                          className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
+                          onClick={() =>
+                            applyCandidateAtIndex(pickCycleIndexRef.current + 1)
+                          }
+                        >
+                          <ChevronRight className='size-3.5' />
+                        </button>
+                      </div>
+                    )}
                     <button
                       type='button'
                       className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
@@ -2928,11 +3217,7 @@ export function ControlRecordView({
             {tDvDlg('instructions')}
           </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
-            {scenarioDeviceVarsQuery.isLoading && activeScenarioId ? (
-              <p className='text-xs text-muted-foreground'>
-                {tDvDlg('loadingVars')}
-              </p>
-            ) : (campaignDevicesQuery.data ?? []).length === 0 ? (
+            {(campaignDevicesQuery.data ?? []).length === 0 ? (
               <p className='text-xs text-muted-foreground'>
                 {tDvDlg('noDevicesInCampaign')}
               </p>
@@ -2950,7 +3235,9 @@ export function ControlRecordView({
                           'mb-1 flex w-full items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
                           active && 'border-primary/30 bg-primary/[0.06]'
                         )}
-                        onClick={() => setSelectedScenarioDeviceId(d.id)}
+                        onClick={() =>
+                          selectScenarioDeviceForVars(d.id, d.serial)
+                        }
                       >
                         <span className='min-w-0 flex-1'>
                           <span className='block truncate font-medium'>
@@ -3001,7 +3288,9 @@ export function ControlRecordView({
               size='sm'
               onClick={() => {
                 if (activeScenarioId || usesCampaignDeviceOverrides) {
-                  saveScenarioDeviceVarsMutation.mutate(deviceVarJsonDrafts);
+                  saveScenarioDeviceVarsMutation.mutate(
+                    deviceVarStateRef.current
+                  );
                   return;
                 }
                 const parsedDrafts: Record<string, Record<string, any>> = {};

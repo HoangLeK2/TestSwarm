@@ -412,8 +412,10 @@ export function useControlRecord(
             : recordXmlRef.current;
 
         if (xml) {
-          const sel = findSelectorInXml(xml, rx, ry);
           const sig = getScreenSignature(xml);
+          const sel = findSelectorInXml(xml, rx, ry, {
+            targetPackage: sig.package || selectedDevice.current_app || undefined
+          });
           const screen: Record<string, unknown> = {
             package: sig.package || undefined,
             hash: hashXml(xml).toString(16),

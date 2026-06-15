@@ -2,6 +2,10 @@
  * hierarchy-tree.ts — Parse UI hierarchy XML into a tree structure for the XML tree viewer.
  */
 
+import { isSystemUiPackage, scoreHierarchyHit } from './hierarchy-hit-test';
+
+export { isSystemUiPackage };
+
 export interface HierarchyTreeNode {
   id: number;
   tag: string;
@@ -92,21 +96,6 @@ export function parseHierarchyTree(xml: string): HierarchyTreeNode | null {
   }
 }
 
-const SYSTEM_UI_PACKAGES = [
-  'com.android.systemui',
-  'com.android.providers.',
-  'com.android.permissioncontroller'
-] as const;
-
-/** True for status bar, nav bar, and other platform chrome in hierarchy dumps. */
-export function isSystemUiPackage(pkg: string): boolean {
-  const p = (pkg ?? '').trim();
-  if (!p || p === 'android') return true;
-  return SYSTEM_UI_PACKAGES.some(
-    (prefix) => p === prefix || p.startsWith(prefix)
-  );
-}
-
 function redepthTree(
   node: HierarchyTreeNode,
   depth: number
@@ -192,13 +181,14 @@ export function searchTree(
  *
  * Picking rule (mirror of findSelectorInXml):
  *   1. Collect nodes whose bounds contain the point.
- *   2. Prefer clickable-self; else promote to nearest clickable ancestor.
- *   3. Smallest-area wins within the chosen pool.
+ *   2. Prefer deepest nodes near the tap (FB nested containers).
+ *   3. Score by semantic content (text/desc) over bare layout containers.
  */
 export function findNodeIdAtRatio(
   root: HierarchyTreeNode,
   rx: number,
-  ry: number
+  ry: number,
+  options?: { targetPackage?: string | null }
 ): number | null {
   // Prefer root bounds. If synthetic wrapper (null bounds), infer from largest child.
   let screenBounds = root.bounds;
@@ -224,62 +214,54 @@ export function findNodeIdAtRatio(
   type Cand = {
     node: HierarchyTreeNode;
     area: number;
-    clickableAncestor: HierarchyTreeNode | null;
   };
-  const candidates: Cand[] = [];
+  const allHits: Cand[] = [];
 
-  function walk(
-    node: HierarchyTreeNode,
-    nearestClickableAnc: HierarchyTreeNode | null
-  ) {
-    const ownClickable = node.clickable ? node : nearestClickableAnc;
+  function walk(node: HierarchyTreeNode) {
     if (!node.bounds) {
-      node.children.forEach((c) => walk(c, ownClickable));
+      node.children.forEach((c) => walk(c));
       return;
     }
     const [x1, y1, x2, y2] = node.bounds;
     if (!(x1 <= px && px <= x2 && y1 <= py && py <= y2)) return;
     if (x2 <= x1 || y2 <= y1) return;
-    candidates.push({
-      node,
-      area: (x2 - x1) * (y2 - y1),
-      clickableAncestor: ownClickable
+    if (!isSystemUiPackage(node.pkg)) {
+      allHits.push({
+        node,
+        area: (x2 - x1) * (y2 - y1)
+      });
+    }
+    node.children.forEach((c) => walk(c));
+  }
+  walk(root);
+
+  if (allHits.length === 0) return null;
+
+  // Strict package filter (matches selector picker); fall back to all app nodes
+  // when the target package has nothing under the tap.
+  const targetPackage = (options?.targetPackage ?? '').trim();
+  let candidates = targetPackage
+    ? allHits.filter((c) => c.node.pkg.trim() === targetPackage)
+    : allHits;
+  if (candidates.length === 0) candidates = allHits;
+
+  const maxDepth = Math.max(...candidates.map((c) => c.node.depth));
+  let pool = candidates.filter((c) => c.node.depth >= maxDepth - 1);
+  if (pool.length === 0) pool = candidates;
+
+  const scoreNode = (c: Cand): number =>
+    scoreHierarchyHit({
+      depth: c.node.depth,
+      area: c.area,
+      clickable: c.node.clickable,
+      text: c.node.text.trim(),
+      contentDesc: c.node.contentDesc.trim(),
+      resourceId: c.node.resourceId.trim(),
+      className: c.node.className
     });
-    node.children.forEach((c) => walk(c, ownClickable));
-  }
-  walk(root, null);
 
-  if (candidates.length === 0) return null;
-
-  const clickableSelf = candidates.filter((c) => c.node.clickable);
-  let pool: HierarchyTreeNode[];
-  if (clickableSelf.length > 0) {
-    pool = clickableSelf.map((c) => c.node);
-  } else {
-    const seen = new Set<number>();
-    const promoted: HierarchyTreeNode[] = [];
-    for (const c of candidates) {
-      const a = c.clickableAncestor;
-      if (a && !seen.has(a.id)) {
-        promoted.push(a);
-        seen.add(a.id);
-      }
-    }
-    pool = promoted.length > 0 ? promoted : candidates.map((c) => c.node);
-  }
-
-  let bestId: number | null = null;
-  let bestArea = Infinity;
-  for (const n of pool) {
-    if (!n.bounds) continue;
-    const [x1, y1, x2, y2] = n.bounds;
-    const area = (x2 - x1) * (y2 - y1);
-    if (area < bestArea) {
-      bestArea = area;
-      bestId = n.id;
-    }
-  }
-  return bestId;
+  pool.sort((a, b) => scoreNode(b) - scoreNode(a));
+  return pool[0]?.node.id ?? null;
 }
 
 /**

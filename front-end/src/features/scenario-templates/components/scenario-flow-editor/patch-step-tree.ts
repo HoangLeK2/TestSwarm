@@ -1,8 +1,8 @@
 /**
  * Mutate nested FlowStep trees by stable flowgram node id (_fgId).
  */
-import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
-import { SELECTOR_STEP_TYPES } from '@/features/campaigns/components/flow-editor/selector-pick';
+import type { FlowStep } from '../../../campaigns/components/scenario-steps/types';
+import { SELECTOR_STEP_TYPES } from '../../../campaigns/components/flow-editor/selector-pick.ts';
 
 const FG = '_fgId' as const;
 
@@ -14,12 +14,21 @@ export function patchStepByFlowgramId(
   return steps.map((s) => patchOne(s, fgId, replacement));
 }
 
+function hasThenElseBranches(type: string): boolean {
+  return (
+    type === 'if_element' ||
+    type === 'if_variable' ||
+    type === 'tap_fb_comment_button' ||
+    type === 'fb_tap_comment_button'
+  );
+}
+
 function patchOne(s: FlowStep, fgId: string, replacement: FlowStep): FlowStep {
   if ((s as Record<string, unknown>)[FG] === fgId) {
     return { ...replacement, [FG]: fgId } as FlowStep;
   }
   const t = s.type;
-  if (t === 'if_element' || t === 'if_variable') {
+  if (hasThenElseBranches(t)) {
     const cur = s as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
     return {
       ...s,
@@ -76,7 +85,7 @@ function mergeOne(
     return { ...next, [FG]: fgId } as FlowStep;
   }
   const t = s.type;
-  if (t === 'if_element' || t === 'if_variable') {
+  if (hasThenElseBranches(t)) {
     const cur = s as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
     return {
       ...s,
@@ -169,7 +178,7 @@ export function findStepByFlowgramId(
 function findOneDeep(s: FlowStep, fgId: string): FlowStep | null {
   if ((s as Record<string, unknown>)[FG] === fgId) return s;
   const t = s.type;
-  if (t === 'if_element' || t === 'if_variable') {
+  if (hasThenElseBranches(t)) {
     const cur = s as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
     for (const x of cur.then ?? []) {
       const h = findOneDeep(x, fgId);

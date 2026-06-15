@@ -144,7 +144,7 @@ export function getCampaignColumns(
             >
               {campaignStatusLabel(c.status, statusLabel)}
             </Badge>
-            <CampaignEngineBadge campaignId={c.id} status={c.status} />
+            {/* <CampaignEngineBadge campaignId={c.id} status={c.status} /> */}
           </div>
         );
       }

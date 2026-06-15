@@ -42,6 +42,7 @@ export function CreateTemplateDialog() {
     tags: z.string().optional()
   });
   const [open, setOpen] = useState(false);
+  const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const [steps, setSteps] = useState<FlowStep[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
   const { mutate, mutateAsync, isPending, error } = useCreateScenarioTemplate();
@@ -108,7 +109,7 @@ export function CreateTemplateDialog() {
   });
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={setOpen} modal={!childStepEditorOpen}>
       <DialogTrigger asChild>
         <Button size='sm'>
           <Plus size={16} className='mr-1' />
@@ -170,6 +171,7 @@ export function CreateTemplateDialog() {
               nestedInDialog
               steps={steps}
               onChange={setSteps}
+              onChildStepEditorOpenChange={setChildStepEditorOpen}
               maxHeight='300px'
             />
           </div>

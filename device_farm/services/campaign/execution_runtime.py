@@ -251,8 +251,13 @@ def build_runtime_scenario_dict(
         if key in scenario_config:
             scenario[key] = scenario_config[key]
 
-    if getattr(scenario_input, "capture_steps", False) or scenario_config.get("capture_steps"):
+    explicit_capture = scenario_config.get("capture_steps")
+    if getattr(scenario_input, "capture_steps", False) or explicit_capture is True:
         scenario["capture_steps"] = True
+    elif explicit_capture is False:
+        # Crawl fast-path: an explicit False must win over the campaign default
+        # so step capture (and its settle/stale-wait transition cost) is skipped.
+        scenario["capture_steps"] = False
     elif exec_id:
         scenario.setdefault("capture_steps", True)
 

@@ -179,6 +179,52 @@ async def test_collect_comment_snapshots_with_scroll() -> None:
     assert any(a[0].get("op") == "swipe" for a in exec_.batches if a)
 
 
+class _GrowingXmlExecutor(_FakeExecutor):
+    """Returns a unique hierarchy on every dump so XML never repeats — isolates
+    the wall-clock cap as the stopping reason (no no-growth / no-new short-circuit)."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._n = 0
+
+    async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+            self._n += 1
+            self._dump_xml = (
+                f'<?xml version="1.0"?><hierarchy><node text="c{self._n}"/></hierarchy>'
+            )
+        return await super().run_batch(serial, actions, early_exit=early_exit)
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_wall_clock_cap_stops_early() -> None:
+    """A tiny wall-clock budget must bound the comment phase well below the full
+    scroll budget, even when XML keeps changing (no no-growth early-stop)."""
+    exec_ = _GrowingXmlExecutor()
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 20,
+            "comment_swipes_per_dump": 3,
+            "comment_scroll_pause_s": 0,
+            "comment_scroll_wall_s": 0.0001,
+        },
+    )
+    assert err is None
+    assert snapshots  # at least the initial snapshot
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    # Wall cap breaks at the first loop check, so at most one swipe batch runs —
+    # far below the 20-pass budget (and below the no-new break of ~12 swipes).
+    assert len(swipes) <= 3, f"wall cap should bound swipes, got {len(swipes)}"
+
+
 @pytest.mark.asyncio
 async def test_collect_returns_error_when_dump_fails() -> None:
     exec_ = _FakeExecutor(xml="<hierarchy />")

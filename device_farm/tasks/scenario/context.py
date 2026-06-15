@@ -137,8 +137,13 @@ class ScenarioContext:
         capture_enabled = epic04_capture_default_enabled(scenario)
         capture_dir: Optional[str] = None
         _exec_id = scenario.get("execution_id") or scenario.get("run_id")
-        capture_pre = bool(_exec_id) or capture_pre_step_enabled()
-        capture_settle_ms = int(scenario.get("settle_timeout_ms") or os.environ.get("SETTLE_TIMEOUT_MS", "800"))
+        capture_pre = capture_enabled and (bool(_exec_id) or capture_pre_step_enabled())
+        # Use `is not None` so an explicit settle_timeout_ms=0 (crawl fast-path)
+        # is honored instead of falling back to the 800ms env default.
+        _raw_settle = scenario.get("settle_timeout_ms")
+        if _raw_settle is None:
+            _raw_settle = os.environ.get("SETTLE_TIMEOUT_MS", "800")
+        capture_settle_ms = int(_raw_settle)
         capture_stale_wait_s = float(os.environ.get("CAPTURE_STALE_WAIT_MS", "1000")) / 1000.0
         capture_skip_settle = frozenset({
             "wait", "wait_stable", "wait_screen_stable",

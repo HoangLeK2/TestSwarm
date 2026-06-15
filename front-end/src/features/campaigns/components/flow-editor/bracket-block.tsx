@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   SortableContext,
@@ -54,68 +54,15 @@ import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
 import { SortableFlowRow } from './sortable-flow-row';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
 import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
-
-// ── Step mutation helpers ────────────────────────────────────────────────────
-
-function removeFromStep(step: FlowStep, key: string, ci: number): FlowStep {
-  const next = { ...step } as any;
-  if (key.startsWith('branches.')) {
-    const bi = parseInt(key.split('.')[1] ?? '0');
-    const branches = [...(next.branches ?? [])];
-    branches[bi] = {
-      ...branches[bi],
-      steps: branches[bi].steps.filter((_: any, i: number) => i !== ci)
-    };
-    next.branches = branches;
-  } else {
-    next[key] = (next[key] ?? []).filter((_: any, i: number) => i !== ci);
-  }
-  return next as FlowStep;
-}
-
-function insertIntoStep(
-  step: FlowStep,
-  key: string,
-  at: number,
-  newStep: FlowStep
-): FlowStep {
-  const next = { ...step } as any;
-  if (key.startsWith('branches.')) {
-    const bi = parseInt(key.split('.')[1] ?? '0');
-    const branches = [...(next.branches ?? [])];
-    const bSteps = [...(branches[bi].steps ?? [])];
-    bSteps.splice(at, 0, newStep);
-    branches[bi] = { ...branches[bi], steps: bSteps };
-    next.branches = branches;
-  } else {
-    const arr = [...(next[key] ?? [])];
-    arr.splice(at, 0, newStep);
-    next[key] = arr;
-  }
-  return next as FlowStep;
-}
-
-function updateChildInStep(
-  step: FlowStep,
-  key: string,
-  ci: number,
-  newChild: FlowStep
-): FlowStep {
-  const next = { ...step } as any;
-  if (key.startsWith('branches.')) {
-    const bi = parseInt(key.split('.')[1] ?? '0');
-    const branches = [...(next.branches ?? [])];
-    const bSteps = [...(branches[bi].steps ?? [])];
-    bSteps[ci] = newChild;
-    branches[bi] = { ...branches[bi], steps: bSteps };
-    next.branches = branches;
-  } else {
-    const arr = [...(next[key] ?? [])];
-    arr[ci] = newChild;
-    next[key] = arr;
-  }
-  return next as FlowStep;
-}
+import {
+  applyChildStepEdit,
+  getChildStep,
+  insertIntoStep,
+  removeFromStep,
+  updateChildInStep
+} from './bracket-step-tree';
+import { shouldUseStepEditOverlay } from './nested-step-edit';
+import { useFlowEditorEditSession } from './flow-editor-edit-session';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -200,7 +147,7 @@ function BranchLane({
   label,
   children
 }: {
-  variant: 'then' | 'else';
+  variant?: 'then' | 'else' | 'body';
   label: string;
   children: ReactNode;
 }) {
@@ -208,12 +155,18 @@ function BranchLane({
     <div
       className={cn(
         'mb-2 overflow-hidden rounded-lg border border-border/50 bg-muted/15',
-        variant === 'then'
-          ? 'border-l-[3px] border-l-emerald-500/70'
-          : 'border-l-[3px] border-l-red-500/55'
+        variant === 'then' && 'border-l-[3px] border-l-emerald-500/70',
+        variant === 'else' && 'border-l-[3px] border-l-red-500/55',
+        variant === 'body' && 'border-l-[3px] border-l-teal-500/60'
       )}
     >
-      <SectionLabel label={label} color='' variant={variant} />
+      <SectionLabel
+        label={label}
+        color=''
+        variant={
+          variant === 'then' || variant === 'else' ? variant : undefined
+        }
+      />
       <div className='space-y-0 px-1 pb-1.5'>{children}</div>
     </div>
   );
@@ -502,18 +455,6 @@ function ChildStepList({
 
 // ── BracketBlock ─────────────────────────────────────────────────────────────
 
-function getChildStep(
-  step: FlowStep,
-  listKey: string,
-  ci: number
-): FlowStep | null {
-  if (listKey.startsWith('branches.')) {
-    const bi = parseInt(listKey.split('.')[1] ?? '0', 10);
-    return (step.branches as any[])?.[bi]?.steps?.[ci] ?? null;
-  }
-  return ((step as any)[listKey] as FlowStep[])?.[ci] ?? null;
-}
-
 export function BracketBlock({
   step,
   stepIndex,
@@ -551,6 +492,47 @@ export function BracketBlock({
   const editingChild = editingChildPath
     ? getChildStep(step, editingChildPath.listKey, editingChildPath.ci)
     : null;
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  const editingChildPathRef = useRef(editingChildPath);
+  editingChildPathRef.current = editingChildPath;
+  const pendingEditingChildRef = useRef<FlowStep | null>(null);
+  const commitEditingChild = useCallback(() => {
+    const path = editingChildPathRef.current;
+    const pending = pendingEditingChildRef.current;
+    if (!path || !pending) return;
+    const next = applyChildStepEdit(stepRef.current, path, pending);
+    if (next) onUpdate(next);
+    pendingEditingChildRef.current = null;
+  }, [onUpdate]);
+  const closeEditingChild = useCallback(() => {
+    commitEditingChild();
+    setEditingChildPath(null);
+  }, [commitEditingChild]);
+  const handleEditingChildChange = useCallback((s: FlowStep) => {
+    pendingEditingChildRef.current = s;
+  }, []);
+  useEffect(() => {
+    if (!editingChildPath) {
+      pendingEditingChildRef.current = null;
+      return;
+    }
+    const child = getChildStep(
+      stepRef.current,
+      editingChildPath.listKey,
+      editingChildPath.ci
+    );
+    if (child) pendingEditingChildRef.current = child;
+  }, [editingChildPath, step]);
+  const editSession = useFlowEditorEditSession();
+  useEffect(() => {
+    if (!editSession) return;
+    const open = editingChildPath != null;
+    if (open) editSession.setChildEditorOpen(true);
+    return () => {
+      if (open) editSession.setChildEditorOpen(false);
+    };
+  }, [editSession, editingChildPath]);
   const colors = BRACKET_COLORS[step.type] ?? BRACKET_COLORS.repeat;
   const blockTitle = useMemo(() => {
     switch (step.type) {
@@ -649,25 +631,16 @@ export function BracketBlock({
 
   return (
     <>
-      {nestedInDialog &&
-        !compact &&
+      {shouldUseStepEditOverlay(nestedInDialog, !!compact) &&
         editingChild != null &&
         editingChildPath &&
         editingChild && (
-          <StepEditOverlay onClose={() => setEditingChildPath(null)}>
+          <StepEditOverlay onClose={closeEditingChild}>
             <StepDetailPanel
+              key={`${editingChildPath.listKey}-${editingChildPath.ci}`}
               step={editingChild}
-              onChange={(s) =>
-                onUpdate(
-                  updateChildInStep(
-                    step,
-                    editingChildPath.listKey,
-                    editingChildPath.ci,
-                    s
-                  )
-                )
-              }
-              onClose={() => setEditingChildPath(null)}
+              onChange={handleEditingChildChange}
+              onClose={closeEditingChild}
               campaignScenarios={campaignScenarios}
               onRequestPickSelector={
                 onTogglePickSelector
@@ -682,7 +655,7 @@ export function BracketBlock({
                           }
                         ]
                       };
-                      setEditingChildPath(null);
+                      closeEditingChild();
                       onTogglePickSelector(path);
                     }
                   : undefined
@@ -700,7 +673,7 @@ export function BracketBlock({
                           childIndex: editingChildPath.ci
                         }
                       ];
-                      setEditingChildPath(null);
+                      closeEditingChild();
                       onToggleCoordinatePick({
                         rootIndex: effectiveRootIndex,
                         path,
@@ -721,7 +694,7 @@ export function BracketBlock({
                           childIndex: editingChildPath.ci
                         }
                       ];
-                      setEditingChildPath(null);
+                      closeEditingChild();
                       onToggleCoordinatePick({
                         rootIndex: effectiveRootIndex,
                         path,
@@ -738,7 +711,7 @@ export function BracketBlock({
         <Dialog
           open={editingChild != null}
           onOpenChange={(open) => {
-            if (!open) setEditingChildPath(null);
+            if (!open) closeEditingChild();
           }}
         >
           <DialogContent className='max-w-sm gap-0 p-0'>
@@ -747,18 +720,10 @@ export function BracketBlock({
             </DialogHeader>
             {editingChild && editingChildPath && (
               <StepDetailPanel
+                key={`${editingChildPath.listKey}-${editingChildPath.ci}`}
                 step={editingChild}
-                onChange={(s) =>
-                  onUpdate(
-                    updateChildInStep(
-                      step,
-                      editingChildPath.listKey,
-                      editingChildPath.ci,
-                      s
-                    )
-                  )
-                }
-                onClose={() => setEditingChildPath(null)}
+                onChange={handleEditingChildChange}
+                onClose={closeEditingChild}
                 campaignScenarios={campaignScenarios}
                 onRequestPickSelector={
                   onTogglePickSelector
@@ -773,7 +738,7 @@ export function BracketBlock({
                             }
                           ]
                         };
-                        setEditingChildPath(null);
+                        closeEditingChild();
                         onTogglePickSelector(path);
                       }
                     : undefined
@@ -791,7 +756,7 @@ export function BracketBlock({
                             childIndex: editingChildPath.ci
                           }
                         ];
-                        setEditingChildPath(null);
+                        closeEditingChild();
                         onToggleCoordinatePick({
                           rootIndex: effectiveRootIndex,
                           path,
@@ -812,7 +777,7 @@ export function BracketBlock({
                             childIndex: editingChildPath.ci
                           }
                         ];
-                        setEditingChildPath(null);
+                        closeEditingChild();
                         onToggleCoordinatePick({
                           rootIndex: effectiveRootIndex,
                           path,
@@ -1033,11 +998,13 @@ export function BracketBlock({
             {(step.type === 'loop' ||
               step.type === 'repeat' ||
               step.type === 'repeat_until') && (
-              <ChildStepList
-                steps={step.steps ?? []}
-                listKey='steps'
-                {...childListProps}
-              />
+              <BranchLane variant='body' label={tFlow('loopBody')}>
+                <ChildStepList
+                  steps={step.steps ?? []}
+                  listKey='steps'
+                  {...childListProps}
+                />
+              </BranchLane>
             )}
 
             {(step.type === 'if_element' ||
@@ -1048,22 +1015,36 @@ export function BracketBlock({
               (() => {
                 const thenSteps = step.then ?? [];
                 const elseSteps = step.else ?? [];
+                const isFbTap =
+                  step.type === 'fb_tap_comment_button' ||
+                  step.type === 'tap_fb_comment_button';
+                const thenLabel = isFbTap
+                  ? tFlow('fbTapBranchOnSuccess')
+                  : tFlow('branchThen');
+                const elseLabel = isFbTap
+                  ? tFlow('fbTapBranchOnMiss')
+                  : tFlow('branchElse');
+                const thenVariant = isFbTap ? 'body' : 'then';
+                const showElseLane = elseSteps.length > 0;
+
                 return (
                   <>
-                    <BranchLane variant='then' label={tFlow('branchThen')}>
+                    <BranchLane variant={thenVariant} label={thenLabel}>
                       <ChildStepList
                         steps={thenSteps}
                         listKey='then'
                         {...childListProps}
                       />
                     </BranchLane>
-                    <BranchLane variant='else' label={tFlow('branchElse')}>
-                      <ChildStepList
-                        steps={elseSteps}
-                        listKey='else'
-                        {...childListProps}
-                      />
-                    </BranchLane>
+                    {showElseLane && (
+                      <BranchLane variant='else' label={elseLabel}>
+                        <ChildStepList
+                          steps={elseSteps}
+                          listKey='else'
+                          {...childListProps}
+                        />
+                      </BranchLane>
+                    )}
                   </>
                 );
               })()}

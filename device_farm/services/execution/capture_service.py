@@ -88,9 +88,37 @@ def resolve_capture_throttle(scenario: dict[str, Any]) -> int:
     return 1
 
 
+def _is_nested_depth(sc: "ScenarioContext") -> bool:
+    """True when the step runs inside a nested scenario (then/else, loop body).
+
+    Tolerates non-int depth (e.g. MagicMock in unit tests) by treating it as the
+    top level so capture behavior there is unchanged.
+    """
+    depth = getattr(sc, "depth", 0)
+    return isinstance(depth, int) and depth > 0
+
+
+def explicit_capture_steps(scenario: dict[str, Any]) -> bool | None:
+    """Tri-state capture_steps override from scenario body or campaign vars.
+
+    Returns True/False when explicitly set (e.g. crawl fast-path disables capture
+    even though the execution is campaign-bound), or None when unset.
+    """
+    cs = scenario.get("capture_steps")
+    if isinstance(cs, bool):
+        return cs
+    campaign_vars = scenario.get("_campaign_vars") or {}
+    if isinstance(campaign_vars, dict):
+        raw = campaign_vars.get("__CAPTURE_STEPS__")
+        if raw is not None:
+            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return None
+
+
 def epic04_capture_default_enabled(scenario: dict[str, Any]) -> bool:
-    if scenario.get("capture_steps") is True:
-        return True
+    explicit = explicit_capture_steps(scenario)
+    if explicit is not None:
+        return explicit
     if scenario.get("execution_id") or scenario.get("run_id"):
         return True
     import os
@@ -354,6 +382,11 @@ def capture_before_step(
     cfg = StepCaptureConfig.from_step(step)
     if not cfg.pre_capture:
         return
+    # Nested branch steps (then/else, loop bodies) inherit the parent's screen
+    # context — skip per-step capture unless explicitly required, to avoid
+    # doubling capture overhead inside crawl loops.
+    if _is_nested_depth(sc) and not cfg.require_capture:
+        return
     if not should_capture_step(sc, step_idx):
         return
 
@@ -460,7 +493,10 @@ def capture_after_step(
 
     if not capture_active(sc):
         return
-    if not StepCaptureConfig.from_step(step).post_capture:
+    cfg = StepCaptureConfig.from_step(step)
+    if not cfg.post_capture:
+        return
+    if _is_nested_depth(sc) and not cfg.require_capture:
         return
     if not is_captured_step(sc, step_idx):
         return

@@ -28,23 +28,23 @@ _GROUP_TOOLBAR_NAMES = frozenset({"openclaw vn", "openclaw"})
 
 
 def _mcp_hierarchy(serial: str, refresh: bool = True) -> tuple[str | None, dict[str, Any]]:
-    import urllib.request
+    _script_dir = Path(__file__).resolve().parent
+    if str(_script_dir) not in sys.path:
+        sys.path.insert(0, str(_script_dir))
+    _repo = Path(__file__).resolve().parents[2]
+    if str(_repo / "device_farm") not in sys.path:
+        sys.path.insert(0, str(_repo / "device_farm"))
+    from mcp_util import McpRunner
 
-    base = os.environ.get("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
-    token = (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
-    suffix = "?refresh=1" if refresh else ""
-    url = f"{base}/api/devices/{serial}/hierarchy{suffix}"
-    req = urllib.request.Request(url, method="GET")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
+    runner = McpRunner(serial)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            xml = resp.read().decode("utf-8", errors="ignore")
-        stripped = xml.strip()
-        ok = stripped.startswith("<hierarchy") or stripped.startswith("<?xml")
-        return (xml if ok else None), {"source": "mcp_http", "ok": ok, "bytes": len(xml)}
+        xml, row = runner.hierarchy(refresh=refresh)
+        row["source"] = "mcp_stdio"
+        return xml, row
     except Exception as exc:
-        return None, {"source": "mcp_http", "ok": False, "error": str(exc)}
+        return None, {"source": "mcp_stdio", "ok": False, "error": str(exc)}
+    finally:
+        runner.close()
 
 
 def _feed_recycler_candidates(xml: str) -> list[tuple[int, str]]:

@@ -13,7 +13,7 @@ import {
 import type { StepLogEntry, WorkflowProgress } from '../types';
 
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
-const RECONNECT_MS = 2000;
+const RECONNECT_MS = 5_000;
 
 export type ExecutionEventStreamState = {
   events: ExecutionEventOut[];
@@ -56,6 +56,16 @@ export function useExecutionEventStream(
 
     let cancelled = false;
     const abort = new AbortController();
+
+    const abortOnPageExit = () => {
+      cancelled = true;
+      abort.abort();
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', abortOnPageExit);
+      window.addEventListener('beforeunload', abortOnPageExit);
+    }
 
     const run = async () => {
       while (!cancelled && !abort.signal.aborted) {
@@ -107,6 +117,10 @@ export function useExecutionEventStream(
       cancelled = true;
       abort.abort();
       setConnected(false);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pagehide', abortOnPageExit);
+        window.removeEventListener('beforeunload', abortOnPageExit);
+      }
     };
   }, [appendEvent, enabled, executionId]);
 

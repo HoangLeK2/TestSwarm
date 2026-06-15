@@ -44,6 +44,7 @@ import { applyFlowDragEnd } from './flow-tree-dnd';
 import { SortableFlowRow } from './sortable-flow-row';
 import { FlowStepRail } from './flow-step-rail';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
+import { FlowEditorEditSessionProvider } from './flow-editor-edit-session';
 
 // ── FlowEditor ───────────────────────────────────────────────────────────────
 
@@ -67,6 +68,8 @@ interface Props {
   onStopInlineRun?: () => void;
   /** When FlowEditor is inside another Radix Dialog (e.g. template editor). */
   nestedInDialog?: boolean;
+  /** Parent dialog can set modal={false} while a nested child step editor is open. */
+  onChildStepEditorOpenChange?: (open: boolean) => void;
   /** Other scenarios in the same campaign — powers run_scenario picker in the step panel. */
   campaignScenarios?: RunScenarioCampaignOption[];
 }
@@ -86,10 +89,13 @@ export function FlowEditor({
   stepRunStates = {},
   onStopInlineRun,
   nestedInDialog = false,
+  onChildStepEditorOpenChange,
   campaignScenarios = []
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const pendingDetailRef = useRef<FlowStep | null>(null);
+  const stepsRef = useRef(steps);
+  stepsRef.current = steps;
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
 
   const handleDetailPanelChange = useCallback((s: FlowStep) => {
@@ -234,16 +240,16 @@ export function FlowEditor({
 
   const insertAt = useCallback(
     (index: number, newStep: FlowStep) => {
-      const next = [...steps];
+      const next = [...stepsRef.current];
       next.splice(index, 0, newStep);
       onChange(next);
     },
-    [steps, onChange]
+    [onChange]
   );
 
   const removeAt = useCallback(
     (index: number) => {
-      onChange(steps.filter((_, i) => i !== index));
+      onChange(stepsRef.current.filter((_, i) => i !== index));
       if (selectedIndex === index) setSelectedIndex(null);
       if (onSelectorPickTargetChange) {
         if (selectorPickTarget?.rootIndex === index) {
@@ -258,7 +264,6 @@ export function FlowEditor({
       }
     },
     [
-      steps,
       onChange,
       selectedIndex,
       selectorPickTarget,
@@ -270,16 +275,16 @@ export function FlowEditor({
 
   const updateAt = useCallback(
     (index: number, newStep: FlowStep) => {
-      const next = [...steps];
+      const next = [...stepsRef.current];
       next[index] = newStep;
       onChange(next);
     },
-    [steps, onChange]
+    [onChange]
   );
 
   const removeChild = useCallback(
     (parentIndex: number, key: string, childIndex: number) => {
-      const parent = steps[parentIndex];
+      const parent = stepsRef.current[parentIndex];
       if (!parent) return;
       const next = { ...parent };
       if (key.startsWith('branches.')) {
@@ -299,12 +304,12 @@ export function FlowEditor({
       }
       updateAt(parentIndex, next);
     },
-    [steps, updateAt]
+    [updateAt]
   );
 
   const insertChild = useCallback(
     (parentIndex: number, key: string, at: number, newStep: FlowStep) => {
-      const parent = steps[parentIndex];
+      const parent = stepsRef.current[parentIndex];
       if (!parent) return;
       const next = { ...parent };
       if (key.startsWith('branches.')) {
@@ -321,10 +326,10 @@ export function FlowEditor({
       }
       updateAt(parentIndex, next);
     },
-    [steps, updateAt]
+    [updateAt]
   );
 
-  return (
+  const editorBody = (
     <>
       <Dialog
         open={!compact && selectedIndex != null}
@@ -567,7 +572,7 @@ export function FlowEditor({
                   </SortableFlowRow>
                 </div>
               ))}
-              <InsertGap onInsert={(s) => insertAt(steps.length, s)} />
+              <InsertGap onInsert={(s) => insertAt(stepsRef.current.length, s)} />
             </SortableContext>
           </DndContext>
 
@@ -580,6 +585,14 @@ export function FlowEditor({
         </div>
       </div>
     </>
+  );
+
+  return (
+    <FlowEditorEditSessionProvider
+      onChildStepEditorOpenChange={onChildStepEditorOpenChange}
+    >
+      {editorBody}
+    </FlowEditorEditSessionProvider>
   );
 }
 

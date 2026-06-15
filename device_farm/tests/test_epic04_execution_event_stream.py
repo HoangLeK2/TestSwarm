@@ -29,6 +29,21 @@ from services.execution.event_types import (
 from tenancy.context import set_current_org_id, tenant_context
 
 
+@pytest.fixture(autouse=True)
+def _csv_casbin_enforcer(monkeypatch):
+    from api.auth import rbac
+
+    async def _fake_enforcer(user, db, domain=None):
+        effective = (domain or rbac.permission_domain(user)).strip() or "global"
+        return rbac.build_enforcer_for_user(user, domain=effective)
+
+    monkeypatch.setattr(
+        "api.deps_streaming.build_enforcer_for_user_from_db",
+        _fake_enforcer,
+    )
+    monkeypatch.setattr("api.deps.build_enforcer_for_user_from_db", _fake_enforcer)
+
+
 @pytest_asyncio.fixture
 async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)

@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from api.deps import CurrentUser, DB, require_permission
+from api.deps_streaming import StreamingUser, require_streaming_permission
 from api.org_scope import data_owner_user_id
 from api.schemas.execution import (
     AddDeviceBody,
@@ -709,23 +710,24 @@ async def list_execution_events(
     return ExecutionEventListOut(items=items, has_more=has_more)
 
 
-@router.get(
-    "/{execution_id}/events/stream",
-    dependencies=[Depends(require_permission("executions", "read"))],
-)
+@router.get("/{execution_id}/events/stream")
 async def stream_execution_events(
     execution_id: str,
     request: Request,
-    db: DB,
-    user: CurrentUser,
+    user: StreamingUser,
+    _perm: None = Depends(require_streaming_permission("executions", "read")),
 ):
     """SSE live stream with ``Last-Event-ID`` resume support (DF-T-04-013)."""
     import asyncio
+    import contextlib
     import json
 
-    await _get_or_404(db, execution_id, user)
+    from api.deps_streaming import load_execution_access
     from db.crud.execution_events import list_execution_events
-    from services.execution.event_bus import get_execution_event_bus
+    from db.database import AsyncSessionLocal
+    from services.execution.event_bus import _SENTINEL, get_execution_event_bus
+
+    await load_execution_access(user, execution_id)
 
     last_event_id = request.headers.get("last-event-id") or request.headers.get("Last-Event-ID")
     if last_event_id == "":
@@ -738,35 +740,78 @@ async def stream_execution_events(
             f"data: {json.dumps(envelope)}\n\n"
         )
 
-    async def event_generator():
-        backlog = await list_execution_events(
-            db,
-            execution_id,
-            since_event_id=last_event_id,
-            limit=500,
-        )
-        for row in backlog:
-            yield _sse_frame(row.to_envelope())
-
-        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
-
-        async def pump() -> None:
-            async for envelope in get_execution_event_bus().subscribe(execution_id):
-                await queue.put(envelope)
-
-        pump_task = asyncio.create_task(pump())
+    backlog_frames: list[str] = []
+    async with AsyncSessionLocal() as db:
         try:
-            while True:
-                if await request.is_disconnected():
-                    break
+            rows = await list_execution_events(
+                db,
+                execution_id,
+                since_event_id=last_event_id,
+                limit=500,
+            )
+            backlog_frames = [_sse_frame(row.to_envelope()) for row in rows]
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+    async def event_generator():
+        import time
+
+        from api.streaming_utils import (
+            client_disconnect_scope,
+            client_gone,
+            stream_expired,
+        )
+
+        started = time.monotonic()
+        async with client_disconnect_scope(request) as disconnected:
+            for frame in backlog_frames:
+                if client_gone(disconnected) or stream_expired(started):
+                    return
+                yield frame
+
+            local_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+            bus = get_execution_event_bus()
+
+            async def pump(bus_queue: asyncio.Queue) -> None:
                 try:
-                    envelope = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                yield _sse_frame(envelope)
-        finally:
-            pump_task.cancel()
+                    while True:
+                        item = await bus_queue.get()
+                        if item is _SENTINEL:
+                            break
+                        await local_queue.put(item)
+                except asyncio.CancelledError:
+                    raise
+
+            async with bus.subscription(execution_id) as bus_queue:
+                pump_task = asyncio.create_task(pump(bus_queue))
+                try:
+                    while True:
+                        if client_gone(disconnected) or stream_expired(started):
+                            break
+                        get_task = asyncio.create_task(local_queue.get())
+                        try:
+                            done, _pending = await asyncio.wait({get_task}, timeout=2.0)
+                        except Exception:
+                            get_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await get_task
+                            raise
+                        if not done:
+                            get_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await get_task
+                            if client_gone(disconnected) or stream_expired(started):
+                                break
+                            yield ": keepalive\n\n"
+                            continue
+                        envelope = get_task.result()
+                        yield _sse_frame(envelope)
+                finally:
+                    pump_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await pump_task
 
     return StreamingResponse(
         event_generator(),

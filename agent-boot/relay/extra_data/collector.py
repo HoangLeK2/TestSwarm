@@ -1035,6 +1035,11 @@ async def _collect_comment_snapshots(
     )
     recover_chrome = _bool_context(context, "comment_recover_chrome", True)
     retry_screen_swipe_on_stuck = _bool_context(context, "comment_screen_swipe_retry_on_stuck", False)
+    # Wall-clock safety cap for extremely long threads (0 = disabled). This bounds
+    # the comment phase independently of the swipe budget so a single huge post
+    # cannot stall the crawl loop indefinitely. Early-stop (no-new / no-growth)
+    # still ends short threads well before this cap.
+    comment_scroll_wall_s = _float_context(context, "comment_scroll_wall_s", 0.0, 0.0, 600.0)
 
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         detect_comment_sheet_interrupt_from_xml,
@@ -1170,10 +1175,24 @@ async def _collect_comment_snapshots(
         _raise_if_cancelled(context)
         return bool(swipe_result.get("ok"))
 
+    wall_deadline = (
+        time.monotonic() + comment_scroll_wall_s if comment_scroll_wall_s > 0 else None
+    )
     cycle = 0
     while cycle < dump_cycles:
         _raise_if_cancelled(context)
         if len(snapshots) >= max_snapshots or swipes_done >= swipe_budget:
+            break
+        if wall_deadline is not None and time.monotonic() >= wall_deadline:
+            logger.info(
+                "[%s] extra_data comment wall-clock cap %.1fs reached after %d dump "
+                "cycles (%d swipes, snapshots=%d)",
+                serial,
+                comment_scroll_wall_s,
+                cycle,
+                swipes_done,
+                len(snapshots),
+            )
             break
 
         batch_swipes = min(swipes_per_dump, swipe_budget - swipes_done)
@@ -1721,6 +1740,33 @@ async def collect_xml_snapshots(
                 # following fb_comments step gets a stable XML.
                 expand_requested = False
                 context["expand_see_more_skipped"] = "comment_sheet"
+            if (
+                expand_requested
+                and strategy == "fb_posts"
+                and cached_xml
+                and _bool_context(context, "expand_skip_if_not_truncated", True)
+            ):
+                # Expanding "See more" is several taps + dumps. Skip it entirely when
+                # the opened post text is not truncated — saves seconds per short post
+                # without losing any content.
+                try:
+                    from relay.extra_data.parsers.facebook.feed_pipeline import (
+                        parse_fb_posts_from_xml_with_diagnostic,
+                    )
+
+                    _probe_posts, _probe_diag = parse_fb_posts_from_xml_with_diagnostic(
+                        cached_xml
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    _probe_posts, _probe_diag = [], {}
+                    logger.debug("[%s] expand truncation probe failed: %s", serial, exc)
+                if _probe_posts and int(_probe_diag.get("truncated_post_count", 0) or 0) == 0:
+                    expand_requested = False
+                    context["expand_see_more_skipped"] = "not_truncated"
+                    logger.info(
+                        "[%s] extra_data expand_see_more skipped: detail post not truncated",
+                        serial,
+                    )
             if strategy in _COMMENT_STRATEGIES:
                 if expand_requested:
                     logger.info(

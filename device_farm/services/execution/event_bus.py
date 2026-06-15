@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 log = logging.getLogger(__name__)
@@ -56,6 +58,26 @@ class ExecutionEventBus:
             queue.put_nowait(_SENTINEL)
         except asyncio.QueueFull:
             pass
+
+    @asynccontextmanager
+    async def subscription(self, execution_id: str) -> AsyncIterator[asyncio.Queue[Any]]:
+        """Register a subscriber queue and always remove it on exit."""
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=256)
+        async with self._lock:
+            self._subs[execution_id].append(queue)
+        try:
+            yield queue
+        finally:
+            await self.close_subscriber(execution_id, queue)
+            async with self._lock:
+                subs = self._subs.get(execution_id, [])
+                if queue in subs:
+                    subs.remove(queue)
+                if not subs:
+                    self._subs.pop(execution_id, None)
+            with contextlib.suppress(asyncio.QueueEmpty):
+                while not queue.empty():
+                    queue.get_nowait()
 
 
 _bus: ExecutionEventBus | None = None

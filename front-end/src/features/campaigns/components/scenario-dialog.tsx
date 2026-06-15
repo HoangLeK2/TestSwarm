@@ -77,7 +77,10 @@ import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-fo
 import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
-import { findSelectorInXml } from '@/features/devices/utils/control-record-xml';
+import {
+  findSelectorInXml,
+  getScreenSignature
+} from '@/features/devices/utils/control-record-xml';
 import {
   buildTapSelectorStep,
   normalizeSelectorStepFields
@@ -566,6 +569,7 @@ export function ScenarioDialog({
     () => scenarioProp ?? campaign.scenarios?.[0],
     [scenarioProp, campaign.scenarios]
   );
+  const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
@@ -1072,7 +1076,10 @@ export function ScenarioDialog({
       const ry3 = parseFloat(ry.toFixed(3));
 
       if (xml) {
-        const sel = findSelectorInXml(xml, rx, ry);
+        const sig = getScreenSignature(xml);
+        const sel = findSelectorInXml(xml, rx, ry, {
+          targetPackage: sig.package || undefined
+        });
         if (sel) {
           appendStepsWithGraphSync((prev) => [
             ...prev,
@@ -1450,6 +1457,9 @@ export function ScenarioDialog({
       toast.error(check.message);
       return;
     }
+    const { nodes: saveNodes, edges: saveEdges } = stepsToGraph(
+      sanitizedSteps as Record<string, unknown>[]
+    );
     if (useRowApi && effectiveRow?.id) {
       saveScenarioRow(
         {
@@ -1459,8 +1469,8 @@ export function ScenarioDialog({
             instructions,
             steps: sanitizedSteps,
             variables: variablesToSave,
-            nodes: graphNodes as any,
-            edges: graphEdges as any,
+            nodes: saveNodes as any,
+            edges: saveEdges as any,
             // Empty string clears the binding on the backend.
             account_group_id: accountGroupId ? accountGroupId : ''
           }
@@ -1746,7 +1756,7 @@ export function ScenarioDialog({
   const embedSerial = xmlSerial || devices[0]?.serial || '';
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={setOpen} modal={!childStepEditorOpen}>
       <DialogTrigger asChild>
         {children ?? (
           <Button size='sm' variant='outline' className='gap-1 text-[10px]'>
@@ -2282,14 +2292,14 @@ export function ScenarioDialog({
                   <FlowEditor
                     steps={steps as any[]}
                     onChange={(newSteps) => {
-                      // Sync steps immediately; debounce expensive graph rebuild to avoid
-                      // per-keystroke O(n) stepsToGraph calls during config edits.
+                      // Text edits in nested step overlay no longer bubble per-keystroke;
+                      // only sync steps — graph is rebuilt on save.
                       setSteps(newSteps as Step[]);
-                      scheduleGraphSync(newSteps as Step[]);
                     }}
                     maxHeight='min(380px, 42vh)'
                     compact
                     nestedInDialog
+                    onChildStepEditorOpenChange={setChildStepEditorOpen}
                     campaignScenarios={runScenarioCampaignOptions}
                     onRunStep={handleInlineRunStep}
                     stepRunStates={stepRunStates}

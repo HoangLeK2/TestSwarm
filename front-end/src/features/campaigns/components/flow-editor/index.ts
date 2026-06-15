@@ -12,3 +12,8 @@ export {
   coordinatePickTargetEquals,
   type CoordinatePickTarget
 } from './coordinate-pick';
+export {
+  decodeScenarioInlineRunKey,
+  resolveLatestStepForInlineRun,
+  resolveStepForInlineRunKey
+} from './inline-run-key';

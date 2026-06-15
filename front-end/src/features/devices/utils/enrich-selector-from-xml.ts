@@ -4,6 +4,7 @@
  */
 
 import type { ScenarioSelectorShape } from '../lib/scenario-selector-step';
+import { isGenericHierarchyResourceId } from './hierarchy-hit-test';
 
 const CONTAINER_CLASSES = new Set([
   'android.widget.FrameLayout',
@@ -96,8 +97,15 @@ function buildConditions(
   if (pkg && !isSystemPackage(pkg)) {
     conditions.packageName = pkg;
   }
-  // When primary is text/desc, pin resource-id if present (often unique within screen region)
-  if (primary.by !== 'resource-id' && rid && rid.includes('/')) {
+  // When primary is text/desc, pin resource-id if present (often unique within
+  // screen region). Skip generic / obfuscated ids (e.g. FB "(name removed)")
+  // which repeat across the dump and would over-match.
+  if (
+    primary.by !== 'resource-id' &&
+    rid &&
+    rid.includes('/') &&
+    !isGenericHierarchyResourceId(rid)
+  ) {
     conditions.resourceId = rid;
   }
   if (primary.by === 'resource-id' && cls && !CONTAINER_CLASSES.has(cls)) {

@@ -1,19 +1,22 @@
 """DF-010: Content Pipeline — API endpoints for content CRUD, collections, exports, stats."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import or_, select
 
 from api.auth.content_share import create_content_share_token, verify_content_share_token
 from api.deps import CurrentUser, DB, require_permission
+from api.deps_streaming import StreamingUser, require_streaming_permission
 from api.org_scope import data_owner_user_id
+from api.streaming_utils import client_disconnect_scope, client_gone
 from api.schemas.content import (
     CollectionCreate,
     CollectionOut,
@@ -25,6 +28,7 @@ from api.schemas.content import (
     SaveContentBody,
 )
 from db.crud import content as content_crud
+from db.database import AsyncSessionLocal
 from db.models.content import ContentItem
 from services.content_artifacts import (
     collect_primary_content_artifacts,
@@ -64,20 +68,31 @@ def _item_row(item) -> list:
     ]
 
 
-async def _csv_generator(db, filters: dict) -> AsyncGenerator[bytes, None]:
-    """Yield CSV bytes row-by-row without loading all data into memory."""
+async def _csv_generator(filters: dict, disconnected: asyncio.Event | None = None) -> AsyncGenerator[bytes, None]:
+    """Yield CSV bytes row-by-row without holding one DB session for the whole stream."""
     buf = io.StringIO()
     writer = csv.writer(buf)
-    # Header
     writer.writerow(_EXPORT_FIELDS)
     yield buf.getvalue().encode()
 
     offset = 0
     while True:
-        items, _ = await content_crud.query_content(db, **filters, limit=_BATCH, offset=offset)
+        if disconnected is not None and client_gone(disconnected):
+            return
+        async with AsyncSessionLocal() as db:
+            try:
+                items, _ = await content_crud.query_content(
+                    db, **filters, limit=_BATCH, offset=offset
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
         if not items:
             break
         for item in items:
+            if disconnected is not None and client_gone(disconnected):
+                return
             buf = io.StringIO()
             csv.writer(buf).writerow(_item_row(item))
             yield buf.getvalue().encode()
@@ -113,13 +128,11 @@ async def _xlsx_bytes(db, filters: dict) -> bytes:
 # ── Streaming Export ──────────────────────────────────────────────────────────
 
 
-@router.get(
-    "/export/stream",
-    dependencies=[Depends(require_permission("content", "read"))],
-)
+@router.get("/export/stream")
 async def stream_export(
-    db: DB,
-    user: CurrentUser,
+    request: Request,
+    user: StreamingUser,
+    _perm: None = Depends(require_streaming_permission("content", "read")),
     format: str = Query("csv", pattern="^(csv|xlsx)$"),
     collection: str | None = None,
     platform: str | None = None,
@@ -148,14 +161,27 @@ async def stream_export(
 
     if format == "csv":
         filename = "content-export.csv"
+
+        async def _csv_with_disconnect() -> AsyncGenerator[bytes, None]:
+            async with client_disconnect_scope(request) as disconnected:
+                async for chunk in _csv_generator(filters, disconnected):
+                    if client_gone(disconnected):
+                        return
+                    yield chunk
+
         return StreamingResponse(
-            _csv_generator(db, filters),
+            _csv_with_disconnect(),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    # xlsx — build in-memory then stream
-    data = await _xlsx_bytes(db, filters)
+    async with AsyncSessionLocal() as db:
+        try:
+            data = await _xlsx_bytes(db, filters)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
     filename = "content-export.xlsx"
     return StreamingResponse(
         iter([data]),

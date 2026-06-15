@@ -1,11 +1,21 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
+import { Z_FLOATING } from '@/lib/z-index';
+
+/** z-index for nested step editor — must sit above parent scenario/template dialogs. */
+export const STEP_EDIT_OVERLAY_Z_INDEX = Z_FLOATING;
 
 /**
- * Full-screen overlay for editing a step — use instead of Radix Dialog when FlowEditor
- * is already inside another Dialog. Nested Radix Dialogs + Presence can infinite-loop on React 19.
+ * Step editor layered above a parent Radix Dialog (scenario / template editors).
+ * Uses a nested Dialog so focus trap and keyboard input work inside the parent modal.
+ * Plain portals at higher z-index still sit outside the parent FocusScope and feel
+ * "frozen" (cannot type in inputs).
  */
 export function StepEditOverlay({
   onClose,
@@ -14,38 +24,23 @@ export function StepEditOverlay({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCloseRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  if (typeof document === 'undefined') return null;
-
-  return createPortal(
-    <div
-      className='fixed inset-0 z-[10050] flex items-center justify-center p-4'
-      role='dialog'
-      aria-modal='true'
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <button
-        type='button'
-        className='absolute inset-0 bg-background/60 backdrop-blur-sm'
-        aria-label='Đóng'
-        onClick={() => onCloseRef.current()}
-      />
-      <div
-        className='relative z-10 grid w-full max-w-sm gap-0 overflow-hidden rounded-lg border bg-background p-0 shadow-lg'
-        onClick={(e) => e.stopPropagation()}
+      <DialogContent
+        className='max-w-lg gap-0 p-0 sm:max-w-xl'
+        zIndex={STEP_EDIT_OVERLAY_Z_INDEX}
+        onClose={onClose}
       >
+        <DialogHeader className='sr-only'>
+          <DialogTitle>Chỉnh sửa bước</DialogTitle>
+        </DialogHeader>
         {children}
-      </div>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   );
 }

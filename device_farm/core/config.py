@@ -666,6 +666,8 @@ def setup_logging(cfg: LoggingConfig) -> None:
             return (
                 name == "scenario_trace"
                 or name == "api_trace"
+                or name == "temporal_trace"
+                or name.startswith("temporal.")
                 or name.startswith("tasks.scenario")
                 or name.startswith("tasks.scenario_task")
                 or name.startswith("api.routes.device_control.scenarios")

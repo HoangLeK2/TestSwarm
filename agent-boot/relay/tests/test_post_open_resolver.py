@@ -434,3 +434,111 @@ def test_live_feed_dump_if_present() -> None:
     )
     assert 250 <= cx <= 900
     assert cy > 300
+
+
+def _feed_anonymous_post_xml() -> str:
+    """Layout from live Codex VN anonymous post — name/time open info sheet, gap opens detail."""
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,472][1260,2641]">
+        <node class="android.widget.ImageView" content-desc="Ảnh đại diện của Người tham gia ẩn danh" bounds="[42,514][182,654]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="Người tham gia ẩn danh" bounds="[210,515][1085,581]" clickable="false">
+          <node class="android.widget.Button" text="Người tham gia ẩn danh" bounds="[210,515][849,581]" clickable="true"/>
+        </node>
+        <node class="android.view.ViewGroup" text="32 phút•Chia sẻ với: Nhóm công khai" content-desc="32 phút•Chia sẻ với: Nhóm công khai" bounds="[224,595][465,644]" clickable="true"/>
+        <node class="android.widget.Button" content-desc="Lựa chọn khác cho bài viết của Người tham gia ẩn danh" bounds="[1113,472][1260,618]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="cho em hỏi sao chatgpt với codex của em mỗi lần mở máy bật lại là cứ bị hết phiên đăng nhập v ạ" bounds="[42,696][1218,1225]" clickable="true" focusable="true"/>
+        <node class="android.widget.Button" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." text="Bình luận" bounds="[360,2480][520,2540]" clickable="true"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+
+
+def test_anonymous_author_prefers_gap_near_menu_not_timestamp() -> None:
+    xml = _feed_anonymous_post_xml()
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] == "author_row_gap"
+    x1, y1, x2, y2 = top["bounds"]
+    assert x1 >= 849
+    assert x2 <= 1113
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind="author_row_gap"
+    )
+    assert 861 <= cx <= 1100
+    assert 515 <= cy <= 590
+
+
+def test_is_anonymous_fb_author_detects_vietnamese_label() -> None:
+    from relay.extra_data.parsers.facebook.parser import _collect_text_nodes, _parse_bounds, _parse_xml
+
+    root = _parse_xml(_feed_anonymous_post_xml())
+    el = post_open_pipeline._discover_post_open_scan_elements(root)[0][1]
+    cb = _parse_bounds(el)
+    nodes = _collect_text_nodes(el, toolbar_cutoff_y=0)
+    ab = post_open_pipeline._find_author_bounds(nodes, cb)
+    assert post_open_pipeline._is_anonymous_fb_author(nodes, ab)
+
+
+def _feed_ai_badge_post_xml() -> str:
+    """Live layout: author row + 'Có dùng AI' chip + timestamp — badge tap opens info sheet."""
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,500][1260,2200]">
+        <node class="android.widget.ImageView" content-desc="Ảnh đại diện của Nguyễn Trọng Đạt" bounds="[42,530][182,670]" clickable="true"/>
+        <node class="android.widget.Button" text="Nguyễn Trọng Đạt" bounds="[210,531][620,597]" clickable="true"/>
+        <node class="android.view.ViewGroup" text="Có dùng AI" bounds="[210,603][420,652]" clickable="true"/>
+        <node class="android.view.ViewGroup" text="19 giờ" bounds="[430,603][560,652]" clickable="true"/>
+        <node class="android.widget.Button" content-desc="Lựa chọn khác cho bài viết của Nguyễn Trọng Đạt" bounds="[1113,488][1260,634]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="Đánh giá MiniMax M3, GLM 5.2 và Kimi K2.7 cho tác vụ coding" bounds="[42,680][1218,1100]" clickable="true" focusable="true"/>
+        <node class="android.widget.Button" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." text="Bình luận" bounds="[360,2000][520,2060]" clickable="true"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+
+
+def test_ai_badge_post_prefers_gap_over_ai_chip() -> None:
+    xml = _feed_ai_badge_post_xml()
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] in {"author_row_gap", "timestamp"}
+    assert top["tap_kind"] != "metadata"
+    label = (top.get("tap_label") or "").casefold()
+    assert "có dùng ai" not in label or top["tap_kind"] == "timestamp"
+    if top["tap_kind"] == "author_row_gap":
+        cx, cy = post_open_pipeline.post_header_tap_point(
+            tuple(top["bounds"]), tap_kind="author_row_gap"
+        )
+        assert cx >= 620
+        assert cx <= 1100
+
+
+def test_ai_badge_combined_timestamp_row_clips_tap_right() -> None:
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,500][1260,2200]">
+        <node class="android.widget.Button" text="Nguyễn Trọng Đạt" bounds="[210,531][620,597]" clickable="true"/>
+        <node class="android.view.ViewGroup" text="Có dùng AI • 19 giờ" bounds="[210,603][620,652]" clickable="true"/>
+        <node class="android.widget.Button" content-desc="Lựa chọn khác cho bài viết" bounds="[1113,488][1260,634]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="Post body with AI badge row above" bounds="[42,680][1218,1100]" clickable="true" focusable="true"/>
+        <node class="android.widget.Button" content-desc="Nút Bình luận" text="Bình luận" bounds="[360,2000][520,2060]" clickable="true"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] in {"author_row_gap", "timestamp"}
+    if top["tap_kind"] == "timestamp":
+        cx, cy = post_open_pipeline.post_header_tap_point(
+            tuple(top["bounds"]), tap_kind="timestamp"
+        )
+        assert cx >= 400

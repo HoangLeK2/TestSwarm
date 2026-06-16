@@ -61,3 +61,26 @@ async def test_to_thread_with_heartbeat_stops_on_execution_cancel_flag():
     assert started.is_set()
     assert cancel_event.is_set()
     assert result == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_to_thread_with_heartbeat_stops_on_temporal_activity_cancel():
+    started = threading.Event()
+
+    def _slow_work() -> str:
+        started.set()
+        time.sleep(10.0)
+        return "done"
+
+    with patch("temporal.activities.activity") as mock_activity:
+        mock_activity.heartbeat = MagicMock()
+        mock_activity.is_cancelled = MagicMock(side_effect=[False, True])
+
+        with pytest.raises(asyncio.CancelledError):
+            await _to_thread_with_heartbeat(
+                _slow_work,
+                heartbeat_interval=0.05,
+                cancel_grace_s=0.2,
+            )
+
+    assert started.is_set()

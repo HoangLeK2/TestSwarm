@@ -88,6 +88,8 @@ database:
   password: "password"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
+# Temporal activity traces → logger "temporal_trace" (console + logs/scenario-trace.log)
+# Key events: temporal_activity_start/end, temporal_thread_cancel, temporal_thread_slot_released
 logging:
   level: "INFO"          
   format: "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"

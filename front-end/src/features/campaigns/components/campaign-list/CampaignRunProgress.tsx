@@ -5,6 +5,7 @@ import { TrendingUp } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import {
   useCampaignProgress,
+  useCampaignStopDrain,
   useCampaignWorkflows
 } from '../../hooks/use-campaigns';
 import { executionsApi } from '../../services/api';
@@ -72,13 +73,15 @@ export function CampaignRunProgress({
   isRunning: boolean;
 }) {
   const t = useTranslations('campaignsFeature.list');
+  const { isStopping, activeWorkflowCount } = useCampaignStopDrain(campaignId);
+  const showProgress = isRunning || isStopping;
 
   // Temporal workflows
-  const { data: wfData } = useCampaignWorkflows(campaignId, isRunning);
+  const { data: wfData } = useCampaignWorkflows(campaignId, showProgress);
   const workflows = wfData?.workflows ?? [];
 
   const shouldUseLegacyFallback =
-    isRunning && wfData !== undefined && workflows.length === 0;
+    showProgress && wfData !== undefined && workflows.length === 0;
   const { data: legacyProgress } = useCampaignProgress(
     campaignId,
     shouldUseLegacyFallback
@@ -87,20 +90,20 @@ export function CampaignRunProgress({
   const { data: latestExecution } = useQuery({
     queryKey: ['campaign-latest-execution', campaignId],
     queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
-    enabled: isRunning && workflows.length === 0,
-    refetchInterval: isRunning ? 8_000 : false,
+    enabled: showProgress && workflows.length === 0,
+    refetchInterval: showProgress ? 8_000 : false,
     refetchOnWindowFocus: false
   });
   const latestExecId = latestExecution?.items?.[0]?.id;
   const { data: execSummary } = useQuery({
     queryKey: ['execution-summary', latestExecId],
     queryFn: () => executionsApi.summary(latestExecId!),
-    enabled: isRunning && workflows.length === 0 && !!latestExecId,
-    refetchInterval: isRunning ? 8_000 : false,
+    enabled: showProgress && workflows.length === 0 && !!latestExecId,
+    refetchInterval: showProgress ? 8_000 : false,
     refetchOnWindowFocus: false
   });
 
-  if (!isRunning) return null;
+  if (!showProgress) return null;
 
   // Derive a single { pct, content } shape so the popover is uniform.
   let pct = 0;
@@ -144,6 +147,9 @@ export function CampaignRunProgress({
           )}
           {failed > 0 && (
             <StatPill label={t('wfFailed', { count: failed })} tone='failed' />
+          )}
+          {isStopping && activeWorkflowCount > 0 && (
+            <StatPill label={t('statusStopping')} tone='paused' />
           )}
         </div>
       </div>

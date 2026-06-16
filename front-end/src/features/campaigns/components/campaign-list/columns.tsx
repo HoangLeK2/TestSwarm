@@ -3,10 +3,6 @@ import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { CampaignOut } from '../../types';
-import {
-  campaignStatusLabel,
-  campaignStatusVariant
-} from '../../campaign-status-ui';
 import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import {
@@ -18,6 +14,8 @@ import { useQuery } from '@tanstack/react-query';
 import { executionsApi } from '../../services/api';
 import { CampaignRunStats } from './CampaignRunStats';
 import { CampaignEngineBadge } from './CampaignEngineBadge';
+import { CampaignStatusBadge } from './CampaignStatusBadge';
+import type { CampaignStatus } from '../../types';
 import { cn } from '@/lib/utils';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
@@ -95,12 +93,12 @@ export function getCampaignColumns(
               </TooltipTrigger>
               <TooltipContent>{c.name}</TooltipContent>
             </Tooltip>
-            <Badge
-              variant={campaignStatusVariant(c.status)}
-              className='mt-1 inline-flex text-[10px] xl:hidden'
-            >
-              {campaignStatusLabel(c.status, statusLabel)}
-            </Badge>
+            <CampaignStatusBadge
+              campaignId={c.id}
+              status={c.status}
+              statusLabels={statusLabel as Record<CampaignStatus, string>}
+              className='mt-1 inline-flex xl:hidden'
+            />
           </div>
         );
       }
@@ -138,12 +136,12 @@ export function getCampaignColumns(
         const c = row.original;
         return (
           <div className='flex flex-col items-start gap-1'>
-            <Badge
-              variant={campaignStatusVariant(c.status)}
+            <CampaignStatusBadge
+              campaignId={c.id}
+              status={c.status}
+              statusLabels={statusLabel as Record<CampaignStatus, string>}
               className='inline-flex items-center gap-1 text-[11px]'
-            >
-              {campaignStatusLabel(c.status, statusLabel)}
-            </Badge>
+            />
             {/* <CampaignEngineBadge campaignId={c.id} status={c.status} /> */}
           </div>
         );

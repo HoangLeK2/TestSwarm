@@ -76,6 +76,10 @@ _ACTIVITY_RETRY = RetryPolicy(
     non_retryable_error_types=["ValueError"],  # Don't retry validation errors
 )
 
+_DEVICE_ACTION_RETRY = RetryPolicy(
+    maximum_attempts=1,
+)
+
 def _lookup_var(name: str, *dicts: dict[str, Any]) -> Any:
     """Lookup a variable in multiple dicts by priority. Returns None if not found.
 
@@ -670,7 +674,7 @@ class ScenarioStepsWorkflow:
                 result_type=DeviceActionBatchResult,
                 # 120 s per step, cap at 10 min
                 start_to_close_timeout=timedelta(seconds=min(120 * n, 600)),
-                retry_policy=_ACTIVITY_RETRY,
+                retry_policy=_DEVICE_ACTION_RETRY,
                 # Extract/comment steps can run minutes; keep margin over 5s heartbeat loop.
                 heartbeat_timeout=timedelta(seconds=60),
             )

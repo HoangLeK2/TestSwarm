@@ -8,6 +8,35 @@ import pytest
 from temporal.shared import DeviceActionBatchInput, DeviceActionBatchResult
 
 
+def test_device_action_batch_temporal_retry_is_single_attempt():
+    """Device actions are side-effectful; Temporal must not replay a timed-out batch."""
+    import ast
+    from pathlib import Path
+
+    from temporal import workflows
+    from temporal.workflows import _DEVICE_ACTION_RETRY
+
+    assert _DEVICE_ACTION_RETRY.maximum_attempts == 1
+
+    source = Path(workflows.__file__).read_text()
+    module = ast.parse(source)
+    batch_calls = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "attr", "") == "execute_activity"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "execute_device_action_batch"
+    ]
+    assert batch_calls, "execute_device_action_batch call site not found"
+    for call in batch_calls:
+        retry_kw = next((kw for kw in call.keywords if kw.arg == "retry_policy"), None)
+        assert retry_kw is not None
+        assert isinstance(retry_kw.value, ast.Name)
+        assert retry_kw.value.id == "_DEVICE_ACTION_RETRY"
+
+
 @pytest.mark.asyncio
 async def test_execute_device_action_batch_returns_cancelled_mid_batch():
     from temporal.activities import DeviceActivities

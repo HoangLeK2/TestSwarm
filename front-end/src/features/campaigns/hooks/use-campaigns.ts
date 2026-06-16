@@ -31,6 +31,9 @@ import {
   fleetStatus,
   type FleetStatusResult
 } from '../../devices/services/api';
+import {
+  markCampaignStopDrain
+} from './use-campaign-stop-drain';
 
 const KEYS = {
   list: ['campaigns'] as const,
@@ -539,9 +542,17 @@ export function useCampaignCancel() {
       campaignId: string;
       reason?: string;
     }) => campaignsApi.cancel(campaignId, reason),
-    onSuccess: (_data, { campaignId }) => invalidate(campaignId)
+    onSuccess: (data, { campaignId }) => {
+      markCampaignStopDrain(qc, campaignId, {
+        workflowsSignalled: data.workflows_signalled,
+        notifyOnComplete: true
+      });
+      invalidate(campaignId);
+    }
   });
 }
+
+export { useCampaignStopDrain, markCampaignStopDrain } from './use-campaign-stop-drain';
 
 export function useWorkflowPause() {
   const qc = useQueryClient();

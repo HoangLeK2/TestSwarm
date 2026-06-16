@@ -18,7 +18,11 @@ import { ROUTES } from '@/config/routes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { DeviceAndroidFrame } from './device-android-frame';
+import {
+  DeviceAndroidFrame,
+  mockupOuterHeightPx
+} from './device-android-frame';
+import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { DeviceStepMonitorButton } from './device-step-monitor';
@@ -159,6 +163,10 @@ function DeviceTilePreviewInner({
 
   /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
   const previewMockupScreenWidth = 216;
+  const previewMockupHeightPx = useMemo(
+    () => mockupOuterHeightPx(previewMockupScreenWidth),
+    [previewMockupScreenWidth]
+  );
 
   const isContinuous =
     streamingConfig !== null && streamingConfig.mode === 'continuous';
@@ -519,22 +527,23 @@ function DeviceTilePreviewInner({
       </CardHeader>
       <CardContent className='flex flex-1 flex-col gap-2 px-2.5 pb-2.5 pt-2.5'>
         <div className='flex flex-col items-center gap-2'>
-          <div className='flex w-full justify-center'>
+          <div
+            className='flex w-full shrink-0 justify-center'
+            style={{
+              height: previewMockupHeightPx,
+              minHeight: previewMockupHeightPx
+            }}
+          >
             <DeviceAndroidFrame
               screenWidth={previewMockupScreenWidth}
               deviceWidth={device.screen_width}
               deviceHeight={device.screen_height}
+              className='h-full shrink-0'
             >
               <div
                 ref={previewZoneRef}
-                className='relative h-full w-full overflow-hidden bg-zinc-900'
+                className='relative h-full min-h-0 w-full overflow-hidden bg-zinc-950'
               >
-                {isActive && loadStream && !hasFrame && (
-                  <div
-                    className='absolute inset-0 bg-gradient-to-b from-zinc-700 to-zinc-900'
-                    aria-hidden
-                  />
-                )}
                 {showMjpegImg && (
                   // eslint-disable-next-line @next/next/no-img-element -- MJPEG stream endpoint
                   <img
@@ -542,7 +551,10 @@ function DeviceTilePreviewInner({
                     alt=''
                     role='presentation'
                     decoding='async'
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
+                    className={cn(
+                      'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
+                      hasFrame && !h264Active ? 'opacity-100' : 'opacity-0'
+                    )}
                     onLoad={() => setHasFrame(true)}
                     onError={() => setMjpegFailed(true)}
                     draggable={false}
@@ -551,25 +563,37 @@ function DeviceTilePreviewInner({
                 {allowH264 && (
                   <canvas
                     ref={canvasRef}
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+                    className={cn(
+                      'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
+                      h264Active && hasFrame ? 'opacity-100' : 'opacity-0'
+                    )}
                   />
                 )}
                 {!isActive ? (
-                  <div className='absolute inset-0 flex items-center justify-center px-2 text-center text-[11px] text-muted-foreground'>
+                  <div className='absolute inset-0 z-10 flex items-center justify-center bg-zinc-950 px-2 text-center text-[11px] text-muted-foreground'>
                     {t('deviceInactive')}
                   </div>
                 ) : !loadStream ? (
-                  <div className='absolute inset-0 flex items-center justify-center px-2 text-center text-[10px] text-muted-foreground'>
-                    {t('previewScrollToLoad')}
+                  <div className='absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-zinc-800 to-zinc-950 px-2 text-center'>
+                    <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400/70 border-t-transparent' />
+                    <p className='text-[10px] text-muted-foreground'>
+                      {t('previewScrollToLoad')}
+                    </p>
                   </div>
                 ) : !serverAllowPreviewMjpeg && !allowH264 ? (
-                  <div className='absolute inset-0 flex items-center justify-center px-2 text-center text-[10px] text-muted-foreground'>
+                  <div className='absolute inset-0 z-10 flex items-center justify-center bg-zinc-950 px-2 text-center text-[10px] text-muted-foreground'>
                     {t('previewDisabledByServer')}
                   </div>
-                ) : !hasFrame ? (
+                ) : (
                   <div
-                    className='absolute inset-0 flex items-center justify-center'
+                    className={cn(
+                      'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-500',
+                      hasFrame
+                        ? 'pointer-events-none opacity-0'
+                        : 'opacity-100'
+                    )}
                     aria-live='polite'
+                    aria-hidden={hasFrame}
                   >
                     <span className='sr-only'>
                       {isUnresponsive
@@ -578,11 +602,22 @@ function DeviceTilePreviewInner({
                           ? t('streamWaitingFirstFrame')
                           : t('streamConnecting')}
                     </span>
-                    {!isUnresponsive && (
-                      <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
+                    {!isUnresponsive ? (
+                      <>
+                        <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
+                        <p className='mt-2 text-[10px] text-muted-foreground'>
+                          {wsConnected
+                            ? t('streamWaitingFirstFrame')
+                            : t('streamConnecting')}
+                        </p>
+                      </>
+                    ) : (
+                      <p className='px-2 text-center text-[10px] text-amber-200/90'>
+                        {t('streamUnresponsive')}
+                      </p>
                     )}
                   </div>
-                ) : null}
+                )}
               </div>
             </DeviceAndroidFrame>
           </div>

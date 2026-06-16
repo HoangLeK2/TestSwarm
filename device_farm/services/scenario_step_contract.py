@@ -36,6 +36,22 @@ def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
         "strategy_version",
         EXTRACT_STRATEGY_VERSION_DEFAULTS.get(strategy, f"{strategy}:v1"),
     )
+    if strategy in {
+        "fb_posts",
+        "fb_comments",
+        "text_nodes",
+        "ig_posts",
+        "tiktok_posts",
+        "linkedin_posts",
+        "auto_posts",
+        "ig_comments",
+        "tiktok_comments",
+        "linkedin_comments",
+        "auto_comments",
+    }:
+        if step.get("edge_extra_data") is None:
+            step.pop("edge_extra_data", None)
+        step.setdefault("edge_extra_data", True)
 
     # Alias used by extract inline-save templates.
     if not step.get("parent_id_var") and step.get("save_parent_id_var"):

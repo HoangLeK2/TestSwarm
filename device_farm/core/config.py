@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 class WebConfig:
     host: str = "0.0.0.0"
     port: int = 8080
-    cors_allow_all: bool = False
+    cors_allow_all: bool = True
     cors_allowed_origins: List[str] = field(
         default_factory=lambda: [
             "http://localhost:3000",
@@ -542,14 +542,18 @@ def load_config(path: str = "config.yaml") -> Config:
     if _as_bool(_get(u2_batch_raw, "enabled", False), False):
         os.environ.setdefault("U2_BATCH_ENABLED", "true")
 
+    web_cors_allow_all = _get(web_raw, "cors_allow_all", True)
+    env_cors_allow_all = os.environ.get("CORS_ALLOW_ALL", "").strip().lower()
+    if env_cors_allow_all in ("0", "false", "no", "off"):
+        web_cors_allow_all = False
+    elif env_cors_allow_all in ("1", "true", "yes", "on"):
+        web_cors_allow_all = True
+
     return Config(
         web=WebConfig(
             host=_get(web_raw, "host", "0.0.0.0"),
             port=_get(web_raw, "port", 8080),
-            cors_allow_all=bool(
-                str(os.environ.get("CORS_ALLOW_ALL", _get(web_raw, "cors_allow_all", False))).strip().lower()
-                in ("1", "true", "yes", "on")
-            ),
+            cors_allow_all=bool(web_cors_allow_all),
             cors_allowed_origins=web_cors_allowed_origins,
             ws_ping_interval=None,  # disabled: concurrent drain assertion in websockets legacy
             ws_ping_timeout=None,

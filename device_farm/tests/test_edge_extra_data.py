@@ -529,6 +529,34 @@ def test_text_nodes_routes_to_agent_boot_without_collection(monkeypatch) -> None
     assert result["extracted"] == 2
 
 
+def test_text_nodes_null_edge_extra_flag_still_routes_to_agent_boot(monkeypatch) -> None:
+    """UI used to set edge_extra_data: undefined (JSON null) when switching strategy."""
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 0,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+            "items": [{"text": "line"}],
+        },
+    })
+    sc = _ctx(device)
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"strategy": "text_nodes", "edge_extra_data": None},
+        "text_nodes",
+        result,
+    )
+
+    assert handled is True
+    assert device.calls[0]["strategy"] == "text_nodes"
+    assert sc.ctx["text_nodes"] == ["line"]
+
+
 def test_non_fb_content_strategy_routes_to_agent_boot(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({

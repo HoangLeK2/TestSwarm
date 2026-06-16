@@ -1135,7 +1135,7 @@ async def _collect_comment_snapshots(
     scroll_xml = initial_xml
     # Slightly longer than minimum so Android treats the gesture as scroll, not tap.
     duration_s = max(0.32, duration_ms / 1000.0)
-    settle_after_batch_s = max(swipe_pause_s, 0.14)
+    settle_after_batch_s = max(swipe_pause_s, 0.05)
     use_screen_swipe = False
     swipes_done = 0
 

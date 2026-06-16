@@ -38,6 +38,77 @@ log = logging.getLogger(__name__)
 # count colons; instead we use a greedy .+ for the serial segment.
 _TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
 _WORKFLOW_CAMPAIGN_RE = re.compile(r"^campaign:([^:]+):")
+_INTERRUPT_TEMPORAL_DEADLINE_S = 3.0
+_INTERRUPT_CANCEL_TIMEOUT_S = 1.0
+_INTERRUPT_CANCEL_CONCURRENCY = 16
+
+
+def _add_interrupt_workflow_id(out: list[str], workflow_id: str | None) -> None:
+    workflow_id = str(workflow_id or "").strip()
+    if not workflow_id:
+        return
+    candidates = [workflow_id]
+    if workflow_id.endswith(":steps"):
+        candidates.append(workflow_id[:-6])
+    else:
+        candidates.append(f"{workflow_id}:steps")
+    for candidate in candidates:
+        if candidate and candidate not in out:
+            out.append(candidate)
+
+
+def _interrupt_workflow_ids_from_executions(executions) -> list[str]:
+    workflow_ids: list[str] = []
+    for execution in executions:
+        meta = getattr(execution, "meta", None) or {}
+        for workflow_id in meta.get("workflow_ids") or []:
+            _add_interrupt_workflow_id(workflow_ids, workflow_id)
+        _add_interrupt_workflow_id(workflow_ids, meta.get("workflow_id"))
+        execution_id = str(getattr(execution, "id", "") or "").strip()
+        if execution_id:
+            _add_interrupt_workflow_id(workflow_ids, f"exec_{execution_id}")
+    return workflow_ids
+
+
+def _interrupt_execution_ids(executions) -> list[str]:
+    ids: list[str] = []
+    for execution in executions:
+        execution_id = str(getattr(execution, "id", "") or "").strip()
+        if execution_id and execution_id not in ids:
+            ids.append(execution_id)
+    return ids
+
+
+async def _mark_interrupt_executions_cancelled(executions) -> None:
+    execution_ids = _interrupt_execution_ids(executions)
+    if not execution_ids:
+        return
+    from services.execution_pause_flags import clear_execution_paused, set_execution_cancelled
+
+    async def _mark_one(execution_id: str) -> None:
+        await clear_execution_paused(execution_id)
+        await set_execution_cancelled(execution_id)
+
+    await asyncio.gather(*(_mark_one(execution_id) for execution_id in execution_ids))
+
+
+async def _cancel_interrupt_workflows(client, workflow_ids: list[str]) -> list[str]:
+    sem = asyncio.Semaphore(_INTERRUPT_CANCEL_CONCURRENCY)
+
+    async def _cancel_one(workflow_id: str) -> str | None:
+        try:
+            async with sem:
+                await asyncio.wait_for(
+                    client.get_workflow_handle(workflow_id).cancel(),
+                    timeout=_INTERRUPT_CANCEL_TIMEOUT_S,
+                )
+            return workflow_id
+        except Exception as exc:
+            log.warning("interrupt: failed to cancel %s: %s", workflow_id, exc)
+            return None
+
+    results = await asyncio.gather(*(_cancel_one(workflow_id) for workflow_id in workflow_ids))
+    return [workflow_id for workflow_id in results if workflow_id]
 
 
 async def _workflow_ui_status(client, workflow_id: str, temporal_status: str) -> str:
@@ -650,17 +721,28 @@ def build_campaign_fleet_router(
         cancelled: list[str] = []
         if config.temporal.enabled:
             try:
+                executions = await repo.list_running_executions_for_device(db, db_device.id)
+                await _mark_interrupt_executions_cancelled(executions)
+                workflow_ids = _interrupt_workflow_ids_from_executions(executions)
                 client = await get_temporal_client(config.temporal)
-                safe_serial = serial.replace('"', "").replace("\\", "")
-                needle = f":device:{safe_serial}:"
-                async for wf in client.list_workflows('ExecutionStatus = "Running"'):
-                    if needle not in wf.id:
-                        continue
-                    try:
-                        await client.get_workflow_handle(wf.id).cancel()
-                        cancelled.append(wf.id)
-                    except Exception as exc:
-                        log.warning("interrupt: failed to cancel %s: %s", wf.id, exc)
+
+                async def _cancel_all() -> list[str]:
+                    ids = list(workflow_ids)
+                    if not ids:
+                        safe_serial = serial.replace('"', "").replace("\\", "")
+                        needle = f":device:{safe_serial}:"
+                        query = 'WorkflowId STARTS_WITH "campaign:" AND ExecutionStatus = "Running"'
+                        async for wf in client.list_workflows(query):
+                            if needle in wf.id:
+                                _add_interrupt_workflow_id(ids, wf.id)
+                    return await _cancel_interrupt_workflows(client, ids)
+
+                cancelled = await asyncio.wait_for(
+                    _cancel_all(),
+                    timeout=_INTERRUPT_TEMPORAL_DEADLINE_S,
+                )
+            except asyncio.TimeoutError:
+                log.warning("interrupt: temporal cancel timed out for %s", serial)
             except Exception as exc:
                 log.warning("interrupt: temporal unavailable for %s: %s", serial, exc)
 

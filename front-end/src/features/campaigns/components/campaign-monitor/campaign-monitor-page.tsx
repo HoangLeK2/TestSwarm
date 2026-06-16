@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ROUTES } from '@/config/routes';
-import { useCampaign } from '../../hooks/use-campaigns';
+import { useCampaign, useCampaignStopDrain } from '../../hooks/use-campaigns';
 import { isCampaignActiveExecution } from '../../types';
 import { MonitorControlBar } from './monitor-control-bar';
 import { MonitorContent } from './monitor-content';
@@ -17,6 +17,7 @@ type Props = {
 export function CampaignMonitorPageView({ campaignId }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const { data: campaign, isLoading, error } = useCampaign(campaignId);
+  const { isStopping } = useCampaignStopDrain(campaignId, campaign?.status);
 
   if (isLoading) {
     return (
@@ -41,13 +42,17 @@ export function CampaignMonitorPageView({ campaignId }: Props) {
     );
   }
 
-  const isRunning = isCampaignActiveExecution(campaign.status);
-  const statusLabel = isRunning
-    ? t('monitorStatusRunning')
-    : t('monitorStatusIdle');
-  const statusClass = isRunning
-    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-    : 'bg-blue-500/15 text-blue-600 dark:text-blue-400';
+  const isRunning = isCampaignActiveExecution(campaign.status) || isStopping;
+  const statusLabel = isStopping
+    ? t('statusStopping')
+    : isRunning
+      ? t('monitorStatusRunning')
+      : t('monitorStatusIdle');
+  const statusClass = isStopping
+    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+    : isRunning
+      ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+      : 'bg-blue-500/15 text-blue-600 dark:text-blue-400';
 
   return (
     <div className='space-y-0 overflow-hidden rounded-xl border bg-card shadow-sm'>

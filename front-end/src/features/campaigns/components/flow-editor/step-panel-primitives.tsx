@@ -200,28 +200,29 @@ export function StepPanelToggle({
 }) {
   return (
     <div
-      role='button'
-      tabIndex={0}
       className={cn(
-        'flex cursor-pointer items-start gap-3 rounded-lg border border-border/60 bg-background/90 px-3 py-2.5 transition-colors',
+        'flex items-start gap-3 rounded-lg border border-border/60 bg-background/90 px-3 py-2.5 transition-colors',
         checked && 'border-primary/25 bg-primary/[0.04]',
         className
       )}
-      onClick={() => onCheckedChange(!checked)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onCheckedChange(!checked);
-        }
-      }}
     >
       <Switch
         checked={checked}
         onCheckedChange={onCheckedChange}
         className='mt-0.5 shrink-0'
-        onClick={(e) => e.stopPropagation()}
       />
-      <div className='min-w-0 flex-1 space-y-0.5'>
+      <div
+        role='button'
+        tabIndex={0}
+        className='min-w-0 flex-1 cursor-pointer space-y-0.5'
+        onClick={() => onCheckedChange(!checked)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onCheckedChange(!checked);
+          }
+        }}
+      >
         <div className='text-xs font-medium leading-snug text-foreground'>
           {label}
         </div>

@@ -8,7 +8,7 @@
       "cwd": "/Users/hoangle/farm/device-farm",
       "env": {
         "DEVICE_FARM_URL": "http://localhost:8081",
-        "MCP_AUTH_TOKEN": "dfmcp_r2Keb_DHDAy9WE-RZf3eJqck28WWvX-O3JqztlPzb9w"
+        "MCP_AUTH_TOKEN": "dfmcp_vAgJ__mnsIX7ysriSQOrH3orkALTIcf5UtlzTreC99g"
       }
     }
   }

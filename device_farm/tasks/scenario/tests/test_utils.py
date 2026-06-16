@@ -146,6 +146,25 @@ class TestWaitForElement:
         # Should abort after 3 errors, not wait full 5s
         assert u2.find_element.call_count == 3
 
+    def test_non_xpath_stops_on_cancel_event(self):
+        u2 = MagicMock()
+        u2.find_element.return_value = None
+        cancel = threading.Event()
+
+        def _set_cancel_after_first(*_args, **_kwargs):
+            cancel.set()
+            return None
+
+        u2.find_element.side_effect = _set_cancel_after_first
+        start = time.monotonic()
+        result = _wait_for_element(
+            u2, "text", "Missing", timeout=5.0, poll=0.2, cancel_event=cancel,
+        )
+        elapsed = time.monotonic() - start
+        assert result is None
+        assert elapsed < 2.0
+        assert u2.find_element.call_count >= 1
+
 
 # ── _evaluate_condition ───────────────────────────────────────────────────────
 

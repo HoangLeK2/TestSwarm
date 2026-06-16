@@ -50,6 +50,10 @@ export const authApi = {
 
   logout: (refreshToken?: string | null) =>
     farmApi
-      .post('/auth/logout', { refresh_token: refreshToken ?? null })
+      .post(
+        '/auth/logout',
+        { refresh_token: refreshToken ?? null },
+        { timeout: AUTH_REQUEST_TIMEOUT_MS, _skip429Retry: true }
+      )
       .then((r) => r.data)
 };

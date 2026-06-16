@@ -1,5 +1,7 @@
 {
-  "_comment": "Deep crawl 1 nhóm — bài viết + comment. Chạy đủ MAX_SCROLLS (không dừng sớm).",
+  "_comment": "Deep crawl 1 nhóm — bài viết + comment. Fast-path: tắt step capture + settle để cắt transition overhead; comment extract dừng sớm theo nội dung.",
+  "capture_steps": false,
+  "settle_timeout_ms": 0,
   "_variables": {
     "GROUP_NAME": "openclaw vn",
     "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN,Công khai · 123K thành viên\"]",
@@ -112,10 +114,11 @@
               "comment_scroll_distance": 0.3,
               "comment_scroll_duration_ms": 300,
               "comment_scroll_pause_s": 0.12,
-              "comment_no_growth_break": 3,
-              "min_comment_scan_passes": 2,
-              "stop_if_no_new": false,
+              "comment_no_growth_break": 2,
+              "min_comment_scan_passes": 1,
+              "comment_stop_if_no_new": true,
               "no_new_threshold": 4,
+              "comment_scroll_wall_s": 90,
               "collection": "${SAVE_COLLECTION}",
               "platform": "facebook",
               "content_type": "fb_comment",

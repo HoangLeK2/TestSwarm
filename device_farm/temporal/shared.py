@@ -121,6 +121,7 @@ class ElementCheckInput:
     by: str
     value: str
     timeout: float = 3.0
+    execution_id: str | None = None
 
 
 @dataclass
@@ -173,6 +174,7 @@ class LegacyConditionCheckInput:
     runtime_vars: dict[str, Any] = field(default_factory=dict)
     # Carries posts, text_nodes, vars etc. so condition checks have full ctx
     context: dict[str, Any] = field(default_factory=dict)
+    execution_id: str | None = None
 
 
 @dataclass

@@ -19,6 +19,7 @@ from temporal.schedule_workflow import ScheduleRunWorkflow
 from temporal.shared import TASK_QUEUE_NAME
 from temporal.account_state_activities import AccountStateActivities
 from temporal.account_state_workflows import AccountCooldownTickWorkflow
+from temporal.trace import TemporalTraceInterceptor
 from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
 log = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ async def create_temporal_worker(
             AccountCooldownTickWorkflow,
         ],
         activities=activity_list,
+        interceptors=[TemporalTraceInterceptor()],
         max_concurrent_activities=cfg.worker_max_concurrent_activities,
         max_concurrent_workflow_tasks=cfg.worker_max_concurrent_workflows,
     )
@@ -137,6 +139,16 @@ async def _run_worker(
             "%s started: server=%s queue=%s activities=%d threads=%d",
             tag, cfg.server_url, cfg.task_queue,
             cfg.worker_max_concurrent_activities, max_threads,
+        )
+        from temporal.trace import trace_log
+        trace_log.info(
+            "temporal_worker_started",
+            worker_index=worker_index,
+            server_url=cfg.server_url,
+            task_queue=cfg.task_queue,
+            max_concurrent_activities=cfg.worker_max_concurrent_activities,
+            max_concurrent_workflows=cfg.worker_max_concurrent_workflows,
+            thread_pool_size=max_threads,
         )
         await worker.run()
     except Exception:

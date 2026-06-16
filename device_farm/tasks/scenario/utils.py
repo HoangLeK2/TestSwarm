@@ -123,39 +123,63 @@ def _wait_for_element(
     value: str,
     timeout: float = 8.0,
     poll: float = 0.3,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Optional[Any]:
     """
     Wait until element appears (up to `timeout` seconds).
 
-    Non-xpath: uses native waitForExists (single server-side blocking call).
+    Non-xpath: polls in short chunks so cooperative cancel can stop quickly.
     xpath: polls via find_element every `poll`s.
     """
     if u2 is None:
         return None
 
     deadline = time.monotonic() + timeout
+    probe_timeout = min(max(0.1, poll), 1.0)
+
+    def _cancelled() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    def _wait_gap() -> None:
+        gap = min(poll, max(0.0, deadline - time.monotonic()))
+        if gap <= 0:
+            return
+        if cancel_event is not None:
+            cancel_event.wait(gap)
+        else:
+            time.sleep(gap)
 
     if by != "xpath":
-        try:
-            remaining = max(0.5, deadline - time.monotonic())
-            eid = u2.find_element(by, value, timeout=remaining)
-            if eid is None:
+        while time.monotonic() < deadline:
+            if _cancelled():
                 return None
-            if hasattr(u2, "find_element_with_bounds"):
-                try:
-                    result = u2.find_element_with_bounds(by, value)
-                    if result:
-                        return result
-                except Exception as exc:
-                    log.debug("find_element_with_bounds failed (%s=%r): %s", by, value, exc)
-            return eid
-        except Exception as exc:
-            log.debug("_wait_for_element %s=%r error: %s", by, value, exc)
-            return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            chunk = min(probe_timeout, remaining)
+            try:
+                eid = u2.find_element(by, value, timeout=max(0.1, chunk))
+                if eid is None:
+                    _wait_gap()
+                    continue
+                if hasattr(u2, "find_element_with_bounds"):
+                    try:
+                        result = u2.find_element_with_bounds(by, value)
+                        if result:
+                            return result
+                    except Exception as exc:
+                        log.debug("find_element_with_bounds failed (%s=%r): %s", by, value, exc)
+                return eid
+            except Exception as exc:
+                log.debug("_wait_for_element %s=%r error: %s", by, value, exc)
+                return None
+        return None
 
     consecutive_errors = 0
     MAX_CONSECUTIVE_ERRORS = 3
     while time.monotonic() < deadline:
+        if _cancelled():
+            return None
         try:
             eid = u2.find_element(by, value, timeout=0)
             if eid is not None:
@@ -168,7 +192,7 @@ def _wait_for_element(
             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                 log.warning("_wait_for_element: %d consecutive errors, aborting (xpath=%r)", consecutive_errors, value)
                 return None
-        time.sleep(poll)
+        _wait_gap()
     return None
 
 

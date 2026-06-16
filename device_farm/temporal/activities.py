@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from temporalio import activity
 
+from temporal.trace import activity_log_context, trace_log
 from temporal.shared import (
     DeviceActionBatchInput,
     DeviceActionBatchResult,
@@ -134,21 +135,39 @@ async def _to_thread_with_heartbeat(
     Temporal force-cancelling the asyncio task.
     """
     thread_task: asyncio.Task[Any] | None = None
+    # Always track cancel signals — even when the worker fn has no cancel_event arg,
+    # Temporal timeout/cancel must release the activity slot (after cancel_grace_s).
+    cancel_event = cooperative_cancel_event or threading.Event()
+    fn_name = getattr(fn, "__name__", repr(fn))
+    thread_ctx = {
+        **activity_log_context(),
+        "execution_id": execution_id,
+        "thread_fn": fn_name,
+    }
+    trace_log.info("temporal_thread_start", **thread_ctx)
 
     async def _maybe_signal_cancel() -> bool:
-        if cooperative_cancel_event is None:
-            return False
-        if cooperative_cancel_event.is_set():
+        if cancel_event.is_set():
             return True
         with contextlib.suppress(Exception):
             if activity.is_cancelled():
-                cooperative_cancel_event.set()
+                cancel_event.set()
+                trace_log.warning(
+                    "temporal_thread_cancel",
+                    **thread_ctx,
+                    reason="temporal_activity_cancelled",
+                )
                 return True
         if execution_id:
             with contextlib.suppress(Exception):
                 from services.execution_pause_flags import is_execution_cancelled_async
                 if await is_execution_cancelled_async(execution_id):
-                    cooperative_cancel_event.set()
+                    cancel_event.set()
+                    trace_log.warning(
+                        "temporal_thread_cancel",
+                        **thread_ctx,
+                        reason="execution_cancel_flag",
+                    )
                     return True
         return False
 
@@ -168,11 +187,19 @@ async def _to_thread_with_heartbeat(
 
     async def _wait_for_thread_after_cancel() -> Any:
         nonlocal thread_task
-        if cooperative_cancel_event is not None:
-            cooperative_cancel_event.set()
+        cancel_event.set()
         if thread_task is None:
             raise asyncio.CancelledError()
-        return await asyncio.wait_for(asyncio.shield(thread_task), timeout=cancel_grace_s)
+        try:
+            return await asyncio.wait_for(asyncio.shield(thread_task), timeout=cancel_grace_s)
+        except asyncio.TimeoutError:
+            trace_log.warning(
+                "temporal_thread_slot_released",
+                **thread_ctx,
+                reason="grace_timeout",
+                cancel_grace_s=cancel_grace_s,
+            )
+            raise asyncio.CancelledError() from None
 
     # Emit one heartbeat immediately so short timeout windows don't expire
     # before the first sleep tick under high worker load.
@@ -187,9 +214,11 @@ async def _to_thread_with_heartbeat(
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if thread_task in done:
+                trace_log.info("temporal_thread_end", **thread_ctx, ok=True)
                 return thread_task.result()
             # Cancel watcher fired — give the worker thread time to stop cooperatively.
             return await _wait_for_thread_after_cancel()
+        trace_log.info("temporal_thread_end", **thread_ctx, ok=True)
         return thread_task.result()
     except BaseException as exc:
         if _is_cancellation_exc(exc):
@@ -608,6 +637,16 @@ class DeviceActivities:
         _validate_serial(inp.device_serial)
         device = _get_device(inp.device_serial)
         activity.heartbeat(f"check_element:{inp.by}={inp.value}")
+        trace_log.info(
+            "check_element_start",
+            device_serial=inp.device_serial,
+            execution_id=inp.execution_id,
+            by=inp.by,
+            value=inp.value,
+            timeout=inp.timeout,
+            u2_ready=device.u2 is not None,
+            device_state=str(getattr(getattr(device, "state", None), "value", getattr(device, "state", None))),
+        )
 
         try:
             from tasks.scenario_task import _wait_for_element
@@ -618,15 +657,53 @@ class DeviceActivities:
                 u2 = device.u2
 
             if u2 is None:
+                trace_log.warning(
+                    "check_element_end",
+                    device_serial=inp.device_serial,
+                    execution_id=inp.execution_id,
+                    found=False,
+                    message="u2 not available",
+                )
                 return ElementCheckResult(found=False, message="u2 not available")
 
-            eid = await _to_thread_with_heartbeat(_wait_for_element, u2, inp.by, inp.value, timeout=inp.timeout)
-            found = eid is not None
-            return ElementCheckResult(
-                found=found,
-                message=f"element {inp.by}={inp.value!r}: {'found' if found else 'not found'}",
+            cancel_event = threading.Event()
+            eid = await _to_thread_with_heartbeat(
+                _wait_for_element,
+                u2,
+                inp.by,
+                inp.value,
+                timeout=inp.timeout,
+                cancel_event=cancel_event,
+                cooperative_cancel_event=cancel_event,
+                execution_id=inp.execution_id,
             )
+            found = eid is not None
+            message = f"element {inp.by}={inp.value!r}: {'found' if found else 'not found'}"
+            trace_log.info(
+                "check_element_end",
+                device_serial=inp.device_serial,
+                execution_id=inp.execution_id,
+                found=found,
+                message=message,
+            )
+            return ElementCheckResult(found=found, message=message)
+        except asyncio.CancelledError:
+            trace_log.warning(
+                "check_element_end",
+                device_serial=inp.device_serial,
+                execution_id=inp.execution_id,
+                found=False,
+                message="cancelled",
+            )
+            return ElementCheckResult(found=False, message="cancelled")
         except Exception as exc:
+            trace_log.warning(
+                "check_element_end",
+                device_serial=inp.device_serial,
+                execution_id=inp.execution_id,
+                found=False,
+                error=str(exc)[:300],
+            )
             log.debug("[%s] check_element error: %s", inp.device_serial, exc)
             return ElementCheckResult(found=False, message=f"check error: {exc}")
 
@@ -652,7 +729,17 @@ class DeviceActivities:
             if inp.runtime_vars:
                 ctx.setdefault("vars", {}).update(inp.runtime_vars)
 
-            return await _to_thread_with_heartbeat(_evaluate_condition, device, inp.condition, ctx)
+            cancel_event = threading.Event()
+            return await _to_thread_with_heartbeat(
+                _evaluate_condition,
+                device,
+                inp.condition,
+                ctx,
+                cooperative_cancel_event=cancel_event,
+                execution_id=inp.execution_id,
+            )
+        except asyncio.CancelledError:
+            return False
         except Exception as exc:
             log.error("[%s] evaluate_legacy_condition error: %s", inp.device_serial, exc)
             return False

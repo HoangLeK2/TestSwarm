@@ -8,6 +8,7 @@ Fix #2: SSIM mismatch logs at INFO not WARNING
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from typing import Any, Dict, List, Optional
@@ -179,6 +180,163 @@ class TestTemporalFallback:
             result = await handler("c1", db=AsyncMock(), user=MagicMock(id="u1"))
         assert isinstance(result, JSONResponse)
         assert result.status_code == 503
+
+    @pytest.mark.anyio
+    async def test_interrupt_uses_db_execution_workflow_ids_without_temporal_scan(self):
+        """Manual takeover should not scan all running workflows in Temporal."""
+        from core.config import Config, TemporalConfig, DatabaseConfig
+
+        config = Config()
+        config.temporal = TemporalConfig(enabled=True, server_url="localhost:7233")
+        config.database = DatabaseConfig(enabled=True)
+
+        device = MagicMock(id="dev-1", serial="SN001")
+        execution = MagicMock(
+            id="exec-1",
+            meta={"workflow_id": "exec_exec-1"},
+        )
+        runtime_device = MagicMock()
+        manager = MagicMock()
+        manager.get_device.return_value = runtime_device
+        queue = MagicMock()
+
+        class _TemporalClient:
+            def __init__(self) -> None:
+                self.cancelled: list[str] = []
+
+            def list_workflows(self, _query):
+                raise AssertionError("interrupt must not scan Temporal when DB IDs exist")
+
+            def get_workflow_handle(self, workflow_id):
+                client = self
+
+                class _Handle:
+                    async def cancel(self) -> None:
+                        client.cancelled.append(workflow_id)
+
+                return _Handle()
+
+        temporal_client = _TemporalClient()
+
+        with patch(
+            "api.routes.device_control.campaign_fleet.repo.get_device_by_serial",
+            AsyncMock(return_value=device),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.device_visible_to_user",
+            AsyncMock(return_value=True),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.repo.list_running_executions_for_device",
+            AsyncMock(return_value=[execution]),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.get_temporal_client",
+            AsyncMock(return_value=temporal_client),
+        ), patch(
+            "api.routes.device_control.scenarios.cancel_all_previews_for_serial",
+            return_value=0,
+        ), patch(
+            "tasks.scenario_task.force_clear_scenario_busy",
+        ):
+            from api.routes.device_control.campaign_fleet import build_campaign_fleet_router
+
+            router = build_campaign_fleet_router(manager, queue, config)
+            handler = next(
+                route.endpoint
+                for route in router.routes
+                if getattr(route, "path", "") == "/devices/{serial}/interrupt"
+            )
+
+            result = await handler("SN001", db=AsyncMock(), user=MagicMock(id="u1"))
+
+        assert result["ok"] is True
+        assert result["cancelled_workflows"] == ["exec_exec-1", "exec_exec-1:steps"]
+        assert temporal_client.cancelled == ["exec_exec-1", "exec_exec-1:steps"]
+
+    @pytest.mark.anyio
+    async def test_interrupt_sets_execution_cancel_flags_before_return(self):
+        """Manual takeover must trip cooperative cancel flags even if Temporal is slow."""
+        from core.config import Config, TemporalConfig, DatabaseConfig
+
+        config = Config()
+        config.temporal = TemporalConfig(enabled=True, server_url="localhost:7233")
+        config.database = DatabaseConfig(enabled=True)
+
+        device = MagicMock(id="dev-1", serial="SN001")
+        execution = MagicMock(id="exec-1", meta={"workflow_id": "exec_exec-1"})
+        manager = MagicMock()
+        manager.get_device.return_value = MagicMock()
+
+        class _TemporalClient:
+            def get_workflow_handle(self, workflow_id):
+                class _Handle:
+                    async def cancel(self) -> None:
+                        await asyncio.sleep(0)
+
+                return _Handle()
+
+        with patch(
+            "api.routes.device_control.campaign_fleet.repo.get_device_by_serial",
+            AsyncMock(return_value=device),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.device_visible_to_user",
+            AsyncMock(return_value=True),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.repo.list_running_executions_for_device",
+            AsyncMock(return_value=[execution]),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.get_temporal_client",
+            AsyncMock(return_value=_TemporalClient()),
+        ), patch(
+            "services.execution_pause_flags.clear_execution_paused",
+            AsyncMock(),
+        ) as clear_paused, patch(
+            "services.execution_pause_flags.set_execution_cancelled",
+            AsyncMock(),
+        ) as set_cancelled, patch(
+            "api.routes.device_control.scenarios.cancel_all_previews_for_serial",
+            return_value=0,
+        ), patch("tasks.scenario_task.force_clear_scenario_busy"):
+            from api.routes.device_control.campaign_fleet import build_campaign_fleet_router
+
+            router = build_campaign_fleet_router(manager, MagicMock(), config)
+            handler = next(
+                route.endpoint
+                for route in router.routes
+                if getattr(route, "path", "") == "/devices/{serial}/interrupt"
+            )
+
+            result = await handler("SN001", db=AsyncMock(), user=MagicMock(id="u1"))
+
+        assert result["ok"] is True
+        clear_paused.assert_awaited_once_with("exec-1")
+        set_cancelled.assert_awaited_once_with("exec-1")
+
+    @pytest.mark.anyio
+    async def test_interrupt_cancel_workflows_runs_concurrently(self):
+        """A slow workflow cancel must not block later workflow cancels in sequence."""
+        from api.routes.device_control import campaign_fleet
+
+        active = 0
+        max_active = 0
+
+        class _TemporalClient:
+            def get_workflow_handle(self, _workflow_id):
+                class _Handle:
+                    async def cancel(self) -> None:
+                        nonlocal active, max_active
+                        active += 1
+                        max_active = max(max_active, active)
+                        await asyncio.sleep(0.01)
+                        active -= 1
+
+                return _Handle()
+
+        cancelled = await campaign_fleet._cancel_interrupt_workflows(
+            _TemporalClient(),
+            ["wf-1", "wf-2", "wf-3"],
+        )
+
+        assert cancelled == ["wf-1", "wf-2", "wf-3"]
+        assert max_active > 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────

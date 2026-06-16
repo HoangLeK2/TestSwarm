@@ -469,6 +469,14 @@ def _resolve_campaign_id_for_edge(scenario: Dict[str, Any]) -> str | None:
         return None
 
 
+def _edge_extra_explicit_enabled(step: Dict[str, Any], strategy: str) -> bool:
+    """True when edge extra-data should run for this step/strategy pair."""
+    raw = step.get("edge_extra_data")
+    if "edge_extra_data" not in step or raw is None:
+        return strategy in EDGE_CONTENT_STRATEGIES
+    return _coerce_bool(raw, default=False)
+
+
 def request_edge_extra_data(
     *,
     device: Any,
@@ -480,12 +488,7 @@ def request_edge_extra_data(
     result: Dict[str, Any],
     cancel_event: Any = None,
 ) -> bool:
-    has_edge_flag = "edge_extra_data" in step
-    explicit_enabled = (
-        _coerce_bool(step.get("edge_extra_data"), default=False)
-        if has_edge_flag
-        else strategy in EDGE_CONTENT_STRATEGIES
-    )
+    explicit_enabled = _edge_extra_explicit_enabled(step, strategy)
     enabled = explicit_enabled or _env_bool("EDGE_EXTRA_DATA_ENABLED", False)
     if not enabled:
         return False

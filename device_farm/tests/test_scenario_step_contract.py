@@ -19,10 +19,10 @@ def test_normalize_extract_step_applies_profile_defaults_and_version() -> None:
     assert step["extract_profile"] == "balanced"
     assert step["strategy_version"] == "fb_comments:v1"
     assert step["max_items"] >= 200
-    assert step["comment_scroll_passes"] == 48
-    assert step["comment_swipes_per_dump"] == 3
-    assert step["comment_no_growth_break"] == 3
-    assert step["min_comment_scan_passes"] == 2
+    assert step["comment_scroll_passes"] == 40
+    assert step["comment_swipes_per_dump"] == 6
+    assert step["comment_no_growth_break"] == 2
+    assert step["min_comment_scan_passes"] == 1
 
 
 def test_normalize_extract_step_keeps_explicit_values() -> None:

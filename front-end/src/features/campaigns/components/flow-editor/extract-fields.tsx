@@ -195,6 +195,53 @@ function saveDefaultsForStrategy(strategy: string): {
   return { content_type: 'text', dedupe_field: 'text' };
 }
 
+/** Switch extract strategy and drop fields that do not apply (update() cannot delete keys). */
+function applyExtractStrategySwitch(
+  step: ExtractStep,
+  strategy: string,
+  saveEnabled: boolean
+): ExtractStep {
+  const next: ExtractStep = { ...step, strategy };
+
+  if (strategy === 'fb_posts') {
+    next.edge_extra_data = step.edge_extra_data ?? true;
+    next.strategy_version = 'fb_posts:v1';
+    next.open_post_before_extract = true;
+    next.open_post_press_back_after_extract = false;
+    next.extract_profile = step.extract_profile ?? 'balanced';
+  } else if (strategy === 'fb_comments') {
+    next.edge_extra_data = step.edge_extra_data ?? true;
+    next.strategy_version = 'fb_comments:v1';
+    next.extract_profile = step.extract_profile ?? 'balanced';
+    delete next.open_post_before_extract;
+    delete next.open_post_press_back_after_extract;
+  } else if (strategy === 'text_nodes') {
+    next.edge_extra_data = step.edge_extra_data ?? true;
+    next.strategy_version = 'text_nodes:v1';
+    delete next.open_post_before_extract;
+    delete next.open_post_press_back_after_extract;
+    delete next.extract_profile;
+    delete next.parent_post_id_var;
+    delete next.comment_scroll_passes;
+    delete next.comment_swipes_per_dump;
+    delete next.comment_scroll_distance;
+    delete next.comment_scroll_duration_ms;
+    delete next.comment_scroll_pause_s;
+    delete next.comment_no_growth_break;
+    delete next.min_comment_scan_passes;
+  }
+
+  if (saveEnabled) {
+    Object.assign(next, saveDefaultsForStrategy(strategy));
+    if (strategy !== 'fb_comments') {
+      delete next.save_parent_id_var;
+    }
+    next.platform = strategy === 'text_nodes' ? 'ui' : 'facebook';
+  }
+
+  return next;
+}
+
 function labelPlatform(platform: string | undefined, t: (k: string) => string) {
   if (!platform || platform === 'facebook') return t('savePlatformFacebook');
   return platform;
@@ -373,32 +420,11 @@ export function ExtractStepFields({
               description={t(s.descKey)}
               selected={strategy === s.value}
               selectedLabel={t('strategySelected')}
-              onSelect={() => {
-                const patch: Partial<FlowStep> = { strategy: s.value };
-                if (s.value === 'fb_posts') {
-                  patch.edge_extra_data = step.edge_extra_data ?? true;
-                  patch.strategy_version = 'fb_posts:v1';
-                  patch.open_post_before_extract = true;
-                  patch.open_post_press_back_after_extract = false;
-                  patch.extract_profile = step.extract_profile ?? 'balanced';
-                } else if (s.value === 'fb_comments') {
-                  patch.edge_extra_data = step.edge_extra_data ?? true;
-                  patch.strategy_version = 'fb_comments:v1';
-                  patch.extract_profile = step.extract_profile ?? 'balanced';
-                } else {
-                  patch.edge_extra_data = undefined;
-                  patch.strategy_version = undefined;
-                  patch.open_post_before_extract = undefined;
-                  patch.open_post_press_back_after_extract = undefined;
-                }
-                if (saveEnabled) {
-                  Object.assign(patch, saveDefaultsForStrategy(s.value));
-                  if (s.value !== 'fb_comments') {
-                    patch.save_parent_id_var = undefined;
-                  }
-                }
-                update(patch);
-              }}
+              onSelect={() =>
+                onChange(
+                  applyExtractStrategySwitch(step, s.value, saveEnabled)
+                )
+              }
             />
           ))}
         </div>
@@ -472,7 +498,9 @@ export function ExtractStepFields({
         />
       </StepPanelSection>
 
-      {strategy === 'fb_posts' || strategy === 'fb_comments' ? (
+      {strategy === 'fb_posts' ||
+      strategy === 'fb_comments' ||
+      strategy === 'text_nodes' ? (
         <StepPanelSection
           title={t('facebookExtraTitle')}
           badge={
@@ -495,7 +523,11 @@ export function ExtractStepFields({
               className='h-8 font-mono text-xs'
               value={
                 step.strategy_version ??
-                (strategy === 'fb_comments' ? 'fb_comments:v1' : 'fb_posts:v1')
+                (strategy === 'fb_comments'
+                  ? 'fb_comments:v1'
+                  : strategy === 'text_nodes'
+                    ? 'text_nodes:v1'
+                    : 'fb_posts:v1')
               }
               onChange={(e) =>
                 update({ strategy_version: e.target.value || undefined })
@@ -557,10 +589,10 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_passes ?? 48)}
+                    value={String(step.comment_scroll_passes ?? 40)}
                     onChange={(e) =>
                       update({
-                        comment_scroll_passes: parseNumOrVar(e.target.value, 48)
+                        comment_scroll_passes: parseNumOrVar(e.target.value, 40)
                       })
                     }
                   />
@@ -571,12 +603,12 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_swipes_per_dump ?? 3)}
+                    value={String(step.comment_swipes_per_dump ?? 6)}
                     onChange={(e) =>
                       update({
                         comment_swipes_per_dump: parseNumOrVar(
                           e.target.value,
-                          3
+                          6
                         )
                       })
                     }
@@ -588,12 +620,12 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_distance ?? 0.3)}
+                    value={String(step.comment_scroll_distance ?? 0.52)}
                     onChange={(e) =>
                       update({
                         comment_scroll_distance: parseNumOrVar(
                           e.target.value,
-                          0.3
+                          0.52
                         )
                       })
                     }
@@ -605,12 +637,12 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_duration_ms ?? 300)}
+                    value={String(step.comment_scroll_duration_ms ?? 120)}
                     onChange={(e) =>
                       update({
                         comment_scroll_duration_ms: parseNumOrVar(
                           e.target.value,
-                          300
+                          120
                         )
                       })
                     }
@@ -622,12 +654,12 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_pause_s ?? 0.12)}
+                    value={String(step.comment_scroll_pause_s ?? 0.03)}
                     onChange={(e) =>
                       update({
                         comment_scroll_pause_s: parseNumOrVar(
                           e.target.value,
-                          0.12
+                          0.03
                         )
                       })
                     }
@@ -869,7 +901,7 @@ export function ExtractStepFields({
             if (checked) {
               update({
                 collection: '${SAVE_COLLECTION}',
-                platform: 'facebook',
+                platform: strategy === 'text_nodes' ? 'ui' : 'facebook',
                 ...saveDefaultsForStrategy(strategy)
               });
             } else {

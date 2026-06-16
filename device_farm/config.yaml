@@ -2,6 +2,7 @@
 web:
   host: "0.0.0.0"
   port: 8081
+  cors_allow_all: true
   ws_ping_interval: 20  
   ws_ping_timeout: 30   
 

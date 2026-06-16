@@ -44,6 +44,7 @@ import {
   useCampaignCancel,
   useCampaignPause,
   useCampaignResume,
+  useCampaignStopDrain,
   useDeleteCampaign,
   useDispatchCampaign,
   useExecutionRuntime,
@@ -141,9 +142,12 @@ export function CampaignRowActions({
   const isStarting = isRunning || isDispatching;
   const { mutate: deleteCampaign, isPending: isDeleting } = useDeleteCampaign();
 
+  const { isStopping, activeWorkflowCount, activeExecutionCount } =
+    useCampaignStopDrain(campaign.id, campaign.status);
+
   const { data: wfData } = useCampaignWorkflows(
     campaign.id,
-    isCampaignActiveExecution(campaign.status)
+    isCampaignActiveExecution(campaign.status) || isStopping
   );
   const workflows = wfData?.workflows ?? [];
   const hasActiveWorkflows = workflows.some(
@@ -281,13 +285,18 @@ export function CampaignRowActions({
     try {
       const data = await cancelCampaign({ campaignId: campaign.id });
       toast.success(t('cancelSuccess'));
-      toast.info(t('cancellingAll', { count: data.workflows_signalled ?? 0 }));
+      if ((data.workflows_signalled ?? 0) > 0) {
+        toast.info(
+          t('cancellingAll', { count: data.workflows_signalled ?? 0 })
+        );
+      }
     } catch (err) {
       toast.error(formatFarmApiError(err, t('cancelFailed')));
     }
   };
 
-  const running = isCampaignActiveExecution(campaign.status);
+  const running =
+    isCampaignActiveExecution(campaign.status) || isStopping;
   const showPause =
     campaign.status === 'running' &&
     (hasActiveWorkflows || runningWorkflowIds.length > 0);
@@ -450,14 +459,25 @@ export function CampaignRowActions({
             size='sm'
             variant='ghost'
             className='h-8 w-8 p-0 text-destructive hover:text-destructive'
-            disabled={isCancelling}
+            disabled={isCancelling || isStopping}
             onClick={handleCancelAll}
-            title={t('titleCancel')}
-            aria-label={t('titleCancel')}
+            title={isStopping ? t('statusStopping') : t('titleCancel')}
+            aria-label={isStopping ? t('statusStopping') : t('titleCancel')}
           >
             <Square size={13} />
           </Button>
         )}
+        {isStopping ? (
+          <span
+            className='hidden max-w-[8rem] truncate text-[10px] text-amber-700 dark:text-amber-300 xl:inline'
+            title={t('stoppingDetail', {
+              workflows: activeWorkflowCount,
+              executions: activeExecutionCount
+            })}
+          >
+            {t('statusStopping')}
+          </span>
+        ) : null}
 
         <CampaignMonitorDialog campaign={campaign}>
           <Button

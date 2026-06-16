@@ -1,6 +1,6 @@
 'use client';
 
-import { Pause, Play, Square } from 'lucide-react';
+import { Loader2, Pause, Play, Square } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import {
   useCampaignCancel,
   useCampaignPause,
   useCampaignResume,
+  useCampaignStopDrain,
   useCampaignWorkflows
 } from '../../hooks/use-campaigns';
 import type { CampaignOut } from '../../types';
@@ -26,7 +27,10 @@ export function MonitorControlBar({ campaign }: Props) {
   const confirm = useConfirm();
   const { canExecute } = useResourcePermissions('campaigns');
 
-  const running = isCampaignActiveExecution(campaign.status);
+  const { isStopping, activeWorkflowCount, activeExecutionCount } =
+    useCampaignStopDrain(campaign.id, campaign.status);
+  const running =
+    isCampaignActiveExecution(campaign.status) || isStopping;
   const { data: wfData } = useCampaignWorkflows(campaign.id, running);
   const workflows = wfData?.workflows ?? [];
 
@@ -44,8 +48,13 @@ export function MonitorControlBar({ campaign }: Props) {
     return null;
   }
 
-  const showPause = campaign.status === 'running' && runningCount > 0;
-  const showResume = campaign.status === 'paused' || pausedCount > 0;
+  const showPause =
+    !isStopping &&
+    campaign.status === 'running' &&
+    runningCount > 0;
+  const showResume =
+    !isStopping &&
+    (campaign.status === 'paused' || pausedCount > 0);
 
   const handleCancelAll = async () => {
     const ok = await confirm({
@@ -58,8 +67,13 @@ export function MonitorControlBar({ campaign }: Props) {
     });
     if (!ok) return;
     try {
-      await cancelCampaign({ campaignId: campaign.id });
+      const data = await cancelCampaign({ campaignId: campaign.id });
       toast.success(t('cancelSuccess'));
+      if ((data.workflows_signalled ?? 0) > 0) {
+        toast.info(
+          t('cancellingAll', { count: data.workflows_signalled ?? 0 })
+        );
+      }
     } catch (err) {
       toast.error(formatFarmApiError(err, t('cancelFailed')));
     }
@@ -70,6 +84,15 @@ export function MonitorControlBar({ campaign }: Props) {
       <span className='mr-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
         {t('monitorControlLabel')}
       </span>
+      {isStopping ? (
+        <span className='inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-200'>
+          <Loader2 className='size-3 animate-spin' aria-hidden />
+          {t('stoppingDetail', {
+            workflows: activeWorkflowCount,
+            executions: activeExecutionCount
+          })}
+        </span>
+      ) : null}
       {showPause ? (
         <Button
           size='sm'
@@ -114,7 +137,7 @@ export function MonitorControlBar({ campaign }: Props) {
         size='sm'
         variant='ghost'
         className='h-7 gap-1 px-2 text-[11px] text-destructive hover:text-destructive'
-        disabled={isCancelling}
+        disabled={isCancelling || isStopping}
         onClick={() => void handleCancelAll()}
       >
         <Square size={12} />

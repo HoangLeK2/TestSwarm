@@ -194,10 +194,11 @@ export function StepDetailPanel({
     };
   }, []);
 
-  /** Persist edits without re-rendering this panel (text fields use StepPanelInput). */
+  /** Persist edits; text fields use StepPanelInput for draft state. Controlled fields (e.g. toggles) need local step sync. */
   const commitStep = useCallback(
     (next: FlowStep) => {
       pendingCommitRef.current = next;
+      setStep(next);
       onChange(next);
     },
     [onChange]

@@ -2,17 +2,14 @@
 
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { CampaignOut } from '../../types';
-import {
-  campaignStatusLabel,
-  campaignStatusVariant
-} from '../../campaign-status-ui';
 import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import { CampaignRunStats } from './CampaignRunStats';
 import { CampaignEngineBadge } from './CampaignEngineBadge';
+import { CampaignStatusBadge } from './CampaignStatusBadge';
+import type { CampaignStatus } from '../../types';
 
 export function CampaignMobileCard({
   campaign,
@@ -46,12 +43,12 @@ export function CampaignMobileCard({
             </p>
           ) : null}
         </div>
-        <Badge
-          variant={campaignStatusVariant(campaign.status)}
+        <CampaignStatusBadge
+          campaignId={campaign.id}
+          status={campaign.status}
+          statusLabels={statusLabel as Record<CampaignStatus, string>}
           className='shrink-0 text-[10px]'
-        >
-          {campaignStatusLabel(campaign.status, statusLabel)}
-        </Badge>
+        />
       </div>
 
       <div className='mt-1'>

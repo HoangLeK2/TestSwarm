@@ -2,9 +2,13 @@
  * hierarchy-tree.ts — Parse UI hierarchy XML into a tree structure for the XML tree viewer.
  */
 
-import { isSystemUiPackage, scoreHierarchyHit } from './hierarchy-hit-test';
+import {
+  isAmbiguousLauncherResourceId,
+  isSystemUiPackage,
+  scoreHierarchyHit
+} from './hierarchy-hit-test';
 
-export { isSystemUiPackage };
+export { isAmbiguousLauncherResourceId, isSystemUiPackage };
 
 export interface HierarchyTreeNode {
   id: number;
@@ -262,37 +266,6 @@ export function findNodeIdAtRatio(
 
   pool.sort((a, b) => scoreNode(b) - scoreNode(a));
   return pool[0]?.node.id ?? null;
-}
-
-/**
- * Home/launcher grids reuse one resource-id for every cell (e.g. Samsung
- * `com.sec.android.app.launcher:id/icon`). Using resource-id taps the *first*
- * match in the XML, not the icon you picked — prefer text / content-desc.
- */
-export function isAmbiguousLauncherResourceId(
-  resourceId: string,
-  pkg: string
-): boolean {
-  if (!resourceId || !resourceId.includes('/')) return false;
-  if (
-    !/:id\/(icon|label|title|icon_text|text|name|bubble_text)$/i.test(
-      resourceId
-    )
-  ) {
-    return false;
-  }
-  const prefixes = [
-    'com.sec.android.app.launcher',
-    'com.android.launcher',
-    'com.google.android.apps.nexuslauncher',
-    'com.miui.home',
-    'com.huawei.android.launcher',
-    'com.oppo.launcher',
-    'com.vivo.launcher'
-  ];
-  return prefixes.some(
-    (p) => pkg.startsWith(p) || resourceId.startsWith(`${p}:`)
-  );
 }
 
 /**

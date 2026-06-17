@@ -338,6 +338,64 @@ class TestTemporalFallback:
         assert cancelled == ["wf-1", "wf-2", "wf-3"]
         assert max_active > 1
 
+    @pytest.mark.anyio
+    async def test_interrupt_returns_when_temporal_connect_hangs(self):
+        """Manual takeover must not wait forever in get_temporal_client()."""
+        from core.config import Config, TemporalConfig, DatabaseConfig
+        from api.routes.device_control import campaign_fleet
+
+        config = Config()
+        config.temporal = TemporalConfig(enabled=True, server_url="localhost:7233")
+        config.database = DatabaseConfig(enabled=True)
+
+        device = MagicMock(id="dev-1", serial="SN001")
+        execution = MagicMock(id="exec-1", meta={"workflow_id": "exec_exec-1"})
+        manager = MagicMock()
+        manager.get_device.return_value = MagicMock()
+
+        async def _hung_temporal_client(_cfg):
+            await asyncio.sleep(10)
+
+        with patch(
+            "api.routes.device_control.campaign_fleet._INTERRUPT_TEMPORAL_DEADLINE_S",
+            0.02,
+        ), patch(
+            "api.routes.device_control.campaign_fleet.repo.get_device_by_serial",
+            AsyncMock(return_value=device),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.device_visible_to_user",
+            AsyncMock(return_value=True),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.repo.list_running_executions_for_device",
+            AsyncMock(return_value=[execution]),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.get_temporal_client",
+            AsyncMock(side_effect=_hung_temporal_client),
+        ), patch(
+            "services.execution_pause_flags.clear_execution_paused",
+            AsyncMock(),
+        ), patch(
+            "services.execution_pause_flags.set_execution_cancelled",
+            AsyncMock(),
+        ), patch(
+            "api.routes.device_control.scenarios.cancel_all_previews_for_serial",
+            return_value=0,
+        ), patch("tasks.scenario_task.force_clear_scenario_busy"):
+            router = campaign_fleet.build_campaign_fleet_router(manager, MagicMock(), config)
+            handler = next(
+                route.endpoint
+                for route in router.routes
+                if getattr(route, "path", "") == "/devices/{serial}/interrupt"
+            )
+
+            result = await asyncio.wait_for(
+                handler("SN001", db=AsyncMock(), user=MagicMock(id="u1")),
+                timeout=0.2,
+            )
+
+        assert result["ok"] is True
+        assert result["cancelled_workflows"] == []
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fix #3: Popup dismiss only after tap fails

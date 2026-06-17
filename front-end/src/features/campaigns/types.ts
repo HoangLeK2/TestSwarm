@@ -21,7 +21,13 @@ const DISPATCHABLE = new Set<string>([
   'failed'
 ]);
 const ACTIVE_EXECUTION = new Set<string>(['running', 'paused']);
-const BODY_EDITABLE = new Set<string>(['draft', 'idle', 'cancelled']);
+const BODY_EDITABLE = new Set<string>([
+  'draft',
+  'idle',
+  'cancelled',
+  'completed',
+  'failed'
+]);
 const TERMINAL = new Set<string>(['completed', 'failed', 'archived']);
 
 /** Campaign may start a new run / dispatch (draft, scheduled, legacy idle). */
@@ -49,7 +55,7 @@ export function isCampaignMetadataEditable(s: string): boolean {
   return BODY_EDITABLE.has(s) || s === 'scheduled';
 }
 
-/** Body fields (scenario_refs, vars, overrides) editable in draft/idle/cancelled. */
+/** Body fields (scenario_refs, vars, overrides) editable before (re-)dispatch. */
 export function isCampaignBodyEditable(s: string): boolean {
   return BODY_EDITABLE.has(s);
 }

@@ -90,6 +90,8 @@ export function OrganizationProvider({
     if (!currentOrg?.id) return;
     void queryClient.invalidateQueries({ queryKey: DEVICES_LIST_KEY });
     void queryClient.invalidateQueries({ queryKey: FLEET_STATS_KEY });
+    void queryClient.invalidateQueries({ queryKey: ['accounts'] });
+    void queryClient.invalidateQueries({ queryKey: ['account-groups'] });
     void queryClient.invalidateQueries({ queryKey: ['notifications'] });
     void queryClient.invalidateQueries({
       queryKey: ['control-record-device-map']

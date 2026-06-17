@@ -79,10 +79,12 @@ export function AccountList() {
             {data.length} {t('countLabel')}
           </span>
         </div>
-        <div className='flex flex-wrap gap-2'>
-          {perms.canCreate ? <ImportAccountsDialog /> : null}
-          {perms.canCreate ? <CreateAccountDialog /> : null}
-        </div>
+        {data.length > 0 && perms.canCreate ? (
+          <div className='flex flex-wrap gap-2'>
+            <ImportAccountsDialog />
+            <CreateAccountDialog />
+          </div>
+        ) : null}
       </div>
 
       {data.length === 0 && !isLoading ? (
@@ -92,24 +94,25 @@ export function AccountList() {
           fallback={
             <CoreEmptyState
               icon={Users}
-              title={tEmpty('accounts.title')}
-              description={tEmpty('accounts.description')}
+              title={t('emptyTitle')}
+              description={t('emptyDescription')}
               readOnlyHint={tEmpty('readOnlyHint')}
               trackingKey='accounts-empty-readonly'
             />
           }
         >
-          <div className='space-y-4'>
-            <CoreEmptyState
-              icon={Users}
-              title={tEmpty('accounts.title')}
-              description={tEmpty('accounts.description')}
-              trackingKey='accounts-empty'
-            />
-            <div className='flex justify-center'>
-              <CreateAccountDialog />
-            </div>
-          </div>
+          <CoreEmptyState
+            icon={Users}
+            title={t('emptyTitle')}
+            description={t('emptyDescription')}
+            trackingKey='accounts-empty'
+            action={
+              <div className='flex flex-wrap justify-center gap-2'>
+                <ImportAccountsDialog />
+                <CreateAccountDialog />
+              </div>
+            }
+          />
         </Can>
       ) : (
         <DataTable table={table} />

@@ -13,7 +13,13 @@ _LEGACY_AS_RUNNING: Final[frozenset[CampaignStatus]] = frozenset(
     {CampaignStatus.RUNNING, CampaignStatus.PAUSED}
 )
 _BODY_MUTABLE: Final[frozenset[CampaignStatus]] = frozenset(
-    {CampaignStatus.DRAFT, CampaignStatus.IDLE, CampaignStatus.CANCELLED}
+    {
+        CampaignStatus.DRAFT,
+        CampaignStatus.IDLE,
+        CampaignStatus.CANCELLED,
+        CampaignStatus.COMPLETED,
+        CampaignStatus.FAILED,
+    }
 )
 
 _TRANSITIONS: Final[dict[CampaignStatus, frozenset[CampaignStatus]]] = {
@@ -119,7 +125,7 @@ def transition_error_message(
 
 
 def is_body_locked(status: str | CampaignStatus) -> bool:
-    """Body fields mutable in draft/idle/cancelled (re-run prep after cancel)."""
+    """Body fields mutable in draft/idle/cancelled/completed/failed (re-run prep)."""
     state = normalize_status(status)
     return state not in _BODY_MUTABLE
 

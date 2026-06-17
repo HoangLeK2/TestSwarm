@@ -6,9 +6,19 @@ import {
   type AccountGroupCreate,
   type AccountGroupUpdate
 } from '../services/api';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
+
+export const ACCOUNT_GROUPS_LIST_KEY = ['account-groups'] as const;
+
+export function accountGroupsListQueryKey(
+  orgId: string | null | undefined,
+  query?: { platform?: string }
+) {
+  return [...ACCOUNT_GROUPS_LIST_KEY, orgId, query] as const;
+}
 
 const KEYS = {
-  list: ['account-groups'] as const,
+  list: ACCOUNT_GROUPS_LIST_KEY,
   detail: (id: string) => ['account-groups', id] as const,
   members: (id: string) => ['account-groups', id, 'members'] as const
 };
@@ -17,10 +27,12 @@ export function useAccountGroups(
   query?: { platform?: string },
   options?: { enabled?: boolean }
 ) {
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
   return useQuery({
-    queryKey: [...KEYS.list, query] as const,
+    queryKey: accountGroupsListQueryKey(orgId, query),
     queryFn: () => accountGroupsApi.list(query),
-    enabled: options?.enabled ?? true
+    enabled: Boolean(orgId) && (options?.enabled ?? true)
   });
 }
 

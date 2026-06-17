@@ -965,6 +965,9 @@ def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> Non
             "comment_scroll_distance": 0.25,
             "comment_scroll_duration_ms": 400,
             "comment_scroll_pause_s": 0.5,
+            "comment_stop_if_no_new": False,
+            "comment_no_new_threshold": 7,
+            "no_new_threshold": 9,
         },
         "fb_comments",
         {},
@@ -978,6 +981,9 @@ def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> Non
     assert context["comment_scroll_distance"] == 0.25
     assert context["comment_scroll_duration_ms"] == 400
     assert context["comment_scroll_pause_s"] == 0.5
+    assert context["comment_stop_if_no_new"] is False
+    assert context["comment_no_new_threshold"] == 7
+    assert context["no_new_threshold"] == 9
 
 
 def test_try_edge_extra_data_forwards_require_verified_parent(monkeypatch) -> None:

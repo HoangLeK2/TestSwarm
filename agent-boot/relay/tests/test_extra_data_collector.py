@@ -426,7 +426,18 @@ async def test_collect_fb_comments_honors_explicit_deep_scroll_context() -> None
         for action in batch
         if action.get("op") == "dump_hierarchy"
     ]
-    assert len(swipes) == 9
+    swipes_between_dumps: list[int] = []
+    current = 0
+    for batch in exec_.batches:
+        for action in batch:
+            if action.get("op") == "swipe":
+                current += 1
+            elif action.get("op") == "dump_hierarchy":
+                if current:
+                    swipes_between_dumps.append(current)
+                    current = 0
+    assert swipes_between_dumps == [3, 2, 2]
+    assert len(swipes) == 7
     assert len(dumps) == 4
 
 

@@ -70,6 +70,28 @@ async def test_collect_comment_snapshots_swipe_inside_scrollable_node() -> None:
     assert len(snapshots) >= 1
 
 
+@pytest.mark.asyncio
+async def test_collect_comment_snapshots_uses_220ms_swipe_floor() -> None:
+    xml = _sheet_xml()
+    exec_ = _CommentScrollExecutor(xml)
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 1,
+            "comment_scroll_duration_ms": 120,
+            "min_comment_scan_passes": 0,
+            "comment_scroll_pause_s": 0,
+        },
+    )
+    assert err is None
+    assert snapshots
+    swipes = [a for batch in exec_.batches for a in batch if a.get("op") == "swipe"]
+    assert swipes
+    assert swipes[0]["duration"] == pytest.approx(0.22)
+
+
 class _RotatingCommentScrollExecutor(_CommentScrollExecutor):
     """Each dump returns a different hierarchy so collector keeps frames."""
 
@@ -195,3 +217,60 @@ async def test_collect_comment_snapshots_reuses_swipe_coords_within_batch(monkey
     assert err is None
     assert snapshots
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_comment_snapshots_reduces_swipe_batch_after_stall() -> None:
+    xml = _sheet_xml()
+    exec_ = _CommentScrollExecutor(xml)
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 18,
+            "comment_swipes_per_dump": 6,
+            "comment_no_growth_break": 3,
+            "min_comment_scan_passes": 0,
+            "comment_scroll_pause_s": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    assert err is None
+    assert snapshots
+    swipes_between_dumps: list[int] = []
+    current = 0
+    for batch in exec_.batches:
+        for action in batch:
+            if action.get("op") == "swipe":
+                current += 1
+            elif action.get("op") == "dump_hierarchy":
+                if current:
+                    swipes_between_dumps.append(current)
+                    current = 0
+    assert swipes_between_dumps[:3] == [6, 2, 2]
+
+
+@pytest.mark.asyncio
+async def test_collect_comment_snapshots_preserves_swipe_budget_after_stall() -> None:
+    xml = _sheet_xml()
+    exec_ = _CommentScrollExecutor(xml)
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 18,
+            "comment_swipes_per_dump": 6,
+            "comment_no_growth_break": 0,
+            "min_comment_scan_passes": 0,
+            "comment_scroll_pause_s": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [a for batch in exec_.batches for a in batch if a.get("op") == "swipe"]
+    assert len(swipes) == 18

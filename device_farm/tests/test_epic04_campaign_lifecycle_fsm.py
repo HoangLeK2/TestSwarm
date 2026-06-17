@@ -404,6 +404,32 @@ async def test_ac6_patch_body_locked_when_running(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_ac6_patch_body_mutable_when_completed(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        scenario_id = await _create_org_scenario(client, name="CompletedEdit")
+        created = await client.post(
+            "/api/campaigns",
+            json={"name": "CompletedEdit", "scenario_refs": [{"scenario_id": scenario_id}]},
+        )
+        campaign_id = created.json()["id"]
+        async with session_factory() as db:
+            row = await campaign_repo.get_campaign_entity(db, campaign_id)
+            row.status = CampaignStatus.COMPLETED.value
+            await db.commit()
+
+        patched = await client.patch(
+            f"/api/campaigns/{campaign_id}",
+            json={"per_device_overrides": {"d1": {"kw": "rerun"}}},
+        )
+
+    assert patched.status_code == 200
+    assert patched.json()["per_device_overrides"] == {"d1": {"kw": "rerun"}}
+
+
+@pytest.mark.asyncio
 async def test_ac6_patch_body_mutable_when_cancelled(session_factory):
     await _seed_orgs(session_factory)
     app = _build_app(session_factory)

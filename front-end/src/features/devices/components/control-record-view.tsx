@@ -149,6 +149,7 @@ import type { FlowStep } from '@/features/campaigns/components/scenario-steps/ty
 import {
   findSelectorForTreeNode,
   findSelectorInXml,
+  hashXml,
   listSelectorCandidatesInXml,
   type XmlSelectorPick
 } from '../utils/control-record-xml';
@@ -303,12 +304,34 @@ export function ControlRecordView({
       initialTemplateId,
       initialOrgScenarioId
     );
+  const {
+    wsSend: recordWsSend,
+    handleToggleMode: recordHandleToggleMode,
+    handleRestart: recordHandleRestart
+  } = record;
   const hierarchyXml = hierarchy.xml;
+  const hierarchyLoading = hierarchy.loading;
+  const hierarchyAutoRefresh = hierarchy.autoRefresh;
+  const setHierarchyAutoRefresh = hierarchy.setAutoRefresh;
+  const refreshHierarchy = hierarchy.refresh;
   const setHierarchyPaused = hierarchy.setPaused;
   const pickTargetPackage = useMemo(
     () => packageFromCurrentApp(device.selectedDevice?.current_app) || undefined,
     [device.selectedDevice?.current_app]
   );
+  const hierarchyPickOptions = useMemo(() => {
+    const w = device.selectedDevice?.screen_width ?? 0;
+    const h = device.selectedDevice?.screen_height ?? 0;
+    return {
+      targetPackage: pickTargetPackage,
+      screenDims:
+        w > 0 && h > 0 ? ({ dw: w, dh: h } as const) : undefined
+    };
+  }, [
+    device.selectedDevice?.screen_width,
+    device.selectedDevice?.screen_height,
+    pickTargetPackage
+  ]);
   const handleScreenTapRef = useRef<(rx: number, ry: number) => void>(() => {});
   const handleScreenSwipeRef = useRef<
     (
@@ -562,6 +585,7 @@ export function ControlRecordView({
   const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
   const [takeoverDialogOpen, setTakeoverDialogOpen] = useState(false);
   const [takeoverPending, setTakeoverPending] = useState(false);
+  const handleTakeControl = useCallback(() => setTakeoverDialogOpen(true), []);
 
   const setCoordinatePickTargetSafe = useCallback(
     (next: CoordinatePickTarget | null) => {
@@ -585,11 +609,21 @@ export function ControlRecordView({
     }
   }, [coordinatePickTarget, flowCoordPick, flowSelectorPickFgId]);
 
-  // Hierarchy changed => stale node bounds/highlight must be cleared.
+  // Hierarchy content changed => stale node bounds/highlight must be cleared.
+  // Use normalized hash so volatile bounds/index churn does not re-render the page.
+  const hierarchyContentHashRef = useRef<number | null>(null);
   useEffect(() => {
+    hierarchyContentHashRef.current = null;
+  }, [device.selectedSerial]);
+  useEffect(() => {
+    const xml = hierarchyXml?.trim();
+    if (!xml) return;
+    const nextHash = hashXml(xml);
+    if (hierarchyContentHashRef.current === nextHash) return;
+    hierarchyContentHashRef.current = nextHash;
     setHighlightBounds(null);
     setSelectedNodeId(null);
-  }, [hierarchy.xml]);
+  }, [hierarchyXml]);
 
   // Inline step runner (step-by-step without entering player mode)
   const [stepRunStates, setStepRunStates] = useState<
@@ -1758,6 +1792,79 @@ export function ControlRecordView({
     [selectorPickTarget, steps, selector, t]
   );
 
+  const treeSelectCtxRef = useRef({
+    hierarchyXml: '',
+    hierarchyPickOptions: hierarchyPickOptions as typeof hierarchyPickOptions,
+    selectorPickTarget: null as SelectorPickTarget | null,
+    applySelectorPick,
+    selector,
+    t
+  });
+  treeSelectCtxRef.current = {
+    hierarchyXml,
+    hierarchyPickOptions,
+    selectorPickTarget,
+    applySelectorPick,
+    selector,
+    t
+  };
+
+  const handleTreeNodeSelect = useCallback(
+    ({
+      bounds,
+      by,
+      value,
+      nodeId
+    }: {
+      bounds: [number, number, number, number] | null;
+      by: string;
+      value: string;
+      nodeId: number;
+    }) => {
+      const ctx = treeSelectCtxRef.current;
+      setHighlightBounds(bounds);
+      if (nodeId != null) setSelectedNodeId(nodeId);
+      const rich = findSelectorForTreeNode(ctx.hierarchyXml, bounds, {
+        ...ctx.hierarchyPickOptions
+      });
+      if (ctx.selectorPickTarget) {
+        if (rich?.value?.trim()) {
+          const fallback = rich.bounds
+            ? {
+                rx: parseFloat(
+                  ((rich.bounds.rx1 + rich.bounds.rx2) / 2).toFixed(3)
+                ),
+                ry: parseFloat(
+                  ((rich.bounds.ry1 + rich.bounds.ry2) / 2).toFixed(3)
+                )
+              }
+            : null;
+          ctx.applySelectorPick(rich.selector, fallback);
+        } else if (value?.trim()) {
+          ctx.applySelectorPick({
+            by: by as ScenarioSelectorShape['by'],
+            value: value.trim()
+          });
+        } else {
+          toast.warning(ctx.t('pickSelectorNoElement'));
+        }
+        return;
+      }
+      if (rich?.value?.trim()) {
+        ctx.selector.setBy(rich.by as typeof ctx.selector.by);
+        ctx.selector.setValue(rich.value.trim());
+        return;
+      }
+      ctx.selector.setBy(by as typeof ctx.selector.by);
+      ctx.selector.setValue(value);
+    },
+    []
+  );
+
+  const handleHierarchyRefresh = useCallback(() => {
+    if (device.selectedDevice) refreshHierarchy();
+  }, [device.selectedDevice, refreshHierarchy]);
+
   // Apply the candidate at `index` to the active selector-pick step. With >1
   // candidate we keep pick mode open so the user can keep cycling overlapping
   // elements (Facebook-style nested layouts).
@@ -1958,9 +2065,7 @@ export function ControlRecordView({
       }
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
-        const sel = findSelectorInXml(hierarchyXml, rx, ry, {
-          targetPackage: pickTargetPackage
-        });
+        const sel = findSelectorInXml(hierarchyXml, rx, ry, hierarchyPickOptions);
         if (!sel?.value?.trim()) {
           toast.warning(t('pickSelectorNoElement'));
           return;
@@ -2021,9 +2126,12 @@ export function ControlRecordView({
       }
 
       if (selectorPickTarget) {
-        const cands = listSelectorCandidatesInXml(hierarchyXml, rx, ry, {
-          targetPackage: pickTargetPackage
-        });
+        const cands = listSelectorCandidatesInXml(
+          hierarchyXml,
+          rx,
+          ry,
+          hierarchyPickOptions
+        );
         if (cands.length === 0) {
           toast.warning(t('pickSelectorNoElement'));
           return;
@@ -2050,7 +2158,7 @@ export function ControlRecordView({
       coordinatePickTarget,
       applySelectorPick,
       applyCandidateAtIndex,
-      pickTargetPackage,
+      hierarchyPickOptions,
       steps,
       t,
       showFlowUi,
@@ -2119,16 +2227,16 @@ export function ControlRecordView({
       onRunStep: runDeviceOpStep,
       onRunShell: (cmd) => runAgentShell(d.serial, cmd),
       onInstallApk: (url) => {
-        record.wsSend({ type: 'install', serial: d.serial, url });
+        recordWsSend({ type: 'install', serial: d.serial, url });
         toast.info(tDeviceOps('installApkRunning', { serial: d.serial }));
       }
     };
   }, [
     device.selectedDevice,
     mirrorInputLocked.readOnlyPreview,
-    record,
     runDeviceOpStep,
-    tDeviceOps
+    tDeviceOps,
+    recordWsSend
   ]);
 
   // ── Error / empty states ─────────────────────────────────────────────────
@@ -2350,8 +2458,8 @@ export function ControlRecordView({
               </div>
             ) : (
               <XmlTreeViewer
-                xml={hierarchy.xml}
-                loading={hierarchy.loading}
+                xml={hierarchyXml}
+                loading={hierarchyLoading}
                 deviceActive={Boolean(
                   selectedDevice?.state &&
                     !['DISCONNECTED', 'DEAD'].includes(
@@ -2359,48 +2467,11 @@ export function ControlRecordView({
                     )
                 )}
                 wsConnected={Boolean(device.wsConnected)}
-                onNodeSelect={({ bounds, by, value, nodeId }) => {
-                  setHighlightBounds(bounds);
-                  if (nodeId != null) setSelectedNodeId(nodeId);
-                  if (selectorPickTarget) {
-                    const rich = findSelectorForTreeNode(hierarchy.xml, bounds, {
-                      targetPackage: pickTargetPackage
-                    });
-                    if (rich?.value?.trim()) {
-                      const fallback = rich.bounds
-                        ? {
-                            rx: parseFloat(
-                              (
-                                (rich.bounds.rx1 + rich.bounds.rx2) /
-                                2
-                              ).toFixed(3)
-                            ),
-                            ry: parseFloat(
-                              (
-                                (rich.bounds.ry1 + rich.bounds.ry2) /
-                                2
-                              ).toFixed(3)
-                            )
-                          }
-                        : null;
-                      applySelectorPick(rich.selector, fallback);
-                    } else if (value?.trim()) {
-                      applySelectorPick({
-                        by: by as ScenarioSelectorShape['by'],
-                        value: value.trim()
-                      });
-                    } else {
-                      toast.warning(t('pickSelectorNoElement'));
-                    }
-                    return;
-                  }
-                  selector.setBy(by as typeof selector.by);
-                  selector.setValue(value);
-                }}
+                onNodeSelect={handleTreeNodeSelect}
                 selectedNodeId={selectedNodeId}
-                onRefresh={() => selectedDevice && hierarchy.refresh()}
-                autoRefresh={hierarchy.autoRefresh}
-                onAutoRefreshChange={hierarchy.setAutoRefresh}
+                onRefresh={handleHierarchyRefresh}
+                autoRefresh={hierarchyAutoRefresh}
+                onAutoRefreshChange={setHierarchyAutoRefresh}
               />
             )}
           </div>
@@ -2613,8 +2684,8 @@ export function ControlRecordView({
                     logLines={device.logs[selectedDevice.serial] ?? []}
                     mode={device.mode}
                     wsSend={mirrorWsSend}
-                    onToggleMode={record.handleToggleMode}
-                    onRestart={record.handleRestart}
+                    onToggleMode={recordHandleToggleMode}
+                    onRestart={recordHandleRestart}
                     onTap={mirrorOnTap}
                     onSwipe={mirrorOnSwipe}
                     highlightBounds={highlightBounds}
@@ -2622,7 +2693,7 @@ export function ControlRecordView({
                     hideDeviceFunctions={mirrorInputLocked.hideControls}
                     readOnlyPreview={mirrorInputLocked.readOnlyPreview}
                     canTakeControl={canExecuteDevice}
-                    onTakeControl={() => setTakeoverDialogOpen(true)}
+                    onTakeControl={handleTakeControl}
                     mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
                     deviceOps={mirrorDeviceOps}
                   />
@@ -2639,8 +2710,8 @@ export function ControlRecordView({
                   logLines={device.logs[selectedDevice.serial] ?? []}
                   mode={device.mode}
                   wsSend={mirrorWsSend}
-                  onToggleMode={record.handleToggleMode}
-                  onRestart={record.handleRestart}
+                  onToggleMode={recordHandleToggleMode}
+                  onRestart={recordHandleRestart}
                   onTap={mirrorOnTap}
                   onSwipe={mirrorOnSwipe}
                   highlightBounds={highlightBounds}
@@ -2648,7 +2719,7 @@ export function ControlRecordView({
                   hideDeviceFunctions={mirrorInputLocked.hideControls}
                   readOnlyPreview={mirrorInputLocked.readOnlyPreview}
                   canTakeControl={canExecuteDevice}
-                  onTakeControl={() => setTakeoverDialogOpen(true)}
+                  onTakeControl={handleTakeControl}
                   deviceOps={mirrorDeviceOps}
                 />
               </div>

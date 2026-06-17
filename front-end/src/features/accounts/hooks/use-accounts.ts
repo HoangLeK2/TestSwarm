@@ -10,9 +10,26 @@ import type {
   BulkImportBody,
   RoundRobinBody
 } from '../../device-farm/services/generated/DeviceFarmApi';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
+
+export const ACCOUNTS_LIST_KEY = ['accounts'] as const;
+
+export function accountsListQueryKey(
+  orgId: string | null | undefined,
+  query?: {
+    platform?: string;
+    status?: string;
+    state?: string;
+    tags?: string;
+    limit?: number;
+    offset?: number;
+  }
+) {
+  return [...ACCOUNTS_LIST_KEY, orgId, query] as const;
+}
 
 const KEYS = {
-  list: ['accounts'] as const,
+  list: ACCOUNTS_LIST_KEY,
   detail: (id: string) => ['accounts', id] as const,
   devices: (id: string) => ['accounts', id, 'devices'] as const,
   events: (id: string, cursor?: string) =>
@@ -22,13 +39,17 @@ const KEYS = {
 export function useAccounts(query?: {
   platform?: string;
   status?: string;
+  state?: string;
   tags?: string;
   limit?: number;
   offset?: number;
 }) {
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
   return useQuery({
-    queryKey: [...KEYS.list, query] as const,
-    queryFn: () => accountsApi.list(query)
+    queryKey: accountsListQueryKey(orgId, query),
+    queryFn: () => accountsApi.list(query),
+    enabled: Boolean(orgId)
   });
 }
 

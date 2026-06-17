@@ -1,6 +1,7 @@
 'use client';
 
 import React, {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -42,7 +43,24 @@ interface XmlTreeViewerProps {
   onAutoRefreshChange: (v: boolean) => void;
 }
 
-export function XmlTreeViewer({
+function xmlTreeViewerPropsEqual(
+  prev: XmlTreeViewerProps,
+  next: XmlTreeViewerProps
+) {
+  return (
+    prev.xml === next.xml &&
+    prev.loading === next.loading &&
+    prev.deviceActive === next.deviceActive &&
+    prev.wsConnected === next.wsConnected &&
+    prev.selectedNodeId === next.selectedNodeId &&
+    prev.autoRefresh === next.autoRefresh &&
+    prev.onNodeSelect === next.onNodeSelect &&
+    prev.onRefresh === next.onRefresh &&
+    prev.onAutoRefreshChange === next.onAutoRefreshChange
+  );
+}
+
+function XmlTreeViewerInner({
   xml,
   loading,
   deviceActive = true,
@@ -240,6 +258,9 @@ export function XmlTreeViewer({
     </div>
   );
 }
+
+/** Re-render only when hierarchy data or selection props change — not on unrelated editor state. */
+export const XmlTreeViewer = memo(XmlTreeViewerInner, xmlTreeViewerPropsEqual);
 
 // ── Recursive tree node renderer ─────────────────────────────────────────
 

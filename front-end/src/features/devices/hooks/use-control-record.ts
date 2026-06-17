@@ -346,6 +346,17 @@ export function useControlRecord(
           ? fetchScreenshotB64(selectedDevice.serial)
           : undefined;
 
+      // Fresh hierarchy at tap-time — recordXmlRef is often stale after navigation
+      // (search list → group page) and would map coords to the wrong row.
+      const preTapHierarchyPromise =
+        !skipTapRecordingWhilePickRef.current &&
+        recordingRef.current &&
+        selectedDevice &&
+        m0.type === 'tap' &&
+        m0.serial === selectedDevice.serial
+          ? fetchHierarchy(selectedDevice.serial, true).catch(() => null)
+          : undefined;
+
       if (multiAction && selectedDevice) {
         wsSend({
           type: 'multi_action',
@@ -405,16 +416,35 @@ export function useControlRecord(
       ) {
         const rx = parseFloat((m.x / w).toFixed(4));
         const ry = parseFloat((m.y / h).toFixed(4));
-        const xml =
-          pollingXmlRef.current ||
-          recordXmlSerialRef.current !== selectedDevice.serial
-            ? null
-            : recordXmlRef.current;
+        const stepSerial = selectedDevice.serial;
 
-        if (xml) {
+        const recordTapWithXml = (xmlRaw: string | null | undefined) => {
+          if (!recordingRef.current) return;
+          if (
+            !canApplyDeviceScopedResult(
+              stepSerial,
+              selectedDeviceSerialRef.current
+            )
+          ) {
+            return;
+          }
+
+          const xml = xmlRaw?.trim() ?? '';
+          if (!xml) {
+            recordStep({ type: 'tap_ratio', x: rx, y: ry });
+            toast.info(t('toast.xmlMissing'), { duration: 3000 });
+            return;
+          }
+
+          setRecordXml(xml);
+          recordXmlRef.current = xml;
+          recordXmlSerialRef.current = stepSerial;
+
           const sig = getScreenSignature(xml);
           const sel = findSelectorInXml(xml, rx, ry, {
-            targetPackage: sig.package || selectedDevice.current_app || undefined
+            targetPackage:
+              sig.package || selectedDevice.current_app || undefined,
+            screenDims: { dw: w, dh: h }
           });
           const screen: Record<string, unknown> = {
             package: sig.package || undefined,
@@ -451,7 +481,6 @@ export function useControlRecord(
             toast.warning(t('toast.elementNotFound'), { duration: 3000 });
           }
 
-          const stepSerial = selectedDevice.serial;
           const ratioCrop =
             elemBounds?.rx2 != null &&
             elemBounds.rx2 > elemBounds.rx1 &&
@@ -464,55 +493,43 @@ export function useControlRecord(
                 }
               : undefined;
 
-          // screen.screenshot is used ONLY for SSIM visual-anchoring during
-          // playback (scenario_task.py: `if not has_real_selector`).
-          // has_real_selector is True for ANY selector type (resource-id, text,
-          // xpath, description, class name) — so SSIM is NEVER used when any
-          // selector is present. Storing the full screenshot for selector steps
-          // wastes ~150-300 KB per tap with zero benefit.
-          // Only save full screenshot when sel === null (pure ratio fallback).
           const needFullScreenshot = !sel;
 
-          // Skip network round-trip when we have a selector AND no crop bounds.
-          // (In practice bounds are always present when sel is set.)
-          if (!needFullScreenshot && !ratioCrop) return;
-
-          trackScreenshotTask(
-            (preTapScreenshotPromise ?? fetchScreenshotB64(stepSerial))
-              .then(async (imgData) => {
-                if (!recordingRef.current) return;
-                // Crop element_image client-side — avoids a second round-trip and
-                // guarantees the crop matches the exact frame in screen.screenshot.
-                const elementImage = ratioCrop
-                  ? await cropBase64(imgData.screenshot, ratioCrop)
-                  : undefined;
-                setSteps((prev) => {
-                  const idxById = prev.findIndex(
-                    (step) => step._id === recordedStepId
-                  );
-                  if (idxById < 0 || prev[idxById].type !== 'tap') return prev;
-                  const updated = [...prev];
-                  const s = { ...updated[idxById] };
-                  const sc = {
-                    ...((s as Record<string, unknown>).screen as Record<
-                      string,
-                      unknown
-                    >)
-                  };
-                  // Only store full screenshot when needed for SSIM visual-anchoring
-                  if (needFullScreenshot) sc.screenshot = imgData.screenshot;
-                  if (elementImage) sc.element_image = elementImage;
-                  (s as Record<string, unknown>).screen = sc;
-                  updated[idxById] = s as StepWithId;
-                  return updated;
-                });
-              })
-              .catch(() => {
-                toast.warning(t('toast.screenshotCaptureFailed'), {
-                  duration: 2500
-                });
-              })
-          );
+          if (needFullScreenshot || ratioCrop) {
+            trackScreenshotTask(
+              (preTapScreenshotPromise ?? fetchScreenshotB64(stepSerial))
+                .then(async (imgData) => {
+                  if (!recordingRef.current) return;
+                  const elementImage = ratioCrop
+                    ? await cropBase64(imgData.screenshot, ratioCrop)
+                    : undefined;
+                  setSteps((prev) => {
+                    const idxById = prev.findIndex(
+                      (step) => step._id === recordedStepId
+                    );
+                    if (idxById < 0 || prev[idxById].type !== 'tap') return prev;
+                    const updated = [...prev];
+                    const s = { ...updated[idxById] };
+                    const sc = {
+                      ...((s as Record<string, unknown>).screen as Record<
+                        string,
+                        unknown
+                      >)
+                    };
+                    if (needFullScreenshot) sc.screenshot = imgData.screenshot;
+                    if (elementImage) sc.element_image = elementImage;
+                    (s as Record<string, unknown>).screen = sc;
+                    updated[idxById] = s as StepWithId;
+                    return updated;
+                  });
+                })
+                .catch(() => {
+                  toast.warning(t('toast.screenshotCaptureFailed'), {
+                    duration: 2500
+                  });
+                })
+            );
+          }
 
           if (recordingRef.current) {
             const oldHash = hashXml(xml);
@@ -554,11 +571,16 @@ export function useControlRecord(
                 setPollingXml(false);
               });
           }
-          return;
-        }
+        };
 
-        recordStep({ type: 'tap_ratio', x: rx, y: ry });
-        toast.info(t('toast.xmlMissing'), { duration: 3000 });
+        if (preTapHierarchyPromise) {
+          void preTapHierarchyPromise.then((freshXml) => {
+            recordTapWithXml(freshXml ?? recordXmlRef.current);
+          });
+        } else {
+          recordTapWithXml(recordXmlRef.current);
+        }
+        return;
       } else if (m.type === 'key' && m.key) {
         recordStep({ type: 'key', key: m.key });
       } else if (

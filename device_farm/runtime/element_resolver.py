@@ -146,7 +146,7 @@ def phase_selector(
 
     w, h = screen_w, screen_h
 
-    # Case A: Have bounds + recorded position → check if recorded pos is inside
+    # Case A: Have bounds + recorded position → prefer exact replay when inside
     if bounds and fallback_rx is not None and fallback_ry is not None:
         hx = int(fallback_rx * w)
         hy = int(fallback_ry * h)
@@ -160,20 +160,19 @@ def phase_selector(
             left - tolerance <= hx <= right + tolerance
             and top - tolerance <= hy <= bottom + tolerance
         )
-        if not in_bounds:
-            log.warning(
-                "[resolver] selector %s=%r bounds %s vs recorded (%d,%d) "
-                "tolerance=%d → falling through",
-                by, value, bounds, hx, hy, tolerance,
+        if in_bounds:
+            return ResolveResult(
+                hit=True, x=hx, y=hy, bounds=bounds,
+                method="selector",
+                message=f"selector {by}={value!r} tapped",
             )
-            return None  # Let image/ratio phases handle it
-        return ResolveResult(
-            hit=True, x=hx, y=hy, bounds=bounds,
-            method="selector",
-            message=f"selector {by}={value!r} tapped",
+        log.info(
+            "[resolver] selector %s=%r matched; recorded (%d,%d) outside bounds "
+            "%s → tap element center (avoid raw fallback coords)",
+            by, value, hx, hy, bounds,
         )
 
-    # Case B: Have bounds, no recorded position → center
+    # Case B: Have bounds → center (also used when recorded point drifted after scroll)
     if bounds:
         cx = (bounds.get("left", 0) + bounds.get("right", w)) // 2
         cy = (bounds.get("top", 0) + bounds.get("bottom", h)) // 2

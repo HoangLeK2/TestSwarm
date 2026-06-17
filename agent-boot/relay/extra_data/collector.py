@@ -23,6 +23,8 @@ _COMMENT_SCROLL_PAUSE_S = 0.05
 _COMMENT_DEEP_SCROLL_MAX_SWIPES = 80
 _COMMENT_DEEP_SWIPES_PER_DUMP = 6
 _COMMENT_DEEP_NO_GROWTH_BREAK = 24
+_COMMENT_STALL_SWIPES_PER_DUMP = 2
+_COMMENT_MIN_SCROLL_DURATION_S = 0.22
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -990,12 +992,21 @@ async def _collect_comment_snapshots(
         _COMMENT_DEEP_SWIPES_PER_DUMP if explicit_swipes_per_dump else _COMMENT_SWIPES_PER_DUMP,
     )
     dump_cycles = max(1, (swipe_budget + swipes_per_dump - 1) // swipes_per_dump)
+    adaptive_dump_cycles = 1 + max(
+        0,
+        (
+            max(0, swipe_budget - swipes_per_dump)
+            + _COMMENT_STALL_SWIPES_PER_DUMP
+            - 1
+        )
+        // _COMMENT_STALL_SWIPES_PER_DUMP,
+    )
     min_dumps = _int_context(
         context,
         "min_comment_scan_passes",
         _COMMENT_MIN_SCAN_PASSES,
         0,
-        dump_cycles,
+        adaptive_dump_cycles,
     )
     explicit_no_growth = "comment_no_growth_break" in context
     no_growth_break = _int_context(
@@ -1014,7 +1025,7 @@ async def _collect_comment_snapshots(
         1000,
     )
     max_snapshots = _int_context(
-        context, "comment_max_snapshots", max(20, dump_cycles + 1), 1, 50
+        context, "comment_max_snapshots", max(20, adaptive_dump_cycles + 1), 1, 50
     )
     max_xml_bytes = _int_context(context, "comment_xml_max_bytes", 6 * 1024 * 1024, 512 * 1024, 7 * 1024 * 1024)
     # Fast by default, but explicit crawl profiles keep their requested scroll tuning.
@@ -1133,11 +1144,12 @@ async def _collect_comment_snapshots(
     unchanged_dumps = 0
     no_new_comment_dumps = 0
     scroll_xml = initial_xml
-    # Slightly longer than minimum so Android treats the gesture as scroll, not tap.
-    duration_s = max(0.32, duration_ms / 1000.0)
+    # Keep enough press time for Android to treat the gesture as scroll, not tap.
+    duration_s = max(_COMMENT_MIN_SCROLL_DURATION_S, duration_ms / 1000.0)
     settle_after_batch_s = max(swipe_pause_s, 0.05)
     use_screen_swipe = False
     swipes_done = 0
+    stall_detected = False
 
     async def _screen_swipe_coords() -> tuple[int, int, int, int]:
         _raise_if_cancelled(context)
@@ -1179,7 +1191,7 @@ async def _collect_comment_snapshots(
         time.monotonic() + comment_scroll_wall_s if comment_scroll_wall_s > 0 else None
     )
     cycle = 0
-    while cycle < dump_cycles:
+    while swipes_done < swipe_budget:
         _raise_if_cancelled(context)
         if len(snapshots) >= max_snapshots or swipes_done >= swipe_budget:
             break
@@ -1195,7 +1207,12 @@ async def _collect_comment_snapshots(
             )
             break
 
-        batch_swipes = min(swipes_per_dump, swipe_budget - swipes_done)
+        effective_swipes_per_dump = (
+            min(swipes_per_dump, _COMMENT_STALL_SWIPES_PER_DUMP)
+            if stall_detected
+            else swipes_per_dump
+        )
+        batch_swipes = min(effective_swipes_per_dump, swipe_budget - swipes_done)
         swipes_before_batch = swipes_done
         batch_coords = await _swipe_coords()
         for _ in range(batch_swipes):
@@ -1239,8 +1256,10 @@ async def _collect_comment_snapshots(
             if new_comment_keys:
                 seen_comment_keys.update(new_comment_keys)
                 no_new_comment_dumps = 0
+                stall_detected = False
             else:
                 no_new_comment_dumps += 1
+                stall_detected = True
                 if (
                     no_new_comment_dumps >= no_new_comment_threshold
                     and (cycle + 1) >= min_dumps
@@ -1267,6 +1286,7 @@ async def _collect_comment_snapshots(
             continue
 
         unchanged_dumps += 1
+        stall_detected = True
         if retry_screen_swipe_on_stuck and not use_screen_swipe and unchanged_dumps <= 2:
             logger.info(
                 "[%s] extra_data comment scroll unchanged XML — retry with screen swipe "

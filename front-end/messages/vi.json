@@ -543,7 +543,7 @@
       "loadError": "Không thể tải tài khoản",
       "countLabel": "tài khoản",
       "emptyTitle": "Chưa có tài khoản",
-      "emptyDescription": "Tạo hoặc nhập tài khoản để bắt đầu",
+      "emptyDescription": "Tạo hoặc nhập tài khoản mạng xã hội để chiến dịch sử dụng khi chạy.",
       "confirmDelete": "Xóa tài khoản \"{username}\"?",
       "colPlatform": "Nền tảng",
       "colUsername": "Tên đăng nhập",
@@ -2863,9 +2863,9 @@
       "ctaCreate": "Tạo chiến dịch"
     },
     "accounts": {
-      "title": "Chưa có account",
-      "description": "Thêm account mạng xã hội mà campaign sẽ dùng khi chạy.",
-      "ctaCreate": "Thêm account"
+      "title": "Chưa có tài khoản",
+      "description": "Tạo hoặc nhập tài khoản mạng xã hội để chiến dịch sử dụng khi chạy.",
+      "ctaCreate": "Tạo tài khoản"
     },
     "content": {
       "titleNoData": "Chưa có content",

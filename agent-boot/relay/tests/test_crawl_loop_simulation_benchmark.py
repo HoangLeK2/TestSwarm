@@ -396,11 +396,10 @@ async def test_crawl_comments_deep_scroll_profile_matches_production() -> None:
     assert err is None
     assert snapshots
     s = stats.summary()
-    # Production tuning stops earlier now: comment_no_growth_break=2,
-    # min_comment_scan_passes=1 → 2 scroll cycles (6 swipes, 3 dumps) on a
-    # non-growing sheet instead of the previous 3 cycles (9 swipes, 4 dumps).
-    assert s["swipe"] == 6
-    assert s["dump"] == 3
+    # After the first unchanged dump, adaptive stall detection checks the tail
+    # with 2-swipe batches instead of repeating full 3-swipe batches.
+    assert s["swipe"] == 7
+    assert s["dump"] == 4
     assert s["wall_ms"] < 500
 
 

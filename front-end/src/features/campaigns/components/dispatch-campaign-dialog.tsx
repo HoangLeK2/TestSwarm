@@ -31,6 +31,7 @@ import {
   parseDeviceVarsJson,
   splitDeviceOverridesFromMerged
 } from '@/components/device-vars-json-panel';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
 import { campaignsApi } from '../services/api';
@@ -280,8 +281,8 @@ export function DispatchCampaignDialog({
       qc.invalidateQueries({ queryKey: ['campaigns', campaignId] as const });
       setDirtyKeys({});
       return true;
-    } catch {
-      toast.error(tVars('saveFailed'));
+    } catch (err) {
+      toast.error(formatFarmApiError(err, tVars('saveFailed')));
       return false;
     } finally {
       setIsSaving(false);

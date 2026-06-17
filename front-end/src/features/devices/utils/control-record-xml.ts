@@ -6,6 +6,7 @@ import {
   type HierarchyPickOptions,
   type XmlSelectorPick
 } from './hierarchy-xml-pick';
+import { hierarchyBoundsCenterRatio } from './hierarchy-hit-test';
 
 export type { HierarchyPickOptions, XmlSelectorPick };
 export { findSelectorInXml, inferForegroundPackage, listSelectorCandidatesInXml };
@@ -53,19 +54,11 @@ export function findSelectorForTreeNode(
     return null;
   }
   const allNodes = Array.from(doc.getElementsByTagName('node'));
-  let dw = 1080;
-  let dh = 1920;
-  for (const n of allNodes) {
-    const m = /\[0,0\]\[(\d+),(\d+)\]/.exec(n.getAttribute('bounds') ?? '');
-    if (m) {
-      dw = parseInt(m[1], 10);
-      dh = parseInt(m[2], 10);
-      break;
-    }
-  }
-  const rx = (x1 + x2) / 2 / dw;
-  const ry = (y1 + y2) / 2 / dh;
-  return findSelectorInXml(xmlStr, rx, ry, options);
+  const center = hierarchyBoundsCenterRatio(allNodes, [x1, y1, x2, y2], {
+    screenDims: options?.screenDims ?? undefined
+  });
+  if (!center) return null;
+  return findSelectorInXml(xmlStr, center.rx, center.ry, options);
 }
 
 export function getScreenSignature(xml: string): {

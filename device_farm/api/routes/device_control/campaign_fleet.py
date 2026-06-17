@@ -724,9 +724,9 @@ def build_campaign_fleet_router(
                 executions = await repo.list_running_executions_for_device(db, db_device.id)
                 await _mark_interrupt_executions_cancelled(executions)
                 workflow_ids = _interrupt_workflow_ids_from_executions(executions)
-                client = await get_temporal_client(config.temporal)
 
                 async def _cancel_all() -> list[str]:
+                    client = await get_temporal_client(config.temporal)
                     ids = list(workflow_ids)
                     if not ids:
                         safe_serial = serial.replace('"', "").replace("\\", "")

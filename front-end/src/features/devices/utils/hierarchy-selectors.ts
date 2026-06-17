@@ -1,7 +1,9 @@
+import { pickStableHierarchySelector } from './hierarchy-hit-test';
+
 export type HierarchyParsedNode = {
   id: string;
   label: string;
-  by: 'resource-id' | 'text' | 'xpath' | 'description';
+  by: 'resource-id' | 'text' | 'xpath' | 'description' | 'class name';
   value: string;
   package?: string;
   bounds?: string;
@@ -31,6 +33,19 @@ export function parseHierarchySelectorNodes(
     const parser = new DOMParser();
     const doc = parser.parseFromString(hierarchyXml, 'text/xml');
     const nodes = Array.from(doc.getElementsByTagName('node')) as Element[];
+    const ridCount = new Map<string, number>();
+    const textCount = new Map<string, number>();
+    const descCount = new Map<string, number>();
+    for (const el of nodes) {
+      const rid = (el.getAttribute('resource-id') ?? '').trim();
+      const text = (el.getAttribute('text') ?? '').trim();
+      const desc = (el.getAttribute('content-desc') ?? '').trim();
+      if (rid) ridCount.set(rid, (ridCount.get(rid) ?? 0) + 1);
+      if (text && text.length < 80)
+        textCount.set(text, (textCount.get(text) ?? 0) + 1);
+      if (desc && desc.length < 80)
+        descCount.set(desc, (descCount.get(desc) ?? 0) + 1);
+    }
     nodes.sort((a, b) => {
       const pa = a.getAttribute('package') || '';
       const pb = b.getAttribute('package') || '';
@@ -45,35 +60,34 @@ export function parseHierarchySelectorNodes(
       const text = el.getAttribute('text') || '';
       const desc = el.getAttribute('content-desc') || '';
       const pkg = el.getAttribute('package') || '';
+      const selector = pickStableHierarchySelector(
+        {
+          resourceId: resId,
+          text,
+          contentDesc: desc,
+          pkg,
+          className: el.getAttribute('class') || '',
+          bounds: el.getAttribute('bounds') || ''
+        },
+        {
+          resourceIdCount: ridCount.get(resId.trim()),
+          textCount: textCount.get(text.trim()),
+          descCount: descCount.get(desc.trim())
+        },
+        { allowBoundsXPath: true }
+      );
 
-      if (resId && !seen.has(`res:${resId}`)) {
-        seen.add(`res:${resId}`);
+      if (selector && !seen.has(`${selector.by}:${selector.value}`)) {
+        seen.add(`${selector.by}:${selector.value}`);
         const label = `${resId}${text ? ` — ${text}` : desc ? ` — ${desc}` : ''}`;
         items.push({
-          id: `res-${idx++}`,
-          label,
-          by: 'resource-id',
-          value: resId,
-          package: pkg || undefined
-        });
-      }
-      if (text && !resId && !seen.has(`txt:${text}`)) {
-        seen.add(`txt:${text}`);
-        items.push({
-          id: `txt-${idx++}`,
-          label: text.slice(0, 60) + (text.length > 60 ? '…' : ''),
-          by: 'text',
-          value: text,
-          package: pkg || undefined
-        });
-      }
-      if (desc && !resId && !seen.has(`desc:${desc}`)) {
-        seen.add(`desc:${desc}`);
-        items.push({
-          id: `desc-${idx++}`,
-          label: `content-desc: ${desc.slice(0, 50)}`,
-          by: 'description',
-          value: desc,
+          id: `${selector.by}-${idx++}`,
+          label:
+            selector.by === 'xpath'
+              ? `bounds: ${el.getAttribute('bounds') || selector.value}`
+              : label || selector.value,
+          by: selector.by,
+          value: selector.value,
           clickable: el.getAttribute('clickable') === 'true',
           package: pkg || undefined
         });

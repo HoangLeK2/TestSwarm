@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from sqlalchemy import select
 
 _SERIAL_RE = _re.compile(r"^[\w.:_\-]{1,128}$")
 
@@ -45,11 +46,16 @@ from db.crud.default_scenario import (
 )
 from db.crud.device import get_device_by_serial
 from db.crud.scenario_device_variable import (
+    delete_campaign_org_scenario_device_variable_key,
     delete_scenario_device_variable_key,
+    get_campaign_org_scenario_device_variables,
     get_scenario_device_variables,
+    merge_campaign_org_scenario_device_variables,
     merge_scenario_device_variables,
+    replace_campaign_org_scenario_device_variables,
     replace_scenario_device_variables,
 )
+from db.models.org_scenario import CampaignOrgScenarioRef
 from services.image_store import save_step_images, delete_scenario_images
 from services.campaign.scenario_ref_resolver import CampaignScenarioRefError
 from services.campaign.service import (
@@ -244,6 +250,7 @@ def _entity_out(view: CampaignView) -> CampaignEntityOut:
         status=view.status,
         vars=view.vars,
         per_device_overrides=view.per_device_overrides,
+        recovery_policy=view.recovery_policy,
         account_group_id=view.account_group_id,
         scenario_account_id=view.scenario_account_id,
         per_device_accounts=view.per_device_accounts,
@@ -280,6 +287,160 @@ async def _get_campaign_or_404(campaign_id: str, user: User, db):
     if not campaign or not await campaign_visible_to_user(db, user, campaign):
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
+
+
+async def _get_org_scenario_ref_row(
+    db,
+    campaign_id: str,
+    scenario_id: str,
+) -> CampaignOrgScenarioRef | None:
+    result = await db.execute(
+        select(CampaignOrgScenarioRef).where(
+            CampaignOrgScenarioRef.campaign_id == campaign_id,
+            CampaignOrgScenarioRef.org_scenario_id == scenario_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _campaign_org_id(db, campaign) -> str | None:
+    org_id = getattr(campaign, "org_id", None)
+    if org_id:
+        return str(org_id)
+    from db.crud import campaign_entity as campaign_entity_repo
+
+    return await campaign_entity_repo.lookup_campaign_org_id(db, campaign.id)
+
+
+async def _org_scenario_to_campaign_scenario_out(
+    db,
+    *,
+    campaign_id: str,
+    ref: CampaignOrgScenarioRef,
+    org_id: str | None,
+) -> ScenarioOut | None:
+    from db.crud import org_scenario as org_scenario_repo
+
+    row = await org_scenario_repo.get_org_scenario(
+        db, ref.org_scenario_id, org_id=org_id
+    )
+    if row is None:
+        return None
+    body = row.body_json if isinstance(row.body_json, dict) else {}
+    account_group_id = body.get("account_group_id")
+    account_group_name = None
+    if account_group_id:
+        account_group_name = await _lookup_account_group_name(db, account_group_id)
+    return ScenarioOut(
+        id=ref.org_scenario_id,
+        campaign_id=campaign_id,
+        name=row.name,
+        instructions=str(body.get("instructions") or ""),
+        steps=body.get("steps") or [],
+        variables=body.get("variables") or {},
+        order=int(ref.order_index or 0),
+        nodes=body.get("nodes") or [],
+        edges=body.get("edges") or [],
+        account_group_id=account_group_id,
+        account_group_name=account_group_name,
+        last_validation_summary=row.last_validation_summary,
+        last_validated_at=row.last_validated_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+async def _list_org_scenario_outs_for_campaign(db, campaign) -> list[ScenarioOut]:
+    from db.crud import campaign_entity as campaign_entity_repo
+    from db.crud.campaign_entity import loaded_org_scenario_refs
+
+    entity = campaign
+    if "org_scenario_refs" not in campaign.__dict__:
+        entity = await campaign_entity_repo.get_campaign_entity(
+            db, campaign.id, include_refs=True
+        )
+    if entity is None:
+        return []
+    refs = sorted(
+        loaded_org_scenario_refs(entity),
+        key=lambda r: int(r.order_index or 0),
+    )
+    if not refs:
+        return []
+    org_id = await _campaign_org_id(db, entity)
+    outs: list[ScenarioOut] = []
+    for ref in refs:
+        out = await _org_scenario_to_campaign_scenario_out(
+            db,
+            campaign_id=entity.id,
+            ref=ref,
+            org_id=org_id,
+        )
+        if out is not None:
+            outs.append(out)
+    return outs
+
+
+async def _org_scenario_id_to_campaign_scenario_out(
+    db,
+    *,
+    campaign_id: str,
+    org_scenario_id: str,
+    org_id: str | None,
+    order: int = 0,
+) -> ScenarioOut | None:
+    from db.crud import org_scenario as org_scenario_repo
+
+    row = await org_scenario_repo.get_org_scenario(db, org_scenario_id, org_id=org_id)
+    if row is None:
+        return None
+    body = row.body_json if isinstance(row.body_json, dict) else {}
+    account_group_id = body.get("account_group_id")
+    account_group_name = None
+    if account_group_id:
+        account_group_name = await _lookup_account_group_name(db, account_group_id)
+    return ScenarioOut(
+        id=org_scenario_id,
+        campaign_id=campaign_id,
+        name=row.name,
+        instructions=str(body.get("instructions") or ""),
+        steps=body.get("steps") or [],
+        variables=body.get("variables") or {},
+        order=order,
+        nodes=body.get("nodes") or [],
+        edges=body.get("edges") or [],
+        account_group_id=account_group_id,
+        account_group_name=account_group_name,
+        last_validation_summary=row.last_validation_summary,
+        last_validated_at=row.last_validated_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _campaign_recovery_scenario_ids(campaign) -> set[str]:
+    from services.execution.recovery_policy import recovery_scenario_ids_from_policy
+
+    return recovery_scenario_ids_from_policy(
+        getattr(campaign, "recovery_policy", None) or {}
+    )
+
+
+async def _scenario_variable_scope_or_404(db, campaign_id: str, scenario_id: str) -> str:
+    scenario = await repo.get_scenario(db, scenario_id)
+    if scenario and scenario.campaign_id == campaign_id:
+        return "legacy"
+
+    if await _get_org_scenario_ref_row(db, campaign_id, scenario_id):
+        return "org"
+
+    from db.crud import campaign_entity as campaign_entity_repo
+
+    campaign = await campaign_entity_repo.get_campaign_entity(db, campaign_id)
+    if campaign and scenario_id in _campaign_recovery_scenario_ids(campaign):
+        return "org"
+
+    raise HTTPException(status_code=404, detail="Scenario not found")
 
 
 # ── Campaign CRUD ────────────────────────────────────────────────────────────
@@ -351,6 +512,7 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
                 description=body.description,
                 vars=vars_payload,
                 per_device_overrides=body.per_device_overrides or None,
+                recovery_policy=body.recovery_policy or {},
                 account_group_id=body.account_group_id,
                 scenario_account_id=body.scenario_account_id,
                 per_device_accounts=body.per_device_accounts or None,
@@ -388,6 +550,7 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
         getattr(user, "org_id", None),
         body.description,
         body.variables,
+        recovery_policy=body.recovery_policy or {},
         target_group_id=body.target_group_id,
     )
     for device_id in valid_device_ids:
@@ -654,6 +817,7 @@ async def patch_campaign_entity(
             description=body.description,
             vars=body.vars,
             per_device_overrides=body.per_device_overrides,
+            recovery_policy=body.recovery_policy,
             tags=body.tags,
             scenario_refs=refs,
         )
@@ -1259,9 +1423,21 @@ async def compile_scenario(
     dependencies=[Depends(require_permission("campaigns", "read"))],
 )
 async def list_scenarios(campaign_id: str, db: DB, user: CurrentUser):
-    await _get_campaign_or_404(campaign_id, user, db)
+    campaign = await _get_campaign_or_404(campaign_id, user, db)
     scenarios = await repo.list_scenarios(db, campaign_id)
-    return [_scenario_to_out(s) for s in scenarios]
+    if scenarios:
+        result = []
+        for s in scenarios:
+            result.append(
+                _scenario_to_out(
+                    s,
+                    account_group_name=await _lookup_account_group_name(
+                        db, s.account_group_id
+                    ),
+                )
+            )
+        return result
+    return await _list_org_scenario_outs_for_campaign(db, campaign)
 
 
 @router.post(
@@ -1333,14 +1509,37 @@ async def reorder_scenarios_route(
     dependencies=[Depends(require_permission("campaigns", "read"))],
 )
 async def get_scenario(campaign_id: str, scenario_id: str, db: DB, user: CurrentUser):
-    await _get_campaign_or_404(campaign_id, user, db)
+    campaign = await _get_campaign_or_404(campaign_id, user, db)
     s = await repo.get_scenario(db, scenario_id)
-    if not s or s.campaign_id != campaign_id:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-    return _scenario_to_out(
-        s,
-        account_group_name=await _lookup_account_group_name(db, s.account_group_id),
-    )
+    if s and s.campaign_id == campaign_id:
+        return _scenario_to_out(
+            s,
+            account_group_name=await _lookup_account_group_name(db, s.account_group_id),
+        )
+    ref = await _get_org_scenario_ref_row(db, campaign_id, scenario_id)
+    org_id = await _campaign_org_id(db, campaign)
+    if ref is not None:
+        out = await _org_scenario_to_campaign_scenario_out(
+            db,
+            campaign_id=campaign_id,
+            ref=ref,
+            org_id=org_id,
+        )
+        if out is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        return out
+    if scenario_id in _campaign_recovery_scenario_ids(campaign):
+        out = await _org_scenario_id_to_campaign_scenario_out(
+            db,
+            campaign_id=campaign_id,
+            org_scenario_id=scenario_id,
+            org_id=org_id,
+            order=-1,
+        )
+        if out is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        return out
+    raise HTTPException(status_code=404, detail="Scenario not found")
 
 
 @router.get(
@@ -1356,13 +1555,16 @@ async def get_scenario_device_variables_endpoint(
     user: CurrentUser,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    scenario = await repo.get_scenario(db, scenario_id)
-    if not scenario or scenario.campaign_id != campaign_id:
-        raise HTTPException(status_code=404, detail="Scenario not found")
+    scope = await _scenario_variable_scope_or_404(db, campaign_id, scenario_id)
     device = await repo.get_device(db, device_id)
     if not await device_visible_to_user(db, user, device):
         raise HTTPException(status_code=404, detail="Device not found")
-    vars_map = await get_scenario_device_variables(db, scenario_id, device_id)
+    if scope == "org":
+        vars_map = await get_campaign_org_scenario_device_variables(
+            db, campaign_id, scenario_id, device_id
+        )
+    else:
+        vars_map = await get_scenario_device_variables(db, scenario_id, device_id)
     return ScenarioDeviceVariablesOut(
         scenario_id=scenario_id,
         device_id=device_id,
@@ -1384,13 +1586,18 @@ async def replace_scenario_device_variables_endpoint(
     user: CurrentUser,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    scenario = await repo.get_scenario(db, scenario_id)
-    if not scenario or scenario.campaign_id != campaign_id:
-        raise HTTPException(status_code=404, detail="Scenario not found")
+    scope = await _scenario_variable_scope_or_404(db, campaign_id, scenario_id)
     device = await repo.get_device(db, device_id)
     if not await device_visible_to_user(db, user, device):
         raise HTTPException(status_code=404, detail="Device not found")
-    vars_map = await replace_scenario_device_variables(db, scenario_id, device_id, body.vars)
+    if scope == "org":
+        vars_map = await replace_campaign_org_scenario_device_variables(
+            db, campaign_id, scenario_id, device_id, body.vars
+        )
+    else:
+        vars_map = await replace_scenario_device_variables(
+            db, scenario_id, device_id, body.vars
+        )
     await db.commit()
     return ScenarioDeviceVariablesOut(
         scenario_id=scenario_id,
@@ -1413,13 +1620,18 @@ async def merge_scenario_device_variables_endpoint(
     user: CurrentUser,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    scenario = await repo.get_scenario(db, scenario_id)
-    if not scenario or scenario.campaign_id != campaign_id:
-        raise HTTPException(status_code=404, detail="Scenario not found")
+    scope = await _scenario_variable_scope_or_404(db, campaign_id, scenario_id)
     device = await repo.get_device(db, device_id)
     if not await device_visible_to_user(db, user, device):
         raise HTTPException(status_code=404, detail="Device not found")
-    vars_map = await merge_scenario_device_variables(db, scenario_id, device_id, body.vars)
+    if scope == "org":
+        vars_map = await merge_campaign_org_scenario_device_variables(
+            db, campaign_id, scenario_id, device_id, body.vars
+        )
+    else:
+        vars_map = await merge_scenario_device_variables(
+            db, scenario_id, device_id, body.vars
+        )
     await db.commit()
     return ScenarioDeviceVariablesOut(
         scenario_id=scenario_id,
@@ -1442,13 +1654,18 @@ async def delete_scenario_device_variable_key_endpoint(
     user: CurrentUser,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    scenario = await repo.get_scenario(db, scenario_id)
-    if not scenario or scenario.campaign_id != campaign_id:
-        raise HTTPException(status_code=404, detail="Scenario not found")
+    scope = await _scenario_variable_scope_or_404(db, campaign_id, scenario_id)
     device = await repo.get_device(db, device_id)
     if not await device_visible_to_user(db, user, device):
         raise HTTPException(status_code=404, detail="Device not found")
-    removed = await delete_scenario_device_variable_key(db, scenario_id, device_id, key)
+    if scope == "org":
+        removed = await delete_campaign_org_scenario_device_variable_key(
+            db, campaign_id, scenario_id, device_id, key
+        )
+    else:
+        removed = await delete_scenario_device_variable_key(
+            db, scenario_id, device_id, key
+        )
     await db.commit()
     return {
         "ok": True,

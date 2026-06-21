@@ -424,6 +424,10 @@ class TestFinalizeCampaignExecutionResult:
             stack.enter_context(patch(
                 "db.crud.execution.upsert_execution_result", upsert_mock
             ))
+            stack.enter_context(patch(
+                "services.execution.step_store.persist_execution_steps_from_results",
+                AsyncMock(),
+            ))
             # Patch campaign-idle check to avoid Temporal client call
             stack.enter_context(patch(
                 "temporal.activities._temporal_config", None
@@ -482,6 +486,10 @@ class TestFinalizeCampaignExecutionResult:
                 "db.crud.execution.upsert_execution_result", upsert_mock
             ))
             stack.enter_context(patch(
+                "services.execution.step_store.persist_execution_steps_from_results",
+                AsyncMock(),
+            ))
+            stack.enter_context(patch(
                 "temporal.activities._temporal_config", None
             ))
 
@@ -492,6 +500,129 @@ class TestFinalizeCampaignExecutionResult:
         assert len(kwargs["passed_steps"]) == 1
         assert len(kwargs["failed_steps"]) == 1
         assert kwargs["failed_steps"][0]["message"] == "Element not found"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_finalize_marks_cancelled_without_opening_dlq(self):
+        acts = self._make_activities()
+        db_mock = _make_db_mock()
+        mock_device = MagicMock()
+        mock_device.id = "dev-db-1"
+
+        inp = {
+            "campaign_id": "",
+            "run_id": None,
+            "success": False,
+            "execution_id": "exec-cancelled",
+            "device_serial": "SN-CANCEL",
+            "org_id": "org-test",
+            "step_results": [],
+            "failed_message": "Workflow error: Child Workflow execution cancelled",
+        }
+
+        upsert_mock = AsyncMock(return_value=None)
+        get_execution_mock = AsyncMock(return_value=SimpleNamespace(status="running", meta={}))
+        update_execution_mock = AsyncMock()
+        cancel_execution_record_mock = AsyncMock(
+            return_value=(SimpleNamespace(status="cancelled", meta={}), True)
+        )
+        get_device_mock = AsyncMock(return_value=mock_device)
+        open_dlq_mock = AsyncMock()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("temporal.activities.activity"))
+            stack.enter_context(patch(
+                "db.database.activity_session", return_value=db_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.device.get_device_by_serial", get_device_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.get_execution", get_execution_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution", update_execution_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.cancel_execution_record",
+                cancel_execution_record_mock,
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.upsert_execution_result", upsert_mock
+            ))
+            stack.enter_context(patch(
+                "services.execution.step_store.persist_execution_steps_from_results",
+                AsyncMock(),
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution_steps.list_execution_steps",
+                AsyncMock(return_value=[]),
+            ))
+            stack.enter_context(patch(
+                "services.campaign.dlq_service.open_dlq_for_failed_execution",
+                open_dlq_mock,
+            ))
+            stack.enter_context(patch(
+                "services.webhook_dispatcher.dispatch_webhook",
+                AsyncMock(),
+            ))
+            stack.enter_context(patch(
+                "temporal.activities._temporal_config", None
+            ))
+
+            await acts.finalize_campaign(inp)
+
+        kwargs = upsert_mock.call_args.kwargs
+        assert kwargs["status"] == "failed"
+        cancel_execution_record_mock.assert_awaited_once_with(
+            db_mock,
+            "exec-cancelled",
+            reason="Workflow error: Child Workflow execution cancelled",
+        )
+        open_dlq_mock.assert_not_awaited()
+        update_execution_mock.assert_not_awaited()
+
+    def test_failed_finalize_uses_persisted_step_results_when_workflow_has_none(self):
+        from temporal.activities import (
+            _finalize_error_message,
+            _finalize_is_cancelled,
+            _finalize_step_results,
+        )
+
+        persisted = [
+            {"index": 0, "type": "tap_selector", "ok": False, "message": "recovery failed"}
+        ]
+
+        step_results = _finalize_step_results(
+            success=False,
+            step_results=[],
+            persisted_step_results=persisted,
+        )
+        error_msg = _finalize_error_message(
+            failed_steps=step_results,
+            workflow_failed_message="Workflow error: Child Workflow execution failed",
+        )
+
+        assert step_results == persisted
+        assert error_msg == "recovery failed"
+        assert _finalize_is_cancelled(
+            failed_steps=[],
+            workflow_failed_message="Workflow error: Child Workflow execution cancelled",
+        )
+        assert _finalize_is_cancelled(
+            failed_steps=[
+                {
+                    "index": 0,
+                    "type": "tap",
+                    "ok": False,
+                    "message": "tap: cancelled by user",
+                }
+            ],
+            workflow_failed_message=None,
+        )
+        assert not _finalize_is_cancelled(
+            failed_steps=[],
+            workflow_failed_message="Workflow error: Child Workflow execution failed",
+        )
 
     @pytest.mark.asyncio
     async def test_no_execution_result_when_execution_id_absent(self):
@@ -557,6 +688,10 @@ class TestFinalizeCampaignExecutionResult:
             ))
             stack.enter_context(patch(
                 "db.crud.execution.upsert_execution_result", upsert_mock
+            ))
+            stack.enter_context(patch(
+                "services.webhook_dispatcher.dispatch_webhook",
+                AsyncMock(),
             ))
             stack.enter_context(patch(
                 "temporal.activities._temporal_config", None

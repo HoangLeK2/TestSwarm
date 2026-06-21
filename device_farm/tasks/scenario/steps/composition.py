@@ -58,7 +58,14 @@ def handle_run_scenario(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
         sub_scenario.get("steps") or [],
         variables=merged_vars,
         call_stack_add=scenario_ref,
-        extra_scenario_keys={"_scenario_registry": registry},
+        extra_scenario_keys={
+            "_scenario_registry": registry,
+            **(
+                {"recovery_policy": sc.scenario["recovery_policy"]}
+                if "recovery_policy" in sc.scenario
+                else {}
+            ),
+        },
     )
     result["sub_result"] = sub
     if not sub.get("success"):

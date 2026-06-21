@@ -122,19 +122,43 @@ def _clear_active_comment_parent(ctx: Dict[str, Any]) -> None:
         ctx.pop(key, None)
 
 
+def _opened_post_from_ingest_diagnostic(ingest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    diagnostic = ingest.get("diagnostic")
+    if isinstance(diagnostic, dict):
+        opened = diagnostic.get("opened_post")
+        if isinstance(opened, dict):
+            return opened
+    return None
+
+
 def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any]) -> None:
     active_parent = ingest.get("active_parent_post")
     pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
     if not isinstance(active_parent, dict):
         if not pid_map or len(pid_map) != 1:
-            _clear_active_comment_parent(ctx)
-            return
-        pid, parent_hash = next(iter(pid_map.items()))
-        active_parent = {
-            "pid": pid,
-            "parent_id": parent_hash,
-            "source": "post_detail",
-        }
+            opened = _opened_post_from_ingest_diagnostic(ingest)
+            if isinstance(opened, dict):
+                active_parent = {
+                    "pid": opened.get("pid"),
+                    "parent_id": opened.get("parent_id") or opened.get("content_hash"),
+                    "post_key": opened.get("post_key"),
+                    "stable_post_id": opened.get("stable_post_id"),
+                    "fb_post_id": opened.get("fb_post_id"),
+                    "author": opened.get("author"),
+                    "timestamp": opened.get("timestamp"),
+                    "text_prefix": opened.get("text_prefix") or opened.get("text"),
+                    "source": "post_detail",
+                }
+            else:
+                _clear_active_comment_parent(ctx)
+                return
+        else:
+            pid, parent_hash = next(iter(pid_map.items()))
+            active_parent = {
+                "pid": pid,
+                "parent_id": parent_hash,
+                "source": "post_detail",
+            }
 
     parent_id = (
         active_parent.get("parent_id")
@@ -172,6 +196,78 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+_BALANCED_FB_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
+    "max_items",
+    "comment_scroll_passes",
+    "comment_swipes_per_dump",
+    "comment_scroll_distance",
+    "comment_scroll_duration_ms",
+    "comment_scroll_pause_s",
+    "comment_scroll_settle_s",
+    "comment_scroll_wall_s",
+    "comment_recover_chrome",
+    "comment_no_growth_break",
+    "min_comment_scan_passes",
+    "comment_max_snapshots",
+    "comment_stop_if_no_new",
+    "stop_if_no_new",
+    "no_new_threshold",
+    "hierarchy_compressed",
+    "hierarchy_dump_timeout_s",
+)
+
+
+_LEGACY_BALANCED_COMMENT_FINGERPRINTS: tuple[tuple[tuple[str, Any], ...], ...] = (
+    (("max_items", 500), ("comment_scroll_passes", 40), ("comment_swipes_per_dump", 6)),
+    (("max_items", 400), ("comment_scroll_passes", 40), ("comment_swipes_per_dump", 6)),
+    (("comment_scroll_passes", 16), ("comment_swipes_per_dump", 4)),
+    (("comment_swipes_per_dump", 4), ("comment_scroll_duration_ms", 120)),
+    (("comment_swipes_per_dump", 4), ("comment_scroll_pause_s", 0.03)),
+)
+
+
+def _looks_like_legacy_balanced_comment_crawl(context: Dict[str, Any]) -> bool:
+    for fingerprint in _LEGACY_BALANCED_COMMENT_FINGERPRINTS:
+        if all(context.get(key) == value for key, value in fingerprint):
+            return True
+    return False
+
+
+def _apply_balanced_comment_runtime_overrides(
+    *,
+    step: Dict[str, Any],
+    context: Dict[str, Any],
+    profile_defaults: Dict[str, Any],
+) -> None:
+    """Refresh stored crawl presets to the latest balanced profile at runtime."""
+    if not profile_defaults:
+        return
+    profile = str(step.get("extract_profile") or step.get("profile") or "balanced").strip()
+    if profile and profile != "balanced":
+        return
+    if _coerce_bool(step.get("lock_comment_crawl_profile"), default=False):
+        return
+    if not _looks_like_legacy_balanced_comment_crawl(context):
+        return
+    for key in _BALANCED_FB_COMMENT_RUNTIME_KEYS:
+        if key in profile_defaults:
+            context[key] = profile_defaults[key]
+
+
+def _normalize_legacy_balanced_comment_budget(
+    *,
+    step: Dict[str, Any],
+    context: Dict[str, Any],
+    profile_defaults: Dict[str, Any],
+) -> None:
+    """Back-compat alias — always refresh balanced crawl tuning unless locked."""
+    _apply_balanced_comment_runtime_overrides(
+        step=step,
+        context=context,
+        profile_defaults=profile_defaults,
+    )
 
 
 def _relay_extra_data_available(device: Any) -> bool:
@@ -584,7 +680,10 @@ def request_edge_extra_data(
         "comment_scroll_distance",
         "comment_scroll_duration_ms",
         "comment_scroll_pause_s",
+        "comment_scroll_settle_s",
+        "comment_scroll_wall_s",
         "comment_no_growth_break",
+        "stop_if_no_new",
         "comment_stop_if_no_new",
         "comment_no_new_threshold",
         "no_new_threshold",
@@ -610,12 +709,18 @@ def request_edge_extra_data(
         "open_post_tap_settle_s",
         "open_post_max_attempts",
         "open_post_verify",
+        "require_open_post_detail",
         "require_verified_parent",
         "allow_a11y_xml_fallback",
     ):
         if key in step:
             context[key] = step[key]
     if strategy in COMMENT_STRATEGIES:
+        _normalize_legacy_balanced_comment_budget(
+            step=step,
+            context=context,
+            profile_defaults=comment_defaults,
+        )
         context["expand_see_more"] = False
     elif "expand_see_more" in step:
         context["expand_see_more"] = step["expand_see_more"]
@@ -638,19 +743,28 @@ def request_edge_extra_data(
         strategy == "fb_comments"
         and _coerce_bool(step.get("comment_filter_on_extract"), default=True)
     ):
-        target_filter = resolve_step_comment_filter(step)
-        if target_filter and ctx.get("_fb_comment_filter_applied") != target_filter:
+        filter_step = comment_filter_effective_step(step, ctx)
+        target_filter = resolve_step_comment_filter(filter_step, ctx)
+        if target_filter:
             filter_report = run_edge_comment_filter_switch(
                 device=device,
                 serial=serial,
                 scenario=scenario,
-                step=step,
+                step=filter_step,
                 result=result,
                 cancel_event=cancel_event,
             )
+            result["comment_filter_on_extract"] = filter_report
             reason = str(filter_report.get("reason_code") or "")
             if filter_report.get("switched") or reason in _COMMENT_FILTER_APPLIED_REASONS:
                 ctx["_fb_comment_filter_applied"] = target_filter
+            elif reason not in {"", "disabled", "no_relay", "cancelled", "request_failed", "ingest_failed"}:
+                log.info(
+                    "[%s] fb_comments extract filter apply reason=%s switched=%s",
+                    serial,
+                    reason,
+                    filter_report.get("switched"),
+                )
             if cancel_event is not None and cancel_event.is_set():
                 result["ok"] = False
                 result["message"] = f"edge extra_data {strategy}: cancelled"
@@ -676,7 +790,12 @@ def request_edge_extra_data(
             return True
         log.warning("[%s] edge extra_data failed: %s", serial, summary.get("error") or summary)
         result["ok"] = False
-        result["message"] = f"edge extra_data failed: {summary.get('error') or 'unknown'}"
+        from services.campaign.dlq_message import summarize_edge_extra_error
+
+        result["message"] = (
+            f"edge extra_data failed: "
+            f"{summarize_edge_extra_error(summary.get('error') or 'unknown')}"
+        )
         result["edge_extra_summary"] = summary
         return True
     ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
@@ -716,6 +835,18 @@ def request_edge_extra_data(
             if isinstance(merged, dict):
                 merged.update(pid_map)
         _remember_active_comment_parent(ctx, ingest)
+        if (
+            _coerce_bool(step.get("open_post_before_extract"), False)
+            and _coerce_bool(step.get("require_open_post_detail", True), True)
+            and not ctx.get("_active_comment_anchor_verified")
+        ):
+            result["ok"] = False
+            result["message"] = (
+                "edge extra_data fb_posts: post detail not opened — "
+                "cannot safely enter comment pass"
+            )
+            result["edge_extra_summary"] = edge_extra_summary
+            return True
     items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
     if items:
         _store_returned_items(ctx, strategy, step, items)
@@ -733,11 +864,57 @@ _COMMENT_FILTER_APPLIED_REASONS = frozenset({
     "already_on_filter",
     "already_all_comments",
     "ok",
-    "filter_not_verified",
 })
 
 
-def resolve_step_comment_filter(step: Dict[str, Any]) -> Optional[str]:
+def stage_comment_filter_for_post(ctx: Dict[str, Any], step: Dict[str, Any]) -> Optional[str]:
+    """Reset per-post filter state and remember the tap step's filter target."""
+    ctx.pop("_fb_comment_filter_applied", None)
+    target = resolve_step_comment_filter(step)
+    if target:
+        ctx["_fb_comment_filter_target"] = target
+        ctx["_fb_comment_filter_switch_to_all"] = bool(step.get("switch_to_all_comments", True))
+    else:
+        ctx.pop("_fb_comment_filter_target", None)
+        ctx.pop("_fb_comment_filter_switch_to_all", None)
+    for key in (
+        "comment_filter_settle_s",
+        "comment_filter_step_pause_s",
+        "comment_filter_post_select_s",
+    ):
+        ctx_key = f"_fb_{key}"
+        if key in step:
+            ctx[ctx_key] = step[key]
+        else:
+            ctx.pop(ctx_key, None)
+    return target
+
+
+def comment_filter_effective_step(step: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge tap-step filter config stored in ctx into nested extract steps."""
+    merged = dict(step)
+    if merged.get("comment_filter") is None and ctx.get("_fb_comment_filter_target"):
+        merged["comment_filter"] = ctx["_fb_comment_filter_target"]
+    if (
+        merged.get("switch_to_all_comments") is None
+        and ctx.get("_fb_comment_filter_switch_to_all") is not None
+    ):
+        merged["switch_to_all_comments"] = ctx["_fb_comment_filter_switch_to_all"]
+    for key in (
+        "comment_filter_settle_s",
+        "comment_filter_step_pause_s",
+        "comment_filter_post_select_s",
+    ):
+        ctx_key = f"_fb_{key}"
+        if key not in merged and ctx_key in ctx:
+            merged[key] = ctx[ctx_key]
+    return merged
+
+
+def resolve_step_comment_filter(
+    step: Dict[str, Any],
+    ctx: Dict[str, Any] | None = None,
+) -> Optional[str]:
     """Target FB comment sort: most_relevant | newest | all_comments, or None to skip."""
     raw = step.get("comment_filter")
     if raw is not None and str(raw).strip():
@@ -748,6 +925,10 @@ def resolve_step_comment_filter(step: Dict[str, Any]) -> Optional[str]:
             return mode
     if step.get("switch_to_all_comments") is False:
         return None
+    if ctx:
+        inherited = ctx.get("_fb_comment_filter_target")
+        if inherited in _COMMENT_FILTER_MODES:
+            return str(inherited)
     return "all_comments"
 
 
@@ -800,6 +981,19 @@ def request_edge_comment_target(
     ):
         if ctx_key in step:
             context[ctx_key] = step[ctx_key]
+    anchor = ctx.get("_active_comment_parent_anchor")
+    if isinstance(anchor, dict) and anchor:
+        context["_active_comment_parent_anchor"] = anchor
+    parent_source = ctx.get("_active_comment_parent_source")
+    if parent_source:
+        context["parent_context_source"] = parent_source
+    parent_hash = ctx.get("_active_comment_parent_hash")
+    if parent_hash:
+        context["parent_id"] = parent_hash
+        context["parent_id_already_scoped"] = True
+    parent_pid = ctx.get("_fb_comment_parent_pid")
+    if parent_pid:
+        context["parent_post_id"] = parent_pid
     timeout = float(
         step.get("edge_extra_timeout_s")
         or os.environ.get("EDGE_COMMENT_TARGET_TIMEOUT_S", "12")

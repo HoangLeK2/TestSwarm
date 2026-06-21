@@ -1,6 +1,7 @@
 """Temporal activity path + DSL materialization for DF-T-04-011 retry."""
 from __future__ import annotations
 
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,6 +73,226 @@ def test_step_runner_retries_until_success():
     assert result["ok"] is True
     assert attempts == 3
     assert len(result.get("retry_attempts") or []) == 3
+
+
+def test_step_runner_recovery_playbook_retries_same_main_step():
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.trace_id = "t1"
+    sc.ctx = {}
+    sc.device = MagicMock()
+    sc.scenario = {
+        "recovery_policy": {
+            "enabled": True,
+            "rules": [
+                {
+                    "scope": {},
+                    "scenario_id": "recovery-1",
+                    "outcome": "retry_step",
+                    "max_attempts": 1,
+                }
+            ],
+        },
+        "_scenario_registry": {
+            "by_id": {
+                "recovery-1": {
+                    "steps": [{"type": "tap_selector", "selector": "dismiss"}],
+                    "variables": {},
+                }
+            }
+        },
+    }
+    calls = {"dispatch": 0}
+
+    def fake_dispatch(_sc, _step, _idx):
+        calls["dispatch"] += 1
+        if calls["dispatch"] == 1:
+            return {"ok": False, "reason_code": "blocked", "message": "popup"}
+        return {"ok": True, "message": "ok"}
+
+    step = {"type": "fb_comment", "strategy": "fb_comments"}
+
+    with patch("services.execution.step_runner.dispatch_step", side_effect=fake_dispatch), patch(
+        "tasks.scenario.executor.run_nested_scenario",
+        return_value={"success": True, "steps_executed": 1},
+    ) as run_nested, patch("services.execution.step_runner.capture_pre_step"), patch(
+        "services.execution.step_runner.capture_post_step"
+    ), patch("services.execution.step_runner.capture_fail_step") as fail_cap:
+        result, attempts = execute_step_with_retry(sc, step, 0)
+
+    assert calls["dispatch"] == 2
+    assert run_nested.call_count == 1
+    assert attempts == 2
+    assert result["ok"] is True
+    assert fail_cap.call_count == 0
+    assert [event["event_type"] for event in result["recovery_events"]] == [
+        "incident.detected",
+        "incident.recovery.started",
+        "incident.recovery.completed",
+        "incident.resolved",
+    ]
+
+
+def test_step_runner_reuses_incident_key_for_recovery_retry_failure():
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.trace_id = "t1"
+    sc.ctx = {}
+    sc.device = MagicMock()
+    sc.call_stack = set()
+    sc.scenario = {
+        "recovery_policy": {
+            "enabled": True,
+            "rules": [
+                {
+                    "scope": {},
+                    "scenario_id": "recovery-1",
+                    "outcome": "retry_step",
+                    "max_attempts": 1,
+                }
+            ],
+        },
+        "_scenario_registry": {
+            "by_id": {
+                "recovery-1": {
+                    "steps": [{"type": "tap_selector", "selector": "dismiss"}],
+                    "variables": {},
+                }
+            }
+        },
+    }
+
+    def fake_dispatch(_sc, _step, _idx):
+        return {"ok": False, "reason_code": "blocked", "message": "popup"}
+
+    step = {"type": "fb_comment", "strategy": "fb_comments"}
+
+    with patch("services.execution.step_runner.dispatch_step", side_effect=fake_dispatch), patch(
+        "tasks.scenario.executor.run_nested_scenario",
+        return_value={"success": True, "steps_executed": 1},
+    ) as run_nested, patch("services.execution.step_runner.capture_pre_step"), patch(
+        "services.execution.step_runner.capture_post_step"
+    ), patch("services.execution.step_runner.capture_fail_step"):
+        result, attempts = execute_step_with_retry(sc, step, 0)
+
+    assert run_nested.call_count == 1
+    assert attempts == 2
+    assert result["ok"] is False
+    assert sc.ctx["_recovery_state"]["total_attempts"] == 1
+    assert len(sc.ctx["_recovery_state"]["by_incident"]) == 1
+
+
+def test_step_runner_marks_cancelled_when_cancel_happens_during_recovery():
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.trace_id = "t1"
+    sc.ctx = {}
+    sc.device = MagicMock()
+    sc.cancel_event = threading.Event()
+    sc.call_stack = set()
+    sc.scenario = {
+        "recovery_policy": {
+            "enabled": True,
+            "rules": [
+                {
+                    "scope": {},
+                    "scenario_id": "recovery-1",
+                    "outcome": "retry_step",
+                    "max_attempts": 1,
+                }
+            ],
+        },
+        "_scenario_registry": {
+            "by_id": {
+                "recovery-1": {
+                    "steps": [{"type": "tap_selector", "selector": "dismiss"}],
+                    "variables": {},
+                }
+            }
+        },
+    }
+
+    def run_nested(_sc, _steps, **_kwargs):
+        _sc.cancel_event.set()
+        return {"success": False, "steps_executed": 1, "failed_message": "cancelled"}
+
+    with patch(
+        "services.execution.step_runner.dispatch_step",
+        return_value={"ok": False, "reason_code": "blocked", "message": "popup"},
+    ) as dispatch, patch(
+        "tasks.scenario.executor.run_nested_scenario",
+        side_effect=run_nested,
+    ) as run_nested_mock, patch("services.execution.step_runner.capture_pre_step"), patch(
+        "services.execution.step_runner.capture_post_step"
+    ), patch("services.execution.step_runner.capture_fail_step"):
+        result, attempts = execute_step_with_retry(
+            sc,
+            {"type": "fb_comment", "strategy": "fb_comments"},
+            0,
+        )
+
+    assert dispatch.call_count == 1
+    assert run_nested_mock.call_count == 1
+    assert attempts == 1
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["message"] == "fb_comment: cancelled by user"
+
+
+def test_step_runner_recovery_timeout_marks_stuck_and_retries_same_step():
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.trace_id = "t1"
+    sc.ctx = {}
+    sc.device = MagicMock()
+    sc.cancel_event = threading.Event()
+    sc.scenario = {
+        "recovery_policy": {
+            "enabled": True,
+            "rules": [
+                {
+                    "scenario_id": "recovery-1",
+                    "outcome": "retry_step",
+                    "max_attempts": 1,
+                    "timeout_ms": 5,
+                }
+            ],
+        },
+        "_scenario_registry": {
+            "by_id": {
+                "recovery-1": {
+                    "steps": [{"type": "tap_selector", "selector": "dismiss"}],
+                    "variables": {},
+                }
+            }
+        },
+    }
+    calls = {"dispatch": 0, "deadline_seen": False}
+
+    def fake_dispatch(_sc, _step, _idx):
+        calls["dispatch"] += 1
+        if calls["dispatch"] == 1:
+            calls["deadline_seen"] = bool(_sc.cancel_event.wait(1.0))
+            return {"ok": True, "message": "handler noticed deadline"}
+        return {"ok": True, "message": "ok"}
+
+    step = {"type": "fb_comment", "strategy": "fb_comments"}
+
+    with patch("services.execution.step_runner.dispatch_step", side_effect=fake_dispatch), patch(
+        "tasks.scenario.executor.run_nested_scenario",
+        return_value={"success": True, "steps_executed": 1},
+    ) as run_nested, patch("services.execution.step_runner.capture_pre_step"), patch(
+        "services.execution.step_runner.capture_post_step"
+    ), patch("services.execution.step_runner.capture_fail_step") as fail_cap:
+        result, attempts = execute_step_with_retry(sc, step, 0)
+
+    assert calls["deadline_seen"] is True
+    assert calls["dispatch"] == 2
+    assert run_nested.call_count == 1
+    assert attempts == 2
+    assert result["ok"] is True
+    assert fail_cap.call_count == 0
+    assert result["recovery_events"][0]["payload"]["reason_code"] == "recovery_playbook"
 
 
 class _CancelOnWait:

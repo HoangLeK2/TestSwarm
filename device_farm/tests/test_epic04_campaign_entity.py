@@ -216,6 +216,149 @@ async def test_create_campaign_requires_scenario_refs(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_org_scenario_device_variables_are_scoped_per_campaign_scenario(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        s1 = await _create_org_scenario(
+            client,
+            name="ScopedS1",
+            steps=[_sequence_step("w1", "input_wait.wait", seconds=1)],
+        )
+        s2 = await _create_org_scenario(
+            client,
+            name="ScopedS2",
+            steps=[_sequence_step("w2", "input_wait.wait", seconds=1)],
+        )
+        created = await client.post(
+            "/api/campaigns",
+            json={
+                "name": "ScopedDeviceVars",
+                "scenario_refs": [{"scenario_id": s1}, {"scenario_id": s2}],
+            },
+        )
+        campaign_id = created.json()["id"]
+
+        from db.models.device import Device
+
+        async with session_factory() as db:
+            db.add(Device(id="dev-scoped-1", serial="SCOPED1", org_id=ORG_A, user_id=USER_OWNER))
+            await db.commit()
+
+        put_s1 = await client.put(
+            f"/api/campaigns/{campaign_id}/scenarios/{s1}/devices/dev-scoped-1/variables",
+            json={"vars": {"kw": "only-s1"}},
+        )
+        put_s2 = await client.put(
+            f"/api/campaigns/{campaign_id}/scenarios/{s2}/devices/dev-scoped-1/variables",
+            json={"vars": {"kw": "only-s2"}},
+        )
+        got_s1 = await client.get(
+            f"/api/campaigns/{campaign_id}/scenarios/{s1}/devices/dev-scoped-1/variables"
+        )
+        got_s2 = await client.get(
+            f"/api/campaigns/{campaign_id}/scenarios/{s2}/devices/dev-scoped-1/variables"
+        )
+        campaign = await client.get(f"/api/campaigns/{campaign_id}")
+
+    assert put_s1.status_code == 200
+    assert put_s2.status_code == 200
+    assert got_s1.json()["vars"] == {"kw": "only-s1"}
+    assert got_s2.json()["vars"] == {"kw": "only-s2"}
+    assert campaign.json()["per_device_overrides"] == {}
+
+
+@pytest.mark.asyncio
+async def test_campaign_scenario_endpoints_resolve_org_library_refs(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        main = await _create_org_scenario(
+            client,
+            name="MainFlow",
+            steps=[_sequence_step("w1", "input_wait.wait", seconds=1)],
+        )
+        helper = await _create_org_scenario(
+            client,
+            name="HelperFlow",
+            steps=[_sequence_step("w2", "input_wait.wait", seconds=1)],
+        )
+        created = await client.post(
+            "/api/campaigns",
+            json={
+                "name": "SubScenarioRefs",
+                "scenario_refs": [{"scenario_id": main}, {"scenario_id": helper}],
+            },
+        )
+        campaign_id = created.json()["id"]
+
+        listed = await client.get(f"/api/campaigns/{campaign_id}/scenarios")
+        got_main = await client.get(f"/api/campaigns/{campaign_id}/scenarios/{main}")
+        got_helper = await client.get(f"/api/campaigns/{campaign_id}/scenarios/{helper}")
+
+    assert listed.status_code == 200
+    assert {row["id"] for row in listed.json()} == {main, helper}
+    assert got_main.status_code == 200
+    assert got_helper.status_code == 200
+    assert len(got_main.json()["steps"]) == 1
+    assert len(got_helper.json()["steps"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_scenario_device_variables_without_scenario_ref(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        main = await _create_org_scenario(
+            client,
+            name="MainRun",
+            steps=[_sequence_step("w1", "input_wait.wait", seconds=1)],
+        )
+        recovery = await _create_org_scenario(
+            client,
+            name="RecoveryFlow",
+            steps=[_sequence_step("w2", "input_wait.wait", seconds=1)],
+        )
+        created = await client.post(
+            "/api/campaigns",
+            json={
+                "name": "RecoveryDeviceVars",
+                "scenario_refs": [{"scenario_id": main}],
+                "recovery_policy": {
+                    "enabled": True,
+                    "rules": [{"scenario_id": recovery, "scope": {}}],
+                },
+            },
+        )
+        campaign_id = created.json()["id"]
+
+        from db.models.device import Device
+
+        async with session_factory() as db:
+            db.add(Device(id="dev-recovery-1", serial="RECOV1", org_id=ORG_A, user_id=USER_OWNER))
+            await db.commit()
+
+        got = await client.get(
+            f"/api/campaigns/{campaign_id}/scenarios/{recovery}/devices/dev-recovery-1/variables"
+        )
+        put = await client.put(
+            f"/api/campaigns/{campaign_id}/scenarios/{recovery}/devices/dev-recovery-1/variables",
+            json={"vars": {"retry_kw": "device-a"}},
+        )
+        detail = await client.get(f"/api/campaigns/{campaign_id}/scenarios/{recovery}")
+
+    assert got.status_code == 200
+    assert got.json()["vars"] == {}
+    assert put.status_code == 200
+    assert put.json()["vars"] == {"retry_kw": "device-a"}
+    assert detail.status_code == 200
+    assert detail.json()["id"] == recovery
+
+
+@pytest.mark.asyncio
 async def test_duplicate_name_case_insensitive(session_factory):
     await _seed_orgs(session_factory)
     app = _build_app(session_factory)

@@ -283,6 +283,8 @@ def run_nested_scenario(
         "run_id",
         "name",
         "scenario_name",
+        "recovery_policy",
+        "_scenario_registry",
     ):
         if key not in child_scenario and key in sc.scenario:
             child_scenario[key] = sc.scenario[key]

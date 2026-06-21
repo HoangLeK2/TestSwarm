@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.crud.router import api_router
@@ -45,6 +45,51 @@ async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS casbin_rule (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ptype VARCHAR(32) NOT NULL,
+                v0 VARCHAR(255),
+                v1 VARCHAR(255),
+                v2 VARCHAR(255),
+                v3 VARCHAR(255),
+                v4 VARCHAR(255),
+                v5 VARCHAR(255)
+            )
+            """
+        ))
+        await conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS casbin_policy_revision (
+                id SMALLINT PRIMARY KEY,
+                revision BIGINT NOT NULL DEFAULT 1
+            )
+            """
+        ))
+        await conn.execute(
+            text("INSERT INTO casbin_policy_revision (id, revision) VALUES (1, 1)")
+        )
+        from api.auth.rbac import _load_seed_policy_rows
+
+        for row in _load_seed_policy_rows():
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
+                    VALUES (:ptype, :v0, :v1, :v2, :v3, :v4, :v5)
+                    """
+                ),
+                {
+                    "ptype": row[0],
+                    "v0": row[1],
+                    "v1": row[2],
+                    "v2": row[3],
+                    "v3": row[4],
+                    "v4": row[5],
+                    "v5": row[6],
+                },
+            )
     yield eng
     await eng.dispose()
 
@@ -238,6 +283,77 @@ async def test_soft_delete_and_include_archived(session_factory):
         got = await client.get(f"/api/scenarios/{scenario_id}")
         assert got.status_code == 200
         assert got.json()["status"] == "archived"
+
+
+@pytest.mark.asyncio
+async def test_list_scenarios_marks_recovery_usage_from_backend(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        main = await client.post(
+            "/api/scenarios",
+            json={"name": "Main", "kind": "sequence"},
+        )
+        recovery = await client.post(
+            "/api/scenarios",
+            json={"name": "Recovery", "kind": "sequence"},
+        )
+        assert main.status_code == 201
+        assert recovery.status_code == 201
+        main_id = main.json()["id"]
+        recovery_id = recovery.json()["id"]
+
+    async with session_factory() as db:
+        await create_campaign(
+            db,
+            "CampWithRecovery",
+            USER_OWNER,
+            org_id=ORG_A,
+            recovery_policy={
+                "enabled": True,
+                "rules": [
+                    {"id": "r1", "scenario_id": recovery_id},
+                    {"id": "r2", "scenario_id": recovery_id},
+                ],
+            },
+        )
+        await create_campaign(
+            db,
+            "DisabledRecovery",
+            USER_OWNER,
+            org_id=ORG_A,
+            recovery_policy={
+                "enabled": False,
+                "rules": [{"id": "r1", "scenario_id": recovery_id}],
+            },
+        )
+        await create_campaign(
+            db,
+            "OtherOrgRecovery",
+            USER_OTHER,
+            org_id=ORG_B,
+            recovery_policy={
+                "enabled": True,
+                "rules": [{"id": "r1", "scenario_id": recovery_id}],
+            },
+        )
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        listed = await client.get("/api/scenarios")
+    assert listed.status_code == 200
+    by_id = {item["id"]: item for item in listed.json()}
+    assert by_id[main_id]["is_recovery_scenario"] is False
+    assert by_id[main_id]["recovery_usage_count"] == 0
+    assert by_id[recovery_id]["is_recovery_scenario"] is True
+    assert by_id[recovery_id]["recovery_usage_count"] == 1
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        detail = await client.get(f"/api/scenarios/{recovery_id}")
+    assert detail.status_code == 200
+    assert detail.json()["is_recovery_scenario"] is True
+    assert detail.json()["recovery_usage_count"] == 1
 
 
 @pytest.mark.asyncio

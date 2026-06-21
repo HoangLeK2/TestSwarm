@@ -250,6 +250,13 @@ def _retry_find_element(
                     if eid is not None:
                         return eid
                 return None
+            if hasattr(u2, "find_element_with_bounds_spec"):
+                try:
+                    result = u2.find_element_with_bounds_spec(spec, timeout=probe_timeout)
+                    if result:
+                        return result
+                except Exception:
+                    pass
             if hasattr(u2, "find_element_spec"):
                 eid = u2.find_element_spec(spec, timeout=probe_timeout)
             else:
@@ -257,13 +264,6 @@ def _retry_find_element(
                 eid = u2.find_element(pby, pval, timeout=probe_timeout)
             if eid is None:
                 return None
-            if hasattr(u2, "find_element_with_bounds_spec"):
-                try:
-                    result = u2.find_element_with_bounds_spec(spec)
-                    if result:
-                        return result
-                except Exception:
-                    pass
             elif hasattr(u2, "find_element_with_bounds"):
                 pby, pval = spec.primary_by_value()
                 try:

@@ -196,6 +196,7 @@ async def test_step_retried_events(session_factory):
                 campaign_id="camp-1",
                 step={"type": "tap", "id": "s1"},
                 step_index=0,
+                depth=2,
             )
             await emit_step_finished(
                 db,
@@ -204,6 +205,7 @@ async def test_step_retried_events(session_factory):
                 campaign_id="camp-1",
                 step={"type": "tap", "id": "s1"},
                 step_index=0,
+                depth=2,
                 step_result={
                     "ok": True,
                     "retry_attempts": [
@@ -220,6 +222,10 @@ async def test_step_retried_events(session_factory):
         rows = await list_execution_events(db, exec_id)
     types = [r.event_type for r in rows]
     assert types == [STEP_STARTED, STEP_RETRIED, STEP_COMPLETED]
+    assert rows[0].step_id == "s1"
+    assert rows[0].payload["step_id"] == "s1"
+    assert rows[0].payload["depth"] == 2
+    assert rows[2].payload["depth"] == 2
 
 
 @pytest.mark.asyncio

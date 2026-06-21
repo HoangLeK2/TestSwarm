@@ -111,3 +111,20 @@ def test_retry_find_element_uses_cancelable_wait():
     assert found is None
     assert cancel_event.is_set() is True
     assert u2.find_element.call_count == 1
+
+
+def test_retry_find_element_prefers_single_bounds_probe():
+    from tasks.scenario.utils import _retry_find_element
+
+    u2 = MagicMock()
+    u2.find_element_with_bounds_spec.return_value = {
+        "eid": "text::OK",
+        "bounds": {"left": 1, "top": 2, "right": 3, "bottom": 4},
+    }
+
+    found = _retry_find_element(u2, "text", "OK", timeout=3.0, poll=0.25)
+
+    assert found == u2.find_element_with_bounds_spec.return_value
+    u2.find_element_with_bounds_spec.assert_called_once()
+    assert u2.find_element_with_bounds_spec.call_args.kwargs["timeout"] == 0.25
+    u2.find_element_spec.assert_not_called()

@@ -39,6 +39,8 @@ from temporal.shared import (
 from temporal.workflows import (
     ScenarioStepsWorkflow,
     ScenarioWorkflow,
+    _append_sub_result,
+    _finish_sub_results,
     _handle_set_variable,
     _lookup_var,
     _resolve_step,
@@ -46,6 +48,22 @@ from temporal.workflows import (
 
 
 # ── Variable resolution tests ────────────────────────────────────────────────
+
+
+def test_sub_result_retention_caps_large_loop_payloads():
+    sub_results: list[dict[str, Any]] = []
+    state: dict[str, Any] = {}
+
+    for i in range(75):
+        _append_sub_result(sub_results, state, {"iteration": i, "success": True})
+    _finish_sub_results(sub_results, state)
+
+    assert len(sub_results) == 51
+    assert sub_results[0] == {"iteration": 0, "success": True}
+    assert sub_results[49] == {"iteration": 49, "success": True}
+    assert sub_results[-1]["truncated"] is True
+    assert sub_results[-1]["omitted"] == 25
+    assert sub_results[-1]["last"] == {"iteration": 74, "success": True}
 
 
 class TestResolveStep:

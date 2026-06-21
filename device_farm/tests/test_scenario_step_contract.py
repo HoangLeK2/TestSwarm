@@ -4,8 +4,23 @@ from api.schemas.scenario import ScenarioModel
 from services.scenario_step_contract import (
     extract_data_var_for_strategy,
     normalize_extract_step,
+    normalize_fb_tap_comment_step,
     normalize_save_extraction_step,
 )
+
+
+def test_normalize_fb_tap_comment_step_applies_crawl_defaults() -> None:
+    step = normalize_fb_tap_comment_step(
+        {
+            "type": "fb_tap_comment_button",
+            "pre_scroll": True,
+            "then": [{"type": "extract", "strategy": "fb_comments"}],
+        }
+    )
+    assert step["comment_filter"] == "all_comments"
+    assert step["require_post_before_comment"] is True
+    assert step["comment_filter_settle_s"] == 0.45
+    assert step["then"][0]["comment_scroll_passes"] == 16
 
 
 def test_normalize_extract_step_applies_profile_defaults_and_version() -> None:
@@ -18,9 +33,13 @@ def test_normalize_extract_step_applies_profile_defaults_and_version() -> None:
     )
     assert step["extract_profile"] == "balanced"
     assert step["strategy_version"] == "fb_comments:v1"
-    assert step["max_items"] >= 200
-    assert step["comment_scroll_passes"] == 40
+    assert step["max_items"] <= 220
+    assert step["comment_scroll_passes"] == 16
     assert step["comment_swipes_per_dump"] == 6
+    assert step["comment_scroll_wall_s"] == 16
+    assert step["comment_scroll_pause_s"] == 0.0
+    assert step["comment_scroll_settle_s"] == 0.02
+    assert step["comment_stop_if_no_new"] is True
     assert step["comment_no_growth_break"] == 2
     assert step["min_comment_scan_passes"] == 1
 

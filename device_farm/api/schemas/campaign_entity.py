@@ -22,6 +22,7 @@ class CampaignEntityCreate(BaseModel):
     description: str = ""
     vars: dict[str, Any] = Field(default_factory=dict)
     per_device_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    recovery_policy: dict[str, Any] = Field(default_factory=dict)
     account_group_id: Optional[str] = None
     scenario_account_id: Optional[str] = None
     per_device_accounts: dict[str, str] = Field(default_factory=dict)
@@ -33,6 +34,7 @@ class CampaignEntityUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     vars: Optional[dict[str, Any]] = None
+    recovery_policy: Optional[dict[str, Any]] = None
     tags: Optional[list[str]] = None
     scenario_refs: Optional[list[CampaignScenarioRefIn]] = None
     per_device_overrides: Optional[dict[str, dict[str, Any]]] = None
@@ -105,6 +107,7 @@ class CampaignEntityOut(BaseModel):
     status: str
     vars: dict[str, Any] = Field(default_factory=dict)
     per_device_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    recovery_policy: dict[str, Any] = Field(default_factory=dict)
     account_group_id: Optional[str] = None
     scenario_account_id: Optional[str] = None
     per_device_accounts: dict[str, str] = Field(default_factory=dict)

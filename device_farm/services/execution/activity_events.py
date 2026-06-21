@@ -27,17 +27,21 @@ async def emit_step_started(
     campaign_id: str | None,
     step: dict[str, Any],
     step_index: int,
+    depth: int = 0,
 ) -> None:
+    step_id = _step_id(step, step_index)
     await enqueue_execution_event(
         db,
         event_type=STEP_STARTED,
         execution_id=execution_id,
         organization_id=org_id,
         campaign_id=campaign_id,
-        step_id=_step_id(step, step_index),
+        step_id=step_id,
         payload={
             "step_index": step_index,
+            "step_id": step_id,
             "step_type": step.get("type"),
+            "depth": depth,
         },
     )
 
@@ -51,6 +55,7 @@ async def emit_step_finished(
     step: dict[str, Any],
     step_index: int,
     step_result: dict[str, Any],
+    depth: int = 0,
 ) -> None:
     step_id = _step_id(step, step_index)
     retry_attempts = step_result.get("retry_attempts") or []
@@ -64,7 +69,9 @@ async def emit_step_finished(
             step_id=step_id,
             payload={
                 "step_index": step_index,
+                "step_id": step_id,
                 "step_type": step.get("type"),
+                "depth": depth,
                 "attempt": rec.get("attempt"),
                 "reason": rec.get("error_reason"),
                 "wait_ms_before_next": rec.get("wait_ms_before_next"),
@@ -75,7 +82,9 @@ async def emit_step_finished(
     event_type = STEP_COMPLETED if ok else STEP_FAILED
     payload: dict[str, Any] = {
         "step_index": step_index,
+        "step_id": step_id,
         "step_type": step.get("type"),
+        "depth": depth,
         "ok": ok,
         "message": step_result.get("message"),
         "reason_code": step_result.get("reason_code"),
@@ -96,3 +105,26 @@ async def emit_step_finished(
         step_id=step_id,
         payload=payload,
     )
+
+    for rec in step_result.get("recovery_events") or []:
+        if not isinstance(rec, dict):
+            continue
+        incident_type = str(rec.get("event_type") or "").strip()
+        incident_payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+        if not incident_type.startswith("incident."):
+            continue
+        await enqueue_execution_event(
+            db,
+            event_type=incident_type,
+            execution_id=execution_id,
+            organization_id=org_id,
+            campaign_id=campaign_id,
+            step_id=step_id,
+            payload={
+                "step_index": step_index,
+                "step_id": step_id,
+                "step_type": step.get("type"),
+                "depth": depth,
+                **incident_payload,
+            },
+        )

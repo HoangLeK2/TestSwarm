@@ -82,6 +82,7 @@ class CampaignCreate(BaseModel):
     variables: dict = {}
     vars: dict | None = None
     per_device_overrides: dict[str, dict] | None = None
+    recovery_policy: dict[str, Any] = Field(default_factory=dict)
     account_group_id: Optional[str] = None
     scenario_account_id: Optional[str] = None
     per_device_accounts: dict[str, str] = Field(default_factory=dict)

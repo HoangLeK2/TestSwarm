@@ -1,7 +1,7 @@
 """Org-scoped scenario library business rules (DF-T-04-001)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -79,6 +79,8 @@ class OrgScenarioView:
     created_at: str
     updated_at: str
     is_runnable: bool = False
+    is_recovery_scenario: bool = False
+    recovery_usage_count: int = 0
     last_validation_summary: dict[str, Any] | None = None
     last_validated_at: str | None = None
 
@@ -99,6 +101,8 @@ class OrgScenarioView:
         if include_body:
             data["body_json"] = self.body_json
         data["is_runnable"] = self.is_runnable
+        data["is_recovery_scenario"] = self.is_recovery_scenario
+        data["recovery_usage_count"] = self.recovery_usage_count
         if self.last_validation_summary is not None:
             data["last_validation_summary"] = self.last_validation_summary
         if self.last_validated_at is not None:
@@ -148,6 +152,18 @@ def _view_from_row(row: OrgScenario, *, include_body: bool = True) -> OrgScenari
         last_validated_at=(
             row.last_validated_at.isoformat() if getattr(row, "last_validated_at", None) else None
         ),
+    )
+
+
+def _with_recovery_usage(
+    view: OrgScenarioView,
+    usage_counts: dict[str, int],
+) -> OrgScenarioView:
+    count = int(usage_counts.get(view.id, 0))
+    return replace(
+        view,
+        is_recovery_scenario=count > 0,
+        recovery_usage_count=count,
     )
 
 
@@ -243,7 +259,13 @@ async def get_scenario_for_org(
     if row is None:
         raise OrgScenarioNotFoundError()
     _assert_scenario_read_access(row, org_id)
-    return _view_from_row(row)
+    view = _view_from_row(row)
+    if row.org_id == SYSTEM_ORG_ID:
+        return view
+    usage_counts = await repo.list_recovery_scenario_usage_counts(
+        db, row.org_id, scenario_ids={row.id}
+    )
+    return _with_recovery_usage(view, usage_counts)
 
 
 async def list_scenarios_for_org(
@@ -259,7 +281,15 @@ async def list_scenarios_for_org(
         rows = await repo.list_org_scenarios(
             db, org_id, include_archived=include_archived, tag=tag
         )
-        return [_view_from_row(r, include_body=False) for r in rows]
+        if not rows:
+            return []
+        usage_counts = await repo.list_recovery_scenario_usage_counts(
+            db, org_id, scenario_ids={row.id for row in rows}
+        )
+        return [
+            _with_recovery_usage(_view_from_row(r, include_body=False), usage_counts)
+            for r in rows
+        ]
 
 
 async def list_system_template_views(db: AsyncSession) -> list[OrgScenarioView]:

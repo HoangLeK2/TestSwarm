@@ -67,6 +67,33 @@ def _workflow_ids_from_meta(meta: dict | None) -> list[str]:
     return out
 
 
+def _workflow_ids_for_campaign(
+    campaign_id: str | None,
+    workflow_ids: list[str],
+) -> list[str]:
+    if not campaign_id:
+        return workflow_ids
+    prefix = f"campaign:{campaign_id}:"
+    return [
+        workflow_id
+        for workflow_id in workflow_ids
+        if not workflow_id.startswith("campaign:") or workflow_id.startswith(prefix)
+    ]
+
+
+def _workflow_ids_for_execution(
+    execution: Execution,
+    workflow_ids: list[str],
+) -> list[str]:
+    campaign_ids = _workflow_ids_for_campaign(execution.campaign_id, workflow_ids)
+    expected_exec_id = f"exec_{execution.id}"
+    return [
+        workflow_id
+        for workflow_id in campaign_ids
+        if not workflow_id.startswith("exec_") or workflow_id == expected_exec_id
+    ]
+
+
 def _expected_workflow_ids(campaign_id: str, device_serials: list[str]) -> list[str]:
     """Deterministic Temporal workflow IDs (no server scan)."""
     return [
@@ -116,7 +143,10 @@ async def _resolve_workflow_ids_for_execution(
     """Workflow IDs to signal for one execution — meta first, then device-derived IDs."""
     from db.crud.execution import list_execution_devices
 
-    ids = _workflow_ids_from_meta(execution.meta)
+    ids = _workflow_ids_for_execution(
+        execution,
+        _workflow_ids_from_meta(execution.meta),
+    )
     if ids:
         return ids
 
@@ -141,11 +171,16 @@ async def _resolve_workflow_ids_for_campaign(
     """One union of workflow IDs for a campaign fan-out (single Temporal pass)."""
     chunks: list[list[str]] = []
     for ex in executions:
-        chunks.append(_workflow_ids_from_meta(ex.meta))
+        chunks.append(
+            _workflow_ids_for_execution(ex, _workflow_ids_from_meta(ex.meta))
+        )
 
     scan_ids: list[str] = []
     if temporal_client is not None:
-        scan_ids = await _list_campaign_running_workflow_ids(temporal_client, campaign_id)
+        scan_ids = _workflow_ids_for_campaign(
+            campaign_id,
+            await _list_campaign_running_workflow_ids(temporal_client, campaign_id),
+        )
 
     if not any(chunks) and not scan_ids:
         from db.crud.execution import list_execution_devices

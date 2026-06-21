@@ -13,6 +13,76 @@ _DEFAULT_DLQ_MESSAGE = (
     "(inspect execution_steps, worker logs, or Temporal history)"
 )
 
+_DIRECT_U2_TRANSIENT_MARKERS = (
+    "json-rpc http 502",
+    "json-rpc http 503",
+    "json-rpc http 504",
+    "502 bad gateway",
+    "504 gateway",
+)
+
+_U2_TRANSIENT_MARKERS = (
+    *_DIRECT_U2_TRANSIENT_MARKERS,
+    "uiautomator",
+    "uiautomation",
+    "already registered",
+    "uiautomation not connected",
+    "illegalstateexception",
+)
+
+
+def summarize_edge_extra_error(error: object) -> str:
+    """Collapse noisy UiAutomator stack traces into a short operator code."""
+    text = str(error or "").strip() or "unknown"
+    lowered = text.lower()
+    if any(marker in lowered for marker in _U2_TRANSIENT_MARKERS):
+        return "u2_transient_error"
+    if len(text) > 240:
+        first = text.splitlines()[0].strip()
+        if len(first) > 240:
+            return first[:240] + "…"
+        return first
+    return text
+
+
+def _is_u2_transient_extra_data_error(text: str) -> bool:
+    lowered = text.lower()
+    if any(marker in lowered for marker in _DIRECT_U2_TRANSIENT_MARKERS):
+        return True
+    if "edge extra_data failed:" not in lowered:
+        return False
+    return "java.lang." in lowered and (
+        "uiautomation" in lowered or "uiautomator" in lowered
+    )
+
+
+def _direct_u2_transient_prefix(text: str) -> str | None:
+    lowered = text.lower()
+    positions = [
+        lowered.find(marker)
+        for marker in _DIRECT_U2_TRANSIENT_MARKERS
+        if marker in lowered
+    ]
+    if not positions:
+        return None
+    idx = min(positions)
+    return text[:idx].rstrip(" —:-")
+
+
+def sanitize_operator_dlq_text(text: str | None) -> str | None:
+    """Hide transient UiAutomator stack traces from operator-facing DLQ text."""
+    if not text:
+        return text
+    msg = str(text).strip()
+    if not msg or not _is_u2_transient_extra_data_error(msg):
+        return msg
+    if "edge extra_data failed:" not in msg:
+        prefix = _direct_u2_transient_prefix(msg)
+        return f"{prefix} — u2_transient_error" if prefix else "u2_transient_error"
+    head, _, _tail = msg.partition("edge extra_data failed:")
+    prefix = f"{head}edge extra_data failed:" if head else "edge extra_data failed:"
+    return f"{prefix} u2_transient_error"
+
 
 def coalesce_dlq_text(*parts: str | None) -> str:
     for part in parts:
@@ -66,7 +136,7 @@ def resolve_dlq_message(
 ) -> str:
     base = coalesce_dlq_text(error, failure_reason, step_message)
     if base != _DEFAULT_DLQ_MESSAGE:
-        return base
+        return sanitize_operator_dlq_text(base) or base
     hints: list[str] = []
     if failed_step_id:
         hints.append(f"failed_step_id={failed_step_id}")

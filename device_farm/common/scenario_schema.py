@@ -380,6 +380,18 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "save_parent_id_var",
             "parent_id_var",
             "item_level",
+            "max_items",
+            "comment_scroll_passes",
+            "comment_swipes_per_dump",
+            "comment_scroll_distance",
+            "comment_scroll_duration_ms",
+            "comment_scroll_pause_s",
+            "comment_scroll_wall_s",
+            "comment_no_growth_break",
+            "min_comment_scan_passes",
+            "comment_max_snapshots",
+            "comment_stop_if_no_new",
+            "comment_no_new_threshold",
         ],
         "description": (
             "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. "
@@ -395,6 +407,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
             "open_post_before_extract (fb_posts): mở màn chi tiết bài trước extract. "
             "open_post_press_back_after_extract: tự Back sau extract; mặc định False — template có bước Back riêng. "
+            "fb_comments supports bounded crawl tuning: max_items, comment_scroll_passes, "
+            "comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. "
             "Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp "
             "vào content DB. "
             "⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động."

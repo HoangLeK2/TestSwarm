@@ -126,6 +126,8 @@ def _summary_out(view) -> OrgScenarioSummaryOut:
         created_at=datetime.fromisoformat(view.created_at),
         updated_at=datetime.fromisoformat(view.updated_at),
         is_runnable=view.is_runnable,
+        is_recovery_scenario=getattr(view, "is_recovery_scenario", False),
+        recovery_usage_count=int(getattr(view, "recovery_usage_count", 0) or 0),
         last_validation_summary=view.last_validation_summary,
         last_validated_at=(
             datetime.fromisoformat(view.last_validated_at)

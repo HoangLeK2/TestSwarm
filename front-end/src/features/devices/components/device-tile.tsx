@@ -17,6 +17,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 import type { DeviceOpsConfig } from './device-ops-rail';
+import { DeviceLiveInputBar } from './device-live-input';
 
 interface DeviceTileProps {
   device: Device;
@@ -166,6 +167,20 @@ export function DeviceTile({
     [wsSend, device.serial]
   );
 
+  const [liveInputOpen, setLiveInputOpen] = useState(false);
+  const liveInputConfig = useMemo(
+    () =>
+      !compact
+        ? {
+            wsSend,
+            disabled: readOnlyPreview,
+            open: liveInputOpen,
+            onOpenChange: setLiveInputOpen
+          }
+        : undefined,
+    [compact, wsSend, readOnlyPreview, liveInputOpen]
+  );
+
   return (
     <Card
       id={`tile-${id}`}
@@ -219,10 +234,17 @@ export function DeviceTile({
               className={cn(
                 compact
                   ? 'flex flex-col items-center gap-2'
-                  : 'inline-flex items-stretch gap-2.5'
+                  : 'inline-flex flex-col items-stretch gap-1'
               )}
-              style={compact ? undefined : { height: mirrorRowHeightPx }}
             >
+              <div
+                className={cn(
+                  compact
+                    ? 'flex flex-col items-center gap-2'
+                    : 'inline-flex items-stretch gap-2.5'
+                )}
+                style={compact ? undefined : { height: mirrorRowHeightPx }}
+              >
               <DeviceAndroidFrame
                 screenWidth={mockupScreenWidth}
                 deviceWidth={device.screen_width}
@@ -274,6 +296,17 @@ export function DeviceTile({
                   hidePinch={minimalRailControls}
                   hideRestart={minimalRailControls}
                   deviceOps={deviceOps}
+                  liveInput={liveInputConfig}
+                />
+              ) : null}
+              </div>
+              {liveInputConfig ? (
+                <DeviceLiveInputBar
+                  serial={device.serial}
+                  wsSend={wsSend}
+                  disabled={readOnlyPreview}
+                  open={liveInputOpen}
+                  onOpenChange={setLiveInputOpen}
                 />
               ) : null}
             </div>

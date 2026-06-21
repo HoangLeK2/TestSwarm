@@ -202,7 +202,7 @@ class WebSocketManager:
     WRITE_MESSAGE_TYPES: frozenset[str] = frozenset({
         "tap", "swipe", "key", "long_tap", "pinch", "double_tap", "drag",
         "tap_selector", "screen_on", "screen_off", "unlock", "swipe_ext",
-        "install", "multi_action",
+        "install", "multi_action", "input_text",
     })
 
     def __init__(
@@ -359,14 +359,33 @@ class WebSocketManager:
             async with self._lock:
                 # Video senders are spawned on-demand via watch_serial/unwatch_serial.
                 self._conn_sender_groups[conn_id] = []
-            send_task = asyncio.create_task(self._sender_ctrl(ws, ctrl_q, ws_send_lock))
-            recv_task = asyncio.create_task(self._receiver(ws, ws_send_lock))
+            send_task = asyncio.create_task(
+                self._sender_ctrl(ws, ctrl_q, ws_send_lock),
+                name=f"frontend-ws-sender-{conn_id}",
+            )
+            recv_task = asyncio.create_task(
+                self._receiver(ws, ws_send_lock),
+                name=f"frontend-ws-receiver-{conn_id}",
+            )
             # Ping loop keeps TCP alive; excluded from wait so silent failures don't tear down connection.
             ping_task = asyncio.create_task(self._ws_ping_loop(ws, ws_send_lock))
             watchdog_task = asyncio.create_task(self._ws_pong_watchdog(ws, ws_send_lock))
             done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
             )
+            for task in done:
+                try:
+                    exc = task.exception()
+                except asyncio.CancelledError:
+                    exc = None
+                if exc is None:
+                    log.info("Frontend WS task ended: %s", task.get_name())
+                else:
+                    log.info(
+                        "Frontend WS task failed: %s (%s)",
+                        task.get_name(),
+                        exc.__class__.__name__,
+                    )
             ping_task.cancel()
             watchdog_task.cancel()
             for t in pending:
@@ -451,7 +470,20 @@ class WebSocketManager:
                 msg = await ctrl_q.get()
                 async with ws_send_lock:
                     await ws.send_json(msg)
-            except Exception:
+            except (WebSocketDisconnect, StarletteWSDisconnect):
+                log.info("Frontend WS sender exit: websocket disconnected")
+                return
+            except RuntimeError as exc:
+                log.info("Frontend WS sender exit: %s", exc)
+                return
+            except (TypeError, ValueError) as exc:
+                log.warning(
+                    "Frontend WS sender dropped unserializable message: %s",
+                    exc,
+                )
+                continue
+            except Exception as exc:
+                log.warning("Frontend WS sender exit: %s", exc)
                 return
 
     async def _send_json_locked(
@@ -559,7 +591,11 @@ class WebSocketManager:
             except asyncio.TimeoutError:
                 pass
             except Exception:
-                return
+                log.debug(
+                    "WS device sender bootstrap skipped for %s",
+                    getattr(device, "serial", "unknown"),
+                    exc_info=True,
+                )
 
             # Ensure first-frame latency: force at least one IDR.
             _request_idr_recover(force=True)
@@ -614,6 +650,10 @@ class WebSocketManager:
                     dropped_total = 0
                     last_stats_ts = now
         finally:
+            log.info(
+                "watch_serial: stopped video sender for %s",
+                getattr(device, "serial", "unknown"),
+            )
             try:
                 device.unsubscribe_frames(frame_q)
             except Exception:
@@ -710,10 +750,17 @@ class WebSocketManager:
                 else:
                     async with self._lock:
                         group = self._conn_sender_groups.get(conn_id, [])
+                        cancelled = 0
                         for t in list(group):
                             if getattr(t, "_device_serial", None) == serial and not t.done():
                                 t.cancel()
+                                cancelled += 1
                         self._conn_sender_groups[conn_id] = group
+                        log.info(
+                            "unwatch_serial: serial=%s cancelled_senders=%d",
+                            serial,
+                            cancelled,
+                        )
                 continue
             device = self.manager.get_device(serial) if serial else None
             if not device:
@@ -869,6 +916,32 @@ class WebSocketManager:
                 ms = int(data.get("ms", 500))
                 log.info(f"[INPUT] SWIPE_EXT {serial} dir={direction} scale={scale} ms={ms}")
                 loop.run_in_executor(None, device.swipe_ext, direction, scale, ms)
+
+            elif msg_type == "input_text":
+                text = str(data.get("text", "") or "")
+                mode = str(data.get("mode") or "")
+                append = bool(data.get("append", False))
+                if mode in ("live_clear",) or (mode == "u2_sync" and not text):
+                    log.info(f"[INPUT] INPUT_CLEAR {serial} route_hint={device.input_route_hint()}")
+                    loop.run_in_executor(None, device.clear_live_input)
+                elif mode in ("live_replace", "u2_sync") or bool(data.get("sync", False)):
+                    log.info(
+                        f"[INPUT] INPUT_REPLACE {serial} len={len(text)} "
+                        f"route_hint={device.input_route_hint()}"
+                    )
+                    loop.run_in_executor(None, device.apply_live_input_text, text)
+                elif append and text:
+                    log.info(
+                        f"[INPUT] INPUT_APPEND {serial} len={len(text)} "
+                        f"route_hint={device.input_route_hint()}"
+                    )
+                    loop.run_in_executor(None, device.append_input_text, text)
+                elif text:
+                    log.info(
+                        f"[INPUT] INPUT_TEXT {serial} len={len(text)} "
+                        f"route_hint={device.input_route_hint()}"
+                    )
+                    loop.run_in_executor(None, device.input_text, text)
 
             elif msg_type == "install":
                 apk_source = data.get("url") or data.get("apk_url", "")

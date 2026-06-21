@@ -1,5 +1,5 @@
 'use strict';
-console.log('[H264Worker] LOADED v26');
+console.log('[H264Worker] LOADED v28');
 /**
  * H264 VideoDecoder — Web Worker, push-model rendering.
  *
@@ -215,6 +215,22 @@ function initDecoder(avccRecord) {
   configureSupportedDecoder(token, codec, desc);
 }
 
+function bytesEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function shouldReconfigureDecoder(nextAvcc, configChanged) {
+  if (configChanged) return true;
+  if (!lastAvcc) return true;
+  if (!bytesEqual(lastAvcc, nextAvcc)) return true;
+  if (decoder && decoder.state !== 'closed') return false;
+  return !decoderConfiguring;
+}
+
 function createDecoder(accel) {
   return new VideoDecoder({
     output: function (frame) {
@@ -229,28 +245,6 @@ function createDecoder(accel) {
       }
       lastOutputMs = now;
       decodedFrames++;
-      var targetFrameTimeMs = 1000 / Math.max(1, targetFps);
-      var queueDelayMs =
-        (decoder ? decoder.decodeQueueSize : 0) * targetFrameTimeMs;
-      // Wider thresholds reduce "stutter by over-dropping" during touch gestures.
-      var dynamicThresholdMs = Math.max(
-        targetFrameTimeMs * 3,
-        360 - decodeFps * 4
-      );
-      // Use actual target FPS (not hardcoded 30) — at 15fps config, 30*0.55=16.5
-      // would ALWAYS trigger overload since decode rate ≈ 15fps.
-      var overload = decodeFps < targetFps * 0.5;
-
-      // Output-stage dropping policy (after decode):
-      // keep decode pipeline intact, shed only presented frames when overloaded.
-      if (queueDelayMs > dynamicThresholdMs || overload) {
-        droppedDelta++;
-        try {
-          frame.close();
-        } catch (_) {}
-        return;
-      }
-
       // Keep latest decoded frame only.
       if (pendingFrame) {
         var prevTs =
@@ -441,14 +435,15 @@ self.onmessage = function (event) {
     case 'config': {
       var avcc = new Uint8Array(data.avcc);
       if (avcc.length < 4) break;
-      lastAvcc = avcc;
+      var reconfigure = shouldReconfigureDecoder(avcc, false);
+      lastAvcc = new Uint8Array(avcc);
       console.log(
         '[H264Worker] config len=' +
           avcc.length +
           ' codec=' +
           getCodecString(avcc)
       );
-      initDecoder(avcc);
+      if (reconfigure) initDecoder(lastAvcc);
       console.log(
         '[H264Worker] decoder state=' + (decoder ? decoder.state : 'null')
       );
@@ -470,10 +465,13 @@ self.onmessage = function (event) {
 
       if (frameType === 0x10) {
         if (buf.byteLength < doff + 2) return;
-        var avcc = new Uint8Array(buf, doff + 1); // skip flags byte
+        var flags = view.getUint8(doff);
+        var avcc = new Uint8Array(buf, doff + 1).slice(); // skip flags byte
         if (avcc.length < 4) return;
-        lastAvcc = new Uint8Array(avcc);
-        initDecoder(lastAvcc);
+        var configChanged = (flags & 0x01) !== 0;
+        var reconfigure = shouldReconfigureDecoder(avcc, configChanged);
+        lastAvcc = avcc;
+        if (reconfigure) initDecoder(lastAvcc);
         return;
       }
 

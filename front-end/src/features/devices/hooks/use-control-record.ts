@@ -33,6 +33,7 @@ import { orgScenariosApi } from '@/features/org-scenarios/services/api';
 import { extractPreviewSteps } from '@/features/org-scenarios/lib/parse-scenario-body';
 import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 import { canApplyDeviceScopedResult } from '../lib/control-record-multi';
+import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
 
 let _stepIdCounter = 0;
 function nextStepId() {
@@ -164,10 +165,7 @@ export function useControlRecord(
   const initialSerialAppliedRef = useRef(false);
 
   const connectedDevices = useMemo(
-    () =>
-      devices.filter((d) =>
-        ['READY', 'BUSY'].includes((d.state ?? '').toUpperCase())
-      ),
+    () => devices.filter(isControlRecordConnectedDevice),
     [devices]
   );
 
@@ -181,6 +179,8 @@ export function useControlRecord(
   const selectedDeviceSerial = selectedDevice?.serial ?? null;
   const selectedDeviceSerialRef = useRef<string | null>(selectedDeviceSerial);
   selectedDeviceSerialRef.current = selectedDeviceSerial;
+  const selectedDeviceRef = useRef(selectedDevice);
+  selectedDeviceRef.current = selectedDevice;
 
   useEffect(() => {
     if (connectedDevices.length === 0) return;
@@ -318,6 +318,7 @@ export function useControlRecord(
 
   const sendAndRecord = useCallback(
     (msg: object, options?: SendAndRecordOptions) => {
+      const selectedDevice = selectedDeviceRef.current;
       const m0 = msg as { type?: string; serial?: string };
       const multiSerials = Array.from(
         new Set(
@@ -507,7 +508,8 @@ export function useControlRecord(
                     const idxById = prev.findIndex(
                       (step) => step._id === recordedStepId
                     );
-                    if (idxById < 0 || prev[idxById].type !== 'tap') return prev;
+                    if (idxById < 0 || prev[idxById].type !== 'tap')
+                      return prev;
                     const updated = [...prev];
                     const s = { ...updated[idxById] };
                     const sc = {
@@ -623,14 +625,7 @@ export function useControlRecord(
         });
       }
     },
-    [
-      wsSend,
-      selectedDevice,
-      recordStep,
-      t,
-      trackScreenshotTask,
-      pulseHierarchyRefresh
-    ]
+    [wsSend, recordStep, t, trackScreenshotTask, pulseHierarchyRefresh]
   );
 
   const addWaitStep = useCallback(() => {
@@ -717,25 +712,33 @@ export function useControlRecord(
     scenarioId: string;
     name: string;
     kind: string;
+    isRecoveryScenario?: boolean;
+    recoveryUsageCount?: number;
     variables?: Record<string, any>;
   } | null>(null);
 
   useEffect(() => {
-    if (!initialCampaignId || !initialScenarioId) return;
+    if (initialOrgScenarioId || initialTemplateId) return;
+    if (!initialCampaignId || !initialScenarioId) {
+      setEditingContext(null);
+      return;
+    }
+
+    let cancelled = false;
     Promise.all([
       scenariosApi.get(initialCampaignId, initialScenarioId),
       campaignsApi.get(initialCampaignId).catch(() => null)
     ])
       .then(([sc, campaign]) => {
+        if (cancelled) return;
+        setOrgScenarioContext(null);
+        setTemplateContext(null);
         const loaded = Array.isArray(sc.steps)
           ? sc.steps.map(
               (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
             )
           : [];
         setSteps(loaded);
-        // Preview stream only receives `variables` from FE payload, so merge both
-        // scopes here to match campaign run behavior:
-        // campaign vars < scenario vars (scenario takes precedence).
         const mergedVars = {
           ...((campaign as { variables?: Record<string, any> } | null)
             ?.variables ?? {}),
@@ -755,20 +758,42 @@ export function useControlRecord(
             t('toast.loadedScenario', { name: sc.name, count: loaded.length })
           );
       })
-      .catch(() => toast.error(t('toast.loadScenarioFailed')));
-    // intentionally runs once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch(() => {
+        if (!cancelled) toast.error(t('toast.loadScenarioFailed'));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    initialCampaignId,
+    initialScenarioId,
+    initialOrgScenarioId,
+    initialTemplateId,
+    t
+  ]);
 
   // Load scenario template when ?templateId=... is present in the URL.
   // Mutually exclusive with campaign/scenario — the UI should only expose
   // one save target per session.
   useEffect(() => {
-    if (!initialTemplateId) return;
-    if (initialCampaignId || initialScenarioId) return;
+    if (
+      !initialTemplateId ||
+      initialOrgScenarioId ||
+      initialCampaignId ||
+      initialScenarioId
+    ) {
+      if (!initialTemplateId) setTemplateContext(null);
+      return;
+    }
+
+    let cancelled = false;
     scenarioTemplatesApi
       .get(initialTemplateId)
       .then((tpl) => {
+        if (cancelled) return;
+        setEditingContext(null);
+        setOrgScenarioContext(null);
         const loaded = Array.isArray(tpl.steps)
           ? tpl.steps.map(
               (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
@@ -788,19 +813,36 @@ export function useControlRecord(
             t('toast.loadedTemplate', { name: tpl.name, count: loaded.length })
           );
       })
-      .catch(() => toast.error(t('toast.loadTemplateFailed')));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch(() => {
+        if (!cancelled) toast.error(t('toast.loadTemplateFailed'));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    initialTemplateId,
+    initialOrgScenarioId,
+    initialCampaignId,
+    initialScenarioId,
+    t
+  ]);
 
   useEffect(() => {
-    if (!initialOrgScenarioId) return;
-    // campaignId may accompany orgScenarioId (Epic 04) for per-device overrides.
-    if (initialScenarioId || initialTemplateId) return;
+    if (!initialOrgScenarioId || initialTemplateId) {
+      if (!initialOrgScenarioId) setOrgScenarioContext(null);
+      return;
+    }
+
+    let cancelled = false;
     Promise.all([
       orgScenariosApi.get(initialOrgScenarioId),
       orgScenariosApi.getBody(initialOrgScenarioId)
     ])
       .then(([meta, bodyOut]) => {
+        if (cancelled) return;
+        setEditingContext(null);
+        setTemplateContext(null);
         const bodyJson = (bodyOut.body_json ?? {}) as Record<string, unknown>;
         const previewSteps = extractPreviewSteps(bodyJson);
         const loaded = previewSteps.map(
@@ -811,6 +853,10 @@ export function useControlRecord(
           scenarioId: initialOrgScenarioId,
           name: meta.name,
           kind: meta.kind,
+          isRecoveryScenario:
+            meta.is_recovery_scenario === true ||
+            (meta.recovery_usage_count ?? 0) > 0,
+          recoveryUsageCount: meta.recovery_usage_count ?? 0,
           variables: normalizeScenarioVariables(
             bodyJson.variables as Record<string, unknown> | undefined
           )
@@ -824,9 +870,14 @@ export function useControlRecord(
           );
         }
       })
-      .catch(() => toast.error(t('toast.loadOrgScenarioFailed')));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch(() => {
+        if (!cancelled) toast.error(t('toast.loadOrgScenarioFailed'));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialOrgScenarioId, initialTemplateId, t]);
 
   const saveToTemplate = useCallback(
     async (variables?: Record<string, any>) => {
@@ -1280,6 +1331,7 @@ export function useControlRecord(
 
   const handleTapSelector = useCallback(
     (options?: SendAndRecordOptions) => {
+      const selectedDevice = selectedDeviceRef.current;
       if (!selectedDevice || !selectorValue.trim()) return;
       const by = selectorBy;
       const value = selectorValue.trim();
@@ -1302,15 +1354,7 @@ export function useControlRecord(
         t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) })
       );
     },
-    [
-      selectedDevice,
-      selectorBy,
-      selectorValue,
-      sendAndRecord,
-      recording,
-      recordStep,
-      t
-    ]
+    [selectorBy, selectorValue, sendAndRecord, recording, recordStep, t]
   );
 
   // ── Return (grouped) ─────────────────────────────────────────────────────

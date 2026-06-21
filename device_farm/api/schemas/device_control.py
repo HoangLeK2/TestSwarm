@@ -130,6 +130,11 @@ class ScrcpyAttachRequest(BaseModel):
     device_ip: str | None = None  # Auto-detected from DB if omitted
     adb_port: int = 5555
     enable_control: bool = True  # Enable scrcpy control channel for touch/key input
+    viewer_id: str | None = None
+
+
+class ScrcpyDetachRequest(BaseModel):
+    viewer_id: str | None = None
 
 
 class StartSessionRequest(BaseModel):

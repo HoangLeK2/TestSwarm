@@ -79,6 +79,23 @@ def _relay_serial_matches_ws_device(
     )
 
 
+def _relay_capabilities_status_payload(device, caps: dict | None) -> dict:
+    """Build metadata from relay heartbeat without reviving watchdog-dead devices."""
+    caps = caps or {}
+    payload = {
+        "brand":         caps.get("brand", ""),
+        "model":         caps.get("model", ""),
+        "android":       caps.get("android_version", ""),
+        "screen_width":  caps.get("screen_width", 0),
+        "screen_height": caps.get("screen_height", 0),
+    }
+    state = getattr(device, "state", None)
+    state_value = str(getattr(state, "value", state) or "").upper()
+    if state_value in {"DISCONNECTED", "CONNECTING", "ERROR"}:
+        payload["state"] = "READY"
+    return payload
+
+
 def _find_ws_device_for_relay_serial(
     devices,
     relay_serial: str,
@@ -512,16 +529,9 @@ def create_app(
         lifecycle.register_resource(
             LifecyclePhase.INFRA, "db_loop_engine", dispose_loop_engine,
         )
-        if redis_store.enabled():
-            import json as _json
-            try:
-                _redis_devs = await redis_store.client().hgetall(redis_store.key("devices"))
-                for _serial in _redis_devs:
-                    manager.ensure_device(_serial)
-                if _redis_devs:
-                    log.info("Restored %d device(s) from Redis", len(_redis_devs))
-            except Exception as _exc:
-                log.warning("Redis device restore failed: %s", _exc)
+        # Device registry is live-only: populated when agent-boot relay or WS
+        # agent connects. Do not hydrate from Redis — stale entries would register
+        # devices that are no longer online.
 
         # ── Start lifecycle components attached by main.py ──
         watchdog = getattr(_app.state, "watchdog", None)
@@ -880,7 +890,6 @@ def create_app(
                         DeviceState.DISCONNECTED,
                         DeviceState.CONNECTING,
                         DeviceState.ERROR,
-                        DeviceState.DEAD,
                     ):
                         device.on_agent_status({"state": "READY"})
 
@@ -973,7 +982,7 @@ def create_app(
                         return
 
                     is_new = _manager_ref.get_device(serial) is None
-                    device = _manager_ref.ensure_device(serial)
+                    device = _manager_ref.register_relay_device(serial)
                     device.set_event_loop(asyncio.get_event_loop())
                     # Set READY immediately — relay reports it as online.
                     # Relay-only devices have no WS-Agent APK to call on_agent_status(),
@@ -1019,14 +1028,9 @@ def create_app(
                     device = _find_device_for_relay_serial(serial, caps=caps)
                     if device is None:
                         return
-                    device.on_agent_status({
-                        "brand":        caps.get("brand", ""),
-                        "model":        caps.get("model", ""),
-                        "android":      caps.get("android_version", ""),
-                        "screen_width": caps.get("screen_width", 0),
-                        "screen_height":caps.get("screen_height", 0),
-                        "state":        "READY",
-                    })
+                    device.on_agent_status(
+                        _relay_capabilities_status_payload(device, caps)
+                    )
                     host = _relay_host_hint(serial, caps)
                     if device.u2 is None and (caps.get("has_u2") or host):
                         _bind_relay_u2(device, serial, caps=caps)

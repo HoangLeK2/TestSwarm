@@ -103,6 +103,11 @@ const lastIdrRequestBySerial = new Map<string, number>();
 // Backend can spawn per-serial sender tasks on demand. Track refs so we only
 // watch serials that at least one component is decoding.
 const watchRefCountBySerial = new Map<string, number>();
+const watchedSerialsOnSocket = new Set<string>();
+const pendingUnwatchTimersBySerial = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
 const pendingIdrSerials = new Set<string>();
 type WsReadyCallback = () => void;
 const wsReadyQueue: WsReadyCallback[] = [];
@@ -191,11 +196,12 @@ if (typeof window !== 'undefined') {
 
   window.addEventListener('focus', () => {
     if (!isCurrentTabNetworkActive()) return;
-    if (listeners.size === 0) return;
+    if (listeners.size === 0 && binaryListeners.size === 0) return;
     if (!sharedSocket || sharedSocket.readyState !== WebSocket.OPEN) {
       connectShared();
       return;
     }
+    if (binaryListeners.size > 0) return;
     // Don't force-close too aggressively: low-FPS periods can legitimately exceed
     // 10s without traffic and this creates reconnect churn (visible stutter).
     if (shouldReconnectStaleSocketOnFocus(lastMessageTime)) {
@@ -268,13 +274,40 @@ function handleTextMessage(raw: string) {
   }
 }
 
-function sendWatchSerial(serial: string) {
+function sendWatchSerial(serial: string, force = false) {
   if (!serial || sharedSocket?.readyState !== WebSocket.OPEN) return;
+  if (!force && watchedSerialsOnSocket.has(serial)) return;
   try {
     sharedSocket.send(JSON.stringify({ type: 'watch_serial', serial }));
+    watchedSerialsOnSocket.add(serial);
   } catch {
     // socket may be closing; onopen will re-assert watches
   }
+}
+
+function clearPendingUnwatch(serial: string) {
+  const timer = pendingUnwatchTimersBySerial.get(serial);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  pendingUnwatchTimersBySerial.delete(serial);
+}
+
+function scheduleUnwatchSerial(serial: string) {
+  clearPendingUnwatch(serial);
+  pendingUnwatchTimersBySerial.set(
+    serial,
+    setTimeout(() => {
+      pendingUnwatchTimersBySerial.delete(serial);
+      if ((watchRefCountBySerial.get(serial) ?? 0) > 0) return;
+      watchedSerialsOnSocket.delete(serial);
+      if (sharedSocket?.readyState !== WebSocket.OPEN) return;
+      try {
+        sharedSocket.send(JSON.stringify({ type: 'unwatch_serial', serial }));
+      } catch {
+        // ignore; socket may be closing
+      }
+    }, 1000)
+  );
 }
 
 /** Re-assert watch_serial when a viewer is active (idempotent on server). */
@@ -282,7 +315,15 @@ export function ensureWatchSerial(serial: string) {
   if (!serial) return;
   const prev = watchRefCountBySerial.get(serial) ?? 0;
   if (prev <= 0) return;
-  sendWatchSerial(serial);
+  if (
+    !sharedSocket ||
+    sharedSocket.readyState === WebSocket.CLOSED ||
+    sharedSocket.readyState === WebSocket.CLOSING
+  ) {
+    connectShared();
+    return;
+  }
+  sendWatchSerial(serial, true);
 }
 
 function connectShared() {
@@ -321,8 +362,9 @@ function connectShared() {
     }
     startClientHeartbeat();
     // Re-assert watched serials after reconnect.
+    watchedSerialsOnSocket.clear();
     watchRefCountBySerial.forEach((_count, serial) => {
-      sendWatchSerial(serial);
+      sendWatchSerial(serial, true);
     });
     flushPendingIdrRequests();
     flushWsReadyQueue();
@@ -333,6 +375,7 @@ function connectShared() {
     if (!isCurrentDeviceFarmWsEvent(sharedSocket, ws)) return;
     stopClientHeartbeat();
     sharedSocket = null;
+    watchedSerialsOnSocket.clear();
     lastConfigBySerial.clear();
     lastKeyBySerial.clear(); // stale after disconnect � server will re-send bootstrap on reconnect
     lastKeyTsBySerial.clear();
@@ -435,6 +478,7 @@ export function subscribeBinaryFrames(
   const listener: BinaryListener = { fn: onBinary, serial };
   binaryListeners.add(listener);
   if (serial) {
+    clearPendingUnwatch(serial);
     const prev = watchRefCountBySerial.get(serial) ?? 0;
     watchRefCountBySerial.set(serial, prev + 1);
     if (prev === 0) {
@@ -503,15 +547,7 @@ export function subscribeBinaryFrames(
       const next = Math.max(0, prev - 1);
       if (next === 0) {
         watchRefCountBySerial.delete(serial);
-        if (sharedSocket?.readyState === WebSocket.OPEN) {
-          try {
-            sharedSocket.send(
-              JSON.stringify({ type: 'unwatch_serial', serial })
-            );
-          } catch {
-            // ignore; socket may be closing
-          }
-        }
+        scheduleUnwatchSerial(serial);
       } else {
         watchRefCountBySerial.set(serial, next);
       }

@@ -110,8 +110,15 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   const compactPadding = mirrorSize !== 'default';
   const compactOverlay = mirrorSize !== 'default';
 
+  const deviceScenarioActive = device.scenario_active ?? 0;
+  const deviceState = device.state;
   const screenOverlay = useMemo(() => {
-    if (!isManualControlBlocked(device)) return undefined;
+    if (
+      (deviceState || '').replace('DeviceState.', '') !== 'BUSY' &&
+      deviceScenarioActive <= 0
+    ) {
+      return undefined;
+    }
     return (
       <ManualControlBlockedBanner
         compact={compactOverlay}
@@ -119,7 +126,13 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
         onTakeControl={onTakeControl ?? (() => {})}
       />
     );
-  }, [canTakeControl, compactOverlay, device, onTakeControl]);
+  }, [
+    canTakeControl,
+    compactOverlay,
+    deviceScenarioActive,
+    deviceState,
+    onTakeControl
+  ]);
 
   return (
     <div className='flex min-h-0 w-full flex-1 flex-col'>

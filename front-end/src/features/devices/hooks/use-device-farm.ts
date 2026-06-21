@@ -1,27 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import type { Device, Task, WsMessage } from '../types';
 import { createWs } from '../services/ws';
 import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
-import {
-  devicesApi,
-  relayAgentsApi,
-  type DeviceOut
-} from '../services/manage-api';
-import { hasOperationalRelayAgent } from '../lib/relay-agent-status';
+import { devicesApi, type DeviceOut } from '../services/manage-api';
+import { filterVisibleDeviceFarmDevices } from '../lib/device-farm-visible-devices';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { useTabNetworkActive } from './use-tab-network-active';
-
-function isRelayManagedDevice(device: DeviceOut): boolean {
-  return Boolean(
-    (device.adb_serial && device.adb_serial.trim()) ||
-      (device.adb_ip && device.adb_ip.trim())
-  );
-}
 
 export function useDeviceFarm() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -40,29 +28,6 @@ export function useDeviceFarm() {
   const { currentOrg } = useOrganization();
   const currentOrgId = currentOrg?.id ?? null;
   const tabActive = useTabNetworkActive();
-
-  const registeredSerials = useMemo(
-    () => new Set(registeredDevices.map((d) => d.serial)),
-    [registeredDevices]
-  );
-  const relayManagedSerials = useMemo(
-    () =>
-      new Set(
-        registeredDevices
-          .filter(isRelayManagedDevice)
-          .map((device) => device.serial)
-      ),
-    [registeredDevices]
-  );
-
-  const { data: relayAgents = [] } = useQuery({
-    queryKey: ['relay-agents', currentOrgId],
-    queryFn: relayAgentsApi.list,
-    enabled: Boolean(currentOrgId) && tabActive,
-    staleTime: 10_000,
-    refetchInterval: tabActive ? 15_000 : false
-  });
-  const relayLive = hasOperationalRelayAgent(relayAgents);
 
   const wsSend = useCallback((obj: object) => wsRef.current?.send(obj), []);
   const refreshTasks = useCallback(() => {
@@ -85,10 +50,13 @@ export function useDeviceFarm() {
   }, [currentOrgId, tabActive]);
 
   useEffect(() => {
-    setDevices([]);
-    setRegisteredDevices([]);
     refreshDevices();
   }, [refreshDevices]);
+
+  useEffect(() => {
+    setDevices([]);
+    setRegisteredDevices([]);
+  }, [currentOrgId]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -243,13 +211,8 @@ export function useDeviceFarm() {
   );
 
   const myDevices = useMemo(
-    () =>
-      devices.filter((device) => {
-        if (!registeredSerials.has(device.serial)) return false;
-        if (relayManagedSerials.has(device.serial) && !relayLive) return false;
-        return true;
-      }),
-    [devices, registeredSerials, relayManagedSerials, relayLive]
+    () => filterVisibleDeviceFarmDevices(devices, registeredDevices),
+    [devices, registeredDevices]
   );
 
   return {

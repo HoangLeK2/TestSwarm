@@ -14,6 +14,7 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { ControlRecordMirror } from './control-record/control-record-mirror';
+import { ScenarioPlayer } from './control-record/scenario-player';
 import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
 import { MultiDevicePicker } from './control-record/multi-device-picker';
 import { MultiDeviceStage } from './control-record/multi-device-stage';
@@ -47,7 +48,6 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
-  Video,
   Crosshair,
   HelpCircle,
   SlidersHorizontal,
@@ -58,7 +58,8 @@ import {
   CheckSquare,
   Code2,
   GitBranch,
-  List
+  List,
+  AlertCircle
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -78,27 +79,6 @@ const FlowgramCanvas = dynamic(
   }
 );
 
-const FlowEditor = dynamic(
-  () =>
-    import('@/features/campaigns/components/flow-editor').then(
-      (m) => m.FlowEditor
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>
-        Đang tải editor…
-      </div>
-    )
-  }
-);
-
-const ScenarioPlayer = dynamic(
-  () =>
-    import('./control-record/scenario-player').then((m) => m.ScenarioPlayer),
-  { ssr: false }
-);
-
 const VariableEditor = dynamic(
   () => import('@/components/variable-editor').then((m) => m.VariableEditor),
   { ssr: false }
@@ -113,6 +93,7 @@ import {
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { normalizeInternalAppPath } from '@/lib/i18n-path';
 import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
@@ -138,12 +119,15 @@ import { EmptyNodePicker } from './control-record/empty-node-picker';
 import { XmlTreeViewer } from './control-record/xml-tree-viewer';
 import {
   applySelectorToSteps,
+  type SelectorPickTarget
+} from '@/features/campaigns/components/flow-editor/selector-pick';
+import {
   applyTapPointToSteps,
   applySwipeSegmentToSteps,
-  resolveLatestStepForInlineRun,
-  type SelectorPickTarget,
   type CoordinatePickTarget
-} from '@/features/campaigns/components/flow-editor';
+} from '@/features/campaigns/components/flow-editor/coordinate-pick';
+import { resolveLatestStepForInlineRun } from '@/features/campaigns/components/flow-editor/inline-run-key';
+import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import {
@@ -171,6 +155,8 @@ import { devicesApi } from '../services/manage-api';
 import { useTranslations } from 'next-intl';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from '@/features/campaigns/components/flow-editor/step-detail-panel';
+import { RecoveryPolicyEditor } from '@/features/campaigns/components/recovery-policy-editor';
+import type { RecoveryPolicy } from '@/features/campaigns/types';
 import {
   findStepByFlowgramId,
   mergeSelectorByFlowgramId,
@@ -295,7 +281,42 @@ export function ControlRecordView({
   const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
   const tModal = useTranslations('components.modal');
   const tVar = useTranslations('components.variableEditor');
+  const tRecovery = useTranslations('campaignsFeature.recoveryPolicy');
   const router = useRouter();
+
+  // Dev/HMR can leave a stale Turbopack chunk map in the tab; reload once on chunk 404.
+  useEffect(() => {
+    const reloadKey = 'control-record-chunk-reload';
+    const reloadOnce = (message: string) => {
+      if (
+        !message.includes('Failed to load chunk') &&
+        !message.includes('Loading chunk')
+      ) {
+        return;
+      }
+      if (sessionStorage.getItem(reloadKey)) return;
+      sessionStorage.setItem(reloadKey, '1');
+      window.location.reload();
+    };
+    const onError = (event: ErrorEvent) => reloadOnce(event.message ?? '');
+    const onRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const message =
+        typeof reason === 'string'
+          ? reason
+          : reason instanceof Error
+            ? reason.message
+            : String(reason ?? '');
+      reloadOnce(message);
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
+
   const { error, device, record, steps, save, hierarchy, selector } =
     useControlRecord(
       initialSerial,
@@ -316,7 +337,8 @@ export function ControlRecordView({
   const refreshHierarchy = hierarchy.refresh;
   const setHierarchyPaused = hierarchy.setPaused;
   const pickTargetPackage = useMemo(
-    () => packageFromCurrentApp(device.selectedDevice?.current_app) || undefined,
+    () =>
+      packageFromCurrentApp(device.selectedDevice?.current_app) || undefined,
     [device.selectedDevice?.current_app]
   );
   const hierarchyPickOptions = useMemo(() => {
@@ -324,8 +346,7 @@ export function ControlRecordView({
     const h = device.selectedDevice?.screen_height ?? 0;
     return {
       targetPackage: pickTargetPackage,
-      screenDims:
-        w > 0 && h > 0 ? ({ dw: w, dh: h } as const) : undefined
+      screenDims: w > 0 && h > 0 ? ({ dw: w, dh: h } as const) : undefined
     };
   }, [
     device.selectedDevice?.screen_width,
@@ -363,7 +384,7 @@ export function ControlRecordView({
 
   useEffect(() => {
     if (!isGraphOrgScenario(save.orgScenarioContext)) return;
-    const back = (returnTo ?? '').trim() || ROUTES.ORG_SCENARIOS.ROOT;
+    const back = normalizeInternalAppPath(returnTo, ROUTES.ORG_SCENARIOS.ROOT);
     toast.error(tOrg('sequenceOnlyNoGraph'));
     router.replace(back);
   }, [save.orgScenarioContext?.kind, returnTo, router, tOrg]);
@@ -393,12 +414,7 @@ export function ControlRecordView({
       {
         onSuccess: () => {
           toast.success(tOrg('saveOrgSuccess'));
-          const next = (returnTo ?? '').trim();
-          if (next) {
-            router.push(next);
-          } else {
-            router.push(ROUTES.ORG_SCENARIOS.ROOT);
-          }
+          router.push(normalizeInternalAppPath(returnTo, ROUTES.ORG_SCENARIOS.ROOT));
         },
         onError: (err) => {
           toast.error(formatFarmApiError(err, tOrg('saveOrgFailed')));
@@ -864,11 +880,15 @@ export function ControlRecordView({
     save.editingContext?.campaignId ??
     (savingOrgScenario ? (initialCampaignId ?? null) : null);
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
+  const activeDeviceVarScenarioId =
+    activeScenarioId ?? (savingOrgScenario ? (initialOrgScenarioId ?? null) : null);
+  const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
+  const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const usesCampaignDeviceOverrides = Boolean(
-    activeCampaignId && savingOrgScenario && !activeScenarioId
+    activeCampaignId && savingOrgScenario && !activeDeviceVarScenarioId
   );
   const canManageDeviceVars = Boolean(
-    activeCampaignId && (activeScenarioId || usesCampaignDeviceOverrides)
+    activeCampaignId && (activeDeviceVarScenarioId || usesCampaignDeviceOverrides)
   );
   const selectedSerial = device.selectedDevice?.serial ?? null;
   const { currentOrg } = useOrganization();
@@ -884,6 +904,47 @@ export function ControlRecordView({
     queryKey: ['campaign-devices', activeCampaignId],
     enabled: !!activeCampaignId && tabActive,
     queryFn: () => campaignsApi.getDevices(activeCampaignId!)
+  });
+  const campaignRecoveryQuery = useQuery({
+    queryKey: ['campaign', activeCampaignId, 'recovery-policy'],
+    enabled: !!activeCampaignId && tabActive,
+    queryFn: () => campaignsApi.get(activeCampaignId!),
+    staleTime: 30_000
+  });
+  useEffect(() => {
+    if (!campaignRecoveryQuery.data) return;
+    setRecoveryPolicy(
+      (campaignRecoveryQuery.data.recovery_policy ?? {}) as RecoveryPolicy
+    );
+  }, [campaignRecoveryQuery.data]);
+  const recoveryPolicyEnabled = Boolean(
+    (campaignRecoveryQuery.data?.recovery_policy ?? recoveryPolicy)?.enabled
+  );
+  const editingRecoveryScenario =
+    save.orgScenarioContext?.isRecoveryScenario === true;
+  const recoveryReturnTo = normalizeInternalAppPath(returnTo, '');
+  const saveRecoveryPolicyMutation = useMutation({
+    mutationFn: async (policy: RecoveryPolicy) => {
+      if (!activeCampaignId) {
+        throw new Error(tRecovery('missingCampaignError'));
+      }
+      return campaignsApi.patchEntity(activeCampaignId, {
+        recovery_policy: policy as Record<string, any>
+      });
+    },
+    onSuccess: () => {
+      toast.success(tRecovery('saveSuccess'));
+      setRecoveryDialogOpen(false);
+      void queryClient.invalidateQueries({
+        queryKey: ['campaign', activeCampaignId, 'recovery-policy']
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['campaign', activeCampaignId, 'global-vars-preview']
+      });
+    },
+    onError: (err) => {
+      toast.error(formatFarmApiError(err, tRecovery('saveFailed')));
+    }
   });
   const selectedDeviceId = useMemo(() => {
     if (!selectedSerial) return null;
@@ -1062,11 +1123,11 @@ export function ControlRecordView({
     [selectedScenarioDeviceId]
   );
   const invalidateScenarioDeviceVars = useCallback(() => {
-    if (!activeCampaignId || !activeScenarioId) return;
+    if (!activeCampaignId || !activeDeviceVarScenarioId) return;
     void queryClient.invalidateQueries({
-      queryKey: ['scenario-device-vars', activeCampaignId, activeScenarioId]
+      queryKey: ['scenario-device-vars', activeCampaignId, activeDeviceVarScenarioId]
     });
-  }, [activeCampaignId, activeScenarioId, queryClient]);
+  }, [activeCampaignId, activeDeviceVarScenarioId, queryClient]);
   useEffect(() => {
     if (!canManageDeviceVars) return;
     const devices = campaignDevicesQuery.data ?? [];
@@ -1078,7 +1139,7 @@ export function ControlRecordView({
 
     const hydrationKey = usesCampaignDeviceOverrides
       ? `campaign:${activeCampaignId}:${campaignForGlobalVarsQuery.dataUpdatedAt}`
-      : `scenario:${activeCampaignId}:${activeScenarioId}:${deviceVarDialogOpen ? 'open' : 'bg'}`;
+      : `scenario:${activeCampaignId}:${activeDeviceVarScenarioId}:${deviceVarDialogOpen ? 'open' : 'bg'}`;
 
     if (deviceVarsHydratedKeyRef.current === hydrationKey) {
       return;
@@ -1123,9 +1184,7 @@ export function ControlRecordView({
         );
         const overrides = campaignPerDeviceOverrides(detail);
         applySeeds(
-          devices.map(
-            (d) => [d.id, { ...(overrides[d.id] ?? {}) }] as const
-          )
+          devices.map((d) => [d.id, { ...(overrides[d.id] ?? {}) }] as const)
         );
         const dataUpdatedAt = queryClient.getQueryState([
           'campaign',
@@ -1141,7 +1200,7 @@ export function ControlRecordView({
       };
     }
 
-    if (!activeScenarioId) {
+    if (!activeDeviceVarScenarioId) {
       const seeded: Record<string, string> = {};
       const enabled: Record<string, boolean> = {};
       const base = pendingScenarioDeviceVarsDraftMap ?? {};
@@ -1166,7 +1225,7 @@ export function ControlRecordView({
         devices.map(async (d) => {
           const res = await campaignsApi.getScenarioDeviceVariables(
             activeCampaignId!,
-            activeScenarioId,
+            activeDeviceVarScenarioId,
             d.id
           );
           return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
@@ -1187,7 +1246,7 @@ export function ControlRecordView({
     campaignForGlobalVarsQuery.data,
     campaignForGlobalVarsQuery.dataUpdatedAt,
     activeCampaignId,
-    activeScenarioId,
+    activeDeviceVarScenarioId,
     usesCampaignDeviceOverrides,
     pendingScenarioDeviceVarsDraftMap,
     scenarioVariables,
@@ -1248,7 +1307,7 @@ export function ControlRecordView({
         return;
       }
 
-      if (!activeScenarioId) return;
+      if (!activeDeviceVarScenarioId) return;
       await Promise.all(
         devices.map((d) => {
           let vars: Record<string, any> = {};
@@ -1264,7 +1323,7 @@ export function ControlRecordView({
           }
           return campaignsApi.replaceScenarioDeviceVariables(
             activeCampaignId,
-            activeScenarioId,
+            activeDeviceVarScenarioId,
             d.id,
             {
               vars
@@ -1313,12 +1372,12 @@ export function ControlRecordView({
             'global-vars-preview'
           ])?.dataUpdatedAt;
           deviceVarsHydratedKeyRef.current = `campaign:${activeCampaignId}:${dataUpdatedAt ?? 0}`;
-        } else if (activeScenarioId) {
+        } else if (activeDeviceVarScenarioId) {
           const entries = await Promise.all(
             devices.map(async (d) => {
               const res = await campaignsApi.getScenarioDeviceVariables(
                 activeCampaignId,
-                activeScenarioId,
+                activeDeviceVarScenarioId,
                 d.id
               );
               return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
@@ -1340,7 +1399,7 @@ export function ControlRecordView({
               ])
             )
           );
-          deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeScenarioId}:bg`;
+          deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeDeviceVarScenarioId}:bg`;
           invalidateScenarioDeviceVars();
         }
         deviceVarUserEditedRef.current = new Set();
@@ -1354,7 +1413,7 @@ export function ControlRecordView({
   });
   useEffect(() => {
     if (!pendingScenarioDeviceVarsDraftMap) return;
-    if (!activeCampaignId || !activeScenarioId) return;
+    if (!activeCampaignId || !activeDeviceVarScenarioId) return;
     const devices = campaignDevicesQuery.data ?? [];
     if (devices.length === 0) return;
     const draftMap = pendingScenarioDeviceVarsDraftMap;
@@ -1363,7 +1422,7 @@ export function ControlRecordView({
         const vars = draftMap[d.id] ?? {};
         return campaignsApi.replaceScenarioDeviceVariables(
           activeCampaignId,
-          activeScenarioId,
+          activeDeviceVarScenarioId,
           d.id,
           {
             vars
@@ -1391,7 +1450,7 @@ export function ControlRecordView({
             ])
           )
         );
-        deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeScenarioId}:bg`;
+        deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeDeviceVarScenarioId}:bg`;
         toast.success('Đã áp dụng biến thiết bị vào scenario vừa lưu');
         setPendingScenarioDeviceVarsDraftMap(null);
       })
@@ -1403,7 +1462,7 @@ export function ControlRecordView({
   }, [
     pendingScenarioDeviceVarsDraftMap,
     activeCampaignId,
-    activeScenarioId,
+    activeDeviceVarScenarioId,
     campaignDevicesQuery.data,
     scenarioVariables
   ]);
@@ -1650,12 +1709,12 @@ export function ControlRecordView({
 
   const runDeviceOpStep = useCallback(
     async (step: FlowStep) => {
-      if (!device.selectedDevice) {
+      const serial = device.selectedDevice?.serial?.trim();
+      if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
       }
       const runId = previewSession.beginRun();
-      const serial = device.selectedDevice.serial;
       try {
         await previewScenarioStream(
           serial,
@@ -1684,7 +1743,7 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice,
+      device.selectedDevice?.serial,
       inlineScenarioDeviceVars,
       previewSession,
       scenarioVariables
@@ -1879,7 +1938,9 @@ export function ControlRecordView({
 
       const fallback = cand.bounds
         ? {
-            rx: parseFloat(((cand.bounds.rx1 + cand.bounds.rx2) / 2).toFixed(3)),
+            rx: parseFloat(
+              ((cand.bounds.rx1 + cand.bounds.rx2) / 2).toFixed(3)
+            ),
             ry: parseFloat(((cand.bounds.ry1 + cand.bounds.ry2) / 2).toFixed(3))
           }
         : null;
@@ -2065,7 +2126,12 @@ export function ControlRecordView({
       }
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
-        const sel = findSelectorInXml(hierarchyXml, rx, ry, hierarchyPickOptions);
+        const sel = findSelectorInXml(
+          hierarchyXml,
+          rx,
+          ry,
+          hierarchyPickOptions
+        );
         if (!sel?.value?.trim()) {
           toast.warning(t('pickSelectorNoElement'));
           return;
@@ -2194,9 +2260,11 @@ export function ControlRecordView({
     [mirrorSwipeEnabled]
   );
 
+  const selectedDeviceSerial = device.selectedDevice?.serial ?? null;
+  const selectedDeviceState = device.selectedDevice?.state;
+  const selectedScenarioActive = device.selectedDevice?.scenario_active ?? 0;
   const mirrorInputLocked = useMemo(() => {
-    const d = device.selectedDevice;
-    if (!d) return { hideControls: true, readOnlyPreview: true };
+    if (!selectedDeviceSerial) return { hideControls: true, readOnlyPreview: true };
     const pickingFromMirror =
       coordinatePickTarget != null ||
       selectorPickTarget != null ||
@@ -2206,12 +2274,14 @@ export function ControlRecordView({
       return { hideControls: false, readOnlyPreview: false };
     }
     const blocked =
-      (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
-      (d.scenario_active ?? 0) > 0;
+      (selectedDeviceState || '').replace('DeviceState.', '') === 'BUSY' ||
+      selectedScenarioActive > 0;
     // Keep the control rail visible; only block tap/swipe on the live mirror.
     return { hideControls: false, readOnlyPreview: blocked };
   }, [
-    device.selectedDevice,
+    selectedDeviceSerial,
+    selectedDeviceState,
+    selectedScenarioActive,
     coordinatePickTarget,
     selectorPickTarget,
     flowCoordPick,
@@ -2232,7 +2302,8 @@ export function ControlRecordView({
       }
     };
   }, [
-    device.selectedDevice,
+    device.selectedDevice?.serial,
+    device.selectedDevice?.current_app,
     mirrorInputLocked.readOnlyPreview,
     runDeviceOpStep,
     tDeviceOps,
@@ -2248,38 +2319,26 @@ export function ControlRecordView({
     );
   }
 
-  // When NOT editing and no device → keep original empty placeholder.
-  // When editing (campaignId+scenarioId in URL) → render the 3-column layout
-  // anyway so user sees XML / mirror / scenario columns. Phone column shows
-  // the existing "Chọn thiết bị từ thanh trên" placeholder when selectedDevice
-  // is null.
-  if (
-    device.connectedDevices.length === 0 &&
-    !save.editingContext &&
-    !save.templateContext
-  ) {
-    return (
-      <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center'>
-        <Video className='mb-3 size-10 text-muted-foreground/40' />
-        <p className='mb-1 text-base font-medium'>{t('noDeviceConnected')}</p>
-        <p className='mb-4 text-sm text-muted-foreground'>
-          {t('noDeviceConnectMessage')}
-        </p>
-        <Button asChild size='sm' variant='outline'>
-          <Link href={ROUTES.DEVICES.MANAGE}>
-            <ArrowLeft className='mr-1.5 size-4' />
-            {t('addDevice')}
-          </Link>
-        </Button>
-      </div>
-    );
-  }
-
   const { selectedDevice } = device;
+  const noConnectedDevices = device.connectedDevices.length === 0;
 
   return (
     <div className='flex h-[calc(100vh-80px)] min-h-0 flex-col overflow-hidden bg-background'>
       <SafeModeBanner className='mx-3 mt-2' />
+      {noConnectedDevices ? (
+        <div className='mx-3 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-amber-400/40 bg-amber-400/5 px-3 py-2 text-xs'>
+          <div className='min-w-0'>
+            <p className='font-medium text-foreground'>{t('noDeviceConnected')}</p>
+            <p className='text-muted-foreground'>{t('noDeviceConnectMessage')}</p>
+          </div>
+          <Button asChild size='sm' variant='outline' className='shrink-0'>
+            <Link href={ROUTES.DEVICES.MANAGE}>
+              <ArrowLeft className='mr-1.5 size-4' />
+              {t('addDevice')}
+            </Link>
+          </Button>
+        </div>
+      ) : null}
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div className='flex min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b bg-background px-3 py-2'>
@@ -2327,6 +2386,19 @@ export function ControlRecordView({
             {t('templateBadge')}
           </span>
         )}
+        {editingRecoveryScenario && recoveryReturnTo ? (
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+            onClick={() =>
+              guardWhilePreviewActive(() => router.push(recoveryReturnTo))
+            }
+          >
+            <ArrowLeft className='size-3.5' />
+            {tRecovery('backToMainScenario')}
+          </Button>
+        ) : null}
 
         {/* Device selector + multi sync */}
         <div className='flex min-w-0 shrink items-center gap-1.5'>
@@ -3029,6 +3101,38 @@ export function ControlRecordView({
                         thử bước
                       </TooltipContent>
                     </Tooltip>
+                    {!editingRecoveryScenario ? (
+                      <Tooltip delayDuration={400}>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            onClick={() => setRecoveryDialogOpen(true)}
+                            className={cn(
+                              'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                              recoveryPolicyEnabled &&
+                                'border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300'
+                            )}
+                          >
+                            <AlertCircle className='size-3.5' />
+                            {tRecovery('controlRecordTitle')}
+                            {recoveryPolicyEnabled && (
+                              <span className='rounded-full bg-amber-500/20 px-1.5 text-[10px] font-bold'>
+                                {tRecovery('enabledBadge')}
+                              </span>
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side='bottom'
+                          className='max-w-xs text-xs'
+                        >
+                          {activeCampaignId
+                            ? tRecovery('controlRecordTooltip')
+                            : tRecovery('controlRecordNoCampaignTooltip')}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : null}
                     <Tooltip delayDuration={400}>
                       <TooltipTrigger asChild>
                         <Button
@@ -3358,7 +3462,7 @@ export function ControlRecordView({
             <Button
               size='sm'
               onClick={() => {
-                if (activeScenarioId || usesCampaignDeviceOverrides) {
+                if (activeDeviceVarScenarioId || usesCampaignDeviceOverrides) {
                   saveScenarioDeviceVarsMutation.mutate(
                     deviceVarStateRef.current
                   );
@@ -3392,9 +3496,65 @@ export function ControlRecordView({
             >
               {saveScenarioDeviceVarsMutation.isPending
                 ? tDvDlg('saveLoading')
-                : activeScenarioId || usesCampaignDeviceOverrides
+                : activeDeviceVarScenarioId || usesCampaignDeviceOverrides
                   ? tDvDlg('save')
                   : tDvDlg('saveDraft')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={recoveryDialogOpen} onOpenChange={setRecoveryDialogOpen}>
+        <DialogContent className='flex max-h-[min(88dvh,720px)] max-w-lg flex-col gap-0 overflow-hidden p-0 sm:max-w-xl'>
+          <DialogHeader className='space-y-1.5 border-b px-5 py-4'>
+            <DialogTitle className='flex items-center gap-2 text-base'>
+              <AlertCircle className='size-4 shrink-0 text-amber-600' />
+              {tRecovery('controlRecordTitle')}
+            </DialogTitle>
+            <DialogDescription className='text-xs leading-relaxed'>
+              {tRecovery('controlRecordDescription')}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className='min-h-0 flex-1 overflow-y-auto px-5 py-4'>
+            {!activeCampaignId ? (
+              <p className='mb-3 rounded-md border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
+                {tRecovery('standaloneWarning')}
+              </p>
+            ) : null}
+            <RecoveryPolicyEditor
+              value={recoveryPolicy}
+              onChange={setRecoveryPolicy}
+              disabled={saveRecoveryPolicyMutation.isPending}
+              recordCampaignId={activeCampaignId}
+              recordDeviceSerial={selectedSerial}
+              variant='embedded'
+              scenarioFilter='recovery'
+              onBeforeRecord={async (policy) => {
+                await saveRecoveryPolicyMutation.mutateAsync(policy);
+                setRecoveryDialogOpen(false);
+              }}
+            />
+          </div>
+
+          <div className='flex justify-end gap-2 border-t px-5 py-3'>
+            <Button
+              variant='ghost'
+              size='sm'
+              onClick={() => setRecoveryDialogOpen(false)}
+            >
+              {tModal('cancel')}
+            </Button>
+            <Button
+              size='sm'
+              onClick={() => saveRecoveryPolicyMutation.mutate(recoveryPolicy)}
+              disabled={
+                !activeCampaignId || saveRecoveryPolicyMutation.isPending
+              }
+            >
+              {saveRecoveryPolicyMutation.isPending
+                ? tRecovery('saving')
+                : tRecovery('save')}
             </Button>
           </div>
         </DialogContent>

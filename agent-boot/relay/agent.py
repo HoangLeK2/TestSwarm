@@ -95,7 +95,9 @@ SCRCPY_STABLE_RESET_SECONDS = 30.0
 RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_RELAY_ID_FILE = os.path.join(os.path.dirname(_HERE), ".relay_id")
+_AGENT_BOOT_ROOT = os.path.dirname(_HERE)
+_STATE_DIR = os.getenv("AGENT_BOOT_STATE_DIR", _AGENT_BOOT_ROOT).strip() or _AGENT_BOOT_ROOT
+_RELAY_ID_FILE = os.path.join(_STATE_DIR, ".relay_id")
 
 # CMD_TYPE constants — must match adb_relay_server.py
 CMD_SHELL           = 0
@@ -114,7 +116,12 @@ def _auto_bootstrap_enabled() -> bool:
     }
 
 
-def _load_or_create_relay_id() -> str:
+def load_or_create_relay_id() -> str:
+    """Stable relay identity across restarts (persisted under AGENT_BOOT_STATE_DIR)."""
+    try:
+        os.makedirs(_STATE_DIR, exist_ok=True)
+    except OSError:
+        pass
     if os.path.exists(_RELAY_ID_FILE):
         rid = open(_RELAY_ID_FILE).read().strip()
         if rid:
@@ -123,6 +130,16 @@ def _load_or_create_relay_id() -> str:
     with open(_RELAY_ID_FILE, "w") as f:
         f.write(rid)
     return rid
+
+
+async def _cancel_and_await(*tasks: asyncio.Task | None) -> None:
+    """Cancel tasks and await completion so Queue.get() waiters are not leaked."""
+    pending = [t for t in tasks if t is not None and not t.done()]
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 class RelayAgent:
@@ -219,6 +236,10 @@ class RelayAgent:
         self._stream_tasks: TaskRegistry = TaskRegistry()
         self._extra_data_tasks: dict[str, asyncio.Task] = {}
         self._extra_data_cancel_events: dict[str, asyncio.Event] = {}
+        self._u2_batch_tasks: dict[str, asyncio.Task] = {}
+        self._u2_batch_cancel_events: dict[str, asyncio.Event] = {}
+        self._command_max_queue = max(8, _env_int("COMMAND_MAX_QUEUE_PER_DEVICE", 128))
+        self._command_state: dict[str, dict[str, Any]] = {}
         self._loop_watchdog: Optional[LoopWatchdog] = None
         self._runtime_stats: Optional[RuntimeStats] = None
 
@@ -230,6 +251,8 @@ class RelayAgent:
         self._hb_cache_key: Optional[tuple] = None
         self._hb_cache_payload: Optional[str] = None
         self._hb_caps_version: int = 0
+        self._capability_probe_inflight: set[str] = set()
+        self._capability_probe_tasks: set[asyncio.Task] = set()
 
     def _ensure_default_scrcpy_desired(self) -> None:
         """
@@ -503,11 +526,9 @@ class RelayAgent:
                             continue
                         await self._handle_server_msg(msg, send_queue, loop)
             finally:
-                watcher_task.cancel()
-                hb_task.cancel()
-                sender_task.cancel()
                 await send_queue.put(None)
-                self._cancel_scrcpy_restart_tasks()
+                await _cancel_and_await(watcher_task, hb_task, sender_task)
+                await self._shutdown_stream_helpers()
                 if self._active_send_queue is send_queue:
                     self._active_send_queue = None
                     self._active_loop = None
@@ -607,12 +628,14 @@ class RelayAgent:
             finally:
                 client.stop()
                 ctrl_client.stop()
-                watcher_task.cancel()
-                hb_task.cancel()
-                consume_task.cancel()
-                ctrl_task.cancel()
                 await send_queue.put(None)
-                self._cancel_scrcpy_restart_tasks()
+                await _cancel_and_await(
+                    watcher_task,
+                    hb_task,
+                    consume_task,
+                    ctrl_task,
+                )
+                await self._shutdown_stream_helpers()
                 if self._active_send_queue is send_queue:
                     self._active_send_queue = None
                     self._active_loop = None
@@ -732,29 +755,7 @@ class RelayAgent:
                     name=f"auto-bootstrap-{serial}",
                 )
             loop = asyncio.get_running_loop()
-            await self._ensure_capabilities_for_serials([serial], loop)
-            pairs = await loop.run_in_executor(
-                adb_executor(),
-                reconcile_usb_preferred_for_duplicate_devices,
-                self._registry,
-            )
-            for tcp_s, usb_s in pairs or []:
-                self._tcp_suppressed_for_usb[tcp_s] = usb_s
-                if ":" in tcp_s:
-                    self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
-            for tcp_s, _usb_s in pairs or []:
-                await self._scrcpy_mgr.stop_session(tcp_s, reason="manual_stop")
-                tcp_state = self._scrcpy_desired.pop(tcp_s, None)
-                if tcp_state is not None:
-                    restart_task = tcp_state.get("restart_task")
-                    if restart_task and not restart_task.done():
-                        restart_task.cancel()
-                    logger.info(
-                        "scrcpy: dropped duplicate TCP desired state %s (USB anchor %s)",
-                        tcp_s,
-                        _usb_s,
-                    )
-                self._scrcpy_logical_to_adb.pop(tcp_s, None)
+            self._schedule_capability_probe([serial], send_queue, loop)
             if self._scrcpy_auto_resume_enabled:
                 self._ensure_default_scrcpy_desired()
                 await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
@@ -789,10 +790,75 @@ class RelayAgent:
             await asyncio.sleep(30)
             await self._send_heartbeat(send_queue)
 
+    async def _refresh_devices_after_adb_connect(
+        self,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+        requested_serial: str,
+    ) -> None:
+        """Publish a fresh serial list immediately after a successful adb connect."""
+        try:
+            serials = await loop.run_in_executor(adb_executor(), _list_serials)
+        except Exception as exc:
+            logger.debug(
+                "post-adb-connect device refresh failed serial=%s: %s",
+                requested_serial,
+                exc,
+            )
+            return
+        if not serials:
+            logger.debug(
+                "post-adb-connect device refresh found no serials requested=%s",
+                requested_serial,
+            )
+            return
+
+        changed = self._seed_registry_from_adb_serials(
+            serials,
+            source="post-adb-connect refresh",
+            requested_serial=requested_serial,
+        )
+
+        # Force a heartbeat even if the serial set matches the cached key:
+        # pending scrcpy on the server may be waiting for this immediate publish.
+        self._hb_cache_key = None
+        await self._send_heartbeat(send_queue)
+
+        if changed and self._scrcpy_auto_resume_enabled:
+            self._ensure_default_scrcpy_desired()
+            await self._resume_desired_scrcpy_sessions(
+                send_queue,
+                loop,
+                source="post-adb-connect-refresh",
+            )
+
+    def _seed_registry_from_adb_serials(
+        self,
+        serials: list[str],
+        *,
+        source: str,
+        requested_serial: str = "",
+    ) -> bool:
+        changed = False
+        for serial in serials:
+            ctx, state_changed = self._registry.on_adb_event(serial, "device")
+            changed = changed or state_changed
+            if requested_serial:
+                logger.info(
+                    "%s: %s -> %s requested=%s",
+                    source,
+                    serial,
+                    ctx.state.value,
+                    requested_serial,
+                )
+            else:
+                logger.info("%s: %s -> %s", source, serial, ctx.state.value)
+        return changed
+
     async def _ensure_capabilities_for_serials(
         self, serials: list[str], loop: asyncio.AbstractEventLoop
     ) -> None:
-        """Probe capabilities for ONLINE serials missing cached caps (before heartbeat)."""
+        """Probe capabilities for ONLINE serials missing cached caps."""
         for serial in serials:
             ctx = self._registry.get(serial)
             if not ctx or ctx.state != DeviceState.ONLINE or ctx.capabilities:
@@ -804,15 +870,144 @@ class RelayAgent:
             if wlan_ip and ":" not in serial:
                 self._atx_lan_host_cache[serial] = wlan_ip
             logger.info(
-                "capabilities (pre-heartbeat) %s: wlan_ip=%s",
+                "capabilities probed %s: wlan_ip=%s",
                 serial,
                 wlan_ip or "unset",
             )
 
-    async def _send_heartbeat(self, send_queue: asyncio.Queue) -> None:
+    def _missing_capability_serials(self, serials: list[str]) -> list[str]:
+        missing: list[str] = []
+        for serial in serials:
+            ctx = self._registry.get(serial)
+            if (
+                ctx
+                and ctx.state == DeviceState.ONLINE
+                and not ctx.capabilities
+                and serial not in self._capability_probe_inflight
+            ):
+                missing.append(serial)
+        return missing
+
+    def _send_queue_is_current(self, send_queue: asyncio.Queue) -> bool:
+        return self._active_send_queue is None or self._active_send_queue is send_queue
+
+    def _schedule_capability_probe(
+        self,
+        serials: list[str],
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        missing = self._missing_capability_serials(serials)
+        if not missing:
+            return
+        for serial in missing:
+            self._capability_probe_inflight.add(serial)
+        task = asyncio.create_task(
+            self._probe_capabilities_then_publish(missing, send_queue, loop),
+            name=f"capabilities-probe-{','.join(missing[:3])}",
+        )
+        self._capability_probe_tasks.add(task)
+        task.add_done_callback(self._capability_probe_tasks.discard)
+
+    async def _apply_usb_preference_reconcile(
+        self,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        pairs = await loop.run_in_executor(
+            adb_executor(),
+            reconcile_usb_preferred_for_duplicate_devices,
+            self._registry,
+        )
+        for tcp_s, usb_s in pairs or []:
+            self._tcp_suppressed_for_usb[tcp_s] = usb_s
+            if ":" in tcp_s:
+                self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
+        for tcp_s, _usb_s in pairs or []:
+            await self._scrcpy_mgr.stop_session(tcp_s, reason="manual_stop")
+            tcp_state = self._scrcpy_desired.pop(tcp_s, None)
+            if tcp_state is not None:
+                restart_task = tcp_state.get("restart_task")
+                if restart_task and not restart_task.done():
+                    restart_task.cancel()
+                logger.info(
+                    "scrcpy: dropped duplicate TCP desired state %s (USB anchor %s)",
+                    tcp_s,
+                    _usb_s,
+                )
+            self._scrcpy_logical_to_adb.pop(tcp_s, None)
+
+    async def _probe_capabilities_then_publish(
+        self,
+        serials: list[str],
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        try:
+            await self._ensure_capabilities_for_serials(serials, loop)
+            await self._apply_usb_preference_reconcile(send_queue, loop)
+            if self._send_queue_is_current(send_queue):
+                await self._send_heartbeat(send_queue, schedule_capability_probe=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("capability probe background failed serials=%s: %s", serials, exc)
+        finally:
+            for serial in serials:
+                self._capability_probe_inflight.discard(serial)
+
+    def _cancel_capability_probe_tasks(self) -> None:
+        for task in list(self._capability_probe_tasks):
+            task.cancel()
+        self._capability_probe_tasks.clear()
+        self._capability_probe_inflight.clear()
+
+    async def _shutdown_stream_helpers(self) -> None:
+        """Cancel and await per-stream helper tasks blocked on queue I/O."""
+        workers: list[asyncio.Task] = []
+
+        for state in self._command_state.values():
+            worker = state.get("worker")
+            if worker is not None and not worker.done():
+                workers.append(worker)
+        self._command_state.clear()
+
+        for state in self._scrcpy_desired.values():
+            task = state.get("restart_task")
+            if task is not None and not task.done():
+                workers.append(task)
+            state["restart_task"] = None
+
+        for task in list(self._capability_probe_tasks):
+            if not task.done():
+                workers.append(task)
+        self._capability_probe_tasks.clear()
+        self._capability_probe_inflight.clear()
+
+        await _cancel_and_await(*workers)
+
+    async def _send_heartbeat(
+        self,
+        send_queue: asyncio.Queue,
+        *,
+        schedule_capability_probe: bool = True,
+    ) -> None:
         serials = self._registry.online_serials
         loop = asyncio.get_running_loop()
-        await self._ensure_capabilities_for_serials(serials, loop)
+        if not serials:
+            try:
+                snapshot = await loop.run_in_executor(adb_executor(), _list_serials)
+            except Exception as exc:
+                logger.debug("heartbeat adb snapshot failed: %s", exc)
+                snapshot = []
+            if snapshot:
+                self._seed_registry_from_adb_serials(
+                    snapshot,
+                    source="heartbeat adb snapshot",
+                )
+                serials = self._registry.online_serials
+        if schedule_capability_probe:
+            self._schedule_capability_probe(serials, send_queue, loop)
 
         key = (tuple(serials), self._hb_caps_version)
         if key == self._hb_cache_key and self._hb_cache_payload is not None:
@@ -866,17 +1061,7 @@ class RelayAgent:
             logger.info("registered: %s", msg.get("message"))
 
         elif mtype == "command":
-            cmd_serial = str(msg.get("serial", "") or "")
-            result = await loop.run_in_executor(
-                adb_executor(),
-                self._execute_command,
-                msg.get("msg_id", ""),
-                cmd_serial,
-                msg.get("cmd", ""),
-                int(msg.get("timeout", 30)),
-                int(msg.get("cmd_type", CMD_SHELL)),
-            )
-            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+            await self._enqueue_command(msg, send_queue, loop)
 
         elif mtype == "scrcpy_start":
             req = str(msg.get("serial", "") or "")
@@ -934,10 +1119,27 @@ class RelayAgent:
             )
 
         elif mtype == "u2_batch":
-            self._stream_tasks.add(
+            req_id = str(msg.get("id", "") or "")
+            if req_id:
+                msg = dict(msg)
+                cancel_event = asyncio.Event()
+                msg["_cancel_event"] = cancel_event
+                self._u2_batch_cancel_events[req_id] = cancel_event
+            task = self._stream_tasks.add(
                 self._guarded(u2_batch_sem(), self._handle_u2_batch(msg, send_queue)),
                 name="u2-batch",
             )
+            if req_id:
+                self._u2_batch_tasks[req_id] = task
+                task.add_done_callback(
+                    lambda _task, _req_id=req_id: (
+                        self._u2_batch_tasks.pop(_req_id, None),
+                        self._u2_batch_cancel_events.pop(_req_id, None),
+                    )
+                )
+
+        elif mtype == "u2_batch_cancel":
+            self._cancel_u2_batch(str(msg.get("id", "") or ""))
 
         elif mtype == "u2_flow":
             self._stream_tasks.add(
@@ -1199,7 +1401,7 @@ class RelayAgent:
                 data = {}
             elif action == "key":
                 key = str(payload.get("key", "") or "").lower()
-                key_map = {"home": "3", "back": "4", "recent": "187", "app_switch": "187", "enter": "66"}
+                key_map = {"home": "3", "back": "4", "recent": "187", "app_switch": "187", "enter": "66", "paste": "279", "delete": "67", "del": "67"}
                 code = key_map.get(key, key)
                 out, rc = _adb_shell(serial, f"input keyevent {code}", timeout=5)
                 ok = rc == 0
@@ -1429,10 +1631,14 @@ class RelayAgent:
         """Execute a batch of primitive u2 actions and return aggregated results."""
         serial = str(msg.get("serial", "") or "")
         actions = msg.get("actions") or []
+        cancel_event = msg.get("_cancel_event")
+        if not isinstance(cancel_event, asyncio.Event):
+            cancel_event = None
         result = await self._try_u2_batch_touch_fast_path(
             serial=serial,
             actions=actions,
             early_exit=bool(msg.get("early_exit", True)),
+            cancel_event=cancel_event,
         )
         if result is not None:
             pass
@@ -1444,6 +1650,7 @@ class RelayAgent:
                 serial=serial,
                 actions=actions,
                 early_exit=bool(msg.get("early_exit", True)),
+                cancel_event=cancel_event,
             )
         result["type"] = "u2_batch_result"
         result["id"] = msg.get("id", "")
@@ -1461,6 +1668,7 @@ class RelayAgent:
         serial: str,
         actions: list[dict],
         early_exit: bool,
+        cancel_event: Optional[asyncio.Event] = None,
     ) -> Optional[dict]:
         """Low-latency u2_batch path for coordinate touch only.
 
@@ -1485,6 +1693,14 @@ class RelayAgent:
             results: list[dict] = []
             stopped_at: Optional[int] = None
             for idx, (op, payload, timeout) in enumerate(prepared):
+                if cancel_event is not None and cancel_event.is_set():
+                    return {
+                        "ok": False,
+                        "stopped_at": idx,
+                        "results": results,
+                        "error": "cancelled",
+                        "cancelled": True,
+                    }
                 try:
                     res = self._do_u2_http(
                         serial,
@@ -1504,6 +1720,14 @@ class RelayAgent:
                 if not ok and early_exit:
                     stopped_at = idx
                     break
+                if cancel_event is not None and cancel_event.is_set() and idx + 1 < len(prepared):
+                    return {
+                        "ok": False,
+                        "stopped_at": idx + 1,
+                        "results": results,
+                        "error": "cancelled",
+                        "cancelled": True,
+                    }
             all_ok = all(bool(item.get("ok")) for item in results) and len(results) == len(prepared)
             return {
                 "ok": all_ok,
@@ -1749,6 +1973,99 @@ class RelayAgent:
         task.cancel()
         logger.info("extra_data cancelled request_id=%s", req_id)
         return True
+
+    def _cancel_u2_batch(self, req_id: str) -> bool:
+        if not req_id:
+            return False
+        event = self._u2_batch_cancel_events.get(req_id)
+        if event is not None:
+            event.set()
+        task = self._u2_batch_tasks.get(req_id)
+        if task is None or task.done():
+            return event is not None
+        logger.info("u2_batch cancel requested request_id=%s", req_id)
+        return True
+
+    async def _enqueue_command(
+        self, msg: dict, send_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        cmd_serial = str(msg.get("serial", "") or "")
+        serial_key = cmd_serial or "-"
+        state = self._command_state.get(serial_key)
+        if state is None:
+            state = {
+                "q": asyncio.Queue(maxsize=self._command_max_queue),
+                "worker": None,
+            }
+            self._command_state[serial_key] = state
+        worker = state.get("worker")
+        if worker is None or worker.done():
+            state["worker"] = asyncio.create_task(
+                self._command_worker(state["q"], send_queue, loop),
+                name=f"cmd-worker-{serial_key}",
+            )
+        try:
+            state["q"].put_nowait(msg)
+        except asyncio.QueueFull:
+            result = dumps({
+                "type": "result",
+                "msg_id": str(msg.get("msg_id", "") or ""),
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": f"command queue full: serial={serial_key}",
+            })
+            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+
+    async def _command_worker(
+        self,
+        q: asyncio.Queue,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        while True:
+            msg = await q.get()
+            if msg is None:
+                return
+            cmd_serial = str(msg.get("serial", "") or "")
+            cmd_type = int(msg.get("cmd_type", CMD_SHELL))
+            result = await loop.run_in_executor(
+                adb_executor(),
+                self._execute_command,
+                msg.get("msg_id", ""),
+                cmd_serial,
+                msg.get("cmd", ""),
+                int(msg.get("timeout", 30)),
+                cmd_type,
+            )
+            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+            if cmd_type == CMD_ADB_CONNECT:
+                try:
+                    parsed = json.loads(result)
+                except Exception:
+                    parsed = {}
+                if parsed.get("ok"):
+                    await self._refresh_devices_after_adb_connect(
+                        send_queue,
+                        loop,
+                        cmd_serial,
+                    )
+
+    def _cancel_command_workers(self, serial: str | None = None) -> None:
+        if serial is not None:
+            serial_key = serial or "-"
+            state = self._command_state.pop(serial_key, None)
+            if not state:
+                return
+            worker = state.get("worker")
+            if worker is not None and not worker.done():
+                worker.cancel()
+            return
+        for state in self._command_state.values():
+            worker = state.get("worker")
+            if worker is not None and not worker.done():
+                worker.cancel()
+        self._command_state.clear()
 
     def _execute_command(
         self,
@@ -2088,6 +2405,7 @@ class RelayAgent:
             breakers.pop(serial, None)
 
         # Cancel any pending scrcpy restart task for this serial.
+        self._cancel_command_workers(serial)
         sd_state = self._scrcpy_desired.get(serial)
         if sd_state is not None:
             task = sd_state.get("restart_task")

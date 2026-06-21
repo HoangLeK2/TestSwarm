@@ -263,6 +263,46 @@ async def test_list_relay_agents_hides_serials_when_control_channel_offline():
     assert result[0].device_names == {}
 
 
+def test_live_relay_serials_requires_video_relay_channel():
+    from unittest.mock import MagicMock, patch
+
+    from api.routes.relay_agents import _live_relay_serials
+
+    fake_conn = MagicMock()
+    fake_conn.serials = {"10AE7S00HD002JK"}
+
+    fake_ctrl = MagicMock()
+    fake_ctrl.conn_for_relay.return_value = fake_conn
+
+    fake_relay = MagicMock()
+    fake_relay.registered_relays.return_value = {}
+
+    with patch("api.routes.relay_agents._get_ctrl_optional", return_value=fake_ctrl), \
+         patch("api.routes.relay_agents._get_relay_manager_optional", return_value=fake_relay):
+        assert _live_relay_serials("relay-x") is None
+
+
+def test_live_relay_serials_intersects_video_and_control_serials():
+    from unittest.mock import MagicMock, patch
+
+    from api.routes.relay_agents import _live_relay_serials
+
+    fake_conn = MagicMock()
+    fake_conn.serials = {"10AE7S00HD002JK", "control-only"}
+
+    fake_ctrl = MagicMock()
+    fake_ctrl.conn_for_relay.return_value = fake_conn
+
+    fake_relay = MagicMock()
+    fake_relay.registered_relays.return_value = {
+        "relay-x": ["10AE7S00HD002JK", "video-only"]
+    }
+
+    with patch("api.routes.relay_agents._get_ctrl_optional", return_value=fake_ctrl), \
+         patch("api.routes.relay_agents._get_relay_manager_optional", return_value=fake_relay):
+        assert _live_relay_serials("relay-x") == {"10AE7S00HD002JK"}
+
+
 @pytest.mark.asyncio
 async def test_relay_token_routes_are_user_scoped():
     from unittest.mock import AsyncMock, MagicMock, patch

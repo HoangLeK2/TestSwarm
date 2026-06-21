@@ -111,3 +111,100 @@ def test_nut_binh_luan_content_desc_matches_action_button() -> None:
         'content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." bounds="[203,2649][433,2800]" />'
     )
     assert _node_has_comment_button_token(node)
+
+
+def test_reply_and_comment_like_do_not_match_comment_button_token() -> None:
+    from lxml import etree
+
+    from relay.extra_data.parsers.facebook.comment_pipeline import _node_has_comment_button_token
+
+    reply = etree.fromstring(
+        '<node class="android.widget.Button" clickable="true" text="Trả lời" bounds="[120,1350][220,1390]" />'
+    )
+    comment_like = etree.fromstring(
+        '<node class="android.widget.Button" clickable="true" '
+        'content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." '
+        'bounds="[40,1350][160,1390]" />'
+    )
+    assert not _node_has_comment_button_token(reply)
+    assert not _node_has_comment_button_token(comment_like)
+
+
+def test_post_detail_prefers_action_bar_comment_over_inline_preview(monkeypatch) -> None:
+    from lxml import etree
+
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        _find_comment_button_click_target_in_element,
+        _post_action_bar_row_band,
+        _resolve_post_detail_comment_target,
+    )
+    from relay.extra_data.parsers.facebook import post_open_pipeline as pop_mod
+
+    xml = """
+    <hierarchy bounds="[0,0][1080,2400]">
+      <node class="android.widget.Button" clickable="true"
+            content-desc="Nút Thích. Nhấn đúp để bày tỏ cảm xúc về bài viết."
+            bounds="[40,1180][200,1240]" />
+      <node class="android.widget.Button" clickable="true" text="Bình luận"
+            bounds="[220,1180][380,1240]" />
+      <node class="android.widget.Button" clickable="true"
+            content-desc="Nút Chia sẻ. Nhấn đúp để chia sẻ bài viết."
+            bounds="[400,1180][560,1240]" />
+      <node class="android.view.ViewGroup" clickable="true" bounds="[0,1260][1080,1700]">
+        <node class="android.widget.Button" clickable="true"
+              content-desc="55 bình luận" bounds="[40,1280][220,1320]" />
+        <node class="android.widget.Button" clickable="true" text="Thích"
+              bounds="[40,1360][120,1400]" />
+        <node class="android.widget.Button" clickable="true" text="Trả lời"
+              bounds="[140,1360][240,1400]" />
+        <node class="android.widget.TextView" text="Kim Ssa" bounds="[80,1330][260,1360]" />
+      </node>
+    </hierarchy>
+    """
+    root = etree.fromstring(xml)
+    band = _post_action_bar_row_band(root, 2400)
+    assert band is not None
+    hit = _find_comment_button_click_target_in_element(
+        root,
+        y_band=band,
+        prefer_compact=True,
+        max_tap_height=120,
+    )
+    assert hit is not None
+    assert list(hit["bounds"]) == [220, 1180, 380, 1240]
+
+    monkeypatch.setattr(pop_mod, "hierarchy_is_fb_post_detail_from_xml", lambda _xml: True)
+    cand = _resolve_post_detail_comment_target(
+        root,
+        locked_anchor={"pid": "p1", "post_key": "p1"},
+        screen_h=2400,
+        screen_w=1080,
+    )
+    assert cand is not None
+    assert list(cand["comment_bounds"]) == [220, 1180, 380, 1240]
+
+
+def test_compact_target_avoids_large_clickable_wrapper() -> None:
+    from lxml import etree
+
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        _find_comment_button_click_target_in_element,
+    )
+
+    xml = """
+    <node bounds="[0,0][1080,2400]">
+      <node class="android.view.ViewGroup" clickable="true" bounds="[0,1150][1080,1700]">
+        <node class="android.widget.Button" clickable="true" text="Bình luận"
+              bounds="[220,1180][380,1220]" />
+        <node class="android.widget.TextView" text="Kim Ssa" bounds="[80,1300][300,1330]" />
+      </node>
+    </node>
+    """
+    root = etree.fromstring(xml)
+    hit = _find_comment_button_click_target_in_element(
+        root,
+        prefer_compact=True,
+        max_tap_height=120,
+    )
+    assert hit is not None
+    assert list(hit["bounds"]) == [220, 1180, 380, 1220]

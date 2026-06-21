@@ -33,10 +33,8 @@ _os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 import argparse
 import asyncio
 import os
-import socket
 import sys
 import time
-import uuid
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -109,8 +107,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=_env("RELAY_ENROLLMENT_TOKEN", ""),
                         help="User-scoped relay ownership token (default: $RELAY_ENROLLMENT_TOKEN)")
     parser.add_argument("--relay-id", metavar="ID",
-                        default=_env("RELAY_ID", f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"),
-                        help="Stable relay ID (default: $RELAY_ID or hostname+uuid)")
+                        default="",
+                        help="Stable relay ID (default: $RELAY_ID or persisted .relay_id file)")
     parser.add_argument("--relay-mode", metavar="MODE",
                         default=_env("RELAY_MODE", "ws"),
                         choices=["ws", "grpc"],
@@ -284,9 +282,21 @@ def _run_relay(args: argparse.Namespace) -> None:
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def _resolve_relay_id(args: argparse.Namespace) -> None:
+    """Pick relay id once per process: explicit flag/env, else persisted file."""
+    explicit = (getattr(args, "relay_id", "") or "").strip() or _env("RELAY_ID", "").strip()
+    if explicit:
+        args.relay_id = explicit
+        return
+    from relay.agent import load_or_create_relay_id
+
+    args.relay_id = load_or_create_relay_id()
+
+
 def main() -> None:
     _load_dotenv()
     args = _build_parser().parse_args()
+    _resolve_relay_id(args)
 
     if args.relay_only:
         _run_relay(args)

@@ -257,8 +257,8 @@ class AdbRelayManager:
         self._capabilities: Dict[str, Dict] = {}
         # serial → "available" | "busy"
         self._pool_state: Dict[str, str] = {}
-        # ip → callable — called when relay reports a device at that IP.
-        self._pending_scrcpy: Dict[str, Any] = {}
+        # ip/serial → callbacks — called when relay reports a matching device.
+        self._pending_scrcpy: Dict[str, list[Any]] = {}
         # Called with (serial) whenever a new device comes online via relay.
         self._on_device_online: Optional[Any] = None
         # Called with (serial) when a relay serial is removed.
@@ -287,6 +287,22 @@ class AdbRelayManager:
         """Current relay serial index (transport-visible devices)."""
         return list(self._serial_index.keys())
 
+    def _pending_keys_for_serial(self, serial: str) -> list[str]:
+        ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
+        return list(dict.fromkeys([serial, ip]))
+
+    def _pop_pending_scrcpy_callbacks(self, serial: str) -> list[tuple[str, Any]]:
+        callbacks: list[tuple[str, Any]] = []
+        seen: set[int] = set()
+        for key in self._pending_keys_for_serial(serial):
+            for cb in self._pending_scrcpy.pop(key, []):
+                ident = id(cb)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                callbacks.append((key, cb))
+        return callbacks
+
     def set_on_capabilities_update(self, callback: Any) -> None:
         """Register a callback fired with (serial, caps) when heartbeat caps arrive."""
         self._on_capabilities_update = callback
@@ -304,10 +320,8 @@ class AdbRelayManager:
             for s in conn.serials:
                 self._serial_index[s] = conn.relay_id
             for s in conn.serials:
-                ip = s.rsplit(":", 1)[0] if ":" in s else s
-                cb = self._pending_scrcpy.pop(ip, None)
-                if cb is not None:
-                    callbacks_to_fire.append((ip, s, cb))
+                for key, cb in self._pop_pending_scrcpy_callbacks(s):
+                    callbacks_to_fire.append((key, s, cb))
         logger.info(
             "relay registered: id=%s serials=%s",
             conn.relay_id, sorted(conn.serials),
@@ -345,13 +359,11 @@ class AdbRelayManager:
                     except Exception as exc:
                         logger.debug("on_device_offline error serial=%s: %s", s, exc)
             for s in new_serials:
-                ip = s.rsplit(":", 1)[0] if ":" in s else s
-                cb = self._pending_scrcpy.pop(ip, None)
-                if cb is not None:
+                for key, cb in self._pop_pending_scrcpy_callbacks(s):
                     try:
                         cb(s)
                     except Exception as exc:
-                        logger.debug("pending scrcpy callback error ip=%s: %s", ip, exc)
+                        logger.debug("pending scrcpy callback error key=%s: %s", key, exc)
                 if self._on_device_online:
                     try:
                         self._on_device_online(s)
@@ -525,10 +537,20 @@ class AdbRelayManager:
             logger.info("pool: released %s", serial)
 
     def register_pending_scrcpy(self, ip: str, callback: Any) -> None:
-        self._pending_scrcpy[ip] = callback
+        callbacks = self._pending_scrcpy.setdefault(ip, [])
+        if callback not in callbacks:
+            callbacks.append(callback)
 
-    def cancel_pending_scrcpy(self, ip: str) -> None:
-        self._pending_scrcpy.pop(ip, None)
+    def cancel_pending_scrcpy(self, ip: str, callback: Any | None = None) -> None:
+        if callback is None:
+            self._pending_scrcpy.pop(ip, None)
+            return
+        callbacks = self._pending_scrcpy.get(ip)
+        if not callbacks:
+            return
+        self._pending_scrcpy[ip] = [cb for cb in callbacks if cb is not callback]
+        if not self._pending_scrcpy[ip]:
+            self._pending_scrcpy.pop(ip, None)
 
     # ── Scrcpy relay ──────────────────────────────────────────────────────────
 
@@ -606,16 +628,30 @@ class AdbRelayManager:
             # Self-heal race: relay may start streaming before the WS side finishes
             # attach_scrcpy_stream registration. If a pending callback exists for
             # this device IP, trigger it now so receiver binding catches up.
-            ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
-            cb = self._pending_scrcpy.get(ip)
-            if cb is not None:
-                try:
-                    cb(serial)
-                except Exception as exc:
-                    logger.debug("pending scrcpy callback error (frame race) ip=%s: %s", ip, exc)
+            keys = self._pending_keys_for_serial(serial)
+            callbacks: list[Any] = []
+            seen: set[int] = set()
+            for key in keys:
+                for cb in self._pending_scrcpy.pop(key, []):
+                    ident = id(cb)
+                    if ident in seen:
+                        continue
+                    seen.add(ident)
+                    callbacks.append(cb)
+            if callbacks:
+                for cb in callbacks:
+                    try:
+                        cb(serial)
+                    except Exception as exc:
+                        logger.debug(
+                            "pending scrcpy callback error (frame race) serial=%s: %s",
+                            serial,
+                            exc,
+                        )
                 receiver = self._resolve_receiver_for_frame(serial)
                 if receiver is not None:
-                    self._pending_scrcpy.pop(ip, None)
+                    for key in keys:
+                        self._pending_scrcpy.pop(key, None)
                     try:
                         receiver.push_frame(
                             data,
@@ -933,10 +969,19 @@ class AdbRelayManager:
         actions: list[dict],
         early_exit: bool = True,
         timeout: float = 30.0,
+        cancel_event: Any = None,
     ) -> dict:
         """Send a u2_batch request to agent-boot and await aggregated results."""
         if not actions:
             return {"ok": True, "stopped_at": None, "results": [], "error": None}
+        if cancel_event is not None and cancel_event.is_set():
+            return {
+                "ok": False,
+                "stopped_at": 0,
+                "results": [],
+                "error": "cancelled",
+                "cancelled": True,
+            }
         conn = self.relay_for_serial(serial)
         if conn is None:
             return {"ok": False, "stopped_at": 0, "results": [],
@@ -949,15 +994,43 @@ class AdbRelayManager:
                 serial=actual,
                 prepared=fast_touch,
                 early_exit=early_exit,
+                cancel_event=cancel_event,
             )
         req_id = f"batch-{uuid.uuid4().hex[:8]}"
-        return await conn.send_json_request(
-            msg={
-                "type": "u2_batch", "id": req_id, "serial": actual,
-                "schema": 1, "early_exit": early_exit, "actions": actions,
-            },
-            reply_id=req_id, timeout=timeout,
+        request_task = asyncio.create_task(
+            conn.send_json_request(
+                msg={
+                    "type": "u2_batch", "id": req_id, "serial": actual,
+                    "schema": 1, "early_exit": early_exit, "actions": actions,
+                },
+                reply_id=req_id, timeout=timeout,
+            )
         )
+        try:
+            while True:
+                if request_task.done():
+                    return await request_task
+                if cancel_event is not None and cancel_event.is_set():
+                    with contextlib.suppress(Exception):
+                        await conn.send_json_message({
+                            "type": "u2_batch_cancel",
+                            "id": req_id,
+                            "serial": actual,
+                        })
+                    request_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await request_task
+                    return {
+                        "ok": False,
+                        "stopped_at": 0,
+                        "results": [],
+                        "error": "cancelled",
+                        "cancelled": True,
+                    }
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            request_task.cancel()
+            raise
 
     @staticmethod
     def _u2_batch_touch_fast_path_actions(
@@ -997,10 +1070,19 @@ class AdbRelayManager:
         serial: str,
         prepared: list[tuple[str, dict, float]],
         early_exit: bool,
+        cancel_event: Any = None,
     ) -> dict:
         results: list[dict] = []
         stopped_at: Optional[int] = None
         for idx, (op, payload, timeout) in enumerate(prepared):
+            if cancel_event is not None and cancel_event.is_set():
+                return {
+                    "ok": False,
+                    "stopped_at": idx,
+                    "results": results,
+                    "error": "cancelled",
+                    "cancelled": True,
+                }
             try:
                 res = await conn.send_u2_request(
                     serial,
@@ -1020,6 +1102,14 @@ class AdbRelayManager:
             if not ok and early_exit:
                 stopped_at = idx
                 break
+            if cancel_event is not None and cancel_event.is_set() and idx + 1 < len(prepared):
+                return {
+                    "ok": False,
+                    "stopped_at": idx + 1,
+                    "results": results,
+                    "error": "cancelled",
+                    "cancelled": True,
+                }
         all_ok = all(bool(item.get("ok")) for item in results) and len(results) == len(prepared)
         return {
             "ok": all_ok,

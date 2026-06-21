@@ -43,6 +43,23 @@ _MASK_INDEX           = 0x800000
 _MASK_INSTANCE        = 0x1000000
 
 
+class U2BatchError(RuntimeError):
+    """u2_batch failure that preserves partial agent results."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stopped_at: int | None = None,
+        results: list[dict] | None = None,
+        cancelled: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.stopped_at = stopped_at
+        self.results = list(results or [])
+        self.cancelled = bool(cancelled)
+
+
 # ── Relay HTTP session (duck-type requests.Session) ──────────────────────────
 
 class _RelayResponse:
@@ -162,15 +179,31 @@ class _BatchRelaySession:
         self._serial = serial
         self._loop = loop
 
-    def batch(self, actions: list[dict], timeout: float = 30.0) -> list[dict]:
+    def batch(
+        self,
+        actions: list[dict],
+        timeout: float = 30.0,
+        cancel_event: Any | None = None,
+    ) -> list[dict]:
         import asyncio
-        fut = asyncio.run_coroutine_threadsafe(
-            self._mgr.u2_batch(self._serial, actions, timeout=timeout),
-            self._loop,
-        )
+        if cancel_event is None:
+            coro = self._mgr.u2_batch(self._serial, actions, timeout=timeout)
+        else:
+            coro = self._mgr.u2_batch(
+                self._serial,
+                actions,
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
         res = fut.result(timeout=timeout + 15.0)
         if not res.get("ok"):
-            raise RuntimeError(res.get("error") or "u2_batch failed")
+            raise U2BatchError(
+                res.get("error") or "u2_batch failed",
+                stopped_at=res.get("stopped_at"),
+                results=res.get("results") or [],
+                cancelled=bool(res.get("cancelled")),
+            )
         return res.get("results") or []
 
     def flow(self, name: str, params: dict, timeout: float = 30.0) -> dict:
@@ -841,6 +874,7 @@ class U2JsonRpcClient:
         # Cache working press method after first success to avoid 8 RPC retries
         self._press_method: Optional[str] = None
         self._press_keycode_method: Optional[str] = None
+        self._dump_hierarchy2_supported: Optional[bool] = None
         # Optional ADB shell callable (transport.shell_safe) for operations
         # that require ADB (e.g. app_start via `am start`).
         self._adb_shell: Optional[Callable[[str], str]] = adb_shell
@@ -959,6 +993,7 @@ class U2JsonRpcClient:
     _KEYCODES: Dict[str, int] = {
         "home": 3, "back": 4, "menu": 82, "power": 26,
         "enter": 66, "del": 67, "delete": 67, "tab": 61,
+        "paste": 279,
         "recent": 187, "app_switch": 187,
         "volumeup": 24, "volumedown": 25,
     }
@@ -1032,6 +1067,57 @@ class U2JsonRpcClient:
                 last_exc = exc
 
         raise RuntimeError(f"u2 press({k!r}) unsupported: {last_exc}")
+
+    # ── AdbKeyboard IME (openatx u2 — incremental typing, not setText/paste) ─
+
+    _ADB_KEYBOARD_IME = "com.github.uiautomator/.AdbKeyboard"
+    _ADB_BROADCAST_OK = -1
+
+    def _adb_shell_run(self, cmd: str) -> str:
+        if self._adb_shell is None:
+            raise RuntimeError("adb_shell callable is required for AdbKeyboard input")
+        return str(self._adb_shell(cmd) or "")
+
+    @staticmethod
+    def _adb_broadcast_code(output: str) -> Optional[int]:
+        m = re.search(r"result=(-?\d+)", output or "")
+        return int(m.group(1)) if m else None
+
+    def adb_keyboard_ensure_ime(self) -> None:
+        current = self._adb_shell_run("settings get secure default_input_method").strip()
+        if current == self._ADB_KEYBOARD_IME:
+            return
+        self._adb_shell_run(f"ime enable {self._ADB_KEYBOARD_IME}")
+        self._adb_shell_run(f"ime set {self._ADB_KEYBOARD_IME}")
+        self._adb_shell_run(
+            f"settings put secure default_input_method {self._ADB_KEYBOARD_IME}"
+        )
+
+    def adb_keyboard_input_text(self, text: str, *, hide: bool = False) -> None:
+        import base64
+
+        if not text:
+            return
+        self.adb_keyboard_ensure_ime()
+        b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        out = self._adb_shell_run(
+            f"am broadcast -a ADB_KEYBOARD_INPUT_TEXT --es text {b64}"
+        )
+        if self._adb_broadcast_code(out) != self._ADB_BROADCAST_OK:
+            raise RuntimeError(f"ADB_KEYBOARD_INPUT_TEXT failed: {out!r}")
+        if hide:
+            self._adb_shell_run("am broadcast -a ADB_KEYBOARD_HIDE")
+
+    def adb_keyboard_clear_text(self) -> None:
+        self.adb_keyboard_ensure_ime()
+        out = self._adb_shell_run("am broadcast -a ADB_KEYBOARD_CLEAR_TEXT")
+        if self._adb_broadcast_code(out) != self._ADB_BROADCAST_OK:
+            raise RuntimeError(f"ADB_KEYBOARD_CLEAR_TEXT failed: {out!r}")
+
+    def adb_keyboard_replace_text(self, text: str) -> None:
+        self.adb_keyboard_clear_text()
+        if text:
+            self.adb_keyboard_input_text(text, hide=False)
 
     # ── Element API ───────────────────────────────────────────────────────────
 
@@ -1115,11 +1201,24 @@ class U2JsonRpcClient:
         if spec_has_chain(spec):
             xpath = compile_chain_to_xpath(spec)
             if xpath:
-                return self._find_element_xpath_with_bounds(xpath)
+                return self._find_element_xpath_with_bounds(xpath, timeout=timeout)
             return None
         rpc = spec_to_rpc_selector(spec)
         if "_xpath" in rpc:
-            return self._find_element_xpath_with_bounds(rpc["_xpath"])
+            return self._find_element_xpath_with_bounds(rpc["_xpath"], timeout=timeout)
+        try:
+            info = self._rpc("objInfo", rpc)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "json-rpc error" in msg or "uiobjectnotfound" in msg:
+                info = None
+            else:
+                raise
+        if info:
+            raw_bounds = info.get("bounds") or info.get("visibleBounds")
+            bounds = self._parse_bounds(raw_bounds)
+            return {"eid": spec_eid(spec), "bounds": bounds, "info": info}
+
         eid = self.find_element_spec(spec, timeout=timeout or 0)
         if not eid:
             return None
@@ -1261,24 +1360,37 @@ class U2JsonRpcClient:
             raise
 
     def _find_element_xpath_with_bounds(self, xpath_expr: str,
-                                        index: int = 0) -> Optional[Dict[str, Any]]:
+                                        index: int = 0,
+                                        timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """Resolve xpath via hierarchy XML, return eid + bounds."""
         expr = normalize_u2_xpath(xpath_expr)
         xpath_query = self._normalize_et_xpath(expr)
-        try:
-            xml = self.page_source(timeout=self._timeout)
-            if not xml:
-                return None
-            root = parse_xml(xml)
-            matches = root.findall(xpath_query)
-            if index >= len(matches):
-                return None
-            node = matches[index]
-            bounds = node_bounds(node)
-            return {"eid": format_xpath_eid(expr, index), "bounds": bounds}
-        except Exception as exc:
-            logger.debug("xpath_with_bounds failed for %r: %s", xpath_expr, exc)
-            raise
+        wait = timeout if timeout is not None else self._implicitly_wait
+        single_shot = wait <= 0
+        deadline = time.monotonic() + max(wait, 0)
+        while True:
+            try:
+                remaining = deadline - time.monotonic()
+                ps_timeout = min(self._timeout, max(0.5, remaining + 1.0))
+                xml = self.page_source(timeout=ps_timeout)
+                if xml:
+                    root = parse_xml(xml)
+                    matches = root.findall(xpath_query)
+                    if index < len(matches):
+                        node = matches[index]
+                        bounds = node_bounds(node)
+                        return {"eid": format_xpath_eid(expr, index), "bounds": bounds}
+            except Exception as exc:
+                logger.debug("xpath_with_bounds failed for %r: %s", xpath_expr, exc)
+                if single_shot:
+                    raise
+            if single_shot:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.5, remaining))
+        return None
 
     @staticmethod
     def _normalize_et_xpath(xpath_expr: str) -> str:
@@ -1355,7 +1467,7 @@ class U2JsonRpcClient:
         t = timeout if timeout is not None else 60.0
         for attempt in range(3):
             try:
-                xml = str(self._rpc("dumpWindowHierarchy", compressed, 50, _timeout=t) or "")
+                xml = self._dump_window_hierarchy_rpc(compressed=compressed, timeout=t)
                 if xml:
                     try:
                         root = parse_xml(xml)
@@ -1384,6 +1496,36 @@ class U2JsonRpcClient:
             if attempt < 2:
                 time.sleep(0.3)
         return ""
+
+    def _dump_window_hierarchy_rpc(self, *, compressed: bool, timeout: float) -> str:
+        if compressed and self._dump_hierarchy2_supported is not False:
+            try:
+                xml = str(self._rpc(
+                    "dumpWindowHierarchy2",
+                    {
+                        "compressed": True,
+                        "maxDepth": 50,
+                        "waitForIdleMs": 0,
+                        "allWindows": True,
+                        "trimEmptyAttributes": True,
+                        "trimFalseAttributes": True,
+                        "includeOptionalAttributes": False,
+                    },
+                    _timeout=timeout,
+                ) or "")
+                self._dump_hierarchy2_supported = True
+                return xml
+            except RuntimeError as exc:
+                msg = str(exc)
+                if not any(pat in msg for pat in (
+                    "JSON-RPC error", "JSON-RPC HTTP",
+                    "empty response", "invalid response",
+                )):
+                    raise
+                if "dumpWindowHierarchy2" in msg:
+                    self._dump_hierarchy2_supported = False
+                logger.debug("dumpWindowHierarchy2 unavailable, falling back: %s", exc)
+        return str(self._rpc("dumpWindowHierarchy", compressed, 50, _timeout=timeout) or "")
 
     # ── App / Session API ─────────────────────────────────────────────────────
 
@@ -1538,12 +1680,45 @@ class U2JsonRpcClient:
                 return
             except Exception:
                 pass
-        # Intentionally no `setText(null, text)` last-resort — it raises
-        # JSON-RPC -32602 "method parameters invalid" on every device we've
-        # seen and masks the real "no focused input" condition from the
-        # caller. Surface a RuntimeError instead so the scenario step reports
-        # actionable context rather than a cryptic JSON-RPC code.
+        try:
+            self.adb_keyboard_input_text(text, hide=True)
+            return
+        except Exception:
+            pass
         raise RuntimeError("send_keys: no focused input field and IME injection failed")
+
+    def set_text_focused(self, text: str) -> None:
+        """Replace focused field content via u2 setText (Unicode-safe)."""
+        focused_selector = {"mask": _MASK_FOCUSED, "focused": True}
+        info = self._rpc("objInfo", focused_selector)
+        if not info:
+            raise RuntimeError("set_text_focused: no focused input field")
+        self._rpc("setText", focused_selector, text)
+
+    def send_keys_append(self, text: str) -> None:
+        """Append text via IME injection (AdbKeyboard broadcast — incremental typing)."""
+        if not text:
+            return
+        for method in ("setFastInputText", "sendKeys"):
+            try:
+                self._rpc(method, text)
+                return
+            except Exception:
+                pass
+        self.adb_keyboard_input_text(text, hide=False)
+
+    def paste_clipboard(self) -> None:
+        """Paste device clipboard into focused field (Ctrl+V injection on u2 server)."""
+        self._rpc("pasteClipboard")
+
+    def paste_clipboard_text(self, text: str) -> None:
+        """Set clipboard then paste via u2 server (works for Unicode)."""
+        self._rpc("setClipboard", "device-farm", text)
+        self._rpc("pasteClipboard")
+
+    def clear_input_text(self) -> None:
+        """Clear focused field via u2 server (Ctrl+A, Del)."""
+        self._rpc("clearInputText")
 
     def clear_text(self) -> None:
         """Clear the currently focused text field. No-op if nothing focused.
@@ -1567,9 +1742,14 @@ class U2JsonRpcClient:
 
     def set_clipboard(self, text: str) -> bool:
         """Set device clipboard text via uiautomator2 server. Returns True on success."""
-        for method in ("setClipboard", "clipboardSet", "clipboard"):
+        attempts: list[tuple[str, tuple]] = [
+            ("setClipboard", ("device-farm", text)),
+            ("clipboardSet", (text,)),
+            ("clipboard", (text,)),
+        ]
+        for method, args in attempts:
             try:
-                self._rpc(method, text)
+                self._rpc(method, *args)
                 return True
             except Exception:
                 pass

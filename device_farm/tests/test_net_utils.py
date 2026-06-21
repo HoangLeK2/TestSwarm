@@ -15,6 +15,11 @@ def test_docker_gateway_not_trusted_device_ip():
     assert not is_trusted_device_lan_ip("172.19.0.1")
 
 
+def test_docker_desktop_host_gateway_not_trusted_device_ip():
+    assert is_private_ip("192.168.65.1")
+    assert not is_trusted_device_lan_ip("192.168.65.1")
+
+
 def test_real_lan_phone_ip_is_trusted():
     assert is_trusted_device_lan_ip("172.16.0.83")
     assert is_trusted_device_lan_ip("192.168.1.42")

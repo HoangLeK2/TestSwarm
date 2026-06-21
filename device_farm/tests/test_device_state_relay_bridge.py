@@ -212,3 +212,39 @@ async def test_apply_relay_online_heals_usb_reconnecting(
 
     async with tenancy_session_factory() as db:
         assert await svc.get_state(db, dev.id) == DeviceFsmState.ONLINE
+
+
+@pytest.mark.asyncio
+async def test_apply_relay_online_revives_dead_device_on_reconnect(
+    tenancy_session_factory, relay_bridge_seed
+):
+    async with tenancy_session_factory() as db:
+        with tenant_context(ORG_ID):
+            dev = await create_device(
+                db,
+                serial="dev-dead",
+                user_id=USER_ID,
+                org_id=ORG_ID,
+            )
+            dev.adb_serial = "dev-dead"
+            await db.commit()
+
+    svc = DeviceStateService()
+    async with tenancy_session_factory() as db:
+        await svc.apply_event(
+            db,
+            dev.id,
+            event=DeviceFsmEvent.DEAD.value,
+            source="system",
+            event_id="seed-dead",
+        )
+        await db.commit()
+
+    async with tenancy_session_factory() as db:
+        with tenant_context(ORG_ID):
+            ok = await apply_relay_online("dev-dead", db=db)
+            await db.commit()
+    assert ok is True
+
+    async with tenancy_session_factory() as db:
+        assert await svc.get_state(db, dev.id) == DeviceFsmState.ONLINE

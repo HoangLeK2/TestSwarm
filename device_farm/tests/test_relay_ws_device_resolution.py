@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from web.server import _find_ws_device_for_relay_serial
+from runtime.core.device_client import DeviceState
+from web.server import (
+    _find_ws_device_for_relay_serial,
+    _relay_capabilities_status_payload,
+)
 
 
 def _device(
@@ -59,3 +63,38 @@ def test_relay_resolution_matches_existing_adb_or_u2_identity():
         _find_ws_device_for_relay_serial([by_adb, by_u2], "172.16.0.86:44601")
         is by_u2
     )
+
+
+def test_relay_capabilities_do_not_revive_dead_runtime_device():
+    device = SimpleNamespace(state=DeviceState.DEAD)
+
+    payload = _relay_capabilities_status_payload(
+        device,
+        {
+            "brand": "Samsung",
+            "model": "SM-G930S",
+            "android_version": "8.0",
+            "screen_width": 1080,
+            "screen_height": 1920,
+        },
+    )
+
+    assert payload["brand"] == "Samsung"
+    assert payload["model"] == "SM-G930S"
+    assert "state" not in payload
+
+
+def test_relay_capabilities_mark_non_dead_runtime_device_ready():
+    device = SimpleNamespace(state=DeviceState.DISCONNECTED)
+
+    payload = _relay_capabilities_status_payload(device, {})
+
+    assert payload["state"] == "READY"
+
+
+def test_relay_capabilities_do_not_override_busy_runtime_device():
+    device = SimpleNamespace(state=DeviceState.BUSY)
+
+    payload = _relay_capabilities_status_payload(device, {})
+
+    assert "state" not in payload

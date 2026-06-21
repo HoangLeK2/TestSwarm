@@ -278,15 +278,35 @@ def _get_ctrl_optional():
         return None
 
 
+def _get_relay_manager_optional():
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        return get_relay_manager()
+    except Exception:
+        return None
+
+
 def _live_relay_serials(relay_id: str) -> set[str] | None:
-    """Serials currently reported by agent-boot control channel, or None if disconnected."""
+    """Serials reported by the video relay channel, or None if stream relay is disconnected."""
+    relay = _get_relay_manager_optional()
+    if relay is None:
+        return None
+    relays = relay.registered_relays()
+    if relay_id not in relays:
+        return None
+
     svc = _get_ctrl_optional()
-    if svc is None:
-        return None
-    conn = svc.conn_for_relay(relay_id)
-    if conn is None:
-        return None
-    return {str(s).strip() for s in conn.serials if str(s).strip()}
+    ctrl_serials: set[str] | None = None
+    if svc is not None:
+        conn = svc.conn_for_relay(relay_id)
+        if conn is not None:
+            ctrl_serials = {str(s).strip() for s in conn.serials if str(s).strip()}
+
+    video_serials = {str(s).strip() for s in relays.get(relay_id, []) if str(s).strip()}
+    if ctrl_serials is not None:
+        return video_serials & ctrl_serials
+    return video_serials
 
 
 def _get_ctrl():

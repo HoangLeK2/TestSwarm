@@ -22,6 +22,17 @@ class _FakeSession:
     def is_alive(self) -> bool:
         return self._alive
 
+    def matches_config(
+        self,
+        max_fps: int,
+        max_width: int,
+        enable_control: bool,
+        port: int,
+        bitrate: int,
+        low_latency: bool,
+    ) -> bool:
+        return True
+
 
 def test_stop_session_emits_manual_reason(monkeypatch):
     events: list[tuple[str, str]] = []
@@ -91,4 +102,60 @@ def test_cleanup_idle_emits_reason(monkeypatch):
             assert ("serial-4", "cleanup_idle") in events
         finally:
             await mgr.stop()
+    asyncio.run(_run())
+
+
+def test_concurrent_start_session_same_serial_coalesces(monkeypatch):
+    starts = 0
+
+    class _SlowStartSession(_FakeSession):
+        def start(self) -> None:
+            nonlocal starts
+            starts += 1
+            time.sleep(0.05)
+
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _SlowStartSession)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            await asyncio.gather(
+                *[
+                    mgr.start_session("serial-5", 30, 720, True, 27183, queue, loop)
+                    for _ in range(3)
+                ]
+            )
+            assert starts == 1
+            assert mgr.count == 1
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
+def test_stop_session_discards_idle_serial_lock(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            await mgr.start_session(
+                "serial-6",
+                30,
+                720,
+                True,
+                27183,
+                asyncio.Queue(),
+                asyncio.get_running_loop(),
+            )
+            assert "serial-6" in mgr._serial_locks
+            await mgr.stop_session("serial-6", reason="manual_stop")
+            assert "serial-6" not in mgr._serial_locks
+        finally:
+            await mgr.stop()
+
     asyncio.run(_run())

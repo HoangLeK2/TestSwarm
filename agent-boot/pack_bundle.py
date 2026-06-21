@@ -57,21 +57,44 @@ _LAUNCH_SH = r"""#!/bin/sh
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Install APKs if not already installed
-_install_apk() {
-    pkg="$1"; apk="$2"
-    if ! pm path "$pkg" > /dev/null 2>&1; then
-        echo "[launch] Installing $apk ..."
-        pm install -r -t "$SCRIPT_DIR/apks/$apk" \
-            && echo "[launch] OK: $apk" \
-            || echo "[launch] WARN: install failed for $apk"
-    else
-        echo "[launch] Already installed: $pkg"
+_sha256() {
+    sha256sum "$1" 2>/dev/null | awk '{print $1}' || toybox sha256sum "$1" 2>/dev/null | awk '{print $1}'
+}
+
+_pkg_sha256() {
+    pkg="$1"
+    path="$(pm path "$pkg" 2>/dev/null | head -n1 | sed 's/^package://')"
+    if [ -n "$path" ]; then
+        _sha256 "$path"
     fi
 }
 
-_install_apk "com.github.uiautomator"      "app-uiautomator.apk"
-_install_apk "com.github.uiautomator.test" "app-uiautomator-test.apk"
+_install_u2_pair_if_needed() {
+    main_pkg="com.github.uiautomator"
+    test_pkg="com.github.uiautomator.test"
+    main_apk="$SCRIPT_DIR/apks/app-uiautomator.apk"
+    test_apk="$SCRIPT_DIR/apks/app-uiautomator-test.apk"
+
+    main_local="$(_sha256 "$main_apk")"
+    test_local="$(_sha256 "$test_apk")"
+    main_installed="$(_pkg_sha256 "$main_pkg")"
+    test_installed="$(_pkg_sha256 "$test_pkg")"
+
+    if [ "$main_local" = "$main_installed" ] && [ "$test_local" = "$test_installed" ]; then
+        echo "[launch] uiautomator2 APKs already installed; hashes match"
+        return 0
+    fi
+
+    echo "[launch] Installing uiautomator2 APK pair ..."
+    pm install -r "$main_apk" \
+        && echo "[launch] OK: app-uiautomator.apk" \
+        || echo "[launch] WARN: install failed for app-uiautomator.apk"
+    pm install -r -t "$test_apk" \
+        && echo "[launch] OK: app-uiautomator-test.apk" \
+        || echo "[launch] WARN: install failed for app-uiautomator-test.apk"
+}
+
+_install_u2_pair_if_needed
 
 # Start atx-agent HTTP bridge on port 7912 (if binary is present in bundle)
 ATX_BIN="$SCRIPT_DIR/atx-agent/atx-agent-arm64"
@@ -89,7 +112,7 @@ echo "[launch] Starting uiautomator2-server ..."
 dumpsys deviceidle whitelist +com.github.uiautomator      2>/dev/null || true
 dumpsys deviceidle whitelist +com.github.uiautomator.test 2>/dev/null || true
 am force-stop com.github.uiautomator 2>/dev/null || true
-am instrument -w -e timeout 0 \
+am instrument -w -e timeout 0 -e class com.github.uiautomator.stub.Stub \
     com.github.uiautomator.test/androidx.test.runner.AndroidJUnitRunner \
     > /tmp/u2-server.log 2>&1 &
 echo "[launch] uiautomator2-server started (pid=$!), log: /tmp/u2-server.log"

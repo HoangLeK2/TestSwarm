@@ -51,7 +51,7 @@ from .execution_event import ExecutionEvent
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
 from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgentToken
-from .scenario_device_variable import ScenarioDeviceVariable
+from .scenario_device_variable import CampaignOrgScenarioDeviceVariable, ScenarioDeviceVariable
 from .notification import Notification, NotificationChannel
 from .activity import ActivityLog
 from .analytics import (
@@ -116,6 +116,7 @@ __all__ = [
     "RelayAgentJobItem",
     "RelayAgentToken",
     "ScenarioDeviceVariable",
+    "CampaignOrgScenarioDeviceVariable",
     "Notification",
     "NotificationChannel",
     "ActivityLog",

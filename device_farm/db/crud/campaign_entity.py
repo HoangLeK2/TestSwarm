@@ -130,6 +130,7 @@ async def create_campaign_entity(
     description: str = "",
     variables: dict | None = None,
     per_device_overrides: dict | None = None,
+    recovery_policy: dict | None = None,
     account_group_id: str | None = None,
     scenario_account_id: str | None = None,
     per_device_accounts: dict | None = None,
@@ -145,6 +146,7 @@ async def create_campaign_entity(
         description=description or "",
         variables=variables or {},
         per_device_overrides=per_device_overrides or {},
+        recovery_policy=recovery_policy or {},
         account_group_id=account_group_id or None,
         scenario_account_id=scenario_account_id or None,
         per_device_accounts=per_device_accounts or {},
@@ -206,6 +208,7 @@ async def update_campaign_entity(
     description: str | None = None,
     variables: dict | None = None,
     per_device_overrides: dict | None = None,
+    recovery_policy: dict | None = None,
     tags: list[str] | None = None,
 ) -> Campaign:
     if name is not None:
@@ -218,6 +221,8 @@ async def update_campaign_entity(
         row.variables = variables
     if per_device_overrides is not None:
         row.per_device_overrides = per_device_overrides
+    if recovery_policy is not None:
+        row.recovery_policy = recovery_policy
     row.updated_at = _now()
     if tags is not None:
         await replace_campaign_tags(db, row.id, tags)

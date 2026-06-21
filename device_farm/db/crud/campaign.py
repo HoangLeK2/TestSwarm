@@ -17,6 +17,7 @@ async def create_campaign(
     org_id: str | None = None,
     description: str = "",
     variables: dict | None = None,
+    recovery_policy: dict | None = None,
     target_group_id: str | None = None,
 ) -> Campaign:
     campaign = Campaign(
@@ -27,6 +28,7 @@ async def create_campaign(
         org_id=org_id,  # type: ignore[arg-type]
         description=description,
         variables=variables or {},
+        recovery_policy=recovery_policy or {},
         target_group_id=target_group_id,
     )
     db.add(campaign)
@@ -192,4 +194,3 @@ async def reorder_scenarios(
             update(Scenario).where(Scenario.id == sid).values(order=idx)
         )
     return await list_scenarios(db, campaign_id)
-

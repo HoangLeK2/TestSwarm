@@ -31,6 +31,7 @@ class Campaign(TenantScopedModel, Base):
     description: Mapped[str] = mapped_column(Text, default="")
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
     per_device_overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+    recovery_policy: Mapped[dict] = mapped_column(JSON, default=dict)
     account_group_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         ForeignKey("account_groups.id", ondelete="SET NULL"),
@@ -196,4 +197,3 @@ class CampaignTag(Base):
     tag: Mapped[str] = mapped_column(String(100), nullable=False)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="tags")
-

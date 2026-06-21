@@ -365,6 +365,47 @@ async def list_running_campaign_refs(
     ]
 
 
+async def list_recovery_scenario_usage_counts(
+    db: AsyncSession,
+    org_id: str,
+    *,
+    scenario_ids: set[str] | None = None,
+) -> dict[str, int]:
+    """Count non-archived campaigns that reference each recovery scenario."""
+    from tenancy.context import use_tenant_scope
+
+    allowed_ids = {str(sid).strip() for sid in scenario_ids or set() if str(sid).strip()}
+    if scenario_ids is not None and not allowed_ids:
+        return {}
+
+    with use_tenant_scope(org_id):
+        stmt = select(Campaign.id, Campaign.recovery_policy).where(
+            Campaign.org_id == org_id,
+            Campaign.deleted_at.is_(None),
+            Campaign.status != CampaignStatus.ARCHIVED.value,
+        )
+        result = await db.execute(stmt)
+
+    counts: dict[str, int] = {}
+    for row in result.all():
+        policy = row.recovery_policy if isinstance(row.recovery_policy, dict) else {}
+        if not policy.get("enabled"):
+            continue
+        referenced_ids: set[str] = set()
+        rules = policy.get("rules")
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            scenario_id = str(rule.get("scenario_id") or "").strip()
+            if scenario_id and (not allowed_ids or scenario_id in allowed_ids):
+                referenced_ids.add(scenario_id)
+        for scenario_id in referenced_ids:
+            counts[scenario_id] = counts.get(scenario_id, 0) + 1
+    return counts
+
+
 async def add_campaign_scenario_ref(
     db: AsyncSession,
     *,

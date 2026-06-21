@@ -65,7 +65,7 @@ export function CampaignMobileCard({
             locale: vi
           })}
         </span>
-        <CampaignRunStats campaignId={campaign.id} />
+        <CampaignRunStats campaignId={campaign.id} status={campaign.status} />
       </div>
 
       <div className='mt-3 space-y-3 [&_[class*="max-w"]]:max-w-none'>

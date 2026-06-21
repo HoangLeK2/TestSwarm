@@ -482,14 +482,18 @@ export function useDeviceRunningWorkflows(serial: string, enabled: boolean) {
   });
 }
 
-export function useWorkflowSteps(workflowId: string, enabled: boolean) {
+export function useWorkflowSteps(
+  workflowId: string,
+  enabled: boolean,
+  poll = enabled
+) {
   return useQuery({
     queryKey: ['workflow-steps', workflowId],
     queryFn: () => workflowsApi.steps(workflowId),
     enabled: enabled && !!workflowId,
     ...monitorQueryDefaults,
     staleTime: 5_000,
-    refetchInterval: enabled ? WORKFLOW_STEPS_POLL_MS : false
+    refetchInterval: enabled && poll ? WORKFLOW_STEPS_POLL_MS : false
   });
 }
 

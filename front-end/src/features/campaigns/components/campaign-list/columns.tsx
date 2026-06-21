@@ -1,6 +1,5 @@
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
-import { Badge } from '@/components/ui/badge';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { CampaignOut } from '../../types';
 import { CampaignSetupCell } from './CampaignSetupCell';
@@ -13,10 +12,13 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { executionsApi } from '../../services/api';
 import { CampaignRunStats } from './CampaignRunStats';
-import { CampaignEngineBadge } from './CampaignEngineBadge';
 import { CampaignStatusBadge } from './CampaignStatusBadge';
 import type { CampaignStatus } from '../../types';
 import { cn } from '@/lib/utils';
+import {
+  campaignRowPollInterval,
+  campaignRowStaleTime
+} from '../../lib/campaign-list-polling';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
@@ -33,12 +35,19 @@ function responsiveCol(cellClassName: string, visibility?: 'lg' | 'xl') {
   };
 }
 
-function CampaignLastRunCell({ campaignId }: { campaignId: string }) {
+function CampaignLastRunCell({
+  campaignId,
+  status
+}: {
+  campaignId: string;
+  status: string;
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ['campaign-latest-execution', campaignId],
     queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
-    staleTime: 10_000,
-    refetchInterval: 15_000
+    staleTime: campaignRowStaleTime(status),
+    refetchInterval: campaignRowPollInterval(status),
+    refetchOnWindowFocus: false
   });
 
   const ex = data?.items?.[0];
@@ -152,14 +161,21 @@ export function getCampaignColumns(
       header: t('colLastRun'),
       size: 140,
       meta: responsiveCol(CELL, 'xl'),
-      cell: ({ row }) => <CampaignLastRunCell campaignId={row.original.id} />
+      cell: ({ row }) => (
+        <CampaignLastRunCell
+          campaignId={row.original.id}
+          status={row.original.status}
+        />
+      )
     },
     {
       id: 'runStats',
       header: t('colRunStats'),
       size: 120,
       meta: responsiveCol(CELL, 'xl'),
-      cell: ({ row }) => <CampaignRunStats campaignId={row.original.id} />
+      cell: ({ row }) => (
+        <CampaignRunStats campaignId={row.original.id} status={row.original.status} />
+      )
     },
     {
       id: 'createdAt',

@@ -32,6 +32,9 @@ import {
 } from '../../hooks/use-campaigns';
 import { useExecutionEventStream } from '../../hooks/use-execution-event-stream';
 import { resolveExecutionIdForWorkflow } from '../../lib/execution-event-utils';
+import { detectActiveRecoveryFromEvents } from '../../lib/workflow-incident-display';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { WorkflowScenarioModeBadge } from '../workflow-scenario-mode-badge';
 import type { ExecutionOut, WorkflowInfo } from '../../types';
 import { useCampaignFlowI18n } from '../flow-editor/flow-i18n';
 import { WorkflowStepList } from '../workflow-step-list';
@@ -172,25 +175,51 @@ export function WorkflowProgressCard({
     wf.status === 'paused_on_error';
 
   const executionId = useMemo(
-    () => resolveExecutionIdForWorkflow(wf.workflow_id, executions),
-    [wf.workflow_id, executions]
+    () =>
+      wf.execution_id || resolveExecutionIdForWorkflow(wf.workflow_id, executions),
+    [wf.execution_id, wf.workflow_id, executions]
   );
 
   const serial = useMemo(() => {
+    if (wf.device_serial) return wf.device_serial;
     const fromWorkflow = parseSerial(wf.workflow_id);
     if (!wf.workflow_id.startsWith('exec_')) return fromWorkflow;
     const ex = executions.find((e) => e.id === executionId);
     const cfg = (ex?.device_config ?? {}) as Record<string, unknown>;
     return String(cfg.device_serial ?? fromWorkflow);
-  }, [wf.workflow_id, executions, executionId]);
+  }, [wf.device_serial, wf.workflow_id, executions, executionId]);
 
-  const scenarioId = parseScenarioId(wf.workflow_id);
+  const scenarioId = wf.scenario_id || parseScenarioId(wf.workflow_id);
+  const workflowCampaignId = wf.campaign_id || campaignId;
+  const campaignLabel =
+    wf.campaign_name || `#${workflowCampaignId.slice(0, 8)}`;
+  const scenarioLabel =
+    wf.scenario_name ||
+    (wf.scenario_count && wf.scenario_count > 1
+      ? t('monitorWorkflowScenarioCount', { count: wf.scenario_count })
+      : scenarioId
+        ? `#${scenarioId.slice(0, 8)}`
+        : t('monitorWorkflowUnknownScenario'));
 
   const eventStream = useExecutionEventStream(executionId, {
     enabled: isActive && !!executionId,
     workflowId: wf.workflow_id,
     deviceSerial: serial
   });
+  const { data: orgScenarios } = useOrgScenarios();
+  const scenarioNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const scenario of orgScenarios ?? []) {
+      map.set(scenario.id, scenario.name);
+    }
+    return map;
+  }, [orgScenarios]);
+  const activeRecovery = useMemo(
+    () => detectActiveRecoveryFromEvents(eventStream.events, scenarioNamesById),
+    [eventStream.events, scenarioNamesById]
+  );
+  const isRecoveryMode =
+    wf.workflow_kind === 'recovery' || activeRecovery.active;
 
   const pollProgress = useWorkflowProgress(
     wf.workflow_id,
@@ -281,14 +310,10 @@ export function WorkflowProgressCard({
           >
             {serial}
           </span>
-          {scenarioId && (
-            <span
-              className='shrink-0 font-mono text-[9px] text-muted-foreground'
-              title={scenarioId}
-            >
-              #{scenarioId.slice(0, 8)}
-            </span>
-          )}
+          <WorkflowScenarioModeBadge
+            mode={isRecoveryMode ? 'recovery' : 'main'}
+            scenarioName={activeRecovery.scenarioName}
+          />
           {eventStream.connected && (
             <span
               className='shrink-0 rounded-full bg-green-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-green-600 dark:text-green-400'
@@ -298,6 +323,32 @@ export function WorkflowProgressCard({
             </span>
           )}
           <StatusBadge status={wf.status} />
+        </div>
+
+        <div className='mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pl-[26px] text-[10px] text-muted-foreground'>
+          <span
+            className='min-w-0 truncate'
+            title={wf.campaign_name || workflowCampaignId}
+          >
+            {campaignLabel}
+          </span>
+          <span className='text-muted-foreground/50'>/</span>
+          <span
+            className='min-w-0 truncate'
+            title={wf.scenario_name || scenarioId || undefined}
+          >
+            {scenarioLabel}
+          </span>
+          {executionId && (
+            <>
+              <span className='text-muted-foreground/50'>/</span>
+              <span className='font-mono'>
+                {t('monitorWorkflowExecutionShort', {
+                  id: executionId.slice(0, 8)
+                })}
+              </span>
+            </>
+          )}
         </div>
 
         {/* Row 2: progress bar + counter */}

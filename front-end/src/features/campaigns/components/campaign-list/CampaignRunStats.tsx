@@ -17,6 +17,10 @@ import {
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { campaignsApi } from '../../services/api';
+import {
+  campaignRowPollInterval,
+  campaignRowStaleTime
+} from '../../lib/campaign-list-polling';
 
 type ExecutionSummary = {
   total_devices: number;
@@ -223,13 +227,20 @@ function RunStatsPopoverBody({
   );
 }
 
-export function CampaignRunStats({ campaignId }: { campaignId: string }) {
+export function CampaignRunStats({
+  campaignId,
+  status
+}: {
+  campaignId: string;
+  status: string;
+}) {
   const t = useTranslations('campaignsFeature.list');
   const summary = useQuery({
     queryKey: ['campaign-run-stats', campaignId],
     queryFn: () => campaignsApi.runStats(campaignId),
-    staleTime: 10_000,
-    refetchInterval: 15_000
+    staleTime: campaignRowStaleTime(status),
+    refetchInterval: campaignRowPollInterval(status),
+    refetchOnWindowFocus: false
   });
 
   if (!summary.data && summary.isLoading)

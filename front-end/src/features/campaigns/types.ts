@@ -100,6 +100,66 @@ export type CampaignScenarioRefOut = {
   scenario_version: number;
 };
 
+export type RecoveryIncidentType =
+  | 'app_popup'
+  | 'facebook_popup'
+  | 'profile_page'
+  | 'lost_post_detail'
+  | 'comment_panel_closed'
+  | 'stuck_screen'
+  | 'login_or_checkpoint'
+  | 'unknown';
+
+export type RecoveryOutcome =
+  | 'retry_step'
+  | 'continue'
+  | 'fail'
+  | 'pause_for_takeover'
+  | 'open_dlq';
+
+export type RecoveryRule = {
+  incident_type?: RecoveryIncidentType;
+  incident_types?: RecoveryIncidentType[];
+  scope?: {
+    step_type_any?: string[];
+    step_id_any?: string[];
+    strategy_any?: string[];
+    step_index_any?: number[];
+  };
+  scenario_id?: string | null;
+  scenario_name?: string | null;
+  outcome?: RecoveryOutcome;
+  on_success?: RecoveryOutcome;
+  on_failure?: RecoveryOutcome;
+  match?: {
+    text_any?: string[];
+    text_all?: string[];
+    result_any?: string[];
+    package_any?: string[];
+    activity_any?: string[];
+    step_type_any?: string[];
+    strategy_any?: string[];
+    min_confidence?: number;
+  };
+  max_attempts?: number;
+  timeout_ms?: number;
+  success_check?: {
+    require_post_detail?: boolean;
+    require_comment_panel?: boolean;
+  };
+  success_checks?: Array<{
+    type?: string;
+    incident_type?: RecoveryIncidentType | string | null;
+  }>;
+};
+
+export type RecoveryPolicy = {
+  enabled?: boolean;
+  max_total_attempts?: number;
+  max_attempts_per_step?: number;
+  rules?: RecoveryRule[];
+};
+
 export type CampaignOut = {
   id: string;
   name: string;
@@ -120,6 +180,8 @@ export type CampaignOut = {
   tags?: string[];
   /** Epic 04 per-device variable overrides keyed by device_id. */
   per_device_overrides?: Record<string, Record<string, unknown>>;
+  /** Campaign-level incident recovery, not part of the scenario node graph. */
+  recovery_policy?: RecoveryPolicy;
 };
 
 export type CampaignDeviceOut = {
@@ -148,6 +210,7 @@ export type CampaignCreate = {
   per_device_accounts?: Record<string, string>;
   device_ids?: string[];
   target_group_id?: string | null;
+  recovery_policy?: RecoveryPolicy;
 };
 
 export type TaskOut = {
@@ -173,9 +236,19 @@ export type WorkflowStatus =
 
 export type WorkflowInfo = {
   workflow_id: string;
-  run_id: string;
+  run_id?: string | null;
   status: WorkflowStatus;
-  start_time: string;
+  start_time?: string | null;
+  execution_id?: string | null;
+  campaign_id?: string | null;
+  campaign_name?: string | null;
+  scenario_id?: string | null;
+  scenario_name?: string | null;
+  scenario_steps?: Record<string, any>[] | null;
+  scenario_count?: number | null;
+  device_serial?: string | null;
+  workflow_kind?: 'main' | 'recovery' | string | null;
+  dispatch_source?: string | null;
 };
 
 export type CampaignWorkflowsResponse = {
@@ -199,16 +272,34 @@ export type WorkflowProgress = {
 
 export type StepLogEntry = {
   index: number;
+  step_id?: string | null;
   type?: string;
   step_type: string;
   ok: boolean;
   message: string | null;
   depth: number;
+  status?: 'running' | 'completed' | 'failed';
   output?: string | null;
   exit_code?: number | null;
   save_as?: string | null;
   output_truncated?: boolean;
   details?: Record<string, unknown>;
+  incidents?: IncidentEvent[];
+};
+
+export type IncidentEvent = {
+  event_type: string;
+  incident_type?: RecoveryIncidentType | string;
+  outcome?: RecoveryOutcome | string;
+  message?: string | null;
+  attempt?: number | null;
+  scenario_id?: string | null;
+  recovery_scenario_id?: string | null;
+  recovery_scenario_name?: string | null;
+  incident_key?: string | null;
+  rule_id?: string | null;
+  matched_rule?: boolean;
+  confidence?: number | null;
 };
 
 export type WorkflowStepLog = {

@@ -152,14 +152,16 @@ export function normalizeCampaignOut(
       per_device_overrides: (row.per_device_overrides ?? {}) as Record<
         string,
         Record<string, unknown>
-      >
+      >,
+      recovery_policy: row.recovery_policy
     };
   }
 
   return {
     ...row,
     variables: row.variables ?? vars,
-    scenario_refs: row.scenario_refs ?? scenarioRefs
+    scenario_refs: row.scenario_refs ?? scenarioRefs,
+    recovery_policy: row.recovery_policy
   };
 }
 

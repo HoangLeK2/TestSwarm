@@ -23,6 +23,7 @@ export const campaignStopDrainKey = (campaignId: string) =>
 
 const DRAIN_POLL_MS = 2_000;
 const DRAIN_TIMEOUT_MS = 10 * 60 * 1000;
+const DRAIN_RECOVERY_STALE_MS = 30_000;
 
 export function markCampaignStopDrain(
   qc: ReturnType<typeof useQueryClient>,
@@ -53,6 +54,14 @@ async function fetchDrainSnapshot(campaignId: string) {
   return { activeWorkflows, activeExecutions };
 }
 
+export function shouldProbeCancelledDrain(
+  campaignId: string,
+  campaignStatus: string | undefined,
+  explicitDrain: boolean
+): boolean {
+  return Boolean(campaignId) && campaignStatus === 'cancelled' && !explicitDrain;
+}
+
 /**
  * Tracks cooperative cancel drain: API marks campaign cancelled immediately,
  * but Temporal workflows / executions may still finish the current step.
@@ -72,22 +81,28 @@ export function useCampaignStopDrain(
   const explicitDrain = Boolean(drainState);
 
   // Recover mid-drain after refresh: cancelled in DB but workflows still active.
+  // This uses a shared query key so StatusBadge + RowActions + Progress do not
+  // each fire their own workflows/executions probe for the same campaign row.
+  const { data: recoverySnapshot } = useQuery({
+    queryKey: ['campaign-stop-drain-recovery', campaignId],
+    queryFn: () => fetchDrainSnapshot(campaignId),
+    enabled: shouldProbeCancelledDrain(campaignId, campaignStatus, explicitDrain),
+    staleTime: DRAIN_RECOVERY_STALE_MS,
+    refetchOnWindowFocus: false,
+    refetchInterval: false,
+    retry: false
+  });
+
   useEffect(() => {
-    if (!campaignId || campaignStatus !== 'cancelled' || explicitDrain) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const snapshot = await fetchDrainSnapshot(campaignId);
-        if (cancelled || isCampaignDrainComplete(snapshot)) return;
-        markCampaignStopDrain(qc, campaignId);
-      } catch {
-        /* ignore probe errors */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignId, campaignStatus, explicitDrain, qc]);
+    if (
+      !shouldProbeCancelledDrain(campaignId, campaignStatus, explicitDrain) ||
+      !recoverySnapshot ||
+      isCampaignDrainComplete(recoverySnapshot)
+    ) {
+      return;
+    }
+    markCampaignStopDrain(qc, campaignId);
+  }, [campaignId, campaignStatus, explicitDrain, qc, recoverySnapshot]);
 
   const { data: snapshot } = useQuery({
     queryKey: ['campaign-stop-drain-snapshot', campaignId],

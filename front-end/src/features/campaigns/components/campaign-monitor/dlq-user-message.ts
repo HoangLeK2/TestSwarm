@@ -28,6 +28,19 @@ function stripRunScenarioPrefix(text: string): string {
   return text.replace(RUN_SCENARIO_PREFIX_RE, '').trim();
 }
 
+function isU2TransientExtraDataError(text: string): boolean {
+  const msg = normalizeRaw(text);
+  if (!/edge extra_data failed:/i.test(msg)) return false;
+  return (
+    /edge extra_data failed:\s*u2_transient_error/i.test(msg) ||
+    /(uiautomator|uiautomation|already registered|java\.lang\.)/i.test(msg)
+  );
+}
+
+function operatorTechnical(raw: string, summary: string): string {
+  return isU2TransientExtraDataError(raw) ? summary : raw;
+}
+
 function humanizeCore(text: string, t: Translate): string | null {
   const msg = normalizeRaw(text);
   if (!msg) return null;
@@ -50,6 +63,14 @@ function humanizeCore(text: string, t: Translate): string | null {
   }
 
   if (/edge extra_data failed:\s*extra_data_failed/i.test(msg)) {
+    return t('monitorDlqErrExtraDataFailed');
+  }
+
+  if (
+    /edge extra_data failed:\s*u2_transient_error/i.test(msg) ||
+    (/edge extra_data failed:/i.test(msg) &&
+      /(uiautomator|uiautomation|already registered|java\.lang\.)/i.test(msg))
+  ) {
     return t('monitorDlqErrExtraDataFailed');
   }
 
@@ -92,18 +113,19 @@ export function humanizeDlqMessage(raw: string, t: Translate): DlqHumanMessage {
   const loop = withoutScenario.match(LOOP_RE);
   if (loop) {
     const inner = humanizeCore(loop[2], t) ?? loop[2];
+    const summary = t('monitorDlqErrLoopIteration', {
+      iteration: loop[1],
+      detail: inner
+    });
     return {
-      summary: t('monitorDlqErrLoopIteration', {
-        iteration: loop[1],
-        detail: inner
-      }),
-      technical
+      summary,
+      technical: operatorTechnical(technical, summary)
     };
   }
 
   const direct = humanizeCore(withoutScenario, t);
   if (direct) {
-    return { summary: direct, technical };
+    return { summary: direct, technical: operatorTechnical(technical, direct) };
   }
 
   // Last resort: drop UUID-ish noise but keep readable tail.

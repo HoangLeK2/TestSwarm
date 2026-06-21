@@ -100,6 +100,7 @@ const BUILTIN_VARIABLE_TOKENS = [
   '${__RANDOM_INT_1_100__}',
   '${__RANDOM_UUID__}',
   '${__STEP_INDEX__}',
+  '${__LOOP_INDEX__}',
   // Account rotation — injected when the scenario is bound to an account group.
   // Password is resolved at Temporal runtime from __ACCOUNT_ID__ so plaintext
   // never lands in the workflow event history.
@@ -1126,6 +1127,14 @@ export function StepDetailPanel({
               <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
                 ④ Nhận diện bài viết
               </div>
+              <StepPanelToggle
+                label='Chỉ bấm khi đã mở chi tiết bài'
+                description='Bật khi bước trước đã extract fb_posts với mở bài — bỏ qua nếu chưa xác minh parent bài viết trên màn hình chi tiết.'
+                checked={!!step.require_post_before_comment}
+                onCheckedChange={(checked) =>
+                  update({ require_post_before_comment: checked })
+                }
+              />
               <F label='Trường hash bài (giữ mặc định nếu không rõ)'>
                 <Input
                   className='h-8 font-mono text-xs'

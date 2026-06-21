@@ -72,7 +72,7 @@ import { DeviceControlEmbed } from '@/features/devices/components/device-control
 import { VariableEditor } from '@/components/variable-editor';
 import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
-import { FlowEditor } from './flow-editor';
+import { FlowEditor } from './flow-editor/flow-editor';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
 import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';

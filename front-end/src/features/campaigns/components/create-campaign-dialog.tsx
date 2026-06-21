@@ -32,6 +32,8 @@ import {
   campaignBindingToPayload,
   type CampaignAccountBindingValue
 } from './campaign-account-binding-fields';
+import { RecoveryPolicyEditor } from './recovery-policy-editor';
+import type { RecoveryPolicy } from '../types';
 
 type FormData = {
   name: string;
@@ -101,6 +103,7 @@ export function CreateCampaignDialog({
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<Record<string, any>>({});
   const [tags, setTags] = useState('');
+  const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>(
     preselectedScenarioIds
   );
@@ -180,6 +183,7 @@ export function CreateCampaignDialog({
       });
       setVariables({});
       setTags('');
+      setRecoveryPolicy({});
       setAccountBinding({
         mode: 'none',
         accountGroupId: '',
@@ -211,6 +215,7 @@ export function CreateCampaignDialog({
         scenario_refs: effectiveScenarioIds.map((scenario_id) => ({
           scenario_id
         })),
+        recovery_policy: recoveryPolicy,
         ...campaignBindingToPayload(accountBinding)
       },
       {
@@ -218,6 +223,7 @@ export function CreateCampaignDialog({
           reset();
           setVariables({});
           setTags('');
+          setRecoveryPolicy({});
           setSelectedScenarioIds(preselectedScenarioIds);
           setAccountBinding({
             mode: 'none',
@@ -248,7 +254,7 @@ export function CreateCampaignDialog({
         )}
       </DialogTrigger>
 
-      <DialogContent className='flex max-h-[92vh] min-w-[min(100%-2rem,720px)] max-w-3xl flex-col gap-0 overflow-y-auto p-0 sm:w-full'>
+      <DialogContent className='flex max-h-[92vh] min-w-[min(100%-2rem,720px)] max-w-5xl flex-col gap-0 overflow-y-auto p-0 sm:w-full'>
         <DialogHeader className='border-b px-5 py-4'>
           <div className='flex items-center gap-2'>
             <Layers size={15} className='text-primary' />
@@ -326,6 +332,13 @@ export function CreateCampaignDialog({
               <CampaignAccountBindingFields
                 value={accountBinding}
                 onChange={setAccountBinding}
+              />
+            </Section>
+            <hr className='border-border' />
+            <Section icon={Layers} title={t('recoverySection')}>
+              <RecoveryPolicyEditor
+                value={recoveryPolicy}
+                onChange={setRecoveryPolicy}
               />
             </Section>
           </div>

@@ -462,7 +462,10 @@ export function getStepSummary(step: FlowStep): string {
       const commentPart = hasFbCommentExtract(step.then)
         ? ' · có trích xuất bình luận'
         : '';
-      return `OK: ${thenN} bước${commentPart}${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
+      const requirePostPart = step.require_post_before_comment
+        ? ' · cần mở bài'
+        : '';
+      return `OK: ${thenN} bước${commentPart}${requirePostPart}${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
     }
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
@@ -660,16 +663,19 @@ export function getStepDisplay(
       const commentPart = hasFbCommentExtract(step.then)
         ? ' · lấy bình luận'
         : '';
+      const requirePostPart = step.require_post_before_comment
+        ? ' · cần mở bài'
+        : '';
       if (t) {
         return {
           target: td('fbCommentSummary', {
             thenCount: thenN,
-            elsePart: `${commentPart}${elseN ? td('fbCommentElse', { elseCount: elseN }) : ''}`
+            elsePart: `${commentPart}${requirePostPart}${elseN ? td('fbCommentElse', { elseCount: elseN }) : ''}`
           })
         };
       }
       return {
-        target: `Comment · OK ${thenN}${commentPart}${elseN ? ` / miss ${elseN}` : ''}`
+        target: `Comment · OK ${thenN}${commentPart}${requirePostPart}${elseN ? ` / miss ${elseN}` : ''}`
       };
     }
     case 'extract': {

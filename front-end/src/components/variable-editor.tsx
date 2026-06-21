@@ -230,7 +230,7 @@ function TypeSelect({
       <SelectTrigger size='sm' className='h-8 w-[96px] shrink-0 text-xs'>
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className='z-[calc(var(--z-floating)+1)]'>
+      <SelectContent className='z-[calc(var(--z-floating)+100)]'>
         <SelectItem value='string'>{t('types.string')}</SelectItem>
         <SelectItem value='number'>{t('types.number')}</SelectItem>
         <SelectItem value='list'>{t('types.list')}</SelectItem>
@@ -565,24 +565,52 @@ export function VariableEditor({
             </Button>
           ) : null}
           {showBuiltins ? (
-            <Button
-              type='button'
-              size='sm'
-              variant='outline'
-              disabled={disabled}
-              className={cn(
-                'h-8 text-xs',
-                builtinsOpen && 'border-primary/30 bg-primary/[0.04]'
-              )}
-              onClick={() => setBuiltinsOpen((v) => !v)}
-            >
-              {builtinsOpen ? (
-                <ChevronDown size={14} className='mr-1' />
-              ) : (
-                <ChevronRight size={14} className='mr-1' />
-              )}
-              {t('builtinsTitle')}
-            </Button>
+            <Popover open={builtinsOpen} onOpenChange={setBuiltinsOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={disabled}
+                  className={cn(
+                    'h-8 text-xs',
+                    builtinsOpen && 'border-primary/30 bg-primary/[0.04]'
+                  )}
+                >
+                  {builtinsOpen ? (
+                    <ChevronDown size={14} className='mr-1' />
+                  ) : (
+                    <ChevronRight size={14} className='mr-1' />
+                  )}
+                  {t('builtinsTitle')}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                className='z-[calc(var(--z-floating)+100)] w-[min(100vw-2rem,28rem)] space-y-2 p-3'
+                align='start'
+              >
+                <p className='text-xs font-semibold text-foreground'>
+                  {t('builtinsReferenceTitle')}
+                </p>
+                <BuiltinGroup
+                  title={t('builtinGroups.system')}
+                  items={SYSTEM_BUILTINS}
+                  copiedKey={copiedKey}
+                  onCopy={copyBuiltin}
+                  t={t}
+                />
+                <BuiltinGroup
+                  title={t('builtinGroups.account')}
+                  items={ACCOUNT_BUILTINS}
+                  copiedKey={copiedKey}
+                  onCopy={copyBuiltin}
+                  t={t}
+                />
+                <p className='text-[10px] text-muted-foreground'>
+                  {t('systemAccountHint')}
+                </p>
+              </PopoverContent>
+            </Popover>
           ) : null}
           <Popover>
             <PopoverTrigger asChild>
@@ -689,30 +717,6 @@ export function VariableEditor({
         </p>
       ) : null}
 
-      {showBuiltins && builtinsOpen ? (
-        <div className='space-y-2 rounded-lg border border-border/60 bg-muted/15 p-3'>
-          <p className='text-xs font-semibold text-foreground'>
-            {t('builtinsReferenceTitle')}
-          </p>
-          <BuiltinGroup
-            title={t('builtinGroups.system')}
-            items={SYSTEM_BUILTINS}
-            copiedKey={copiedKey}
-            onCopy={copyBuiltin}
-            t={t}
-          />
-          <BuiltinGroup
-            title={t('builtinGroups.account')}
-            items={ACCOUNT_BUILTINS}
-            copiedKey={copiedKey}
-            onCopy={copyBuiltin}
-            t={t}
-          />
-          <p className='text-[10px] text-muted-foreground'>
-            {t('systemAccountHint')}
-          </p>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -7,11 +7,30 @@ const t = (key: string, values?: Record<string, string | number>) => {
     monitorDlqErrUnknown: 'Lỗi không rõ — thử chạy lại',
     monitorDlqErrNoRelay: 'Relay chưa kết nối',
     monitorDlqErrLoopIteration: `Vòng ${values?.iteration}: ${values?.detail}`,
+    monitorDlqErrExtraDataFailed: 'Thu thập dữ liệu bài viết thất bại trên thiết bị.',
     monitorDlqErrSelectorNotFound: `Không thấy "${values?.selector}"`,
     monitorDlqNoErrorMessage: 'Không có mô tả'
   };
   return map[key] ?? key;
 };
+
+test('humanizeDlqMessage hides u2 stack trace from technical detail', () => {
+  const raw =
+    'loop: iteration 1 failed — edge extra_data failed: [server] INFO: [UiAutomator2Server] java.lang.IllegalStateException: UiAutomationService already registered!';
+  const out = humanizeDlqMessage(raw, t);
+  assert.ok(!out.technical.includes('IllegalStateException'));
+  assert.equal(out.technical, out.summary);
+});
+
+test('humanizeDlqMessage maps u2 transient extra_data inside loop', () => {
+  const out = humanizeDlqMessage(
+    'loop: iteration 1 failed — edge extra_data failed: [server] INFO: [UiAutomator2Server] Starting Server java.lang.IllegalStateException: UiAutomationService already registered!',
+    t
+  );
+  assert.ok(out.summary.includes('Vòng 1'));
+  assert.ok(out.summary.includes('Thu thập dữ liệu'));
+  assert.ok(!out.summary.includes('IllegalStateException'));
+});
 
 test('humanizeDlqMessage maps no relay inside loop', () => {
   const out = humanizeDlqMessage(

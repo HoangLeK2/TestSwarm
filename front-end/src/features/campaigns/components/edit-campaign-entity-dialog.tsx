@@ -17,13 +17,14 @@ import { VariableEditor } from '@/components/variable-editor';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 import { CampaignOrgScenarioPicker } from './campaign-org-scenario-picker';
+import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import {
   useCampaign,
   useBindCampaignAccounts,
   usePatchCampaignEntity,
   useUnbindCampaignAccounts
 } from '../hooks/use-campaigns';
-import type { CampaignOut } from '../types';
+import type { CampaignOut, RecoveryPolicy } from '../types';
 import { isCampaignBodyEditable } from '../types';
 import { isCampaignEntityOut } from '../services/api';
 import {
@@ -46,6 +47,7 @@ export function EditCampaignEntityDialog({
   const { data: detail } = useCampaign(campaign.id, open);
   const {
     mutate: patchEntity,
+    mutateAsync: patchEntityAsync,
     isPending: isPatching,
     error,
     reset
@@ -62,6 +64,7 @@ export function EditCampaignEntityDialog({
   const [description, setDescription] = useState(campaign.description ?? '');
   const [tags, setTags] = useState('');
   const [variables, setVariables] = useState<Record<string, unknown>>({});
+  const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [accountBinding, setAccountBinding] =
     useState<CampaignAccountBindingValue>({
@@ -76,6 +79,7 @@ export function EditCampaignEntityDialog({
     setDescription(entity.description ?? '');
     setTags((entity.tags ?? []).join(', '));
     setVariables(entity.vars ?? entity.variables ?? {});
+    setRecoveryPolicy((entity.recovery_policy ?? {}) as RecoveryPolicy);
     setSelectedIds((entity.scenario_refs ?? []).map((ref) => ref.scenario_id));
     setAccountBinding(campaignBindingFromEntity(entity));
   }, [entity]);
@@ -103,7 +107,10 @@ export function EditCampaignEntityDialog({
                 .map((tag) => tag.trim())
                 .filter(Boolean),
               vars: variables,
-              scenario_refs: selectedIds.map((scenario_id) => ({ scenario_id }))
+              scenario_refs: selectedIds.map((scenario_id) => ({
+                scenario_id
+              })),
+              recovery_policy: recoveryPolicy
             }
       },
       {
@@ -140,7 +147,7 @@ export function EditCampaignEntityDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='max-h-[90vh] max-w-lg overflow-y-auto'>
+      <DialogContent className='max-h-[90vh] max-w-4xl overflow-y-auto'>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
         </DialogHeader>
@@ -229,6 +236,18 @@ export function EditCampaignEntityDialog({
               onChange={setAccountBinding}
             />
           </div>
+          <RecoveryPolicyEditor
+            value={recoveryPolicy}
+            onChange={setRecoveryPolicy}
+            disabled={bodyLocked}
+            recordCampaignId={campaign.id}
+            onBeforeRecord={(policy) =>
+              patchEntityAsync({
+                id: campaign.id,
+                data: { recovery_policy: policy as Record<string, any> }
+              }).then(() => undefined)
+            }
+          />
           {error && (
             <p className='text-xs text-destructive'>
               {formatFarmApiError(error, t('saveFailed'))}

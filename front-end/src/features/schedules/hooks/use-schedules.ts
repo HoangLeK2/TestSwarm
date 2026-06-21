@@ -118,6 +118,8 @@ export function useRunNowSchedule() {
     onSuccess: (_, scheduleId) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.runs(scheduleId) });
+      qc.invalidateQueries({ queryKey: ['campaigns'] });
+      void qc.refetchQueries({ queryKey: ['campaigns'] });
     }
   });
 }

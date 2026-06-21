@@ -24,6 +24,11 @@ async def _mock_schedule_tenant_db(_schedule_id: str, db):
     yield db, "org-001"
 
 
+@asynccontextmanager
+async def _mock_db_session(db):
+    yield db
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -308,6 +313,39 @@ class TestSchedulerServiceEpic05:
                 await service.trigger_now(mock_db, "sched-001")
 
     @pytest.mark.asyncio
+    async def test_trigger_now_temporal_starts_workflow_with_real_run_id(self):
+        from services.scheduler import SchedulerService
+        from temporal.schedule_shared import ScheduleRunInput
+
+        mock_db = AsyncMock()
+        schedule = _make_schedule()
+        run = _make_run(id="run-now-001")
+        temporal_client = AsyncMock()
+
+        with (
+            patch("db.crud.schedule.get_schedule", return_value=schedule),
+            patch(
+                "db.crud.schedule.create_schedule_run", return_value=run
+            ) as create_run,
+        ):
+            service = SchedulerService(
+                temporal_client=temporal_client,
+                manager=None,
+                queue=None,
+            )
+            result = await service.trigger_now(mock_db, "sched-001")
+
+        assert result == "run-now-001"
+        create_run.assert_awaited_once()
+        temporal_client.start_workflow.assert_awaited_once()
+        args, kwargs = temporal_client.start_workflow.await_args
+        assert isinstance(args[1], ScheduleRunInput)
+        assert args[1].schedule_id == "sched-001"
+        assert args[1].run_id == "run-now-001"
+        assert kwargs["id"] == "df-sched-run-sched-001:run-now:run-now-001"
+        assert not temporal_client.get_schedule_handle.called
+
+    @pytest.mark.asyncio
     async def test_create_one_shot_requires_future_run_at(self):
         from services.scheduler import SchedulerService
 
@@ -464,6 +502,82 @@ class TestScheduleActivities:
         assert result == "run-abc"
 
     @pytest.mark.asyncio
+    async def test_dispatch_campaign_propagates_fan_out_error(self):
+        from temporal.schedule_activities import ScheduleActivities
+        from services.campaign.dispatcher import CampaignDispatchError
+
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        device = MagicMock(id="device-001")
+        with patch("temporal.schedule_activities._temporal_client_ref", object()), \
+             patch("db.database.activity_session", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.list_campaign_devices", return_value=[device]), \
+             patch(
+                 "services.campaign.dispatcher.dispatch_campaign",
+                 side_effect=CampaignDispatchError(
+                     "Campaign has no scenarios. Link an org scenario or add steps in the flow editor.",
+                     code="CAMPAIGN_NO_SCENARIOS",
+                 ),
+             ):
+            activities = ScheduleActivities()
+            with pytest.raises(RuntimeError, match="Campaign has no scenarios"):
+                await activities._dispatch_campaign(
+                    {"target_id": "camp-001"}, stagger=False, stagger_interval=60
+                )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_campaign_requires_runtime_started(self):
+        from temporal.schedule_activities import ScheduleActivities
+        from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        device = MagicMock(id="device-001")
+        fan_out = FanOutResult(
+            dispatch_id="dispatch-001",
+            campaign_id="camp-001",
+            dispatch_strategy="parallel",
+            executions=[
+                FanOutExecutionView(
+                    execution_id="exec-001",
+                    device_id="device-001",
+                    status="running",
+                    effective_vars={},
+                )
+            ],
+        )
+        with patch("temporal.schedule_activities._temporal_client_ref", object()), \
+             patch("db.database.activity_session", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.list_campaign_devices", return_value=[device]), \
+             patch("services.campaign.dispatcher.dispatch_campaign", return_value=fan_out), \
+             patch(
+                 "services.campaign.execution_runtime.start_execution_runtime",
+                 return_value={"temporal": 0, "fallback": 0},
+             ), \
+             patch("db.crud.execution.get_execution", return_value=MagicMock(meta={})):
+            activities = ScheduleActivities()
+            with pytest.raises(RuntimeError, match="started no workflows"):
+                await activities._dispatch_campaign(
+                    {"target_id": "camp-001"}, stagger=False, stagger_interval=60
+                )
+
+    @pytest.mark.asyncio
     async def test_finalize_run_updates_db(self):
         from temporal.schedule_activities import ScheduleActivities
         from temporal.schedule_shared import ScheduleDispatchResult
@@ -528,6 +642,84 @@ class TestScheduleActivities:
 
         assert captured["status"] == "failed"
         assert "No devices available" in captured["error_message"]
+
+
+class TestSchedulerCampaignDispatch:
+    @pytest.mark.asyncio
+    async def test_dispatch_campaign_propagates_fan_out_error(self):
+        from services.scheduler import _dispatch_campaign
+        from services.campaign.dispatcher import CampaignDispatchError
+
+        mock_db = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        device = MagicMock(id="device-001")
+        with patch("db.database.AsyncSessionLocal", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.list_campaign_devices", return_value=[device]), \
+             patch(
+                 "services.campaign.dispatcher.dispatch_campaign",
+                 side_effect=CampaignDispatchError(
+                     "Campaign has no scenarios. Link an org scenario or add steps in the flow editor.",
+                     code="CAMPAIGN_NO_SCENARIOS",
+                 ),
+             ):
+            with pytest.raises(RuntimeError, match="Campaign has no scenarios"):
+                await _dispatch_campaign(
+                    {"target_id": "camp-001"},
+                    queue=None,
+                    temporal_client=object(),
+                    temporal_config=None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_campaign_requires_runtime_started(self):
+        from services.scheduler import _dispatch_campaign
+        from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+
+        mock_db = AsyncMock()
+        campaign = MagicMock(
+            id="camp-001",
+            org_id="org-001",
+            created_by="user-001",
+            user_id=None,
+            target_group_id=None,
+        )
+        device = MagicMock(id="device-001")
+        fan_out = FanOutResult(
+            dispatch_id="dispatch-001",
+            campaign_id="camp-001",
+            dispatch_strategy="parallel",
+            executions=[
+                FanOutExecutionView(
+                    execution_id="exec-001",
+                    device_id="device-001",
+                    status="running",
+                    effective_vars={},
+                )
+            ],
+        )
+        with patch("db.database.AsyncSessionLocal", lambda: _mock_db_session(mock_db)), \
+             patch("db.crud.campaign_entity.get_campaign_entity", return_value=campaign), \
+             patch("db.crud.list_campaign_devices", return_value=[device]), \
+             patch("services.campaign.dispatcher.dispatch_campaign", return_value=fan_out), \
+             patch(
+                 "services.campaign.execution_runtime.start_execution_runtime",
+                 return_value={"temporal": 0, "fallback": 0},
+             ), \
+             patch("db.crud.execution.get_execution", return_value=MagicMock(meta={})):
+            with pytest.raises(RuntimeError, match="started no workflows"):
+                await _dispatch_campaign(
+                    {"target_id": "camp-001"},
+                    queue=None,
+                    temporal_client=object(),
+                    temporal_config=None,
+                )
 
 
 # ── _compute_next_run helper ──────────────────────────────────────────────────

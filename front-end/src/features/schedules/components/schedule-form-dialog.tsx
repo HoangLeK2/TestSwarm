@@ -412,8 +412,9 @@ export function ScheduleFormDialog({
           {/* ── Lịch cron ── */}
           <div className='space-y-2'>
             <CronBuilder
+              key={`${mode}-${schedule?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
               value={cronExpression}
-              onChange={(next) => setCronExpression(next)}
+              onChange={setCronExpression}
             />
           </div>
 

@@ -215,14 +215,84 @@ class ScheduleActivities:
                 "Ensure temporal.enabled=true and the Temporal server is reachable."
             )
 
-        from services.campaign_dispatch import enqueue_campaign_run_temporal
-        result, _ = await enqueue_campaign_run_temporal(
-            target_id, temporal_client, _temporal_config_ref
+        from db import crud as legacy_repo
+        from db.crud import campaign_entity as campaign_repo
+        from db.crud.execution import get_execution
+        from db.database import activity_session
+        from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
+        from services.campaign.execution_runtime import start_execution_runtime
+
+        async with activity_session() as db:
+            campaign = await campaign_repo.get_campaign_entity(db, target_id)
+            if campaign is None:
+                raise RuntimeError("Campaign not found")
+
+            org_id = str(cfg.get("org_id") or campaign.org_id or "")
+            actor_user_id = str(
+                cfg.get("user_id")
+                or campaign.created_by
+                or campaign.user_id
+                or "system"
+            )
+            if not org_id:
+                raise RuntimeError("Campaign has no organization")
+
+            device_ids: list[str] | None = None
+            device_group_ids: list[str] | None = None
+            if campaign.target_group_id:
+                device_group_ids = [str(campaign.target_group_id)]
+            else:
+                devices = await legacy_repo.list_campaign_devices(db, target_id)
+                device_ids = [str(device.id) for device in devices]
+
+            try:
+                fan_out = await dispatch_campaign(
+                    db,
+                    campaign_id=target_id,
+                    org_id=org_id,
+                    actor_user_id=actor_user_id,
+                    device_ids=device_ids,
+                    device_group_ids=device_group_ids,
+                    dispatch_strategy="parallel",
+                    allow_partial=False,
+                    require_online=True,
+                )
+            except CampaignDispatchError as exc:
+                raise RuntimeError(str(exc)) from exc
+
+            runtime_stats = await start_execution_runtime(
+                db,
+                fan_out=fan_out,
+                campaign=campaign,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                temporal_client=temporal_client,
+                temporal_config=_temporal_config_ref,
+                manager=_manager_ref,
+            )
+            workflow_ids: list[str] = []
+            execution_ids: list[str] = []
+            for view in fan_out.executions:
+                execution_ids.append(view.execution_id)
+                execution = await get_execution(db, view.execution_id)
+                meta = execution.meta if execution else {}
+                workflow_id = (meta or {}).get("workflow_id")
+                if workflow_id:
+                    workflow_ids.append(str(workflow_id))
+            await db.commit()
+
+        started_count = int(runtime_stats.get("temporal", 0) or 0) + int(
+            runtime_stats.get("fallback", 0) or 0
         )
+        if started_count <= 0:
+            raise RuntimeError(
+                f"Campaign dispatch started no workflows for campaign {target_id!r}"
+            )
 
         return {
-            "devices_dispatched": len(result.get("device_serials", [])),
-            "workflow_ids": result.get("workflow_ids", []),
+            "devices_dispatched": started_count,
+            "workflow_ids": workflow_ids,
+            "execution_id": execution_ids[0] if execution_ids else None,
         }
 
     async def _dispatch_template(

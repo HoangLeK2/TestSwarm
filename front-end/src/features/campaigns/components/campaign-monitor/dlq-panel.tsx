@@ -30,6 +30,13 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger
@@ -64,6 +71,14 @@ import {
 } from '@/lib/z-index';
 
 import { dlqStatusLabel, dlqStatusVariant } from './dlq-status';
+
+const DLQ_FILTER_ALL = 'all';
+
+function shortenExecutionId(id: string): string {
+  const trimmed = id.trim();
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 8)}…`;
+}
 
 function artifactPreviewUrl(entry: DlqEntry): string | null {
   const refs = entry.artifact_refs ?? {};
@@ -112,36 +127,74 @@ export function DlqPanel({
   const [closeTarget, setCloseTarget] = useState<DlqEntry | null>(null);
   const [closeReason, setCloseReason] = useState('');
   const [detailEntry, setDetailEntry] = useState<DlqEntry | null>(null);
-  const [deviceFilter, setDeviceFilter] = useState('');
-  const [errorFilter, setErrorFilter] = useState('');
-  const [executionFilter, setExecutionFilter] = useState('');
+  const [deviceFilter, setDeviceFilter] = useState(DLQ_FILTER_ALL);
+  const [errorFilter, setErrorFilter] = useState(DLQ_FILTER_ALL);
+  const [executionFilter, setExecutionFilter] = useState(DLQ_FILTER_ALL);
+
+  const deviceOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: { value: string; label: string }[] = [];
+    for (const entry of data) {
+      const serial = entry.device_serial.trim();
+      if (!serial || seen.has(serial)) continue;
+      seen.add(serial);
+      const device = resolveDlqDeviceLabel(serial, campaignDevices, t);
+      options.push({ value: serial, label: device.label });
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  }, [data, campaignDevices, t]);
+
+  const executionOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: { value: string; label: string }[] = [];
+    for (const entry of data) {
+      const id = entry.execution_id.trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      options.push({
+        value: id,
+        label: shortenExecutionId(id)
+      });
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  }, [data]);
+
+  const errorOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: string[] = [];
+    for (const entry of data) {
+      const raw = dlqDisplayMessage(entry, '');
+      const { summary } = humanizeDlqMessage(raw, t);
+      const key = summary.trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      options.push(key);
+    }
+    return options.sort((a, b) => a.localeCompare(b));
+  }, [data, t]);
 
   const filteredData = useMemo(() => {
-    const deviceNeedle = deviceFilter.trim().toLowerCase();
-    const errorNeedle = errorFilter.trim().toLowerCase();
-    const execNeedle = executionFilter.trim().toLowerCase();
     return data.filter((entry) => {
       if (
-        deviceNeedle &&
-        !entry.device_serial.toLowerCase().includes(deviceNeedle)
+        deviceFilter !== DLQ_FILTER_ALL &&
+        entry.device_serial.trim() !== deviceFilter
       ) {
         return false;
       }
       if (
-        execNeedle &&
-        !entry.execution_id.toLowerCase().includes(execNeedle)
+        executionFilter !== DLQ_FILTER_ALL &&
+        entry.execution_id.trim() !== executionFilter
       ) {
         return false;
       }
-      if (errorNeedle) {
+      if (errorFilter !== DLQ_FILTER_ALL) {
         const raw = dlqDisplayMessage(entry, '');
-        const user = humanizeDlqMessage(raw, t).summary;
-        const haystack = `${raw} ${user}`.toLowerCase();
-        if (!haystack.includes(errorNeedle)) return false;
+        const { summary } = humanizeDlqMessage(raw, t);
+        if (summary.trim() !== errorFilter) return false;
       }
       return true;
     });
-  }, [data, deviceFilter, errorFilter, executionFilter]);
+  }, [data, deviceFilter, errorFilter, executionFilter, t]);
 
   const replayableEntries = useMemo(
     () => filteredData.filter(isDlqEntryReplayable),
@@ -204,7 +257,7 @@ export function DlqPanel({
   };
 
   return (
-    <section className='border-t px-6 py-5'>
+    <section className='min-w-0 px-4 py-5 sm:px-5'>
       <MonitorSectionHeader
         icon={<AlertTriangle size={20} />}
         title={t('monitorDlqTitle')}
@@ -262,25 +315,71 @@ export function DlqPanel({
       ) : null}
 
       {!isLoading && data.length > 0 ? (
-        <div className='mt-4 flex flex-wrap gap-2'>
-          <Input
-            className='h-8 max-w-[160px] text-xs'
-            placeholder={t('monitorDlqFilterDevice')}
-            value={deviceFilter}
-            onChange={(e) => setDeviceFilter(e.target.value)}
-          />
-          <Input
-            className='h-8 max-w-[160px] text-xs'
-            placeholder={t('monitorDlqFilterExecution')}
-            value={executionFilter}
-            onChange={(e) => setExecutionFilter(e.target.value)}
-          />
-          <Input
-            className='h-8 min-w-[180px] flex-1 text-xs'
-            placeholder={t('monitorDlqFilterError')}
-            value={errorFilter}
-            onChange={(e) => setErrorFilter(e.target.value)}
-          />
+        <div className='mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3'>
+          <div className='min-w-0 space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              {t('monitorDlqFilterDevice')}
+            </Label>
+            <Select value={deviceFilter} onValueChange={setDeviceFilter}>
+              <SelectTrigger className='h-8 w-full text-xs'>
+                <SelectValue placeholder={t('monitorDlqFilterDevice')} />
+              </SelectTrigger>
+              <SelectContent style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}>
+                <SelectItem value={DLQ_FILTER_ALL}>
+                  {t('monitorDlqFilterAll')}
+                </SelectItem>
+                {deviceOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className='min-w-0 space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              {t('monitorDlqFilterExecution')}
+            </Label>
+            <Select value={executionFilter} onValueChange={setExecutionFilter}>
+              <SelectTrigger className='h-8 w-full font-mono text-xs'>
+                <SelectValue placeholder={t('monitorDlqFilterExecution')} />
+              </SelectTrigger>
+              <SelectContent style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}>
+                <SelectItem value={DLQ_FILTER_ALL}>
+                  {t('monitorDlqFilterAll')}
+                </SelectItem>
+                {executionOptions.map((option) => (
+                  <SelectItem
+                    key={option.value}
+                    value={option.value}
+                    title={option.value}
+                  >
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className='min-w-0 space-y-1'>
+            <Label className='text-[11px] text-muted-foreground'>
+              {t('monitorDlqFilterError')}
+            </Label>
+            <Select value={errorFilter} onValueChange={setErrorFilter}>
+              <SelectTrigger className='h-8 w-full text-xs'>
+                <SelectValue placeholder={t('monitorDlqFilterError')} />
+              </SelectTrigger>
+              <SelectContent style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}>
+                <SelectItem value={DLQ_FILTER_ALL}>
+                  {t('monitorDlqFilterAll')}
+                </SelectItem>
+                {errorOptions.map((option) => (
+                  <SelectItem key={option} value={option} title={option}>
+                    <span className='line-clamp-2'>{option}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       ) : null}
 
@@ -291,7 +390,7 @@ export function DlqPanel({
       ) : null}
 
       {!isLoading && filteredData.length > 0 ? (
-        <ul className='mt-4 max-h-[min(55vh,480px)] divide-y overflow-y-auto rounded-lg border bg-muted/20'>
+        <ul className='mt-4 max-h-[min(62vh,620px)] divide-y overflow-y-auto rounded-lg border bg-muted/20'>
           {filteredData.map((entry) => {
             const isRowPending =
               activeEntryId === entry.id &&
@@ -320,30 +419,144 @@ export function DlqPanel({
             return (
               <li
                 key={entry.id}
-                className='flex items-start gap-3 px-4 py-4 first:rounded-t-lg last:rounded-b-lg'
+                className='min-w-0 space-y-2 px-3 py-3 first:rounded-t-lg last:rounded-b-lg sm:px-4 sm:py-4'
               >
-                <button
-                  type='button'
-                  className='min-w-0 flex-1 space-y-2 text-left'
-                  onClick={() => setDetailEntry(entry)}
-                >
-                  <div className='flex flex-wrap items-center gap-2'>
+                <div className='flex min-w-0 items-start justify-between gap-2'>
+                  <div className='min-w-0 flex-1 space-y-1'>
                     <span
-                      className='text-sm font-semibold text-foreground'
+                      className='block break-all font-mono text-sm font-semibold leading-snug text-foreground'
                       title={device.title}
                     >
                       {device.label}
                     </span>
                     <Badge
                       variant={dlqStatusVariant(entry.status)}
-                      className='px-2.5 py-0.5 text-xs'
+                      className='w-fit px-2.5 py-0.5 text-xs'
                     >
                       {dlqStatusLabel(entry.status, t)}
                     </Badge>
                   </div>
+                  <div className='flex shrink-0 items-center gap-1'>
+                    {canExecute ? (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    size='sm'
+                                    variant='outline'
+                                    className='h-9 gap-1 px-2'
+                                    disabled={isRowPending || !replayable}
+                                  >
+                                    <RefreshCw
+                                      size={16}
+                                      className={
+                                        isRowPending && retryMut.isPending
+                                          ? 'animate-spin'
+                                          : undefined
+                                      }
+                                    />
+                                    <ChevronDown
+                                      size={14}
+                                      className='opacity-60'
+                                    />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align='end'
+                                  style={{
+                                    zIndex: Z_CAMPAIGN_MONITOR_FLOATING
+                                  }}
+                                >
+                                  <DropdownMenuItem
+                                    onClick={() => handleRetry(entry, true)}
+                                  >
+                                    {t('monitorDlqRetryCheckpoint')}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handleRetry(entry, false)}
+                                  >
+                                    {t('monitorDlqRetryFull')}
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </span>
+                          </TooltipTrigger>
+                          {!replayable && blockedReason ? (
+                            <TooltipContent
+                              className='max-w-xs text-xs'
+                              style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                            >
+                              {blockedReason}
+                            </TooltipContent>
+                          ) : null}
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size='icon'
+                              variant='outline'
+                              className='size-9'
+                              disabled={isRowPending}
+                              onClick={() => {
+                                setActiveEntryId(entry.id);
+                                setCloseTarget(entry);
+                                setCloseReason('');
+                              }}
+                            >
+                              <XCircle size={18} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent
+                            className='text-sm'
+                            style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                          >
+                            {t('monitorActionClose')}
+                          </TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size='icon'
+                              variant='outline'
+                              className='size-9 text-muted-foreground'
+                              disabled={isRowPending}
+                              onClick={() => {
+                                setActiveEntryId(entry.id);
+                                dismissMut.mutate(entry.id, {
+                                  onSuccess: () =>
+                                    toast.success(t('monitorDlqDismissSuccess')),
+                                  onError: () =>
+                                    toast.error(t('monitorDlqDismissFailed')),
+                                  onSettled: () => setActiveEntryId(null)
+                                });
+                              }}
+                            >
+                              <Trash2 size={18} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent
+                            className='text-sm'
+                            style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                          >
+                            {t('monitorActionDismiss')}
+                          </TooltipContent>
+                        </Tooltip>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+
+                <button
+                  type='button'
+                  className='block w-full min-w-0 text-left'
+                  onClick={() => setDetailEntry(entry)}
+                >
                   <p
                     className={cn(
-                      'max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed',
+                      'whitespace-pre-wrap break-words text-sm leading-relaxed',
                       hasExplicitMessage
                         ? 'text-foreground/90'
                         : 'italic text-muted-foreground'
@@ -352,7 +565,7 @@ export function DlqPanel({
                   >
                     {reason}
                   </p>
-                  <div className='flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground'>
+                  <div className='mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground'>
                     <span>
                       {t('monitorDlqFailedAt', {
                         time: formatTs(entry.created_at)
@@ -379,116 +592,6 @@ export function DlqPanel({
                     ) : null}
                   </div>
                 </button>
-
-                <div className='flex shrink-0 gap-1'>
-                  {canExecute ? (
-                    <>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  size='sm'
-                                  variant='outline'
-                                  className='h-10 gap-1 px-2.5'
-                                  disabled={isRowPending || !replayable}
-                                >
-                                  <RefreshCw
-                                    size={16}
-                                    className={
-                                      isRowPending && retryMut.isPending
-                                        ? 'animate-spin'
-                                        : undefined
-                                    }
-                                  />
-                                  <ChevronDown
-                                    size={14}
-                                    className='opacity-60'
-                                  />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent
-                                align='end'
-                                style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
-                              >
-                                <DropdownMenuItem
-                                  onClick={() => handleRetry(entry, true)}
-                                >
-                                  {t('monitorDlqRetryCheckpoint')}
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleRetry(entry, false)}
-                                >
-                                  {t('monitorDlqRetryFull')}
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </span>
-                        </TooltipTrigger>
-                        {!replayable && blockedReason ? (
-                          <TooltipContent
-                            className='max-w-xs text-xs'
-                            style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
-                          >
-                            {blockedReason}
-                          </TooltipContent>
-                        ) : null}
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size='icon'
-                            variant='outline'
-                            className='h-10 w-10'
-                            disabled={isRowPending}
-                            onClick={() => {
-                              setActiveEntryId(entry.id);
-                              setCloseTarget(entry);
-                              setCloseReason('');
-                            }}
-                          >
-                            <XCircle size={18} />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent
-                          className='text-sm'
-                          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
-                        >
-                          {t('monitorActionClose')}
-                        </TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size='icon'
-                            variant='outline'
-                            className='h-10 w-10 text-muted-foreground'
-                            disabled={isRowPending}
-                            onClick={() => {
-                              setActiveEntryId(entry.id);
-                              dismissMut.mutate(entry.id, {
-                                onSuccess: () =>
-                                  toast.success(t('monitorDlqDismissSuccess')),
-                                onError: () =>
-                                  toast.error(t('monitorDlqDismissFailed')),
-                                onSettled: () => setActiveEntryId(null)
-                              });
-                            }}
-                          >
-                            <Trash2 size={18} />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent
-                          className='text-sm'
-                          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
-                        >
-                          {t('monitorActionDismiss')}
-                        </TooltipContent>
-                      </Tooltip>
-                    </>
-                  ) : null}
-                </div>
               </li>
             );
           })}

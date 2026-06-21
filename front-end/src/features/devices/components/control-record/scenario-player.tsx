@@ -669,7 +669,7 @@ export function ScenarioPlayer({
           }
         >
           <StepForward className='size-3.5' />
-          {stepByStep ? t('modeStepByStep') : t('modeAll')}
+          {stepByStep ? t('modeAll') : t('modeStepByStep')}
         </Button>
 
         {stepByStep ? (

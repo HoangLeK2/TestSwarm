@@ -23,6 +23,7 @@ import {
   type CampaignOut,
   type CampaignRunResponse,
   type CampaignStatus,
+  type ExecutionArtifact,
   type ScenarioCreate,
   type ScenarioUpdate
 } from '../types';
@@ -714,32 +715,36 @@ export function useDismissDlqEntry() {
   });
 }
 
-export function useLatestExecutionArtifacts(
+export function useExecutionArtifacts(
+  executionId: string | null | undefined,
+  enabled: boolean,
+  pollAggressive = true
+) {
+  return useQuery({
+    queryKey: ['execution-artifacts', executionId],
+    enabled: enabled && !!executionId,
+    ...monitorQueryDefaults,
+    staleTime: 10 * 60_000,
+    gcTime: 30 * 60_000,
+    queryFn: () => executionsApi.listArtifacts(executionId!),
+    refetchInterval:
+      enabled && pollAggressive ? MONITOR_SIDEBAR_ACTIVE_POLL_MS : false,
+    refetchOnWindowFocus: false
+  });
+}
+
+export function useCampaignExecutionHistory(
   campaignId: string,
   enabled: boolean,
   pollAggressive = true
 ) {
   return useQuery({
-    queryKey: ['campaign-artifacts', campaignId],
+    queryKey: ['campaign-execution-history', campaignId],
     enabled: enabled && !!campaignId,
     ...monitorQueryDefaults,
     staleTime: 15_000,
-    queryFn: async () => {
-      const listing = await executionsApi.list({
-        campaignId,
-        limit: 1,
-        offset: 0
-      });
-      const latest = listing.items?.[0];
-      if (!latest) {
-        return {
-          execution: null,
-          artifacts: [] as import('../types').ExecutionArtifact[]
-        };
-      }
-      const artifacts = await executionsApi.listArtifacts(latest.id);
-      return { execution: latest, artifacts };
-    },
+    queryFn: () => executionsApi.list({ campaignId, limit: 50, offset: 0 }),
+    select: (data) => data.items ?? [],
     refetchInterval: enabled
       ? pollAggressive
         ? MONITOR_SIDEBAR_ACTIVE_POLL_MS

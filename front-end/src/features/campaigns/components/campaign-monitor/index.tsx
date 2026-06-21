@@ -73,7 +73,7 @@ export function CampaignMonitorDialog({
 
       <DialogContent
         zIndex={Z_CAMPAIGN_MONITOR}
-        className='flex max-h-[min(92dvh,1040px)] min-h-0 w-[min(96vw,1120px)] max-w-[1120px] flex-col gap-0 overflow-hidden p-0 sm:rounded-xl'
+        className='flex max-h-[min(95dvh,1200px)] min-h-[min(72dvh,820px)] min-w-0 w-[min(99vw,1600px)] max-w-[min(99vw,1600px)] sm:!max-w-[min(99vw,1600px)] flex-col gap-0 overflow-hidden p-0 sm:rounded-xl'
       >
         <DialogHeader className='shrink-0 border-b px-6 py-4 pr-14'>
           <div className='flex min-w-0 items-center gap-3'>

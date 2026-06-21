@@ -105,6 +105,7 @@ async def _seed_epic04_execution(
                     id=exec_id,
                     run_type="campaign_device",
                     status=ExecutionStatus.DLQ_OPEN.value,
+                    org_id="org-1",
                     campaign_id=campaign_id,
                     user_id="u1",
                     checkpoint_step=checkpoint,
@@ -369,3 +370,52 @@ async def test_epic04_replay_checkpoint_creates_linked_execution(session_factory
     assert new_ex.meta["replayed_from"] == exec_id
     assert new_ex.meta["start_step"] == 2
     assert new_ex.checkpoint_step == 2
+
+
+@pytest.mark.asyncio
+async def test_epic04_replay_full_rerun_resets_checkpoint(session_factory):
+    exec_id = await _seed_epic04_execution(session_factory, exec_id="exec-replay-full", checkpoint=5)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            entry = await create_dlq_entry(
+                db,
+                execution_id=exec_id,
+                device_serial="SN1",
+                campaign_id="camp-1",
+            )
+        await db.commit()
+        dlq_id = entry.id
+
+    view = SimpleNamespace(
+        execution_id="new-exec-full",
+        device_id="dev-sn1",
+        status=ExecutionStatus.RUNNING.value,
+        failure_reason=None,
+    )
+
+    with patch(
+        "services.campaign.dispatcher.CampaignDispatcher.activate_queued_execution",
+        new=AsyncMock(return_value=view),
+    ), patch(
+        "services.campaign.execution_runtime.start_execution_runtime",
+        new=AsyncMock(return_value={"temporal": 1, "fallback": 0}),
+    ):
+        async with session_factory() as db:
+            with tenant_context("org-1"):
+                entry, new_ex, changed = await replay_dlq_entry(
+                    db,
+                    dlq_id=dlq_id,
+                    user_id="u1",
+                    org_id="org-1",
+                    actor_user_id="u1",
+                    from_checkpoint=False,
+                    temporal_client=AsyncMock(),
+                    temporal_config=SimpleNamespace(enabled=True),
+                )
+            await db.commit()
+
+    assert changed is True
+    assert entry.status == "replayed"
+    assert new_ex.meta["replayed_from"] == exec_id
+    assert new_ex.meta["start_step"] == 0
+    assert new_ex.checkpoint_step == 0

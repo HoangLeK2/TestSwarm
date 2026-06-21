@@ -977,7 +977,7 @@ class TestDlqRetryReenqueue:
         entry.id = "dlq-1"
         entry.execution_id = "exec-1"
         entry.device_serial = "SN001"
-        entry.error = None
+        entry.error = "timeout"
         entry.retry_count = 1
         entry.status = "resolved"
         entry.last_attempt_at = None
@@ -994,6 +994,7 @@ class TestDlqRetryReenqueue:
         entry.closed_at = None
         entry.close_reason = None
         entry.artifact_refs = {}
+        entry.display_message = ""
         execution.meta = {}
         request = MagicMock()
         request.app.state.scheduler = MagicMock()
@@ -1036,7 +1037,7 @@ class TestDlqRetryReenqueue:
         entry.id = "dlq-1"
         entry.execution_id = "exec-1"
         entry.device_serial = "SN001"
-        entry.error = None
+        entry.error = "timeout"
         entry.retry_count = 1
         entry.status = "retrying"
         entry.last_attempt_at = None
@@ -1112,3 +1113,75 @@ class TestDlqRetryReenqueue:
         assert exc.value.status_code == 404
 
         legacy_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retry_dlq_epic04_forwards_full_rerun_flag(self):
+        from api.routes import executions as executions_route
+        from api.routes.executions import DLQRetryBody
+        from services.campaign.execution_runtime import DISPATCH_SOURCE_TEMPORAL
+
+        db = AsyncMock()
+        user = MagicMock()
+        user.id = "user-1"
+        user.org_id = "org-1"
+        entry = MagicMock()
+        entry.id = "dlq-1"
+        entry.execution_id = "exec-1"
+        entry.device_serial = "SN001"
+        entry.error = "timeout"
+        entry.retry_count = 1
+        entry.status = "replayed"
+        entry.last_attempt_at = None
+        entry.created_at = datetime.now(timezone.utc)
+        entry.replayed_to_execution_id = "exec-replay-1"
+        entry.campaign_id = "camp-1"
+        entry.failed_step_id = None
+        entry.failure_reason = None
+        entry.closed_by = None
+        entry.closed_at = None
+        entry.close_reason = None
+        entry.artifact_refs = {}
+        entry.display_message = ""
+        execution = MagicMock()
+        execution.id = "exec-1"
+        execution.user_id = "user-1"
+        execution.campaign_id = "camp-1"
+        execution.meta = {"dispatch_source": DISPATCH_SOURCE_TEMPORAL}
+        request = MagicMock()
+        request.app.state.scheduler = MagicMock()
+        request.app.state.scheduler._client = AsyncMock()
+        request.app.state.scheduler._cfg = MagicMock()
+        request.app.state.manager = None
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "db.crud.execution_dlq.get_dlq_entry_for_user",
+                    AsyncMock(return_value=entry),
+                )
+            )
+            stack.enter_context(
+                patch("api.execution_access.get_execution_for_user", AsyncMock(return_value=execution))
+            )
+            replay_mock = stack.enter_context(
+                patch(
+                    "services.campaign.dlq_service.replay_dlq_entry",
+                    AsyncMock(return_value=(entry, MagicMock(), True)),
+                )
+            )
+            legacy_mock = stack.enter_context(
+                patch("services.campaign.dlq_service.legacy_retry_dlq_entry", AsyncMock())
+            )
+
+            out = await executions_route.retry_dlq(
+                "dlq-1",
+                request,
+                db,
+                user,
+                DLQRetryBody(from_checkpoint=False),
+            )
+
+        replay_mock.assert_awaited_once()
+        assert replay_mock.await_args.kwargs["from_checkpoint"] is False
+        legacy_mock.assert_not_awaited()
+        assert out.id == "dlq-1"

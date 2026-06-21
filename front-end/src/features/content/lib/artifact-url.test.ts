@@ -67,6 +67,13 @@ test('shouldProxyArtifactFetch is true for local screenshot paths', () => {
   assert.equal(directObjectStorageUrl(raw, resolved), null);
 });
 
+test('shouldProxyArtifactFetch is false for static captures mount', () => {
+  const raw = '/captures/screenshots/a.jpg';
+  const resolved = resolveArtifactUrl(raw, 'http://localhost:8081');
+  assert.equal(shouldProxyArtifactFetch(raw, resolved), false);
+  assert.equal(directObjectStorageUrl(raw, resolved), resolved);
+});
+
 test('isImageArtifact detects proxy screenshots without file extension', () => {
   assert.equal(
     isImageArtifact('text', '/artifacts/abc/content', {

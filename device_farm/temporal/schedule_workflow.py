@@ -97,12 +97,14 @@ class ScheduleRunWorkflow:
                 error="Schedule is disabled",
             )
 
-        run_id: str = await workflow.execute_activity(
-            "create_run_record",
-            schedule_id,
-            start_to_close_timeout=_SHORT,
-            retry_policy=_DB_RETRY,
-        )
+        run_id = inp.run_id
+        if not run_id:
+            run_id = await workflow.execute_activity(
+                "create_run_record",
+                schedule_id,
+                start_to_close_timeout=_SHORT,
+                retry_policy=_DB_RETRY,
+            )
 
         delay_min = int(schedule_config.get("random_delay_min", 0))
         delay_max = int(schedule_config.get("random_delay_max", 0))

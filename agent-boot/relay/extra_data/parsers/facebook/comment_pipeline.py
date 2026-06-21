@@ -46,6 +46,10 @@ def _node_has_comment_button_token(node) -> bool:
         return False
     if "cảm xúc về bình luận" in d_cf or "react to the comment" in d_cf:
         return False
+    if "bình luận của" in d_cf or "comment on" in d_cf:
+        return False
+    if "thích bình luận" in d_cf or d_cf.startswith("trả lời"):
+        return False
 
     if d_cf in exact:
         return True
@@ -127,26 +131,88 @@ def build_comment_button_u2_click(node, bounds: Tuple[int, int, int, int]) -> di
     }
 
 
-def _resolve_comment_button_click_meta(node) -> Optional[dict[str, Any]]:
+def _resolve_comment_button_click_meta(
+    node,
+    *,
+    prefer_compact: bool = False,
+    max_tap_height: int | None = None,
+) -> Optional[dict[str, Any]]:
     """Resolve tappable comment control metadata for U2 click + bounds fallback."""
     if not _node_has_comment_button_token(node):
         return None
+    compact_best: Optional[dict[str, Any]] = None
+    compact_area = 10**12
     cur = node
     for _ in range(12):
         if _is_tappable_fb_node(cur):
             bnds = _parse_bounds_from_node(cur)
             if bnds:
                 is_btn = "Button" in (cur.get("class") or "")
-                return {
+                height = bnds[3] - bnds[1]
+                if max_tap_height and height > max_tap_height and not is_btn:
+                    parent = cur.getparent()
+                    if parent is None:
+                        break
+                    cur = parent
+                    continue
+                meta = {
                     "bounds": bnds,
                     "is_button": is_btn,
                     "u2_click": build_comment_button_u2_click(cur, bnds),
                 }
+                if not prefer_compact:
+                    return meta
+                area = max(1, (bnds[2] - bnds[0]) * height)
+                if compact_best is None or area < compact_area or (
+                    is_btn and not compact_best.get("is_button")
+                ):
+                    compact_best = meta
+                    compact_area = area
         parent = cur.getparent()
         if parent is None:
             break
         cur = parent
-    return None
+    return compact_best
+
+
+def _post_action_bar_row_band(root, screen_h: int) -> Optional[Tuple[int, int]]:
+    """Vertical band for the post Like/Comment/Share row on detail screens."""
+    row_mids: List[int] = []
+    for node in root.iter():
+        if not _is_tappable_fb_node(node):
+            continue
+        desc_cf = _norm_fb_ui(node.get("content-desc") or "").casefold()
+        text_cf = _norm_fb_ui(node.get("text") or "").casefold()
+        if "cảm xúc về bình luận" in desc_cf or "react to the comment" in desc_cf:
+            continue
+        if "thích bình luận" in desc_cf or desc_cf.startswith("trả lời"):
+            continue
+        exact = {tok.casefold() for tok in COMMENT_BUTTON_TOKENS}
+        is_post_like = (
+            (desc_cf.startswith("nút thích") or desc_cf.startswith("like"))
+            and "bình luận" not in desc_cf
+        )
+        is_post_share = "nút chia sẻ" in desc_cf and "bài viết" in desc_cf
+        is_post_comment = (
+            desc_cf.startswith("nút bình luận")
+            or desc_cf.startswith("comment button")
+            or text_cf in exact
+        )
+        if not (is_post_like or is_post_share or is_post_comment):
+            continue
+        bnds = _parse_bounds_from_node(node)
+        if not bnds:
+            continue
+        row_mids.append((bnds[1] + bnds[3]) // 2)
+    if not row_mids:
+        return None
+    row_mids.sort()
+    median = row_mids[len(row_mids) // 2]
+    tolerance = max(40, int(screen_h * 0.028))
+    cluster = [y for y in row_mids if abs(y - median) <= tolerance] or row_mids
+    y1 = min(cluster) - tolerance // 2
+    y2 = max(cluster) + tolerance // 2
+    return max(0, y1), y2
 
 
 def _comment_button_within_post_card(
@@ -833,18 +899,31 @@ def _resolve_comment_region_anchors(root, row_match_pid: Optional[str]) -> Tuple
     return _legacy_last_binh_luan_anchors(root)
 
 
-def _find_comment_button_click_target_in_element(element) -> Optional[dict[str, Any]]:
+def _find_comment_button_click_target_in_element(
+    element,
+    *,
+    y_band: Optional[Tuple[int, int]] = None,
+    prefer_compact: bool = False,
+    max_tap_height: int | None = None,
+) -> Optional[dict[str, Any]]:
     from .parser import _parse_bounds
 
     parent_bounds = _parse_bounds(element)
     best: Optional[tuple[int, dict[str, Any]]] = None
     fallback: Optional[tuple[int, dict[str, Any]]] = None
     for node in element.iter():
-        meta = _resolve_comment_button_click_meta(node)
+        meta = _resolve_comment_button_click_meta(
+            node,
+            prefer_compact=prefer_compact,
+            max_tap_height=max_tap_height,
+        )
         if not meta:
             continue
         bnds = meta["bounds"]
         if not _comment_button_within_post_card(bnds, parent_bounds):
+            continue
+        y_mid = (bnds[1] + bnds[3]) // 2
+        if y_band and (y_mid < y_band[0] or y_mid > y_band[1]):
             continue
         y1 = bnds[1]
         if meta.get("is_button"):
@@ -1133,6 +1212,125 @@ def _score_comment_candidate(
     }
 
 
+def _comment_candidate_matches_anchor(
+    cand: Dict[str, Any],
+    locked_anchor: Dict[str, Any],
+) -> bool:
+    post = cand.get("post") if isinstance(cand.get("post"), dict) else {}
+    for key in ("post_key", "stable_post_id", "fb_post_id", "pid", "_pid"):
+        expected = locked_anchor.get(key)
+        if not expected:
+            continue
+        actual = post.get(key if key != "pid" else "_pid") or post.get("pid")
+        if actual and str(actual) == str(expected):
+            return True
+    anchor_author = str(locked_anchor.get("author") or "").strip().casefold()
+    anchor_prefix = str(locked_anchor.get("text_prefix") or "").strip().casefold()
+    post_author = str(post.get("author") or "").strip().casefold()
+    post_text = str(
+        post.get("text")
+        or post.get("body")
+        or post.get("content")
+        or post.get("message")
+        or post.get("caption")
+        or post.get("description")
+        or post.get("image_desc")
+        or ""
+    ).strip().casefold()
+    if anchor_author and post_author and anchor_author == post_author:
+        if not anchor_prefix or (post_text and post_text.startswith(anchor_prefix[:48])):
+            return True
+    return False
+
+
+def _apply_locked_anchor_scoring(
+    cand: Dict[str, Any],
+    locked_anchor: Dict[str, Any] | None,
+) -> None:
+    if not locked_anchor:
+        return
+    breakdown = dict(cand.get("breakdown") or {})
+    if _comment_candidate_matches_anchor(cand, locked_anchor):
+        breakdown["anchor_match"] = True
+        cand["score"] = float(cand.get("score", 0.0)) - 500.0
+    else:
+        breakdown["anchor_match"] = False
+        cand["score"] = float(cand.get("score", 0.0)) + 800.0
+    cand["breakdown"] = breakdown
+
+
+def _resolve_post_detail_comment_target(
+    root,
+    *,
+    locked_anchor: Dict[str, Any] | None = None,
+    screen_h: int,
+    screen_w: int,
+) -> Optional[Dict[str, Any]]:
+    """Pick the main post action-bar comment button on a single-post detail screen."""
+    from .post_extractor import (
+        _extract_fb_link_meta,
+        _extract_post,
+        _resource_id_media_hint,
+        _structural_post_type_hint,
+    )
+    from .parser import _collect_text_nodes
+
+    btn = _find_comment_button_click_target_in_element(
+        root,
+        y_band=_post_action_bar_row_band(root, screen_h),
+        prefer_compact=True,
+        max_tap_height=max(80, int(screen_h * 0.045)),
+    )
+    if not btn:
+        btn = _find_comment_button_click_target_in_element(
+            root,
+            prefer_compact=True,
+            max_tap_height=max(80, int(screen_h * 0.045)),
+        )
+    if not btn:
+        return None
+    comment_bounds = btn["bounds"]
+    y_mid = (comment_bounds[1] + comment_bounds[3]) // 2
+    header_cutoff = max(160, int(screen_h * 0.08))
+    detail_action_max = int(screen_h * 0.62)
+    if y_mid < header_cutoff or y_mid > detail_action_max:
+        return None
+
+    nodes = _collect_text_nodes(root, toolbar_cutoff_y=header_cutoff)
+    post: Optional[Dict[str, Any]] = None
+    if nodes:
+        fb_pid, fb_gid, perms = _extract_fb_link_meta(root)
+        post = _extract_post(
+            nodes,
+            0,
+            structural_type_hint=_structural_post_type_hint(root),
+            resource_id_media_hint=_resource_id_media_hint(root),
+            fb_post_id=fb_pid,
+            fb_group_id=fb_gid,
+            permalink_candidates=perms,
+            feed_item_index=0,
+        )
+    if (not post or not post.get("_pid")) and locked_anchor:
+        post = {
+            "_pid": locked_anchor.get("pid") or locked_anchor.get("_pid") or "detail-anchor",
+            "post_key": locked_anchor.get("post_key"),
+            "stable_post_id": locked_anchor.get("stable_post_id"),
+            "fb_post_id": locked_anchor.get("fb_post_id"),
+            "author": locked_anchor.get("author"),
+            "timestamp": locked_anchor.get("timestamp"),
+            "text": locked_anchor.get("text_prefix"),
+        }
+    if not post or not post.get("_pid"):
+        return None
+    return {
+        "comment_bounds": comment_bounds,
+        "comment_u2_click": btn.get("u2_click"),
+        "parent_post_bounds": None,
+        "post": post,
+        "feed_item_index": 0,
+    }
+
+
 def resolve_comment_targets_from_xml(
     xml: str,
     *,
@@ -1140,6 +1338,7 @@ def resolve_comment_targets_from_xml(
     max_candidates: int = 5,
     band_low: float = 0.12,
     band_high: float = 0.97,
+    locked_anchor: Dict[str, Any] | None = None,
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """Rank visible FB Comment buttons per the post-comment linking spec.
 
@@ -1162,6 +1361,7 @@ def resolve_comment_targets_from_xml(
     """
     from .feed_pipeline import _is_ad_container
     from .parser import _infer_screen_size, _parse_xml, _pick_feed_container
+    from .post_open_pipeline import hierarchy_is_fb_post_detail_from_xml
 
     root = _parse_xml(xml)
     if root is None:
@@ -1173,6 +1373,31 @@ def resolve_comment_targets_from_xml(
     if screen_w <= 0:
         screen_w = 1080
     center_y_ratio = max(band_low, min(band_high, float(center_y_ratio)))
+
+    if hierarchy_is_fb_post_detail_from_xml(xml):
+        try:
+            detail_cand = _resolve_post_detail_comment_target(
+                root,
+                locked_anchor=locked_anchor,
+                screen_h=screen_h,
+                screen_w=screen_w,
+            )
+        except AttributeError:
+            detail_cand = None
+        if detail_cand is not None:
+            detail_cand["_screen_h"] = screen_h
+            detail_cand["_screen_w"] = screen_w
+            detail_cand["_center_y_ratio"] = center_y_ratio
+            detail_cand.update(
+                _score_comment_candidate(
+                    detail_cand,
+                    screen_h=screen_h,
+                    screen_w=screen_w,
+                    center_y_ratio=center_y_ratio,
+                )
+            )
+            _apply_locked_anchor_scoring(detail_cand, locked_anchor)
+            return detail_cand, [detail_cand]
 
     containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
     feed_children: List[Any] = []
@@ -1203,6 +1428,10 @@ def resolve_comment_targets_from_xml(
                 center_y_ratio=center_y_ratio,
             )
         )
+        cand["_screen_h"] = screen_h
+        cand["_screen_w"] = screen_w
+        cand["_center_y_ratio"] = center_y_ratio
+        _apply_locked_anchor_scoring(cand, locked_anchor)
         scored.append(cand)
 
     if not scored and band_high < 0.99:
@@ -1222,7 +1451,16 @@ def resolve_comment_targets_from_xml(
                     center_y_ratio=center_y_ratio,
                 )
             )
+            cand["_screen_h"] = screen_h
+            cand["_screen_w"] = screen_w
+            cand["_center_y_ratio"] = center_y_ratio
+            _apply_locked_anchor_scoring(cand, locked_anchor)
             scored.append(cand)
+
+    if locked_anchor and scored:
+        matched = [c for c in scored if (c.get("breakdown") or {}).get("anchor_match")]
+        if matched:
+            scored = matched
 
     if not scored:
         return None, []

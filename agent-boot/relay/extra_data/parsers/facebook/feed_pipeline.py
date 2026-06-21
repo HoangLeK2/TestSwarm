@@ -358,11 +358,73 @@ def _extract_header_stats(
     return stats
 
 
+_COUNT_RE = re.compile(r"([\d.,]+)\s*([KkMmBb])?")
+
+
+def parse_fb_count_text(text: Any) -> int:
+    """Parse FB count badges: ``70``, ``1.2K``, ``45M`` → int (0 on failure)."""
+    if text is None:
+        return 0
+    s = str(text).replace(",", "").strip()
+    if not s:
+        return 0
+    m = _COUNT_RE.search(s)
+    if not m:
+        return 0
+    try:
+        val = float(m.group(1))
+    except (ValueError, TypeError):
+        return 0
+    suffix = (m.group(2) or "").lower()
+    if suffix == "k":
+        val *= 1_000
+    elif suffix == "m":
+        val *= 1_000_000
+    elif suffix == "b":
+        val *= 1_000_000_000
+    return int(val)
+
+
+def extract_post_comment_count_from_xml(xml: str) -> Optional[int]:
+    """Read total comment count shown on the post (action bar or header stats)."""
+    from .parser import _parse_xml
+    from .post_extractor import _extract_post_action_bar_stats
+
+    root = _parse_xml(xml)
+    if root is None:
+        return None
+
+    for raw in (
+        (_extract_post_action_bar_stats(root) or {}).get("comments"),
+        (_extract_header_stats(root) or {}).get("comments"),
+    ):
+        if not raw:
+            continue
+        count = parse_fb_count_text(raw)
+        if count > 0:
+            return count
+    return None
+
+
+def resolve_comment_crawl_target(
+    max_items: int,
+    post_comment_count: Optional[int],
+) -> int:
+    """Cap crawl target by the smaller of ``max_items`` and on-screen post comment count."""
+    target = max(1, int(max_items))
+    if post_comment_count is not None and post_comment_count > 0:
+        target = min(target, post_comment_count)
+    return target
+
+
 __all__ = [
     "_empty_post_diagnostic",
     "_extract_header_stats",
     "_extract_posts_from_recycler",
+    "extract_post_comment_count_from_xml",
+    "parse_fb_count_text",
     "parse_fb_posts_from_xml",
     "parse_fb_posts_from_xml_with_diagnostic",
+    "resolve_comment_crawl_target",
 ]
 

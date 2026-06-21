@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from relay.extra_data.parsers.facebook.feed_pipeline import parse_fb_posts_from_xml_with_diagnostic
+from relay.extra_data.parsers.facebook.feed_pipeline import (
+    extract_post_comment_count_from_xml,
+    parse_fb_count_text,
+    parse_fb_posts_from_xml_with_diagnostic,
+    resolve_comment_crawl_target,
+)
 from relay.extra_data.parsers.facebook.post_extractor import _extract_post_action_bar_stats
 from relay.extra_data.parsers.facebook.parser import _parse_xml
 from relay.extra_data.writer import build_content_item_row
@@ -52,3 +57,20 @@ def test_writer_maps_reactions_comments_shares_to_db_columns() -> None:
     assert row["likes_count"] == 6
     assert row["comments_count"] == 23
     assert row["shares_count"] == 2
+
+
+def test_parse_fb_count_text_handles_suffixes() -> None:
+    assert parse_fb_count_text("70") == 70
+    assert parse_fb_count_text("1.2K") == 1200
+    assert parse_fb_count_text("45M") == 45_000_000
+
+
+def test_resolve_comment_crawl_target_caps_by_post_count() -> None:
+    assert resolve_comment_crawl_target(500, 70) == 70
+    assert resolve_comment_crawl_target(500, 1000) == 500
+    assert resolve_comment_crawl_target(500, None) == 500
+
+
+def test_extract_post_comment_count_from_action_bar_snippet() -> None:
+    xml = f"<hierarchy>{ACTION_BAR_SNIPPET}</hierarchy>"
+    assert extract_post_comment_count_from_xml(xml) == 23

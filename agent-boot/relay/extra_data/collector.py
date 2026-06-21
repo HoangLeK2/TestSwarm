@@ -24,7 +24,7 @@ _COMMENT_DEEP_SCROLL_MAX_SWIPES = 80
 _COMMENT_DEEP_SWIPES_PER_DUMP = 6
 _COMMENT_DEEP_NO_GROWTH_BREAK = 24
 _COMMENT_STALL_SWIPES_PER_DUMP = 2
-_COMMENT_MIN_SCROLL_DURATION_S = 0.22
+_COMMENT_MIN_SCROLL_DURATION_S = 0.10
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -389,9 +389,30 @@ async def _maybe_open_fb_post_detail(
         return None, {"skipped": True}
 
     if hierarchy_is_fb_post_detail_from_xml(feed_xml):
-        logger.info("[%s] open_post_before_extract: already on post detail", serial)
-        context["open_post_detail"] = True
-        return feed_xml, {"reason_code": "already_on_post_detail"}
+        probe_posts: list[dict[str, Any]] = []
+        try:
+            from relay.extra_data.parsers.facebook.feed_pipeline import (
+                parse_fb_posts_from_xml_with_diagnostic,
+            )
+
+            probe_posts, _ = parse_fb_posts_from_xml_with_diagnostic(feed_xml)
+        except Exception:
+            probe_posts = []
+        if len(probe_posts) >= 2:
+            logger.info(
+                "[%s] open_post_before_extract: post-detail heuristic false positive (%d feed posts)",
+                serial,
+                len(probe_posts),
+            )
+        else:
+            logger.info("[%s] open_post_before_extract: already on post detail", serial)
+            context["open_post_detail"] = True
+            diagnostic: dict[str, Any] = {"reason_code": "already_on_post_detail"}
+            if len(probe_posts) == 1:
+                opened_post = _opened_post_payload_from_post(probe_posts[0])
+                if opened_post:
+                    diagnostic["opened_post"] = opened_post
+            return feed_xml, diagnostic
 
     locked_post_key = str(context.get("post_key") or "").strip() or None
     primary, alternates = resolve_post_open_targets_from_xml(
@@ -561,11 +582,44 @@ async def _u2_swipe_vertical(
     *,
     distance_ratio: float,
     duration_s: float,
+    context: dict[str, Any] | None = None,
+    start_x_ratio: float = 0.5,
 ) -> bool:
     width, height = await _window_size(executor, serial)
-    cx = int(width * 0.5)
+    cx = int(width * start_x_ratio)
     y1 = int(height * 0.65)
     y2 = int(height * max(0.2, 0.65 - distance_ratio))
+    if context is not None:
+        try:
+            from relay.extra_data.parsers.facebook.scroll_swipe import (
+                resolve_feed_scroll_swipe_from_xml,
+            )
+
+            xml = context.get("_last_hierarchy_xml")
+            if not isinstance(xml, str) or not xml.strip():
+                dump = await executor.run_batch(
+                    serial,
+                    [{"op": "dump_hierarchy", "timeout": 3.0}],
+                    early_exit=True,
+                )
+                results = dump.get("results") or []
+                if results and results[0].get("ok"):
+                    xml = results[0].get("value")
+            if isinstance(xml, str) and xml.strip():
+                context["_last_hierarchy_xml"] = xml
+                end_y_ratio = max(0.2, 0.65 - distance_ratio)
+                resolved = resolve_feed_scroll_swipe_from_xml(
+                    xml,
+                    screen_w=width,
+                    screen_h=height,
+                    start_x_ratio=start_x_ratio,
+                    start_y_ratio=0.65,
+                    end_y_ratio=end_y_ratio,
+                )
+                if resolved is not None:
+                    cx, y1, _, y2 = resolved
+        except Exception:
+            pass
     result = await executor.run_batch(
         serial,
         [{
@@ -645,6 +699,8 @@ async def _expand_see_more_via_selectors(
                 serial,
                 distance_ratio=scroll_distance,
                 duration_s=0.78,
+                context=context,
+                start_x_ratio=_float_context(context, "scroll_x_ratio", 0.18, 0.05, 0.95),
             )
             await asyncio.sleep(0.5)
         pass_taps = 0
@@ -824,6 +880,8 @@ async def _expand_see_more_via_xml_dump(
                 serial,
                 distance_ratio=max(0.15, scroll_distance / 2),
                 duration_s=0.72,
+                context=context,
+                start_x_ratio=_float_context(context, "scroll_x_ratio", 0.18, 0.05, 0.95),
             )
             await asyncio.sleep(0.5)
     return total_taps, None
@@ -1016,7 +1074,12 @@ async def _collect_comment_snapshots(
         0,
         _COMMENT_DEEP_NO_GROWTH_BREAK if explicit_no_growth else _COMMENT_NO_GROWTH_BREAK,
     )
-    stop_if_no_new_comments = _bool_context(context, "comment_stop_if_no_new", True)
+    stop_if_no_new_default = _bool_context(context, "stop_if_no_new", True)
+    stop_if_no_new_comments = _bool_context(
+        context,
+        "comment_stop_if_no_new",
+        stop_if_no_new_default,
+    )
     no_new_comment_threshold = _int_context(
         context,
         "comment_no_new_threshold",
@@ -1044,6 +1107,14 @@ async def _collect_comment_snapshots(
         0.0,
         4.0 if "comment_scroll_pause_s" in context else _COMMENT_SCROLL_PAUSE_S,
     )
+    settle_default = max(swipe_pause_s, 0.03 if "comment_scroll_pause_s" in context else 0.05)
+    settle_after_batch_s = _float_context(
+        context,
+        "comment_scroll_settle_s",
+        settle_default,
+        0.0,
+        2.0,
+    )
     recover_chrome = _bool_context(context, "comment_recover_chrome", True)
     retry_screen_swipe_on_stuck = _bool_context(context, "comment_screen_swipe_retry_on_stuck", False)
     # Wall-clock safety cap for extremely long threads (0 = disabled). This bounds
@@ -1051,6 +1122,33 @@ async def _collect_comment_snapshots(
     # cannot stall the crawl loop indefinitely. Early-stop (no-new / no-growth)
     # still ends short threads well before this cap.
     comment_scroll_wall_s = _float_context(context, "comment_scroll_wall_s", 0.0, 0.0, 600.0)
+    max_items = _int_context(context, "max_items", 400, 1, 10_000)
+    respect_post_count = _bool_context(context, "comment_respect_post_count", True)
+    post_comment_count: int | None = None
+    effective_comment_target = max_items
+    if respect_post_count:
+        from relay.extra_data.parsers.facebook.feed_pipeline import (
+            extract_post_comment_count_from_xml,
+            resolve_comment_crawl_target,
+        )
+
+        post_comment_count = extract_post_comment_count_from_xml(initial_xml)
+        effective_comment_target = resolve_comment_crawl_target(max_items, post_comment_count)
+        if (
+            post_comment_count is not None
+            and post_comment_count > 0
+            and effective_comment_target < max_items
+        ):
+            logger.info(
+                "[%s] extra_data comment target capped by post count: "
+                "max_items=%d post_comments=%d effective=%d",
+                serial,
+                max_items,
+                post_comment_count,
+                effective_comment_target,
+            )
+        context["post_comment_count"] = post_comment_count
+        context["comment_target_effective"] = effective_comment_target
 
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         detect_comment_sheet_interrupt_from_xml,
@@ -1136,9 +1234,33 @@ async def _collect_comment_snapshots(
         return [initial_xml]
     snapshots: list[str] = [initial_xml]
     seen_xml: set[str] = {_sha256_hex(initial_xml)}
-    seen_comment_keys: set[str] = (
-        _visible_comment_keys(initial_xml) if stop_if_no_new_comments else set()
+    track_comment_keys = stop_if_no_new_comments or (
+        post_comment_count is not None and post_comment_count > 0
     )
+    seen_comment_keys: set[str] = (
+        _visible_comment_keys(initial_xml) if track_comment_keys else set()
+    )
+    no_new_probe_ready = bool(seen_comment_keys)
+
+    def _comment_target_reached() -> bool:
+        if not track_comment_keys:
+            return False
+        if post_comment_count is None or post_comment_count <= 0:
+            return False
+        return len(seen_comment_keys) >= effective_comment_target
+
+    if _comment_target_reached():
+        logger.info(
+            "[%s] extra_data comment target already visible: collected=%d target=%d "
+            "(post=%s max_items=%d)",
+            serial,
+            len(seen_comment_keys),
+            effective_comment_target,
+            post_comment_count,
+            max_items,
+        )
+        return snapshots
+
     total_xml_bytes = len(initial_xml.encode("utf-8"))
     # Stop after N consecutive dumps with identical hierarchy (end of list / scroll stuck).
     unchanged_dumps = 0
@@ -1146,7 +1268,6 @@ async def _collect_comment_snapshots(
     scroll_xml = initial_xml
     # Keep enough press time for Android to treat the gesture as scroll, not tap.
     duration_s = max(_COMMENT_MIN_SCROLL_DURATION_S, duration_ms / 1000.0)
-    settle_after_batch_s = max(swipe_pause_s, 0.05)
     use_screen_swipe = False
     swipes_done = 0
     stall_detected = False
@@ -1154,10 +1275,28 @@ async def _collect_comment_snapshots(
     async def _screen_swipe_coords() -> tuple[int, int, int, int]:
         _raise_if_cancelled(context)
         width, height = await _window_size(executor, serial)
+        try:
+            from relay.extra_data.parsers.facebook.scroll_swipe import (
+                resolve_feed_scroll_swipe_from_xml,
+            )
+
+            if isinstance(scroll_xml, str) and scroll_xml.strip():
+                feed_swipe = resolve_feed_scroll_swipe_from_xml(
+                    scroll_xml,
+                    screen_w=width,
+                    screen_h=height,
+                    start_x_ratio=0.76,
+                    start_y_ratio=0.62,
+                    end_y_ratio=max(0.18, 0.62 - max(0.26, min(0.75, float(distance)))),
+                )
+                if feed_swipe is not None:
+                    return feed_swipe
+        except Exception:
+            pass
         x = int(width * 0.76)
         ratio = max(0.26, min(0.75, float(distance)))
-        fy = int(height * 0.58)
-        ty = int(height * max(0.22, 0.58 - ratio))
+        fy = int(height * 0.62)
+        ty = int(height * max(0.18, 0.62 - ratio))
         return x, fy, x, ty
 
     async def _swipe_coords() -> tuple[int, int, int, int]:
@@ -1250,30 +1389,50 @@ async def _collect_comment_snapshots(
 
         digest = _sha256_hex(next_xml)
         duplicate_xml = digest in seen_xml
-        if stop_if_no_new_comments and not duplicate_xml:
+        if track_comment_keys and not duplicate_xml:
             current_comment_keys = _visible_comment_keys(next_xml)
-            new_comment_keys = current_comment_keys - seen_comment_keys
-            if new_comment_keys:
-                seen_comment_keys.update(new_comment_keys)
-                no_new_comment_dumps = 0
-                stall_detected = False
-            else:
+            if current_comment_keys:
+                no_new_probe_ready = True
+                new_comment_keys = current_comment_keys - seen_comment_keys
+                if new_comment_keys:
+                    seen_comment_keys.update(new_comment_keys)
+                    no_new_comment_dumps = 0
+                    stall_detected = False
+                elif stop_if_no_new_comments:
+                    no_new_comment_dumps += 1
+                    stall_detected = True
+            elif no_new_probe_ready and stop_if_no_new_comments:
                 no_new_comment_dumps += 1
                 stall_detected = True
-                if (
-                    no_new_comment_dumps >= no_new_comment_threshold
-                    and (cycle + 1) >= min_dumps
-                ):
-                    logger.info(
-                        "[%s] extra_data comment no-new break after %d dump cycles "
-                        "(%d swipes, %d no-new comment dumps, snapshots=%d)",
-                        serial,
-                        cycle + 1,
-                        swipes_done,
-                        no_new_comment_dumps,
-                        len(snapshots),
-                    )
-                    break
+            if _comment_target_reached():
+                logger.info(
+                    "[%s] extra_data comment target reached after %d dump cycles "
+                    "(%d swipes, collected=%d target=%d post=%s max_items=%d)",
+                    serial,
+                    cycle + 1,
+                    swipes_done,
+                    len(seen_comment_keys),
+                    effective_comment_target,
+                    post_comment_count,
+                    max_items,
+                )
+                break
+            if (
+                stop_if_no_new_comments
+                and no_new_probe_ready
+                and no_new_comment_dumps >= no_new_comment_threshold
+                and (cycle + 1) >= min_dumps
+            ):
+                logger.info(
+                    "[%s] extra_data comment no-new break after %d dump cycles "
+                    "(%d swipes, %d no-new comment dumps, snapshots=%d)",
+                    serial,
+                    cycle + 1,
+                    swipes_done,
+                    no_new_comment_dumps,
+                    len(snapshots),
+                )
+                break
 
         if not duplicate_xml:
             seen_xml.add(digest)
@@ -1746,6 +1905,20 @@ async def collect_xml_snapshots(
                 )
                 if open_diag:
                     context["open_post_detail_diagnostic"] = open_diag
+                if (
+                    _bool_context(context, "open_post_before_extract", False)
+                    and _bool_context(context, "require_open_post_detail", True)
+                    and not context.get("open_post_detail")
+                ):
+                    reason = "post_open_not_established"
+                    if isinstance(open_diag, dict):
+                        reason = str(open_diag.get("reason_code") or reason)
+                    logger.info(
+                        "[%s] open_post_before_extract required but not established reason=%s",
+                        serial,
+                        reason,
+                    )
+                    return [], f"post_open_required:{reason}"
 
             expand_default = strategy in _POST_STRATEGIES or str(strategy).endswith("_posts")
             cached_xml: str | None = detail_xml

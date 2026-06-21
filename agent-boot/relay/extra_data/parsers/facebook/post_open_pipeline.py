@@ -1045,11 +1045,12 @@ def _pick_header_tap_for_card(
     body_see_more = any(
         c.get("tap_kind") == "post_body" and c.get("has_see_more") for c in candidates
     )
+    # Timestamp taps on some devices (e.g. Vivo) open the comment sheet, not post
+    # detail. Prefer author_row_gap / metadata when available.
     if body_see_more and not has_media_cand and not is_anonymous:
-        ts = [c for c in candidates if c.get("tap_kind") == "timestamp"]
-        if ts:
-            rest = [c for c in candidates if c.get("tap_kind") != "timestamp"]
-            candidates = ts + rest
+        non_ts = [c for c in candidates if c.get("tap_kind") != "timestamp"]
+        if non_ts:
+            candidates = non_ts
 
     def _sort_key(c: Dict[str, Any]) -> Tuple[int, int, int]:
         kind = c.get("tap_kind") or "metadata"

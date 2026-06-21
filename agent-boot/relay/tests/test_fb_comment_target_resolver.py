@@ -165,6 +165,8 @@ def test_resolve_picks_center_post_when_three_visible(monkeypatch) -> None:
     monkeypatch.setattr(parser_mod, "_pick_feed_container", fake_pick)
     from relay.extra_data.parsers.facebook import feed_pipeline as feed_mod
     monkeypatch.setattr(feed_mod, "_is_ad_container", lambda _e: False)
+    from relay.extra_data.parsers.facebook import post_open_pipeline as pop_mod
+    monkeypatch.setattr(pop_mod, "hierarchy_is_fb_post_detail_from_xml", lambda _xml: False)
 
     top, ranked = comment_pipeline.resolve_comment_targets_from_xml("<hierarchy />")
     assert top is not None
@@ -209,11 +211,44 @@ def test_resolve_tie_break_prefers_strong_key(monkeypatch) -> None:
     monkeypatch.setattr(parser_mod, "_pick_feed_container", fake_pick)
     from relay.extra_data.parsers.facebook import feed_pipeline as feed_mod
     monkeypatch.setattr(feed_mod, "_is_ad_container", lambda _e: False)
+    from relay.extra_data.parsers.facebook import post_open_pipeline as pop_mod
+    monkeypatch.setattr(pop_mod, "hierarchy_is_fb_post_detail_from_xml", lambda _xml: False)
 
     top, ranked = comment_pipeline.resolve_comment_targets_from_xml("<hierarchy />")
     assert top is not None
     assert top["post"]["post_key"] == "strong"
     assert ranked[1]["post"]["_pid"] == "weak"
+
+
+def test_locked_anchor_prefers_matching_candidate() -> None:
+    mid = _cand(
+        comment_bounds=(40, int(SCREEN_H * 0.50), 200, int(SCREEN_H * 0.56)),
+        parent_post_bounds=(0, int(SCREEN_H * 0.35), 1080, int(SCREEN_H * 0.62)),
+        post={"_pid": "mid", "post_key": "mid", "author": "Alice", "text": "middle post"},
+    )
+    other = _cand(
+        comment_bounds=(40, int(SCREEN_H * 0.48), 200, int(SCREEN_H * 0.54)),
+        parent_post_bounds=(0, int(SCREEN_H * 0.33), 1080, int(SCREEN_H * 0.60)),
+        post={"_pid": "other", "post_key": "other", "author": "Bob", "text": "other post"},
+    )
+    for cand in (mid, other):
+        cand.update(
+            comment_pipeline._score_comment_candidate(
+                cand,
+                screen_h=SCREEN_H,
+                screen_w=1080,
+                center_y_ratio=0.5,
+            )
+        )
+    comment_pipeline._apply_locked_anchor_scoring(
+        other,
+        {"post_key": "other", "author": "Bob", "text_prefix": "other post"},
+    )
+    comment_pipeline._apply_locked_anchor_scoring(
+        mid,
+        {"post_key": "other", "author": "Bob", "text_prefix": "other post"},
+    )
+    assert float(other["score"]) < float(mid["score"])
 
 
 def test_legacy_center_wrapper_returns_post_and_bounds(monkeypatch) -> None:

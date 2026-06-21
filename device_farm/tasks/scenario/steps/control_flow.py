@@ -14,6 +14,8 @@ from tasks.scenario.utils import _evaluate_condition, _eval_ru_condition, _wait_
 
 log = logging.getLogger(__name__)
 
+_MAX_RETAINED_SUB_RESULTS = 50
+
 
 def _cancelled(sc: ScenarioContext) -> bool:
     return sc.cancel_event is not None and sc.cancel_event.is_set()
@@ -23,6 +25,34 @@ def _mark_cancelled(result: Dict[str, Any], message: str) -> None:
     result["ok"] = False
     result["message"] = message
     result["cancelled"] = True
+
+
+def _append_sub_result(
+    sub_results: List[Dict[str, Any]],
+    state: Dict[str, Any],
+    item: Dict[str, Any],
+) -> None:
+    state["last"] = item
+    if len(sub_results) < _MAX_RETAINED_SUB_RESULTS:
+        sub_results.append(item)
+        return
+    state["omitted"] = int(state.get("omitted", 0) or 0) + 1
+
+
+def _finish_sub_results(
+    sub_results: List[Dict[str, Any]],
+    state: Dict[str, Any],
+) -> None:
+    omitted = int(state.get("omitted", 0) or 0)
+    if omitted <= 0:
+        return
+    sub_results.append(
+        {
+            "truncated": True,
+            "omitted": omitted,
+            "last": state.get("last"),
+        }
+    )
 
 
 # Per-execution asyncio.Lock for serializing loop_state writes.
@@ -91,7 +121,8 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     if resume_from:
         log.info(f"[{sc.serial}] loop: resuming from iter {resume_from}/{iterations}")
 
-    sub_results = []
+    sub_results: List[Dict[str, Any]] = []
+    sub_result_state: Dict[str, Any] = {}
     actual_iters = 0
     for i in range(resume_from, iterations):
         if _cancelled(sc):
@@ -101,7 +132,11 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
             break
         sc.ctx["_loop_iter"] = i
         nested_result = _run_nested(sc, nested_steps)
-        sub_results.append({"iteration": i, "result": nested_result})
+        _append_sub_result(
+            sub_results,
+            sub_result_state,
+            {"iteration": i, "result": nested_result},
+        )
         actual_iters += 1
         if _cancelled(sc):
             _mark_cancelled(result, "loop: cancelled by user")
@@ -119,6 +154,7 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
             break
 
     sc.ctx.pop("_loop_iter", None)
+    _finish_sub_results(sub_results, sub_result_state)
     result["iterations"] = actual_iters
     result["sub_results"] = sub_results
     if result.get("ok", True):
@@ -246,13 +282,20 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
         return
 
     sub_results: List[Dict[str, Any]] = []
+    sub_result_state: Dict[str, Any] = {}
+    actual_iters = 0
     for i in range(n):
         if _cancelled(sc):
             _mark_cancelled(result, "repeat: cancelled by user")
             break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         iter_res = _run_nested(sc, sub_steps)
-        sub_results.append({"iteration": i, "result": iter_res})
+        actual_iters += 1
+        _append_sub_result(
+            sub_results,
+            sub_result_state,
+            {"iteration": i, "result": iter_res},
+        )
         if _cancelled(sc):
             _mark_cancelled(result, "repeat: cancelled by user")
             break
@@ -270,7 +313,8 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
                 time.sleep(delay)
     else:
         result["message"] = f"repeat: {n} iteration(s) completed"
-    result["iterations"] = len(sub_results)
+    _finish_sub_results(sub_results, sub_result_state)
+    result["iterations"] = actual_iters
     result["sub_results"] = sub_results
 
 
@@ -366,17 +410,42 @@ def handle_tap_fb_comment_button(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Resolve the visible FB comment button via agent-boot, then tap locally."""
+    from services.scenario_step_contract import normalize_fb_tap_comment_step
     from tasks.scenario.steps.extraction import (
         _clear_active_comment_parent,
         request_edge_comment_target,
+        resolve_step_comment_filter,
+        run_edge_comment_filter_switch,
+        stage_comment_filter_for_post,
     )
 
+    step = normalize_fb_tap_comment_step(step)
+
+    require_post_before_comment = step.get("require_post_before_comment")
+    if require_post_before_comment is None:
+        require_post_before_comment = bool(step.get("pre_scroll"))
+    else:
+        require_post_before_comment = bool(require_post_before_comment)
+
+    def _post_detail_parent_ready() -> bool:
+        if sc.ctx.get("_active_comment_parent_source") != "post_detail":
+            return False
+        return bool(
+            sc.ctx.get("_active_comment_parent_hash")
+            or sc.ctx.get("_fb_comment_parent_pid")
+            or sc.ctx.get("_active_comment_anchor_verified")
+        )
+
+    on_post_detail = sc.ctx.get("_active_comment_parent_source") == "post_detail"
+    stage_comment_filter_for_post(sc.ctx, step)
     target = None
     precheck_before_scroll = bool(
         step.get("pre_scroll")
-        and sc.ctx.get("_active_comment_parent_source") == "post_detail"
+        and on_post_detail
     )
-    if precheck_before_scroll:
+    if precheck_before_scroll and (
+        not require_post_before_comment or _post_detail_parent_ready()
+    ):
         target = request_edge_comment_target(
             device=sc.device,
             serial=sc.serial,
@@ -390,37 +459,64 @@ def handle_tap_fb_comment_button(
             result["pre_scroll_skipped"] = "post_detail_target_precheck"
 
     if step.get("pre_scroll") and not target and result.get("reason_code") != "already_on_comment_sheet":
-        try:
-            distance = float(step.get("pre_scroll_distance", 0.24) or 0.24)
-            duration_ms = int(step.get("pre_scroll_duration_ms", 520) or 520)
-            start_x_ratio = float(step.get("pre_scroll_x_ratio", 0.68) or 0.68)
-            start_y_ratio = float(step.get("pre_scroll_start_y_ratio", 0.65) or 0.65)
-            end_y_ratio = float(step.get("pre_scroll_end_y_ratio", 0.47) or 0.47)
-            pause_s = float(step.get("pre_scroll_pause_s", 0.6) or 0.6)
-            start_x_ratio = min(0.95, max(0.05, start_x_ratio))
-            start_y_ratio = min(0.95, max(0.55, start_y_ratio))
-            end_y_ratio = min(0.75, max(0.1, end_y_ratio))
-            if end_y_ratio >= start_y_ratio:
-                end_y_ratio = max(0.1, start_y_ratio - distance)
-            sx = int(sc.w * start_x_ratio)
-            sy1 = int(sc.h * start_y_ratio)
-            sy2 = int(sc.h * end_y_ratio)
-            sc.device.swipe(sx, sy1, sx, sy2, duration_ms=max(120, duration_ms))
-            if pause_s > 0:
-                if sc.cancel_event is not None:
-                    sc.cancel_event.wait(pause_s)
-                else:
-                    time.sleep(pause_s)
-            if _cancelled(sc):
-                result["ok"] = False
-                result["message"] = "tap_fb_comment_button: cancelled"
-                result["cancelled"] = True
-                return
-            result["pre_scrolled"] = True
-        except Exception as exc:
-            log.warning("[%s] tap_fb_comment_button: pre_scroll failed: %s", sc.serial, exc)
+        if not on_post_detail:
+            result["pre_scroll_skipped"] = "not_on_post_detail"
+        else:
+            try:
+                distance = float(step.get("pre_scroll_distance", 0.24) or 0.24)
+                duration_ms = int(step.get("pre_scroll_duration_ms", 520) or 520)
+                start_x_ratio = float(step.get("pre_scroll_x_ratio", 0.68) or 0.68)
+                start_y_ratio = float(step.get("pre_scroll_start_y_ratio", 0.65) or 0.65)
+                end_y_ratio = float(step.get("pre_scroll_end_y_ratio", 0.47) or 0.47)
+                pause_s = float(step.get("pre_scroll_pause_s", 0.6) or 0.6)
+                start_x_ratio = min(0.95, max(0.05, start_x_ratio))
+                start_y_ratio = min(0.95, max(0.55, start_y_ratio))
+                end_y_ratio = min(0.75, max(0.1, end_y_ratio))
+                if end_y_ratio >= start_y_ratio:
+                    end_y_ratio = max(0.1, start_y_ratio - distance)
+                sx = int(sc.w * start_x_ratio)
+                sy1 = int(sc.h * start_y_ratio)
+                sy2 = int(sc.h * end_y_ratio)
+                try:
+                    from tasks.scenario.fb_scroll_swipe import resolve_feed_scroll_swipe_from_xml
 
-    if target is None and result.get("reason_code") != "already_on_comment_sheet":
+                    hierarchy_fn = getattr(sc.device, "hierarchy_xml", None)
+                    xml = hierarchy_fn(force_refresh=False) if callable(hierarchy_fn) else None
+                    if isinstance(xml, str) and xml.strip():
+                        resolved = resolve_feed_scroll_swipe_from_xml(
+                            xml,
+                            screen_w=sc.w,
+                            screen_h=sc.h,
+                            start_x_ratio=start_x_ratio,
+                            start_y_ratio=start_y_ratio,
+                            end_y_ratio=end_y_ratio,
+                        )
+                        if resolved is not None:
+                            sx, sy1, _, sy2 = resolved
+                            result["pre_scroll_smart"] = True
+                except Exception:
+                    pass
+                sc.device.swipe(sx, sy1, sx, sy2, duration_ms=max(120, duration_ms))
+                if pause_s > 0:
+                    if sc.cancel_event is not None:
+                        sc.cancel_event.wait(pause_s)
+                    else:
+                        time.sleep(pause_s)
+                if _cancelled(sc):
+                    result["ok"] = False
+                    result["message"] = "tap_fb_comment_button: cancelled"
+                    result["cancelled"] = True
+                    return
+                result["pre_scrolled"] = True
+            except Exception as exc:
+                log.warning("[%s] tap_fb_comment_button: pre_scroll failed: %s", sc.serial, exc)
+
+    if require_post_before_comment and not _post_detail_parent_ready():
+        result["post_not_ready"] = True
+        result["message"] = (
+            "tap_fb_comment_button: skip — post detail parent not verified"
+        )
+    elif target is None and result.get("reason_code") != "already_on_comment_sheet":
         target = request_edge_comment_target(
             device=sc.device,
             serial=sc.serial,
@@ -435,7 +531,9 @@ def handle_tap_fb_comment_button(
     else_steps = step.get("else") or []
 
     tapped = False
-    if result.get("reason_code") == "already_on_comment_sheet":
+    if result.get("post_not_ready"):
+        tapped = False
+    elif result.get("reason_code") == "already_on_comment_sheet":
         tapped = True
         keep_existing_parent = bool(
             sc.ctx.get("_active_comment_parent_hash")
@@ -517,12 +615,8 @@ def handle_tap_fb_comment_button(
                 result["message"] = f"tap_fb_comment_button: tap failed: {exc}"
                 return
 
-    from tasks.scenario.steps.extraction import (
-        resolve_step_comment_filter,
-        run_edge_comment_filter_switch,
-    )
-
-    if tapped and resolve_step_comment_filter(step):
+    target_filter = resolve_step_comment_filter(step, sc.ctx)
+    if tapped and target_filter:
         try:
             result["filter_switch"] = run_edge_comment_filter_switch(
                 device=sc.device,
@@ -533,17 +627,20 @@ def handle_tap_fb_comment_button(
                 cancel_event=sc.cancel_event,
             )
             filter_report = result["filter_switch"] if isinstance(result.get("filter_switch"), dict) else {}
-            target_filter = filter_report.get("target_filter")
+            target_filter = filter_report.get("target_filter") or target_filter
             reason = str(filter_report.get("reason_code") or "")
-            if target_filter and (
-                filter_report.get("switched")
-                or reason in {"already_on_filter", "already_all_comments", "ok", "filter_not_verified"}
-            ):
+            if filter_report.get("switched") or reason in {
+                "already_on_filter",
+                "already_all_comments",
+                "ok",
+            }:
                 sc.ctx["_fb_comment_filter_applied"] = target_filter
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
         settle_s = float(
-            step.get("comment_filter_settle_s", step.get("post_tap_wait_s", 0.6)) or 0.6
+            step.get("comment_filter_settle_s")
+            or sc.ctx.get("_fb_comment_filter_settle_s")
+            or 0.45
         )
         if settle_s > 0:
             if sc.cancel_event is not None:

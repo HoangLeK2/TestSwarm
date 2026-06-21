@@ -16,6 +16,8 @@ export type ScenarioLibraryItem = {
   is_system_template: boolean;
   is_builtin?: boolean;
   category?: string;
+  is_recovery_scenario?: boolean;
+  recovery_usage_count?: number;
   /** Present when source === 'org' */
   orgSummary?: OrgScenarioSummaryOut;
   /** Present when source === 'template' */
@@ -66,6 +68,8 @@ export function orgScenarioToLibraryItem(
     is_runnable: scenario.is_runnable ?? false,
     source: 'org',
     is_system_template: false,
+    is_recovery_scenario: scenario.is_recovery_scenario ?? false,
+    recovery_usage_count: scenario.recovery_usage_count ?? 0,
     orgSummary: scenario
   };
 }

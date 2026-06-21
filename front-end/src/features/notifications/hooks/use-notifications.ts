@@ -117,6 +117,13 @@ export function useTestNotificationChannel() {
   });
 }
 
+export function useTestNotificationChannelDraft() {
+  return useMutation({
+    mutationFn: (data: { type: string; config: Record<string, unknown> }) =>
+      notificationsApi.testChannelDraft(data)
+  });
+}
+
 export function mergeNotification(
   existing: NotificationItem[],
   incoming: NotificationItem

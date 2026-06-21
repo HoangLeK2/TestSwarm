@@ -908,6 +908,8 @@ export interface CampaignEntityOut {
   vars?: Record<string, any>;
   /** Per Device Overrides */
   per_device_overrides?: Record<string, Record<string, any>>;
+  /** Recovery Policy */
+  recovery_policy?: Record<string, any>;
   /** Account Group Id */
   account_group_id?: string | null;
   /** Scenario Account Id */
@@ -952,6 +954,8 @@ export interface CampaignEntityUpdate {
   scenario_refs?: CampaignScenarioRefIn[] | null;
   /** Per Device Overrides */
   per_device_overrides?: Record<string, Record<string, any>> | null;
+  /** Recovery Policy */
+  recovery_policy?: Record<string, any> | null;
 }
 
 /** CampaignForceTransitionIn */
@@ -2550,6 +2554,16 @@ export interface OrgScenarioOut {
    * @default false
    */
   is_runnable?: boolean;
+  /**
+   * Is Recovery Scenario
+   * @default false
+   */
+  is_recovery_scenario?: boolean;
+  /**
+   * Recovery Usage Count
+   * @default 0
+   */
+  recovery_usage_count?: number;
   /** Last Validation Summary */
   last_validation_summary?: Record<string, any> | null;
   /** Last Validated At */
@@ -2598,6 +2612,16 @@ export interface OrgScenarioSummaryOut {
    * @default false
    */
   is_runnable?: boolean;
+  /**
+   * Is Recovery Scenario
+   * @default false
+   */
+  is_recovery_scenario?: boolean;
+  /**
+   * Recovery Usage Count
+   * @default 0
+   */
+  recovery_usage_count?: number;
   /** Last Validation Summary */
   last_validation_summary?: Record<string, any> | null;
   /** Last Validated At */

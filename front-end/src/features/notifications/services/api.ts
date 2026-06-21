@@ -73,5 +73,16 @@ export const notificationsApi = {
 
   testChannel: async (channelId: string) =>
     (await df().testChannelApiNotificationChannelsChannelIdTestPost(channelId))
-      .data as TestNotificationOut
+      .data as TestNotificationOut,
+
+  testChannelDraft: async (data: { type: string; config: Record<string, unknown> }) =>
+    (
+      await getDeviceFarmApi().request<TestNotificationOut>({
+        path: '/api/notification-channels/test-draft',
+        method: 'POST',
+        body: data,
+        secure: true,
+        format: 'json'
+      })
+    ).data
 };

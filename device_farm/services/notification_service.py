@@ -199,19 +199,76 @@ class NotificationService:
             )
 
     async def send_test(self, db: AsyncSession, channel: NotificationChannel, user_id: str) -> None:
+        await self._send_test_payload(db, channel.type, channel.config or {}, user_id, channel)
+
+    async def send_test_draft(
+        self,
+        db: AsyncSession,
+        channel_type: str,
+        config: dict[str, Any],
+        user_id: str,
+    ) -> None:
+        await self._send_test_payload(db, channel_type, config, user_id, channel=None)
+
+    async def _send_test_payload(
+        self,
+        db: AsyncSession,
+        channel_type: str,
+        config: dict[str, Any],
+        user_id: str,
+        channel: NotificationChannel | None,
+    ) -> None:
         event = "task.failed"
         title = "Test notification"
         body = "Device Farm notification channel is working."
-        if channel.type == "in_app":
+        if channel_type == "in_app":
+            if channel is None:
+                raise ValueError("in_app channels do not require a connection test")
             notification = await self._send_in_app(
                 db, channel, event, title, body, {"test": True}, user_id
             )
             await db.flush()
             await self._push_in_app(notification)
-        elif channel.type == "telegram":
-            await self._send_telegram(channel, title, body)
-        elif channel.type == "webhook":
-            await self._send_webhook(channel, event, title, body, {"test": True})
+        elif channel_type == "telegram":
+            await self._send_telegram(self._draft_channel(channel_type, config), title, body)
+        elif channel_type == "webhook":
+            await self._send_webhook_draft(config, event, title, body, {"test": True})
+        else:
+            raise ValueError(f"connection test is not supported for {channel_type} channels")
+
+    @staticmethod
+    def _draft_channel(channel_type: str, config: dict[str, Any]) -> NotificationChannel:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(type=channel_type, config=config)  # type: ignore[return-value]
+
+    async def _send_webhook_draft(
+        self,
+        config: dict[str, Any],
+        event: str,
+        title: str,
+        body: Optional[str],
+        data: dict[str, Any],
+    ) -> None:
+        url = str(config.get("url") or "").strip()
+        if not url:
+            raise ValueError("webhook channel requires url")
+        if not _is_safe_webhook_url(url):
+            raise ValueError("unsafe webhook url")
+        headers = config.get("headers") or config.get("custom_headers")
+        if not isinstance(headers, dict):
+            headers = {}
+        timeout = min(max(int(config.get("timeout_seconds") or 10), 1), 30)
+        payload = {
+            "event_type": event,
+            "title": title,
+            "body": body,
+            "data": data,
+            "test": True,
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
 
     def bind_device_events(self, recorder) -> None:
         recorder.add_listener(self._on_device_event)

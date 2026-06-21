@@ -38,6 +38,11 @@ import { getOrgScenarioColumns } from './columns';
 import { isOrgScenarioVisibleInLibrary } from '../../lib/campaign-scenario-eligibility';
 
 type LibraryTab = 'org' | 'system';
+type ScenarioRoleFilter = 'all' | 'regular' | 'recovery';
+
+function isRecoveryScenario(item: ScenarioLibraryItem): boolean {
+  return item.is_recovery_scenario === true || (item.recovery_usage_count ?? 0) > 0;
+}
 
 export function ScenarioLibrary() {
   const t = useTranslations('orgScenariosFeature.list');
@@ -49,6 +54,7 @@ export function ScenarioLibrary() {
   const confirm = useConfirm();
   const [search, setSearch] = useState('');
   const [showHidden, setShowHidden] = useState(false);
+  const [roleFilter, setRoleFilter] = useState<ScenarioRoleFilter>('all');
   const [activeTab, setActiveTab] = useState<LibraryTab>('org');
   const [selected, setSelected] = useState<ScenarioLibraryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -71,26 +77,42 @@ export function ScenarioLibrary() {
   const isLoading = activeTab === 'org' ? orgLoading : templatesLoading;
   const error = activeTab === 'org' ? orgError : templatesError;
 
+  const orgLibraryItems = useMemo(
+    () =>
+      (orgScenarios ?? [])
+        .filter((s) => isOrgScenarioVisibleInLibrary(s))
+        .map((scenario) => orgScenarioToLibraryItem(scenario)),
+    [orgScenarios]
+  );
+
   const counts = useMemo(() => {
-    const orgItems = (orgScenarios ?? [])
-      .filter((s) => isOrgScenarioVisibleInLibrary(s))
-      .map(orgScenarioToLibraryItem);
-    const visibleOrg = orgItems.filter((s) => s.status !== 'archived').length;
-    const hiddenOrg = orgItems.filter((s) => s.status === 'archived').length;
+    const visibleOrg = orgLibraryItems.filter((s) => s.status !== 'archived').length;
+    const hiddenOrg = orgLibraryItems.filter((s) => s.status === 'archived').length;
+    const recovery = orgLibraryItems.filter(
+      (s) => s.status !== 'archived' && isRecoveryScenario(s)
+    ).length;
+    const regular = orgLibraryItems.filter(
+      (s) => s.status !== 'archived' && !isRecoveryScenario(s)
+    ).length;
     const system = (templates ?? []).length;
-    return { org: visibleOrg, hidden: hiddenOrg, system };
-  }, [orgScenarios, templates]);
+    return { org: visibleOrg, hidden: hiddenOrg, system, recovery, regular };
+  }, [orgLibraryItems, templates]);
 
   const filtered = useMemo(() => {
     let items: ScenarioLibraryItem[] =
       activeTab === 'system'
         ? (templates ?? []).map(templateToLibraryItem)
-        : (orgScenarios ?? [])
-            .filter((s) => isOrgScenarioVisibleInLibrary(s))
-            .map(orgScenarioToLibraryItem);
+        : orgLibraryItems;
 
     if (activeTab === 'org' && !showHidden) {
       items = items.filter((item) => item.status !== 'archived');
+    }
+
+    if (activeTab === 'org' && roleFilter !== 'all') {
+      items = items.filter((item) => {
+        const isRecovery = isRecoveryScenario(item);
+        return roleFilter === 'recovery' ? isRecovery : !isRecovery;
+      });
     }
 
     if (!search.trim()) return items;
@@ -101,7 +123,7 @@ export function ScenarioLibrary() {
         item.description?.toLowerCase().includes(q) ||
         (item.tags ?? []).some((tag: string) => tag.toLowerCase().includes(q))
     );
-  }, [orgScenarios, templates, search, activeTab, showHidden]);
+  }, [orgLibraryItems, templates, search, activeTab, showHidden, roleFilter]);
 
   // Deep-link: when returning from control-record page, reopen the scenario sheet.
   // URL: /dashboard/org-scenarios?scenario_id=...
@@ -115,16 +137,14 @@ export function ScenarioLibrary() {
     const candidates =
       activeTab === 'system'
         ? (templates ?? []).map(templateToLibraryItem)
-        : (orgScenarios ?? [])
-            .filter((s) => isOrgScenarioVisibleInLibrary(s))
-            .map(orgScenarioToLibraryItem);
+        : orgLibraryItems;
     const found = candidates.find((s) => s.id === deepLinkScenarioId);
     if (found) {
       openedDeepLinkRef.current = deepLinkScenarioId;
       setSelected(found);
       setDetailOpen(true);
     }
-  }, [deepLinkScenarioId, activeTab, orgScenarios, templates]);
+  }, [deepLinkScenarioId, activeTab, orgLibraryItems, templates]);
 
   const handleDetailOpenChange = useCallback(
     (open: boolean) => {
@@ -145,12 +165,12 @@ export function ScenarioLibrary() {
     [deepLinkScenarioId, router, searchParams]
   );
 
-  const openScenario = (scenario: ScenarioLibraryItem) => {
+  const openScenario = useCallback((scenario: ScenarioLibraryItem) => {
     setSelected(scenario);
     setDetailOpen(true);
-  };
+  }, []);
 
-  const handleArchive = (scenario: ScenarioLibraryItem) => {
+  const handleArchive = useCallback((scenario: ScenarioLibraryItem) => {
     if (isSystemTemplateItem(scenario)) return;
     void (async () => {
       const ok = await confirm({
@@ -167,9 +187,9 @@ export function ScenarioLibrary() {
         onError: () => toast.error(t('archiveFailed'))
       });
     })();
-  };
+  }, [archiveMutation, confirm, t, tCommon]);
 
-  const handleRestore = (scenario: ScenarioLibraryItem) => {
+  const handleRestore = useCallback((scenario: ScenarioLibraryItem) => {
     if (isSystemTemplateItem(scenario)) return;
     void (async () => {
       const ok = await confirm({
@@ -185,14 +205,14 @@ export function ScenarioLibrary() {
         onError: () => toast.error(t('restoreFailed'))
       });
     })();
-  };
+  }, [confirm, restoreMutation, t, tCommon]);
 
   const columns = useMemo(
     () =>
       getOrgScenarioColumns(t, openScenario, handleArchive, handleRestore, {
         showSourceColumn: false
       }),
-    [t]
+    [t, openScenario, handleArchive, handleRestore]
   );
 
   const { table } = useDataTable<ScenarioLibraryItem>({
@@ -213,6 +233,7 @@ export function ScenarioLibrary() {
         onValueChange={(value) => {
           setActiveTab(value as LibraryTab);
           setSearch('');
+          setRoleFilter('all');
         }}
         className='space-y-0'
       >
@@ -261,6 +282,27 @@ export function ScenarioLibrary() {
                   className='h-10 w-full border-border/80 bg-background pl-9'
                 />
               </div>
+              {activeTab === 'org' ? (
+                <Tabs
+                  value={roleFilter}
+                  onValueChange={(value) =>
+                    setRoleFilter(value as ScenarioRoleFilter)
+                  }
+                  className='shrink-0'
+                >
+                  <TabsList className='grid h-10 w-full grid-cols-3 sm:w-auto'>
+                    <TabsTrigger value='all' className='text-xs'>
+                      {t('roleFilterAll', { count: counts.org })}
+                    </TabsTrigger>
+                    <TabsTrigger value='regular' className='text-xs'>
+                      {t('roleFilterMain', { count: counts.regular })}
+                    </TabsTrigger>
+                    <TabsTrigger value='recovery' className='text-xs'>
+                      {t('roleFilterRecovery', { count: counts.recovery })}
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              ) : null}
               {activeTab === 'org' && counts.hidden > 0 ? (
                 <label
                   className={cn(

@@ -13,6 +13,7 @@ from api.schemas.notification import (
     NotificationChannelCreate,
     NotificationChannelOut,
     NotificationChannelPatch,
+    NotificationChannelTestRequest,
     NotificationListOut,
     NotificationOut,
     TestNotificationOut,
@@ -188,6 +189,26 @@ async def delete_channel(channel_id: str, db: DB, user: CurrentUser):
     channel = await _get_channel_or_404(db, channel_id, user.id)
     await db.delete(channel)
     await db.flush()
+
+
+@router.post(
+    "/notification-channels/test-draft",
+    response_model=TestNotificationOut,
+    dependencies=[Depends(require_permission("notifications", "execute"))],
+)
+async def test_channel_draft(
+    body: NotificationChannelTestRequest,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+):
+    try:
+        await _notification_service(request).send_test_draft(
+            db, body.type, body.config, user.id
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TestNotificationOut(ok=True, message="Test notification sent")
 
 
 @router.post(

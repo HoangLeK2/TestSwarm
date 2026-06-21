@@ -118,6 +118,11 @@ class UnreadCountOut(BaseModel):
     count: int
 
 
+class NotificationChannelTestRequest(BaseModel):
+    type: str = Field(..., pattern="^(in_app|telegram|webhook|email|slack)$")
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class TestNotificationOut(BaseModel):
     ok: bool
     message: str

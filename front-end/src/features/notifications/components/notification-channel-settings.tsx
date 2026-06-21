@@ -53,6 +53,7 @@ import {
   useDeleteNotificationChannel,
   useNotificationChannels,
   useTestNotificationChannel,
+  useTestNotificationChannelDraft,
   useUpdateNotificationChannel
 } from '../hooks/use-notifications';
 
@@ -128,11 +129,17 @@ function typeLabel(
 function ChannelTypeSetup({
   form,
   setForm,
-  t
+  t,
+  canTest,
+  testing,
+  onTestConnection
 }: {
   form: FormState;
   setForm: (updater: (current: FormState) => FormState) => void;
   t: ReturnType<typeof useTranslations<'notificationsFeature'>>;
+  canTest: boolean;
+  testing: boolean;
+  onTestConnection: () => void;
 }) {
   if (form.type === 'in_app') {
     return (
@@ -199,7 +206,18 @@ function ChannelTypeSetup({
             <p className='text-xs text-muted-foreground'>{t('chatIdHint')}</p>
           </div>
         </div>
-        <p className='text-xs text-muted-foreground'>{t('testHint')}</p>
+        {canTest ? (
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={onTestConnection}
+            disabled={testing}
+          >
+            {testing ? <Loader2 className='size-4 animate-spin' /> : <Send className='size-4' />}
+            {t('actions.testConnection')}
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -243,6 +261,18 @@ function ChannelTypeSetup({
         />
         <p className='text-xs text-muted-foreground'>{t('headersHint')}</p>
       </div>
+      {canTest ? (
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={onTestConnection}
+          disabled={testing}
+        >
+          {testing ? <Loader2 className='size-4 animate-spin' /> : <Send className='size-4' />}
+          {t('actions.testConnection')}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -257,11 +287,14 @@ function ChannelDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useTranslations('notificationsFeature');
+  const perms = useResourcePermissions('notifications');
   const [form, setForm] = useState<FormState>(() => channelToForm(channel));
   const createChannel = useCreateNotificationChannel();
   const updateChannel = useUpdateNotificationChannel();
+  const testChannelDraft = useTestNotificationChannelDraft();
   const isEdit = !!channel;
   const saving = createChannel.isPending || updateChannel.isPending;
+  const testing = testChannelDraft.isPending;
 
   useEffect(() => {
     if (open) {
@@ -276,6 +309,36 @@ function ChannelDialog({
         ? Array.from(new Set([...current.events, event]))
         : current.events.filter((item) => item !== event)
     }));
+  };
+
+  const testConnection = () => {
+    try {
+      if (form.type === 'telegram') {
+        if (!form.botToken.trim()) {
+          toast.error(t('errors.telegramTokenRequired'));
+          return;
+        }
+        if (!form.chatId.trim()) {
+          toast.error(t('errors.telegramChatRequired'));
+          return;
+        }
+      }
+      if (form.type === 'webhook' && !form.webhookUrl.trim()) {
+        toast.error(t('errors.webhookUrlRequired'));
+        return;
+      }
+      const payload = formToPayload(form);
+      testChannelDraft
+        .mutateAsync({ type: payload.type, config: payload.config ?? {} })
+        .then(() => toast.success(t('toasts.testSent')))
+        .catch((err) =>
+          toast.error(err?.response?.data?.detail ?? t('errors.testFailed'))
+        );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : t('errors.invalidConfig')
+      );
+    }
   };
 
   const submit = () => {
@@ -351,6 +414,7 @@ function ChannelDialog({
               <Label>{t('fields.type')}</Label>
               <Select
                 value={form.type}
+                disabled={form.type === 'webhook'}
                 onValueChange={(value) =>
                   setForm((current) => ({
                     ...current,
@@ -366,7 +430,6 @@ function ChannelDialog({
                   <SelectItem value='telegram'>
                     {t('types.telegram')}
                   </SelectItem>
-                  <SelectItem value='webhook'>{t('types.webhook')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -388,7 +451,14 @@ function ChannelDialog({
               </div>
             </div>
           </div>
-          <ChannelTypeSetup form={form} setForm={setForm} t={t} />
+          <ChannelTypeSetup
+            form={form}
+            setForm={setForm}
+            t={t}
+            canTest={perms.canExecute && (form.type === 'telegram' || form.type === 'webhook')}
+            testing={testing}
+            onTestConnection={testConnection}
+          />
           <div className='grid gap-2'>
             <Label>{t('fields.events')}</Label>
             <div className='grid gap-2 rounded-md border p-3 sm:grid-cols-2'>

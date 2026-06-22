@@ -28,6 +28,30 @@ def _batch_indices(inp) -> list[int]:
     return list(raw or [])
 
 
+def test_temporal_error_policy_defaults_run_scenario_to_continue():
+    from temporal.workflows import _error_policy
+
+    assert _error_policy({"type": "run_scenario"}, {}) == "continue"
+    assert _error_policy({"type": "tap"}, {}) == "stop"
+
+
+@pytest.mark.parametrize(
+    ("step", "expected"),
+    [
+        ({"type": "run_scenario", "on_error": "stop"}, "stop"),
+        ({"type": "run_scenario", "on_error": "pause"}, "pause"),
+        ({"type": "run_scenario", "ignore_error": True}, "continue"),
+        ({"type": "run_scenario", "error_policy": "stop"}, "stop"),
+        ({"type": "run_scenario", "error_policy": "ignore"}, "continue"),
+        ({"type": "run_scenario", "error_policy": "continue"}, "continue"),
+    ],
+)
+def test_temporal_error_policy_honors_parent_step_policy(step, expected):
+    from temporal.workflows import _error_policy
+
+    assert _error_policy(step, {}) == expected
+
+
 async def _poll_until(condition, *, timeout: float = 5.0, interval: float = 0.05):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

@@ -197,7 +197,7 @@ def test_run_scenario_not_found_returns_error():
         "_scenario_registry": _registry(),
     }
     result = run_scenario_task(_make_device(), scenario)
-    assert result["success"] is False
+    assert result["success"] is True
     sr = result["step_results"][0]
     assert sr["ok"] is False
     assert "not found" in sr["message"]
@@ -209,7 +209,7 @@ def test_run_scenario_missing_id_and_name():
         "_scenario_registry": _registry(),
     }
     result = run_scenario_task(_make_device(), scenario)
-    assert result["success"] is False
+    assert result["success"] is True
     sr = result["step_results"][0]
     assert sr["ok"] is False
     assert "missing" in sr["message"]
@@ -221,7 +221,7 @@ def test_run_scenario_empty_registry():
         # No _scenario_registry key at all
     }
     result = run_scenario_task(_make_device(), scenario)
-    assert result["success"] is False
+    assert result["success"] is True
     assert "not found" in result["step_results"][0]["message"]
 
 
@@ -264,8 +264,9 @@ def test_circular_indirect_reference_detected():
         "_scenario_registry": reg,
     }
     result = run_scenario_task(_make_device(), scenario)
-    # Entire chain should fail (A fails because B fails because A is circular)
-    assert result["success"] is False
+    # Entire chain records failure, but default parent policy continues.
+    assert result["success"] is True
+    assert result["step_results"][0]["ok"] is False
 
 
 # ── Max depth guard ───────────────────────────────────────────────────────────
@@ -283,8 +284,9 @@ def test_max_depth_guard_blocks_deep_nesting():
     }
     # At _depth=10, run_scenario_task immediately returns error (depth guard)
     result = run_scenario_task(_make_device(), scenario, _depth=10)
-    assert result["success"] is False
-    assert "depth" in result.get("failed_message", "").lower()
+    assert result["success"] is True
+    assert result["step_results"][0]["ok"] is False
+    assert "depth" in result["step_results"][0].get("message", "").lower()
 
 
 # ── VariableContext.child_scope ───────────────────────────────────────────────
@@ -410,6 +412,155 @@ def test_run_scenario_registry_passed_to_nested_sub():
     }
     result = run_scenario_task(_make_device(), scenario)
     assert result["success"] is True
+
+
+def test_run_scenario_child_failure_continues_parent_by_default():
+    """A child failure is recorded, but run_scenario wrapper continues by default."""
+    reg = _registry(
+        by_campaign_name={
+            "bad_child": _sub_def([{"type": "unknown_bad_step"}]),
+        }
+    )
+    scenario = {
+        "steps": [
+            {"type": "set_variable", "name": "PARENT_BEFORE", "value": "1"},
+            {"type": "run_scenario", "scenario_name": "bad_child"},
+            {"type": "set_variable", "name": "PARENT_AFTER", "value": "1"},
+        ],
+        "_scenario_registry": reg,
+        "capture_steps": False,
+        "settle_timeout_ms": 0,
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is True
+    assert [step["type"] for step in result["step_results"]] == [
+        "set_variable",
+        "run_scenario",
+        "set_variable",
+    ]
+    run_step = result["step_results"][1]
+    assert run_step["ok"] is True
+    assert run_step["error_policy"] == "continue"
+    assert run_step["error_ignored"] is True
+    assert run_step["marked_ignored"] is True
+    assert run_step["ignored_failure"] is True
+    assert any(not step.get("ok", True) for step in run_step["sub_result"]["step_results"])
+
+
+def test_run_scenario_recovery_unresolved_does_not_fail_parent_wrapper():
+    from tasks.scenario.steps import register_step
+
+    @register_step("test_recovery_unresolved")
+    def _test_recovery_unresolved(sc, step, idx, result):
+        result["ok"] = False
+        result["message"] = "incident recovery playbooks did not resolve the step"
+
+    reg = _registry(
+        by_campaign_name={
+            "bad_child": _sub_def([{"type": "test_recovery_unresolved"}]),
+        }
+    )
+    scenario = {
+        "steps": [
+            {"type": "run_scenario", "scenario_name": "bad_child"},
+            {"type": "set_variable", "name": "PARENT_AFTER", "value": "1"},
+        ],
+        "_scenario_registry": reg,
+        "capture_steps": False,
+        "settle_timeout_ms": 0,
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is True
+    run_step = result["step_results"][0]
+    assert run_step["ok"] is True
+    assert run_step["error_ignored"] is True
+    assert run_step["marked_ignored"] is True
+    assert run_step["ignored_failure"] is True
+    assert "incident recovery playbooks did not resolve" in run_step["ignored_message"]
+    assert result["step_results"][1]["type"] == "set_variable"
+
+
+def test_run_scenario_child_failure_stops_parent_when_requested():
+    """The parent can still make a child failure stop the remaining steps."""
+    reg = _registry(
+        by_campaign_name={
+            "bad_child": _sub_def([{"type": "unknown_bad_step"}]),
+        }
+    )
+    scenario = {
+        "steps": [
+            {"type": "set_variable", "name": "PARENT_BEFORE", "value": "1"},
+            {
+                "type": "run_scenario",
+                "scenario_name": "bad_child",
+                "on_error": "stop",
+            },
+            {"type": "set_variable", "name": "PARENT_AFTER", "value": "1"},
+        ],
+        "_scenario_registry": reg,
+        "capture_steps": False,
+        "settle_timeout_ms": 0,
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is False
+    assert [step["type"] for step in result["step_results"]] == [
+        "set_variable",
+        "run_scenario",
+    ]
+    assert result["step_results"][1]["error_policy"] == "stop"
+    assert "bad_child" in result["failed_message"]
+
+
+@pytest.mark.parametrize(
+    "parent_policy",
+    [
+        {"ignore_error": True},
+        {"on_error": "continue"},
+    ],
+)
+def test_run_scenario_child_failure_can_continue_when_parent_chooses_continue(parent_policy):
+    """The parent run_scenario step owns continue/stop policy."""
+    reg = _registry(
+        by_campaign_name={
+            "bad_child": _sub_def([{"type": "unknown_bad_step"}]),
+        }
+    )
+    scenario = {
+        "steps": [
+            {"type": "set_variable", "name": "PARENT_BEFORE", "value": "1"},
+            {
+                "type": "run_scenario",
+                "scenario_name": "bad_child",
+                **parent_policy,
+            },
+            {"type": "set_variable", "name": "PARENT_AFTER", "value": "1"},
+        ],
+        "_scenario_registry": reg,
+        "capture_steps": False,
+        "settle_timeout_ms": 0,
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is True
+    assert [step["type"] for step in result["step_results"]] == [
+        "set_variable",
+        "run_scenario",
+        "set_variable",
+    ]
+    run_step = result["step_results"][1]
+    assert run_step["ok"] is True
+    assert run_step["error_policy"] == "continue"
+    assert run_step["error_ignored"] is True
+    assert run_step["marked_ignored"] is True
+    assert run_step["ignored_failure"] is True
+    assert any(not step.get("ok", True) for step in run_step["sub_result"]["step_results"])
 
 
 # ── Seed data integrity ───────────────────────────────────────────────────────

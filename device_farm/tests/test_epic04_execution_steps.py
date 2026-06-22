@@ -190,6 +190,61 @@ def test_build_execution_step_payload_maps_fields():
     assert payload["effective_config_json"]["step_id"] == "s1"
 
 
+def test_ignored_run_scenario_failure_persists_as_passed_step():
+    step = {"id": "run-child", "type": "run_scenario", "scenario_id": "child-1"}
+    result = {
+        "index": 1,
+        "type": "run_scenario",
+        "ok": True,
+        "message": "run_scenario failed; ignored by parent run_scenario policy",
+        "error_policy": "continue",
+        "error_ignored": True,
+        "marked_ignored": True,
+        "ignored_failure": True,
+        "sub_result": {
+            "success": False,
+            "step_results": [
+                {"index": 0, "type": "tap_selector", "ok": False, "message": "not found"}
+            ],
+        },
+    }
+    payload = build_execution_step_payload("exec-1", step, result)
+    assert payload["status"] == "passed"
+    assert payload["marked_ignored"] is True
+    assert payload["error_json"] == {}
+
+
+def test_temporal_finalize_extracts_ignored_step_warnings():
+    from temporal.activities import _ignored_step_warnings_from_results
+
+    warnings = _ignored_step_warnings_from_results(
+        [
+            {"index": 0, "type": "tap", "ok": True},
+            {
+                "index": 1,
+                "type": "run_scenario",
+                "ok": True,
+                "ignored_failure": True,
+                "ignored_message": (
+                    "run_scenario: sub-scenario 'child' failed — "
+                    "incident recovery playbooks did not resolve the step"
+                ),
+            },
+        ]
+    )
+
+    assert warnings == [
+        {
+            "step_index": 1,
+            "step_type": "run_scenario",
+            "message": (
+                "run_scenario: sub-scenario 'child' failed — "
+                "incident recovery playbooks did not resolve the step"
+            ),
+        }
+    ]
+
+
 def test_extract_artifacts_json_from_temporal_details():
     arts = [{"type": "post", "screenshot_url": "/captures/post.png"}]
     result = {

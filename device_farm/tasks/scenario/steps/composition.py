@@ -10,6 +10,23 @@ from tasks.scenario.context import ScenarioContext
 log = logging.getLogger(__name__)
 
 
+def _first_failed_message(result: Dict[str, Any]) -> str:
+    failed_message = result.get("failed_message")
+    if failed_message:
+        return str(failed_message)
+    for entry in result.get("step_results") or []:
+        if isinstance(entry, dict) and not entry.get("ok", True):
+            return str(entry.get("message") or "step failed")
+    return ""
+
+
+def _has_failed_step(result: Dict[str, Any]) -> bool:
+    return any(
+        isinstance(entry, dict) and not entry.get("ok", True)
+        for entry in result.get("step_results") or []
+    )
+
+
 @register_step("run_scenario")
 def handle_run_scenario(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     scenario_id = str(step.get("scenario_id") or "").strip()
@@ -68,8 +85,11 @@ def handle_run_scenario(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
         },
     )
     result["sub_result"] = sub
-    if not sub.get("success"):
+    if not sub.get("success") or _has_failed_step(sub):
         result["ok"] = False
-        result["message"] = f"run_scenario: sub-scenario {scenario_ref!r} failed — {sub.get('failed_message', '')}"
+        result["message"] = (
+            f"run_scenario: sub-scenario {scenario_ref!r} failed — "
+            f"{_first_failed_message(sub)}"
+        )
     else:
         result["message"] = f"run_scenario: {scenario_ref!r} completed ({sub.get('steps_executed', 0)} steps)"

@@ -21,6 +21,130 @@ trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
 _MAX_NESTING_DEPTH = 10
 
 
+def _error_policy(step: Dict[str, Any], scenario: Dict[str, Any]) -> str:
+    """Return parent-owned error policy for a failed step."""
+    step_type = str(step.get("type") or "")
+    dsl_policy = step.get("error_policy", "")
+    if dsl_policy in ("ignore", "continue"):
+        return "continue"
+    if dsl_policy == "stop":
+        return "stop"
+    step_policy = step.get("on_error", "")
+    if step_policy in ("pause", "continue", "stop"):
+        return step_policy
+    if step.get("ignore_error"):
+        return "continue"
+    scenario_policy = scenario.get("on_error", "")
+    if scenario_policy in ("pause", "continue", "stop"):
+        return scenario_policy
+    if scenario.get("continue_on_error"):
+        return "continue"
+    if step_type == "run_scenario":
+        return "continue"
+    return "stop"
+
+
+def _failure_counts_for_result(step_result: Dict[str, Any]) -> bool:
+    if step_result.get("ok", True):
+        return False
+    return not bool(step_result.get("error_ignored"))
+
+
+def _run_scenario_failure_can_be_ignored(step_result: Dict[str, Any]) -> bool:
+    if not step_result.get("sub_result"):
+        return False
+    message = str(step_result.get("message") or "")
+    reason = message.split("—", maxsplit=1)[-1].strip()
+    if reason.startswith("run_scenario:"):
+        return False
+    if reason.startswith("Max nesting depth"):
+        return False
+    return True
+
+
+def _schedule_ignored_failure_warning(
+    sc: "ScenarioContext",
+    step: Dict[str, Any],
+    step_result: Dict[str, Any],
+) -> None:
+    if sc.depth > 0 or not sc.execution_id or not step_result.get("ignored_failure"):
+        return
+    loop = getattr(sc.device, "_loop", None)
+    if loop is None or loop.is_closed():
+        return
+
+    execution_id = sc.execution_id
+    device_serial = sc.serial
+    step_index = step_result.get("index")
+    step_type = str(step_result.get("type") or step.get("type") or "unknown")
+    message = str(
+        step_result.get("ignored_message")
+        or step_result.get("message")
+        or "step warning"
+    )
+
+    async def _do() -> None:
+        try:
+            from db.database import activity_session
+            from db.crud.execution import get_execution
+            from services.execution.event_publisher import resolve_execution_org_id
+            from services.campaign.events import emit_campaign_step_warning
+            from tenancy.context import tenant_context
+
+            async with activity_session() as db:
+                execution = await get_execution(db, execution_id)
+                campaign_id = getattr(execution, "campaign_id", None) if execution else None
+                if not execution or not campaign_id:
+                    return
+                org_id = await resolve_execution_org_id(db, execution)
+                if not org_id:
+                    return
+                campaign_name = None
+                with tenant_context(org_id):
+                    try:
+                        from db.crud import campaign_entity as campaign_repo
+
+                        campaign = await campaign_repo.get_campaign_entity(db, campaign_id)
+                        campaign_name = getattr(campaign, "name", None) if campaign else None
+                    except Exception:
+                        campaign_name = None
+                    await emit_campaign_step_warning(
+                        db,
+                        org_id=org_id,
+                        campaign_id=campaign_id,
+                        campaign_name=campaign_name,
+                        execution_id=execution_id,
+                        device_serial=device_serial,
+                        step_index=step_index,
+                        step_type=step_type,
+                        message=message,
+                        user_id=getattr(execution, "user_id", None),
+                    )
+                    await db.commit()
+        except Exception as exc:
+            log.debug(
+                "campaign step warning schedule failed exec_id=%s step=%s: %s",
+                execution_id,
+                step_index,
+                exc,
+            )
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_do(), loop)
+        fut.add_done_callback(
+            lambda f: log.warning(
+                "campaign step warning future failed exec_id=%s step=%s: %s",
+                execution_id,
+                step_index,
+                f.exception(),
+            )
+            if f.exception() is not None
+            else None
+        )
+    except Exception as exc:
+        log.debug("campaign step warning schedule failed (non-fatal): %s", exc)
+
+
 def _persist_checkpoint(sc: "ScenarioContext", next_step: int) -> None:
     """Best-effort async checkpoint write. Never blocks or raises.
 
@@ -172,6 +296,36 @@ class ScenarioExecutor:
                 attempts=attempts_used,
             )
 
+            stop_after_step = False
+            if step_result.get("ok", True):
+                _persist_checkpoint(sc, idx + 1)
+            else:
+                policy = _error_policy(step, sc.scenario)
+                step_result["error_policy"] = policy
+                if policy == "continue":
+                    step_result["error_ignored"] = True
+                    step_result["marked_ignored"] = True
+                    if (
+                        str(step.get("type") or "") == "run_scenario"
+                        and _run_scenario_failure_can_be_ignored(step_result)
+                    ):
+                        step_result["ignored_failure"] = True
+                        step_result["ignored_message"] = step_result.get("message")
+                        step_result["message"] = (
+                            f"{step_result.get('message') or 'run_scenario failed'}; "
+                            "ignored by parent run_scenario policy"
+                        )
+                        step_result["ok"] = True
+                        _schedule_ignored_failure_warning(sc, step, step_result)
+                    _persist_checkpoint(sc, idx + 1)
+                else:
+                    if policy == "pause":
+                        step_result["message"] = (
+                            f"{step_result.get('message') or 'step failed'}; "
+                            "pause-on-error is only supported by Temporal execution"
+                        )
+                    stop_after_step = True
+
             sc.step_results.append(step_result)
 
             if sc.depth == 0 and sc.execution_id:
@@ -186,15 +340,15 @@ class ScenarioExecutor:
                     duration_ms=step_dur_ms,
                 )
 
-            if step_result.get("ok", True):
-                _persist_checkpoint(sc, idx + 1)
-
             # Notify caller
             if sc.on_step_done is not None:
                 try:
                     sc.on_step_done(step_result)
                 except Exception:
                     pass
+
+            if stop_after_step:
+                break
 
             # Phase 2 — anti-detection jitter between steps. Applied only at
             # top-level scenarios (nested scenarios inherit pacing from parent)
@@ -235,8 +389,8 @@ class ScenarioExecutor:
 
     def _build_result(self) -> Dict[str, Any]:
         sc = self.sc
-        all_ok = all(r.get("ok", True) for r in sc.step_results)
-        failed_steps = [r for r in sc.step_results if not r.get("ok", True)]
+        failed_steps = [r for r in sc.step_results if _failure_counts_for_result(r)]
+        all_ok = not failed_steps
         first_fail_msg = failed_steps[0].get("message", "step failed") if failed_steps else ""
 
         result = {

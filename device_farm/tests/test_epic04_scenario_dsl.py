@@ -177,7 +177,7 @@ async def test_tc03_duplicate_step_id(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_ac4_default_stop_on_failure_no_warnings(session_factory):
+async def test_ac4_default_stop_on_regular_steps_no_warnings(session_factory):
     steps = [
         {"id": "s1", "type": "interaction.tap", "config": {"selector": "a"}},
         {"id": "s2", "type": "input_wait.wait", "config": {"seconds": 1}},
@@ -222,9 +222,17 @@ def test_fr04_20_normalize_never_adds_on_error_branch():
     assert "on_error" not in normalized or normalized.get("on_error") in (None, "")
 
 
-def test_fr04_20_effective_policy_only_stop_unless_declared():
+def test_fr04_20_effective_policy_stops_regular_steps_unless_declared():
     assert effective_error_policy({"id": "x", "type": "input_wait.wait"}) == "stop"
     assert effective_error_policy({"id": "x", "type": "input_wait.wait", "error_policy": "ignore"}) == "ignore"
+    assert effective_error_policy({"id": "x", "type": "input_wait.wait", "error_policy": "continue"}) == "ignore"
+    assert effective_error_policy({"id": "x", "type": "input_wait.wait", "error_policy": "stop"}) == "stop"
+
+
+def test_run_scenario_default_policy_continues_parent_flow():
+    assert effective_error_policy({"id": "x", "type": "run_scenario"}) == "ignore"
+    assert effective_error_policy({"id": "x", "type": "composition.run_scenario"}) == "ignore"
+    assert effective_error_policy({"id": "x", "type": "run_scenario", "error_policy": "stop"}) == "stop"
 
 
 def test_legacy_runtime_step_types_are_known():

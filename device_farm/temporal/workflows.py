@@ -131,13 +131,20 @@ def _error_policy(step: dict, cfg: dict) -> str:
     """Return error handling policy: 'pause' | 'continue' | 'stop'.
 
     Priority: step-level on_error → step-level ignore_error → scenario-level on_error
-    → scenario-level continue_on_error → default 'stop'.
+    → scenario-level continue_on_error → run_scenario default 'continue'
+    → other step default 'stop'.
 
     Usage in scenario JSON:
         Step-level:     {"type": "tap", ..., "on_error": "pause"}
         Scenario-level: {"continue_on_error": true, "steps": [...]}
         Pause all:      {"on_error": "pause", "steps": [...]}
     """
+    step_type = str(step.get("type") or "")
+    dsl_policy = step.get("error_policy", "")
+    if dsl_policy in ("ignore", "continue"):
+        return "continue"
+    if dsl_policy == "stop":
+        return "stop"
     step_policy = step.get("on_error", "")
     if step_policy in ("pause", "continue", "stop"):
         return step_policy
@@ -148,7 +155,37 @@ def _error_policy(step: dict, cfg: dict) -> str:
         return cfg_policy
     if cfg.get("continue_on_error"):
         return "continue"
+    if step_type == "run_scenario":
+        return "continue"
     return "stop"
+
+
+def _step_results_have_failure(step_results: list) -> bool:
+    return any(
+        isinstance(entry, dict) and not entry.get("ok", True)
+        for entry in step_results or []
+    )
+
+
+def _first_failed_step_message(step_results: list) -> str:
+    for entry in step_results or []:
+        if isinstance(entry, dict) and not entry.get("ok", True):
+            return str(entry.get("message") or "step failed")
+    return ""
+
+
+def _run_scenario_failure_can_be_ignored(
+    message: str,
+    sub_results: list,
+) -> bool:
+    if not sub_results:
+        return False
+    reason = str(message or "").split("—", maxsplit=1)[-1].strip()
+    if reason.startswith("run_scenario:"):
+        return False
+    if reason.startswith("Max nesting depth"):
+        return False
+    return True
 
 
 def _positive_int(value: Any) -> int:
@@ -1136,12 +1173,27 @@ class ScenarioStepsWorkflow:
                 ok, msg, sub_results, runtime_context = await self._handle_run_scenario(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({
+                entry = {
                     "index": idx, "type": "run_scenario", "ok": ok,
                     "message": msg, "sub_results": sub_results,
-                })
+                }
                 steps_executed += 1
                 if not ok:
+                    policy = _error_policy(step, inp.scenario_config or {})
+                    if (
+                        policy == "continue"
+                        and _run_scenario_failure_can_be_ignored(msg, sub_results)
+                    ):
+                        entry["error_policy"] = policy
+                        entry["error_ignored"] = True
+                        entry["marked_ignored"] = True
+                        entry["ignored_failure"] = True
+                        entry["ignored_message"] = msg
+                        entry["message"] = f"{msg}; ignored by parent run_scenario policy"
+                        entry["ok"] = True
+                        _append(entry)
+                        continue
+                    _append(entry)
                     action, early = await self._apply_error_policy(
                         step, idx, msg, inp, runtime_vars, runtime_context,
                         steps_executed, step_results,
@@ -1149,6 +1201,7 @@ class ScenarioStepsWorkflow:
                     if action == "stop":
                         return early
                     continue
+                _append(entry)
                 continue
 
             # ── extract — writes to context (posts / text_nodes) ─────────────
@@ -1745,10 +1798,17 @@ class ScenarioStepsWorkflow:
         merged_ctx = {**runtime_context, **child_result.context}
         merged_ctx.pop("__scenario_call_stack__", None)
 
-        if not child_result.success:
+        child_failed = (not child_result.success) or _step_results_have_failure(
+            child_result.step_results
+        )
+        if child_failed:
+            failed_message = (
+                child_result.failed_message
+                or _first_failed_step_message(child_result.step_results)
+            )
             return (
                 False,
-                f"run_scenario: sub-scenario {scenario_ref!r} failed — {child_result.failed_message}",
+                f"run_scenario: sub-scenario {scenario_ref!r} failed — {failed_message}",
                 child_result.step_results,
                 merged_ctx,
             )

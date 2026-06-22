@@ -656,48 +656,53 @@ export function ScenarioDialog({
     []
   );
 
-  const hardStopPreview = useCallback(() => {
-    previewAllAbortRef.current?.abort();
-    flowRunAbortRef.current?.abort();
-    stepRunAbortRef.current?.abort();
-    const active = previewSession.takeActiveForCancel();
-    const serial = (previewSerial || devices[0]?.serial || '').trim();
-    if (active) {
-      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-      interruptDevice(active.serial).catch(() => undefined);
-    } else if (serial) {
-      interruptDevice(serial).catch(() => undefined);
-    }
-    setStepRunStates((s) => {
-      const hadRunning = Object.values(s).some((st) => st === 'running');
-      if (!hadRunning) return s;
-      const n = { ...s };
-      for (const k of Object.keys(n)) {
-        if (n[k] === 'running') delete n[k];
+  const hardStopPreview = useCallback(
+    (options?: { interruptWithoutActive?: boolean }) => {
+      previewAllAbortRef.current?.abort();
+      flowRunAbortRef.current?.abort();
+      stepRunAbortRef.current?.abort();
+      const active = previewSession.takeActiveForCancel();
+      const serial = (previewSerial || devices[0]?.serial || '').trim();
+      if (active) {
+        cancelPreviewStream(active.serial, active.traceId).catch(
+          () => undefined
+        );
+        interruptDevice(active.serial).catch(() => undefined);
+      } else if (options?.interruptWithoutActive !== false && serial) {
+        interruptDevice(serial).catch(() => undefined);
       }
-      return n;
-    });
-    setFlowRunStates((s) => {
-      const hadRunning = Object.values(s).some((st) => st === 'running');
-      if (!hadRunning) return s;
-      const n = { ...s };
-      for (const k of Object.keys(n)) {
-        if (n[k] === 'running') delete n[k];
-      }
-      return n;
-    });
-    flowRunningIdsRef.current.clear();
-    queueMicrotask(() => toast.info('Đã dừng chạy thử'));
-  }, [previewSession, previewSerial, devices]);
+      setStepRunStates((s) => {
+        const hadRunning = Object.values(s).some((st) => st === 'running');
+        if (!hadRunning) return s;
+        const n = { ...s };
+        for (const k of Object.keys(n)) {
+          if (n[k] === 'running') delete n[k];
+        }
+        return n;
+      });
+      setFlowRunStates((s) => {
+        const hadRunning = Object.values(s).some((st) => st === 'running');
+        if (!hadRunning) return s;
+        const n = { ...s };
+        for (const k of Object.keys(n)) {
+          if (n[k] === 'running') delete n[k];
+        }
+        return n;
+      });
+      flowRunningIdsRef.current.clear();
+      queueMicrotask(() => toast.info('Đã dừng chạy thử'));
+    },
+    [previewSession, previewSerial, devices]
+  );
 
   // Dialog close / tab close / Next.js route change all end up unmounting
   // this component. Make sure the scenario actually stops server-side.
   useEffect(() => {
-    const onPageHide = () => hardStopPreview();
+    const onPageHide = () => hardStopPreview({ interruptWithoutActive: false });
     window.addEventListener('pagehide', onPageHide);
     return () => {
       window.removeEventListener('pagehide', onPageHide);
-      hardStopPreview();
+      hardStopPreview({ interruptWithoutActive: false });
     };
   }, [hardStopPreview]);
 

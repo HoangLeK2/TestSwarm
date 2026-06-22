@@ -678,8 +678,6 @@ export function ControlRecordView({
           () => undefined
         );
         interruptDevice(active.serial).catch(() => undefined);
-      } else if (serial) {
-        interruptDevice(serial).catch(() => undefined);
       }
       stepRunAbortRef.current?.abort();
       flowRunLeafAbortRef.current?.abort();

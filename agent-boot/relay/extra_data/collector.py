@@ -312,16 +312,58 @@ async def _u2_click_post_open_target(
         return False, "invalid_bounds"
     x1, y1, x2, y2 = [int(v) for v in bounds]
     tap_kind = str(target.get("tap_kind") or "")
+    gradient_wallpaper = bool(target.get("gradient_wallpaper"))
     screen_w, _screen_h = await _window_size(executor, serial)
-    cx, cy = post_header_tap_point((x1, y1, x2, y2), tap_kind=tap_kind, screen_w=screen_w)
-    if target.get("has_see_more") and tap_kind == "post_body":
-        logger.info(
-            "[%s] open_post tap post_body (see-more present) at (%d,%d) bounds=%s",
-            serial,
-            cx,
-            cy,
-            bounds,
-        )
+    timeout = _float_context(context, "post_open_click_timeout_s", 0.35, 0.1, 4.0)
+    u2_click = target.get("u2_click") if isinstance(target.get("u2_click"), dict) else {}
+
+    # Wallpaper posts: click the text node directly (coords often land on image padding).
+    if gradient_wallpaper and u2_click:
+        spec = u2_click.get("spec") if isinstance(u2_click.get("spec"), dict) else None
+        if spec and await _u2_click_spec(executor, serial, spec, timeout=timeout):
+            logger.info(
+                "[%s] open_post tap kind=%s route=click_spec wallpaper=True label=%r",
+                serial,
+                tap_kind,
+                (target.get("tap_label") or "")[:60],
+            )
+            return True, "click_spec"
+        xpath = u2_click.get("xpath")
+        if xpath and await _u2_click_spec(
+            executor, serial, {"xpath": xpath}, timeout=timeout
+        ):
+            logger.info(
+                "[%s] open_post tap kind=%s route=click_spec_xpath wallpaper=True",
+                serial,
+                tap_kind,
+            )
+            return True, "click_spec_xpath"
+        selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
+        if selector and await _u2_click_selector(
+            executor, serial, selector, timeout=timeout
+        ):
+            logger.info(
+                "[%s] open_post tap kind=%s route=click_selector wallpaper=True",
+                serial,
+                tap_kind,
+            )
+            return True, "click_selector"
+
+    cx, cy = post_header_tap_point(
+        (x1, y1, x2, y2),
+        tap_kind=tap_kind,
+        screen_w=screen_w,
+        gradient_wallpaper=gradient_wallpaper,
+    )
+    logger.info(
+        "[%s] open_post tap kind=%s at (%d,%d) bounds=%s wallpaper=%s",
+        serial,
+        tap_kind,
+        cx,
+        cy,
+        bounds,
+        bool(target.get("gradient_wallpaper")),
+    )
     if await _u2_click(executor, serial, cx, cy):
         return True, "click_coord"
 
@@ -423,6 +465,17 @@ async def _maybe_open_fb_post_detail(
     candidates = ([primary] if primary else []) + [
         t for t in alternates if isinstance(t, dict)
     ]
+    attempt_targets: list[dict[str, Any]] = []
+    if primary:
+        attempt_targets.append(primary)
+        for alt_tap in primary.get("tap_alternates") or []:
+            if isinstance(alt_tap, dict):
+                attempt_targets.append({**primary, **alt_tap})
+    for alt in alternates:
+        if isinstance(alt, dict) and alt.get("post_key") != (primary or {}).get("post_key"):
+            attempt_targets.append(alt)
+    if not attempt_targets:
+        attempt_targets = candidates
     if not candidates:
         from relay.extra_data.parsers.facebook.post_open_pipeline import (
             diagnose_post_open_resolution,
@@ -446,7 +499,7 @@ async def _maybe_open_fb_post_detail(
     back_settle_s = _float_context(context, "post_open_back_settle_s", 0.5, 0.0, 3.0)
     attempts: list[dict[str, Any]] = []
 
-    for idx, target in enumerate(candidates[:max_attempts]):
+    for idx, target in enumerate(attempt_targets[:max_attempts]):
         click_ok, route = await _u2_click_post_open_target(executor, serial, target, context)
         if not click_ok:
             attempts.append({"index": idx, "tapped": False, "reason": "tap_failed", "route": route})
@@ -506,7 +559,10 @@ async def _maybe_open_fb_post_detail(
             )
             return (detail_xml or feed_xml), diagnostic
         # Verify heuristic missed detail chrome but tap may still have navigated — keep post-tap XML.
-        if detail_xml and detail_xml != feed_xml:
+        wallpaper_body_miss = bool(
+            target.get("gradient_wallpaper") and target.get("tap_kind") == "post_body"
+        )
+        if detail_xml and detail_xml != feed_xml and not wallpaper_body_miss:
             logger.info(
                 "[%s] open_post_before_extract: verify miss but hierarchy changed — using post-tap xml",
                 serial,
@@ -522,6 +578,14 @@ async def _maybe_open_fb_post_detail(
             if opened_post:
                 diagnostic["opened_post"] = opened_post
             return detail_xml, diagnostic
+        if wallpaper_body_miss:
+            attempts[-1]["verified"] = False
+            attempts[-1]["reason"] = "wallpaper_body_no_detail"
+            logger.info(
+                "[%s] open_post_before_extract tap #%d wallpaper shell miss — try timestamp",
+                serial,
+                idx,
+            )
         # Same rule as comment-target retries: never BACK on group feed (exits the
         # group). Only dismiss transient overlays (profile viewer, photo lightbox).
         from relay.extra_data.parsers.facebook.comment_pipeline import (

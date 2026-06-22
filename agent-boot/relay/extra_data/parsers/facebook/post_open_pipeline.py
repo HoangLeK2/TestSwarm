@@ -81,6 +81,14 @@ _MEDIA_ONLY_LABELS = frozenset({
     "clip",
 })
 
+# FB gradient / coloured text-on-wallpaper posts wrap copy in a "Hình nền" shell.
+_WALLPAPER_SHELL_LABELS = frozenset({
+    "hình nền",
+    "background",
+    "hinh nen",
+    "wallpaper",
+})
+
 _MEDIA_OPEN_REJECT = (
     "mở rộng ảnh",
     "mở rộng",
@@ -243,11 +251,15 @@ def _card_has_action_bar(element) -> bool:
     return False
 
 
+_AVATAR_COLUMN_GUARD_X = 220
+
+
 def post_header_tap_point(
     bounds: Tuple[int, int, int, int],
     *,
     screen_w: int = 1080,
     tap_kind: str | None = None,
+    gradient_wallpaper: bool = False,
 ) -> Tuple[int, int]:
     """Pick tap coords by target kind — post body center; header taps avoid Follow on the right."""
     x1, y1, x2, y2 = bounds
@@ -256,9 +268,15 @@ def post_header_tap_point(
     kind = (tap_kind or "").strip().lower()
 
     if kind in {"post_body", "post_media"}:
-        # Left-upper quadrant — "xem thêm" / See more is almost always bottom-right.
-        cx = x1 + max(32, width // 4)
-        cy = y1 + max(24, height // 4)
+        if gradient_wallpaper:
+            # Shell open band — not the text overlay (text tap does not navigate on device).
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+        else:
+            # Left-upper quadrant — "xem thêm" / See more is almost always bottom-right.
+            cx = x1 + max(32, width // 4)
+            cy = y1 + max(24, height // 4)
+        cx = max(cx, _AVATAR_COLUMN_GUARD_X)
         return cx, cy
 
     if kind in {"author_row_gap", "geometric"}:
@@ -267,7 +285,9 @@ def post_header_tap_point(
         return max(x1 + 8, min(x2 - 8, cx)), (y1 + y2) // 2
 
     if kind == "timestamp":
-        cx = x1 + int(width * 0.35)
+        # On Codex VN group feeds, the right segment ("Chia sẻ với…") opens post detail;
+        # left segment ("2 ngày") under author often opens profile.
+        cx = x1 + int(width * 0.52)
         return max(x1 + 6, min(x2 - 6, cx)), (y1 + y2) // 2
 
     # metadata / privacy / fallback: mild right bias but not into menu column
@@ -291,10 +311,14 @@ def _looks_like_avatar_node(n: Dict[str, Any]) -> bool:
 
 
 def _is_header_badge_label(label: str) -> bool:
+    from .filters import _comment_line_is_badge
+
     ll = label.casefold().strip()
     if not ll:
         return False
-    return any(marker in ll for marker in _HEADER_BADGE_REJECT)
+    if any(marker in ll for marker in _HEADER_BADGE_REJECT):
+        return True
+    return _comment_line_is_badge(label)
 
 
 def _clip_header_tap_bounds_for_label(
@@ -569,6 +593,8 @@ def _is_post_body_label(label: str) -> bool:
     stripped = label.strip()
     if len(stripped) < 8:
         return False
+    if stripped.casefold() in _WALLPAPER_SHELL_LABELS:
+        return False
     if stripped.casefold() in {"xem thêm", "see more", "xem bài viết", "view post"}:
         return False
     if _is_translation_chrome_label(label):
@@ -613,6 +639,219 @@ def _header_bottom_for_body(
     return min(cy2, floor_y + 12)
 
 
+def _is_wallpaper_post_shell_label(label: str) -> bool:
+    ll = _norm(label).casefold()
+    if not ll:
+        return False
+    if ll in _WALLPAPER_SHELL_LABELS:
+        return True
+    return ll.startswith("hình nền") or ll.startswith("background")
+
+
+def _clip_wallpaper_text_tap_bounds(
+    bounds: Tuple[int, int, int, int],
+) -> Tuple[int, int, int, int]:
+    """FB often reports a tall wrapper; tap only the upper text band."""
+    x1, y1, x2, y2 = bounds
+    height = max(1, y2 - y1)
+    if height <= 220:
+        return bounds
+    clip_h = min(200, max(120, int(height * 0.42)))
+    return x1, y1, x2, min(y2, y1 + clip_h)
+
+
+def _wallpaper_shell_open_tap_bounds(
+    shell_bounds: Tuple[int, int, int, int],
+    *,
+    text_bounds: Optional[Tuple[int, int, int, int]] = None,
+) -> Tuple[int, int, int, int]:
+    """Coord box on the wallpaper shell that opens post detail (not the text overlay).
+
+    On real devices, tapping the centered copy on Hình nền / photo posts often does
+  not navigate — it only focuses the overlay (long-clickable). FB opens detail from
+  the shell background band above the text.
+    """
+    sx1, sy1, sx2, sy2 = shell_bounds
+    shell_h = max(1, sy2 - sy1)
+    # Upper shell band — below header chrome, above centered text overlay.
+    if text_bounds:
+        text_top = text_bounds[1]
+        open_y2 = min(sy2, max(sy1 + 96, text_top - 48))
+    else:
+        open_y2 = min(sy2, sy1 + min(220, max(120, shell_h // 5)))
+    open_y1 = sy1 + min(72, max(40, shell_h // 12))
+    if open_y2 <= open_y1 + 32:
+        open_y1, open_y2 = sy1, min(sy2, sy1 + 160)
+    cx = (sx1 + sx2) // 2
+    half_w = min(140, max(72, (sx2 - sx1) // 4))
+    return (
+        max(sx1 + 24, cx - half_w),
+        open_y1,
+        min(sx2 - 24, cx + half_w),
+        open_y2,
+    )
+
+
+def _wallpaper_text_tap_in_shell(
+    shell,
+    shell_bounds: Tuple[int, int, int, int],
+) -> Tuple[str, Optional[Tuple[int, int, int, int]], Any]:
+    """Find tappable post text inside a wallpaper / photo shell."""
+    text_label = ""
+    text_bounds: Optional[Tuple[int, int, int, int]] = None
+    text_node: Any = None
+    # Scores are often negative (compact text bonus minus area); start low enough to accept any child.
+    text_score = -(10**18)
+
+    def _consider_text_node(
+        node: Any,
+        label: str,
+        bounds: Tuple[int, int, int, int],
+        *,
+        u2_node: Any,
+    ) -> None:
+        nonlocal text_label, text_bounds, text_node, text_score
+        if not _is_post_body_label(label):
+            return
+        area = max(1, (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]))
+        # Prefer compact text nodes — avoid tall wrappers that include image padding.
+        score = len(label) * 800 - area
+        if score <= text_score:
+            return
+        text_score = score
+        text_label = label[:120]
+        text_bounds = bounds
+        text_node = u2_node
+
+    for child in shell.iter("node"):
+        if child is shell:
+            continue
+        label = _subtree_text_label(child) or _node_label(child)
+        if not label:
+            continue
+        cb = _parse_bounds_from_node(child)
+        if not cb:
+            continue
+        if _is_tappable_fb_node(child):
+            _consider_text_node(child, label, cb, u2_node=child)
+            continue
+        # Photo overlays: copy node may be non-clickable; still use its bounds for coords.
+        if len(label.strip()) < 16:
+            continue
+        u2_node = child
+        for _ in range(10):
+            if _is_tappable_fb_node(u2_node):
+                break
+            parent = u2_node.getparent()
+            if parent is None or parent is shell:
+                u2_node = shell
+                break
+            u2_node = parent
+        _consider_text_node(child, label, cb, u2_node=u2_node)
+
+    if not text_bounds:
+        merged = _subtree_text_label(shell)
+        if _is_post_body_label(merged) and len(merged) >= 24:
+            text_label = merged[:120]
+            text_bounds = shell_bounds
+            text_node = shell
+    if text_bounds:
+        text_bounds = _clip_wallpaper_text_tap_bounds(text_bounds)
+    return text_label, text_bounds, text_node
+
+
+def _find_wallpaper_post_body_tap(
+    element,
+    *,
+    card_bounds: Tuple[int, int, int, int],
+    author_bounds: Tuple[int, int, int, int],
+    nodes: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Gradient / coloured wallpaper posts: tap the shell, not the header row."""
+    cx1, cy1, cx2, cy2 = card_bounds
+    card_w = max(1, cx2 - cx1)
+    card_h = max(1, cy2 - cy1)
+    body_top = _header_bottom_for_body(card_bounds, author_bounds, nodes)
+
+    best_shell: Optional[Tuple[int, int, int, int]] = None
+    best_text_bounds: Optional[Tuple[int, int, int, int]] = None
+    best_text_node: Any = None
+    best_label = ""
+    best_score = -1
+
+    def _consider_shell(
+        shell: Any,
+        shell_bounds: Tuple[int, int, int, int],
+        *,
+        shell_score_bonus: int = 0,
+    ) -> None:
+        nonlocal best_shell, best_text_bounds, best_text_node, best_label, best_score
+        sx1, sy1, sx2, sy2 = shell_bounds
+        if sy1 < body_top:
+            return
+        if (sx2 - sx1) < int(card_w * 0.45) or (sy2 - sy1) < int(card_h * 0.12):
+            return
+        text_label, text_bounds, text_node = _wallpaper_text_tap_in_shell(
+            shell, shell_bounds
+        )
+        if not text_label or text_bounds is None:
+            return
+        text_score = (text_bounds[2] - text_bounds[0]) * (text_bounds[3] - text_bounds[1])
+        shell_score = (sx2 - sx1) * (sy2 - sy1) + text_score + shell_score_bonus
+        if shell_score > best_score:
+            best_score = shell_score
+            best_shell = shell_bounds
+            best_text_bounds = text_bounds
+            best_text_node = text_node
+            best_label = text_label
+
+    for shell in element.iter("node"):
+        shell_label = _node_label(shell)
+        if not _is_wallpaper_post_shell_label(shell_label):
+            continue
+        shell_bounds = _parse_bounds_from_node(shell)
+        if not shell_bounds:
+            continue
+        _consider_shell(shell, shell_bounds, shell_score_bonus=10_000)
+
+    # Photo background posts (floral image) often use ImageView Ảnh without "Hình nền" shell.
+    if best_shell is None:
+        for shell in element.iter("node"):
+            shell_bounds = _parse_bounds_from_node(shell)
+            if not shell_bounds:
+                continue
+            cls = (shell.get("class") or "").lower()
+            shell_label = _node_label(shell)
+            if not (
+                "image" in cls
+                or _is_feed_media_label(shell_label)
+                or _is_wallpaper_post_shell_label(shell_label)
+            ):
+                continue
+            if _is_action_or_chrome(shell_label):
+                continue
+            _consider_shell(shell, shell_bounds)
+
+    if best_shell is None or best_text_bounds is None:
+        return None
+
+    open_bounds = _wallpaper_shell_open_tap_bounds(
+        best_shell, text_bounds=best_text_bounds
+    )
+
+    return {
+        "tap_kind": "post_body",
+        "bounds": best_shell,
+        "tap_bounds": open_bounds,
+        "text_overlay_bounds": best_text_bounds,
+        "has_see_more": False,
+        "label": best_label,
+        "gradient_wallpaper": True,
+        # Text overlay is often long-clickable and does not open post detail.
+        "u2_click": None,
+    }
+
+
 def _find_post_body_tap(
     element,
     *,
@@ -621,6 +860,15 @@ def _find_post_body_tap(
     nodes: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Tap the main post text block — opens full post detail (not Follow / header chrome)."""
+    wallpaper = _find_wallpaper_post_body_tap(
+        element,
+        card_bounds=card_bounds,
+        author_bounds=author_bounds,
+        nodes=nodes,
+    )
+    if wallpaper:
+        return wallpaper
+
     cx1, cy1, cx2, cy2 = card_bounds
     card_h = max(1, cy2 - cy1)
     body_top = _header_bottom_for_body(card_bounds, author_bounds, nodes)
@@ -638,8 +886,12 @@ def _find_post_body_tap(
         if not bounds:
             continue
         x1, y1, x2, y2 = bounds
-        if y1 < body_top or y2 > body_bottom:
+        if y1 < body_top:
             continue
+        if y2 > body_bottom:
+            overflow = y2 - body_bottom
+            if overflow > max(96, int(card_h * 0.12)):
+                continue
         if (x2 - x1) < int((cx2 - cx1) * 0.35):
             continue
         label = _subtree_text_label(node) or _node_label(node)
@@ -661,8 +913,12 @@ def _find_post_body_tap(
             if not text or len(text) < 12:
                 continue
             x1, y1, x2, y2 = n["bounds"]
-            if y1 < body_top or y2 > body_bottom:
+            if y1 < body_top:
                 continue
+            if y2 > body_bottom:
+                overflow = y2 - body_bottom
+                if overflow > max(96, int(card_h * 0.12)):
+                    continue
             if not _is_post_body_label(text):
                 continue
             area = (x2 - x1) * (y2 - y1)
@@ -916,13 +1172,13 @@ def _media_dominates_for_post_open(
     return body_h < 200 and media_area > body_area * 4
 
 
-def _pick_header_tap_for_card(
+def _list_post_open_taps_for_card(
     element,
     *,
     card_bounds: Tuple[int, int, int, int],
     nodes: Optional[List[Dict[str, Any]]] = None,
     author_bounds: Optional[Tuple[int, int, int, int]] = None,
-) -> Optional[Dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     header_candidates: List[Dict[str, Any]] = []
 
@@ -959,7 +1215,6 @@ def _pick_header_tap_for_card(
         band = _header_band(card_bounds, author_bounds, nodes)
         for node in element.iter("node"):
             if is_anonymous:
-                # Timestamp/metadata open the anonymous info sheet on real devices.
                 continue
             kind = _classify_header_node(
                 node, band=band, author_bounds=author_bounds
@@ -970,7 +1225,6 @@ def _pick_header_tap_for_card(
             if not bounds:
                 continue
             if kind in {"timestamp", "metadata"}:
-                # Avoid bubbling to full-width header row (often includes Follow).
                 node_bounds = _parse_bounds_from_node(node)
                 if node_bounds:
                     bounds = node_bounds
@@ -1015,17 +1269,35 @@ def _pick_header_tap_for_card(
             has_plain_body = bool(
                 body
                 and not body.get("has_see_more")
+                and not body.get("gradient_wallpaper")
                 and not use_media_path
                 and not is_anonymous
             )
-            if has_gap or has_plain_body:
+            wallpaper_body = bool(body and body.get("gradient_wallpaper"))
+            # Wallpaper posts need timestamp fallback — text overlay often does not navigate.
+            if (has_gap or has_plain_body) and not wallpaper_body:
                 header_candidates = [
                     h
                     for h in header_candidates
                     if not _header_tap_risks_profile_open(h, author_bounds)
                 ]
 
-    if header_candidates and not use_media_path:
+    prefer_wallpaper_body = bool(
+        body
+        and body.get("gradient_wallpaper")
+        and not body.get("has_see_more")
+        and not use_media_path
+        and not is_anonymous
+    )
+
+    if prefer_wallpaper_body:
+        # Device + MCP verified: timestamp row opens post detail; shell/text does not.
+        for header in header_candidates:
+            if header.get("tap_kind") == "timestamp":
+                candidates.append(header)
+                break
+        candidates.append(body)
+    elif header_candidates and not use_media_path:
         candidates.extend(header_candidates)
 
     if not candidates:
@@ -1071,18 +1343,27 @@ def _pick_header_tap_for_card(
             )
 
     if not candidates:
-        return None
+        return []
 
-    safe = [c for c in candidates if c.get("tap_kind") not in _UNSAFE_POST_OPEN_TAP_KINDS]
+    safe = [
+        c
+        for c in candidates
+        if c.get("tap_kind") not in _UNSAFE_POST_OPEN_TAP_KINDS
+        or (
+            c.get("tap_kind") == "post_body" and c.get("gradient_wallpaper")
+        )
+    ]
     if safe:
         candidates = safe
+    elif any(c.get("tap_kind") == "post_media" for c in candidates):
+        non_media = [c for c in candidates if c.get("tap_kind") != "post_media"]
+        if non_media:
+            candidates = non_media
 
     has_media_cand = any(c.get("tap_kind") == "post_media" for c in candidates)
     body_see_more = any(
         c.get("tap_kind") == "post_body" and c.get("has_see_more") for c in candidates
     )
-    # Timestamp taps on some devices (e.g. Vivo) open the comment sheet, not post
-    # detail. Prefer author_row_gap / metadata when available.
     if body_see_more and not has_media_cand and not is_anonymous:
         non_ts = [c for c in candidates if c.get("tap_kind") != "timestamp"]
         if non_ts:
@@ -1091,6 +1372,8 @@ def _pick_header_tap_for_card(
     def _sort_key(c: Dict[str, Any]) -> Tuple[int, int, int]:
         kind = c.get("tap_kind") or "metadata"
         rank = _TAP_KIND_RANK.get(kind, 9)
+        if c.get("gradient_wallpaper") and kind == "post_body":
+            rank = 3
         if is_anonymous:
             if kind == "author_row_gap":
                 rank = 0
@@ -1104,7 +1387,23 @@ def _pick_header_tap_for_card(
         return (rank, -b[2], b[1])
 
     candidates.sort(key=_sort_key)
-    return candidates[0]
+    return candidates
+
+
+def _pick_header_tap_for_card(
+    element,
+    *,
+    card_bounds: Tuple[int, int, int, int],
+    nodes: Optional[List[Dict[str, Any]]] = None,
+    author_bounds: Optional[Tuple[int, int, int, int]] = None,
+) -> Optional[Dict[str, Any]]:
+    taps = _list_post_open_taps_for_card(
+        element,
+        card_bounds=card_bounds,
+        nodes=nodes,
+        author_bounds=author_bounds,
+    )
+    return taps[0] if taps else None
 
 
 def _build_post_open_candidate(
@@ -1130,14 +1429,15 @@ def _build_post_open_candidate(
     if not nodes:
         return None
     author_bounds = _find_author_bounds(nodes, card_bounds)
-    tap = _pick_header_tap_for_card(
+    taps = _list_post_open_taps_for_card(
         element,
         card_bounds=card_bounds,
         nodes=nodes,
         author_bounds=author_bounds,
     )
-    if not tap:
+    if not taps:
         return None
+    tap = taps[0]
     if not author_bounds and tap.get("tap_kind") in _UNSAFE_POST_OPEN_TAP_KINDS:
         return None
 
@@ -1166,6 +1466,18 @@ def _build_post_open_candidate(
         post["_pid"] = post.get("post_key") or f"open:{feed_item_index}"
 
     tb = tap.get("tap_bounds") or tap["bounds"]
+    tap_alternates: List[Dict[str, Any]] = []
+    for alt in taps[1:3]:
+        alt_tb = alt.get("tap_bounds") or alt["bounds"]
+        tap_alternates.append(
+            {
+                "bounds": [alt_tb[0], alt_tb[1], alt_tb[2], alt_tb[3]],
+                "tap_kind": alt.get("tap_kind"),
+                "tap_label": alt.get("label") or "",
+                "u2_click": alt.get("u2_click"),
+                "gradient_wallpaper": bool(alt.get("gradient_wallpaper")),
+            }
+        )
     return {
         "bounds": [tb[0], tb[1], tb[2], tb[3]],
         "tap_kind": tap.get("tap_kind"),
@@ -1175,6 +1487,8 @@ def _build_post_open_candidate(
         "post": post,
         "feed_item_index": feed_item_index,
         "has_see_more": bool(tap.get("has_see_more")),
+        "gradient_wallpaper": bool(tap.get("gradient_wallpaper")),
+        "tap_alternates": tap_alternates,
     }
 
 
@@ -1511,6 +1825,8 @@ def resolve_post_open_targets_from_xml(
         "post": top.get("post"),
         "feed_item_index": top.get("feed_item_index"),
         "score": top.get("score"),
+        "gradient_wallpaper": bool(top.get("gradient_wallpaper")),
+        "tap_alternates": top.get("tap_alternates") or [],
     }
     alternates = [
         {

@@ -13,6 +13,7 @@ from .device import *  # noqa: F401,F403
 from .session import *  # noqa: F401,F403
 from .campaign import *  # noqa: F401,F403
 from .mcp_session import *  # noqa: F401,F403
+from .mcp_token import *  # noqa: F401,F403
 from .scenario_template import *  # noqa: F401,F403
 from .account_group import *  # noqa: F401,F403
 from .device_group import *  # noqa: F401,F403

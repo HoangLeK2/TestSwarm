@@ -32,7 +32,7 @@ from urllib.error import HTTPError, URLError
 
 
 DEVICE_FARM_URL = os.environ.get("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
-SERVER_VERSION = "2.2.0"
+SERVER_VERSION = "2.2.1"
 CONTRACT_VERSION = "df-mcp-preview-2026-06-01"
 PREVIEW_WARNING = (
     "Preview / Experimental: Device Farm MCP Agent Tools contract may change "
@@ -238,6 +238,60 @@ def _summarize_output(result: Any) -> Dict[str, Any]:
     if isinstance(result, list):
         return {"items": len(result)}
     return {"type": type(result).__name__}
+
+
+def _tool_success_payload(name: str, result: Any) -> Dict[str, Any]:
+    return {
+        "preview": True,
+        "contract_version": CONTRACT_VERSION,
+        "tool_name": name,
+        "result": result,
+    }
+
+
+def _tool_structured_content(name: str, result: Any) -> Dict[str, Any]:
+    """Build MCP structuredContent that conforms to each tool's outputSchema."""
+    if name == "df_screenshot" and isinstance(result, dict):
+        img = result.get("image")
+        if isinstance(img, dict):
+            data = img.get("data")
+            byte_length = None
+            if isinstance(data, str):
+                try:
+                    byte_length = len(base64.b64decode(data))
+                except Exception:
+                    byte_length = None
+            return {
+                "image": {
+                    "mimeType": img.get("mimeType"),
+                    "byte_length": byte_length,
+                    "note": "Image bytes are returned in content as an image block.",
+                }
+            }
+
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, list):
+        return {"items": result}
+    return {"value": result}
+
+
+def _tool_call_content(name: str, result: Any) -> List[Dict[str, Any]]:
+    content: List[Dict[str, Any]] = []
+    if name == "df_screenshot" and isinstance(result, dict):
+        img = result.get("image")
+        if isinstance(img, dict) and img.get("data"):
+            content.append(
+                {
+                    "type": "image",
+                    "data": img["data"],
+                    "mimeType": img.get("mimeType") or "image/jpeg",
+                }
+            )
+    structured = _tool_structured_content(name, result)
+    payload = _tool_success_payload(name, result)
+    content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False)})
+    return content
 
 
 def _audit_log_path() -> Path:
@@ -2118,22 +2172,14 @@ def handle_tools_call(ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
             started_at=started_at,
             artifact_refs=args.get("artifact_refs") if isinstance(args.get("artifact_refs"), list) else None,
         )
-        content: List[Dict[str, Any]] = []
-        if name == "df_screenshot":
-            img = result["image"]
-            content.append({"type": "image", "data": img["data"], "mimeType": img["mimeType"]})
-        else:
-            payload = {
-                "preview": True,
-                "contract_version": CONTRACT_VERSION,
-                "tool_name": name,
-                "result": result,
-            }
-            content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False)})
+        content = _tool_call_content(name, result)
         return {
             "id": msg.get("id"),
             "jsonrpc": "2.0",
-            "result": {"content": content},
+            "result": {
+                "content": content,
+                "structuredContent": _tool_structured_content(name, result),
+            },
         }
     except Exception as e:
         err = _exception_to_mcp_error(e)

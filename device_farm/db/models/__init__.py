@@ -37,6 +37,7 @@ from .device_group import DeviceGroup, DeviceGroupMember
 from .campaign import Campaign, CampaignDevice, CampaignTag, CampaignTarget, Scenario
 from .org_scenario import CampaignOrgScenarioRef, OrgScenario, OrgScenarioTag
 from .mcp_session import McpSession
+from .mcp_token import McpToken
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
 from .account_event import AccountEvent
@@ -89,6 +90,7 @@ __all__ = [
     "CampaignTarget",
     "Scenario",
     "McpSession",
+    "McpToken",
     "ScenarioTemplate",
     "Account",
     "DeviceAccount",

@@ -50,6 +50,18 @@ class McpTokenRecord:
         return out
 
 
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def token_id(token: str) -> str:
+    return hash_token(token)[:24]
+
+
+def _use_file_store() -> bool:
+    return bool((os.environ.get("DEVICE_FARM_MCP_TOKEN_STORE") or "").strip())
+
+
 def token_store_path() -> Path:
     configured = (os.environ.get("DEVICE_FARM_MCP_TOKEN_STORE") or "").strip()
     if configured:
@@ -77,12 +89,10 @@ def _locked_store():
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
 
-def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def _run_db(coro):
+    from db.database import run_activity_coro_blocking
 
-
-def token_id(token: str) -> str:
-    return hash_token(token)[:24]
+    return run_activity_coro_blocking(coro)
 
 
 def _read_records() -> list[McpTokenRecord]:
@@ -135,14 +145,38 @@ def list_tokens(
     *,
     include_revoked: bool = False,
     org_id: str | None = None,
+    owner_user_id: str | None = None,
 ) -> list[McpTokenRecord]:
-    with _locked_store():
-        records = _read_records()
-    if org_id is not None:
-        records = [record for record in records if record.org_id == org_id]
-    if include_revoked:
-        return records
-    return [record for record in records if record.revoked_at is None]
+    if _use_file_store():
+        with _locked_store():
+            records = _read_records()
+        if org_id is not None:
+            records = [
+                record
+                for record in records
+                if record.org_id == org_id
+                or (record.org_id is None and owner_user_id and record.owner_user_id == owner_user_id)
+            ]
+        elif owner_user_id is not None:
+            records = [record for record in records if record.owner_user_id == owner_user_id]
+        if include_revoked:
+            return records
+        return [record for record in records if record.revoked_at is None]
+
+    async def _list() -> list[McpTokenRecord]:
+        from db.crud.mcp_token import list_mcp_tokens, row_to_record
+        from db.database import activity_session
+
+        async with activity_session() as db:
+            rows = await list_mcp_tokens(
+                db,
+                include_revoked=include_revoked,
+                org_id=org_id,
+                owner_user_id=owner_user_id,
+            )
+            return [row_to_record(row) for row in rows]
+
+    return _run_db(_list())
 
 
 def create_token(
@@ -155,47 +189,113 @@ def create_token(
 ) -> tuple[McpTokenRecord, str]:
     if scope_type not in {"device", "user"}:
         raise ValueError("scope_type must be device or user")
-    plaintext = f"dfmcp_{secrets.token_urlsafe(32)}"
-    record = McpTokenRecord(
-        id=token_id(plaintext),
-        name=name.strip() or f"{scope_type} MCP token",
-        hashed_value=hash_token(plaintext),
-        scope_type=scope_type,
-        scope_ref=str(scope_ref) if scope_ref is not None else None,
-        owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
-        org_id=str(org_id) if org_id is not None else None,
-        created_at=time.time(),
-    )
-    with _locked_store():
-        records = _read_records()
-        records.append(record)
-        _write_records(records)
-    return record, plaintext
+
+    if _use_file_store():
+        plaintext = f"dfmcp_{secrets.token_urlsafe(32)}"
+        record = McpTokenRecord(
+            id=token_id(plaintext),
+            name=name.strip() or f"{scope_type} MCP token",
+            hashed_value=hash_token(plaintext),
+            scope_type=scope_type,
+            scope_ref=str(scope_ref) if scope_ref is not None else None,
+            owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
+            org_id=str(org_id) if org_id is not None else None,
+            created_at=time.time(),
+        )
+        with _locked_store():
+            records = _read_records()
+            records.append(record)
+            _write_records(records)
+        return record, plaintext
+
+    async def _create() -> tuple[McpTokenRecord, str]:
+        from db.crud.mcp_token import create_mcp_token, row_to_record
+        from db.database import activity_session
+
+        async with activity_session() as db:
+            row, plaintext = await create_mcp_token(
+                db,
+                name=name,
+                scope_type=scope_type,
+                scope_ref=scope_ref,
+                owner_user_id=owner_user_id,
+                org_id=org_id,
+            )
+            await db.commit()
+            return row_to_record(row), plaintext
+
+    return _run_db(_create())
 
 
 def revoke_token(record_id: str, *, org_id: str | None = None) -> bool:
-    now = time.time()
-    updated = False
-    records: list[McpTokenRecord] = []
-    with _locked_store():
-        for record in _read_records():
-            if (
-                record.id == record_id
-                and record.revoked_at is None
-                and (org_id is None or record.org_id == org_id)
-            ):
-                record = McpTokenRecord(**{**record.__dict__, "revoked_at": now})
-                updated = True
-            records.append(record)
-        if updated:
-            _write_records(records)
-    return updated
+    if _use_file_store():
+        now = time.time()
+        updated = False
+        records: list[McpTokenRecord] = []
+        with _locked_store():
+            for record in _read_records():
+                if (
+                    record.id == record_id
+                    and record.revoked_at is None
+                    and (org_id is None or record.org_id == org_id)
+                ):
+                    record = McpTokenRecord(**{**record.__dict__, "revoked_at": now})
+                    updated = True
+                records.append(record)
+            if updated:
+                _write_records(records)
+        return updated
+
+    async def _revoke() -> bool:
+        from db.crud.mcp_token import revoke_mcp_token
+        from db.database import activity_session
+
+        async with activity_session() as db:
+            ok = await revoke_mcp_token(db, record_id, org_id=org_id)
+            await db.commit()
+            return ok
+
+    return _run_db(_revoke())
+
+
+async def lookup_token_async(
+    token: str,
+    *,
+    db: Any | None = None,
+) -> McpTokenRecord | None:
+    hashed = hash_token(token)
+
+    if _use_file_store():
+        with _locked_store():
+            for record in _read_records():
+                if record.hashed_value == hashed and record.revoked_at is None:
+                    return record
+        return None
+
+    from db.crud.mcp_token import lookup_mcp_token, row_to_record
+
+    if db is not None:
+        row = await lookup_mcp_token(db, token)
+        return row_to_record(row) if row is not None else None
+
+    from db.database import activity_session
+
+    async with activity_session() as session:
+        row = await lookup_mcp_token(session, token)
+        return row_to_record(row) if row is not None else None
 
 
 def lookup_token(token: str) -> McpTokenRecord | None:
     hashed = hash_token(token)
-    with _locked_store():
-        for record in _read_records():
-            if record.hashed_value == hashed and record.revoked_at is None:
-                return record
-    return None
+
+    if _use_file_store():
+        with _locked_store():
+            for record in _read_records():
+                if record.hashed_value == hashed and record.revoked_at is None:
+                    return record
+        return None
+
+    async def _lookup() -> McpTokenRecord | None:
+        return await lookup_token_async(token)
+
+    return _run_db(_lookup())

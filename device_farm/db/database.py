@@ -12,6 +12,7 @@ Usage in Temporal activities (separate thread/loop):
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import threading
@@ -156,6 +157,25 @@ def run_activity_coro(coro):
     exhausting Postgres with "too many clients already".
     """
     return asyncio.run(_run_activity_coro(coro))
+
+
+def run_activity_coro_blocking(coro, *, timeout: float = 30.0):
+    """Run an activity coroutine from sync code, even inside a running loop.
+
+    Fast path: no running loop in this thread -> asyncio.run directly.
+    Fallback: offload to a dedicated thread so asyncio.run() is safe.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return run_activity_coro(coro)
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(run_activity_coro, coro)
+    try:
+        return fut.result(timeout=timeout)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 @asynccontextmanager

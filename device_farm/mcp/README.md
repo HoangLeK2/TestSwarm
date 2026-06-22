@@ -52,7 +52,7 @@ MCP server tự load `device_farm/.env` khi chạy. Copy `device_farm/.env.examp
 
 - `DEVICE_FARM_URL` — URL backend (mặc định `http://localhost:8081`).
 - `MCP_AUTH_TOKEN` — bearer token cho toàn bộ MCP server. Dùng token `dfmcp_*` user-scoped cho agent cần cả device/session và campaign/content/account/scenario; dùng token device-scoped nếu chỉ muốn cấp quyền device/session.
-- `DEVICE_FARM_MCP_TOKEN_STORE` — optional path cho token tạo từ dashboard; token lưu dạng hash-at-rest.
+- Token `dfmcp_*` tạo từ dashboard lưu hash trong PostgreSQL (`mcp_tokens`); chỉ dùng `DEVICE_FARM_MCP_TOKEN_STORE` (file JSON) cho test/local override.
 
 ## Tích hợp Cursor
 

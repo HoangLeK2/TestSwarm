@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from jose import JWTError, ExpiredSignatureError, jwt
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.secret_versioning import (
     JwtKeyRevokedError,
@@ -52,6 +55,38 @@ class TokenExpiredError(AuthError):
     code = "TOKEN_EXPIRED"
 
 
+def _auth_context_from_mcp_record(raw_token: str, record) -> AuthContext:
+    if record is None:
+        raise AuthError("invalid mcp token")
+    if not record.owner_user_id:
+        raise AuthError("mcp token missing owner")
+    return AuthContext(
+        user_id=record.owner_user_id,
+        token_type="mcp",
+        raw_token=raw_token,
+        org_id=record.org_id,
+        roles=(f"mcp:{record.scope_type}",),
+    )
+
+
+async def decode_access_token_async(
+    raw_token: str,
+    *,
+    db: "AsyncSession | None" = None,
+) -> AuthContext:
+    """Async decode path for FastAPI dependencies inside a running event loop."""
+    if not raw_token:
+        raise AuthError("missing token")
+    if raw_token.startswith("dfmcp_"):
+        try:
+            from mcp.token_store import lookup_token_async
+        except Exception as exc:
+            raise AuthError("mcp token store unavailable") from exc
+        record = await lookup_token_async(raw_token, db=db)
+        return _auth_context_from_mcp_record(raw_token, record)
+    return decode_access_token(raw_token)
+
+
 def decode_access_token(raw_token: str) -> AuthContext:
     """Decode an access JWT into an AuthContext, raising AuthError on failure."""
     if not raw_token:
@@ -62,17 +97,7 @@ def decode_access_token(raw_token: str) -> AuthContext:
         except Exception as exc:
             raise AuthError("mcp token store unavailable") from exc
         record = lookup_token(raw_token)
-        if record is None:
-            raise AuthError("invalid mcp token")
-        if not record.owner_user_id:
-            raise AuthError("mcp token missing owner")
-        return AuthContext(
-            user_id=record.owner_user_id,
-            token_type="mcp",
-            raw_token=raw_token,
-            org_id=record.org_id,
-            roles=(f"mcp:{record.scope_type}",),
-        )
+        return _auth_context_from_mcp_record(raw_token, record)
     header = jwt.get_unverified_header(raw_token)
     kid = header.get("kid")
     candidates = []

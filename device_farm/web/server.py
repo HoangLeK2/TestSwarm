@@ -113,6 +113,31 @@ def _find_ws_device_for_relay_serial(
     )
 
 
+def _relay_has_active_scrcpy_viewers(serial: str) -> bool:
+    try:
+        from api.routes.device_control.scrcpy import has_active_scrcpy_viewers
+
+        return has_active_scrcpy_viewers(serial)
+    except Exception as exc:
+        log.debug("scrcpy viewer state unavailable for relay online %s: %s", serial, exc)
+        return False
+
+
+def _relay_should_attach_scrcpy_on_online(device_serial: str, *, auto_attach: bool) -> bool:
+    return bool(auto_attach or _relay_has_active_scrcpy_viewers(device_serial))
+
+
+def _mark_relay_scrcpy_offline(device, relay_serial: str) -> bool:
+    marker = getattr(device, "mark_scrcpy_relay_offline", None)
+    if marker is None:
+        return False
+    try:
+        return bool(marker(relay_serial))
+    except Exception as exc:
+        log.warning("relay device offline %s - failed to mark scrcpy inactive: %s", relay_serial, exc)
+        return False
+
+
 class RequestLogMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
@@ -953,7 +978,11 @@ def create_app(
                         _relay_auto = bool(
                             getattr(_st, "auto_attach_scrcpy_on_relay_online", True)
                         )
-                        if _relay_auto and _relay_db_allows_scrcpy(ws_device.serial):
+                        _should_attach = _relay_should_attach_scrcpy_on_online(
+                            ws_device.serial,
+                            auto_attach=_relay_auto,
+                        )
+                        if _should_attach and _relay_db_allows_scrcpy(ws_device.serial):
                             _RELAY_ATTACH_POOL.submit(
                                 ws_device.attach_scrcpy_stream,
                                 serial,
@@ -961,10 +990,12 @@ def create_app(
                                 _config_ref.device.scrcpy_control,
                             )
                             log.info(
-                                "relay device online %s — reattaching scrcpy for WS device %s",
-                                serial, ws_device.serial,
+                                "relay device online %s — reattaching scrcpy for WS device %s (%s)",
+                                serial,
+                                ws_device.serial,
+                                "auto_attach" if _relay_auto else "active_viewer",
                             )
-                        elif _relay_auto:
+                        elif _should_attach:
                             log.info(
                                 "relay device online %s — skip scrcpy reattach "
                                 "(relay_scrcpy_enabled=false in DB for %s)",
@@ -994,15 +1025,23 @@ def create_app(
                         ws_manager.subscribe_device(device)
                     _st2 = getattr(_config_ref, "streaming", None)
                     _relay_auto2 = bool(getattr(_st2, "auto_attach_scrcpy_on_relay_online", True))
-                    if _relay_auto2 and _relay_db_allows_scrcpy(serial):
+                    _should_attach2 = _relay_should_attach_scrcpy_on_online(
+                        serial,
+                        auto_attach=_relay_auto2,
+                    )
+                    if _should_attach2 and _relay_db_allows_scrcpy(serial):
                         _RELAY_ATTACH_POOL.submit(
                             device.attach_scrcpy_stream,
                             serial,
                             None,
                             _config_ref.device.scrcpy_control,
                         )
-                        log.info("relay device online → auto-attach scrcpy: %s", serial)
-                    elif _relay_auto2:
+                        log.info(
+                            "relay device online → attach scrcpy: %s (%s)",
+                            serial,
+                            "auto_attach" if _relay_auto2 else "active_viewer",
+                        )
+                    elif _should_attach2:
                         log.info(
                             "relay device online → skip auto-attach scrcpy "
                             "(relay_scrcpy_enabled=false in DB): %s",
@@ -1016,6 +1055,9 @@ def create_app(
 
                 def _on_relay_device_offline(serial: str) -> None:
                     _emit_relay_fsm_offline(serial)
+                    device = _find_device_for_relay_serial(serial)
+                    if device is not None and _mark_relay_scrcpy_offline(device, serial):
+                        log.info("relay device offline %s — scrcpy marked inactive", serial)
 
                 def _on_relay_capabilities_update(serial: str, caps: dict) -> None:
                     """Propagate relay heartbeat capabilities to DeviceClient metadata."""

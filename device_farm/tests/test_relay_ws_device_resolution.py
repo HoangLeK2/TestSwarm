@@ -6,6 +6,7 @@ from runtime.core.device_client import DeviceState
 from web.server import (
     _find_ws_device_for_relay_serial,
     _relay_capabilities_status_payload,
+    _relay_should_attach_scrcpy_on_online,
 )
 
 
@@ -98,3 +99,14 @@ def test_relay_capabilities_do_not_override_busy_runtime_device():
     payload = _relay_capabilities_status_payload(device, {})
 
     assert "state" not in payload
+
+
+def test_relay_online_reattaches_when_auto_disabled_but_viewer_is_active(monkeypatch):
+    monkeypatch.setattr(
+        "web.server._relay_has_active_scrcpy_viewers",
+        lambda serial: serial == "phone-A",
+    )
+
+    assert _relay_should_attach_scrcpy_on_online("phone-A", auto_attach=False) is True
+    assert _relay_should_attach_scrcpy_on_online("phone-B", auto_attach=False) is False
+    assert _relay_should_attach_scrcpy_on_online("phone-B", auto_attach=True) is True

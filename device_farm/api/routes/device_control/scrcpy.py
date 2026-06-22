@@ -56,6 +56,10 @@ def _replace_stale_surface_viewers(viewers: set[str], viewer_id: str) -> int:
     return before - len(viewers)
 
 
+def has_active_scrcpy_viewers(serial: str) -> bool:
+    return bool(_SCRCPY_VIEWERS.get(serial))
+
+
 def build_scrcpy_router(
     manager: DeviceManager,
     *,

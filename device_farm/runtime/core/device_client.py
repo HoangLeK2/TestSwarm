@@ -3426,6 +3426,48 @@ class DeviceClient:
                 pass
             self._scrcpy_stop_task = None
 
+    def mark_scrcpy_relay_offline(self, relay_serial: str) -> bool:
+        """Mark the relay-owned scrcpy session dead without sending scrcpy_stop.
+
+        Relay disconnect already killed agent-boot's scrcpy process.  This only
+        clears this DeviceClient's stale receiver/active flags so the next attach
+        can issue a new scrcpy_start when the relay comes back.
+        """
+        receiver = self._scrcpy_receiver
+        if receiver is None:
+            return False
+
+        receiver_serial = str(getattr(receiver, "serial", "") or "")
+        relay_serial = str(relay_serial or "").strip()
+        if relay_serial and receiver_serial and receiver_serial != relay_serial:
+            return False
+
+        try:
+            receiver.stop_receiver()
+        except Exception:
+            pass
+
+        if receiver_serial:
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+
+                relay = get_relay_manager()
+                if relay and relay.get_scrcpy_receiver(receiver_serial) is receiver:
+                    relay.unregister_scrcpy_receiver(receiver_serial)
+            except Exception:
+                pass
+
+        self._scrcpy_receiver = None
+        self._scrcpy_active = False
+        self._scrcpy_attached_at = 0.0
+        self._last_frame_time = 0.0
+        self._cancel_scrcpy_pending_attach()
+        self._log(
+            f"scrcpy relay offline for {relay_serial or receiver_serial} — marked inactive",
+            level=logging.INFO,
+        )
+        return True
+
     def detach_scrcpy_stream(self, reason: str = "unspecified") -> None:
         """Stop scrcpy receiver (+ control) and resume MediaProjection frames.
         For relay receivers, also sends SCRCPY_STOP to the relay agent."""

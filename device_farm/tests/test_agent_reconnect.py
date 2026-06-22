@@ -666,3 +666,30 @@ def test_detach_scrcpy_relay_stop_when_still_owner():
 
     rcts.assert_called_once()
     assert d._scrcpy_receiver is None
+
+
+def test_mark_scrcpy_relay_offline_clears_stale_active_state_without_stop():
+    from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+
+    d = _make_device("usb-serial")
+    receiver = RelayScrcpyReceiver("usb-serial")
+    receiver.stop_receiver = MagicMock()
+    relay = MagicMock()
+    relay.get_scrcpy_receiver.return_value = receiver
+
+    d._scrcpy_receiver = receiver
+    d._scrcpy_active = True
+    d._scrcpy_attached_at = 123.0
+    d._last_frame_time = 456.0
+    d._scrcpy_params = ("usb-serial", None, True)
+
+    with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+        assert d.mark_scrcpy_relay_offline("usb-serial") is True
+
+    receiver.stop_receiver.assert_called_once()
+    relay.unregister_scrcpy_receiver.assert_called_once_with("usb-serial")
+    assert d._scrcpy_receiver is None
+    assert d._scrcpy_active is False
+    assert d._scrcpy_attached_at == 0.0
+    assert d._last_frame_time == 0.0
+    assert d._scrcpy_params == ("usb-serial", None, True)

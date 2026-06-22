@@ -1,0 +1,38 @@
+<hierarchy>
+  <node package="com.facebook.katana" class="android.widget.FrameLayout" bounds="[0,0][1080,1920]">
+    <node package="com.facebook.katana" class="android.view.ViewGroup" clickable="true"
+          content-desc="Codex VN, Công khai · 11K thành viên"
+          bounds="[0,0][1080,1920]">
+      <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+            bounds="[0,280][1080,1800]">
+        <node package="com.facebook.katana" class="android.view.ViewGroup"
+              bounds="[0,400][1080,700]">
+          <node package="com.facebook.katana" class="android.widget.TextView"
+                text="config không tương thích rồi cái mới đè cái cũ"
+                bounds="[24,420][1000,580]" />
+          <node package="com.facebook.katana" class="android.widget.Button"
+                text="Bình luận" clickable="true" bounds="[100,620][300,680]" />
+          <node package="com.facebook.katana" class="android.widget.Button"
+                text="Thích" clickable="true" bounds="[320,620][480,680]" />
+        </node>
+        <node package="com.facebook.katana" class="android.view.ViewGroup"
+              bounds="[0,700][1080,950]">
+          <node package="com.facebook.katana" class="android.widget.Button"
+                text="Anonymous Member 175" clickable="true"
+                bounds="[120,720][520,780]" />
+          <node package="com.facebook.katana" class="android.widget.TextView"
+                text="dùng model ngoài add API kiểu gì thế bạn"
+                bounds="[120,790][1000,900]" />
+        </node>
+        <node package="com.facebook.katana" class="android.view.ViewGroup"
+              bounds="[0,960][1080,1200]">
+          <node package="com.facebook.katana" class="android.widget.TextView"
+                text="RubyParrot5186 · 2 giờ"
+                bounds="[24,980][1000,1040]" />
+          <node package="com.facebook.katana" class="android.widget.Button"
+                text="Bình luận" clickable="true" bounds="[100,1100][300,1160]" />
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>

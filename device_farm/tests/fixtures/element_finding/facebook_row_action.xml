@@ -1,0 +1,18 @@
+<hierarchy>
+  <node package="com.facebook.katana" class="android.widget.FrameLayout" bounds="[0,0][1080,1920]">
+    <node package="com.facebook.katana" class="android.view.ViewGroup" clickable="true" bounds="[0,100][1080,220]">
+      <node package="com.facebook.katana" class="android.widget.TextView"
+            content-desc="Group Alpha, 42K members"
+            bounds="[24,120][720,180]" />
+      <node package="com.facebook.katana" class="android.widget.Button"
+            text="Join" clickable="true" bounds="[820,118][1040,190]" />
+    </node>
+    <node package="com.facebook.katana" class="android.view.ViewGroup" clickable="true" bounds="[0,240][1080,360]">
+      <node package="com.facebook.katana" class="android.widget.TextView"
+            content-desc="Group Alpha Deals, 99K members"
+            bounds="[24,260][720,320]" />
+      <node package="com.facebook.katana" class="android.widget.Button"
+            text="Join" clickable="true" bounds="[820,258][1040,330]" />
+    </node>
+  </node>
+</hierarchy>

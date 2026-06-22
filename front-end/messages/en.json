@@ -1201,6 +1201,8 @@
       "runFailed": "Run campaign failed",
       "dispatchStarted": "Dispatched to {count} target(s)",
       "dispatchPartialFailures": "{count} execution(s) failed at fan-out",
+      "dispatchAllDevicesBusy": "{count} device(s) are already claimed by another campaign. No new run was started.",
+      "dispatchAllFailed": "{count} execution(s) failed at fan-out. No new run was started.",
       "dispatchFailed": "Dispatch failed",
       "titleNeedDevice": "Add at least 1 device before running",
       "titleAddScenario": "Add scenario",

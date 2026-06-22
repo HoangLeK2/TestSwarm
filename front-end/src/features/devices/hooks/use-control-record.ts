@@ -1,11 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient
+} from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { campaignsApi, scenariosApi } from '@/features/campaigns/services/api';
 import { scenarioTemplatesApi } from '@/features/scenario-templates/services/api';
-import type { ScenarioOut } from '@/features/campaigns/types';
+import type { CampaignOut, ScenarioOut } from '@/features/campaigns/types';
 import type { Device } from '../types';
 import type { ScenarioStep } from '../types/scenario';
 import { scenarioToJson } from '../types/scenario';
@@ -48,6 +52,55 @@ const HIERARCHY_BOOTSTRAP_RETRY_MS = 1500;
 const HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS = 20;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
+
+function bySavedScenarioOrder(a: ScenarioOut, b: ScenarioOut) {
+  return (a.order ?? 0) - (b.order ?? 0);
+}
+
+function upsertSavedScenario(rows: ScenarioOut[], row: ScenarioOut) {
+  const found = rows.some((scenario) => scenario.id === row.id);
+  const next = found
+    ? rows.map((scenario) => (scenario.id === row.id ? row : scenario))
+    : [...rows, row];
+  return [...next].sort(bySavedScenarioOrder);
+}
+
+function syncSavedScenarioCaches(
+  queryClient: QueryClient,
+  campaignId: string,
+  scenario: ScenarioOut
+) {
+  const scenariosKey = ['campaigns', campaignId, 'scenarios'] as const;
+  queryClient.setQueryData<ScenarioOut[]>(scenariosKey, (old) =>
+    upsertSavedScenario(old ?? [], scenario)
+  );
+  queryClient.setQueryData<CampaignOut | undefined>(
+    ['campaigns', campaignId],
+    (old) =>
+      old
+        ? {
+            ...old,
+            scenarios: upsertSavedScenario(old.scenarios ?? [], scenario)
+          }
+        : old
+  );
+  queryClient.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
+    old?.map((campaign) =>
+      campaign.id === campaignId
+        ? {
+            ...campaign,
+            scenarios: upsertSavedScenario(campaign.scenarios ?? [], scenario)
+          }
+        : campaign
+    )
+  );
+  void queryClient.invalidateQueries({ queryKey: scenariosKey, exact: true });
+  void queryClient.invalidateQueries({
+    queryKey: ['campaigns', campaignId],
+    exact: true
+  });
+  void queryClient.invalidateQueries({ queryKey: ['campaigns'], exact: true });
+}
 
 type SendAndRecordOptions = {
   multiSerials?: string[];
@@ -159,6 +212,7 @@ export function useControlRecord(
     error
   } = useDeviceFarm();
   const tabActive = useTabNetworkActive();
+  const queryClient = useQueryClient();
 
   // ── Device ───────────────────────────────────────────────────────────────
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
@@ -317,7 +371,7 @@ export function useControlRecord(
   }, []);
 
   const sendAndRecord = useCallback(
-    (msg: object, options?: SendAndRecordOptions) => {
+    async (msg: object, options?: SendAndRecordOptions) => {
       const selectedDevice = selectedDeviceRef.current;
       const m0 = msg as { type?: string; serial?: string };
       const multiSerials = Array.from(
@@ -338,25 +392,31 @@ export function useControlRecord(
       // state at tap-time (before any UI transition the tap triggers).
       // `device.take_screenshot()` on the backend returns the last cached frame,
       // so fetching before the tap gives us the exact screen the user saw.
-      const preTapScreenshotPromise =
+      const shouldCaptureTapBeforeSend =
         !skipTapRecordingWhilePickRef.current &&
         recordingRef.current &&
         selectedDevice &&
         m0.type === 'tap' &&
-        m0.serial === selectedDevice.serial
-          ? fetchScreenshotB64(selectedDevice.serial)
-          : undefined;
+        m0.serial === selectedDevice.serial;
+
+      const preTapScreenshotPromise = shouldCaptureTapBeforeSend
+        ? fetchScreenshotB64(selectedDevice.serial)
+        : undefined;
 
       // Fresh hierarchy at tap-time — recordXmlRef is often stale after navigation
       // (search list → group page) and would map coords to the wrong row.
-      const preTapHierarchyPromise =
-        !skipTapRecordingWhilePickRef.current &&
-        recordingRef.current &&
-        selectedDevice &&
-        m0.type === 'tap' &&
-        m0.serial === selectedDevice.serial
-          ? fetchHierarchy(selectedDevice.serial, true).catch(() => null)
-          : undefined;
+      const preTapHierarchyPromise = shouldCaptureTapBeforeSend
+        ? fetchHierarchy(selectedDevice.serial, true, {
+            bypassInFlight: true
+          }).catch(() => null)
+        : undefined;
+
+      if (shouldCaptureTapBeforeSend) {
+        await Promise.allSettled([
+          preTapHierarchyPromise,
+          preTapScreenshotPromise
+        ]);
+      }
 
       if (multiAction && selectedDevice) {
         wsSend({
@@ -1013,6 +1073,7 @@ export function useControlRecord(
       scenariosApi
         .update(campaignId, scenarioId, payload)
         .then((updated) => {
+          syncSavedScenarioCaches(queryClient, campaignId, updated);
           setEditingContext({
             campaignId,
             scenarioId: updated.id,
@@ -1038,7 +1099,8 @@ export function useControlRecord(
       pendingScreenshotCount,
       t,
       waitForPendingScreenshots,
-      editingContext
+      editingContext,
+      queryClient
     ]
   );
 
@@ -1080,6 +1142,7 @@ export function useControlRecord(
       scenariosApi
         .create(campaignId, createBody)
         .then((created) => {
+          syncSavedScenarioCaches(queryClient, campaignId, created);
           setEditingContext({
             campaignId,
             scenarioId: created.id,
@@ -1100,7 +1163,13 @@ export function useControlRecord(
         )
         .finally(() => setSavingCampaignId(null));
     },
-    [cleanSteps, pendingScreenshotCount, t, waitForPendingScreenshots]
+    [
+      cleanSteps,
+      pendingScreenshotCount,
+      t,
+      waitForPendingScreenshots,
+      queryClient
+    ]
   );
 
   // ── Hierarchy / Inspector ────────────────────────────────────────────────
@@ -1110,7 +1179,6 @@ export function useControlRecord(
   const lastHierarchyAppRef = useRef<string>('');
   const selectedHierarchySerial = selectedDevice?.serial ?? null;
   const selectedHierarchyApp = selectedDevice?.current_app ?? '';
-  const queryClient = useQueryClient();
   const hierarchyQueryKey = useMemo(
     () => ['device-hierarchy', selectedHierarchySerial ?? 'none'] as const,
     [selectedHierarchySerial]

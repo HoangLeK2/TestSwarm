@@ -79,6 +79,31 @@ def test_tools_list_exposes_epic10_preview_contract(monkeypatch):
         assert tools[name]["metadata"]["token_scope"] in {"device", "user", "any"}
 
 
+def test_ui_element_tools_describe_safe_selector_contract(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
+
+    response = server.handle_tools_list(
+        server.McpContext(initialized=True),
+        {"id": "list-1", "jsonrpc": "2.0", "method": "tools/list"},
+    )
+
+    tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+    ui_tool = tools["df_get_ui_elements"]
+    tap_tool = tools["df_tap_selector"]
+
+    assert "selector_reason" in ui_tool["description"]
+    assert "selector_volatile" in ui_tool["description"]
+    assert tap_tool["inputSchema"]["properties"]["by"]["enum"] == [
+        "resource-id",
+        "text",
+        "description",
+        "descriptionContains",
+        "descriptionStartsWith",
+        "xpath",
+        "class name",
+    ]
+
+
 def test_stdio_startup_requires_at_least_one_token(monkeypatch):
     monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("DEVICE_FARM_MCP_ALLOW_UNAUTH", raising=False)

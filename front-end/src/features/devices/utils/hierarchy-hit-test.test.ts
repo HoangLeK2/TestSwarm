@@ -118,7 +118,9 @@ test('hierarchyRatioToPoint prefers device screenDims over taller hierarchy boun
     mockNode({ package: 'com.vivo.upslide', bounds: '[0,2737][1260,2800]' })
   ];
   assert.deepEqual(
-    hierarchyRatioToPoint(nodes, 0.5, 0.5, { screenDims: { dw: 1260, dh: 2737 } }),
+    hierarchyRatioToPoint(nodes, 0.5, 0.5, {
+      screenDims: { dw: 1260, dh: 2737 }
+    }),
     { px: 630, py: 1368.5, dw: 1260, dh: 2737 }
   );
 });
@@ -146,9 +148,7 @@ test('hierarchyBoundsCenterRatio uses device screenDims when provided', () => {
 });
 
 test('hierarchyBoundsCenterRatio rejects empty and inverted bounds', () => {
-  const nodes = [
-    mockNode({ package: 'android', bounds: '[0,0][1080,1920]' })
-  ];
+  const nodes = [mockNode({ package: 'android', bounds: '[0,0][1080,1920]' })];
   assert.equal(hierarchyBoundsCenterRatio(nodes, null), null);
   assert.equal(hierarchyBoundsCenterRatio(nodes, [10, 10, 10, 20]), null);
   assert.equal(hierarchyBoundsCenterRatio(nodes, [20, 20, 10, 30]), null);
@@ -172,7 +172,15 @@ test('pickStableHierarchySelector uses unique resource-id', () => {
       { resourceIdCount: 1 },
       { allowBoundsXPath: true }
     ),
-    { by: 'resource-id', value: 'com.example:id/submit' }
+    {
+      by: 'resource-id',
+      value: 'com.example:id/submit',
+      selectorReason: 'unique resource-id',
+      selectorVolatile: false,
+      resourceIdDuplicateCount: 1,
+      textDuplicateCount: 0,
+      descDuplicateCount: 0
+    }
   );
 });
 
@@ -187,7 +195,39 @@ test('pickStableHierarchySelector avoids duplicate resource-id and uses unique t
       { resourceIdCount: 8, textCount: 1 },
       { allowBoundsXPath: true }
     ),
-    { by: 'text', value: 'Target row' }
+    {
+      by: 'text',
+      value: 'Target row',
+      selectorReason: 'unique text',
+      selectorVolatile: false,
+      resourceIdDuplicateCount: 8,
+      textDuplicateCount: 1,
+      descDuplicateCount: 0
+    }
+  );
+});
+
+test('pickStableHierarchySelector avoids generic resource-id even when currently unique', () => {
+  assert.deepEqual(
+    pickStableHierarchySelector(
+      {
+        resourceId: 'com.facebook.katana:id/(name removed)',
+        text: 'Theo dõi',
+        pkg: 'com.facebook.katana',
+        bounds: '[100,200][500,260]'
+      },
+      { resourceIdCount: 1, textCount: 1 },
+      { allowBoundsXPath: true }
+    ),
+    {
+      by: 'text',
+      value: 'Theo dõi',
+      selectorReason: 'unique text',
+      selectorVolatile: false,
+      resourceIdDuplicateCount: 1,
+      textDuplicateCount: 1,
+      descDuplicateCount: 0
+    }
   );
 });
 
@@ -203,7 +243,15 @@ test('pickStableHierarchySelector falls back to bounds XPath for duplicate selec
       { resourceIdCount: 8, textCount: 4, descCount: 4 },
       { allowBoundsXPath: true }
     ),
-    { by: 'xpath', value: '//*[@bounds="[100,200][500,260]"]' }
+    {
+      by: 'xpath',
+      value: '//*[@bounds="[100,200][500,260]"]',
+      selectorReason: 'bounds fallback',
+      selectorVolatile: true,
+      resourceIdDuplicateCount: 8,
+      textDuplicateCount: 4,
+      descDuplicateCount: 4
+    }
   );
 });
 
@@ -219,7 +267,15 @@ test('pickStableHierarchySelector never picks duplicate launcher icon resource-i
       { resourceIdCount: 20, textCount: 1 },
       { allowBoundsXPath: true }
     ),
-    { by: 'text', value: 'Facebook' }
+    {
+      by: 'text',
+      value: 'Facebook',
+      selectorReason: 'unique text',
+      selectorVolatile: false,
+      resourceIdDuplicateCount: 20,
+      textDuplicateCount: 1,
+      descDuplicateCount: 0
+    }
   );
 });
 

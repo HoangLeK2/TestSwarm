@@ -110,7 +110,8 @@ import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   campaignPerDeviceOverrides,
   campaignVariables,
-  campaignsApi
+  campaignsApi,
+  type ScenarioDeviceVariablesOut
 } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
@@ -414,7 +415,9 @@ export function ControlRecordView({
       {
         onSuccess: () => {
           toast.success(tOrg('saveOrgSuccess'));
-          router.push(normalizeInternalAppPath(returnTo, ROUTES.ORG_SCENARIOS.ROOT));
+          router.push(
+            normalizeInternalAppPath(returnTo, ROUTES.ORG_SCENARIOS.ROOT)
+          );
         },
         onError: (err) => {
           toast.error(formatFarmApiError(err, tOrg('saveOrgFailed')));
@@ -439,6 +442,9 @@ export function ControlRecordView({
     index: number;
     total: number;
   } | null>(null);
+  const [pickSelectorWarning, setPickSelectorWarning] = useState<string | null>(
+    null
+  );
   const [coordinatePickTarget, setCoordinatePickTarget] =
     useState<CoordinatePickTarget | null>(null);
   const mirrorColRef = useRef<HTMLDivElement>(null);
@@ -881,14 +887,16 @@ export function ControlRecordView({
     (savingOrgScenario ? (initialCampaignId ?? null) : null);
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
   const activeDeviceVarScenarioId =
-    activeScenarioId ?? (savingOrgScenario ? (initialOrgScenarioId ?? null) : null);
+    activeScenarioId ??
+    (savingOrgScenario ? (initialOrgScenarioId ?? null) : null);
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const usesCampaignDeviceOverrides = Boolean(
     activeCampaignId && savingOrgScenario && !activeDeviceVarScenarioId
   );
   const canManageDeviceVars = Boolean(
-    activeCampaignId && (activeDeviceVarScenarioId || usesCampaignDeviceOverrides)
+    activeCampaignId &&
+      (activeDeviceVarScenarioId || usesCampaignDeviceOverrides)
   );
   const selectedSerial = device.selectedDevice?.serial ?? null;
   const { currentOrg } = useOrganization();
@@ -1122,12 +1130,27 @@ export function ControlRecordView({
     },
     [selectedScenarioDeviceId]
   );
-  const invalidateScenarioDeviceVars = useCallback(() => {
-    if (!activeCampaignId || !activeDeviceVarScenarioId) return;
-    void queryClient.invalidateQueries({
-      queryKey: ['scenario-device-vars', activeCampaignId, activeDeviceVarScenarioId]
-    });
-  }, [activeCampaignId, activeDeviceVarScenarioId, queryClient]);
+  const setScenarioDeviceVarsCache = useCallback(
+    (entries: Array<readonly [string, Record<string, any>]>) => {
+      if (!activeCampaignId || !activeDeviceVarScenarioId) return;
+      for (const [deviceId, vars] of entries) {
+        queryClient.setQueryData<ScenarioDeviceVariablesOut>(
+          [
+            'campaign-device-variables',
+            activeCampaignId,
+            activeDeviceVarScenarioId,
+            deviceId
+          ],
+          {
+            scenario_id: activeDeviceVarScenarioId,
+            device_id: deviceId,
+            vars
+          }
+        );
+      }
+    },
+    [activeCampaignId, activeDeviceVarScenarioId, queryClient]
+  );
   useEffect(() => {
     if (!canManageDeviceVars) return;
     const devices = campaignDevicesQuery.data ?? [];
@@ -1400,7 +1423,7 @@ export function ControlRecordView({
             )
           );
           deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeDeviceVarScenarioId}:bg`;
-          invalidateScenarioDeviceVars();
+          setScenarioDeviceVarsCache(entries);
         }
         deviceVarUserEditedRef.current = new Set();
         toast.success(tDvDlg('saveAllSuccess'));
@@ -1451,6 +1474,7 @@ export function ControlRecordView({
           )
         );
         deviceVarsHydratedKeyRef.current = `scenario:${activeCampaignId}:${activeDeviceVarScenarioId}:bg`;
+        setScenarioDeviceVarsCache(entries);
         toast.success('Đã áp dụng biến thiết bị vào scenario vừa lưu');
         setPendingScenarioDeviceVarsDraftMap(null);
       })
@@ -1464,7 +1488,8 @@ export function ControlRecordView({
     activeCampaignId,
     activeDeviceVarScenarioId,
     campaignDevicesQuery.data,
-    scenarioVariables
+    scenarioVariables,
+    setScenarioDeviceVarsCache
   ]);
 
   useEffect(() => {
@@ -1950,6 +1975,23 @@ export function ControlRecordView({
         silent: multi
       });
 
+      const duplicateCount = Math.max(
+        cand.resourceIdDuplicateCount ?? 0,
+        cand.textDuplicateCount ?? 0,
+        cand.descDuplicateCount ?? 0
+      );
+      if (cand.selectorVolatile) {
+        setPickSelectorWarning(
+          `Selector tạm theo ${cand.selectorReason ?? 'bounds'}; nên kiểm tra lại sau khi màn hình thay đổi.`
+        );
+      } else if (duplicateCount > 1) {
+        setPickSelectorWarning(
+          `Có ${duplicateCount} phần tử trùng selector; đang dùng ${cand.selectorReason ?? cand.by}.`
+        );
+      } else {
+        setPickSelectorWarning(null);
+      }
+
       if (cand.bounds) {
         setHighlightBounds([
           cand.bounds.left,
@@ -1990,6 +2032,7 @@ export function ControlRecordView({
       lastPickSpotRef.current = null;
       pickCycleIndexRef.current = 0;
       setPickCycle(null);
+      setPickSelectorWarning(null);
     }
   }, [selectorPickTarget]);
 
@@ -2264,7 +2307,8 @@ export function ControlRecordView({
   const selectedDeviceState = device.selectedDevice?.state;
   const selectedScenarioActive = device.selectedDevice?.scenario_active ?? 0;
   const mirrorInputLocked = useMemo(() => {
-    if (!selectedDeviceSerial) return { hideControls: true, readOnlyPreview: true };
+    if (!selectedDeviceSerial)
+      return { hideControls: true, readOnlyPreview: true };
     const pickingFromMirror =
       coordinatePickTarget != null ||
       selectorPickTarget != null ||
@@ -2328,8 +2372,12 @@ export function ControlRecordView({
       {noConnectedDevices ? (
         <div className='mx-3 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-amber-400/40 bg-amber-400/5 px-3 py-2 text-xs'>
           <div className='min-w-0'>
-            <p className='font-medium text-foreground'>{t('noDeviceConnected')}</p>
-            <p className='text-muted-foreground'>{t('noDeviceConnectMessage')}</p>
+            <p className='font-medium text-foreground'>
+              {t('noDeviceConnected')}
+            </p>
+            <p className='text-muted-foreground'>
+              {t('noDeviceConnectMessage')}
+            </p>
           </div>
           <Button asChild size='sm' variant='outline' className='shrink-0'>
             <Link href={ROUTES.DEVICES.MANAGE}>
@@ -2841,46 +2889,60 @@ export function ControlRecordView({
               <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
                 {/* Selector pick banner */}
                 {selectorPickTarget && (
-                  <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                    <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                    <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                      {pickCycle && pickCycle.total > 1
-                        ? t('pickSelectorCycleHint', {
-                            index: pickCycle.index,
-                            total: pickCycle.total
-                          })
-                        : t('pickSelectorBanner')}
-                    </p>
-                    {pickCycle && pickCycle.total > 1 && (
-                      <div className='flex shrink-0 items-center gap-0.5'>
-                        <button
-                          type='button'
-                          aria-label='prev'
-                          className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
-                          onClick={() =>
-                            applyCandidateAtIndex(pickCycleIndexRef.current - 1)
-                          }
-                        >
-                          <ChevronLeft className='size-3.5' />
-                        </button>
-                        <span className='min-w-[34px] text-center font-mono text-[10px] text-amber-800 dark:text-amber-300'>
-                          {pickCycle.index}/{pickCycle.total}
-                        </span>
-                        <button
-                          type='button'
-                          aria-label='next'
-                          className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
-                          onClick={() =>
-                            applyCandidateAtIndex(pickCycleIndexRef.current + 1)
-                          }
-                        >
-                          <ChevronRight className='size-3.5' />
-                        </button>
+                  <div className='flex shrink-0 gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                    <Crosshair className='mt-0.5 size-3.5 shrink-0 text-amber-600' />
+                    <div className='min-w-0 flex-1'>
+                      <div className='flex items-center gap-2'>
+                        <p className='min-w-0 flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                          {pickCycle && pickCycle.total > 1
+                            ? t('pickSelectorCycleHint', {
+                                index: pickCycle.index,
+                                total: pickCycle.total
+                              })
+                            : t('pickSelectorBanner')}
+                        </p>
+                        {pickCycle && pickCycle.total > 1 && (
+                          <div className='flex shrink-0 items-center gap-0.5'>
+                            <button
+                              type='button'
+                              aria-label='prev'
+                              className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
+                              onClick={() =>
+                                applyCandidateAtIndex(
+                                  pickCycleIndexRef.current - 1
+                                )
+                              }
+                            >
+                              <ChevronLeft className='size-3.5' />
+                            </button>
+                            <span className='min-w-[34px] text-center font-mono text-[10px] text-amber-800 dark:text-amber-300'>
+                              {pickCycle.index}/{pickCycle.total}
+                            </span>
+                            <button
+                              type='button'
+                              aria-label='next'
+                              className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
+                              onClick={() =>
+                                applyCandidateAtIndex(
+                                  pickCycleIndexRef.current + 1
+                                )
+                              }
+                            >
+                              <ChevronRight className='size-3.5' />
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    )}
+                      {pickSelectorWarning && (
+                        <div className='mt-1 flex items-center gap-1 text-[10px] text-amber-900 dark:text-amber-200'>
+                          <AlertCircle className='size-3 shrink-0' />
+                          <span className='min-w-0'>{pickSelectorWarning}</span>
+                        </div>
+                      )}
+                    </div>
                     <button
                       type='button'
-                      className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                      className='shrink-0 self-start text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
                       onClick={() => setSelectorPickTarget(null)}
                     >
                       Huỷ
@@ -3518,7 +3580,7 @@ export function ControlRecordView({
 
           <div className='min-h-0 flex-1 overflow-y-auto px-5 py-4'>
             {!activeCampaignId ? (
-              <p className='mb-3 rounded-md border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
+              <p className='bg-amber-500/8 mb-3 rounded-md border border-amber-500/25 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
                 {tRecovery('standaloneWarning')}
               </p>
             ) : null}

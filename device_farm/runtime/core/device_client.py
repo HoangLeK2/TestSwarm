@@ -2783,6 +2783,63 @@ class DeviceClient:
         node = chosen["node"]
         x1, y1, x2, y2 = chosen["x1"], chosen["y1"], chosen["x2"], chosen["y2"]
 
+        # Wide FB row shells are clickable but meaningless — pick the deepest
+        # semantic node at (x,y), matching frontend hierarchy-xml-pick behavior.
+        if chosen["area"] > 80_000:
+            depth_of: Dict[int, int] = {}
+
+            def _node_depth(n) -> int:
+                nid = id(n)
+                if nid in depth_of:
+                    return depth_of[nid]
+                p = parent_of.get(id(n))
+                depth_of[nid] = 0 if p is None else _node_depth(p) + 1
+                return depth_of[nid]
+
+            FB_GROUP_HEADER_DESC_RE = _re.compile(
+                r"\b(thành viên|members|Công khai|Public|Nhóm công khai|private group|Private)\b",
+                _re.I,
+            )
+
+            def _is_fb_group_header_desc(desc: str) -> bool:
+                return bool(FB_GROUP_HEADER_DESC_RE.search((desc or "").strip()))
+
+            best_sem = None
+            best_score = -1
+            start_area = chosen["area"]
+            for c in candidates:
+                sem = c["node"]
+                desc = (sem.get("content-desc") or "").strip()
+                text = (sem.get("text") or "").strip()
+                rid = (sem.get("resource-id") or "").strip()
+                if not desc and not text and not rid:
+                    continue
+                sem_area = c["area"]
+                if (
+                    desc
+                    and _is_fb_group_header_desc(desc)
+                    and sem_area > start_area * 0.5
+                ):
+                    continue
+                depth = _node_depth(sem)
+                score = depth * 600
+                if desc and len(desc) < 500 and desc_count.get(desc, 0) == 1:
+                    score += 3000
+                elif text and len(text) < 500 and text_count.get(text, 0) == 1:
+                    score += 2500
+                elif rid and rid_count.get(rid, 0) == 1:
+                    score += 800
+                if (sem.get("clickable") or "").strip() == "true":
+                    score += 900
+                if score > best_score:
+                    best_score = score
+                    best_sem = sem
+            if best_sem is not None:
+                node = best_sem
+                mm = BOUNDS_RE.search(node.get("bounds") or "")
+                if mm:
+                    x1, y1, x2, y2 = (int(mm.group(i)) for i in (1, 2, 3, 4))
+
         rid = (node.get("resource-id") or "").strip()
         text = (node.get("text") or "").strip()
         desc = (node.get("content-desc") or "").strip()
@@ -3406,9 +3463,14 @@ class DeviceClient:
 
     _BY_MAP = {
         "xpath":       "xpath",
+        "resource-id": "resourceId",
+        "id":          "resourceId",
         "resourceId":  "resourceId",
         "text":        "text",
+        "content-desc": "description",
+        "content_desc": "description",
         "description": "description",
+        "class name":  "className",
         "className":   "className",
     }
 

@@ -310,6 +310,86 @@ async def test_ac6_device_claim_fail(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_single_busy_device_dispatch_marks_campaign_failed(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="BUSY-D1")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        await claim_device_session(
+            db,
+            device_id=d1,
+            org_id=ORG_A,
+            actor_user_id=USER_OWNER,
+            owner_type="manual",
+            owner_id="other-campaign",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        campaign_id = await _create_campaign(client, name="AllClaimFail")
+        resp = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={"target": {"device_ids": [d1]}},
+        )
+
+    assert resp.status_code == 200
+    execution = resp.json()["executions"][0]
+    assert execution["status"] == "failed"
+    assert execution["failure_reason"] == "device_claim_failed"
+
+    async with session_factory() as db:
+        row = await campaign_repo.get_campaign_entity(db, campaign_id)
+    assert row.status == CampaignStatus.FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_sequential_dispatch_promotes_next_device_when_first_claim_fails(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="SEQ-BUSY-D1")
+    d2 = await _online_device(session_factory, serial="SEQ-BUSY-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        await claim_device_session(
+            db,
+            device_id=d1,
+            org_id=ORG_A,
+            actor_user_id=USER_OWNER,
+            owner_type="manual",
+            owner_id="other-campaign",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        campaign_id = await _create_campaign(client, name="SequentialPromote")
+        resp = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={
+                "target": {"device_ids": [d1, d2]},
+                "dispatch_strategy": "sequential",
+            },
+        )
+
+    assert resp.status_code == 200
+    by_device = {item["device_id"]: item for item in resp.json()["executions"]}
+    assert by_device[d1]["status"] == "failed"
+    assert by_device[d1]["failure_reason"] == "device_claim_failed"
+    assert by_device[d2]["status"] == "running"
+
+    async with session_factory() as db:
+        row = await campaign_repo.get_campaign_entity(db, campaign_id)
+        session = await get_active_session(db, d2)
+    assert row.status == CampaignStatus.RUNNING.value
+    assert session is not None
+    assert session.owner_id == campaign_id
+
+
+@pytest.mark.asyncio
 async def test_ac7_cross_org_device_reject(session_factory):
     await _seed_orgs(session_factory)
     d5 = await _online_device(session_factory, org_id=ORG_B, serial="ORG-B-D5")

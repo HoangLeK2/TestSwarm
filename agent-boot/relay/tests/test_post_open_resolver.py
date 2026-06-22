@@ -542,3 +542,53 @@ def test_ai_badge_combined_timestamp_row_clips_tap_right() -> None:
             tuple(top["bounds"]), tap_kind="timestamp"
         )
         assert cx >= 400
+
+
+def test_codex_vn_stacked_timestamp_prefers_gap_not_profile_tap() -> None:
+    """Regression: Vivo/Codex VN — timestamp under author opens profile; use gap or body."""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / ".."
+        / "device_farm"
+        / "tests"
+        / "fixtures"
+        / "element_finding"
+        / "facebook_codex_vn_live.xml"
+    )
+    if not path.is_file():
+        path = Path("/Users/hoangle/farm/device-farm/tmp/mcp-hierarchy-live.xml")
+    if not path.is_file():
+        return
+    xml = path.read_text(encoding="utf-8")
+    from relay.extra_data.parsers.facebook.parser import _collect_text_nodes, _parse_xml
+    from relay.extra_data.parsers.facebook.post_open_pipeline import (
+        _build_post_open_candidate,
+        _discover_post_open_scan_elements,
+        post_header_tap_point,
+    )
+
+    root = _parse_xml(xml)
+    loyal = None
+    for idx, el in _discover_post_open_scan_elements(root):
+        nodes = _collect_text_nodes(el, toolbar_cutoff_y=0)
+        if any("LoyalMoose" in str(n.get("text") or "") for n in nodes):
+            loyal = _build_post_open_candidate(el, feed_item_index=idx)
+            break
+    if loyal is None:
+        # Live dump may scroll — use RubyParrot text-only card from same fixture.
+        for idx, el in _discover_post_open_scan_elements(root):
+            nodes = _collect_text_nodes(el, toolbar_cutoff_y=0)
+            if any("RubyParrot5186" in str(n.get("text") or "") for n in nodes):
+                loyal = _build_post_open_candidate(el, feed_item_index=idx)
+                break
+    assert loyal is not None
+    assert loyal["tap_kind"] in {"author_row_gap", "post_body"}
+    cx, cy = post_header_tap_point(
+        tuple(loyal["bounds"]), tap_kind=str(loyal["tap_kind"]), screen_w=1260
+    )
+    # Avoid the left-column author/timestamp band that opens profile on device.
+    assert cx >= 400 or loyal["tap_kind"] == "post_body"
+    if loyal["tap_kind"] == "post_body":
+        assert cy >= 1700

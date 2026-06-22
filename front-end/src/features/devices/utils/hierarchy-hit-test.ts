@@ -54,6 +54,11 @@ export type StableHierarchySelectorBy =
 export type StableHierarchySelector = {
   by: StableHierarchySelectorBy;
   value: string;
+  selectorReason: string;
+  selectorVolatile: boolean;
+  resourceIdDuplicateCount: number;
+  textDuplicateCount: number;
+  descDuplicateCount: number;
 };
 export type StableHierarchySelectorAttrs = {
   resourceId?: string;
@@ -107,6 +112,16 @@ export type HierarchyRatioToPointOptions = {
   fallback?: HierarchyScreenDims;
 };
 
+function isHierarchyRatioToPointOptions(
+  options: HierarchyScreenDims | HierarchyRatioToPointOptions | undefined
+): options is HierarchyRatioToPointOptions {
+  return (
+    !!options &&
+    typeof options === 'object' &&
+    ('screenDims' in options || 'fallback' in options)
+  );
+}
+
 export function hierarchyRatioToPoint(
   allNodes: Element[],
   rx: number,
@@ -114,7 +129,7 @@ export function hierarchyRatioToPoint(
   options?: HierarchyScreenDims | HierarchyRatioToPointOptions
 ): { px: number; py: number; dw: number; dh: number } {
   const normalized: HierarchyRatioToPointOptions =
-    options && typeof options === 'object' && 'screenDims' in options
+    isHierarchyRatioToPointOptions(options)
       ? options
       : options
         ? { fallback: options }
@@ -133,7 +148,7 @@ export function hierarchyBoundsCenterRatio(
   const [x1, y1, x2, y2] = bounds;
   if (x2 <= x1 || y2 <= y1) return null;
   const normalized: HierarchyRatioToPointOptions =
-    options && typeof options === 'object' && 'screenDims' in options
+    isHierarchyRatioToPointOptions(options)
       ? options
       : options
         ? { fallback: options }
@@ -196,29 +211,51 @@ export function pickStableHierarchySelector(
   const desc = (attrs.contentDesc ?? '').trim();
   const pkg = (attrs.pkg ?? '').trim();
   const cls = (attrs.className ?? '').trim();
-  const ambiguousLauncher = rid ? isAmbiguousLauncherResourceId(rid, pkg) : false;
+  const ambiguousLauncher = rid
+    ? isAmbiguousLauncherResourceId(rid, pkg)
+    : false;
   const ridUnique =
-    !!rid && !ambiguousLauncher && (counts.resourceIdCount ?? 0) === 1;
+    !!rid &&
+    !ambiguousLauncher &&
+    !isGenericHierarchyResourceId(rid) &&
+    (counts.resourceIdCount ?? 0) === 1;
   const textUnique =
     !!text && text.length < 500 && (counts.textCount ?? 0) === 1;
   const descUnique =
     !!desc && desc.length < 500 && (counts.descCount ?? 0) === 1;
+  const withMeta = (
+    by: StableHierarchySelectorBy,
+    value: string,
+    selectorReason: string,
+    selectorVolatile: boolean
+  ): StableHierarchySelector => ({
+    by,
+    value,
+    selectorReason,
+    selectorVolatile,
+    resourceIdDuplicateCount: rid ? (counts.resourceIdCount ?? 0) : 0,
+    textDuplicateCount: text ? (counts.textCount ?? 0) : 0,
+    descDuplicateCount: desc ? (counts.descCount ?? 0) : 0
+  });
 
-  if (ambiguousLauncher && textUnique) return { by: 'text', value: text };
+  if (ambiguousLauncher && textUnique)
+    return withMeta('text', text, 'unique text', false);
   if (ambiguousLauncher && descUnique) {
-    return { by: 'description', value: desc };
+    return withMeta('description', desc, 'unique content-desc', false);
   }
-  if (ridUnique) return { by: 'resource-id', value: rid };
-  if (descUnique) return { by: 'description', value: desc };
-  if (textUnique) return { by: 'text', value: text };
+  if (ridUnique)
+    return withMeta('resource-id', rid, 'unique resource-id', false);
+  if (descUnique)
+    return withMeta('description', desc, 'unique content-desc', false);
+  if (textUnique) return withMeta('text', text, 'unique text', false);
 
   if (options.allowBoundsXPath) {
     const xpath = buildBoundsXPath(attrs.bounds ?? '');
-    if (xpath) return { by: 'xpath', value: xpath };
+    if (xpath) return withMeta('xpath', xpath, 'bounds fallback', true);
   }
 
   if (cls && !isHierarchyLayoutContainer(cls)) {
-    return { by: 'class name', value: cls };
+    return withMeta('class name', cls, 'class fallback', true);
   }
   return null;
 }
@@ -301,11 +338,7 @@ export function scoreHierarchyHit(input: HierarchyHitScoreInput): number {
 
   if (clickable) score += 900;
 
-  if (
-    isHierarchyLayoutContainer(className) &&
-    !text &&
-    !contentDesc
-  ) {
+  if (isHierarchyLayoutContainer(className) && !text && !contentDesc) {
     score -= 8000;
   }
 

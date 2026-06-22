@@ -1213,6 +1213,8 @@
       "runFailed": "Chạy chiến dịch thất bại",
       "dispatchStarted": "Đã phân phối tới {count} mục tiêu",
       "dispatchPartialFailures": "{count} lần thực thi thất bại khi phân phối",
+      "dispatchAllDevicesBusy": "{count} thiết bị đang bị chiến dịch khác chiếm. Không có lượt chạy mới được bắt đầu.",
+      "dispatchAllFailed": "{count} lần thực thi thất bại khi phân phối. Không có lượt chạy mới được bắt đầu.",
       "dispatchFailed": "Phân phối thất bại",
       "titleNeedDevice": "Thêm thiết bị",
       "titleAddScenario": "Thêm kịch bản",

@@ -16,6 +16,7 @@ from db.crud.execution import (
     add_device_to_execution,
     create_execution,
     finish_execution,
+    get_execution,
     upsert_execution_result,
 )
 from db.models.campaign import Campaign
@@ -262,6 +263,28 @@ class CampaignDispatcher:
                 )
             )
 
+        if dispatch_strategy == "sequential" and not any(
+            view.status == ExecutionStatus.RUNNING.value for view in executions
+        ):
+            for index, view in enumerate(executions):
+                if view.status != ExecutionStatus.PENDING.value:
+                    continue
+                execution = await get_execution(db, view.execution_id)
+                if execution is None:
+                    continue
+                promoted = await self.activate_queued_execution(
+                    db,
+                    execution=execution,
+                    campaign=campaign,
+                    org_id=org_id,
+                    actor_user_id=actor_user_id,
+                )
+                if promoted is None:
+                    continue
+                executions[index] = promoted
+                if promoted.status == ExecutionStatus.RUNNING.value:
+                    break
+
         from services.campaign.fsm import can_dispatch
 
         if can_dispatch(campaign.status):
@@ -275,6 +298,24 @@ class CampaignDispatcher:
                 user_id=actor_user_id,
                 reason="dispatch",
             )
+            has_active_execution = any(
+                view.status
+                in {
+                    ExecutionStatus.PENDING.value,
+                    ExecutionStatus.RUNNING.value,
+                    ExecutionStatus.PAUSED.value,
+                }
+                for view in executions
+            )
+            if not has_active_execution:
+                await apply_campaign_transition(
+                    db,
+                    campaign,
+                    CampaignStatus.FAILED,
+                    org_id=org_id,
+                    user_id=actor_user_id,
+                    reason="dispatch_no_runnable_targets",
+                )
 
         await db.flush()
         return FanOutResult(

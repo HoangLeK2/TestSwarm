@@ -804,6 +804,22 @@ def _header_band(
     return band_left, band_top, cx2, band_bottom
 
 
+def _header_tap_risks_profile_open(
+    candidate: Dict[str, Any],
+    author_bounds: Tuple[int, int, int, int],
+) -> bool:
+    """True when a header tap sits in the author name column (FB opens profile, not detail)."""
+    kind = candidate.get("tap_kind") or ""
+    if kind not in {"timestamp", "metadata", "privacy"}:
+        return False
+    ax1, ay1, ax2, ay2 = author_bounds
+    x1, y1, x2, y2 = candidate["bounds"]
+    # Timestamp below the name but still in the left column (Vivo / Codex VN feed).
+    horiz_overlap = not (x2 <= ax1 + 16 or x1 >= ax2 - 16)
+    stacked_under_author = y1 <= ay2 + 32
+    return horiz_overlap and stacked_under_author
+
+
 def _classify_header_node(
     node,
     *,
@@ -988,7 +1004,27 @@ def _pick_header_tap_for_card(
     if is_anonymous:
         use_media_path = False
 
-    # Prefer header row (time/badge/gap) — body/photo rarely land on post detail.
+    if author_bounds and header_candidates:
+        has_risky_header = any(
+            _header_tap_risks_profile_open(h, author_bounds) for h in header_candidates
+        )
+        if has_risky_header:
+            has_gap = any(
+                h.get("tap_kind") == "author_row_gap" for h in header_candidates
+            )
+            has_plain_body = bool(
+                body
+                and not body.get("has_see_more")
+                and not use_media_path
+                and not is_anonymous
+            )
+            if has_gap or has_plain_body:
+                header_candidates = [
+                    h
+                    for h in header_candidates
+                    if not _header_tap_risks_profile_open(h, author_bounds)
+                ]
+
     if header_candidates and not use_media_path:
         candidates.extend(header_candidates)
 

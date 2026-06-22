@@ -1,5 +1,10 @@
 'use client';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient
+} from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import {
   campaignsApi,
@@ -23,8 +28,8 @@ import {
   type CampaignOut,
   type CampaignRunResponse,
   type CampaignStatus,
-  type ExecutionArtifact,
   type ScenarioCreate,
+  type ScenarioOut,
   type ScenarioUpdate
 } from '../types';
 import {
@@ -32,9 +37,11 @@ import {
   fleetStatus,
   type FleetStatusResult
 } from '../../devices/services/api';
+import { markCampaignStopDrain } from './use-campaign-stop-drain';
 import {
-  markCampaignStopDrain
-} from './use-campaign-stop-drain';
+  summarizeDispatchResult,
+  type DispatchResultSummary
+} from '../lib/campaign-dispatch-result';
 
 const KEYS = {
   list: ['campaigns'] as const,
@@ -57,6 +64,47 @@ const WORKFLOW_STEPS_POLL_MS = 10_000;
 const monitorQueryDefaults = {
   refetchOnWindowFocus: false
 } as const;
+
+function byScenarioOrder(a: ScenarioOut, b: ScenarioOut) {
+  return (a.order ?? 0) - (b.order ?? 0);
+}
+
+function upsertScenarioRow(rows: ScenarioOut[], row: ScenarioOut) {
+  const found = rows.some((s) => s.id === row.id);
+  const next = found
+    ? rows.map((s) => (s.id === row.id ? row : s))
+    : [...rows, row];
+  return [...next].sort(byScenarioOrder);
+}
+
+function updateCachedCampaignScenarios(
+  qc: QueryClient,
+  campaignId: string,
+  update: (rows: ScenarioOut[]) => ScenarioOut[]
+) {
+  qc.setQueryData<ScenarioOut[]>(KEYS.scenarios(campaignId), (old) =>
+    update(old ?? [])
+  );
+  qc.setQueryData<CampaignOut | undefined>(KEYS.detail(campaignId), (old) =>
+    old ? { ...old, scenarios: update(old.scenarios ?? []) } : old
+  );
+  qc.setQueryData<CampaignOut[] | undefined>(KEYS.list, (old) =>
+    old?.map((campaign) =>
+      campaign.id === campaignId
+        ? { ...campaign, scenarios: update(campaign.scenarios ?? []) }
+        : campaign
+    )
+  );
+}
+
+function invalidateCampaignScenarioQueries(
+  qc: QueryClient,
+  campaignId: string
+) {
+  qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId), exact: true });
+  qc.invalidateQueries({ queryKey: KEYS.detail(campaignId), exact: true });
+  qc.invalidateQueries({ queryKey: KEYS.list, exact: true });
+}
 
 export function useExecutionRuntime() {
   return useQuery({
@@ -365,9 +413,11 @@ export function useCreateScenario() {
       campaignId: string;
       data: ScenarioCreate;
     }) => scenariosApi.create(campaignId, data),
-    onSuccess: (_, { campaignId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
-      qc.invalidateQueries({ queryKey: KEYS.list });
+    onSuccess: (created, { campaignId }) => {
+      updateCachedCampaignScenarios(qc, campaignId, (rows) =>
+        upsertScenarioRow(rows, created)
+      );
+      invalidateCampaignScenarioQueries(qc, campaignId);
     }
   });
 }
@@ -384,9 +434,11 @@ export function useUpdateScenario() {
       scenarioId: string;
       data: ScenarioUpdate;
     }) => scenariosApi.update(campaignId, scenarioId, data),
-    onSuccess: (_, { campaignId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
-      qc.invalidateQueries({ queryKey: KEYS.list });
+    onSuccess: (updated, { campaignId }) => {
+      updateCachedCampaignScenarios(qc, campaignId, (rows) =>
+        upsertScenarioRow(rows, updated)
+      );
+      invalidateCampaignScenarioQueries(qc, campaignId);
     }
   });
 }
@@ -401,9 +453,11 @@ export function useDeleteScenario() {
       campaignId: string;
       scenarioId: string;
     }) => scenariosApi.delete(campaignId, scenarioId),
-    onSuccess: (_, { campaignId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
-      qc.invalidateQueries({ queryKey: KEYS.list });
+    onSuccess: (_, { campaignId, scenarioId }) => {
+      updateCachedCampaignScenarios(qc, campaignId, (rows) =>
+        rows.filter((scenario) => scenario.id !== scenarioId)
+      );
+      invalidateCampaignScenarioQueries(qc, campaignId);
     }
   });
 }
@@ -419,7 +473,8 @@ export function useReorderScenarios() {
       orderedIds: string[];
     }) => scenariosApi.reorder(campaignId, orderedIds),
     onSuccess: (data, { campaignId }) => {
-      qc.setQueryData(KEYS.scenarios(campaignId), data);
+      updateCachedCampaignScenarios(qc, campaignId, () => data);
+      invalidateCampaignScenarioQueries(qc, campaignId);
     }
   });
 }
@@ -441,9 +496,11 @@ export function useCompileScenario() {
         deviceSerial: params.deviceSerial,
         deviceContext: params.deviceContext
       }),
-    onSuccess: (_, { campaignId }) => {
-      qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
-      qc.invalidateQueries({ queryKey: KEYS.list });
+    onSuccess: (updated, { campaignId }) => {
+      updateCachedCampaignScenarios(qc, campaignId, (rows) =>
+        upsertScenarioRow(rows, updated)
+      );
+      invalidateCampaignScenarioQueries(qc, campaignId);
     }
   });
 }
@@ -557,7 +614,10 @@ export function useCampaignCancel() {
   });
 }
 
-export { useCampaignStopDrain, markCampaignStopDrain } from './use-campaign-stop-drain';
+export {
+  useCampaignStopDrain,
+  markCampaignStopDrain
+} from './use-campaign-stop-drain';
 
 export function useWorkflowPause() {
   const qc = useQueryClient();
@@ -926,7 +986,9 @@ export function useRunCampaign(
 }
 
 /** Epic 04 entity dispatch — FSM drives status; do not reset to idle. */
-export function useDispatchCampaign(onAllDone?: () => void) {
+export function useDispatchCampaign(
+  onAllDone?: (summary?: DispatchResultSummary) => void
+) {
   const qc = useQueryClient();
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -942,12 +1004,18 @@ export function useDispatchCampaign(onAllDone?: () => void) {
   return useMutation({
     mutationFn: ({ id, body }: { id: string; body: CampaignDispatchIn }) =>
       campaignsApi.dispatch(id, body),
-    onSuccess: async (_data, { id }) => {
+    onSuccess: async (data, { id }) => {
       clearPollTimer();
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
       qc.invalidateQueries({ queryKey: ['executions'] });
       qc.invalidateQueries({ queryKey: KEYS.executionRuntime });
+
+      const summary = summarizeDispatchResult(data);
+      if (summary.allTerminal) {
+        onAllDone?.(summary);
+        return;
+      }
 
       const deadline = Date.now() + POLL_TIMEOUT_MS;
       pollTimerRef.current = setInterval(async () => {

@@ -2,9 +2,11 @@ import { deviceFarmBackendBase, farmApi } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import type { Device, DeviceEvent, Task } from '../types';
 import {
+  type FetchHierarchyOptions,
   HIERARCHY_FAILURE_COOLDOWN_MS,
   HIERARCHY_REQUEST_TIMEOUT_MS,
-  shouldBackoffHierarchyError
+  shouldBackoffHierarchyError,
+  shouldReuseHierarchyInFlight
 } from '../lib/hierarchy-request';
 import { createSingleFlight } from '../lib/single-flight';
 
@@ -155,7 +157,8 @@ export async function runAgentShell(
 /** UI hierarchy XML (uiautomator2 page source). On 503 returns "" and backs off per device. */
 export async function fetchHierarchy(
   serial: string,
-  refresh = false
+  refresh = false,
+  options?: FetchHierarchyOptions
 ): Promise<string> {
   const key = serial;
   const now = Date.now();
@@ -163,8 +166,9 @@ export async function fetchHierarchy(
   // even for refresh=true so bootstrap/interaction pulses do not starve screen
   // streaming while uiautomator2 is recovering.
   if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
+  const reuseInFlight = shouldReuseHierarchyInFlight(options);
   const pending = hierarchyInFlight.get(key);
-  if (pending) return pending;
+  if (reuseInFlight && pending) return pending;
 
   // Respect safe-mode: if the backend has stream_hierarchy=false, skip the
   // request entirely so we don't spam the network with 503s.
@@ -200,7 +204,7 @@ export async function fetchHierarchy(
       hierarchyInFlight.delete(key);
     }
   })();
-  hierarchyInFlight.set(key, task);
+  if (reuseInFlight) hierarchyInFlight.set(key, task);
   return task;
 }
 

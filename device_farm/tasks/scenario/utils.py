@@ -115,6 +115,115 @@ def _xml_has_element(xml: str, by: str, value: str) -> bool:
         return False
 
 
+_VOLATILE_SELECTOR_BY = frozenset({
+    "xpath",
+    "class name",
+    "classname",
+    "textcontains",
+    "textstartswith",
+    "textmatches",
+    "descriptioncontains",
+    "descriptionstartswith",
+    "content-desc-contains",
+    "content_desc_contains",
+    "content-desc-starts-with",
+    "content_desc_starts_with",
+})
+
+_COMMON_ACTION_TEXTS = frozenset({
+    "add",
+    "allow",
+    "cancel",
+    "close",
+    "continue",
+    "dismiss",
+    "follow",
+    "following",
+    "join",
+    "joined",
+    "like",
+    "message",
+    "next",
+    "ok",
+    "open",
+    "save",
+    "share",
+    "skip",
+    "tham gia",
+    "theo dõi",
+    "tiếp tục",
+})
+
+
+def _selector_primary_by_value(
+    by: Optional[str],
+    value: Optional[str],
+    spec: Optional[Any],
+) -> Tuple[str, str]:
+    if spec is not None:
+        xpath = str(getattr(spec, "xpath", "") or "").strip()
+        if xpath:
+            return "xpath", xpath
+        spec_by = str(getattr(spec, "by", "") or "").strip()
+        spec_value = str(getattr(spec, "value", "") or "").strip()
+        if spec_by and spec_value:
+            return spec_by, spec_value
+    return str(by or "").strip(), str(value or "").strip()
+
+
+def _selector_is_volatile(
+    by: Optional[str],
+    value: Optional[str],
+    spec: Optional[Any] = None,
+) -> bool:
+    sel_by, sel_value = _selector_primary_by_value(by, value, spec)
+    norm_by = sel_by.replace("_", "-").strip().lower()
+    if norm_by in _VOLATILE_SELECTOR_BY:
+        return True
+    if norm_by == "xpath" and "@bounds=" in sel_value:
+        return True
+    if norm_by == "text" and sel_value.strip().lower() in _COMMON_ACTION_TEXTS:
+        return True
+    conditions = getattr(spec, "conditions", {}) if spec is not None else {}
+    if isinstance(conditions, dict) and conditions.get("volatile") is True:
+        return True
+    return False
+
+
+def _node_matches_selector(node: Any, by: str, value: str) -> bool:
+    if by == "text":
+        return (node.get("text") or "") == value
+    if by in ("resource-id", "id", "resourceId"):
+        return (node.get("resource-id") or "") == value
+    if by in ("description", "content-desc", "accessibility id"):
+        return (node.get("content-desc") or "") == value
+    if by in ("class name", "className"):
+        return (node.get("class") or "") == value
+    if by in ("package", "packageName"):
+        return (node.get("package") or "") == value
+    return False
+
+
+def _current_selector_match_count(
+    device: "DeviceClient",
+    by: Optional[str],
+    value: Optional[str],
+    spec: Optional[Any] = None,
+) -> int:
+    sel_by, sel_value = _selector_primary_by_value(by, value, spec)
+    if not sel_by or not sel_value or _selector_is_volatile(sel_by, sel_value, spec):
+        return 0
+    try:
+        xml = device.hierarchy_xml(force_refresh=True)
+        if not xml:
+            return 0
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(xml)
+    except Exception:
+        return 0
+    return sum(1 for node in root.iter() if _node_matches_selector(node, sel_by, sel_value))
+
+
 # ── Element find helpers ──────────────────────────────────────────────────────
 
 def _wait_for_element(
@@ -587,7 +696,14 @@ def _execute_tap(
     phases = []
 
     has_selector = bool(u2 and spec and not spec.is_empty()) or bool(u2 and effective_by and effective_value)
-    if has_selector and spec:
+    selector_volatile = _selector_is_volatile(effective_by, effective_value, spec) if has_selector else False
+    allow_moved_selector = (
+        has_selector
+        and not selector_volatile
+        and _current_selector_match_count(device, effective_by, effective_value, spec) == 1
+    )
+    use_selector_phase = has_selector and not selector_volatile
+    if use_selector_phase and spec:
         def _phase_spec():
             return phase_selector(
                 u2, effective_by, effective_value,
@@ -597,9 +713,10 @@ def _execute_tap(
                 find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
                     u, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, spec=spec, device=device,
                 ),
+                allow_moved_selector=allow_moved_selector,
             )
         phases.append(_phase_spec)
-    elif has_selector:
+    elif use_selector_phase:
         phases.append(lambda: phase_selector(
             u2, effective_by, effective_value,
             fallback_rx, fallback_ry,
@@ -608,9 +725,15 @@ def _execute_tap(
             find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
                 u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, device=device,
             ),
+            allow_moved_selector=allow_moved_selector,
         ))
 
-    if has_selector and fallback_rx is not None and fallback_ry is not None:
+    if (
+        has_selector
+        and not selector_volatile
+        and fallback_rx is not None
+        and fallback_ry is not None
+    ):
         phases.append(lambda: phase_healing(
             u2, device, effective_by, effective_value,
             fallback_rx, fallback_ry, w, h,
@@ -623,7 +746,7 @@ def _execute_tap(
             screenshot_anchor=screenshot_anchor,
         ))
 
-    if fallback_rx is not None and fallback_ry is not None:
+    if not has_selector and fallback_rx is not None and fallback_ry is not None:
         phases.append(lambda: phase_ratio(
             device, fallback_rx, fallback_ry, w, h,
             selector_tried=has_selector,
@@ -684,7 +807,17 @@ def _execute_tap(
         else:
             time.sleep(0.3)
 
-    return True, result.message, result.bounds
+    details = [result.message, f"method={result.method}"]
+    if result.x >= 0 and result.y >= 0:
+        details.append(f"tap=({result.x},{result.y})")
+    if result.bounds:
+        left = result.bounds.get("left")
+        top = result.bounds.get("top")
+        right = result.bounds.get("right")
+        bottom = result.bounds.get("bottom")
+        details.append(f"bounds=[{left},{top}][{right},{bottom}]")
+
+    return True, " ".join(details), result.bounds
 
 
 # ── Condition evaluators ──────────────────────────────────────────────────────

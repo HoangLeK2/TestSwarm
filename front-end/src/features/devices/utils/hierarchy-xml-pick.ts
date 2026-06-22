@@ -11,10 +11,23 @@ import {
 
 export { inferForegroundPackage };
 
+type XmlSelectorPickBy =
+  | 'resource-id'
+  | 'text'
+  | 'description'
+  | 'descriptionStartsWith'
+  | 'xpath'
+  | 'class name';
+
 export type XmlSelectorPick = {
-  by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
+  by: XmlSelectorPickBy;
   value: string;
   selector: ScenarioSelectorShape;
+  selectorReason?: string;
+  selectorVolatile?: boolean;
+  resourceIdDuplicateCount?: number;
+  textDuplicateCount?: number;
+  descDuplicateCount?: number;
   bounds?: {
     left: number;
     top: number;
@@ -36,6 +49,22 @@ export type HierarchyPickOptions = {
 
 const BOUNDS_RE = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
 
+/** FB group page shells embed feed inside a row whose content-desc is the group header. */
+const FB_GROUP_HEADER_DESC_RE =
+  /\b(thành viên|members|Công khai|Public|Nhóm công khai|private group|Private)\b/i;
+
+function isFbGroupHeaderDescription(desc: string): boolean {
+  return FB_GROUP_HEADER_DESC_RE.test(desc.trim());
+}
+
+function nodeBoundsArea(n: Element): number {
+  const m = BOUNDS_RE.exec(n.getAttribute('bounds') ?? '');
+  if (!m) return 0;
+  const w = +m[3] - +m[1];
+  const h = +m[4] - +m[2];
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
 type RankedCandidate = {
   node: Element;
   x1: number;
@@ -50,6 +79,11 @@ type RankedCandidate = {
 type Sel = {
   by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
   value: string;
+  selectorReason?: string;
+  selectorVolatile?: boolean;
+  resourceIdDuplicateCount?: number;
+  textDuplicateCount?: number;
+  descDuplicateCount?: number;
 };
 
 /**
@@ -178,6 +212,10 @@ export function listSelectorCandidatesInXml(
     for (const n of nodes) {
       const s = tryPrimaryOnNode(n);
       if (!s || s.by === 'xpath' || s.by === 'class name') continue;
+      if (s.by === 'description') {
+        const desc = (n.getAttribute('content-desc') ?? '').trim();
+        if (isFbGroupHeaderDescription(desc)) continue;
+      }
       const score = scoreSelectorAnchor(n, s);
       if (!best || score > best.score) {
         best = { sel: s, anchor: n, score };
@@ -207,17 +245,6 @@ export function listSelectorCandidatesInXml(
   const pickPrimaryForNode = (
     start: Element
   ): { sel: Sel; anchor: Element } | null => {
-    // FB list rows: "Tham gia" is a sibling of the group title — scan the row
-    // container (parent) for unique content-desc / title text.
-    const parent = parentOf.get(start) ?? null;
-    if (parent) {
-      const parentCls = (parent.getAttribute('class') ?? '').trim();
-      if (!isListContainerClass(parentCls)) {
-        const rowPick = pickBestSemanticInSubtree(parent);
-        if (rowPick) return rowPick;
-      }
-    }
-
     const ordered: Element[] = [];
     const walkDesc = (el: Element) => {
       ordered.push(el);
@@ -234,15 +261,51 @@ export function listSelectorCandidatesInXml(
     }
 
     let best: { sel: Sel; anchor: Element; score: number } | null = null;
+    const startArea = nodeBoundsArea(start);
     for (const n of ordered) {
       const s = tryPrimaryOnNode(n);
       if (!s || s.by === 'xpath' || s.by === 'class name') continue;
+      if (n !== start && s.by === 'description') {
+        const desc = (n.getAttribute('content-desc') ?? '').trim();
+        const area = nodeBoundsArea(n);
+        if (
+          isFbGroupHeaderDescription(desc) &&
+          startArea > 0 &&
+          area > startArea * 2
+        ) {
+          continue;
+        }
+      }
       const score = scoreSelectorAnchor(n, s);
       if (!best || score > best.score) {
         best = { sel: s, anchor: n, score };
       }
     }
     if (best) return { sel: best.sel, anchor: best.anchor };
+
+    const startClassName = (start.getAttribute('class') ?? '').trim();
+    if (!isHierarchyLayoutContainer(startClassName)) {
+      const localFallback = pickStableHierarchySelector(
+        nodeAttrs(start),
+        nodeCounts(start),
+        { allowBoundsXPath: true }
+      );
+      if (localFallback && localFallback.by !== 'class name') {
+        return { sel: localFallback, anchor: start };
+      }
+    }
+
+    // FB list rows: when the tapped node is a selector-poor shell, scan the row
+    // container for a unique semantic anchor. Do this after local search so an
+    // explicit tapped action is not replaced by a sibling title/description.
+    const parent = parentOf.get(start) ?? null;
+    if (parent) {
+      const parentCls = (parent.getAttribute('class') ?? '').trim();
+      if (!isListContainerClass(parentCls)) {
+        const rowPick = pickBestSemanticInSubtree(parent);
+        if (rowPick) return rowPick;
+      }
+    }
 
     const fallback = pickStableHierarchySelector(
       nodeAttrs(start),
@@ -286,7 +349,9 @@ export function listSelectorCandidatesInXml(
 
   // Strict package filter first; fall back to all non-systemUI nodes when the
   // target package (often a stale current_app) has nothing under the tap.
-  let hits = effectivePackage ? collectHits(effectivePackage) : collectHits(null);
+  let hits = effectivePackage
+    ? collectHits(effectivePackage)
+    : collectHits(null);
   if (hits.length === 0) hits = collectHits(null);
   if (hits.length === 0) return [];
 
@@ -306,6 +371,11 @@ export function listSelectorCandidatesInXml(
       by: sel.by,
       value: sel.value,
       selector,
+      selectorReason: sel.selectorReason,
+      selectorVolatile: sel.selectorVolatile,
+      resourceIdDuplicateCount: sel.resourceIdDuplicateCount,
+      textDuplicateCount: sel.textDuplicateCount,
+      descDuplicateCount: sel.descDuplicateCount,
       bounds: {
         left: hit.x1,
         top: hit.y1,
@@ -334,11 +404,13 @@ export function findSelectorInXml(
   options?: HierarchyPickOptions
 ): XmlSelectorPick | null {
   const pick = listSelectorCandidatesInXml(xmlStr, rx, ry, options)[0] ?? null;
-  return pick ? stabilizeListRowSelector(pick) : null;
+  return pick;
 }
 
 /** FB list rows: prefer descriptionStartsWith on group name (scroll-safe). */
-export function stabilizeListRowSelector(pick: XmlSelectorPick): XmlSelectorPick {
+export function stabilizeListRowSelector(
+  pick: XmlSelectorPick
+): XmlSelectorPick {
   if (pick.by !== 'description') return pick;
   const value = pick.value.trim();
   if (!value) return pick;

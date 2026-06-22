@@ -64,6 +64,7 @@ import {
   isCampaignMetadataEditable,
   isDispatchableStatus
 } from '../../types';
+import { summarizeDispatchResult } from '../../lib/campaign-dispatch-result';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useConfirm } from '@/providers/modal-provider';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
@@ -133,9 +134,9 @@ export function CampaignRowActions({
   const runMutation = useRunCampaign(() => toast.success(t('campaignDone')), {
     onTemporalFallback: () => toast.warning(t('temporalFallback'))
   });
-  const dispatchMutation = useDispatchCampaign(() =>
-    toast.success(t('campaignDone'))
-  );
+  const dispatchMutation = useDispatchCampaign((summary) => {
+    if (!summary?.allFailed) toast.success(t('campaignDone'));
+  });
   const { mutate: runCampaign, isPending: isRunning } = runMutation;
   const { mutate: dispatchCampaign, isPending: isDispatching } =
     dispatchMutation;
@@ -388,10 +389,7 @@ export function CampaignRowActions({
                     { id: campaign.id, body },
                     {
                       onSuccess: (data) => {
-                        const failed =
-                          data.executions?.filter(
-                            (e) => e.status === 'failed' || e.failure_reason
-                          ).length ?? 0;
+                        const summary = summarizeDispatchResult(data);
                         const usedFallback =
                           executionRuntime?.campaign_run
                             ?.fallback_mode_active ||
@@ -403,13 +401,29 @@ export function CampaignRowActions({
                             duration: 8000
                           });
                         }
+                        if (summary.allFailed) {
+                          toast.error(
+                            summary.allFailuresAreDeviceClaim
+                              ? t('dispatchAllDevicesBusy', {
+                                  count: summary.deviceClaimFailed
+                                })
+                              : t('dispatchAllFailed', {
+                                  count: summary.failed
+                                }),
+                            {
+                              description: campaign.name,
+                              duration: 8000
+                            }
+                          );
+                          return;
+                        }
                         toast.success(
                           t('dispatchStarted', { count: data.target_count }),
                           {
                             description:
-                              failed > 0
+                              summary.failed > 0
                                 ? t('dispatchPartialFailures', {
-                                    count: failed
+                                    count: summary.failed
                                   })
                                 : campaign.name,
                             duration: 5000

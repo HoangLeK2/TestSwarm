@@ -626,8 +626,10 @@ def _df_get_ui_elements(args: Dict[str, Any]) -> Dict[str, Any]:
     """
     Get UI hierarchy as a structured, LLM-friendly element list.
     Server parses the XML and returns [{text, resource_id, content_desc, class_name,
-    bounds, clickable, selector_by, selector_value}].
-    LLM picks the right element and calls df_tap_selector with selector_by + selector_value.
+    bounds, clickable, selector_by, selector_value, selector_reason,
+    selector_volatile}].
+    LLM picks the right element, respects duplicate/volatile warnings, and calls
+    df_tap_selector with selector_by + selector_value.
     """
     serial = _resolve_device(args)
     refresh = bool(args.get("refresh", True))
@@ -1273,8 +1275,10 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     "df_get_ui_elements": {
         "description": (
             "⚡ PREFERRED for UI interaction. Get UI elements as structured list — server fetches hierarchy XML "
-            "and parses into [{text, resource_id, content_desc, class_name, bounds, clickable, selector_by, selector_value}]. "
+            "and parses into [{text, resource_id, content_desc, class_name, bounds, clickable, selector_by, selector_value, "
+            "selector_reason, selector_volatile}]. "
             "LLM workflow: call this → pick element matching intent → call df_tap_selector with selector_by + selector_value. "
+            "Prefer selector_by/selector_value over raw fields; avoid volatile selectors when a non-volatile candidate matches. "
             "This replaces df_tap(x,y) with reliable element-based interaction. "
             "If element_count < 5, XML is flat — enable Accessibility Service on device for full hierarchy."
         ),
@@ -1291,7 +1295,8 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     "df_tap_selector": {
         "description": (
             "Tap UI element by selector strategy. "
-            "by: resource-id | text | xpath | class name. Give device or session_id."
+            "by: resource-id | text | description | descriptionContains | "
+            "descriptionStartsWith | xpath | class name. Give device or session_id."
         ),
         "inputSchema": {
             "type": "object",
@@ -1299,7 +1304,15 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
                 **_DEVICE_OR_SESSION,
                 "by": {
                     "type": "string",
-                    "enum": ["resource-id", "text", "xpath", "class name"],
+                    "enum": [
+                        "resource-id",
+                        "text",
+                        "description",
+                        "descriptionContains",
+                        "descriptionStartsWith",
+                        "xpath",
+                        "class name",
+                    ],
                 },
                 "value": {"type": "string"},
             },

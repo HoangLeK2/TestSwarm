@@ -41,10 +41,25 @@ const EVENT_VISUALS: Record<string, NotificationVisual> = {
     tone: 'success',
     eventLabelKey: 'campaign_complete'
   },
+  'campaign.dispatched': {
+    Icon: Megaphone,
+    tone: 'info',
+    eventLabelKey: 'campaign_dispatched'
+  },
+  'campaign.completed': {
+    Icon: CheckCircle2,
+    tone: 'success',
+    eventLabelKey: 'campaign_completed'
+  },
   'campaign.failed': {
     Icon: AlertTriangle,
     tone: 'danger',
     eventLabelKey: 'campaign_failed'
+  },
+  'campaign.step_warning': {
+    Icon: AlertTriangle,
+    tone: 'warning',
+    eventLabelKey: 'campaign_step_warning'
   },
   'schedule.triggered': {
     Icon: CalendarClock,

@@ -47,6 +47,7 @@ _SCHEMAS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "campaign.dispatched": ("campaign", "campaign_id", ("campaign_id",)),
     "campaign.completed": ("campaign", "campaign_id", ("campaign_id",)),
     "campaign.failed": ("campaign", "campaign_id", ("campaign_id",)),
+    "campaign.step_warning": ("campaign", "campaign_id", ("campaign_id",)),
     "campaign.dlq_opened": ("execution", "execution_id", ("campaign_id", "execution_id")),
     "schedule.run_failed": ("schedule", "schedule_id", ("schedule_id",)),
     "device.offline": ("device", "device_id", ()),
@@ -71,16 +72,82 @@ _PATHS = {
 
 _TEMPLATES: dict[str, dict[str, tuple[str, str]]] = {
     "campaign.completed": {
-        "en": ("Campaign {resource_name} completed", "{summary}. Open: {deep_link}"),
-        "vi": ("Campaign {resource_name} da hoan thanh", "{summary}. Mo chi tiet: {deep_link}"),
+        "en": (
+            "Campaign {resource_name} completed",
+            "Status: {status}\n"
+            "Collected: {collected_count} items\n"
+            "Executions: {execution_completed} completed, {execution_failed} failed, "
+            "{execution_cancelled} cancelled\n"
+            "Run: {dispatch_id}\n"
+            "Open: {deep_link}",
+        ),
+        "vi": (
+            "Campaign {resource_name} da hoan thanh",
+            "Trang thai: {status}\n"
+            "Thu thap: {collected_count} items\n"
+            "Executions: {execution_completed} hoan thanh, {execution_failed} that bai, "
+            "{execution_cancelled} da huy\n"
+            "Run: {dispatch_id}\n"
+            "Mo chi tiet: {deep_link}",
+        ),
     },
     "campaign.failed": {
-        "en": ("Campaign {resource_name} failed", "{summary}. Open: {deep_link}"),
-        "vi": ("Campaign {resource_name} that bai", "{summary}. Mo chi tiet: {deep_link}"),
+        "en": (
+            "Campaign {resource_name} failed",
+            "Status: {status}\n"
+            "Error: {error_message}\n"
+            "Collected: {collected_count} items\n"
+            "Executions: {execution_completed} completed, {execution_failed} failed, "
+            "{execution_cancelled} cancelled\n"
+            "Run: {dispatch_id}\n"
+            "Open: {deep_link}",
+        ),
+        "vi": (
+            "Campaign {resource_name} that bai",
+            "Trang thai: {status}\n"
+            "Loi: {error_message}\n"
+            "Thu thap: {collected_count} items\n"
+            "Executions: {execution_completed} hoan thanh, {execution_failed} that bai, "
+            "{execution_cancelled} da huy\n"
+            "Run: {dispatch_id}\n"
+            "Mo chi tiet: {deep_link}",
+        ),
     },
     "campaign.dispatched": {
-        "en": ("Campaign {resource_name} dispatched", "{summary}. Open: {deep_link}"),
-        "vi": ("Campaign {resource_name} da dispatch", "{summary}. Mo chi tiet: {deep_link}"),
+        "en": (
+            "Campaign {resource_name} dispatched",
+            "Status: {status}\n"
+            "Executions: {execution_total}\n"
+            "Run: {dispatch_id}\n"
+            "Open: {deep_link}",
+        ),
+        "vi": (
+            "Campaign {resource_name} da dispatch",
+            "Trang thai: {status}\n"
+            "Executions: {execution_total}\n"
+            "Run: {dispatch_id}\n"
+            "Mo chi tiet: {deep_link}",
+        ),
+    },
+    "campaign.step_warning": {
+        "en": (
+            "Campaign {resource_name} step warning",
+            "Status: {status}\n"
+            "Step: {step_type} #{step_index}\n"
+            "Device: {device_serial}\n"
+            "Execution: {execution_id}\n"
+            "Error: {error_message}\n"
+            "Campaign continues. Open: {deep_link}",
+        ),
+        "vi": (
+            "Campaign {resource_name} co canh bao step",
+            "Trang thai: {status}\n"
+            "Step: {step_type} #{step_index}\n"
+            "Thiet bi: {device_serial}\n"
+            "Execution: {execution_id}\n"
+            "Loi: {error_message}\n"
+            "Campaign tiep tuc chay. Mo chi tiet: {deep_link}",
+        ),
     },
     "campaign.dlq_opened": {
         "en": ("Campaign DLQ opened", "{summary}. Open: {deep_link}"),
@@ -128,7 +195,42 @@ _ALLOWED_PLACEHOLDERS = {
     "timestamp",
     "deep_link",
     "summary",
+    "status",
+    "collected_count",
+    "execution_total",
+    "execution_completed",
+    "execution_failed",
+    "execution_cancelled",
+    "dispatch_id",
+    "error_message",
+    "step_type",
+    "step_index",
+    "device_serial",
+    "execution_id",
 }
+
+
+def _payload_text(payload: dict[str, Any], *keys: str, default: str = "") -> str:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return default
+
+
+def _payload_count(payload: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def normalize_event_type(event_type: str) -> str:
@@ -177,6 +279,8 @@ def parse_domain_event(payload: dict[str, Any]) -> DomainEvent:
 
 def build_deep_link(resource_type: str, resource_id: str, app_base_url: str) -> str:
     base = app_base_url.rstrip("/")
+    if resource_type == "campaign":
+        return f"{base}/dashboard/campaigns/{resource_id}/monitor".rstrip("/")
     path = _PATHS.get(resource_type, resource_type)
     return f"{base}/{path}/{resource_id}".rstrip("/")
 
@@ -195,14 +299,54 @@ def render_notification(
         raise EventSchemaError("TEMPLATE_NOT_FOUND", f"no locale template for {event.event_type}")
     title_template, body_template = templates[effective_locale]
     deep_link = build_deep_link(event.resource_type, event.resource_id, app_base_url)
+    payload = event.payload or {}
     context = {
         "resource_type": event.resource_type,
         "resource_id": event.resource_id,
-        "resource_name": (event.payload or {}).get("resource_name") or event.resource_id,
+        "resource_name": _payload_text(payload, "resource_name", "campaign_name", default=event.resource_id),
         "actor": event.actor_user_id or "system",
         "timestamp": (event.timestamp or datetime.now(timezone.utc)).isoformat(),
         "deep_link": deep_link,
         "summary": event.summary,
+        "status": _payload_text(
+            payload,
+            "status",
+            default=event.event_type.rsplit(".", maxsplit=1)[-1],
+        ),
+        "collected_count": _payload_count(
+            payload,
+            "collected_count",
+            "content_count",
+            "collected",
+        ),
+        "execution_total": _payload_count(payload, "execution_total", "total_executions"),
+        "execution_completed": _payload_count(
+            payload,
+            "execution_completed",
+            "completed_executions",
+        ),
+        "execution_failed": _payload_count(
+            payload,
+            "execution_failed",
+            "failed_executions",
+        ),
+        "execution_cancelled": _payload_count(
+            payload,
+            "execution_cancelled",
+            "cancelled_executions",
+        ),
+        "dispatch_id": _payload_text(payload, "dispatch_id", default="unknown"),
+        "error_message": _payload_text(
+            payload,
+            "error_message",
+            "reason",
+            "error",
+            default="unknown",
+        ),
+        "step_type": _payload_text(payload, "step_type", "type", default="unknown"),
+        "step_index": _payload_text(payload, "step_index", "index", default="unknown"),
+        "device_serial": _payload_text(payload, "device_serial", "serial", default="unknown"),
+        "execution_id": _payload_text(payload, "execution_id", "run_id", default="unknown"),
     }
     return RenderedNotification(
         title=title_template.format(**context),

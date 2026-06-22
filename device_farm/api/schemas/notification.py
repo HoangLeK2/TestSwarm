@@ -16,6 +16,7 @@ NOTIFICATION_EVENTS = [
     "campaign.completed",
     "campaign.dispatched",
     "campaign.failed",
+    "campaign.step_warning",
     "campaign.dlq_opened",
     "schedule.triggered",
     "schedule.failed",

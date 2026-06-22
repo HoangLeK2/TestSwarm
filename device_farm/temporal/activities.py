@@ -87,6 +87,27 @@ def _finalize_is_cancelled(
     return any("cancelled" in text.lower() or "canceled" in text.lower() for text in texts)
 
 
+def _ignored_step_warnings_from_results(
+    step_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for entry in step_results:
+        if not isinstance(entry, dict) or not entry.get("ignored_failure"):
+            continue
+        warnings.append(
+            {
+                "step_index": entry.get("index"),
+                "step_type": entry.get("type") or "unknown",
+                "message": (
+                    entry.get("ignored_message")
+                    or entry.get("message")
+                    or "step warning"
+                ),
+            }
+        )
+    return warnings
+
+
 def _prepare_activity_step(step: dict[str, Any]) -> dict[str, Any]:
     """Epic 04 DSL → legacy executor shape before Temporal step activities run."""
     from services.execution.retry_policy import step_for_single_attempt
@@ -1714,6 +1735,27 @@ class DeviceActivities:
                             failed_steps = slim_step_results(
                                 [s for s in step_results if not s.get("ok")]
                             )
+                            if execution_campaign_id:
+                                from services.campaign.events import emit_campaign_step_warning
+
+                                campaign_name = (
+                                    getattr(campaign_row, "name", None)
+                                    if campaign_row is not None
+                                    else None
+                                )
+                                for warning in _ignored_step_warnings_from_results(step_results):
+                                    await emit_campaign_step_warning(
+                                        db,
+                                        org_id=org_id_epic,
+                                        campaign_id=execution_campaign_id,
+                                        campaign_name=campaign_name,
+                                        execution_id=execution_id,
+                                        device_serial=device_serial,
+                                        step_index=warning.get("step_index"),
+                                        step_type=str(warning.get("step_type") or "unknown"),
+                                        message=str(warning.get("message") or "step warning"),
+                                        user_id=execution_user_id,
+                                    )
                             cancelled_terminal = (
                                 not success
                                 and _finalize_is_cancelled(

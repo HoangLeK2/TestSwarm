@@ -1,7 +1,10 @@
 """Epic 04 DF-T-04-007: campaign lifecycle FSM."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,6 +17,7 @@ from db.crud import campaign_entity as campaign_repo
 from db.crud.execution import create_execution
 from db.crud.execution_dlq import create_dlq_entry
 from db.models.activity import ActivityLog
+from db.models.content import ContentItem
 from db.models.enums import CampaignStatus, DLQStatus, ExecutionStatus
 from db.models.execution import Execution
 from services.campaign.aggregator import (
@@ -244,6 +248,268 @@ async def test_ac2_aggregator_running_to_completed(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_completed_campaign_transition_notifies_after_commit(
+    session_factory,
+    monkeypatch,
+):
+    await _seed_orgs(session_factory)
+    notify = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "services.campaign.events._notification_service_for_background",
+        lambda: SimpleNamespace(notify=notify),
+    )
+
+    async with session_factory() as db:
+        row = await campaign_repo.create_campaign_entity(
+            db,
+            org_id=ORG_A,
+            name="TelegramCampaign",
+            status=CampaignStatus.RUNNING.value,
+            created_by=USER_OWNER,
+        )
+        campaign_id = row.id
+        row.started_at = row.created_at
+        await db.flush()
+        set_current_org_id(ORG_A)
+        ex_done = await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.COMPLETED.value,
+            user_id=USER_OWNER,
+        )
+        await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.FAILED.value,
+            user_id=USER_OWNER,
+        )
+        db.add_all(
+            [
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="telegram",
+                    content_hash="telegram-campaign-1",
+                    campaign_id=campaign_id,
+                    execution_id=ex_done.id,
+                    user_id=USER_OWNER,
+                ),
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="telegram",
+                    content_hash="telegram-campaign-2",
+                    campaign_id=campaign_id,
+                    execution_id=ex_done.id,
+                    user_id=USER_OWNER,
+                ),
+            ]
+        )
+        set_current_org_id(ORG_A)
+        await apply_campaign_transition(
+            db,
+            row,
+            CampaignStatus.COMPLETED,
+            org_id=ORG_A,
+            user_id=USER_OWNER,
+            reason="all_done",
+        )
+        notify.assert_not_awaited()
+        await db.commit()
+
+    for _ in range(10):
+        if notify.await_count:
+            break
+        await asyncio.sleep(0)
+
+    notify.assert_awaited_once()
+    event, title, body, data = notify.await_args.args[:4]
+    assert event == "campaign.completed"
+    assert title == "Campaign TelegramCampaign completed"
+    assert "Collected: 2 items" in body
+    assert "Executions: 1 completed, 1 failed" in body
+    assert data["campaign_id"] == campaign_id
+    assert data["collected_count"] == 2
+    assert notify.await_args.kwargs["user_id"] == USER_OWNER
+
+
+@pytest.mark.asyncio
+async def test_completed_campaign_notification_uses_latest_dispatch_counts(
+    session_factory,
+    monkeypatch,
+):
+    await _seed_orgs(session_factory)
+    notify = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "services.campaign.events._notification_service_for_background",
+        lambda: SimpleNamespace(notify=notify),
+    )
+
+    async with session_factory() as db:
+        row = await campaign_repo.create_campaign_entity(
+            db,
+            org_id=ORG_A,
+            name="LatestDispatchCampaign",
+            status=CampaignStatus.RUNNING.value,
+            created_by=USER_OWNER,
+        )
+        campaign_id = row.id
+        row.started_at = row.created_at
+        await db.flush()
+        old_ex = await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.COMPLETED.value,
+            user_id=USER_OWNER,
+            meta={"dispatch_id": "old-dispatch"},
+        )
+        await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.FAILED.value,
+            user_id=USER_OWNER,
+            meta={"dispatch_id": "old-dispatch"},
+        )
+        latest_ex = await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.COMPLETED.value,
+            user_id=USER_OWNER,
+            meta={"dispatch_id": "latest-dispatch"},
+        )
+        db.add_all(
+            [
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="telegram",
+                    content_hash="old-dispatch-content",
+                    campaign_id=campaign_id,
+                    execution_id=old_ex.id,
+                    user_id=USER_OWNER,
+                ),
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="telegram",
+                    content_hash="latest-dispatch-content",
+                    campaign_id=campaign_id,
+                    execution_id=latest_ex.id,
+                    user_id=USER_OWNER,
+                ),
+            ]
+        )
+        set_current_org_id(ORG_A)
+        await apply_campaign_transition(
+            db,
+            row,
+            CampaignStatus.COMPLETED,
+            org_id=ORG_A,
+            user_id=USER_OWNER,
+            reason="latest_done",
+        )
+        await db.commit()
+
+    for _ in range(10):
+        if notify.await_count:
+            break
+        await asyncio.sleep(0)
+
+    notify.assert_awaited_once()
+    data = notify.await_args.args[3]
+    assert data["dispatch_id"] == "latest-dispatch"
+    assert data["collected_count"] == 1
+    assert data["execution_total"] == 1
+    assert data["execution_completed"] == 1
+    assert data["execution_failed"] == 0
+    assert data["execution_cancelled"] == 0
+
+
+@pytest.mark.asyncio
+async def test_campaign_transition_notification_discarded_on_rollback(
+    session_factory,
+    monkeypatch,
+):
+    await _seed_orgs(session_factory)
+    notify = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "services.campaign.events._notification_service_for_background",
+        lambda: SimpleNamespace(notify=notify),
+    )
+
+    async with session_factory() as db:
+        row = await campaign_repo.create_campaign_entity(
+            db,
+            org_id=ORG_A,
+            name="RollbackCampaign",
+            status=CampaignStatus.RUNNING.value,
+            created_by=USER_OWNER,
+        )
+        await db.flush()
+        set_current_org_id(ORG_A)
+        await apply_campaign_transition(
+            db,
+            row,
+            CampaignStatus.FAILED,
+            org_id=ORG_A,
+            user_id=USER_OWNER,
+            reason="rollback_check",
+        )
+        await db.rollback()
+
+    await asyncio.sleep(0)
+    notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_campaign_notification_queue_is_bounded(monkeypatch, caplog):
+    from services.campaign import events as campaign_events
+
+    release = asyncio.Event()
+
+    async def _blocked_deliver(payload):
+        await release.wait()
+
+    monkeypatch.setattr(campaign_events, "_NOTIFICATION_QUEUE_MAX_SIZE", 1)
+    monkeypatch.setattr(campaign_events, "_NOTIFICATION_WORKER_COUNT", 1)
+    monkeypatch.setattr(
+        campaign_events,
+        "_NOTIFICATION_WORKER_IDLE_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        campaign_events,
+        "_deliver_campaign_notification",
+        _blocked_deliver,
+    )
+    campaign_events._notification_queue = None
+    campaign_events._notification_queue_loop = None
+    campaign_events._notification_workers = set()
+
+    caplog.set_level(logging.WARNING, logger="services.campaign.events")
+    try:
+        campaign_events._schedule_campaign_notification(
+            {"type": "campaign.completed", "campaign_id": "camp-queue-1"}
+        )
+        campaign_events._schedule_campaign_notification(
+            {"type": "campaign.completed", "campaign_id": "camp-queue-2"}
+        )
+        assert "campaign notification queue full" in caplog.text
+    finally:
+        release.set()
+        for task in list(campaign_events._notification_workers):
+            task.cancel()
+        await asyncio.gather(
+            *list(campaign_events._notification_workers),
+            return_exceptions=True,
+        )
+        campaign_events._notification_queue = None
+        campaign_events._notification_queue_loop = None
+        campaign_events._notification_workers = set()
+
+
+@pytest.mark.asyncio
 async def test_ac3_aggregator_running_to_failed(session_factory):
     await _seed_orgs(session_factory)
     async with session_factory() as db:
@@ -286,6 +552,63 @@ async def test_ac3_aggregator_running_to_failed(session_factory):
 
     assert result is not None
     assert result.to_status == CampaignStatus.FAILED.value
+    assert row.status == CampaignStatus.FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_aggregator_uses_latest_dispatch_scope_for_terminal_status(session_factory):
+    await _seed_orgs(session_factory)
+    async with session_factory() as db:
+        row = await campaign_repo.create_campaign_entity(
+            db,
+            org_id=ORG_A,
+            name="DispatchScoped",
+            status=CampaignStatus.RUNNING.value,
+            created_by=USER_OWNER,
+        )
+        row.started_at = row.created_at
+        await db.flush()
+        await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.COMPLETED.value,
+            user_id=USER_OWNER,
+            meta={"dispatch_id": "old-dispatch"},
+        )
+        await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.FAILED.value,
+            user_id=USER_OWNER,
+            meta={"dispatch_id": "old-dispatch"},
+        )
+        await create_execution(
+            db,
+            run_type="campaign_device",
+            campaign_id=row.id,
+            status=ExecutionStatus.CANCELLED.value,
+            user_id=USER_OWNER,
+            meta={"dispatch_id": "latest-dispatch"},
+        )
+        await db.commit()
+        campaign_id = row.id
+
+    async with session_factory() as db:
+        set_current_org_id(ORG_A)
+        result = await evaluate_campaign_status(
+            db,
+            org_id=ORG_A,
+            campaign_id=campaign_id,
+            user_id=USER_OWNER,
+        )
+        row = await campaign_repo.get_campaign_entity(db, campaign_id)
+        await db.commit()
+
+    assert result is not None
+    assert result.to_status == CampaignStatus.FAILED.value
+    assert result.reason == "all_executions_cancelled"
     assert row.status == CampaignStatus.FAILED.value
 
 

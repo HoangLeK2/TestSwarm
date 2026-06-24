@@ -147,7 +147,7 @@ export const contentApi = {
   fetchArtifactBlob: async (resolvedUrl: string): Promise<Blob> => {
     const path = artifactApiPath(resolvedUrl);
     const response = await farmApi.get<Blob>(path, { responseType: 'blob' });
-    const data = response.data;
+    const data: unknown = response.data;
     if (data instanceof Blob) return data;
     if (data instanceof ArrayBuffer) {
       const contentType = String(

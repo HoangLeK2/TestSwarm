@@ -2,7 +2,7 @@
  * Mutate nested FlowStep trees by stable flowgram node id (_fgId).
  */
 import type { FlowStep } from '../../../campaigns/components/scenario-steps/types';
-import { SELECTOR_STEP_TYPES } from '../../../campaigns/components/flow-editor/selector-pick.ts';
+import { SELECTOR_STEP_TYPES } from '../../../campaigns/components/flow-editor/selector-pick';
 
 const FG = '_fgId' as const;
 

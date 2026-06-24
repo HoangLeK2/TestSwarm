@@ -412,9 +412,9 @@ export function StepRetryPolicySection({
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.retryPolicy');
   const suppressRetryPatchRef = useRef(false);
-  const suppressRetryPatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
+  const suppressRetryPatchTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   const enabled = !!(
     step.retry &&
     typeof step.retry === 'object' &&

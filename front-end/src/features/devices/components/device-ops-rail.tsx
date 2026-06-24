@@ -292,7 +292,9 @@ export function DeviceOpsRailSection({
               {open === 'install_apk' && draft.type === 'install_apk' ? (
                 <div className='space-y-2'>
                   <p className='text-[12px] text-muted-foreground'>
-                    {tApp('installApkHint', { varToken: SCENARIO_VAR_TOKENS.VAR })}
+                    {tApp('installApkHint', {
+                      varToken: SCENARIO_VAR_TOKENS.VAR
+                    })}
                   </p>
                   <Input
                     placeholder={tApp('installApkUrlPlaceholder')}

@@ -52,9 +52,7 @@ export function DeviceGroupDetail({ groupId, onBack }: Props) {
 
       <div className='flex items-center justify-between'>
         <h3 className='text-sm font-medium'>{t('devicesTitle')}</h3>
-        {perms.canUpdate ? (
-          <AddDevicesToGroupDialog groupId={groupId} />
-        ) : null}
+        {perms.canUpdate ? <AddDevicesToGroupDialog groupId={groupId} /> : null}
       </div>
 
       {(!group.devices || group.devices.length === 0) && (

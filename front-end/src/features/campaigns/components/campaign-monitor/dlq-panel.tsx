@@ -55,10 +55,7 @@ import {
 import { MonitorSectionHeader } from './monitor-section-header';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { dlqDisplayMessage, dlqHasExplicitMessage } from './dlq-message';
-import {
-  humanizeDlqMessage,
-  resolveDlqDeviceLabel
-} from './dlq-user-message';
+import { humanizeDlqMessage, resolveDlqDeviceLabel } from './dlq-user-message';
 import { formatTs } from './dlq-run-summary';
 import {
   dlqReplayBlockedReason,
@@ -527,7 +524,9 @@ export function DlqPanel({
                                 setActiveEntryId(entry.id);
                                 dismissMut.mutate(entry.id, {
                                   onSuccess: () =>
-                                    toast.success(t('monitorDlqDismissSuccess')),
+                                    toast.success(
+                                      t('monitorDlqDismissSuccess')
+                                    ),
                                   onError: () =>
                                     toast.error(t('monitorDlqDismissFailed')),
                                   onSettled: () => setActiveEntryId(null)

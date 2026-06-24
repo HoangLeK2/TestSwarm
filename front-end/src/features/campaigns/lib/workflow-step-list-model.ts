@@ -315,7 +315,8 @@ function logType(log: StepLogEntry): string {
 function logPath(log: StepLogEntry): string | null {
   const details = log.details ?? {};
   const raw =
-    (log as StepLogEntry & { path_key?: unknown; step_path?: unknown }).path_key ??
+    (log as StepLogEntry & { path_key?: unknown; step_path?: unknown })
+      .path_key ??
     (log as StepLogEntry & { path?: unknown }).path ??
     details.path_key ??
     details.step_path ??
@@ -369,7 +370,9 @@ function assignLogs(
     if (candidates.length === 0 && (log.depth ?? 0) === 0) {
       candidates = flatSteps.filter(
         (flat) =>
-          flat.depth === 0 && flat.rootIndex === log.index && matchesType(flat, log)
+          flat.depth === 0 &&
+          flat.rootIndex === log.index &&
+          matchesType(flat, log)
       );
     }
 

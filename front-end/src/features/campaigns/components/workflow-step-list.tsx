@@ -264,17 +264,22 @@ function stepTypeBadgeClass(
   type: string,
   state: 'running' | 'ok' | 'failed' | 'pending'
 ): string {
-  if (state === 'running') return 'border-transparent bg-primary/15 text-primary';
+  if (state === 'running')
+    return 'border-transparent bg-primary/15 text-primary';
   if (state === 'ok')
     return 'border-transparent bg-green-500/10 text-green-700 dark:text-green-400';
-  if (state === 'failed') return 'border-transparent bg-destructive/10 text-destructive';
+  if (state === 'failed')
+    return 'border-transparent bg-destructive/10 text-destructive';
 
   const category = stepCategory(type);
   const pendingByCategory: Record<StepCategory, string> = {
     app: 'border-transparent bg-primary/10 text-primary/80',
-    logic: 'border-transparent bg-amber-500/10 text-amber-700 dark:text-amber-300',
-    touch: 'border-transparent bg-purple-500/10 text-purple-700 dark:text-purple-300',
-    input: 'border-transparent bg-green-500/10 text-green-700 dark:text-green-400',
+    logic:
+      'border-transparent bg-amber-500/10 text-amber-700 dark:text-amber-300',
+    touch:
+      'border-transparent bg-purple-500/10 text-purple-700 dark:text-purple-300',
+    input:
+      'border-transparent bg-green-500/10 text-green-700 dark:text-green-400',
     key: 'border-transparent bg-muted text-muted-foreground',
     other: 'border-transparent bg-muted text-muted-foreground'
   };
@@ -381,7 +386,7 @@ export function StepRow({
       ) : null}
       {!isLast ? (
         <div
-          className='absolute top-[22px] bottom-0 w-px bg-border'
+          className='absolute bottom-0 top-[22px] w-px bg-border'
           style={{ left: depth > 0 ? 12 : 26 }}
         />
       ) : null}
@@ -404,7 +409,10 @@ export function StepRow({
           ) : isOk ? (
             <CheckCircle2 size={14} className='text-green-500' />
           ) : (
-            <Circle size={10} className='ml-0.5 mt-0.5 text-muted-foreground/40' />
+            <Circle
+              size={10}
+              className='ml-0.5 mt-0.5 text-muted-foreground/40'
+            />
           )}
         </div>
 
@@ -477,7 +485,10 @@ export function StepRow({
             </div>
           )}
           {isFailed && msg && (
-            <div className='truncate text-[10px] text-destructive/80' title={msg}>
+            <div
+              className='truncate text-[10px] text-destructive/80'
+              title={msg}
+            >
               {msg}
             </div>
           )}
@@ -621,11 +632,7 @@ export function WorkflowStepList({
   const eventDerivedProgress = useMemo(
     () =>
       allExecutionEvents.length > 0
-        ? foldEventsToProgress(
-            allExecutionEvents,
-            wf.workflow_id,
-            deviceSerial
-          )
+        ? foldEventsToProgress(allExecutionEvents, wf.workflow_id, deviceSerial)
         : null,
     [allExecutionEvents, wf.workflow_id, deviceSerial]
   );
@@ -646,7 +653,7 @@ export function WorkflowStepList({
     useQuery({
       queryKey: ['scenario-steps-fallback', campaignId],
       queryFn: () => scenariosApi.list(campaignId),
-      enabled: !!campaignId && !scenarioId && !(wf.scenario_steps?.length),
+      enabled: !!campaignId && !scenarioId && !wf.scenario_steps?.length,
       staleTime: 30_000
     });
   const { data: orgScenarios } = useOrgScenarios();
@@ -675,7 +682,8 @@ export function WorkflowStepList({
     if (scenario?.steps?.length) return scenario.steps as FlowStep[];
     if (wf.scenario_steps?.length) return wf.scenario_steps as FlowStep[];
     const scenarios = campaignScenarios ?? [];
-    if (scenarios.length === 1) return (scenarios[0]?.steps ?? []) as FlowStep[];
+    if (scenarios.length === 1)
+      return (scenarios[0]?.steps ?? []) as FlowStep[];
     return scenarios
       .filter((item) => (item.steps ?? []).length > 0)
       .map(
@@ -713,13 +721,10 @@ export function WorkflowStepList({
     progressCurrentStep: progressSource?.current_step
   });
   const stepType =
-    derivedCursor.currentStepType ||
-    progressSource?.current_step_type ||
-    '';
+    derivedCursor.currentStepType || progressSource?.current_step_type || '';
   const message = derivedCursor.message || progressSource?.message || '';
   const loopIter =
-    progressSource?.loop_iteration != null &&
-    progressSource.loop_iteration >= 0
+    progressSource?.loop_iteration != null && progressSource.loop_iteration >= 0
       ? progressSource.loop_iteration
       : null;
   const rows = buildWorkflowStepRows({
@@ -737,10 +742,7 @@ export function WorkflowStepList({
     : wf.status === 'COMPLETED'
       ? total
       : Math.min(completed + 1, total);
-  const remaining = Math.max(
-    total - completed - (runningRow ? 1 : 0),
-    0
-  );
+  const remaining = Math.max(total - completed - (runningRow ? 1 : 0), 0);
   const pct =
     total > 0
       ? Math.round((completed / total) * 100)

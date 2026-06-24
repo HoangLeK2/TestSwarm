@@ -9,7 +9,11 @@ import {
 import { hierarchyBoundsCenterRatio } from './hierarchy-hit-test';
 
 export type { HierarchyPickOptions, XmlSelectorPick };
-export { findSelectorInXml, inferForegroundPackage, listSelectorCandidatesInXml };
+export {
+  findSelectorInXml,
+  inferForegroundPackage,
+  listSelectorCandidatesInXml
+};
 
 /**
  * Normalize Android hierarchy XML before hashing.

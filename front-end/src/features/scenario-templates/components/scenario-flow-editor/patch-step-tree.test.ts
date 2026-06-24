@@ -29,16 +29,12 @@ const fbGroupLoop: FlowStep = {
 } as FlowStep;
 
 test('patchStepByFlowgramId updates extract inside fb_tap_comment_button then branch', () => {
-  const next = patchStepByFlowgramId(
-    [fbGroupLoop],
-    'extract-node',
-    {
-      type: 'extract',
-      strategy: 'fb_comments',
-      max_items: 120,
-      comment_scroll_passes: 12
-    } as FlowStep
-  );
+  const next = patchStepByFlowgramId([fbGroupLoop], 'extract-node', {
+    type: 'extract',
+    strategy: 'fb_comments',
+    max_items: 120,
+    comment_scroll_passes: 12
+  } as FlowStep);
 
   const loop = next[0] as FlowStep & { steps?: FlowStep[] };
   const tap = loop.steps?.[0] as FlowStep & { then?: FlowStep[] };

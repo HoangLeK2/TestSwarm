@@ -408,7 +408,10 @@ export function CronBuilder({
         <TabsContent value='simple' className='space-y-3 pt-4'>
           <div className='space-y-1'>
             <Label>{t('preset')}</Label>
-            <Select value={kind} onValueChange={(v) => changeKind(v as SimpleCronKind)}>
+            <Select
+              value={kind}
+              onValueChange={(v) => changeKind(v as SimpleCronKind)}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

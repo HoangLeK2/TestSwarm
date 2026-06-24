@@ -32,14 +32,17 @@ export function isActiveWorkflowStatus(status: string): boolean {
   return ACTIVE_WORKFLOW_STATUSES.has(status);
 }
 
-export function countActiveWorkflows(workflows: Pick<WorkflowInfo, 'status'>[]): number {
+export function countActiveWorkflows(
+  workflows: Pick<WorkflowInfo, 'status'>[]
+): number {
   return workflows.filter((w) => isActiveWorkflowStatus(w.status)).length;
 }
 
 export function countActiveExecutions(
   executions: Pick<ExecutionOut, 'status'>[]
 ): number {
-  return executions.filter((e) => ACTIVE_EXECUTION_STATUSES.has(e.status)).length;
+  return executions.filter((e) => ACTIVE_EXECUTION_STATUSES.has(e.status))
+    .length;
 }
 
 export function isCampaignDrainComplete(snapshot: {

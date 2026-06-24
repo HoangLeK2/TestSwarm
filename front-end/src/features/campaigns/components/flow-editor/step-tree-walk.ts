@@ -35,8 +35,10 @@ function childLists(
     });
   }
   const thenElse = step as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
-  if (thenElse.then?.length) out.push({ listKey: 'then', steps: thenElse.then });
-  if (thenElse.else?.length) out.push({ listKey: 'else', steps: thenElse.else });
+  if (thenElse.then?.length)
+    out.push({ listKey: 'then', steps: thenElse.then });
+  if (thenElse.else?.length)
+    out.push({ listKey: 'else', steps: thenElse.else });
   return out;
 }
 
@@ -66,7 +68,13 @@ export function walkFlowStepsWithPaths(steps: FlowStep[]): StepTreeVisit[] {
     if (!step.type) continue;
     out.push({ step, path: [{ listKey: 'steps', ci }], depth: 0 });
     for (const childList of childLists(step)) {
-      walkChildren(childList.steps, childList.listKey, [{ listKey: 'steps', ci }], 1, out);
+      walkChildren(
+        childList.steps,
+        childList.listKey,
+        [{ listKey: 'steps', ci }],
+        1,
+        out
+      );
     }
   }
   return out;
@@ -95,11 +103,12 @@ export function resolveStepAtPath(
     if (listKey.startsWith('branches.')) {
       const bi = parseInt(listKey.split('.')[1] ?? '0', 10);
       current =
-        (
-          current as FlowStep & { branches?: Array<{ steps?: FlowStep[] }> }
-        ).branches?.[bi]?.steps?.[ci] ?? null;
+        (current as FlowStep & { branches?: Array<{ steps?: FlowStep[] }> })
+          .branches?.[bi]?.steps?.[ci] ?? null;
     } else {
-      current = ((current as Record<string, unknown>)[listKey] as FlowStep[])?.[ci] ?? null;
+      current =
+        ((current as Record<string, unknown>)[listKey] as FlowStep[])?.[ci] ??
+        null;
     }
   }
   return current;
@@ -151,7 +160,8 @@ export function updateStepAtPath(
       next.branches = branches;
     } else {
       const arr = [...((next[listKey] as FlowStep[]) ?? [])];
-      arr[ci] = tail.length === 0 ? value : patchInParent(arr[ci]!, tail, value);
+      arr[ci] =
+        tail.length === 0 ? value : patchInParent(arr[ci]!, tail, value);
       next[listKey] = arr;
     }
     return next as FlowStep;
@@ -163,7 +173,10 @@ export function updateStepAtPath(
 }
 
 /** Scale loop body for perf stress tests. */
-export function amplifyLoopSteps(steps: FlowStep[], factor: number): FlowStep[] {
+export function amplifyLoopSteps(
+  steps: FlowStep[],
+  factor: number
+): FlowStep[] {
   return steps.map((step) => {
     if (step.type !== 'loop') return step;
     const loop = step as FlowStep & { steps?: FlowStep[] };

@@ -41,7 +41,9 @@ type LibraryTab = 'org' | 'system';
 type ScenarioRoleFilter = 'all' | 'regular' | 'recovery';
 
 function isRecoveryScenario(item: ScenarioLibraryItem): boolean {
-  return item.is_recovery_scenario === true || (item.recovery_usage_count ?? 0) > 0;
+  return (
+    item.is_recovery_scenario === true || (item.recovery_usage_count ?? 0) > 0
+  );
 }
 
 export function ScenarioLibrary() {
@@ -86,8 +88,12 @@ export function ScenarioLibrary() {
   );
 
   const counts = useMemo(() => {
-    const visibleOrg = orgLibraryItems.filter((s) => s.status !== 'archived').length;
-    const hiddenOrg = orgLibraryItems.filter((s) => s.status === 'archived').length;
+    const visibleOrg = orgLibraryItems.filter(
+      (s) => s.status !== 'archived'
+    ).length;
+    const hiddenOrg = orgLibraryItems.filter(
+      (s) => s.status === 'archived'
+    ).length;
     const recovery = orgLibraryItems.filter(
       (s) => s.status !== 'archived' && isRecoveryScenario(s)
     ).length;
@@ -170,42 +176,48 @@ export function ScenarioLibrary() {
     setDetailOpen(true);
   }, []);
 
-  const handleArchive = useCallback((scenario: ScenarioLibraryItem) => {
-    if (isSystemTemplateItem(scenario)) return;
-    void (async () => {
-      const ok = await confirm({
-        title: t('archiveTitle'),
-        description: t('archiveConfirm', { name: scenario.name }),
-        confirmText: tCommon('confirm'),
-        cancelText: tCommon('cancel'),
-        confirmVariant: 'destructive',
-        zIndex: 10_000
-      });
-      if (!ok) return;
-      archiveMutation.mutate(scenario.id, {
-        onSuccess: () => toast.success(t('archiveSuccess')),
-        onError: () => toast.error(t('archiveFailed'))
-      });
-    })();
-  }, [archiveMutation, confirm, t, tCommon]);
+  const handleArchive = useCallback(
+    (scenario: ScenarioLibraryItem) => {
+      if (isSystemTemplateItem(scenario)) return;
+      void (async () => {
+        const ok = await confirm({
+          title: t('archiveTitle'),
+          description: t('archiveConfirm', { name: scenario.name }),
+          confirmText: tCommon('confirm'),
+          cancelText: tCommon('cancel'),
+          confirmVariant: 'destructive',
+          zIndex: 10_000
+        });
+        if (!ok) return;
+        archiveMutation.mutate(scenario.id, {
+          onSuccess: () => toast.success(t('archiveSuccess')),
+          onError: () => toast.error(t('archiveFailed'))
+        });
+      })();
+    },
+    [archiveMutation, confirm, t, tCommon]
+  );
 
-  const handleRestore = useCallback((scenario: ScenarioLibraryItem) => {
-    if (isSystemTemplateItem(scenario)) return;
-    void (async () => {
-      const ok = await confirm({
-        title: t('restoreTitle'),
-        description: t('restoreConfirm', { name: scenario.name }),
-        confirmText: tCommon('confirm'),
-        cancelText: tCommon('cancel'),
-        zIndex: 10_000
-      });
-      if (!ok) return;
-      restoreMutation.mutate(scenario.id, {
-        onSuccess: () => toast.success(t('restoreSuccess')),
-        onError: () => toast.error(t('restoreFailed'))
-      });
-    })();
-  }, [confirm, restoreMutation, t, tCommon]);
+  const handleRestore = useCallback(
+    (scenario: ScenarioLibraryItem) => {
+      if (isSystemTemplateItem(scenario)) return;
+      void (async () => {
+        const ok = await confirm({
+          title: t('restoreTitle'),
+          description: t('restoreConfirm', { name: scenario.name }),
+          confirmText: tCommon('confirm'),
+          cancelText: tCommon('cancel'),
+          zIndex: 10_000
+        });
+        if (!ok) return;
+        restoreMutation.mutate(scenario.id, {
+          onSuccess: () => toast.success(t('restoreSuccess')),
+          onError: () => toast.error(t('restoreFailed'))
+        });
+      })();
+    },
+    [confirm, restoreMutation, t, tCommon]
+  );
 
   const columns = useMemo(
     () =>

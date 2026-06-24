@@ -1,29 +1,16 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import {
   countScenarioVariables,
   extractPreviewSteps
 } from '../lib/parse-scenario-body';
 import { ImportOrgScenarioInlineTrigger } from './import-scenario-dialog';
-
-const FlowEditor = dynamic(
-  () =>
-    import('@/features/campaigns/components/flow-editor').then(
-      (m) => m.FlowEditor
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <div className='h-40 animate-pulse rounded-lg border bg-muted/30' />
-    )
-  }
-);
 
 export function ScenarioBodyPreview({
   body,

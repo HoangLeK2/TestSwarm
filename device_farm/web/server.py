@@ -79,6 +79,23 @@ def _relay_serial_matches_ws_device(
     )
 
 
+def _relay_capabilities_status_payload(device, caps: dict | None) -> dict:
+    """Build metadata from relay heartbeat without reviving watchdog-dead devices."""
+    caps = caps or {}
+    payload = {
+        "brand":         caps.get("brand", ""),
+        "model":         caps.get("model", ""),
+        "android":       caps.get("android_version", ""),
+        "screen_width":  caps.get("screen_width", 0),
+        "screen_height": caps.get("screen_height", 0),
+    }
+    state = getattr(device, "state", None)
+    state_value = str(getattr(state, "value", state) or "").upper()
+    if state_value in {"DISCONNECTED", "CONNECTING", "ERROR"}:
+        payload["state"] = "READY"
+    return payload
+
+
 def _find_ws_device_for_relay_serial(
     devices,
     relay_serial: str,
@@ -94,6 +111,31 @@ def _find_ws_device_for_relay_serial(
         ),
         None,
     )
+
+
+def _relay_has_active_scrcpy_viewers(serial: str) -> bool:
+    try:
+        from api.routes.device_control.scrcpy import has_active_scrcpy_viewers
+
+        return has_active_scrcpy_viewers(serial)
+    except Exception as exc:
+        log.debug("scrcpy viewer state unavailable for relay online %s: %s", serial, exc)
+        return False
+
+
+def _relay_should_attach_scrcpy_on_online(device_serial: str, *, auto_attach: bool) -> bool:
+    return bool(auto_attach or _relay_has_active_scrcpy_viewers(device_serial))
+
+
+def _mark_relay_scrcpy_offline(device, relay_serial: str) -> bool:
+    marker = getattr(device, "mark_scrcpy_relay_offline", None)
+    if marker is None:
+        return False
+    try:
+        return bool(marker(relay_serial))
+    except Exception as exc:
+        log.warning("relay device offline %s - failed to mark scrcpy inactive: %s", relay_serial, exc)
+        return False
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
@@ -512,16 +554,9 @@ def create_app(
         lifecycle.register_resource(
             LifecyclePhase.INFRA, "db_loop_engine", dispose_loop_engine,
         )
-        if redis_store.enabled():
-            import json as _json
-            try:
-                _redis_devs = await redis_store.client().hgetall(redis_store.key("devices"))
-                for _serial in _redis_devs:
-                    manager.ensure_device(_serial)
-                if _redis_devs:
-                    log.info("Restored %d device(s) from Redis", len(_redis_devs))
-            except Exception as _exc:
-                log.warning("Redis device restore failed: %s", _exc)
+        # Device registry is live-only: populated when agent-boot relay or WS
+        # agent connects. Do not hydrate from Redis — stale entries would register
+        # devices that are no longer online.
 
         # ── Start lifecycle components attached by main.py ──
         watchdog = getattr(_app.state, "watchdog", None)
@@ -880,7 +915,6 @@ def create_app(
                         DeviceState.DISCONNECTED,
                         DeviceState.CONNECTING,
                         DeviceState.ERROR,
-                        DeviceState.DEAD,
                     ):
                         device.on_agent_status({"state": "READY"})
 
@@ -944,7 +978,11 @@ def create_app(
                         _relay_auto = bool(
                             getattr(_st, "auto_attach_scrcpy_on_relay_online", True)
                         )
-                        if _relay_auto and _relay_db_allows_scrcpy(ws_device.serial):
+                        _should_attach = _relay_should_attach_scrcpy_on_online(
+                            ws_device.serial,
+                            auto_attach=_relay_auto,
+                        )
+                        if _should_attach and _relay_db_allows_scrcpy(ws_device.serial):
                             _RELAY_ATTACH_POOL.submit(
                                 ws_device.attach_scrcpy_stream,
                                 serial,
@@ -952,10 +990,12 @@ def create_app(
                                 _config_ref.device.scrcpy_control,
                             )
                             log.info(
-                                "relay device online %s — reattaching scrcpy for WS device %s",
-                                serial, ws_device.serial,
+                                "relay device online %s — reattaching scrcpy for WS device %s (%s)",
+                                serial,
+                                ws_device.serial,
+                                "auto_attach" if _relay_auto else "active_viewer",
                             )
-                        elif _relay_auto:
+                        elif _should_attach:
                             log.info(
                                 "relay device online %s — skip scrcpy reattach "
                                 "(relay_scrcpy_enabled=false in DB for %s)",
@@ -973,7 +1013,7 @@ def create_app(
                         return
 
                     is_new = _manager_ref.get_device(serial) is None
-                    device = _manager_ref.ensure_device(serial)
+                    device = _manager_ref.register_relay_device(serial)
                     device.set_event_loop(asyncio.get_event_loop())
                     # Set READY immediately — relay reports it as online.
                     # Relay-only devices have no WS-Agent APK to call on_agent_status(),
@@ -985,15 +1025,23 @@ def create_app(
                         ws_manager.subscribe_device(device)
                     _st2 = getattr(_config_ref, "streaming", None)
                     _relay_auto2 = bool(getattr(_st2, "auto_attach_scrcpy_on_relay_online", True))
-                    if _relay_auto2 and _relay_db_allows_scrcpy(serial):
+                    _should_attach2 = _relay_should_attach_scrcpy_on_online(
+                        serial,
+                        auto_attach=_relay_auto2,
+                    )
+                    if _should_attach2 and _relay_db_allows_scrcpy(serial):
                         _RELAY_ATTACH_POOL.submit(
                             device.attach_scrcpy_stream,
                             serial,
                             None,
                             _config_ref.device.scrcpy_control,
                         )
-                        log.info("relay device online → auto-attach scrcpy: %s", serial)
-                    elif _relay_auto2:
+                        log.info(
+                            "relay device online → attach scrcpy: %s (%s)",
+                            serial,
+                            "auto_attach" if _relay_auto2 else "active_viewer",
+                        )
+                    elif _should_attach2:
                         log.info(
                             "relay device online → skip auto-attach scrcpy "
                             "(relay_scrcpy_enabled=false in DB): %s",
@@ -1007,6 +1055,9 @@ def create_app(
 
                 def _on_relay_device_offline(serial: str) -> None:
                     _emit_relay_fsm_offline(serial)
+                    device = _find_device_for_relay_serial(serial)
+                    if device is not None and _mark_relay_scrcpy_offline(device, serial):
+                        log.info("relay device offline %s — scrcpy marked inactive", serial)
 
                 def _on_relay_capabilities_update(serial: str, caps: dict) -> None:
                     """Propagate relay heartbeat capabilities to DeviceClient metadata."""
@@ -1019,14 +1070,9 @@ def create_app(
                     device = _find_device_for_relay_serial(serial, caps=caps)
                     if device is None:
                         return
-                    device.on_agent_status({
-                        "brand":        caps.get("brand", ""),
-                        "model":        caps.get("model", ""),
-                        "android":      caps.get("android_version", ""),
-                        "screen_width": caps.get("screen_width", 0),
-                        "screen_height":caps.get("screen_height", 0),
-                        "state":        "READY",
-                    })
+                    device.on_agent_status(
+                        _relay_capabilities_status_payload(device, caps)
+                    )
                     host = _relay_host_hint(serial, caps)
                     if device.u2 is None and (caps.get("has_u2") or host):
                         _bind_relay_u2(device, serial, caps=caps)

@@ -98,6 +98,7 @@ def phase_selector(
     screen_w: int,
     screen_h: int,
     find_fn: Optional[Callable] = None,
+    allow_moved_selector: bool = False,
 ) -> Optional[ResolveResult]:
     """
     Find element via uiautomator2 selector with retry-until-visible.
@@ -109,7 +110,10 @@ def phase_selector(
 
     If element is found with bounds AND a recorded hint position (fallback_rx/ry)
     falls inside the bounds (with tolerance), returns the recorded position for
-    exact tap replay. Otherwise returns element center.
+    exact tap replay. If the selector is known to be unique and non-volatile,
+    ``allow_moved_selector`` allows tapping the element center after list rows
+    move. Otherwise an out-of-hint match returns None so later guarded phases can
+    run instead of clicking a likely wrong list item.
 
     Returns None if element not found (triggers next phase).
     """
@@ -166,14 +170,23 @@ def phase_selector(
                 method="selector",
                 message=f"selector {by}={value!r} tapped",
             )
+        if allow_moved_selector:
+            cx = (left + right) // 2
+            cy = (top + bottom) // 2
+            return ResolveResult(
+                hit=True, x=cx, y=cy, bounds=bounds,
+                method="selector",
+                message=f"selector {by}={value!r} moved from recorded hint",
+            )
         log.info(
-            "[resolver] selector %s=%r matched; recorded (%d,%d) outside bounds "
-            "%s → tap element center (avoid raw fallback coords)",
+            "[resolver] selector %s=%r matched outside recorded hint (%d,%d); "
+            "bounds=%s → continue to healing/image/fallback",
             by, value, hx, hy, bounds,
         )
+        return None
 
-    # Case B: Have bounds → center (also used when recorded point drifted after scroll)
-    if bounds:
+    # Case B: Have bounds but no recorded position → center tap
+    if bounds and (fallback_rx is None or fallback_ry is None):
         cx = (bounds.get("left", 0) + bounds.get("right", w)) // 2
         cy = (bounds.get("top", 0) + bounds.get("bottom", h)) // 2
         return ResolveResult(

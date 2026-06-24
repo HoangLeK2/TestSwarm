@@ -18,7 +18,8 @@ import {
   ChevronsUp,
   ChevronsDown,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  Keyboard
 } from 'lucide-react';
 import { serialToId } from '../helpers';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,13 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { DeviceOpsRailSection, type DeviceOpsConfig } from './device-ops-rail';
+
+export type DeviceLiveInputConfig = {
+  wsSend: (obj: object) => void;
+  disabled?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
 
 interface DeviceControlsProps {
   serial: string;
@@ -54,6 +62,8 @@ interface DeviceControlsProps {
   hideRestart?: boolean;
   /** Device ops (ADB shell, APK, files…) on the rail — control-record only. */
   deviceOps?: DeviceOpsConfig;
+  /** Live text input — keyboard icon on rail + bar below phone. */
+  liveInput?: DeviceLiveInputConfig;
 }
 
 function RailIconButton({
@@ -63,6 +73,7 @@ function RailIconButton({
   active,
   compact,
   dpad,
+  disabled,
   children
 }: {
   label: string;
@@ -72,6 +83,7 @@ function RailIconButton({
   compact?: boolean;
   /** Narrow rail D-pad — fits two buttons per row inside `w-11`. */
   dpad?: boolean;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -81,15 +93,18 @@ function RailIconButton({
           type='button'
           aria-label={label}
           aria-pressed={active}
+          disabled={disabled}
           onClick={onClick}
           className={cn(
             'flex shrink-0 items-center justify-center rounded-full transition-colors',
             !dpad && 'mx-auto',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
             dpad ? 'size-7' : compact ? 'size-8' : 'size-9',
-            active
-              ? 'bg-primary text-primary-foreground shadow-md'
-              : 'text-zinc-300 hover:bg-white/15 hover:text-white'
+            disabled
+              ? 'cursor-not-allowed text-zinc-600'
+              : active
+                ? 'bg-primary text-primary-foreground shadow-md'
+                : 'text-zinc-300 hover:bg-white/15 hover:text-white'
           )}
         >
           {children}
@@ -156,9 +171,11 @@ function DeviceControlsRail({
   hidePinch,
   hideRestart,
   deviceOps,
+  liveInput,
   className
 }: DeviceControlsProps) {
   const t = useTranslations('devicesControlRecord.controls');
+  const tLive = useTranslations('devicesControlRecord.liveInput');
   const id = serialToId(serial);
   const ModeIcon = mode === 'tap' ? MousePointerClick : MoveHorizontal;
   const iconClass = 'size-[18px] shrink-0 stroke-[2.25]';
@@ -281,6 +298,21 @@ function DeviceControlsRail({
           <Power className={iconClass} aria-hidden />
         </RailIconButton>
       </div>
+
+      {liveInput ? (
+        <div className={cn(railSectionClass, 'py-1')}>
+          <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
+          <RailIconButton
+            label={tLive('label')}
+            hint={tLive('railHint')}
+            active={liveInput.open}
+            disabled={liveInput.disabled}
+            onClick={() => liveInput.onOpenChange(!liveInput.open)}
+          >
+            <Keyboard className={iconClass} aria-hidden />
+          </RailIconButton>
+        </div>
+      ) : null}
 
       {deviceOps ? (
         <div className={cn(railSectionClass, 'py-1')}>

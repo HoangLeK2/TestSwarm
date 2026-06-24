@@ -45,6 +45,7 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
 
   const handleRunNow = () => {
     runNowMutation.mutate(schedule.id, {
+      onSuccess: () => toast.success(t('runNowSuccess')),
       onError: (err: unknown) =>
         toast.error(formatFarmApiError(err, t('runNowFailed')))
     });

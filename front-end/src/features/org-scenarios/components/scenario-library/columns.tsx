@@ -8,7 +8,8 @@ import {
   EyeOff,
   FileCode,
   MoreHorizontal,
-  RotateCcw
+  RotateCcw,
+  Wrench
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -59,6 +60,8 @@ export function getOrgScenarioColumns(
         const item = row.original;
         const isSystem = isSystemTemplateItem(item);
         const isArchived = item.status === 'archived';
+        const recoveryUsageCount = item.recovery_usage_count ?? 0;
+        const isRecovery = item.is_recovery_scenario === true || recoveryUsageCount > 0;
         return (
           <button
             type='button'
@@ -87,6 +90,21 @@ export function getOrgScenarioColumns(
                   <span className='text-[11px] text-muted-foreground'>
                     {t('templateBadge')}
                   </span>
+                ) : null}
+                {!isSystem ? (
+                  <Badge
+                    variant='outline'
+                    className='h-5 gap-1 px-1.5 text-[10px] font-medium'
+                  >
+                    {isRecovery ? (
+                      <Wrench className='size-3' />
+                    ) : null}
+                    {isRecovery
+                      ? t('recoveryScenarioBadge', {
+                          count: recoveryUsageCount
+                        })
+                      : t('mainScenarioBadge')}
+                  </Badge>
                 ) : null}
               </span>
             </div>

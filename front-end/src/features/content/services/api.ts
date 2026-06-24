@@ -147,7 +147,13 @@ export const contentApi = {
   fetchArtifactBlob: async (resolvedUrl: string): Promise<Blob> => {
     const path = artifactApiPath(resolvedUrl);
     const response = await farmApi.get<Blob>(path, { responseType: 'blob' });
-    return response.data as Blob;
+    const data = response.data;
+    if (data instanceof Blob) return data;
+    if (data instanceof ArrayBuffer) {
+      const contentType = String(response.headers['content-type'] ?? 'image/png');
+      return new Blob([data], { type: contentType });
+    }
+    throw new TypeError('Artifact download did not return a Blob');
   },
 
   list: async (filters?: ContentFilters): Promise<ContentListResponse> => {

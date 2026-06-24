@@ -128,7 +128,13 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
 
         # Rank Comment buttons by proximity to mid-screen so a feed with several
         # visible "Bình luận" rows never silently latches onto the wrong post.
-        top, ranked = resolve_comment_targets_from_xml(xml)
+        locked_anchor = context.get("_active_comment_parent_anchor")
+        if not isinstance(locked_anchor, dict) or not locked_anchor:
+            locked_anchor = None
+        top, ranked = resolve_comment_targets_from_xml(
+            xml,
+            locked_anchor=locked_anchor,
+        )
         if not top:
             diag = diagnose_comment_target_resolution(xml)
             return [], {

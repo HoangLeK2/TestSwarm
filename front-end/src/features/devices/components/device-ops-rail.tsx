@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { SCENARIO_VAR_TOKENS } from '@/features/campaigns/i18n/scenario-var-tokens';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -291,7 +292,7 @@ export function DeviceOpsRailSection({
               {open === 'install_apk' && draft.type === 'install_apk' ? (
                 <div className='space-y-2'>
                   <p className='text-[12px] text-muted-foreground'>
-                    {tApp('installApkHint')}
+                    {tApp('installApkHint', { varToken: SCENARIO_VAR_TOKENS.VAR })}
                   </p>
                   <Input
                     placeholder={tApp('installApkUrlPlaceholder')}

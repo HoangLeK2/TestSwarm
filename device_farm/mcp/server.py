@@ -32,7 +32,7 @@ from urllib.error import HTTPError, URLError
 
 
 DEVICE_FARM_URL = os.environ.get("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
-SERVER_VERSION = "2.2.0"
+SERVER_VERSION = "2.2.1"
 CONTRACT_VERSION = "df-mcp-preview-2026-06-01"
 PREVIEW_WARNING = (
     "Preview / Experimental: Device Farm MCP Agent Tools contract may change "
@@ -238,6 +238,60 @@ def _summarize_output(result: Any) -> Dict[str, Any]:
     if isinstance(result, list):
         return {"items": len(result)}
     return {"type": type(result).__name__}
+
+
+def _tool_success_payload(name: str, result: Any) -> Dict[str, Any]:
+    return {
+        "preview": True,
+        "contract_version": CONTRACT_VERSION,
+        "tool_name": name,
+        "result": result,
+    }
+
+
+def _tool_structured_content(name: str, result: Any) -> Dict[str, Any]:
+    """Build MCP structuredContent that conforms to each tool's outputSchema."""
+    if name == "df_screenshot" and isinstance(result, dict):
+        img = result.get("image")
+        if isinstance(img, dict):
+            data = img.get("data")
+            byte_length = None
+            if isinstance(data, str):
+                try:
+                    byte_length = len(base64.b64decode(data))
+                except Exception:
+                    byte_length = None
+            return {
+                "image": {
+                    "mimeType": img.get("mimeType"),
+                    "byte_length": byte_length,
+                    "note": "Image bytes are returned in content as an image block.",
+                }
+            }
+
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, list):
+        return {"items": result}
+    return {"value": result}
+
+
+def _tool_call_content(name: str, result: Any) -> List[Dict[str, Any]]:
+    content: List[Dict[str, Any]] = []
+    if name == "df_screenshot" and isinstance(result, dict):
+        img = result.get("image")
+        if isinstance(img, dict) and img.get("data"):
+            content.append(
+                {
+                    "type": "image",
+                    "data": img["data"],
+                    "mimeType": img.get("mimeType") or "image/jpeg",
+                }
+            )
+    structured = _tool_structured_content(name, result)
+    payload = _tool_success_payload(name, result)
+    content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False)})
+    return content
 
 
 def _audit_log_path() -> Path:
@@ -626,8 +680,10 @@ def _df_get_ui_elements(args: Dict[str, Any]) -> Dict[str, Any]:
     """
     Get UI hierarchy as a structured, LLM-friendly element list.
     Server parses the XML and returns [{text, resource_id, content_desc, class_name,
-    bounds, clickable, selector_by, selector_value}].
-    LLM picks the right element and calls df_tap_selector with selector_by + selector_value.
+    bounds, clickable, selector_by, selector_value, selector_reason,
+    selector_volatile}].
+    LLM picks the right element, respects duplicate/volatile warnings, and calls
+    df_tap_selector with selector_by + selector_value.
     """
     serial = _resolve_device(args)
     refresh = bool(args.get("refresh", True))
@@ -1273,8 +1329,10 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     "df_get_ui_elements": {
         "description": (
             "⚡ PREFERRED for UI interaction. Get UI elements as structured list — server fetches hierarchy XML "
-            "and parses into [{text, resource_id, content_desc, class_name, bounds, clickable, selector_by, selector_value}]. "
+            "and parses into [{text, resource_id, content_desc, class_name, bounds, clickable, selector_by, selector_value, "
+            "selector_reason, selector_volatile}]. "
             "LLM workflow: call this → pick element matching intent → call df_tap_selector with selector_by + selector_value. "
+            "Prefer selector_by/selector_value over raw fields; avoid volatile selectors when a non-volatile candidate matches. "
             "This replaces df_tap(x,y) with reliable element-based interaction. "
             "If element_count < 5, XML is flat — enable Accessibility Service on device for full hierarchy."
         ),
@@ -1291,7 +1349,8 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     "df_tap_selector": {
         "description": (
             "Tap UI element by selector strategy. "
-            "by: resource-id | text | xpath | class name. Give device or session_id."
+            "by: resource-id | text | description | descriptionContains | "
+            "descriptionStartsWith | xpath | class name. Give device or session_id."
         ),
         "inputSchema": {
             "type": "object",
@@ -1299,7 +1358,15 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
                 **_DEVICE_OR_SESSION,
                 "by": {
                     "type": "string",
-                    "enum": ["resource-id", "text", "xpath", "class name"],
+                    "enum": [
+                        "resource-id",
+                        "text",
+                        "description",
+                        "descriptionContains",
+                        "descriptionStartsWith",
+                        "xpath",
+                        "class name",
+                    ],
                 },
                 "value": {"type": "string"},
             },
@@ -2105,22 +2172,14 @@ def handle_tools_call(ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
             started_at=started_at,
             artifact_refs=args.get("artifact_refs") if isinstance(args.get("artifact_refs"), list) else None,
         )
-        content: List[Dict[str, Any]] = []
-        if name == "df_screenshot":
-            img = result["image"]
-            content.append({"type": "image", "data": img["data"], "mimeType": img["mimeType"]})
-        else:
-            payload = {
-                "preview": True,
-                "contract_version": CONTRACT_VERSION,
-                "tool_name": name,
-                "result": result,
-            }
-            content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False)})
+        content = _tool_call_content(name, result)
         return {
             "id": msg.get("id"),
             "jsonrpc": "2.0",
-            "result": {"content": content},
+            "result": {
+                "content": content,
+                "structuredContent": _tool_structured_content(name, result),
+            },
         }
     except Exception as e:
         err = _exception_to_mcp_error(e)

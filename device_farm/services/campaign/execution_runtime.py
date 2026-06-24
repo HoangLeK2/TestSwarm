@@ -18,6 +18,7 @@ from services.campaign.scenario_sources import (
     build_campaign_scenario_registry,
     resolve_campaign_scenario_refs,
 )
+from common.variable_resolver import normalize_device_vars
 from temporal.shared import ScenarioInput, TASK_QUEUE_NAME
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,26 @@ DISPATCH_SOURCE_FALLBACK = "fallback"
 def workflow_id_for_execution(execution_id: str) -> str:
     """Deterministic Temporal workflow id (DF-T-04-010)."""
     return f"exec_{execution_id}"
+
+
+def _scenario_refs_with_recovery_refs(
+    scenario_refs: list[dict[str, Any]],
+    recovery_policy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    merged = list(scenario_refs)
+    seen = {str(ref.get("scenario_id") or "") for ref in merged}
+    raw_rules = recovery_policy.get("rules")
+    if not isinstance(raw_rules, list):
+        return merged
+    for rule in raw_rules:
+        if not isinstance(rule, dict):
+            continue
+        scenario_id = str(rule.get("scenario_id") or "").strip()
+        if not scenario_id or scenario_id in seen:
+            continue
+        merged.append({"scenario_id": scenario_id})
+        seen.add(scenario_id)
+    return merged
 
 
 async def build_org_scenario_registry(
@@ -69,11 +90,26 @@ def build_sequence_steps(
     device_index: int,
     effective_vars: dict[str, Any],
     account_vars: dict[str, Any],
+    campaign_vars: dict[str, Any] | None = None,
+    scenario_device_vars: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
+    campaign_defaults = dict(campaign_vars or {})
+    device_override_vars = (
+        {
+            key: value
+            for key, value in (effective_vars or {}).items()
+            if campaign_defaults.get(key) != value
+        }
+        if campaign_vars is not None
+        else dict(effective_vars or {})
+    )
     for scenario_idx, ref in enumerate(scenario_refs):
+        scenario_id = str(ref["scenario_id"])
+        scoped_vars = dict((scenario_device_vars or {}).get(scenario_id) or {})
         merged_vars = {
-            **effective_vars,
+            **device_override_vars,
+            **scoped_vars,
             **account_vars,
             "DEVICE_INDEX": str(device_index),
             "SCENARIO_INDEX": str(scenario_idx),
@@ -81,11 +117,37 @@ def build_sequence_steps(
         steps.append(
             {
                 "type": "run_scenario",
-                "scenario_id": ref["scenario_id"],
+                "scenario_id": scenario_id,
                 "variables": merged_vars,
             }
         )
     return steps
+
+
+async def _load_scenario_device_vars_for_execution(
+    db: AsyncSession,
+    *,
+    campaign_id: str,
+    scenario_refs: list[dict[str, Any]],
+    device_id: str | None,
+) -> dict[str, dict[str, Any]]:
+    if not device_id or not scenario_refs:
+        return {}
+    from db.crud.scenario_device_variable import (
+        get_campaign_org_scenario_device_variables_bulk,
+    )
+
+    scenario_ids = [str(ref["scenario_id"]) for ref in scenario_refs if ref.get("scenario_id")]
+    bulk = await get_campaign_org_scenario_device_variables_bulk(
+        db,
+        campaign_id,
+        scenario_ids,
+        [device_id],
+    )
+    return {
+        scenario_id: normalize_device_vars(bulk.get((scenario_id, device_id), {}))
+        for scenario_id in scenario_ids
+    }
 
 
 async def prepare_scenario_input(
@@ -98,6 +160,7 @@ async def prepare_scenario_input(
     effective_vars: dict[str, Any],
     account_vars: dict[str, Any],
     scenario_refs: list[dict[str, Any]] | None = None,
+    device_id: str | None = None,
     device_index: int = 0,
 ) -> ScenarioInput | None:
     refs = scenario_refs if scenario_refs is not None else await resolve_campaign_scenario_refs(
@@ -105,27 +168,38 @@ async def prepare_scenario_input(
     )
     if not refs:
         return None
+    recovery_policy = dict(getattr(campaign, "recovery_policy", None) or {})
+    registry_refs = _scenario_refs_with_recovery_refs(refs, recovery_policy)
     registry = await build_campaign_scenario_registry(
         db,
         campaign=campaign,
         org_id=org_id,
-        scenario_refs=refs,
+        scenario_refs=registry_refs,
     )
+    campaign_vars = dict(campaign.variables or {})
+    owner = campaign.created_by or campaign.user_id
+    if owner:
+        campaign_vars.setdefault("__USER_ID__", str(owner))
     sequence_steps = build_sequence_steps(
         refs,
         device_index=device_index,
         effective_vars=effective_vars,
         account_vars=account_vars,
+        campaign_vars=campaign_vars,
+        scenario_device_vars=await _load_scenario_device_vars_for_execution(
+            db,
+            campaign_id=campaign.id,
+            scenario_refs=registry_refs,
+            device_id=device_id,
+        ),
     )
     if not sequence_steps:
         return None
 
-    campaign_vars = dict(campaign.variables or {})
-    owner = campaign.created_by or campaign.user_id
-    if owner:
-        campaign_vars.setdefault("__USER_ID__", str(owner))
-
     start_step = int((execution.meta or {}).get("start_step") or execution.checkpoint_step or 0)
+    scenario_config: dict[str, Any] = {"capture_mode": "error_only"}
+    if recovery_policy:
+        scenario_config["recovery_policy"] = recovery_policy
 
     return ScenarioInput(
         campaign_id=campaign.id,
@@ -137,6 +211,7 @@ async def prepare_scenario_input(
         execution_id=execution.id,
         run_id=execution.id,
         start_step=max(0, start_step),
+        scenario_config=scenario_config,
     )
 
 
@@ -245,8 +320,10 @@ def build_runtime_scenario_dict(
         "implicit_wait",
         "capture_steps",
         "capture_throttle",
+        "capture_mode",
         "settle_timeout_ms",
         "preview_collection",
+        "recovery_policy",
     ):
         if key in scenario_config:
             scenario[key] = scenario_config[key]
@@ -437,6 +514,7 @@ async def start_execution_runtime(
             effective_vars=effective_vars,
             account_vars=account_vars,
             scenario_refs=scenario_refs,
+            device_id=view.device_id,
             device_index=device_index,
         )
         if scenario_input is None:

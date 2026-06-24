@@ -11,6 +11,49 @@ from services.extract_profiles import (
 )
 
 
+_FB_TAP_COMMENT_DEFAULTS: dict[str, Any] = {
+    "comment_filter": "all_comments",
+    "switch_to_all_comments": True,
+    "comment_filter_settle_s": 0.45,
+    "comment_filter_step_pause_s": 0.35,
+    "comment_filter_post_select_s": 0.85,
+    "post_tap_wait_s": 0.35,
+}
+
+_NESTED_STEP_BRANCHES: tuple[str, ...] = ("then", "else", "steps")
+
+
+def _normalize_nested_steps(step: dict[str, Any], normalizer) -> None:
+    for branch in _NESTED_STEP_BRANCHES:
+        nested = step.get(branch)
+        if isinstance(nested, list):
+            step[branch] = [normalizer(item) for item in nested if isinstance(item, dict)]
+
+
+def normalize_fb_tap_comment_step(raw_step: dict[str, Any]) -> dict[str, Any]:
+    step = deepcopy(raw_step)
+    step_type = str(step.get("type") or "")
+    if step_type not in {"fb_tap_comment_button", "tap_fb_comment_button"}:
+        return step
+    for key, val in _FB_TAP_COMMENT_DEFAULTS.items():
+        step.setdefault(key, val)
+    if step.get("require_post_before_comment") is None and step.get("pre_scroll"):
+        step["require_post_before_comment"] = True
+    _normalize_nested_steps(step, normalize_scenario_step)
+    return step
+
+
+def normalize_scenario_step(raw_step: dict[str, Any]) -> dict[str, Any]:
+    step = deepcopy(raw_step)
+    step_type = str(step.get("type") or "")
+    if step_type == "extract":
+        return normalize_extract_step(step)
+    if step_type in {"fb_tap_comment_button", "tap_fb_comment_button"}:
+        return normalize_fb_tap_comment_step(step)
+    _normalize_nested_steps(step, normalize_scenario_step)
+    return step
+
+
 def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     step = deepcopy(raw_step)
     strategy = str(step.get("strategy") or "fb_posts")

@@ -6,20 +6,22 @@ from typing import Any
 
 from services.execution.capture_policy import default_capture_enabled_for_step
 
-_VALID_ERROR_POLICIES = frozenset({"stop", "ignore", "on_error"})
+_VALID_ERROR_POLICIES = frozenset({"stop", "ignore", "continue", "on_error"})
 
 # FR-04-20: normalization must never inject implicit recovery/retry.
 IMPLICIT_RECOVERY_FORBIDDEN = True
 
 
 def effective_error_policy(step: dict[str, Any]) -> str:
-    """Return explicit error policy; default is stop-on-failure (FR-04-05/06/20)."""
+    """Return explicit error policy; undeclared failures stop by default."""
     raw = step.get("error_policy")
     if raw is None or raw == "":
         return "stop"
     policy = str(raw)
+    if policy == "continue":
+        return "ignore"
     if policy not in _VALID_ERROR_POLICIES:
-        return "stop"
+        return "ignore"
     return policy
 
 
@@ -48,13 +50,13 @@ def normalize_body_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def assert_no_implicit_recovery(steps: list[dict[str, Any]]) -> None:
-    """Guard FR-04-20: fail if any step would get non-stop policy without declaration."""
+    """Guard FR-04-20: normalization must not invent recovery branches/retries."""
     for step in steps:
         if not isinstance(step, dict):
             continue
         declared = step.get("error_policy")
         effective = effective_error_policy(step)
-        if declared is None and effective != "stop":
+        if declared is None and effective == "on_error":
             raise AssertionError("implicit error_policy injected")
         if declared is None and step.get("retry") not in (None, {}):
             raise AssertionError("implicit retry on step without explicit retry block")

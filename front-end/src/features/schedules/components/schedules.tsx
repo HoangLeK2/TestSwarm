@@ -5,6 +5,12 @@ import { Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import type { ScheduleOut } from '../services/api';
 import { useSchedules } from '../hooks/use-schedules';
+import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
+import {
+  isCampaignActiveExecution,
+  type CampaignOut
+} from '@/features/campaigns/types';
+import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
 import { Button } from '@/components/ui/button';
@@ -14,16 +20,37 @@ import { FileText } from 'lucide-react';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { Can } from '@/features/auth';
+import { Badge } from '@/components/ui/badge';
 
 export function Schedules() {
   const tList = useTranslations('schedulesFeature.list');
   const tCron = useTranslations('schedulesFeature.cronBuilder');
   const { data: schedules, isLoading, error } = useSchedules();
+  const { data: campaigns = [] } = useCampaigns();
 
   const data: ScheduleOut[] = schedules ?? [];
+  const hasTemplateTargets = data.some((s) => s.target_type === 'template');
+  const { data: templates = [] } = useScenarioTemplates(undefined, {
+    enabled: hasTemplateTargets
+  });
+  const campaignById = useMemo(
+    () => new Map(campaigns.map((campaign) => [campaign.id, campaign])),
+    [campaigns]
+  );
+  const templateById = useMemo(
+    () => new Map(templates.map((template) => [template.id, template])),
+    [templates]
+  );
+  const runningCampaigns = useMemo(
+    () =>
+      campaigns.filter((campaign) =>
+        isCampaignActiveExecution(campaign.status)
+      ),
+    [campaigns]
+  );
   const columns = useMemo(
-    () => getScheduleColumns(tList, tCron),
-    [tList, tCron]
+    () => getScheduleColumns(tList, tCron, { campaignById, templateById }),
+    [tList, tCron, campaignById, templateById]
   );
 
   const { table } = useDataTable<ScheduleOut>({
@@ -36,6 +63,31 @@ export function Schedules() {
 
   return (
     <div className='space-y-6'>
+      {runningCampaigns.length > 0 && (
+        <div className='rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <Badge className='bg-emerald-600 text-[11px] text-white hover:bg-emerald-600'>
+              {tList('runningCampaignsLabel', {
+                count: runningCampaigns.length
+              })}
+            </Badge>
+            {runningCampaigns.map((campaign: CampaignOut) => (
+              <Button
+                key={campaign.id}
+                asChild
+                size='sm'
+                variant='outline'
+                className='h-7 max-w-full px-2 text-xs'
+              >
+                <Link href={ROUTES.CAMPAIGNS.MONITOR(campaign.id)}>
+                  <span className='truncate'>{campaign.name}</span>
+                </Link>
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isLoading || error ? (
         <div>
           {isLoading && (

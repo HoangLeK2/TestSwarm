@@ -592,6 +592,17 @@ class ExtractStep(StepBase):
     parent_post_id_var: Optional[str] = None  # ctx var holding parent post id
     # int or "${VAR}" string — resolved at runtime before use
     max_items: Optional[Union[int, str]] = None
+    comment_scroll_passes: Optional[IntOrVar] = None
+    comment_swipes_per_dump: Optional[IntOrVar] = None
+    comment_scroll_distance: Optional[NumOrVar] = None
+    comment_scroll_duration_ms: Optional[IntOrVar] = None
+    comment_scroll_pause_s: Optional[NumOrVar] = None
+    comment_scroll_wall_s: Optional[NumOrVar] = None
+    comment_no_growth_break: Optional[IntOrVar] = None
+    min_comment_scan_passes: Optional[IntOrVar] = None
+    comment_max_snapshots: Optional[IntOrVar] = None
+    comment_stop_if_no_new: Optional[bool] = None
+    comment_no_new_threshold: Optional[IntOrVar] = None
     # ── Inline save (merged extract+save) ──
     # When collection is set, auto-save extracted data after extraction.
     # Replaces the need for a separate save_extraction step.

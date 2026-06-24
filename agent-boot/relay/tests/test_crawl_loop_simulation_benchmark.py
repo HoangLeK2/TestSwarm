@@ -49,6 +49,28 @@ CRAWL_FB_COMMENTS_CONTEXT: dict[str, Any] = {
     "return_items": True,
 }
 
+LEGACY_BALANCED_FB_COMMENTS_CONTEXT: dict[str, Any] = {
+    "expand_see_more": False,
+    "hierarchy_compressed": True,
+    "hierarchy_dump_timeout_s": 2.2,
+    "max_items": 400,
+    "comment_scroll_passes": 40,
+    "comment_swipes_per_dump": 6,
+    "comment_scroll_distance": 0.52,
+    "comment_scroll_duration_ms": 120,
+    "comment_scroll_pause_s": 0.03,
+    "comment_recover_chrome": False,
+    "comment_no_growth_break": 2,
+    "min_comment_scan_passes": 1,
+    "comment_max_snapshots": 28,
+    "comment_stop_if_no_new": False,
+    "stop_if_no_new": False,
+    "no_new_threshold": 3,
+    "parent_post_id": "pid-test-001",
+    "persist": False,
+    "return_items": True,
+}
+
 CRAWL_FB_POSTS_CONTEXT: dict[str, Any] = {
     "expand_see_more": False,
     "open_post_before_extract": False,
@@ -203,6 +225,23 @@ class _InstrumentedSessionExecutor(_SessionFakeExecutor):
         return result
 
 
+class _GrowingCommentExecutor(_InstrumentedExecutor):
+    """Keep the comment sheet structurally valid while making each dump unique."""
+
+    def __init__(self, *, stats: OpStats) -> None:
+        super().__init__(_sheet_xml(), stats=stats)
+        self._dump_n = 0
+
+    async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+            self._dump_n += 1
+            self._dump_xml = _sheet_xml().replace(
+                'rotation="0"',
+                f'rotation="{self._dump_n}"',
+            )
+        return await super().run_batch(serial, actions, early_exit=early_exit)
+
+
 def _load_crawl_group_comment_context() -> dict[str, Any]:
     root = Path(__file__).resolve().parents[2]
     path = root / "Crawl group (2).json"
@@ -249,6 +288,55 @@ def _load_crawl_group_comment_context() -> dict[str, Any]:
     ctx["comment_scroll_pause_s"] = 0
     ctx["comment_recover_chrome"] = False
     return ctx
+
+
+def _current_balanced_comment_context() -> dict[str, Any]:
+    from services.extract_profiles import get_profile_defaults
+
+    ctx = dict(get_profile_defaults("balanced", "fb_comments"))
+    ctx["comment_recover_chrome"] = False
+    ctx["parent_post_id"] = "pid-test-001"
+    ctx["persist"] = False
+    ctx["return_items"] = True
+    return ctx
+
+
+def _estimate_comment_device_ms(stats: OpStats, context: dict[str, Any], snapshots: int) -> float:
+    dump_ms = float(context.get("hierarchy_dump_timeout_s") or 2.2) * 1000.0
+    swipe_ms = float(context.get("comment_scroll_duration_ms") or 120)
+    pause_ms = float(context.get("comment_scroll_pause_s") or 0) * 1000.0
+    parse_ms_per_snapshot = 80.0
+    return (
+        stats.dump * dump_ms
+        + stats.swipe * (swipe_ms + pause_ms)
+        + snapshots * parse_ms_per_snapshot
+    )
+
+
+async def _simulate_long_comment_thread(context: dict[str, Any]) -> dict[str, Any]:
+    stats = OpStats()
+    exec_ = _GrowingCommentExecutor(stats=stats)
+    t0 = time.perf_counter()
+    snapshots, err = await collect_xml_snapshots(exec_, "bench-dev", "fb_comments", dict(context))
+    wall_ms = (time.perf_counter() - t0) * 1000
+    assert err is None
+    summary = stats.summary()
+    estimated_ms = _estimate_comment_device_ms(stats, context, len(snapshots))
+    return {
+        "snapshots": len(snapshots),
+        "dump": summary["dump"],
+        "swipe": summary["swipe"],
+        "sim_wall_ms": round(wall_ms, 2),
+        "estimated_device_s": round(estimated_ms / 1000.0, 2),
+        "context": {
+            "max_items": context.get("max_items"),
+            "comment_scroll_passes": context.get("comment_scroll_passes"),
+            "comment_swipes_per_dump": context.get("comment_swipes_per_dump"),
+            "comment_max_snapshots": context.get("comment_max_snapshots"),
+            "comment_scroll_wall_s": context.get("comment_scroll_wall_s"),
+            "comment_stop_if_no_new": context.get("comment_stop_if_no_new"),
+        },
+    }
 
 
 async def _simulate_crawl_iteration(
@@ -401,6 +489,30 @@ async def test_crawl_comments_deep_scroll_profile_matches_production() -> None:
     assert s["swipe"] == 7
     assert s["dump"] == 4
     assert s["wall_ms"] < 500
+
+
+@pytest.mark.asyncio
+async def test_crawl_comments_balanced_profile_speedup_benchmark() -> None:
+    legacy = await _simulate_long_comment_thread(LEGACY_BALANCED_FB_COMMENTS_CONTEXT)
+    current = await _simulate_long_comment_thread(_current_balanced_comment_context())
+
+    reduction = {
+        "swipe_pct": round((1 - current["swipe"] / legacy["swipe"]) * 100, 1),
+        "dump_pct": round((1 - current["dump"] / legacy["dump"]) * 100, 1),
+        "estimated_device_pct": round(
+            (1 - current["estimated_device_s"] / legacy["estimated_device_s"]) * 100,
+            1,
+        ),
+    }
+    print(
+        "\n[crawl-bench-balanced] "
+        f"legacy={legacy} current={current} reduction={reduction}"
+    )
+
+    assert legacy["swipe"] == 40
+    assert current["swipe"] <= 16
+    assert current["dump"] < legacy["dump"]
+    assert reduction["estimated_device_pct"] >= 40
 
 
 @pytest.mark.asyncio

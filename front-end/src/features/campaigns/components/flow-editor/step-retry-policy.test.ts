@@ -5,8 +5,11 @@ import {
   DEFAULT_STEP_RETRY_POLICY,
   coerceStepRetryPolicy,
   formatRetryReasons,
+  hasEnabledStepRetry,
   parseRetryReasons,
   retryPatchForEnabledState,
+  sanitizeStepRetryForApi,
+  applyStepRetrySanitize,
   withRetryField
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './step-retry-policy.ts';
@@ -65,4 +68,60 @@ test('withRetryField omits empty retryable reasons', () => {
     backoff_strategy: 'exponential',
     jitter: 0.2
   });
+});
+
+test('hasEnabledStepRetry requires max_attempts >= 2', () => {
+  assert.equal(hasEnabledStepRetry(undefined), false);
+  assert.equal(hasEnabledStepRetry(null), false);
+  assert.equal(hasEnabledStepRetry({}), false);
+  assert.equal(hasEnabledStepRetry({ max_attempts: 1 }), false);
+  assert.equal(hasEnabledStepRetry({ max_attempts: 2 }), true);
+});
+
+test('applyStepRetrySanitize removes disabled retry from step payload', () => {
+  const step: Record<string, unknown> = {
+    type: 'tap',
+    retry: { max_attempts: 1 }
+  };
+  applyStepRetrySanitize(step);
+  assert.equal('retry' in step, false);
+});
+
+test('sanitizeStepRetryForApi strips disabled and legacy fields', () => {
+  assert.equal(sanitizeStepRetryForApi(undefined), undefined);
+  assert.equal(sanitizeStepRetryForApi({}), undefined);
+  assert.equal(sanitizeStepRetryForApi({ max_attempts: 1 }), undefined);
+
+  assert.deepEqual(
+    sanitizeStepRetryForApi({
+      attempts: 4,
+      on: ['timeout'],
+      jitter_ms: 50,
+      backoff_strategy: 'linear'
+    }),
+    {
+      max_attempts: 4,
+      backoff_ms: 1000,
+      backoff_strategy: 'exponential',
+      jitter: 0.2,
+      retryable_reasons: ['timeout']
+    }
+  );
+
+  assert.deepEqual(
+    sanitizeStepRetryForApi({
+      max_attempts: 3,
+      backoff_ms: 1000,
+      backoff_strategy: 'fixed',
+      jitter: 0.2,
+      retryable_reasons: ['timeout', 'stale_frame']
+    }),
+    {
+      max_attempts: 3,
+      backoff_ms: 1000,
+      backoff_strategy: 'fixed',
+      jitter: 0.2,
+      retryable_reasons: ['timeout', 'stale_frame']
+    }
+  );
 });

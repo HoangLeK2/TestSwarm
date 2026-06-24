@@ -3,7 +3,6 @@
 import { CircleHelp } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
 import { Z_CAMPAIGN_MONITOR_FLOATING } from '@/lib/z-index';
 import {
   Tooltip,
@@ -31,39 +30,42 @@ export function MonitorSectionHeader({
   const t = useTranslations('campaignsFeature.list');
 
   return (
-    <div className='flex flex-wrap items-center gap-2.5'>
-      <span className='text-muted-foreground'>{icon}</span>
-      <span className='text-base font-semibold'>{title}</span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type='button'
-            className='rounded-full p-0.5 text-muted-foreground hover:text-foreground'
-            aria-label={t('monitorSectionHintLabel')}
-          >
-            <CircleHelp size={18} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent
-          side='top'
-          className='max-w-sm text-sm leading-snug'
-          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+    <div className='min-w-0 space-y-2'>
+      <div className='flex min-w-0 items-start justify-between gap-2'>
+        <div className='flex min-w-0 items-center gap-2'>
+          <span className='shrink-0 text-muted-foreground'>{icon}</span>
+          <span className='min-w-0 text-base font-semibold leading-snug'>
+            {title}
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type='button'
+                className='shrink-0 rounded-full p-0.5 text-muted-foreground hover:text-foreground'
+                aria-label={t('monitorSectionHintLabel')}
+              >
+                <CircleHelp size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent
+              side='top'
+              className='max-w-sm text-sm leading-snug'
+              style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+            >
+              {hint}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <Badge
+          variant={countVariant}
+          className='min-h-7 shrink-0 px-2.5 text-sm tabular-nums'
         >
-          {hint}
-        </TooltipContent>
-      </Tooltip>
+          {count}
+        </Badge>
+      </div>
       {actions ? (
-        <div className='ml-auto flex items-center gap-2'>{actions}</div>
+        <div className='flex min-w-0 flex-wrap items-center gap-2'>{actions}</div>
       ) : null}
-      <Badge
-        variant={countVariant}
-        className={cn(
-          'min-h-7 min-w-7 justify-center px-2.5 text-sm tabular-nums',
-          !actions && 'ml-auto'
-        )}
-      >
-        {count}
-      </Badge>
     </div>
   );
 }

@@ -16,6 +16,14 @@ log = logging.getLogger(__name__)
 _capture_svc: Any | None = None
 _ARTIFACT_KIND_MAX_LEN = 32
 _STEP_CAPTURE_PHASES = {"pre", "post", "fail"}
+_STEP_CAPTURE_XML_ENV = "DEVICE_FARM_STEP_CAPTURE_XML_ARTIFACTS_ENABLED"
+
+
+def _step_capture_xml_enabled() -> bool:
+    raw = os.environ.get(_STEP_CAPTURE_XML_ENV)
+    if raw is None or str(raw).strip() == "":
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _get_capture_service() -> Any:
@@ -99,16 +107,20 @@ def build_step_capture_payload(
     bounds: dict[str, int] | None = None,
     selector: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Capture screenshot + hierarchy (+ optional selector/element) for one step phase."""
+    """Capture screenshot (+ optional XML/selector/element) for one step phase."""
     from services.content.extraction.scenario_bridge import execution_capture_ctx
 
     capture = _get_capture_service()
     prefix, capture_dir, minio_prefix = _paths(sc, step_idx, tag)
 
     screenshot_kind = _artifact_kind("screenshot", tag)
-    hierarchy_kind = _artifact_kind("hierarchy", tag)
     screenshot_ctx = execution_capture_ctx(sc, step_idx, screenshot_kind)
-    hierarchy_ctx = execution_capture_ctx(sc, step_idx, hierarchy_kind)
+    capture_xml = _step_capture_xml_enabled()
+    hierarchy_ctx = (
+        execution_capture_ctx(sc, step_idx, _artifact_kind("hierarchy", tag))
+        if capture_xml
+        else None
+    )
     persist = screenshot_ctx is not None
 
     screenshot_handle = capture.capture_screenshot(
@@ -139,28 +151,29 @@ def build_step_capture_payload(
     if screenshot_handle.artifact_id:
         result["screenshot_artifact_id"] = screenshot_handle.artifact_id
 
-    try:
-        hier_handle = capture.capture_hierarchy(
-            sc.device,
-            persist=bool(hierarchy_ctx),
-            execution_ctx=hierarchy_ctx,
-        )
-        if hier_handle and hier_handle.xml_bytes:
-            xml_local = os.path.join(capture_dir, f"{prefix}_hierarchy.xml") if capture_dir else ""
-            xml_key = hier_handle.object_key or f"{minio_prefix}/{prefix}_hierarchy.xml"
-            xml_url = _store_bytes(
-                hier_handle.xml_bytes,
-                object_key=hier_handle.object_key,
-                local_path=xml_local,
-                minio_key=xml_key,
-                content_type="application/xml",
+    if capture_xml:
+        try:
+            hier_handle = capture.capture_hierarchy(
+                sc.device,
+                persist=bool(hierarchy_ctx),
+                execution_ctx=hierarchy_ctx,
             )
-            if xml_url:
-                result["hierarchy"] = xml_url
-            if hier_handle.artifact_id:
-                result["hierarchy_artifact_id"] = hier_handle.artifact_id
-    except Exception as exc:
-        log.debug("hierarchy capture skipped for %s: %s", tag, exc)
+            if hier_handle and hier_handle.xml_bytes:
+                xml_local = os.path.join(capture_dir, f"{prefix}_hierarchy.xml") if capture_dir else ""
+                xml_key = hier_handle.object_key or f"{minio_prefix}/{prefix}_hierarchy.xml"
+                xml_url = _store_bytes(
+                    hier_handle.xml_bytes,
+                    object_key=hier_handle.object_key,
+                    local_path=xml_local,
+                    minio_key=xml_key,
+                    content_type="application/xml",
+                )
+                if xml_url:
+                    result["hierarchy"] = xml_url
+                if hier_handle.artifact_id:
+                    result["hierarchy_artifact_id"] = hier_handle.artifact_id
+        except Exception as exc:
+            log.debug("hierarchy capture skipped for %s: %s", tag, exc)
 
     if selector:
         sel_local = os.path.join(capture_dir, f"{prefix}_selector.json") if capture_dir else ""

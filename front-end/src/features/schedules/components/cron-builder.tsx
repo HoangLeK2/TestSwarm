@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
@@ -40,6 +40,16 @@ type ParsedCron =
       stepHours: number;
     };
 
+type SimpleCronParams = {
+  intervalMinutes: number;
+  intervalHours: number;
+  minute: number;
+  hour: number;
+  startHour: number;
+  endHour: number;
+  stepHours: number;
+};
+
 function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
@@ -56,7 +66,6 @@ export function cronExpressionToHumanReadable(
   const tr = (key: string, fallback: string, values?: Record<string, any>) =>
     t ? t(key, values) : fallback;
 
-  // Every N minutes: */N * * * *
   const everyMin = minField.match(/^\*\/(\d+)$/);
   if (
     everyMin &&
@@ -70,7 +79,6 @@ export function cronExpressionToHumanReadable(
     });
   }
 
-  // Every N hours at minute: M */N * * *
   const everyHour = hourField.match(/^\*\/(\d+)$/);
   if (everyHour && domField === '*' && monField === '*' && dowField === '*') {
     const minute = Number(minField);
@@ -101,7 +109,6 @@ export function cronExpressionToHumanReadable(
     }
   }
 
-  // Window minutes: */N start-end * * *
   const winMin = minField.match(/^\*\/(\d+)$/);
   const winHourRange = hourField.match(/^(\d{1,2})-(\d{1,2})$/);
   if (
@@ -125,7 +132,6 @@ export function cronExpressionToHumanReadable(
     );
   }
 
-  // Window hours with step: M start-end/step * * *
   const winHourStep = hourField.match(/^(\d{1,2})-(\d{1,2})\/(\d+)$/);
   if (winHourStep && domField === '*' && monField === '*' && dowField === '*') {
     const minute = Number(minField);
@@ -144,7 +150,6 @@ export function cronExpressionToHumanReadable(
     );
   }
 
-  // Window hours range without step: M start-end * * *
   const winHourRangeOnly = hourField.match(/^(\d{1,2})-(\d{1,2})$/);
   if (
     winHourRangeOnly &&
@@ -175,13 +180,11 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
   const [minField, hourField, domField, monField, dowField] = parts;
   if (domField !== '*' || monField !== '*' || dowField !== '*') return null;
 
-  // */N * * * *
   const everyMin = minField.match(/^\*\/(\d+)$/);
   if (everyMin && hourField === '*') {
     return { kind: 'everyMinutes', intervalMinutes: Number(everyMin[1]) };
   }
 
-  // M */N * * *
   const everyHour = hourField.match(/^\*\/(\d+)$/);
   if (everyHour && !minField.includes('/')) {
     const minute = Number(minField);
@@ -189,7 +192,6 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
     return { kind: 'everyHours', minute, intervalHours: Number(everyHour[1]) };
   }
 
-  // M H * * *
   if (
     !minField.includes('/') &&
     !hourField.includes('/') &&
@@ -202,7 +204,6 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
     return { kind: 'dailyAt', hour, minute };
   }
 
-  // */N start-end * * *
   const winMin = minField.match(/^\*\/(\d+)$/);
   const winHourRange = hourField.match(/^(\d{1,2})-(\d{1,2})$/);
   if (winMin && winHourRange) {
@@ -214,7 +215,6 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
     };
   }
 
-  // M start-end/step * * *
   const winHourStep = hourField.match(/^(\d{1,2})-(\d{1,2})\/(\d+)$/);
   if (winHourStep && !minField.includes('/')) {
     const minute = Number(minField);
@@ -228,7 +228,6 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
     };
   }
 
-  // M start-end * * *
   const winHourRangeOnly = hourField.match(/^(\d{1,2})-(\d{1,2})$/);
   if (winHourRangeOnly && !minField.includes('/')) {
     const minute = Number(minField);
@@ -247,40 +246,82 @@ function parseCronExpression(cronExpression: string): ParsedCron | null {
 
 function buildCronFromSimpleKind(
   kind: SimpleCronKind,
-  params: Record<string, number>
+  params: SimpleCronParams
 ): string {
   switch (kind) {
-    case 'everyMinutes': {
-      const intervalMinutes = params.intervalMinutes;
-      return `*/${intervalMinutes} * * * *`;
-    }
-    case 'everyHours': {
-      const minute = params.minute;
-      const intervalHours = params.intervalHours;
-      return `${minute} */${intervalHours} * * *`;
-    }
-    case 'dailyAt': {
-      const hour = params.hour;
-      const minute = params.minute;
-      return `${minute} ${hour} * * *`;
-    }
-    case 'windowMinutes': {
-      const intervalMinutes = params.intervalMinutes;
-      const startHour = params.startHour;
-      const endHour = params.endHour;
-      return `*/${intervalMinutes} ${startHour}-${endHour} * * *`;
-    }
-    case 'windowHours': {
-      const minute = params.minute;
-      const startHour = params.startHour;
-      const endHour = params.endHour;
-      const stepHours = params.stepHours;
-      if (stepHours === 1) {
-        return `${minute} ${startHour}-${endHour} * * *`;
+    case 'everyMinutes':
+      return `*/${params.intervalMinutes} * * * *`;
+    case 'everyHours':
+      return `${params.minute} */${params.intervalHours} * * *`;
+    case 'dailyAt':
+      return `${params.minute} ${params.hour} * * *`;
+    case 'windowMinutes':
+      return `*/${params.intervalMinutes} ${params.startHour}-${params.endHour} * * *`;
+    case 'windowHours':
+      if (params.stepHours === 1) {
+        return `${params.minute} ${params.startHour}-${params.endHour} * * *`;
       }
-      return `${minute} ${startHour}-${endHour}/${stepHours} * * *`;
-    }
+      return `${params.minute} ${params.startHour}-${params.endHour}/${params.stepHours} * * *`;
   }
+}
+
+function applyParsedCron(parsed: ParsedCron): Partial<SimpleCronParams> & {
+  kind: SimpleCronKind;
+} {
+  switch (parsed.kind) {
+    case 'everyMinutes':
+      return { kind: parsed.kind, intervalMinutes: parsed.intervalMinutes };
+    case 'everyHours':
+      return {
+        kind: parsed.kind,
+        intervalHours: parsed.intervalHours,
+        minute: parsed.minute
+      };
+    case 'dailyAt':
+      return { kind: parsed.kind, hour: parsed.hour, minute: parsed.minute };
+    case 'windowMinutes':
+      return {
+        kind: parsed.kind,
+        intervalMinutes: parsed.intervalMinutes,
+        startHour: parsed.startHour,
+        endHour: parsed.endHour
+      };
+    case 'windowHours':
+      return {
+        kind: parsed.kind,
+        minute: parsed.minute,
+        startHour: parsed.startHour,
+        endHour: parsed.endHour,
+        stepHours: parsed.stepHours
+      };
+  }
+}
+
+function createInitialSimpleState(value: string) {
+  const parsed = parseCronExpression(value);
+  const defaults: SimpleCronParams = {
+    intervalMinutes: 30,
+    intervalHours: 2,
+    minute: 0,
+    hour: 8,
+    startHour: 8,
+    endHour: 22,
+    stepHours: 2
+  };
+
+  if (!parsed) {
+    return {
+      tab: 'advanced' as const,
+      kind: 'everyMinutes' as SimpleCronKind,
+      params: defaults
+    };
+  }
+
+  return {
+    tab: 'simple' as const,
+    kind: parsed.kind,
+    params: { ...defaults, ...applyParsedCron(parsed) }
+  };
 }
 
 export function CronBuilder({
@@ -291,77 +332,50 @@ export function CronBuilder({
   onChange: (cronExpression: string) => void;
 }) {
   const t = useTranslations('schedulesFeature.cronBuilder');
-  const parsed = useMemo(() => parseCronExpression(value), [value]);
-  const [tab, setTab] = useState<'simple' | 'advanced'>(
-    parsed ? 'simple' : 'advanced'
+  const initial = useMemo(() => createInitialSimpleState(value), []);
+  const [tab, setTab] = useState<'simple' | 'advanced'>(initial.tab);
+  const [kind, setKind] = useState<SimpleCronKind>(initial.kind);
+  const [params, setParams] = useState<SimpleCronParams>(initial.params);
+  const lastExternalValueRef = useRef(value);
+
+  const updateParam = useCallback(
+    <K extends keyof SimpleCronParams>(key: K, next: SimpleCronParams[K]) => {
+      setParams((current) => {
+        const merged = { ...current, [key]: next };
+        const cron = buildCronFromSimpleKind(kind, merged);
+        lastExternalValueRef.current = cron;
+        onChange(cron);
+        return merged;
+      });
+    },
+    [kind, onChange]
   );
 
-  const [kind, setKind] = useState<SimpleCronKind>('everyMinutes');
-  const [intervalMinutes, setIntervalMinutes] = useState(30);
-  const [intervalHours, setIntervalHours] = useState(2);
-  const [minute, setMinute] = useState(0);
-  const [hour, setHour] = useState(8);
-  const [startHour, setStartHour] = useState(8);
-  const [endHour, setEndHour] = useState(22);
-  const [stepHours, setStepHours] = useState(2);
+  const changeKind = useCallback(
+    (nextKind: SimpleCronKind) => {
+      const cron = buildCronFromSimpleKind(nextKind, params);
+      lastExternalValueRef.current = cron;
+      setKind(nextKind);
+      onChange(cron);
+    },
+    [onChange, params]
+  );
 
-  // useLayoutEffect so local state matches `value` before useEffect below can call
-  // onChange — otherwise the onChange effect runs with default everyMinutes (*/30…)
-  // while value is e.g. "5 */2 * * *" and causes an infinite update loop with the parent.
   useLayoutEffect(() => {
-    if (parsed) {
-      setTab('simple');
-      setKind(parsed.kind);
-      if (parsed.kind === 'everyMinutes') {
-        setIntervalMinutes(parsed.intervalMinutes);
-      } else if (parsed.kind === 'everyHours') {
-        setIntervalHours(parsed.intervalHours);
-        setMinute(parsed.minute);
-      } else if (parsed.kind === 'dailyAt') {
-        setHour(parsed.hour);
-        setMinute(parsed.minute);
-      } else if (parsed.kind === 'windowMinutes') {
-        setIntervalMinutes(parsed.intervalMinutes);
-        setStartHour(parsed.startHour);
-        setEndHour(parsed.endHour);
-      } else if (parsed.kind === 'windowHours') {
-        setMinute(parsed.minute);
-        setStartHour(parsed.startHour);
-        setEndHour(parsed.endHour);
-        setStepHours(parsed.stepHours);
-      }
-    } else {
+    if (lastExternalValueRef.current === value) return;
+    lastExternalValueRef.current = value;
+
+    const parsed = parseCronExpression(value);
+    if (!parsed) {
       setTab('advanced');
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    const next = applyParsedCron(parsed);
+    setTab('simple');
+    setKind(next.kind);
+    setParams((current) => ({ ...current, ...next }));
   }, [value]);
-
-  const simpleCron = useMemo(() => {
-    return buildCronFromSimpleKind(kind, {
-      intervalMinutes,
-      intervalHours,
-      minute,
-      hour,
-      startHour,
-      endHour,
-      stepHours
-    });
-  }, [
-    kind,
-    endHour,
-    hour,
-    intervalHours,
-    intervalMinutes,
-    minute,
-    startHour,
-    stepHours
-  ]);
-
-  useEffect(() => {
-    if (tab !== 'simple') return;
-    if (simpleCron && simpleCron !== value) onChange(simpleCron);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [simpleCron, tab]);
 
   const preview = useMemo(
     () => cronExpressionToHumanReadable(value, t),
@@ -394,10 +408,7 @@ export function CronBuilder({
         <TabsContent value='simple' className='space-y-3 pt-4'>
           <div className='space-y-1'>
             <Label>{t('preset')}</Label>
-            <Select
-              value={kind}
-              onValueChange={(v) => setKind(v as SimpleCronKind)}
-            >
+            <Select value={kind} onValueChange={(v) => changeKind(v as SimpleCronKind)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -425,9 +436,12 @@ export function CronBuilder({
               <Input
                 type='number'
                 min={1}
-                value={intervalMinutes}
+                value={params.intervalMinutes}
                 onChange={(e) =>
-                  setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))
+                  updateParam(
+                    'intervalMinutes',
+                    Math.max(1, Number(e.target.value) || 1)
+                  )
                 }
               />
             </div>
@@ -440,9 +454,12 @@ export function CronBuilder({
                 <Input
                   type='number'
                   min={1}
-                  value={intervalHours}
+                  value={params.intervalHours}
                   onChange={(e) =>
-                    setIntervalHours(Math.max(1, Number(e.target.value) || 1))
+                    updateParam(
+                      'intervalHours',
+                      Math.max(1, Number(e.target.value) || 1)
+                    )
                   }
                 />
               </div>
@@ -452,9 +469,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={59}
-                  value={minute}
+                  value={params.minute}
                   onChange={(e) =>
-                    setMinute(
+                    updateParam(
+                      'minute',
                       Math.max(0, Math.min(59, Number(e.target.value) || 0))
                     )
                   }
@@ -471,9 +489,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={23}
-                  value={hour}
+                  value={params.hour}
                   onChange={(e) =>
-                    setHour(
+                    updateParam(
+                      'hour',
                       Math.max(0, Math.min(23, Number(e.target.value) || 0))
                     )
                   }
@@ -485,9 +504,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={59}
-                  value={minute}
+                  value={params.minute}
                   onChange={(e) =>
-                    setMinute(
+                    updateParam(
+                      'minute',
                       Math.max(0, Math.min(59, Number(e.target.value) || 0))
                     )
                   }
@@ -503,9 +523,12 @@ export function CronBuilder({
                 <Input
                   type='number'
                   min={1}
-                  value={intervalMinutes}
+                  value={params.intervalMinutes}
                   onChange={(e) =>
-                    setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))
+                    updateParam(
+                      'intervalMinutes',
+                      Math.max(1, Number(e.target.value) || 1)
+                    )
                   }
                 />
               </div>
@@ -515,9 +538,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={23}
-                  value={startHour}
+                  value={params.startHour}
                   onChange={(e) =>
-                    setStartHour(
+                    updateParam(
+                      'startHour',
                       Math.max(0, Math.min(23, Number(e.target.value) || 0))
                     )
                   }
@@ -529,9 +553,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={23}
-                  value={endHour}
+                  value={params.endHour}
                   onChange={(e) =>
-                    setEndHour(
+                    updateParam(
+                      'endHour',
                       Math.max(0, Math.min(23, Number(e.target.value) || 0))
                     )
                   }
@@ -547,9 +572,12 @@ export function CronBuilder({
                 <Input
                   type='number'
                   min={1}
-                  value={stepHours}
+                  value={params.stepHours}
                   onChange={(e) =>
-                    setStepHours(Math.max(1, Number(e.target.value) || 1))
+                    updateParam(
+                      'stepHours',
+                      Math.max(1, Number(e.target.value) || 1)
+                    )
                   }
                 />
               </div>
@@ -559,9 +587,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={23}
-                  value={startHour}
+                  value={params.startHour}
                   onChange={(e) =>
-                    setStartHour(
+                    updateParam(
+                      'startHour',
                       Math.max(0, Math.min(23, Number(e.target.value) || 0))
                     )
                   }
@@ -573,9 +602,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={23}
-                  value={endHour}
+                  value={params.endHour}
                   onChange={(e) =>
-                    setEndHour(
+                    updateParam(
+                      'endHour',
                       Math.max(0, Math.min(23, Number(e.target.value) || 0))
                     )
                   }
@@ -587,9 +617,10 @@ export function CronBuilder({
                   type='number'
                   min={0}
                   max={59}
-                  value={minute}
+                  value={params.minute}
                   onChange={(e) =>
-                    setMinute(
+                    updateParam(
+                      'minute',
                       Math.max(0, Math.min(59, Number(e.target.value) || 0))
                     )
                   }

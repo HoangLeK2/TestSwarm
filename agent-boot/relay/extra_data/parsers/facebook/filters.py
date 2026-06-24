@@ -234,14 +234,24 @@ def _is_duplicate_short_author_footer_row(
     return bool(pa.endswith(ca) or ca in pa)
 
 
+def _normalize_badge_probe(text: str) -> str:
+    s = unicodedata.normalize("NFC", (text or "").strip())
+    s = re.sub(r"^[★☆✓✔✗•·\s]+", "", s).strip()
+    return s.lower()
+
+
 def _comment_line_is_badge(text: str) -> bool:
-    """VN/EN badge chip under commenter name."""
-    tl = text.strip().lower()
+    """VN/EN badge chip under commenter or poster name."""
+    tl = _normalize_badge_probe(text)
     if len(tl) < 2 or len(tl) > 72:
         return False
     if tl in _CMT_BADGE_LABELS:
         return True
     if any(b in tl for b in _CMT_BADGE_LABELS if len(b) >= 10):
+        return True
+    if "người đóng góp" in tl and len(tl) <= 72:
+        return True
+    if "contributor" in tl and len(tl) <= 72:
         return True
     if tl.startswith("top ") and "fan" in tl:
         return True

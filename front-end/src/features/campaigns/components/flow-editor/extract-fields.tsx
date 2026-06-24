@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
+import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import {
   F,
   StepPanelField,
@@ -39,8 +40,11 @@ type ExtractStep = FlowStep & {
   comment_scroll_distance?: number | string;
   comment_scroll_duration_ms?: number | string;
   comment_scroll_pause_s?: number | string;
+  comment_scroll_wall_s?: number | string;
   comment_no_growth_break?: number | string;
   min_comment_scan_passes?: number | string;
+  comment_max_snapshots?: number | string;
+  comment_stop_if_no_new?: boolean;
   no_new_threshold?: number;
   result_var?: string;
   collection?: string;
@@ -227,8 +231,11 @@ function applyExtractStrategySwitch(
     delete next.comment_scroll_distance;
     delete next.comment_scroll_duration_ms;
     delete next.comment_scroll_pause_s;
+    delete next.comment_scroll_wall_s;
     delete next.comment_no_growth_break;
     delete next.min_comment_scan_passes;
+    delete next.comment_max_snapshots;
+    delete next.comment_stop_if_no_new;
   }
 
   if (saveEnabled) {
@@ -544,9 +551,9 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 w-full font-mono text-xs'
-                    value={String(step.max_items ?? 500)}
+                    value={String(step.max_items ?? 220)}
                     onChange={(e) =>
-                      update({ max_items: parseNumOrVar(e.target.value, 500) })
+                      update({ max_items: parseNumOrVar(e.target.value, 220) })
                     }
                   />
                 </CompactField>
@@ -589,10 +596,10 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_passes ?? 40)}
+                    value={String(step.comment_scroll_passes ?? 16)}
                     onChange={(e) =>
                       update({
-                        comment_scroll_passes: parseNumOrVar(e.target.value, 40)
+                        comment_scroll_passes: parseNumOrVar(e.target.value, 16)
                       })
                     }
                   />
@@ -603,12 +610,12 @@ export function ExtractStepFields({
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_swipes_per_dump ?? 6)}
+                    value={String(step.comment_swipes_per_dump ?? 4)}
                     onChange={(e) =>
                       update({
                         comment_swipes_per_dump: parseNumOrVar(
                           e.target.value,
-                          6
+                          4
                         )
                       })
                     }
@@ -930,12 +937,16 @@ export function ExtractStepFields({
             <F label={t('saveCollectionLabel')}>
               <Input
                 className='h-9 text-xs'
-                placeholder={t('saveCollectionPlaceholder')}
+                placeholder={t('saveCollectionPlaceholder', {
+                  varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
+                })}
                 value={step.collection ?? ''}
                 onChange={(e) => update({ collection: e.target.value })}
               />
               <p className='mt-1 text-[10px] text-muted-foreground'>
-                {t('saveCollectionHint')}
+                {t('saveCollectionHint', {
+                  varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
+                })}
               </p>
             </F>
 
@@ -1010,7 +1021,9 @@ export function ExtractStepFields({
                   }
                 />
                 <p className='mt-1 text-[10px] text-muted-foreground'>
-                  {t('saveTagsHint')}
+                  {t('saveTagsHint', {
+                    varToken: SCENARIO_VAR_TOKENS.GROUP_NAME
+                  })}
                 </p>
               </F>
               {strategy === 'fb_comments' ? (

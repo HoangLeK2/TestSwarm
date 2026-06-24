@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { StepPanelInput } from './step-panel-primitives';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import type { FlowStep } from '../scenario-steps/types';
 import {
   StepPanelField,
@@ -708,7 +709,9 @@ export function SelectorFields({
             onValueCommit={(nextValue) =>
               onChange(patchSelector(step, { value: nextValue }))
             }
-            placeholder={tSel('valuePlaceholder')}
+            placeholder={tSel('valuePlaceholder', {
+              varToken: SCENARIO_VAR_TOKENS.VAR
+            })}
           />
           <VariableInsertSelect
             availableVariables={availableVariables}

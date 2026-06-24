@@ -394,21 +394,9 @@ class SchedulerService:
         if not schedule.is_enabled or getattr(schedule, "status", "enabled") != "enabled":
             raise ValueError("SCHEDULE_DISABLED: enable the schedule before run-now")
 
-        if self._client is not None:
-            # Temporal: trigger the existing schedule handle
-            handle = self._client.get_schedule_handle(
-                f"{_TEMPORAL_SCHEDULE_PREFIX}{schedule_id}"
-            )
-            try:
-                await handle.trigger()
-                log.info("[scheduler] triggered Temporal schedule %s", schedule_id)
-            except Exception as exc:
-                log.warning("[scheduler] Temporal trigger failed, falling back: %s", exc)
-                return await self._trigger_fallback(db, schedule)
-        else:
+        if self._client is None:
             return await self._trigger_fallback(db, schedule)
 
-        # Create a pending run record for UI tracking
         run = await create_schedule_run(
             db,
             schedule_id=schedule_id,
@@ -418,6 +406,54 @@ class SchedulerService:
             org_id=getattr(schedule, "org_id", None),
         )
         await db.commit()
+
+        try:
+            from temporal.schedule_shared import ScheduleRunInput
+            from temporal.schedule_workflow import ScheduleRunWorkflow
+            from temporal.shared import TASK_QUEUE_NAME
+            from temporalio.common import WorkflowIDReusePolicy
+
+            task_queue = TASK_QUEUE_NAME
+            if self._cfg is not None:
+                task_queue = getattr(self._cfg, "task_queue", None) or task_queue
+
+            workflow_id = f"{_TEMPORAL_WORKFLOW_PREFIX}{schedule_id}:run-now:{run.id}"
+            await self._client.start_workflow(
+                ScheduleRunWorkflow.run,
+                ScheduleRunInput(schedule_id=schedule_id, run_id=run.id),
+                id=workflow_id,
+                task_queue=task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            )
+            log.info(
+                "[scheduler] started Temporal run-now workflow %s for schedule %s run=%s",
+                workflow_id,
+                schedule_id,
+                run.id,
+            )
+        except Exception as exc:
+            log.error(
+                "[scheduler] Temporal run-now start failed for %s: %s",
+                schedule_id,
+                exc,
+            )
+            failed_at = datetime.now(timezone.utc)
+            await finalize_schedule_run_record(
+                db,
+                run_id=run.id,
+                schedule_id=schedule_id,
+                status="failed",
+                finished_at=failed_at,
+                dispatch_result={"devices_dispatched": 0, "task_ids": []},
+                cron_expression=schedule.cron_expression,
+                timezone_name=schedule.timezone,
+                organization_id=getattr(schedule, "org_id", None),
+                error_code="TEMPORAL_RUN_NOW_FAILED",
+                error_message=str(exc),
+            )
+            await db.commit()
+            raise
+
         return run.id
 
     async def bulk_toggle(
@@ -989,7 +1025,9 @@ async def _dispatch_schedule_config(
     target_type = cfg["target_type"]
 
     if target_type == "campaign":
-        return await _dispatch_campaign(cfg, queue, temporal_client, temporal_config)
+        return await _dispatch_campaign(
+            cfg, queue, temporal_client, temporal_config, manager=manager
+        )
     elif target_type == "template":
         return await _dispatch_template(cfg, queue, manager)
     elif target_type == "fleet":
@@ -1003,6 +1041,7 @@ async def _dispatch_campaign(
     queue,
     temporal_client,
     temporal_config,
+    manager=None,
 ) -> dict[str, Any]:
     target_id = cfg.get("target_id")
     if not target_id:
@@ -1014,14 +1053,84 @@ async def _dispatch_campaign(
             "Ensure temporal.enabled=true and the Temporal server is reachable."
         )
 
-    from services.campaign_dispatch import enqueue_campaign_run_temporal
-    result, _ = await enqueue_campaign_run_temporal(
-        target_id, temporal_client, temporal_config
+    from db import crud as legacy_repo
+    from db.crud import campaign_entity as campaign_repo
+    from db.crud.execution import get_execution
+    from db.database import AsyncSessionLocal
+    from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
+    from services.campaign.execution_runtime import start_execution_runtime
+
+    async with AsyncSessionLocal() as db:
+        campaign = await campaign_repo.get_campaign_entity(db, target_id)
+        if campaign is None:
+            raise RuntimeError("Campaign not found")
+
+        org_id = str(cfg.get("org_id") or campaign.org_id or "")
+        actor_user_id = str(
+            cfg.get("user_id")
+            or campaign.created_by
+            or campaign.user_id
+            or "system"
+        )
+        if not org_id:
+            raise RuntimeError("Campaign has no organization")
+
+        device_ids: list[str] | None = None
+        device_group_ids: list[str] | None = None
+        if campaign.target_group_id:
+            device_group_ids = [str(campaign.target_group_id)]
+        else:
+            devices = await legacy_repo.list_campaign_devices(db, target_id)
+            device_ids = [str(device.id) for device in devices]
+
+        try:
+            fan_out = await dispatch_campaign(
+                db,
+                campaign_id=target_id,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                device_ids=device_ids,
+                device_group_ids=device_group_ids,
+                dispatch_strategy="parallel",
+                allow_partial=False,
+                require_online=True,
+            )
+        except CampaignDispatchError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        runtime_stats = await start_execution_runtime(
+            db,
+            fan_out=fan_out,
+            campaign=campaign,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            temporal_client=temporal_client,
+            temporal_config=temporal_config,
+            manager=manager,
+        )
+        workflow_ids: list[str] = []
+        execution_ids: list[str] = []
+        for view in fan_out.executions:
+            execution_ids.append(view.execution_id)
+            execution = await get_execution(db, view.execution_id)
+            meta = execution.meta if execution else {}
+            workflow_id = (meta or {}).get("workflow_id")
+            if workflow_id:
+                workflow_ids.append(str(workflow_id))
+        await db.commit()
+
+    started_count = int(runtime_stats.get("temporal", 0) or 0) + int(
+        runtime_stats.get("fallback", 0) or 0
     )
+    if started_count <= 0:
+        raise RuntimeError(
+            f"Campaign dispatch started no workflows for campaign {target_id!r}"
+        )
 
     return {
-        "devices_dispatched": len(result.get("device_serials", [])),
-        "workflow_ids": result.get("workflow_ids", []),
+        "devices_dispatched": started_count,
+        "workflow_ids": workflow_ids,
+        "execution_id": execution_ids[0] if execution_ids else None,
     }
 
 

@@ -230,6 +230,10 @@ class DeviceClient:
         self._scrcpy_attached_at: float = 0.0
         # Pending relay attach: cancel on detach so 30s retry does not override user "stream off".
         self._scrcpy_pending_registered_ip: Optional[str] = None
+        self._scrcpy_pending_registered_keys: set[str] = set()
+        self._scrcpy_pending_callback: Optional[Any] = None
+        self._scrcpy_pending_generation: int = 0
+        self._scrcpy_pending_claimed: bool = False
         self._scrcpy_attach_retry_task: Optional[asyncio.Task] = None
 
         # WebSocket send callback (set when agent connects)
@@ -1530,6 +1534,73 @@ class DeviceClient:
         # Fallback: use APK "type" message which calls injectText() (handles special chars via a11y/clipboard)
         self._send_to_agent({"type": "type", "text": text})
 
+    def sync_input_text(self, text: str) -> None:
+        """Legacy alias — live input uses AdbKeyboard IME, not setText/paste."""
+        self.apply_live_input_text(text)
+
+    def apply_live_input_text(self, text: str) -> None:
+        """Replace focused field via AdbKeyboard IME (Unicode-safe, not clipboard paste)."""
+        import unicodedata
+
+        text = unicodedata.normalize("NFC", text)
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.adb_keyboard_replace_text(text)
+                return
+            except Exception as exc:
+                self._log(
+                    f"apply_live_input_text via AdbKeyboard failed: {exc}",
+                    level=logging.WARNING,
+                )
+        if text:
+            self.input_text(text)
+        else:
+            self.clear_live_input()
+
+    def clear_live_input(self) -> None:
+        """Clear focused field for live input (AdbKeyboard clear, not Ctrl+V)."""
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.adb_keyboard_clear_text()
+                return
+            except Exception as exc:
+                self._log(f"clear_live_input via AdbKeyboard failed: {exc}", level=logging.WARNING)
+            try:
+                u2.clear_input_text()
+                return
+            except Exception as exc:
+                self._log(f"clear_live_input via u2 clear failed: {exc}", level=logging.WARNING)
+        self.key("delete")
+
+    def append_input_text(self, text: str) -> None:
+        """Append text to the focused field via IME (live keyboard)."""
+        if not text:
+            return
+        import unicodedata
+
+        text = unicodedata.normalize("NFC", text)
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.send_keys_append(text)
+                return
+            except Exception as exc:
+                self._log(f"append_input_text via IME failed: {exc}", level=logging.WARNING)
+        if self._a11y_mutate("type", {"text": text}, timeout=6.0):
+            return
+        if not text.isascii():
+            self._log(
+                f"append_input_text: unicode append failed for {text!r}",
+                level=logging.WARNING,
+            )
+            return
+        self._send_to_agent({"type": "type", "text": text})
+
     def scroll(self, direction: str = "down", distance: float = 0.5, *, duration_ms: int = 400) -> None:
         """Scroll screen. direction: up|down|left|right. distance: 0.0-1.0 of screen size."""
         w = self.screen_width or 1080
@@ -1703,6 +1774,26 @@ class DeviceClient:
         Output is only visible in agent logs.
         """
         self._send_to_agent({"type": "shell", "cmd": cmd})
+
+    def shell_sync(self, cmd: str, timeout: float = 10.0) -> str:
+        """Run shell via relay ADB when available; returns stdout (empty on fire-and-forget)."""
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial()
+            if relay and relay.relay_for_serial(serial):
+                import asyncio
+
+                fut = asyncio.run_coroutine_threadsafe(
+                    relay.adb_shell(serial, cmd, timeout=timeout),
+                    self._loop,
+                )
+                return str(fut.result(timeout=timeout + 5.0) or "")
+        except Exception as exc:
+            self._log(f"shell_sync failed: {exc}", level=logging.WARNING)
+        self.shell(cmd)
+        return ""
 
     def launch_app(
         self,
@@ -2692,6 +2783,63 @@ class DeviceClient:
         node = chosen["node"]
         x1, y1, x2, y2 = chosen["x1"], chosen["y1"], chosen["x2"], chosen["y2"]
 
+        # Wide FB row shells are clickable but meaningless — pick the deepest
+        # semantic node at (x,y), matching frontend hierarchy-xml-pick behavior.
+        if chosen["area"] > 80_000:
+            depth_of: Dict[int, int] = {}
+
+            def _node_depth(n) -> int:
+                nid = id(n)
+                if nid in depth_of:
+                    return depth_of[nid]
+                p = parent_of.get(id(n))
+                depth_of[nid] = 0 if p is None else _node_depth(p) + 1
+                return depth_of[nid]
+
+            FB_GROUP_HEADER_DESC_RE = _re.compile(
+                r"\b(thành viên|members|Công khai|Public|Nhóm công khai|private group|Private)\b",
+                _re.I,
+            )
+
+            def _is_fb_group_header_desc(desc: str) -> bool:
+                return bool(FB_GROUP_HEADER_DESC_RE.search((desc or "").strip()))
+
+            best_sem = None
+            best_score = -1
+            start_area = chosen["area"]
+            for c in candidates:
+                sem = c["node"]
+                desc = (sem.get("content-desc") or "").strip()
+                text = (sem.get("text") or "").strip()
+                rid = (sem.get("resource-id") or "").strip()
+                if not desc and not text and not rid:
+                    continue
+                sem_area = c["area"]
+                if (
+                    desc
+                    and _is_fb_group_header_desc(desc)
+                    and sem_area > start_area * 0.5
+                ):
+                    continue
+                depth = _node_depth(sem)
+                score = depth * 600
+                if desc and len(desc) < 500 and desc_count.get(desc, 0) == 1:
+                    score += 3000
+                elif text and len(text) < 500 and text_count.get(text, 0) == 1:
+                    score += 2500
+                elif rid and rid_count.get(rid, 0) == 1:
+                    score += 800
+                if (sem.get("clickable") or "").strip() == "true":
+                    score += 900
+                if score > best_score:
+                    best_score = score
+                    best_sem = sem
+            if best_sem is not None:
+                node = best_sem
+                mm = BOUNDS_RE.search(node.get("bounds") or "")
+                if mm:
+                    x1, y1, x2, y2 = (int(mm.group(i)) for i in (1, 2, 3, 4))
+
         rid = (node.get("resource-id") or "").strip()
         text = (node.get("text") or "").strip()
         desc = (node.get("content-desc") or "").strip()
@@ -2739,17 +2887,26 @@ class DeviceClient:
 
     def _cancel_scrcpy_pending_attach(self) -> None:
         """Clear relay pending callback + 30s retry task (user detach must stop background re-attach)."""
-        ip = self._scrcpy_pending_registered_ip
-        if ip:
+        with self._lock:
+            self._scrcpy_pending_generation += 1
+            self._scrcpy_pending_claimed = False
+        keys = set(self._scrcpy_pending_registered_keys)
+        if self._scrcpy_pending_registered_ip:
+            keys.add(self._scrcpy_pending_registered_ip)
+        callback = self._scrcpy_pending_callback
+        if keys:
             try:
                 from runtime.transports.adb_relay_server import get_relay_manager
 
                 _r = get_relay_manager()
                 if _r:
-                    _r.cancel_pending_scrcpy(ip)
+                    for key in keys:
+                        _r.cancel_pending_scrcpy(key, callback)
             except Exception:
                 pass
             self._scrcpy_pending_registered_ip = None
+            self._scrcpy_pending_registered_keys.clear()
+            self._scrcpy_pending_callback = None
         t = self._scrcpy_attach_retry_task
         self._scrcpy_attach_retry_task = None
         if t is not None and not t.done() and self._loop:
@@ -2769,7 +2926,7 @@ class DeviceClient:
         device_ip: str,
         adb_port: int = 5555,
         enable_control: bool = True,
-    ) -> None:
+    ) -> str:
         """
         Attach scrcpy screen streaming to a WS-Agent device (Mode A hybrid).
 
@@ -2827,7 +2984,7 @@ class DeviceClient:
                             self._log("request_idr after attach-skip (WS reconnect)", level=logging.DEBUG)
                         except Exception:
                             pass
-                    return
+                    return "active"
                 # If we are still receiving frames recently, treat this as a transient
                 # relay flap / false negative and do not restart immediately.
                 now = _time.monotonic()
@@ -2837,7 +2994,7 @@ class DeviceClient:
                         f"({now - self._last_frame_time:.2f}s) — skipping restart",
                         level=logging.INFO,
                     )
-                    return
+                    return "active"
                 # Restart cooldown: avoid repeated stop/restart loops on unstable gRPC.
                 if self._scrcpy_last_restart_at > 0 and (now - self._scrcpy_last_restart_at) < 5.0:
                     self._log(
@@ -2845,7 +3002,7 @@ class DeviceClient:
                         f"({now - self._scrcpy_last_restart_at:.1f}s) — skipping restart",
                         level=logging.WARNING,
                     )
-                    return
+                    return "pending"
                 # Relay session lost — stop the dead receiver (no scrcpy_stop sent,
                 # agent already stopped it) and fall through to restart.
                 # _scrcpy_active stays True so on_agent_disconnect won't clear
@@ -3009,7 +3166,7 @@ class DeviceClient:
                     # Respect configured cap so operators can lower stream cost.
                     # Do not auto-upscale to native width in control mode.
                     _start_max_width = _cfg_max_width
-                    asyncio.run_coroutine_threadsafe(
+                    start_future = asyncio.run_coroutine_threadsafe(
                         relay.start_scrcpy(
                             serial=actual_serial,
                             max_fps=self.config.device.scrcpy_max_fps,
@@ -3021,6 +3178,49 @@ class DeviceClient:
                         ),
                         self._loop,
                     )
+                    try:
+                        started = bool(start_future.result(timeout=5.0))
+                    except Exception as exc:
+                        start_future.cancel()
+
+                        def _cleanup_late_scrcpy_start(done_future: Any) -> None:
+                            if done_future.cancelled():
+                                return
+                            try:
+                                late_started = bool(done_future.result())
+                            except Exception:
+                                return
+                            if late_started and self._loop:
+                                asyncio.run_coroutine_threadsafe(
+                                    relay.stop_scrcpy(
+                                        actual_serial,
+                                        reason="attach_start_abandoned",
+                                    ),
+                                    self._loop,
+                                )
+
+                        start_future.add_done_callback(_cleanup_late_scrcpy_start)
+                        relay.unregister_scrcpy_receiver(actual_serial)
+                        try:
+                            receiver.stop_receiver()
+                        except Exception:
+                            pass
+                        self._log(
+                            f"scrcpy_start failed for {actual_serial}: {exc}",
+                            level=logging.WARNING,
+                        )
+                        return "unavailable"
+                    if not started:
+                        relay.unregister_scrcpy_receiver(actual_serial)
+                        try:
+                            receiver.stop_receiver()
+                        except Exception:
+                            pass
+                        self._log(
+                            f"scrcpy_start rejected: no relay for {actual_serial}",
+                            level=logging.WARNING,
+                        )
+                        return "unavailable"
 
                 # Fetch screen resolution via relay shell (non-blocking, best-effort)
                 if not self.screen_width or not self.screen_height:
@@ -3037,8 +3237,13 @@ class DeviceClient:
                     self.state = DeviceState.READY
                 ctrl_status = "control=ON (relay)" if enable_control else "video-only (relay)"
                 self._log(f"scrcpy stream attached via relay ({actual_serial}) — {ctrl_status}")
-                self._scrcpy_pending_registered_ip = None
-                return
+                with self._lock:
+                    self._scrcpy_pending_generation += 1
+                    self._scrcpy_pending_claimed = False
+                    self._scrcpy_pending_registered_ip = None
+                    self._scrcpy_pending_registered_keys.clear()
+                    self._scrcpy_pending_callback = None
+                return "active"
         except Exception as exc:
             self._log(f"relay scrcpy unavailable, falling back to local adb: {exc}", level=logging.DEBUG)
 
@@ -3049,11 +3254,30 @@ class DeviceClient:
             from runtime.transports.adb_relay_server import get_relay_manager
             _relay = get_relay_manager()
             if _relay is not None:
+                connected_relays = _relay.registered_relays()
                 device_ip = device_ip  # captured in closure below
                 _enable_control = enable_control
                 _loop = self._loop
+                with self._lock:
+                    self._scrcpy_pending_generation += 1
+                    _pending_generation = self._scrcpy_pending_generation
+                    self._scrcpy_pending_claimed = False
 
                 def _on_relay_serial(actual_serial: str) -> None:
+                    skip_reason = ""
+                    with self._lock:
+                        if _pending_generation != self._scrcpy_pending_generation:
+                            skip_reason = "stale generation"
+                        elif self._scrcpy_pending_claimed:
+                            skip_reason = "already claimed"
+                        else:
+                            self._scrcpy_pending_claimed = True
+                    if skip_reason:
+                        self._log(
+                            f"[scrcpy] skip duplicate pending attach for {actual_serial}: {skip_reason}",
+                            level=logging.DEBUG,
+                        )
+                        return
                     self._log(
                         f"[scrcpy] relay agent now has {actual_serial} — re-attaching scrcpy",
                         level=logging.INFO,
@@ -3071,14 +3295,23 @@ class DeviceClient:
                     pending_keys.append(h)
                     if ":" in h:
                         pending_keys.append(h.rsplit(":", 1)[0])
-                for key in dict.fromkeys(pending_keys):
-                    _relay.register_pending_scrcpy(key, _on_relay_serial)
+                pending_keys_deduped = list(dict.fromkeys(pending_keys))
                 self._scrcpy_pending_registered_ip = device_ip
+                self._scrcpy_pending_registered_keys = set(pending_keys_deduped)
+                self._scrcpy_pending_callback = _on_relay_serial
+                for key in pending_keys_deduped:
+                    _relay.register_pending_scrcpy(key, _on_relay_serial)
+                relay_status = (
+                    "no relay video agents connected; "
+                    "agent-boot RelayService/WS video channel is not registered"
+                    if not connected_relays
+                    else f"relay agent not yet connected for {device_ip!r}"
+                )
                 self._log(
-                    f"[scrcpy] relay agent not yet connected for {device_ip!r} "
-                    f"(pending keys={list(dict.fromkeys(pending_keys))}) — "
+                    f"[scrcpy] {relay_status} "
+                    f"(pending keys={pending_keys_deduped}) — "
                     f"will auto-start when agent-boot reports the device. "
-                    f"Connected relay agents: {_relay.registered_relays()}",
+                    f"Connected relay agents: {connected_relays}",
                     level=logging.WARNING,
                 )
 
@@ -3114,6 +3347,13 @@ class DeviceClient:
                                 f"[scrcpy] 30s retry: re-attempting attach_scrcpy_stream for {retry_target!r}",
                                 level=logging.INFO,
                             )
+                            with self._lock:
+                                if (
+                                    _pending_generation != self._scrcpy_pending_generation
+                                    or self._scrcpy_pending_claimed
+                                ):
+                                    return
+                                self._scrcpy_pending_claimed = True
                             import concurrent.futures as _cf2
                             _cf2.ThreadPoolExecutor(max_workers=1).submit(
                                 self.attach_scrcpy_stream, retry_target, 5555, _enable_control
@@ -3126,15 +3366,20 @@ class DeviceClient:
                         self._scrcpy_attach_retry_task = _loop.create_task(_delayed_retry())
 
                     _loop.call_soon_threadsafe(_arm_retry)
-                return
-        except Exception:
-            pass
+                return "pending"
+        except Exception as exc:
+            self._log(
+                f"attach_scrcpy_stream: pending relay attach setup failed for {device_ip!r}: {exc}",
+                level=logging.WARNING,
+            )
 
         self._log(
             f"attach_scrcpy_stream: no relay agent connected for {device_ip!r}. "
-            "Scrcpy requires agent-boot to be running and connected.",
+            "Scrcpy requires agent-boot to be running and connected; "
+            "leaving stream inactive instead of failing attach.",
             level=logging.WARNING,
         )
+        return "unavailable"
 
     async def _fetch_screen_size_via_relay(self, relay: Any, serial: str) -> None:
         """Best-effort: read wm size from device via relay shell and store on self."""
@@ -3181,6 +3426,48 @@ class DeviceClient:
                 pass
             self._scrcpy_stop_task = None
 
+    def mark_scrcpy_relay_offline(self, relay_serial: str) -> bool:
+        """Mark the relay-owned scrcpy session dead without sending scrcpy_stop.
+
+        Relay disconnect already killed agent-boot's scrcpy process.  This only
+        clears this DeviceClient's stale receiver/active flags so the next attach
+        can issue a new scrcpy_start when the relay comes back.
+        """
+        receiver = self._scrcpy_receiver
+        if receiver is None:
+            return False
+
+        receiver_serial = str(getattr(receiver, "serial", "") or "")
+        relay_serial = str(relay_serial or "").strip()
+        if relay_serial and receiver_serial and receiver_serial != relay_serial:
+            return False
+
+        try:
+            receiver.stop_receiver()
+        except Exception:
+            pass
+
+        if receiver_serial:
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+
+                relay = get_relay_manager()
+                if relay and relay.get_scrcpy_receiver(receiver_serial) is receiver:
+                    relay.unregister_scrcpy_receiver(receiver_serial)
+            except Exception:
+                pass
+
+        self._scrcpy_receiver = None
+        self._scrcpy_active = False
+        self._scrcpy_attached_at = 0.0
+        self._last_frame_time = 0.0
+        self._cancel_scrcpy_pending_attach()
+        self._log(
+            f"scrcpy relay offline for {relay_serial or receiver_serial} — marked inactive",
+            level=logging.INFO,
+        )
+        return True
+
     def detach_scrcpy_stream(self, reason: str = "unspecified") -> None:
         """Stop scrcpy receiver (+ control) and resume MediaProjection frames.
         For relay receivers, also sends SCRCPY_STOP to the relay agent."""
@@ -3218,9 +3505,14 @@ class DeviceClient:
 
     _BY_MAP = {
         "xpath":       "xpath",
+        "resource-id": "resourceId",
+        "id":          "resourceId",
         "resourceId":  "resourceId",
         "text":        "text",
+        "content-desc": "description",
+        "content_desc": "description",
         "description": "description",
+        "class name":  "className",
         "className":   "className",
     }
 
@@ -3233,11 +3525,16 @@ class DeviceClient:
             return {"text": value}
         return {key: value}
 
-    def u2_batch(self, actions: list, timeout: float = 30.0) -> list:
+    def u2_batch(
+        self,
+        actions: list,
+        timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> list:
         """Pipeline N primitive u2 ops in a single RPC. Raises if not enabled."""
         if not self._batch_enabled():
             raise RuntimeError("u2 batch not available for this device")
-        return self._u2_batch.batch(actions, timeout=timeout)
+        return self._u2_batch.batch(actions, timeout=timeout, cancel_event=cancel_event)
 
     def tap_selector(self, by: str, value: str) -> None:
         """
@@ -3816,7 +4113,7 @@ class DeviceClient:
                 "127.0.0.1",
                 port,
                 timeout=cfg.wait_timeout,
-                adb_shell=lambda cmd: (self.shell(cmd) or ""),
+                adb_shell=lambda cmd: self.shell_sync(cmd),
             )
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
@@ -3909,7 +4206,7 @@ class DeviceClient:
                 host,
                 port,
                 timeout=cfg.wait_timeout,
-                adb_shell=lambda cmd: (self.shell(cmd) or ""),
+                adb_shell=lambda cmd: self.shell_sync(cmd),
             )
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
@@ -4225,7 +4522,13 @@ class DeviceClient:
                 params = self._scrcpy_params
 
                 def _start() -> None:
-                    self.attach_scrcpy_stream(*params)
+                    try:
+                        self.attach_scrcpy_stream(*params)
+                    except Exception as exc:
+                        self._log(
+                            f"subscribe demand-start scrcpy failed: {exc}",
+                            level=logging.WARNING,
+                        )
 
                 self._loop.run_in_executor(None, _start)
 
@@ -4239,35 +4542,44 @@ class DeviceClient:
         if is_empty and self._scrcpy_receiver is not None and self._loop:
             async def _debounced_stop() -> None:
                 await asyncio.sleep(SCRCPY_AUTO_STOP_IDLE_S)
+                should_detach = False
+                reason = "unsubscribe_frames:idle_no_viewers"
                 with self._frame_lock:
-                    if len(self._frame_queues) == 0:
-                        _now = time.monotonic()
-                        if (
-                            self._scrcpy_attached_at > 0
-                            and (_now - self._scrcpy_attached_at) < SCRCPY_STOP_GRACE_S
-                        ):
-                            _remain = SCRCPY_STOP_GRACE_S - (_now - self._scrcpy_attached_at)
-                            self._logger.info(
-                                "scrcpy auto-stop skipped (within grace %.1fs < %.1fs)",
-                                (_now - self._scrcpy_attached_at),
-                                SCRCPY_STOP_GRACE_S,
-                            )
-                            if _remain > 0:
-                                await asyncio.sleep(_remain)
-                            with self._frame_lock:
-                                if len(self._frame_queues) != 0:
-                                    return
-                            self.detach_scrcpy_stream(reason="unsubscribe_frames:post_grace_idle")
-                            self._logger.info(
-                                "scrcpy auto-stopped after grace window (%.1fs)",
-                                SCRCPY_STOP_GRACE_S,
-                            )
-                            return
-                        self.detach_scrcpy_stream(reason="unsubscribe_frames:idle_no_viewers")
-                        self._logger.info(
-                            "scrcpy auto-stopped (no viewers for %.1fs)",
-                            SCRCPY_AUTO_STOP_IDLE_S,
-                        )
+                    no_viewers = len(self._frame_queues) == 0
+                if not no_viewers:
+                    return
+
+                _now = time.monotonic()
+                if (
+                    self._scrcpy_attached_at > 0
+                    and (_now - self._scrcpy_attached_at) < SCRCPY_STOP_GRACE_S
+                ):
+                    _remain = SCRCPY_STOP_GRACE_S - (_now - self._scrcpy_attached_at)
+                    self._logger.info(
+                        "scrcpy auto-stop skipped (within grace %.1fs < %.1fs)",
+                        (_now - self._scrcpy_attached_at),
+                        SCRCPY_STOP_GRACE_S,
+                    )
+                    if _remain > 0:
+                        await asyncio.sleep(_remain)
+                    with self._frame_lock:
+                        should_detach = len(self._frame_queues) == 0
+                    reason = "unsubscribe_frames:post_grace_idle"
+                    if not should_detach:
+                        return
+                    self._logger.info(
+                        "scrcpy auto-stopped after grace window (%.1fs)",
+                        SCRCPY_STOP_GRACE_S,
+                    )
+                else:
+                    should_detach = True
+                    self._logger.info(
+                        "scrcpy auto-stopped (no viewers for %.1fs)",
+                        SCRCPY_AUTO_STOP_IDLE_S,
+                    )
+
+                if should_detach:
+                    self.detach_scrcpy_stream(reason=reason)
 
             task = asyncio.run_coroutine_threadsafe(_debounced_stop(), self._loop)
             # Store as a cancellable Future (not asyncio.Task, but cancel() works the same)

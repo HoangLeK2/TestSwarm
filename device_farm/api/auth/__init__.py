@@ -7,12 +7,18 @@ Exports:
 """
 from __future__ import annotations
 
-from .context import AuthContext, decode_access_token, try_decode_access_token
+from .context import (
+    AuthContext,
+    decode_access_token,
+    decode_access_token_async,
+    try_decode_access_token,
+)
 from . import policy
 
 __all__ = [
     "AuthContext",
     "decode_access_token",
+    "decode_access_token_async",
     "try_decode_access_token",
     "policy",
 ]

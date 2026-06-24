@@ -383,6 +383,27 @@ def handle_scroll_down(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     sx = int(sc.w * start_x_ratio)
     sy1 = int(sc.h * start_y_ratio)
     sy2 = int(sc.h * end_y_ratio)
+    smart_scroll = step.get("smart_scroll", True)
+    if smart_scroll is not False and str(smart_scroll).strip().lower() not in {"0", "false", "no", "off"}:
+        try:
+            from tasks.scenario.fb_scroll_swipe import resolve_feed_scroll_swipe_from_xml
+
+            hierarchy_fn = getattr(sc.device, "hierarchy_xml", None)
+            xml = hierarchy_fn(force_refresh=False) if callable(hierarchy_fn) else None
+            if isinstance(xml, str) and xml.strip():
+                resolved = resolve_feed_scroll_swipe_from_xml(
+                    xml,
+                    screen_w=sc.w,
+                    screen_h=sc.h,
+                    start_x_ratio=start_x_ratio,
+                    start_y_ratio=start_y_ratio,
+                    end_y_ratio=end_y_ratio,
+                )
+                if resolved is not None:
+                    sx, sy1, _, sy2 = resolved
+                    result["smart_scroll"] = True
+        except Exception as exc:
+            log.debug("[%s] scroll_down smart_scroll skipped: %s", sc.serial, exc)
     failed = False
     for i in range(max(1, repeats)):
         if sc.cancel_event is not None and sc.cancel_event.is_set():

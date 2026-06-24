@@ -12,6 +12,8 @@ from services.execution.capture_service import (
     StepCaptureConfig,
     compress_jpeg,
     epic04_capture_default_enabled,
+    error_only_capture_mode,
+    extract_only_capture_mode,
     flush_pending_captures,
     is_captured_step,
     resolve_capture_throttle,
@@ -96,6 +98,83 @@ def test_capture_throttle_skips_steps():
     assert is_captured_step(sc, 1) is False
     assert is_captured_step(sc, 3) is True
     assert resolve_capture_throttle({"capture_throttle": 3}) == 3
+
+
+def test_extract_only_mode_skips_legacy_non_extract_capture_flags():
+    sc = _make_sc()
+    sc.scenario = {"execution_id": "exec-1", "capture_mode": "extract_only"}
+    step = {
+        "type": "wait",
+        "pre_capture": True,
+        "post_capture": True,
+        "id": "legacy-wait",
+    }
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    with patch("services.execution.capture_service._capture_payload") as cap:
+        from services.execution.capture_service import capture_before_step, capture_after_step
+
+        capture_before_step(sc, step, 0, step_result)
+        capture_after_step(sc, step, 0, step_result, 0.0, sync=True)
+
+    assert extract_only_capture_mode(sc.scenario) is True
+    cap.assert_not_called()
+    assert "screenshot_pre" not in step_result
+    assert "screenshot" not in step_result
+
+
+def test_extract_only_mode_still_honors_require_capture():
+    sc = _make_sc()
+    sc.scenario = {"execution_id": "exec-1", "capture_mode": "extract_only"}
+    step = {"type": "wait", "require_capture": True, "id": "debug-wait"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    with patch(
+        "services.execution.capture_service._capture_payload",
+        return_value={"full": "http://minio/pre.jpg"},
+    ) as cap:
+        from services.execution.capture_service import capture_before_step
+
+        capture_before_step(sc, step, 0, step_result)
+
+    cap.assert_called_once()
+    assert step_result.get("screenshot_pre")
+
+
+def test_error_only_mode_skips_success_pre_post_even_for_extract():
+    sc = _make_sc()
+    sc.scenario = {"execution_id": "exec-1", "capture_mode": "error_only"}
+    step = {"type": "extract", "strategy": "fb_posts", "id": "x1"}
+    step_result: dict = {"index": 0, "type": "extract", "ok": True}
+
+    with patch("services.execution.capture_service._capture_payload") as cap:
+        from services.execution.capture_service import capture_before_step, capture_after_step
+
+        capture_before_step(sc, step, 0, step_result)
+        capture_after_step(sc, step, 0, step_result, 0.0, sync=True)
+
+    assert error_only_capture_mode(sc.scenario) is True
+    cap.assert_not_called()
+    assert "screenshot_pre" not in step_result
+    assert "screenshot" not in step_result
+
+
+def test_error_only_mode_still_captures_failed_step():
+    sc = _make_sc()
+    sc.scenario = {"execution_id": "exec-1", "capture_mode": "error_only"}
+    step = {"type": "wait", "id": "failed-wait"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": False}
+
+    with patch(
+        "services.execution.capture_service._capture_payload",
+        return_value={"full": "http://minio/fail.jpg"},
+    ) as cap:
+        from services.execution.capture_service import capture_on_fail
+
+        capture_on_fail(sc, step, 0, step_result)
+
+    cap.assert_called_once()
+    assert step_result.get("screenshot")
 
 
 def test_compress_jpeg_reduces_large_payload():
@@ -286,7 +365,54 @@ def test_capture_payload_delegates_to_epic06_capture():
     assert out["screenshot_artifact_id"] == "art-1"
 
 
-def test_epic06_capture_payload_uses_db_safe_artifact_kinds(monkeypatch):
+def test_epic06_capture_payload_skips_xml_artifact_by_default(monkeypatch):
+    from services.execution import epic06_capture_adapter
+
+    sc = _make_sc()
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeCaptureService:
+        def capture_screenshot(self, _device, *, persist, execution_ctx):
+            calls.append(("screenshot", execution_ctx.kind if execution_ctx else None))
+            return SimpleNamespace(
+                image_bytes=b"\x89PNG\r\n\x1a\n",
+                object_key="captures/step.png",
+                sha256="abc123",
+                artifact_id="art-screenshot",
+            )
+
+        def capture_hierarchy(self, _device, *, persist, execution_ctx):
+            calls.append(("hierarchy", execution_ctx.kind if execution_ctx else None))
+            return SimpleNamespace(
+                xml_bytes=b"<hierarchy/>",
+                object_key="captures/step.xml",
+                artifact_id="art-hierarchy",
+            )
+
+    store_calls: list[dict] = []
+    monkeypatch.setattr(epic06_capture_adapter, "_get_capture_service", lambda: FakeCaptureService())
+
+    def fake_store(*args, **kwargs):
+        store_calls.append(kwargs)
+        return "http://minio/artifact"
+
+    monkeypatch.setattr(epic06_capture_adapter, "_store_bytes", fake_store)
+    monkeypatch.delenv("DEVICE_FARM_STEP_CAPTURE_XML_ARTIFACTS_ENABLED", raising=False)
+
+    payload = epic06_capture_adapter.build_step_capture_payload(
+        sc,
+        0,
+        "tap_fb_comment_button_pre",
+    )
+
+    assert payload["full"] == "http://minio/artifact"
+    assert "hierarchy" not in payload
+    assert "hierarchy_artifact_id" not in payload
+    assert calls == [("screenshot", "screenshot_pre")]
+    assert [c["content_type"] for c in store_calls] == ["image/png"]
+
+
+def test_epic06_capture_payload_xml_artifact_opt_in_uses_db_safe_kinds(monkeypatch):
     from services.execution import epic06_capture_adapter
 
     sc = _make_sc()
@@ -312,6 +438,7 @@ def test_epic06_capture_payload_uses_db_safe_artifact_kinds(monkeypatch):
 
     monkeypatch.setattr(epic06_capture_adapter, "_get_capture_service", lambda: FakeCaptureService())
     monkeypatch.setattr(epic06_capture_adapter, "_store_bytes", lambda *args, **kwargs: "http://minio/artifact")
+    monkeypatch.setenv("DEVICE_FARM_STEP_CAPTURE_XML_ARTIFACTS_ENABLED", "1")
 
     payload = epic06_capture_adapter.build_step_capture_payload(
         sc,

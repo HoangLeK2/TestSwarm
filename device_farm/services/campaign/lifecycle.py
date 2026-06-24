@@ -137,6 +137,7 @@ async def apply_campaign_transition(
         db,
         org_id=org_id,
         campaign_id=current.id,
+        campaign_name=current.name,
         user_id=user_id,
         from_status=from_status.value,
         to_status=target.value,

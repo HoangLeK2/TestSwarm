@@ -13,6 +13,8 @@ Steps per device:
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import subprocess
 import tarfile
 import threading
@@ -35,6 +37,8 @@ _FARM_ROOT   = _ROOT.parent                             # deviceFarmer/
 _DEVICE_FARM = _FARM_ROOT / "device_farm"
 
 _U2_APK_SEARCH_DIRS = [
+    _ROOT / "assets" / "apks",
+    _ROOT / "assets",
     _DEVICE_FARM / "third_party",
     _DEVICE_FARM / "bundle" / "apks",
     _ROOT,
@@ -129,6 +133,35 @@ def _get_sdk(serial: str) -> int:
 def _is_pkg_installed(pkg: str, serial: str) -> bool:
     return "package:" in _adb_shell(f"pm path {pkg}", serial=serial)
 
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _installed_pkg_sha256(pkg: str, serial: str) -> str | None:
+    out = _adb_shell(
+        "apk=$(pm path {pkg} 2>/dev/null | head -n1 | sed 's/^package://'); "
+        'if [ -n "$apk" ]; then sha256sum "$apk" 2>/dev/null || toybox sha256sum "$apk" 2>/dev/null; fi'.format(pkg=pkg),
+        serial=serial,
+        timeout=10,
+    )
+    match = re.search(r"\b([0-9a-fA-F]{64})\b", out)
+    return match.group(1).lower() if match else None
+
+
+def _installed_apk_matches(serial: str, pkg: str, local_apk: Path | None) -> bool | None:
+    if local_apk is None or not local_apk.is_file():
+        return None
+    installed_sha = _installed_pkg_sha256(pkg, serial)
+    if not installed_sha:
+        return None
+    return installed_sha == _sha256_file(local_apk)
+
+
 def _is_atx_listening(serial: str) -> bool:
     out = _adb_shell(
         f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':{_ATX_AGENT_PORT_HEX}' | head -1 || true",
@@ -149,7 +182,9 @@ def _adb_install(
     out = (r.stdout + r.stderr).strip()
     ok = r.returncode == 0 and "Failure" not in out and "Exception" not in out
     if not ok and package_name and (
-        "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out or "signatures do not match" in out
+        "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out
+        or "INSTALL_FAILED_VERSION_DOWNGRADE" in out
+        or "signatures do not match" in out
     ):
         _adb_shell(f"pm uninstall {package_name} 2>/dev/null || true", serial=serial)
         r = _adb("install", *flags, str(apk_path), serial=serial, check=False, timeout=120)
@@ -340,12 +375,22 @@ def step_install_u2(serial: str, skip: bool, force: bool = False) -> bool:
 
     installed_main = _is_pkg_installed(_U2_PKG, serial)
     installed_test = _is_pkg_installed(_U2_TEST_PKG, serial)
-    if installed_main and installed_test and not (force or _force_u2_install_enabled()):
-        console.print(f"    [green]✓[/green] {_U2_PKG} already installed — skipping.")
-        console.print(f"    [green]✓[/green] {_U2_TEST_PKG} already installed — skipping.")
-        return True
+    force_install = force or _force_u2_install_enabled()
 
     main_apk, test_apk = find_u2_apks()
+    main_matches = _installed_apk_matches(serial, _U2_PKG, main_apk) if installed_main else False
+    test_matches = _installed_apk_matches(serial, _U2_TEST_PKG, test_apk) if installed_test else False
+    pair_mismatch = main_matches is False or test_matches is False
+
+    if installed_main and installed_test and not force_install and not pair_mismatch:
+        console.print(f"    [green]✓[/green] {_U2_PKG} already installed — skipping.")
+        console.print(f"    [green]✓[/green] {_U2_TEST_PKG} already installed — skipping.")
+        if main_matches is True and test_matches is True:
+            console.print("    [green]✓[/green] Installed u2 APK hashes match local assets.")
+        else:
+            console.print("    [yellow]⚠[/yellow] Could not verify installed u2 APK hashes; keeping existing packages.")
+        return True
+
     if main_apk is None or test_apk is None:
         missing = [n for n, p in [("app-uiautomator.apk", main_apk), ("app-uiautomator-test.apk", test_apk)] if p is None]
         console.print(f"    [red]✗[/red] APKs not found: {', '.join(missing)}")
@@ -354,11 +399,12 @@ def step_install_u2(serial: str, skip: bool, force: bool = False) -> bool:
         return False
 
     ok = True
-    if force or _force_u2_install_enabled() or not installed_main:
+    reinstall_pair = force_install or pair_mismatch
+    if reinstall_pair or not installed_main:
         ok &= _adb_install(main_apk, serial, _U2_PKG, package_name=_U2_PKG)
     else:
         console.print(f"    [green]✓[/green] {_U2_PKG} already installed — skipping.")
-    if force or _force_u2_install_enabled() or not installed_test:
+    if reinstall_pair or not installed_test:
         ok &= _adb_install(test_apk, serial, _U2_TEST_PKG, extra_flags=["-t"], package_name=_U2_TEST_PKG)
     else:
         console.print(f"    [green]✓[/green] {_U2_TEST_PKG} already installed — skipping.")
@@ -617,6 +663,14 @@ def _ensure_stability_settings(serial: str) -> None:
             )
     except Exception as exc:
         console.print(f"    [dim]encoder probe skipped: {exc}[/dim]")
+
+    from relay.adb import ensure_u2_input_ime
+
+    ok, msg = ensure_u2_input_ime(serial)
+    if ok:
+        console.print(f"    [green]✓[/green] u2 AdbKeyboard IME ({msg})")
+    else:
+        console.print(f"    [yellow]⚠[/yellow] u2 AdbKeyboard IME: {msg}")
 
 
 def step_open_app(serial: str, skip: bool) -> None:

@@ -7,6 +7,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from relay.agent import RelayAgent
+from relay.u2_executor import U2Executor
+
+
+class _FakePool:
+    async def run_locked(self, _serial, fn):
+        return fn(_FakeDevice())
+
+
+class _FakeDevice:
+    def __init__(self) -> None:
+        self.clicks: list[tuple[int, int]] = []
+
+    def click(self, x: int, y: int) -> None:
+        self.clicks.append((x, y))
 
 
 @pytest.mark.asyncio
@@ -110,3 +124,36 @@ async def test_u2_batch_fast_path_respects_early_exit_false(monkeypatch):
         {"op": "click", "ok": True},
     ]
     agent._u2_executor.run_batch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_u2_executor_run_batch_stops_before_next_action_when_cancelled():
+    cancel_event = asyncio.Event()
+    executor = U2Executor(_FakePool(), asyncio.get_running_loop())
+
+    original_op = None
+    import relay.u2_executor as u2_executor
+
+    original_op = u2_executor._OP_TABLE["click"]
+
+    def _click_and_cancel(dev, act):
+        original_op(dev, act)
+        cancel_event.set()
+
+    u2_executor._OP_TABLE["click"] = _click_and_cancel
+    try:
+        result = await executor.run_batch(
+            "10AE7S00HD002JK",
+            [
+                {"op": "click", "x": 1, "y": 2},
+                {"op": "click", "x": 3, "y": 4},
+            ],
+            cancel_event=cancel_event,
+        )
+    finally:
+        u2_executor._OP_TABLE["click"] = original_op
+
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["stopped_at"] == 1
+    assert result["results"] == [{"op": "click", "ok": True}]

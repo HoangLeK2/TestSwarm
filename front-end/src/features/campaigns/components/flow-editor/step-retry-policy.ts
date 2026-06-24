@@ -135,3 +135,49 @@ export function retryPatchForEnabledState(
   if (!enabled) return { retry: undefined };
   return { retry: coerceStepRetryPolicy(step.retry) };
 }
+
+/** Matches `parse_step_retry_policy` — retry is active only when max_attempts > 1. */
+export function hasEnabledStepRetry(raw: unknown): boolean {
+  if (raw == null || typeof raw !== 'object') return false;
+  if (Object.keys(raw as object).length === 0) return false;
+
+  const policy = raw as Record<string, unknown>;
+  const attemptsRaw = policy.max_attempts ?? policy.attempts;
+  if (attemptsRaw != null) {
+    const n = Number(attemptsRaw);
+    if (Number.isFinite(n) && n <= 1) return false;
+  }
+
+  return coerceStepRetryPolicy(raw).max_attempts >= 2;
+}
+
+/** Normalize retry block for API / executor (`parse_step_retry_policy` contract). */
+export function sanitizeStepRetryForApi(
+  raw: unknown
+): StepRetryPolicy | undefined {
+  if (!hasEnabledStepRetry(raw)) return undefined;
+
+  const policy = coerceStepRetryPolicy(raw);
+  const out: StepRetryPolicy = {
+    max_attempts: policy.max_attempts,
+    backoff_ms: policy.backoff_ms,
+    backoff_strategy: policy.backoff_strategy,
+    jitter: policy.jitter
+  };
+  if (policy.backoff_cap_ms != null) {
+    out.backoff_cap_ms = policy.backoff_cap_ms;
+  }
+  if (policy.retryable_reasons?.length) {
+    out.retryable_reasons = [...policy.retryable_reasons];
+  }
+  return out;
+}
+
+export function applyStepRetrySanitize(step: Record<string, unknown>): void {
+  const sanitized = sanitizeStepRetryForApi(step.retry);
+  if (sanitized === undefined) {
+    delete step.retry;
+  } else {
+    step.retry = sanitized;
+  }
+}

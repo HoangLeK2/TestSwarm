@@ -241,26 +241,31 @@ export function ScenarioPlayer({
     null
   );
 
-  const hardStop = useCallback(() => {
-    abortRef.current?.abort();
-    const active = activePreviewRef.current;
-    if (active) {
-      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-      interruptDevice(active.serial).catch(() => undefined);
-      activePreviewRef.current = null;
-    } else if (serial?.trim()) {
-      interruptDevice(serial.trim()).catch(() => undefined);
-    }
-  }, [serial]);
+  const hardStop = useCallback(
+    (options?: { interruptWithoutActive?: boolean }) => {
+      abortRef.current?.abort();
+      const active = activePreviewRef.current;
+      if (active) {
+        cancelPreviewStream(active.serial, active.traceId).catch(
+          () => undefined
+        );
+        interruptDevice(active.serial).catch(() => undefined);
+        activePreviewRef.current = null;
+      } else if (options?.interruptWithoutActive !== false && serial?.trim()) {
+        interruptDevice(serial.trim()).catch(() => undefined);
+      }
+    },
+    [serial]
+  );
 
   // Unmount cleanup: browser navigation away, Next.js route change, and tab
   // close (pagehide). Scenario stops at next step boundary on the server.
   useEffect(() => {
-    const onPageHide = () => hardStop();
+    const onPageHide = () => hardStop({ interruptWithoutActive: false });
     window.addEventListener('pagehide', onPageHide);
     return () => {
       window.removeEventListener('pagehide', onPageHide);
-      hardStop();
+      hardStop({ interruptWithoutActive: false });
     };
   }, [hardStop]);
 
@@ -669,7 +674,7 @@ export function ScenarioPlayer({
           }
         >
           <StepForward className='size-3.5' />
-          {stepByStep ? t('modeStepByStep') : t('modeAll')}
+          {stepByStep ? t('modeAll') : t('modeStepByStep')}
         </Button>
 
         {stepByStep ? (

@@ -5,7 +5,10 @@ import { MousePointerClick, Move } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { RepeatUntilFields } from '../scenario-steps/control-flow-editors';
+import {
+  LoopConfigFields,
+  RepeatUntilFields
+} from '../scenario-steps/control-flow-editors';
 import {
   RunScenarioFields,
   type RunScenarioCampaignOption
@@ -14,6 +17,7 @@ import {
   createDefaultFbCommentThenSteps,
   type FlowStep
 } from '../scenario-steps/types';
+import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import { ExtractStepFields } from './extract-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
@@ -100,6 +104,7 @@ const BUILTIN_VARIABLE_TOKENS = [
   '${__RANDOM_INT_1_100__}',
   '${__RANDOM_UUID__}',
   '${__STEP_INDEX__}',
+  '${__LOOP_INDEX__}',
   // Account rotation — injected when the scenario is bound to an account group.
   // Password is resolved at Temporal runtime from __ACCOUNT_ID__ so plaintext
   // never lands in the workflow event history.
@@ -179,13 +184,24 @@ export function StepDetailPanel({
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
   const [step, setStep] = useState(stepProp);
+  const stepRef = useRef(step);
+  stepRef.current = step;
   const pendingCommitRef = useRef<FlowStep | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const stepIdentity =
+    String(
+      (stepProp as Record<string, unknown>)._fgId ??
+        (stepProp as Record<string, unknown>).id ??
+        ''
+    ) || stepProp.type;
+  const stepIdentityRef = useRef(stepIdentity);
 
   useEffect(() => {
+    if (stepIdentityRef.current === stepIdentity) return;
+    stepIdentityRef.current = stepIdentity;
     setStep(stepProp);
-  }, [stepProp]);
+  }, [stepProp, stepIdentity]);
 
   useEffect(() => {
     return () => {
@@ -206,12 +222,18 @@ export function StepDetailPanel({
 
   const update = useCallback(
     (fields: Partial<FlowStep>) => {
-      setStep((prev) => {
-        const next = { ...prev, ...fields } as FlowStep;
-        pendingCommitRef.current = next;
-        onChange(next);
-        return next;
-      });
+      const next = { ...stepRef.current } as FlowStep;
+      const record = next as Record<string, unknown>;
+      for (const [key, value] of Object.entries(fields)) {
+        if (value === undefined) {
+          delete record[key];
+        } else {
+          record[key] = value;
+        }
+      }
+      pendingCommitRef.current = next;
+      setStep(next);
+      onChange(next);
     },
     [onChange]
   );
@@ -419,7 +441,9 @@ export function StepDetailPanel({
                   </span>
                 </div>
               </F>
-              <StepPanelHint>{tApp('installApkHint')}</StepPanelHint>
+              <StepPanelHint>
+                {tApp('installApkHint', { varToken: SCENARIO_VAR_TOKENS.VAR })}
+              </StepPanelHint>
             </>
           )}
 
@@ -1126,6 +1150,14 @@ export function StepDetailPanel({
               <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
                 ④ Nhận diện bài viết
               </div>
+              <StepPanelToggle
+                label='Chỉ bấm khi đã mở chi tiết bài'
+                description='Bật khi bước trước đã extract fb_posts với mở bài — bỏ qua nếu chưa xác minh parent bài viết trên màn hình chi tiết.'
+                checked={!!step.require_post_before_comment}
+                onCheckedChange={(checked) =>
+                  update({ require_post_before_comment: checked })
+                }
+              />
               <F label='Trường hash bài (giữ mặc định nếu không rõ)'>
                 <Input
                   className='h-8 font-mono text-xs'
@@ -1172,42 +1204,9 @@ export function StepDetailPanel({
           )}
 
           {step.type === 'loop' && (
-            <>
-              <F label='Số vòng lặp (hỗ trợ biến)'>
-                <Input
-                  className='h-8 font-mono text-xs'
-                  placeholder='10 hoặc ${MAX_SCROLLS}'
-                  value={step.count ?? '10'}
-                  onChange={(e) => update({ count: e.target.value })}
-                />
-                <p className='mt-1 text-[10px] text-muted-foreground'>
-                  Chạy đúng N lần. Có thể dừng sớm bằng break_if hoặc extract stop_if_no_new.
-                </p>
-              </F>
-              <JsonTextarea
-                label='while condition (JSON, optional)'
-                value={step.while}
-                onCommit={(next) => update({ while: next })}
-              />
-              {step.while != null &&
-                typeof step.while === 'object' &&
-                Object.keys(step.while).length > 0 && (
-                  <F label='max_iterations (giới hạn khi dùng while)'>
-                    <Input
-                      type='number'
-                      min={1}
-                      className='h-8 w-28 text-xs'
-                      value={step.max_iterations ?? 100}
-                      onChange={(e) =>
-                        update({ max_iterations: Number(e.target.value) || 100 })
-                      }
-                    />
-                    <p className='mt-1 text-[10px] text-muted-foreground'>
-                      Chỉ áp dụng khi không có count và dùng while condition.
-                    </p>
-                  </F>
-                )}
-            </>
+            <F label='Cấu hình vòng lặp'>
+              <LoopConfigFields step={step} onUpdate={update} />
+            </F>
           )}
 
           {step.type === 'repeat' && (
@@ -1415,7 +1414,9 @@ export function StepDetailPanel({
                     className='h-9 min-w-0 flex-1 font-mono text-sm'
                     value={step.value ?? ''}
                     onChange={(e) => update({ value: e.target.value })}
-                    placeholder={t('setVariable.valuePlaceholder')}
+                    placeholder={t('setVariable.valuePlaceholder', {
+                      varToken: SCENARIO_VAR_TOKENS.VAR
+                    })}
                   />
                   <VariableInsertSelect
                     availableVariables={availableVariables}

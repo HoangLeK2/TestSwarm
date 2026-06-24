@@ -5,12 +5,21 @@ import { Badge } from '@/components/ui/badge';
 import type { ScheduleOut } from '../services/api';
 import { cronExpressionToHumanReadable } from './cron-builder';
 import { ScheduleRowActions } from './schedule-row-actions';
+import {
+  isCampaignActiveExecution,
+  type CampaignOut
+} from '@/features/campaigns/types';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
+type TargetLookup = {
+  campaignById: Map<string, CampaignOut>;
+  templateById: Map<string, { id: string; name: string }>;
+};
 
 export function getScheduleColumns(
   tList: TFn,
-  tCron: TFn
+  tCron: TFn,
+  lookup: TargetLookup
 ): ColumnDef<ScheduleOut>[] {
   return [
     {
@@ -29,6 +38,21 @@ export function getScheduleColumns(
       header: tList('colTarget'),
       cell: ({ row }) => {
         const s = row.original;
+        const targetCampaign =
+          s.target_type === 'campaign' && s.target_id
+            ? lookup.campaignById.get(s.target_id)
+            : null;
+        const targetTemplate =
+          s.target_type === 'template' && s.target_id
+            ? lookup.templateById.get(s.target_id)
+            : null;
+        const targetName = targetCampaign?.name ?? targetTemplate?.name;
+        const targetDetail =
+          targetName ??
+          (s.target_id ? `${tList('targetIdPrefix')}: ${s.target_id}` : null);
+        const isRunningCampaign = targetCampaign
+          ? isCampaignActiveExecution(targetCampaign.status)
+          : false;
         const targetLabel =
           s.target_type === 'campaign'
             ? tList('targetCampaign')
@@ -38,7 +62,26 @@ export function getScheduleColumns(
                 ? tList('targetFleet')
                 : s.target_type;
         return (
-          <span className='truncate text-sm font-medium'>{targetLabel}</span>
+          <div className='min-w-0 space-y-1'>
+            <div className='flex min-w-0 items-center gap-2'>
+              <span className='truncate text-sm font-medium'>
+                {targetLabel}
+              </span>
+              {isRunningCampaign && (
+                <Badge className='shrink-0 bg-emerald-600 text-[10px] text-white hover:bg-emerald-600'>
+                  {tList('targetRunning')}
+                </Badge>
+              )}
+            </div>
+            {targetDetail && (
+              <div
+                className='truncate text-xs text-muted-foreground'
+                title={targetDetail}
+              >
+                {targetDetail}
+              </div>
+            )}
+          </div>
         );
       }
     },

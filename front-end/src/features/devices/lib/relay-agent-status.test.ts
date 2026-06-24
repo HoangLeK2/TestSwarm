@@ -68,6 +68,25 @@ test('getRelayConnectionState resolves inactive, connecting, and connected', () 
     'connecting'
   );
 
+  assert.equal(
+    getRelayConnectionState({
+      ...agent,
+      live_connected: true,
+      connected_at: new Date(now - 5_000).toISOString(),
+      last_heartbeat_at: null
+    }),
+    'connected'
+  );
+
+  assert.equal(
+    getRelayConnectionState({
+      ...agent,
+      live_connected: false,
+      last_heartbeat_at: new Date(now - 5_000).toISOString()
+    }),
+    'connecting'
+  );
+
   assert.equal(getRelayConnectionState(agent, { busy: true }), 'connecting');
 });
 
@@ -87,6 +106,14 @@ test('getVisibleRelaySerials returns serials only when connected', () => {
   };
 
   assert.deepEqual(getVisibleRelaySerials(agent), ['dev-1']);
+  assert.deepEqual(
+    getVisibleRelaySerials({
+      ...agent,
+      connected_at: new Date(now - 5_000).toISOString(),
+      last_heartbeat_at: null
+    }),
+    ['dev-1']
+  );
   assert.deepEqual(
     getVisibleRelaySerials({
       ...agent,

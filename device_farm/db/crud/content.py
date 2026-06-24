@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.content import ContentCollection, ContentItem
+from db.models.execution import Execution
 
 
 async def resolve_org_id(db: AsyncSession, *, user_id: str | None = None) -> str | None:
@@ -305,6 +306,25 @@ async def count_by_execution(
     stmt = select(func.count(ContentItem.id)).where(ContentItem.execution_id == execution_id)
     if user_id:
         stmt = stmt.where(ContentItem.user_id == user_id)
+    result = await db.execute(stmt)
+    return int(result.scalar() or 0)
+
+
+async def count_by_campaign(
+    db: AsyncSession,
+    campaign_id: str,
+    *,
+    user_id: str | None = None,
+    dispatch_id: str | None = None,
+) -> int:
+    """Count saved content items attached to a campaign."""
+    stmt = select(func.count(ContentItem.id)).where(ContentItem.campaign_id == campaign_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if dispatch_id:
+        stmt = stmt.join(Execution, Execution.id == ContentItem.execution_id).where(
+            Execution.meta["dispatch_id"].as_string() == dispatch_id
+        )
     result = await db.execute(stmt)
     return int(result.scalar() or 0)
 

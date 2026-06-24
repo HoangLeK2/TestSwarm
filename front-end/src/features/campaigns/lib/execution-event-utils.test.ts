@@ -28,3 +28,103 @@ test('foldEventsToStepLog keeps adb shell output fields from step event payload'
   assert.equal(rows[0].save_as, 'PHONE_MODEL');
   assert.equal(rows[0].output_truncated, false);
 });
+
+test('foldEventsToStepLog attaches incident events to the owning step', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-1',
+      event_type: 'incident.detected',
+      execution_id: 'exec-1',
+      payload: {
+        step_index: 2,
+        step_type: 'fb_comment',
+        incident_type: 'facebook_popup',
+        confidence: 0.9,
+        matched_rule: true
+      }
+    } as any,
+    {
+      event_id: 'evt-2',
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      payload: {
+        step_index: 2,
+        step_type: 'fb_comment',
+        message: 'ok'
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].index, 2);
+  assert.equal(rows[0].step_type, 'fb_comment');
+  assert.equal(rows[0].incidents?.length, 1);
+  assert.equal(rows[0].incidents?.[0]?.event_type, 'incident.detected');
+  assert.equal(rows[0].incidents?.[0]?.incident_type, 'facebook_popup');
+  assert.equal(rows[0].incidents?.[0]?.matched_rule, true);
+});
+
+test('foldEventsToStepLog keeps recovery scenario metadata on incident events', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-1',
+      event_type: 'incident.recovery.started',
+      execution_id: 'exec-1',
+      payload: {
+        step_index: 4,
+        step_type: 'fb_comment',
+        incident_type: 'profile_page',
+        attempt: 2,
+        scenario_id: 'main-scenario',
+        recovery_scenario_id: 'recovery-scenario',
+        recovery_scenario_name: 'Close profile popup',
+        incident_key: '4:loop-12',
+        rule_id: 'rule-profile',
+        outcome: 'retry_step'
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].incidents?.length, 1);
+  assert.equal(rows[0].incidents?.[0]?.event_type, 'incident.recovery.started');
+  assert.equal(rows[0].incidents?.[0]?.attempt, 2);
+  assert.equal(rows[0].incidents?.[0]?.scenario_id, 'main-scenario');
+  assert.equal(
+    rows[0].incidents?.[0]?.recovery_scenario_id,
+    'recovery-scenario'
+  );
+  assert.equal(
+    rows[0].incidents?.[0]?.recovery_scenario_name,
+    'Close profile popup'
+  );
+  assert.equal(rows[0].incidents?.[0]?.incident_key, '4:loop-12');
+  assert.equal(rows[0].incidents?.[0]?.rule_id, 'rule-profile');
+  assert.equal(rows[0].incidents?.[0]?.outcome, 'retry_step');
+});
+
+test('foldEventsToStepLog exposes step.started as a running row for live UI spinners', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-1',
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      step_id: 'if-1',
+      payload: {
+        step_index: 1,
+        step_id: 'if-1',
+        step_type: 'if_element',
+        depth: 2,
+        message: 'running if'
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].index, 1);
+  assert.equal(rows[0].step_id, 'if-1');
+  assert.equal(rows[0].step_type, 'if_element');
+  assert.equal(rows[0].depth, 2);
+  assert.equal(rows[0].status, 'running');
+  assert.equal(rows[0].message, 'running if');
+});

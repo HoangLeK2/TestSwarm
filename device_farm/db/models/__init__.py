@@ -37,6 +37,7 @@ from .device_group import DeviceGroup, DeviceGroupMember
 from .campaign import Campaign, CampaignDevice, CampaignTag, CampaignTarget, Scenario
 from .org_scenario import CampaignOrgScenarioRef, OrgScenario, OrgScenarioTag
 from .mcp_session import McpSession
+from .mcp_token import McpToken
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
 from .account_event import AccountEvent
@@ -51,7 +52,7 @@ from .execution_event import ExecutionEvent
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
 from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgentToken
-from .scenario_device_variable import ScenarioDeviceVariable
+from .scenario_device_variable import CampaignOrgScenarioDeviceVariable, ScenarioDeviceVariable
 from .notification import Notification, NotificationChannel
 from .activity import ActivityLog
 from .analytics import (
@@ -89,6 +90,7 @@ __all__ = [
     "CampaignTarget",
     "Scenario",
     "McpSession",
+    "McpToken",
     "ScenarioTemplate",
     "Account",
     "DeviceAccount",
@@ -116,6 +118,7 @@ __all__ = [
     "RelayAgentJobItem",
     "RelayAgentToken",
     "ScenarioDeviceVariable",
+    "CampaignOrgScenarioDeviceVariable",
     "Notification",
     "NotificationChannel",
     "ActivityLog",

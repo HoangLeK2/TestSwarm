@@ -1,11 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient
+} from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { campaignsApi, scenariosApi } from '@/features/campaigns/services/api';
 import { scenarioTemplatesApi } from '@/features/scenario-templates/services/api';
-import type { ScenarioOut } from '@/features/campaigns/types';
+import type { CampaignOut, ScenarioOut } from '@/features/campaigns/types';
 import type { Device } from '../types';
 import type { ScenarioStep } from '../types/scenario';
 import { scenarioToJson } from '../types/scenario';
@@ -33,6 +37,7 @@ import { orgScenariosApi } from '@/features/org-scenarios/services/api';
 import { extractPreviewSteps } from '@/features/org-scenarios/lib/parse-scenario-body';
 import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 import { canApplyDeviceScopedResult } from '../lib/control-record-multi';
+import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
 
 let _stepIdCounter = 0;
 function nextStepId() {
@@ -47,6 +52,55 @@ const HIERARCHY_BOOTSTRAP_RETRY_MS = 1500;
 const HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS = 20;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
+
+function bySavedScenarioOrder(a: ScenarioOut, b: ScenarioOut) {
+  return (a.order ?? 0) - (b.order ?? 0);
+}
+
+function upsertSavedScenario(rows: ScenarioOut[], row: ScenarioOut) {
+  const found = rows.some((scenario) => scenario.id === row.id);
+  const next = found
+    ? rows.map((scenario) => (scenario.id === row.id ? row : scenario))
+    : [...rows, row];
+  return [...next].sort(bySavedScenarioOrder);
+}
+
+function syncSavedScenarioCaches(
+  queryClient: QueryClient,
+  campaignId: string,
+  scenario: ScenarioOut
+) {
+  const scenariosKey = ['campaigns', campaignId, 'scenarios'] as const;
+  queryClient.setQueryData<ScenarioOut[]>(scenariosKey, (old) =>
+    upsertSavedScenario(old ?? [], scenario)
+  );
+  queryClient.setQueryData<CampaignOut | undefined>(
+    ['campaigns', campaignId],
+    (old) =>
+      old
+        ? {
+            ...old,
+            scenarios: upsertSavedScenario(old.scenarios ?? [], scenario)
+          }
+        : old
+  );
+  queryClient.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
+    old?.map((campaign) =>
+      campaign.id === campaignId
+        ? {
+            ...campaign,
+            scenarios: upsertSavedScenario(campaign.scenarios ?? [], scenario)
+          }
+        : campaign
+    )
+  );
+  void queryClient.invalidateQueries({ queryKey: scenariosKey, exact: true });
+  void queryClient.invalidateQueries({
+    queryKey: ['campaigns', campaignId],
+    exact: true
+  });
+  void queryClient.invalidateQueries({ queryKey: ['campaigns'], exact: true });
+}
 
 type SendAndRecordOptions = {
   multiSerials?: string[];
@@ -158,16 +212,14 @@ export function useControlRecord(
     error
   } = useDeviceFarm();
   const tabActive = useTabNetworkActive();
+  const queryClient = useQueryClient();
 
   // ── Device ───────────────────────────────────────────────────────────────
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const initialSerialAppliedRef = useRef(false);
 
   const connectedDevices = useMemo(
-    () =>
-      devices.filter((d) =>
-        ['READY', 'BUSY'].includes((d.state ?? '').toUpperCase())
-      ),
+    () => devices.filter(isControlRecordConnectedDevice),
     [devices]
   );
 
@@ -181,6 +233,8 @@ export function useControlRecord(
   const selectedDeviceSerial = selectedDevice?.serial ?? null;
   const selectedDeviceSerialRef = useRef<string | null>(selectedDeviceSerial);
   selectedDeviceSerialRef.current = selectedDeviceSerial;
+  const selectedDeviceRef = useRef(selectedDevice);
+  selectedDeviceRef.current = selectedDevice;
 
   useEffect(() => {
     if (connectedDevices.length === 0) return;
@@ -317,7 +371,8 @@ export function useControlRecord(
   }, []);
 
   const sendAndRecord = useCallback(
-    (msg: object, options?: SendAndRecordOptions) => {
+    async (msg: object, options?: SendAndRecordOptions) => {
+      const selectedDevice = selectedDeviceRef.current;
       const m0 = msg as { type?: string; serial?: string };
       const multiSerials = Array.from(
         new Set(
@@ -337,25 +392,31 @@ export function useControlRecord(
       // state at tap-time (before any UI transition the tap triggers).
       // `device.take_screenshot()` on the backend returns the last cached frame,
       // so fetching before the tap gives us the exact screen the user saw.
-      const preTapScreenshotPromise =
+      const shouldCaptureTapBeforeSend =
         !skipTapRecordingWhilePickRef.current &&
         recordingRef.current &&
         selectedDevice &&
         m0.type === 'tap' &&
-        m0.serial === selectedDevice.serial
-          ? fetchScreenshotB64(selectedDevice.serial)
-          : undefined;
+        m0.serial === selectedDevice.serial;
+
+      const preTapScreenshotPromise = shouldCaptureTapBeforeSend
+        ? fetchScreenshotB64(selectedDevice.serial)
+        : undefined;
 
       // Fresh hierarchy at tap-time — recordXmlRef is often stale after navigation
       // (search list → group page) and would map coords to the wrong row.
-      const preTapHierarchyPromise =
-        !skipTapRecordingWhilePickRef.current &&
-        recordingRef.current &&
-        selectedDevice &&
-        m0.type === 'tap' &&
-        m0.serial === selectedDevice.serial
-          ? fetchHierarchy(selectedDevice.serial, true).catch(() => null)
-          : undefined;
+      const preTapHierarchyPromise = shouldCaptureTapBeforeSend
+        ? fetchHierarchy(selectedDevice.serial, true, {
+            bypassInFlight: true
+          }).catch(() => null)
+        : undefined;
+
+      if (shouldCaptureTapBeforeSend) {
+        await Promise.allSettled([
+          preTapHierarchyPromise,
+          preTapScreenshotPromise
+        ]);
+      }
 
       if (multiAction && selectedDevice) {
         wsSend({
@@ -507,7 +568,8 @@ export function useControlRecord(
                     const idxById = prev.findIndex(
                       (step) => step._id === recordedStepId
                     );
-                    if (idxById < 0 || prev[idxById].type !== 'tap') return prev;
+                    if (idxById < 0 || prev[idxById].type !== 'tap')
+                      return prev;
                     const updated = [...prev];
                     const s = { ...updated[idxById] };
                     const sc = {
@@ -623,14 +685,7 @@ export function useControlRecord(
         });
       }
     },
-    [
-      wsSend,
-      selectedDevice,
-      recordStep,
-      t,
-      trackScreenshotTask,
-      pulseHierarchyRefresh
-    ]
+    [wsSend, recordStep, t, trackScreenshotTask, pulseHierarchyRefresh]
   );
 
   const addWaitStep = useCallback(() => {
@@ -717,25 +772,33 @@ export function useControlRecord(
     scenarioId: string;
     name: string;
     kind: string;
+    isRecoveryScenario?: boolean;
+    recoveryUsageCount?: number;
     variables?: Record<string, any>;
   } | null>(null);
 
   useEffect(() => {
-    if (!initialCampaignId || !initialScenarioId) return;
+    if (initialOrgScenarioId || initialTemplateId) return;
+    if (!initialCampaignId || !initialScenarioId) {
+      setEditingContext(null);
+      return;
+    }
+
+    let cancelled = false;
     Promise.all([
       scenariosApi.get(initialCampaignId, initialScenarioId),
       campaignsApi.get(initialCampaignId).catch(() => null)
     ])
       .then(([sc, campaign]) => {
+        if (cancelled) return;
+        setOrgScenarioContext(null);
+        setTemplateContext(null);
         const loaded = Array.isArray(sc.steps)
           ? sc.steps.map(
               (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
             )
           : [];
         setSteps(loaded);
-        // Preview stream only receives `variables` from FE payload, so merge both
-        // scopes here to match campaign run behavior:
-        // campaign vars < scenario vars (scenario takes precedence).
         const mergedVars = {
           ...((campaign as { variables?: Record<string, any> } | null)
             ?.variables ?? {}),
@@ -755,20 +818,42 @@ export function useControlRecord(
             t('toast.loadedScenario', { name: sc.name, count: loaded.length })
           );
       })
-      .catch(() => toast.error(t('toast.loadScenarioFailed')));
-    // intentionally runs once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch(() => {
+        if (!cancelled) toast.error(t('toast.loadScenarioFailed'));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    initialCampaignId,
+    initialScenarioId,
+    initialOrgScenarioId,
+    initialTemplateId,
+    t
+  ]);
 
   // Load scenario template when ?templateId=... is present in the URL.
   // Mutually exclusive with campaign/scenario — the UI should only expose
   // one save target per session.
   useEffect(() => {
-    if (!initialTemplateId) return;
-    if (initialCampaignId || initialScenarioId) return;
+    if (
+      !initialTemplateId ||
+      initialOrgScenarioId ||
+      initialCampaignId ||
+      initialScenarioId
+    ) {
+      if (!initialTemplateId) setTemplateContext(null);
+      return;
+    }
+
+    let cancelled = false;
     scenarioTemplatesApi
       .get(initialTemplateId)
       .then((tpl) => {
+        if (cancelled) return;
+        setEditingContext(null);
+        setOrgScenarioContext(null);
         const loaded = Array.isArray(tpl.steps)
           ? tpl.steps.map(
               (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
@@ -788,19 +873,36 @@ export function useControlRecord(
             t('toast.loadedTemplate', { name: tpl.name, count: loaded.length })
           );
       })
-      .catch(() => toast.error(t('toast.loadTemplateFailed')));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch(() => {
+        if (!cancelled) toast.error(t('toast.loadTemplateFailed'));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    initialTemplateId,
+    initialOrgScenarioId,
+    initialCampaignId,
+    initialScenarioId,
+    t
+  ]);
 
   useEffect(() => {
-    if (!initialOrgScenarioId) return;
-    // campaignId may accompany orgScenarioId (Epic 04) for per-device overrides.
-    if (initialScenarioId || initialTemplateId) return;
+    if (!initialOrgScenarioId || initialTemplateId) {
+      if (!initialOrgScenarioId) setOrgScenarioContext(null);
+      return;
+    }
+
+    let cancelled = false;
     Promise.all([
       orgScenariosApi.get(initialOrgScenarioId),
       orgScenariosApi.getBody(initialOrgScenarioId)
     ])
       .then(([meta, bodyOut]) => {
+        if (cancelled) return;
+        setEditingContext(null);
+        setTemplateContext(null);
         const bodyJson = (bodyOut.body_json ?? {}) as Record<string, unknown>;
         const previewSteps = extractPreviewSteps(bodyJson);
         const loaded = previewSteps.map(
@@ -811,6 +913,10 @@ export function useControlRecord(
           scenarioId: initialOrgScenarioId,
           name: meta.name,
           kind: meta.kind,
+          isRecoveryScenario:
+            meta.is_recovery_scenario === true ||
+            (meta.recovery_usage_count ?? 0) > 0,
+          recoveryUsageCount: meta.recovery_usage_count ?? 0,
           variables: normalizeScenarioVariables(
             bodyJson.variables as Record<string, unknown> | undefined
           )
@@ -824,9 +930,14 @@ export function useControlRecord(
           );
         }
       })
-      .catch(() => toast.error(t('toast.loadOrgScenarioFailed')));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch(() => {
+        if (!cancelled) toast.error(t('toast.loadOrgScenarioFailed'));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialOrgScenarioId, initialTemplateId, t]);
 
   const saveToTemplate = useCallback(
     async (variables?: Record<string, any>) => {
@@ -962,6 +1073,7 @@ export function useControlRecord(
       scenariosApi
         .update(campaignId, scenarioId, payload)
         .then((updated) => {
+          syncSavedScenarioCaches(queryClient, campaignId, updated);
           setEditingContext({
             campaignId,
             scenarioId: updated.id,
@@ -987,7 +1099,8 @@ export function useControlRecord(
       pendingScreenshotCount,
       t,
       waitForPendingScreenshots,
-      editingContext
+      editingContext,
+      queryClient
     ]
   );
 
@@ -1029,6 +1142,7 @@ export function useControlRecord(
       scenariosApi
         .create(campaignId, createBody)
         .then((created) => {
+          syncSavedScenarioCaches(queryClient, campaignId, created);
           setEditingContext({
             campaignId,
             scenarioId: created.id,
@@ -1049,7 +1163,13 @@ export function useControlRecord(
         )
         .finally(() => setSavingCampaignId(null));
     },
-    [cleanSteps, pendingScreenshotCount, t, waitForPendingScreenshots]
+    [
+      cleanSteps,
+      pendingScreenshotCount,
+      t,
+      waitForPendingScreenshots,
+      queryClient
+    ]
   );
 
   // ── Hierarchy / Inspector ────────────────────────────────────────────────
@@ -1059,7 +1179,6 @@ export function useControlRecord(
   const lastHierarchyAppRef = useRef<string>('');
   const selectedHierarchySerial = selectedDevice?.serial ?? null;
   const selectedHierarchyApp = selectedDevice?.current_app ?? '';
-  const queryClient = useQueryClient();
   const hierarchyQueryKey = useMemo(
     () => ['device-hierarchy', selectedHierarchySerial ?? 'none'] as const,
     [selectedHierarchySerial]
@@ -1280,6 +1399,7 @@ export function useControlRecord(
 
   const handleTapSelector = useCallback(
     (options?: SendAndRecordOptions) => {
+      const selectedDevice = selectedDeviceRef.current;
       if (!selectedDevice || !selectorValue.trim()) return;
       const by = selectorBy;
       const value = selectorValue.trim();
@@ -1302,15 +1422,7 @@ export function useControlRecord(
         t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) })
       );
     },
-    [
-      selectedDevice,
-      selectorBy,
-      selectorValue,
-      sendAndRecord,
-      recording,
-      recordStep,
-      t
-    ]
+    [selectorBy, selectorValue, sendAndRecord, recording, recordStep, t]
   );
 
   // ── Return (grouped) ─────────────────────────────────────────────────────
@@ -1343,6 +1455,7 @@ export function useControlRecord(
     steps: {
       items: steps,
       setItems: setSteps,
+      cleanItems: cleanSteps,
       addWait: addWaitStep,
       addFlow: addFlowStep,
       appendSteps,

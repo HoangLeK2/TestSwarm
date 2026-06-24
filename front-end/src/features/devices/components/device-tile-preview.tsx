@@ -37,13 +37,16 @@ import { Badge } from '@/components/ui/badge';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   attachScrcpyStream,
-  detachScrcpyStream
+  createScrcpyViewerId,
+  detachScrcpyStream,
+  scrcpyAttachErrorMessage
 } from '../services/scrcpy-stream';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
   (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '0').trim() !==
   '0';
+const SCRCPY_ATTACH_RETRY_MS = 3_000;
 
 const gridH264Slots = new Set<string>();
 const gridH264SlotListeners = new Set<() => void>();
@@ -100,6 +103,11 @@ function DeviceTilePreviewInner({
   const isActive =
     device.state &&
     !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+  const deviceState = String(device.state || '')
+    .replace('DeviceState.', '')
+    .toUpperCase();
+  const automationBusy =
+    deviceState === 'BUSY' || (device.scenario_active ?? 0) > 0;
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
@@ -127,6 +135,9 @@ function DeviceTilePreviewInner({
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const attachedScrcpySerialRef = useRef<string | null>(null);
+  const pendingScrcpyAttachSerialRef = useRef<string | null>(null);
+  const scrcpyAttachGenerationRef = useRef(0);
+  const scrcpyViewerIdRef = useRef(createScrcpyViewerId('grid-preview'));
   const tabActive = useTabNetworkActive();
   const [hasFrame, setHasFrame] = useState(false);
   const [mjpegFailed, setMjpegFailed] = useState(false);
@@ -136,11 +147,40 @@ function DeviceTilePreviewInner({
   const [h264Active, setH264Active] = useState(false);
   const [hasH264Slot, setHasH264Slot] = useState(false);
   const [h264Suppressed, setH264Suppressed] = useState(false);
+  const [h264RestartKey, setH264RestartKey] = useState(0);
+  const [scrcpyAttachReady, setScrcpyAttachReady] = useState(false);
+  const [scrcpyAttachRetryTick, setScrcpyAttachRetryTick] = useState(0);
   const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({
     startedAt: 0,
     frames: 0
   });
   const h264BlackStreakRef = useRef(0);
+  const h264BusyRecoveryAtRef = useRef(0);
+  const scrcpyAttachRetryTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
+  const clearScrcpyAttachRetryTimer = useCallback(() => {
+    if (scrcpyAttachRetryTimerRef.current) {
+      clearTimeout(scrcpyAttachRetryTimerRef.current);
+      scrcpyAttachRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleScrcpyAttachRetry = useCallback(
+    (generation: number, serial: string) => {
+      clearScrcpyAttachRetryTimer();
+      scrcpyAttachRetryTimerRef.current = setTimeout(() => {
+        scrcpyAttachRetryTimerRef.current = null;
+        if (scrcpyAttachGenerationRef.current !== generation) return;
+        if (attachedScrcpySerialRef.current !== null) return;
+        if (pendingScrcpyAttachSerialRef.current !== null) return;
+        if (serial !== device.serial) return;
+        setScrcpyAttachRetryTick((tick) => tick + 1);
+      }, SCRCPY_ATTACH_RETRY_MS);
+    },
+    [clearScrcpyAttachRetryTimer, device.serial]
+  );
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -210,6 +250,17 @@ function DeviceTilePreviewInner({
   }, [device.serial, gridH264Limit, wantsH264]);
 
   const allowH264 = wantsH264 && hasH264Slot && !h264Suppressed;
+  const viewerGatedContinuous =
+    isContinuous && streamingConfig?.autoAttachScrcpy === false;
+  // Keep the tile's claimed H264 slot subscribed while viewer-gated scrcpy
+  // attach/retry is in flight; otherwise backend can keep producing frames for
+  // 0 WS subscribers after a relay/backend reconnect.
+  const h264SubscriptionAllowed = allowH264;
+
+  useEffect(() => {
+    if (!viewerGatedContinuous || wsConnected) return;
+    setScrcpyAttachReady(false);
+  }, [viewerGatedContinuous, wsConnected]);
 
   const mjpegUrl = useMemo(() => {
     if (!tabActive) return null;
@@ -270,7 +321,16 @@ function DeviceTilePreviewInner({
     allowH264
   ]);
 
-  // Viewer-gated streaming: attach on mount (when we have an H264 slot), detach on cleanup.
+  const detachScrcpyViewer = useCallback((...serials: Array<string | null>) => {
+    const viewerId = scrcpyViewerIdRef.current;
+    Array.from(new Set(serials.filter(Boolean) as string[])).forEach(
+      (serial) => {
+        detachScrcpyStream(serial, viewerId).catch(() => {});
+      }
+    );
+  }, []);
+
+  // Viewer-gated streaming: attach when this preview owns an H264 slot.
   useEffect(() => {
     const shouldAttach =
       tabActive &&
@@ -280,33 +340,110 @@ function DeviceTilePreviewInner({
       streamingConfig?.mode === 'continuous' &&
       streamingConfig?.autoAttachScrcpy === false &&
       relayStreamOn;
-    if (!shouldAttach) return;
+    if (!shouldAttach) {
+      clearScrcpyAttachRetryTimer();
+      const attachedSerial = attachedScrcpySerialRef.current;
+      const pendingSerial = pendingScrcpyAttachSerialRef.current;
+      scrcpyAttachGenerationRef.current += 1;
+      attachedScrcpySerialRef.current = null;
+      pendingScrcpyAttachSerialRef.current = null;
+      setScrcpyAttachReady(false);
+      detachScrcpyViewer(attachedSerial, pendingSerial);
+      return;
+    }
 
-    let detachScheduled = false;
     const serial = device.serial;
-    if (attachedScrcpySerialRef.current === serial) return;
+    if (attachedScrcpySerialRef.current === serial && scrcpyAttachReady) return;
+    clearScrcpyAttachRetryTimer();
+    const previousSerial = attachedScrcpySerialRef.current;
+    if (previousSerial && previousSerial !== serial) {
+      detachScrcpyViewer(previousSerial);
+    }
+    const generation = scrcpyAttachGenerationRef.current + 1;
+    scrcpyAttachGenerationRef.current = generation;
+    pendingScrcpyAttachSerialRef.current = serial;
     attachedScrcpySerialRef.current = serial;
+    setScrcpyAttachReady(false);
 
-    attachScrcpyStream(serial).catch(() => {});
+    attachScrcpyStream(serial, scrcpyViewerIdRef.current)
+      .then(() => {
+        clearScrcpyAttachRetryTimer();
+        pendingScrcpyAttachSerialRef.current =
+          pendingScrcpyAttachSerialRef.current === serial
+            ? null
+            : pendingScrcpyAttachSerialRef.current;
+        if (
+          scrcpyAttachGenerationRef.current !== generation ||
+          attachedScrcpySerialRef.current !== serial
+        ) {
+          detachScrcpyViewer(serial);
+          return;
+        }
+        setScrcpyAttachReady(true);
+        ensureWatchSerial(serial);
+        requestIdr(serial);
+      })
+      .catch(() => {
+        if (
+          scrcpyAttachGenerationRef.current === generation &&
+          attachedScrcpySerialRef.current === serial
+        ) {
+          attachedScrcpySerialRef.current = null;
+          pendingScrcpyAttachSerialRef.current = null;
+          setScrcpyAttachReady(false);
+        } else if (pendingScrcpyAttachSerialRef.current === serial) {
+          pendingScrcpyAttachSerialRef.current = null;
+        }
+        scheduleScrcpyAttachRetry(generation, serial);
+      });
 
     return () => {
-      if (detachScheduled) return;
-      detachScheduled = true;
-      if (attachedScrcpySerialRef.current === serial) {
-        attachedScrcpySerialRef.current = null;
-      }
-      detachScrcpyStream(serial).catch(() => {});
+      // Avoid detach/re-attach flicker during React effect re-runs. The branch
+      // above handles real inactive/offscreen transitions.
     };
   }, [
     allowH264,
+    clearScrcpyAttachRetryTimer,
+    detachScrcpyViewer,
     device.serial,
     isActive,
     isContinuous,
     relayStreamOn,
+    scheduleScrcpyAttachRetry,
+    scrcpyAttachReady,
+    scrcpyAttachRetryTick,
     streamingConfig?.autoAttachScrcpy,
     streamingConfig?.mode,
-    tabActive
+    tabActive,
+    wsConnected
   ]);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      const attachedSerial = attachedScrcpySerialRef.current;
+      const pendingSerial = pendingScrcpyAttachSerialRef.current;
+      if (!attachedSerial && !pendingSerial) return;
+      scrcpyAttachGenerationRef.current += 1;
+      attachedScrcpySerialRef.current = null;
+      pendingScrcpyAttachSerialRef.current = null;
+      setScrcpyAttachReady(false);
+      clearScrcpyAttachRetryTimer();
+      detachScrcpyViewer(attachedSerial, pendingSerial);
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      const attachedSerial = attachedScrcpySerialRef.current;
+      const pendingSerial = pendingScrcpyAttachSerialRef.current;
+      if (attachedSerial || pendingSerial) {
+        scrcpyAttachGenerationRef.current += 1;
+        attachedScrcpySerialRef.current = null;
+        pendingScrcpyAttachSerialRef.current = null;
+        setScrcpyAttachReady(false);
+        detachScrcpyViewer(attachedSerial, pendingSerial);
+      }
+    };
+  }, [clearScrcpyAttachRetryTimer, detachScrcpyViewer]);
 
   const onRelayStreamChange = useCallback(
     async (checked: boolean) => {
@@ -314,21 +451,18 @@ function DeviceTilePreviewInner({
       setRelayStreamBusy(true);
       try {
         if (checked) {
-          await attachScrcpyStream(device.serial);
+          await attachScrcpyStream(device.serial, scrcpyViewerIdRef.current);
           attachedScrcpySerialRef.current = device.serial;
+          setScrcpyAttachReady(true);
         } else {
-          await detachScrcpyStream(device.serial);
+          await detachScrcpyStream(device.serial, scrcpyViewerIdRef.current);
           attachedScrcpySerialRef.current = null;
+          pendingScrcpyAttachSerialRef.current = null;
+          setScrcpyAttachReady(false);
         }
         setRelayStreamOn(checked);
       } catch (err) {
-        const msg =
-          err && typeof err === 'object' && 'response' in err
-            ? String(
-                (err as { response?: { data?: { error?: string } } }).response
-                  ?.data?.error ?? ''
-              )
-            : '';
+        const msg = scrcpyAttachErrorMessage(err);
         toast.error(
           checked ? t('screenStreamAttachError') : t('screenStreamDetachError'),
           { description: msg || undefined }
@@ -340,48 +474,72 @@ function DeviceTilePreviewInner({
     [device.serial, isActive, isContinuous, t]
   );
 
-  useH264Video(tabActive && allowH264 ? device.serial : '', canvasRef, {
-    onFrame: useCallback(
-      (frame?: { mostlyBlack: boolean }) => {
-        if (frame?.mostlyBlack) {
-          // Decoder reset/recovery often emits 1–2 black frames. Dropping H264
-          // immediately crossfades to MJPEG and causes visible grid flicker.
-          if (!h264Active) return;
-          h264BlackStreakRef.current += 1;
-          if (h264BlackStreakRef.current < 4) return;
-          setH264Active(false);
+  useH264Video(
+    tabActive && h264SubscriptionAllowed ? device.serial : '',
+    canvasRef,
+    {
+      restartKey: h264RestartKey,
+      notifyStallWithVisibleFrame: automationBusy,
+      onFrame: useCallback(
+        (frame?: { mostlyBlack: boolean }) => {
+          if (frame?.mostlyBlack) {
+            // Decoder reset/recovery often emits 1–2 black frames. Dropping H264
+            // immediately crossfades to MJPEG and causes visible grid flicker.
+            if (!h264Active) return;
+            h264BlackStreakRef.current += 1;
+            if (h264BlackStreakRef.current < 4) return;
+            setH264Active(false);
+            h264WarmupRef.current = { startedAt: 0, frames: 0 };
+            return;
+          }
+          h264BlackStreakRef.current = 0;
+          setHasFrame(true);
+          const now = Date.now();
+          const warm = h264WarmupRef.current;
+          if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
+            warm.startedAt = now;
+            warm.frames = 1;
+          } else {
+            warm.frames += 1;
+          }
+          if (!h264Active && warm.frames >= 1) {
+            setH264Active(true);
+          }
+          // Keep the last decoded frame on static scenes — timing out to MJPEG
+          // makes idle devices look like they are blinking every few seconds.
+        },
+        [h264Active]
+      ),
+      onStall: useCallback(
+        (reason: 'no_packets' | 'decoder_stalled') => {
+          // Soft recovery: keep canvas visible when possible; only nudge MJPEG
+          // when we never got a first frame.
           h264WarmupRef.current = { startedAt: 0, frames: 0 };
-          return;
-        }
-        h264BlackStreakRef.current = 0;
-        setHasFrame(true);
-        const now = Date.now();
-        const warm = h264WarmupRef.current;
-        if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
-          warm.startedAt = now;
-          warm.frames = 1;
-        } else {
-          warm.frames += 1;
-        }
-        if (!h264Active && warm.frames >= 1) {
-          setH264Active(true);
-        }
-        // Keep the last decoded frame on static scenes — timing out to MJPEG
-        // makes idle devices look like they are blinking every few seconds.
-      },
-      [h264Active]
-    ),
-    onStall: useCallback(() => {
-      // Soft recovery: keep canvas visible when possible; only nudge MJPEG
-      // when we never got a first frame.
-      h264WarmupRef.current = { startedAt: 0, frames: 0 };
-      h264BlackStreakRef.current = 0;
-      if (!hasFrame) {
-        setMjpegFailed(false);
-        setMjpegAttempt((n) => n + 1);
-      }
-    }, [hasFrame])
-  });
+          h264BlackStreakRef.current = 0;
+          if (automationBusy) {
+            const now = Date.now();
+            if (now - h264BusyRecoveryAtRef.current > 2500) {
+              h264BusyRecoveryAtRef.current = now;
+              setH264Active(false);
+              setHasFrame(false);
+              setH264RestartKey((key) => key + 1);
+              requestIdr(device.serial, 0);
+            }
+            if (reason === 'no_packets') {
+              setMjpegFailed(false);
+              setMjpegAttempt((n) => n + 1);
+            }
+            return;
+          }
+          if (!hasFrame) {
+            setMjpegFailed(false);
+            setMjpegAttempt((n) => n + 1);
+          }
+        },
+        [automationBusy, device.serial, hasFrame]
+      )
+    }
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -397,9 +555,11 @@ function DeviceTilePreviewInner({
     setMjpegAttempt(0);
     setH264Active(false);
     setH264Suppressed(false);
+    if (!h264SubscriptionAllowed) setScrcpyAttachReady(false);
+    h264BusyRecoveryAtRef.current = 0;
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     h264BlackStreakRef.current = 0;
-  }, [device.serial, allowH264]);
+  }, [device.serial, h264SubscriptionAllowed]);
 
   useEffect(() => {
     setMjpegFailed(false);
@@ -431,11 +591,12 @@ function DeviceTilePreviewInner({
 
   useEffect(() => {
     if (!isActive || !loadStream) return;
-    if (allowH264) ensureWatchSerial(device.serial);
-  }, [allowH264, device.serial, isActive, loadStream]);
+    if (h264SubscriptionAllowed) ensureWatchSerial(device.serial);
+  }, [device.serial, h264SubscriptionAllowed, isActive, loadStream]);
 
   useEffect(() => {
-    if (!isActive || !wsConnected || hasFrame) return;
+    if (!isActive || !wsConnected || hasFrame || !h264SubscriptionAllowed)
+      return;
     ensureWatchSerial(device.serial);
     const idr = window.setTimeout(() => requestIdr(device.serial), 100);
     const armMjpeg = window.setTimeout(() => {
@@ -446,7 +607,7 @@ function DeviceTilePreviewInner({
       window.clearTimeout(idr);
       window.clearTimeout(armMjpeg);
     };
-  }, [device.serial, hasFrame, isActive, wsConnected]);
+  }, [device.serial, h264SubscriptionAllowed, hasFrame, isActive, wsConnected]);
 
   useEffect(() => {
     if (!isActive || hasFrame) {
@@ -588,9 +749,7 @@ function DeviceTilePreviewInner({
                   <div
                     className={cn(
                       'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-500',
-                      hasFrame
-                        ? 'pointer-events-none opacity-0'
-                        : 'opacity-100'
+                      hasFrame ? 'pointer-events-none opacity-0' : 'opacity-100'
                     )}
                     aria-live='polite'
                     aria-hidden={hasFrame}
@@ -682,6 +841,7 @@ function tilePreviewPropsEqual(
     pd.brand === nd.brand &&
     pd.model === nd.model &&
     pd.battery === nd.battery &&
+    pd.scenario_active === nd.scenario_active &&
     pd.relay_scrcpy_enabled === nd.relay_scrcpy_enabled &&
     pd.screen_width === nd.screen_width &&
     pd.screen_height === nd.screen_height

@@ -51,6 +51,7 @@ class ScrcpySessionManager:
         self._on_session_stopped = on_session_stopped
         self._starting_serials: set[str] = set()
         self._fatal_during_start: Dict[str, str] = {}
+        self._serial_locks: Dict[str, asyncio.Lock] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -107,49 +108,82 @@ class ScrcpySessionManager:
         low_latency: bool = False,
     ) -> None:
         """Create and start a session. Stops any existing session for same serial."""
-        await self.stop_session(serial)
+        async with self._lock_for_serial(serial):
+            existing = self._sessions.get(serial)
+            if (
+                existing is not None
+                and existing.is_alive()
+                and hasattr(existing, "matches_config")
+                and existing.matches_config(max_fps, max_width, enable_control, port, bitrate, low_latency)
+            ):
+                logger.info("session already running with same config: %s", serial)
+                return
 
-        if len(self._sessions) >= MAX_SESSIONS:
-            logger.warning(
-                "max sessions (%d) reached — rejecting scrcpy for %s",
-                MAX_SESSIONS, serial,
+            await self._stop_session_unlocked(serial)
+
+            if len(self._sessions) >= MAX_SESSIONS:
+                logger.warning(
+                    "max sessions (%d) reached — rejecting scrcpy for %s",
+                    MAX_SESSIONS, serial,
+                )
+                return
+
+            session = ScrcpyRelaySession(
+                serial=serial,
+                max_fps=max_fps,
+                max_width=max_width,
+                enable_control=enable_control,
+                port=port,
+                send_queue=send_queue,
+                loop=loop,
+                bitrate=bitrate,
+                low_latency=low_latency,
+                on_fatal=self._on_session_fatal,
             )
-            return
 
-        session = ScrcpyRelaySession(
-            serial=serial,
-            max_fps=max_fps,
-            max_width=max_width,
-            enable_control=enable_control,
-            port=port,
-            send_queue=send_queue,
-            loop=loop,
-            bitrate=bitrate,
-            low_latency=low_latency,
-            on_fatal=self._on_session_fatal,
-        )
-
-        try:
-            self._starting_serials.add(serial)
-            # start() is blocking (JAR push ~1-2s) — run in scrcpy-specific
-            # pool so a slow start cannot starve adb/u2 work.
-            await asyncio.get_running_loop().run_in_executor(scrcpy_executor(), session.start)
-            self._sessions[serial] = session
-            self._started_at[serial] = time.monotonic()
-            logger.info("session started: %s (total=%d)", serial, len(self._sessions))
-            self._starting_serials.discard(serial)
-            fatal_reason = self._fatal_during_start.pop(serial, "")
-            if fatal_reason:
-                await self.stop_session(serial, reason=fatal_reason)
-        except Exception as exc:
-            logger.error("session start failed for %s: %s", serial, exc)
-            self._emit_stopped(serial, "startup_failure")
-            self._fatal_during_start.pop(serial, None)
-        finally:
-            self._starting_serials.discard(serial)
+            try:
+                self._starting_serials.add(serial)
+                # start() is blocking (JAR push ~1-2s) — run in scrcpy-specific
+                # pool so a slow start cannot starve adb/u2 work.
+                await asyncio.get_running_loop().run_in_executor(scrcpy_executor(), session.start)
+                self._sessions[serial] = session
+                self._started_at[serial] = time.monotonic()
+                logger.info("session started: %s (total=%d)", serial, len(self._sessions))
+                self._starting_serials.discard(serial)
+                fatal_reason = self._fatal_during_start.pop(serial, "")
+                if fatal_reason:
+                    await self._stop_session_unlocked(serial, reason=fatal_reason)
+            except Exception as exc:
+                logger.error("session start failed for %s: %s", serial, exc)
+                self._emit_stopped(serial, "startup_failure")
+                self._fatal_during_start.pop(serial, None)
+            finally:
+                self._starting_serials.discard(serial)
 
     async def stop_session(self, serial: str, reason: str = "manual_stop") -> None:
         """Stop and remove session for serial."""
+        async with self._lock_for_serial(serial):
+            await self._stop_session_unlocked(serial, reason=reason)
+        self._discard_serial_lock_if_idle(serial)
+
+    def _lock_for_serial(self, serial: str) -> asyncio.Lock:
+        lock = self._serial_locks.get(serial)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._serial_locks[serial] = lock
+        return lock
+
+    def _discard_serial_lock_if_idle(self, serial: str) -> None:
+        lock = self._serial_locks.get(serial)
+        if (
+            lock is not None
+            and not lock.locked()
+            and serial not in self._sessions
+            and serial not in self._starting_serials
+        ):
+            self._serial_locks.pop(serial, None)
+
+    async def _stop_session_unlocked(self, serial: str, reason: str = "manual_stop") -> None:
         session = self._sessions.pop(serial, None)
         self._started_at.pop(serial, None)
         if session:

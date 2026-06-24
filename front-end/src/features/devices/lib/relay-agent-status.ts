@@ -2,9 +2,9 @@ import type { RelayAgentOut } from '../services/manage-api';
 
 export type RelayConnectionState = 'inactive' | 'connecting' | 'connected';
 
-/** Grace period after (re)connect before showing "connected". */
+/** Fallback when API omits live_connected (legacy responses). */
 const CONNECTING_GRACE_MS = 45_000;
-/** Heartbeat older than this while still "online" → reconnecting. */
+/** Fallback heartbeat staleness when live_connected is unknown. */
 const HEARTBEAT_STALE_MS = 90_000;
 
 export function getRelayConnectionState(
@@ -13,6 +13,11 @@ export function getRelayConnectionState(
 ): RelayConnectionState {
   if (agent.status !== 'online') return 'inactive';
   if (opts?.busy) return 'connecting';
+
+  // Production: control-channel liveness from the farm is authoritative.
+  // Do not keep showing "connecting" for 45–90s after a successful register.
+  if (agent.live_connected === true) return 'connected';
+  if (agent.live_connected === false) return 'connecting';
 
   const now = Date.now();
   const connectedAt = Date.parse(agent.connected_at);
@@ -46,10 +51,8 @@ export function getVisibleRelaySerials(
   agent: RelayAgentOut,
   opts?: { busy?: boolean }
 ): string[] {
-  if (!relayLiveConnected(agent)) {
-    return [];
-  }
-  if (!isRelayOperational(getRelayConnectionState(agent, opts))) {
+  const state = getRelayConnectionState(agent, opts);
+  if (!isRelayOperational(state)) {
     return [];
   }
   return agent.serials.filter((s) => s && !s.startsWith('pending-'));

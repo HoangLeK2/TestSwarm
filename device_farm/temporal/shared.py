@@ -57,6 +57,7 @@ class StepResult:
     # Optional so Temporal can deserialize legacy payloads that have message=null
     message: str | None = ""
     details: dict[str, Any] = field(default_factory=dict)
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +88,9 @@ class DeviceActionInput:
     scenario_registry: dict[str, Any] = field(default_factory=dict)
     execution_id: str | None = None
     campaign_id: str | None = None
+    depth: int = 0
+    # Shared runtime context (posts, comment parent anchors, loop vars, …).
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -105,6 +109,8 @@ class DeviceActionBatchInput:
     scenario_registry: dict[str, Any] = field(default_factory=dict)
     execution_id: str | None = None
     campaign_id: str | None = None
+    depth: int = 0
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -113,6 +119,7 @@ class DeviceActionBatchResult:
     first_failure_index: int = -1   # index into results of first failed step, -1 if all ok
     paused_mid_batch: bool = False
     cancelled_mid_batch: bool = False
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

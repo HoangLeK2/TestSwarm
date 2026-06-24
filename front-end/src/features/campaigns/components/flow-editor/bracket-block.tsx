@@ -523,7 +523,7 @@ export function BracketBlock({
       editingChildPath.ci
     );
     if (child) pendingEditingChildRef.current = child;
-  }, [editingChildPath, step]);
+  }, [editingChildPath]);
   const editSession = useFlowEditorEditSession();
   useEffect(() => {
     if (!editSession) return;

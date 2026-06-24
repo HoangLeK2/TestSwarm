@@ -1,119 +1,195 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { FileCode2, Loader2 } from 'lucide-react';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { useTranslations } from 'next-intl';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { contentApi } from '@/features/content/services/api';
 import {
   directObjectStorageUrl,
   shouldProxyArtifactFetch
 } from '@/features/content/lib/artifact-url';
-import { Z_CAMPAIGN_MONITOR_NESTED } from '@/lib/z-index';
+import { cn } from '@/lib/utils';
 import type { ExecutionArtifact } from '../../types';
 
 interface Props {
   artifact: ExecutionArtifact;
   href: string;
   label: string;
+  deviceLabel: string;
+  subtitle: string;
+  stepNumber?: number | null;
+  isFail?: boolean;
+  timeLabel?: string;
+  hideDeviceLabel?: boolean;
+  compact?: boolean;
 }
 
-export function ArtifactMonitorTile({ artifact, href, label }: Props) {
-  const [failed, setFailed] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const needsAuthFetch = shouldProxyArtifactFetch(artifact.url, href);
-  const publicUrl = directObjectStorageUrl(artifact.url, href);
+function isBlobLike(value: unknown): value is Blob {
+  return (
+    typeof Blob !== 'undefined' &&
+    value instanceof Blob &&
+    value.size >= 0
+  );
+}
+
+function blobToObjectUrl(value: unknown): string | undefined {
+  if (!isBlobLike(value)) return undefined;
+  try {
+    return URL.createObjectURL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function useMonitorArtifactImageSrc(artifact: ExecutionArtifact, href: string) {
+  const [directFailed, setDirectFailed] = useState(false);
+  const [renderFailed, setRenderFailed] = useState(false);
+
+  useEffect(() => {
+    setDirectFailed(false);
+    setRenderFailed(false);
+  }, [href, artifact.url]);
+
+  const directUrl = useMemo(
+    () => directObjectStorageUrl(artifact.url, href),
+    [artifact.url, href]
+  );
+
+  const needsProxy =
+    directFailed ||
+    !directUrl ||
+    shouldProxyArtifactFetch(artifact.url, href);
 
   const {
-    data: authImageSrc,
-    isError: authFetchError,
-    isLoading: authLoading
+    data: blob,
+    isError: proxyError,
+    isLoading: proxyLoading
   } = useQuery({
-    queryKey: ['monitor-artifact-blob', href],
+    queryKey: ['monitor-artifact-blob-v2', href],
     queryFn: async () => {
-      const blob = await contentApi.fetchArtifactBlob(href);
-      return URL.createObjectURL(blob);
+      const data = await contentApi.fetchArtifactBlob(href);
+      if (!isBlobLike(data)) {
+        throw new TypeError('Artifact response is not a Blob');
+      }
+      return data;
     },
-    enabled: needsAuthFetch && !!href,
+    enabled: needsProxy && !!href,
     staleTime: 10 * 60_000,
     gcTime: 15 * 60_000,
     refetchOnWindowFocus: false,
-    retry: 1
+    retry: 2
   });
+
+  const blobUrl = useMemo(() => blobToObjectUrl(blob), [blob]);
 
   useEffect(() => {
     return () => {
-      if (authImageSrc?.startsWith('blob:')) {
-        URL.revokeObjectURL(authImageSrc);
+      if (blobUrl?.startsWith('blob:')) {
+        URL.revokeObjectURL(blobUrl);
       }
     };
-  }, [authImageSrc]);
+  }, [blobUrl]);
 
-  const imageSrc = needsAuthFetch
-    ? (authImageSrc ?? undefined)
-    : (publicUrl ?? href);
-  const showFailed = failed || (needsAuthFetch && authFetchError);
-  const showLoading = needsAuthFetch ? authLoading && !imageSrc : !imageSrc;
+  const imageSrc = needsProxy ? blobUrl : (directUrl ?? undefined);
+  const showLoading = needsProxy ? !blobUrl && !proxyError : !directUrl;
+  const showFailed =
+    renderFailed ||
+    (needsProxy && proxyError) ||
+    (needsProxy && !proxyLoading && Boolean(blob) && !blobUrl);
 
-  const handleOpen = () => {
-    if (showFailed || !imageSrc) return;
-    if (needsAuthFetch) {
-      setPreviewOpen(true);
+  const onImageError = () => {
+    if (directUrl && !directFailed && !needsProxy) {
+      setDirectFailed(true);
       return;
     }
-    window.open(imageSrc, '_blank', 'noopener,noreferrer');
+    setRenderFailed(true);
   };
 
+  return { imageSrc, showLoading, showFailed, onImageError };
+}
+
+export function ArtifactMonitorTile({
+  artifact,
+  href,
+  label,
+  deviceLabel,
+  subtitle,
+  stepNumber,
+  isFail = false,
+  timeLabel,
+  hideDeviceLabel = false,
+  compact = false
+}: Props) {
+  const t = useTranslations('campaignsFeature.list');
+  const { imageSrc, showLoading, showFailed, onImageError } =
+    useMonitorArtifactImageSrc(artifact, href);
+  const previewMaxClass = compact
+    ? 'max-h-[min(28vh,240px)]'
+    : 'max-h-[min(40vh,320px)]';
+
   return (
-    <>
-      <button
-        type='button'
-        onClick={handleOpen}
-        disabled={showFailed || !imageSrc}
-        className='w-full overflow-hidden rounded-lg border bg-muted/30 text-left shadow-sm transition hover:ring-2 hover:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60'
-        title={label}
-      >
-        <div className='aspect-video bg-muted'>
+    <Card className='gap-0 overflow-hidden py-0 shadow-none'>
+      <CardHeader className='gap-1 border-b px-3 py-2'>
+        <div className='flex flex-wrap items-center gap-1.5'>
+          {stepNumber != null ? (
+            <Badge
+              variant='secondary'
+              className='h-5 px-1.5 text-[10px] font-bold tabular-nums'
+            >
+              B{stepNumber}
+            </Badge>
+          ) : null}
+          {isFail ? (
+            <Badge
+              variant='destructive'
+              className='h-5 px-1.5 text-[10px] font-bold'
+            >
+              !
+            </Badge>
+          ) : null}
+          {!hideDeviceLabel ? (
+            <span className='truncate text-xs font-semibold'>{deviceLabel}</span>
+          ) : null}
+        </div>
+        <p className='text-[11px] leading-snug text-muted-foreground'>{subtitle}</p>
+        {timeLabel ? (
+          <p className='text-[10px] text-muted-foreground'>{timeLabel}</p>
+        ) : null}
+      </CardHeader>
+
+      <CardContent className='p-2'>
+        <div
+          className={cn(
+            'flex items-center justify-center overflow-hidden rounded-md bg-muted/40',
+            previewMaxClass
+          )}
+        >
           {showFailed ? (
-            <div className='flex h-full flex-col items-center justify-center gap-2 px-2 text-center text-xs text-muted-foreground'>
+            <div className='flex flex-col items-center justify-center gap-2 px-3 py-6 text-center text-xs text-muted-foreground'>
               <FileCode2 size={22} className='opacity-70' />
-              <span className='line-clamp-2'>{artifact.artifact_type}</span>
+              <span>{t('monitorArtifactPreviewUnavailable')}</span>
+              <span className='text-[10px] opacity-80'>{label}</span>
             </div>
           ) : showLoading ? (
-            <div className='flex h-full items-center justify-center text-muted-foreground'>
-              <Loader2 size={18} className='animate-spin' />
+            <div className='flex items-center justify-center py-10 text-muted-foreground'>
+              <Loader2 size={20} className='animate-spin' />
             </div>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={imageSrc}
               alt={label}
-              className='h-full w-full object-cover'
-              loading='lazy'
-              onError={() => setFailed(true)}
+              className={cn('w-full object-contain', previewMaxClass)}
+              loading='eager'
+              decoding='async'
+              onError={onImageError}
             />
           )}
         </div>
-      </button>
-
-      {needsAuthFetch ? (
-        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent
-            zIndex={Z_CAMPAIGN_MONITOR_NESTED}
-            className='max-h-[90dvh] max-w-[min(96vw,900px)] p-2 sm:p-4'
-          >
-            <DialogTitle className='sr-only'>{label}</DialogTitle>
-            {imageSrc ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={imageSrc}
-                alt={label}
-                className='max-h-[min(82dvh,800px)] w-full object-contain'
-              />
-            ) : null}
-          </DialogContent>
-        </Dialog>
-      ) : null}
-    </>
+      </CardContent>
+    </Card>
   );
 }

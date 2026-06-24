@@ -144,6 +144,7 @@ _CMT_EMPTY_BODY_JUNK_AUTHOR = frozenset({
 })
 _CMT_BADGE_LABELS = frozenset({
     "người đóng góp nổi bật", "người đóng góp đang lên", "người đóng góp nhiều nhất",
+    "người đóng góp đáng tin", "top contributor", "reliable contributor",
     "top fan", "fan cứng", "siêu fan", "super fan", "rising creator", "friend",
     "được mời", "người ảnh hưởng", "chuyên gia", "pre-broadcast contributor",
     "người hâm mộ", "subscriber", "đăng ký theo dõi", "fan cuồng", "người hay tương tác",

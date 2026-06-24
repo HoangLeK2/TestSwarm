@@ -38,6 +38,8 @@ class OrgScenarioSummaryOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_runnable: bool = False
+    is_recovery_scenario: bool = False
+    recovery_usage_count: int = 0
     last_validation_summary: Optional[dict[str, Any]] = None
     last_validated_at: Optional[datetime] = None
 

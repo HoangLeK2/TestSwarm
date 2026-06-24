@@ -461,6 +461,25 @@ class ScrcpyRelaySession:
         t = self._relay_thread
         return t is not None and t.is_alive()
 
+    def matches_config(
+        self,
+        max_fps: int,
+        max_width: int,
+        enable_control: bool,
+        port: int,
+        bitrate: int,
+        low_latency: bool,
+    ) -> bool:
+        """Return True when a duplicate start request can reuse this live session."""
+        return (
+            self._max_fps == (max_fps or 30)
+            and self._max_width == (max_width or 800)
+            and self._enable_touch_control == bool(enable_control)
+            and self._port == port
+            and self._bitrate == (bitrate or 2_000_000)
+            and self._low_latency == bool(low_latency)
+        )
+
     # ── Internal ─────────────────────────────────────────────────────────────
 
     def _relay_loop(self) -> None:

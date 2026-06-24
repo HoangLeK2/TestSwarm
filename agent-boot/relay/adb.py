@@ -12,6 +12,7 @@ All functions are blocking — call via loop.run_in_executor() from async code.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os as _os
 import re
@@ -39,7 +40,7 @@ _ADB: str = shutil.which("adb") or "adb"
 
 _HERE = Path(__file__).parent
 
-def _assets_dir() -> Path:
+def gts_dir() -> Path:
     from_env = _os.environ.get("AGENT_BOOT_ASSETS", "").strip()
     if from_env and Path(from_env).is_dir():
         return Path(from_env)
@@ -50,6 +51,11 @@ def _assets_dir() -> Path:
     if dev_bundle.is_dir():
         return dev_bundle
     return local  # may not exist — callers check
+
+
+def _assets_dir() -> Path:
+    return gts_dir()
+
 
 # ABI → atx-agent binary name
 _ABI_BINARY: dict[str, str] = {
@@ -64,7 +70,9 @@ _ABI_BINARY: dict[str, str] = {
 _U2_PKG      = "com.github.uiautomator"
 _U2_TEST_PKG = "com.github.uiautomator.test"
 _STF_PKG     = "jp.co.cyberagent.stf"
+_U2_ADB_KEYBOARD_IME = f"{_U2_PKG}/.AdbKeyboard"
 _U2_RUNNER   = "androidx.test.runner.AndroidJUnitRunner"
+_U2_STUB_CLASS = "com.github.uiautomator.stub.Stub"
 
 def _run(
     *args: str,
@@ -244,7 +252,7 @@ def _device_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
     hex_port = format(port, "04X")
     out, _ = _adb_shell(
         serial,
-        f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':{hex_port}' | head -1 || true",
+        f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | awk '$2 ~ /:{hex_port}$/ && $4 == \"0A\" {{print; exit}}'",
         timeout=timeout,
     )
     return bool(out.strip())
@@ -268,15 +276,40 @@ def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -
         return False, str(exc)
 
 
+def _wait_for_u2_port_state(
+    serial: str,
+    *,
+    listening: bool,
+    timeout: float,
+    interval: float = 0.25,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        if _device_port_listening(serial, 9008) is listening:
+            return True
+        time.sleep(interval)
+    return _device_port_listening(serial, 9008) is listening
+
+
 def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
     _apply_u2_stability_settings(serial)
     _adb_shell(serial, f"am force-stop {_U2_TEST_PKG}", timeout=10)
     _adb_shell(serial, f"am force-stop {_U2_PKG}", timeout=10)
-    _adb_shell(serial, "pkill -9 -f 'uiautomator' 2>/dev/null || true", timeout=5)
-    time.sleep(0.3)
+    _adb_shell(serial, "pkill -9 -f '[u]iautomator' 2>/dev/null || true", timeout=5)
+    _wait_for_u2_port_state(serial, listening=False, timeout=3.0)
+
+    atx_ok, _ = _atx_http_ping(serial, timeout=1.5)
+    if atx_ok and _wait_for_u2_port_state(serial, listening=True, timeout=min(8.0, timeout)):
+        lock_portrait_rotation(serial)
+        return "u2 started via atx-agent", 0
+
+    if _device_port_listening(serial, 9008):
+        lock_portrait_rotation(serial)
+        return "u2 already listening after cleanup; skipped duplicate start", 0
+
     _adb_shell(
         serial,
-        f"nohup am instrument -w -e debug false {_U2_TEST_PKG}/{_U2_RUNNER}"
+        f"nohup am instrument -w -e debug false -e class {_U2_STUB_CLASS} {_U2_TEST_PKG}/{_U2_RUNNER}"
         f" </dev/null >/data/local/tmp/u2.log 2>&1 &",
         timeout=10,
     )
@@ -385,6 +418,41 @@ def _apply_u2_stability_settings(serial: str) -> None:
     for cmd in commands:
         _adb_shell(serial, cmd, timeout=5)
     lock_portrait_rotation(serial)
+    ok, msg = ensure_u2_input_ime(serial)
+    if ok:
+        logger.info("[%s] u2 AdbKeyboard IME: %s", serial, msg)
+    else:
+        logger.warning("[%s] u2 AdbKeyboard IME not pinned: %s", serial, msg)
+
+
+def _list_input_methods(serial: str) -> list[str]:
+    out, _ = _adb_shell(serial, "ime list -s -a", timeout=10)
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def ensure_u2_input_ime(serial: str) -> tuple[bool, str]:
+    """
+    Pin openatx AdbKeyboard as the default IME for u2 text input.
+
+    Matches uiautomator2 ``set_input_ime()`` / ``ADB_KEYBOARD_INPUT_TEXT`` so
+    live typing and scenarios do not fall back to setText or clipboard paste.
+    Idempotent — safe on every bootstrap.
+    """
+    if not _pkg_installed(serial, _U2_PKG):
+        return False, "u2 package not installed"
+    if _U2_ADB_KEYBOARD_IME not in _list_input_methods(serial):
+        return False, f"{_U2_ADB_KEYBOARD_IME} not registered (reinstall u2 APK?)"
+    current_out, _ = _adb_shell(serial, "settings get secure default_input_method", timeout=5)
+    current = current_out.strip()
+    if current == _U2_ADB_KEYBOARD_IME:
+        return True, "already default"
+    _adb_shell(serial, f"ime enable {_U2_ADB_KEYBOARD_IME}", timeout=5)
+    _adb_shell(serial, f"ime set {_U2_ADB_KEYBOARD_IME}", timeout=5)
+    _adb_shell(serial, f"settings put secure default_input_method {_U2_ADB_KEYBOARD_IME}", timeout=5)
+    current_out, _ = _adb_shell(serial, "settings get secure default_input_method", timeout=5)
+    if current_out.strip() == _U2_ADB_KEYBOARD_IME:
+        return True, "enabled"
+    return False, f"default still {current_out.strip()!r}"
 
 
 def _run_bytes(
@@ -555,8 +623,6 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
     force_install = _os.getenv("AGENT_BOOT_FORCE_U2_INSTALL", "").strip().lower() in {"1", "true", "yes", "on"}
     installed_main = _pkg_installed(serial, _U2_PKG)
     installed_test = _pkg_installed(serial, _U2_TEST_PKG)
-    if installed_main and installed_test and not force_install:
-        return "u2 APKs already installed", 0
 
     assets = _assets_dir()
     # Look in assets/apks/ then assets/ directly
@@ -570,6 +636,14 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
             main_apk, test_apk = m, t
             break
 
+    main_matches = _installed_apk_matches(serial, _U2_PKG, main_apk) if installed_main else False
+    test_matches = _installed_apk_matches(serial, _U2_TEST_PKG, test_apk) if installed_test else False
+    pair_mismatch = main_matches is False or test_matches is False
+    if installed_main and installed_test and not force_install and not pair_mismatch:
+        if main_matches is True and test_matches is True:
+            return "u2 APKs already installed; hashes match local assets", 0
+        return "u2 APKs already installed; hashes unavailable", 0
+
     if main_apk is None:
         msg = (
             f"u2 APKs not found in {assets}. "
@@ -580,14 +654,15 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
 
     out_m = "Success"
     out_t = "Success"
-    if force_install or not installed_main:
+    reinstall_pair = force_install or pair_mismatch
+    if reinstall_pair or not installed_main:
         logger.info("[%s] installing u2 main APK from %s", serial, main_apk)
         out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
                        serial=serial, timeout=120)
         if rc != 0:
             return f"push u2 main APK failed: {out}", -1
         out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
-    if force_install or not installed_test:
+    if reinstall_pair or not installed_test:
         logger.info("[%s] installing u2 test APK from %s", serial, test_apk)
         out, rc = _run("push", str(test_apk), "/data/local/tmp/u2-test.apk",
                        serial=serial, timeout=120)
@@ -596,7 +671,11 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
         out_t, rc_t = _adb_shell(serial, "pm install -r -t /data/local/tmp/u2-test.apk", timeout=120)
 
     combined = f"{out_m}\n{out_t}"
-    if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in combined or "signatures do not match" in combined:
+    if (
+        "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in combined
+        or "INSTALL_FAILED_VERSION_DOWNGRADE" in combined
+        or "signatures do not match" in combined
+    ):
         _adb_shell(serial, f"pm uninstall {_U2_TEST_PKG} 2>/dev/null || true", timeout=30)
         _adb_shell(serial, f"pm uninstall {_U2_PKG} 2>/dev/null || true", timeout=30)
         out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
@@ -622,6 +701,34 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
 def _pkg_installed(serial: str, package: str) -> bool:
     out, _ = _adb_shell(serial, f"pm path {package} 2>/dev/null || true", timeout=5)
     return "package:" in out
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _installed_pkg_sha256(serial: str, package: str) -> Optional[str]:
+    out, _ = _adb_shell(
+        serial,
+        "apk=$(pm path {package} 2>/dev/null | head -n1 | sed 's/^package://'); "
+        'if [ -n "$apk" ]; then sha256sum "$apk" 2>/dev/null || toybox sha256sum "$apk" 2>/dev/null; fi'.format(package=package),
+        timeout=10,
+    )
+    match = re.search(r"\b([0-9a-fA-F]{64})\b", out)
+    return match.group(1).lower() if match else None
+
+
+def _installed_apk_matches(serial: str, package: str, local_apk: Optional[Path]) -> Optional[bool]:
+    if local_apk is None or not local_apk.is_file():
+        return None
+    installed_sha = _installed_pkg_sha256(serial, package)
+    if not installed_sha:
+        return None
+    return installed_sha == _sha256_file(local_apk)
 
 
 def _install_stf_apk(serial: str) -> tuple[str, int]:
@@ -759,6 +866,14 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
             return _json.dumps(summary), -1
         logger.info("[%s] u2 ready", serial)
         summary["u2_ready"] = True
+
+    ime_ok, ime_msg = ensure_u2_input_ime(serial)
+    summary["u2_ime_ready"] = ime_ok
+    if ime_ok:
+        logger.info("[%s] u2 AdbKeyboard IME: %s", serial, ime_msg)
+    else:
+        logger.warning("[%s] u2 AdbKeyboard IME not pinned: %s", serial, ime_msg)
+        summary["errors"].append(f"u2 ime: {ime_msg}")
 
     caps = _probe_capabilities(serial)
     summary["wlan_ip"] = str(caps.get("wlan_ip") or "")

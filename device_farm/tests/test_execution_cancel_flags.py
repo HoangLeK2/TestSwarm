@@ -10,8 +10,10 @@ import pytest
 
 from services.execution_pause_flags import (
     clear_execution_cancelled,
+    clear_execution_paused,
     is_execution_cancelled_async,
     is_execution_cancelled_local,
+    set_execution_paused,
     set_execution_cancelled,
 )
 from temporal.activities import _to_thread_with_heartbeat
@@ -61,6 +63,43 @@ async def test_to_thread_with_heartbeat_stops_on_execution_cancel_flag():
     assert started.is_set()
     assert cancel_event.is_set()
     assert result == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_to_thread_with_heartbeat_stops_on_execution_pause_flag():
+    cancel_event = threading.Event()
+    started = threading.Event()
+
+    def _slow_work() -> str:
+        started.set()
+        while not cancel_event.is_set():
+            time.sleep(0.05)
+        return "paused"
+
+    try:
+        await set_execution_paused("exec-pause-1")
+        with patch("temporal.activities.activity") as mock_activity:
+            mock_activity.heartbeat = MagicMock()
+            mock_activity.is_cancelled = MagicMock(return_value=False)
+
+            with patch(
+                "services.execution_pause_flags.is_execution_cancelled_async",
+                AsyncMock(return_value=False),
+            ):
+                result = await _to_thread_with_heartbeat(
+                    _slow_work,
+                    cooperative_cancel_event=cancel_event,
+                    execution_id="exec-pause-1",
+                    heartbeat_interval=0.05,
+                    cancel_grace_s=2.0,
+                    stop_on_pause=True,
+                )
+    finally:
+        await clear_execution_paused("exec-pause-1")
+
+    assert started.is_set()
+    assert cancel_event.is_set()
+    assert result == "paused"
 
 
 @pytest.mark.asyncio

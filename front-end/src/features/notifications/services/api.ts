@@ -17,7 +17,10 @@ export const NOTIFICATION_EVENTS = [
   'device.reconnect',
   'task.failed',
   'campaign.complete',
+  'campaign.dispatched',
+  'campaign.completed',
   'campaign.failed',
+  'campaign.step_warning',
   'schedule.triggered',
   'schedule.failed',
   'account.banned',
@@ -73,5 +76,16 @@ export const notificationsApi = {
 
   testChannel: async (channelId: string) =>
     (await df().testChannelApiNotificationChannelsChannelIdTestPost(channelId))
-      .data as TestNotificationOut
+      .data as TestNotificationOut,
+
+  testChannelDraft: async (data: { type: string; config: Record<string, unknown> }) =>
+    (
+      await getDeviceFarmApi().request<TestNotificationOut>({
+        path: '/api/notification-channels/test-draft',
+        method: 'POST',
+        body: data,
+        secure: true,
+        format: 'json'
+      })
+    ).data
 };

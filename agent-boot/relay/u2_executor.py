@@ -517,6 +517,7 @@ class U2Executor:
         serial: str,
         actions: list[dict],
         early_exit: bool = True,
+        cancel_event: Any = None,
     ) -> dict:
         if not actions:
             return {"ok": True, "stopped_at": None, "results": [], "error": None}
@@ -528,6 +529,14 @@ class U2Executor:
         def _run_actions(dev: Any) -> dict:
             results: list[dict] = []
             for idx, act in enumerate(actions):
+                if cancel_event is not None and cancel_event.is_set():
+                    return {
+                        "ok": False,
+                        "stopped_at": idx,
+                        "results": results,
+                        "error": "cancelled",
+                        "cancelled": True,
+                    }
                 op = act.get("op", "")
                 fn = _OP_TABLE.get(op)
                 if fn is None:
@@ -559,6 +568,14 @@ class U2Executor:
                     if value is not None:
                         entry["value"] = value
                     results.append(entry)
+                    if cancel_event is not None and cancel_event.is_set() and idx + 1 < len(actions):
+                        return {
+                            "ok": False,
+                            "stopped_at": idx + 1,
+                            "results": results,
+                            "error": "cancelled",
+                            "cancelled": True,
+                        }
                 except Exception as exc:
                     results.append({"op": op, "ok": False, "error": str(exc)})
                     if early_exit:

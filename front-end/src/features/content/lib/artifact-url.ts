@@ -76,13 +76,15 @@ export function shouldProxyArtifactFetch(
     return true;
   }
 
-  const farmRelative =
-    raw.startsWith('screenshots/') ||
-    raw.startsWith('/screenshots') ||
-    raw.startsWith('captures/') ||
-    raw.startsWith('/captures');
+  // Static capture files are mounted at app root (/captures), not under /api.
+  if (raw.startsWith('/captures/') || raw.startsWith('captures/')) {
+    return false;
+  }
 
-  if (farmRelative) return true;
+  const legacyScreenshot =
+    raw.startsWith('screenshots/') || raw.startsWith('/screenshots');
+
+  if (legacyScreenshot) return true;
 
   // Absolute MinIO/R2/public CDN — browser loads directly (no farm download hop).
   if (isAbsoluteHttpUrl(raw)) {

@@ -51,9 +51,9 @@ def test_resolve_accepts_arbitrary_badge_text_as_metadata() -> None:
     )
     top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
     assert top is not None
-    assert top["tap_kind"] in {"post_body", "author_row_gap", "metadata", "timestamp", "geometric"}
-    if top["tap_kind"] == "metadata":
-        assert "Người đóng góp" in (top.get("tap_label") or "")
+    assert top["tap_kind"] in {"post_body", "author_row_gap", "timestamp", "geometric"}
+    label = (top.get("tap_label") or "").casefold()
+    assert "người đóng góp" not in label
 
 
 def test_resolve_accepts_different_badge_label() -> None:
@@ -330,6 +330,47 @@ def test_case3_translated_post_taps_content_not_translation_chrome() -> None:
         assert not (sx1 <= cx <= sx2 and sy1 <= cy <= sy2)
 
 
+def test_caption_see_more_with_large_photo_prefers_header_not_image() -> None:
+    """Regression: long caption + xem thêm + infographic — do not open photo lightbox."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,287][1260,1975]">
+        <node class="android.view.ViewGroup" bounds="[42,287][1218,980]">
+          <node class="android.widget.TextView" text="OpenAI Codex" bounds="[210,300][700,360]" clickable="false"/>
+          <node class="android.widget.TextView" text="2 giờ" bounds="[224,370][350,410]" clickable="true"/>
+          <node content-desc="Lựa chọn khác cho bài viết này" bounds="[1113,287][1260,437]" clickable="true"/>
+          <node class="android.view.ViewGroup" clickable="true" bounds="[42,420][1176,973]">
+            <node class="android.view.ViewGroup" bounds="[42,420][1176,865]">
+              <node content-desc="Codex workflow tips… xem thêm" bounds="[91,420][1176,865]">
+                <node text="xem thêm" class="android.widget.Button" clickable="true" bounds="[596,798][845,860]"/>
+              </node>
+            </node>
+            <node class="android.widget.Button" content-desc="Xếp hạng bản dịch này" clickable="true" bounds="[70,865][674,952]"/>
+          </node>
+        </node>
+        <node class="android.view.ViewGroup" bounds="[0,980][1260,1821]">
+          <node class="android.widget.ImageView" content-desc="Ảnh" clickable="true" bounds="[0,980][1260,1819]"/>
+        </node>
+        <node class="android.view.ViewGroup" clickable="true" bounds="[0,1821][1260,1975]">
+          <node class="android.widget.Button" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." text="Bình luận" bounds="[227,1821][431,1975]" clickable="true"/>
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] != "post_media"
+    assert top["tap_kind"] in {"timestamp", "author_row_gap", "metadata", "post_body"}
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind=str(top["tap_kind"])
+    )
+    assert cy < 900
+    assert not (0 <= cx <= 1260 and 980 <= cy <= 1819)
+
+
 def test_case2_photo_caption_prefers_post_media() -> None:
     """Case 2: short caption + full-width image (Vy Thiên Hùng BDS post)."""
     from pathlib import Path
@@ -542,3 +583,247 @@ def test_ai_badge_combined_timestamp_row_clips_tap_right() -> None:
             tuple(top["bounds"]), tap_kind="timestamp"
         )
         assert cx >= 400
+
+
+def test_codex_vn_wallpaper_gradient_prefers_shell_when_timestamp_stacked() -> None:
+    """Regression: Hình nền + timestamp under author — shell band, not profile tap."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,1491][1260,2414]">
+        <node class="android.view.ViewGroup" clickable="true" bounds="[0,1491][1260,1715]">
+          <node class="android.widget.ImageView" content-desc="Ảnh đại diện của Huy Vũ Nguyễn" clickable="true" bounds="[42,1533][182,1673]"/>
+          <node class="android.widget.Button" text="Huy Vũ Nguyễn" clickable="true" bounds="[210,1534][655,1600]"/>
+          <node class="android.view.ViewGroup" text="5 phút•Chia sẻ với: Nhóm công khai" content-desc="5 phút•Chia sẻ với: Nhóm công khai" clickable="true" bounds="[224,1614][443,1663]"/>
+          <node class="android.widget.Button" content-desc="Lựa chọn khác cho bài viết của Huy Vũ Nguyễn" clickable="true" bounds="[1113,1491][1260,1637]"/>
+        </node>
+        <node class="android.view.ViewGroup" bounds="[42,1715][1218,2253]">
+          <node class="android.view.ViewGroup" content-desc="Hình nền" bounds="[42,1715][1218,2253]">
+            <node class="android.view.ViewGroup" text="GPT Go dùng codex ổn ko các bác" content-desc="GPT Go dùng codex ổn ko các bác" clickable="true" focusable="true" bounds="[105,1980][1155,2200]"/>
+          </node>
+        </node>
+        <node class="android.view.ViewGroup" bounds="[0,2253][1260,2407]">
+          <node class="android.widget.Button" content-desc="Bình luận" clickable="true" bounds="[154,2253][308,2407]"/>
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] == "post_body"
+    assert top.get("gradient_wallpaper")
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
+    )
+    assert cy >= 1715
+    assert cy < 1980
+    assert cx < 210 or cy >= 1720
+
+
+def test_empathetic_sunflower_wallpaper_avoids_profile_header_tap() -> None:
+    """Device dump: stacked timestamp under long author name opens profile, not detail."""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "facebook"
+        / "empathetic_sunflower_wallpaper_feed.xml"
+    )
+    xml = path.read_text(encoding="utf-8")
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert (top.get("post") or {}).get("author") == "EmpatheticSunflower8012"
+    assert top["tap_kind"] == "post_body"
+    assert top.get("gradient_wallpaper")
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
+    )
+    assert cy >= 1424
+    assert cy < 1755
+    assert not (210 <= cx <= 906 and 1243 <= cy <= 1372)
+
+
+def test_codex_vn_stacked_timestamp_prefers_gap_not_profile_tap() -> None:
+    """Regression: Vivo/Codex VN — timestamp under author opens profile; use gap or body."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,1491][1260,2414]">
+        <node class="android.view.ViewGroup" clickable="true" bounds="[0,1491][1260,1715]">
+          <node class="android.widget.ImageView" content-desc="Ảnh đại diện của LoyalMoose6295" clickable="true" bounds="[42,1533][182,1673]"/>
+          <node class="android.widget.Button" text="LoyalMoose6295" clickable="true" bounds="[210,1534][655,1600]"/>
+          <node class="android.view.ViewGroup" text="5 phút•Chia sẻ với: Nhóm công khai" content-desc="5 phút•Chia sẻ với: Nhóm công khai" clickable="true" bounds="[224,1614][443,1663]"/>
+          <node class="android.widget.Button" content-desc="Lựa chọn khác cho bài viết của LoyalMoose6295" clickable="true" bounds="[1113,1491][1260,1637]"/>
+        </node>
+        <node class="android.view.ViewGroup" bounds="[42,1715][1218,2253]">
+          <node class="android.view.ViewGroup" text="Từ hôm qua tới nay codeX toàn lỗi bad request các ae có bị vậy k" content-desc="Từ hôm qua tới nay codeX toàn lỗi bad request các ae có bị vậy k" clickable="true" focusable="true" bounds="[42,1715][1218,2253]"/>
+        </node>
+        <node class="android.view.ViewGroup" bounds="[0,2253][1260,2407]">
+          <node class="android.widget.Button" content-desc="Bình luận" clickable="true" bounds="[154,2253][308,2407]"/>
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] in {"author_row_gap", "post_body"}
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind=str(top["tap_kind"]), screen_w=1260
+    )
+    assert cx >= 400 or top["tap_kind"] == "post_body"
+    if top["tap_kind"] == "post_body":
+        assert cy >= 1700
+
+
+def test_contributor_badge_combined_timestamp_prefers_body_or_gap() -> None:
+    """Regression: ★ Người đóng góp đáng tin • 6 giờ — never tap the badge half."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,800][1260,2000]">
+        <node class="android.widget.Button" text="HyperX" bounds="[210,842][420,898]" clickable="true"/>
+        <node class="android.view.ViewGroup" text="★ Người đóng góp đáng tin • 6 giờ" bounds="[210,910][900,960]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="Trình Chỉnh Sửa Video AI" bounds="[42,1020][1218,1700]" clickable="true" focusable="true"/>
+        <node class="android.widget.Button" content-desc="Bình luận" clickable="true" bounds="[154,1700][308,1850]"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] in {"post_body", "author_row_gap", "timestamp"}
+    label = (top.get("tap_label") or "").casefold()
+    assert "đóng góp đáng tin" not in label or top["tap_kind"] == "timestamp"
+    if top["tap_kind"] == "timestamp":
+        cx, _ = post_open_pipeline.post_header_tap_point(
+            tuple(top["bounds"]), tap_kind="timestamp"
+        )
+        assert cx >= 500
+
+
+def test_nghi_floral_imageview_prefers_shell_when_timestamp_stacked() -> None:
+    """Regression: photo background — stacked timestamp under author opens profile."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,1050][1260,2450]">
+        <node class="android.view.ViewGroup" bounds="[0,1050][1260,1270]">
+          <node class="android.widget.ImageView" content-desc="Ảnh đại diện của Nghi Huynh Quoc" clickable="true" bounds="[42,1092][182,1232]"/>
+          <node class="android.widget.Button" text="Nghi Huynh Quoc" clickable="true" bounds="[210,1093][620,1159]"/>
+          <node class="android.view.ViewGroup" text="★ Người đóng góp đang lên • 4 ngày" clickable="true" bounds="[210,1161][900,1211]"/>
+        </node>
+        <node class="android.widget.ImageView" content-desc="Ảnh" clickable="true" bounds="[42,1270][1218,2250]">
+          <node class="android.view.ViewGroup" text="Đang free unlimited token cho KiMi 2.7 và GLM 5.2. Chi tiết dưới cmt" content-desc="Đang free unlimited token cho KiMi 2.7 và GLM 5.2. Chi tiết dưới cmt" clickable="true" focusable="true" bounds="[105,1650][1155,1870]"/>
+        </node>
+        <node class="android.widget.Button" content-desc="Bình luận" clickable="true" bounds="[154,2250][308,2400]"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] == "post_body"
+    assert top.get("gradient_wallpaper")
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
+    )
+    assert cy >= 1270
+    assert cy < 1650
+
+
+def test_codex_vn_two_post_feed_selects_wallpaper_post_not_profile() -> None:
+    """Live dump: lower wallpaper post must open detail, not author/timestamp profile tap."""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "facebook"
+        / "codex_vn_two_post_feed.xml"
+    )
+    xml = path.read_text(encoding="utf-8")
+    top, alts = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert (top.get("post") or {}).get("author") == "EmpatheticSunflower8012"
+    assert top["tap_kind"] == "post_body"
+    assert top.get("gradient_wallpaper")
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]), tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
+    )
+    assert cy >= 1890
+    assert cy < 2221
+    assert not (210 <= cx <= 906 and 1709 <= cy <= 1838)
+    assert any(
+        (a.get("post") or {}).get("author") == "Cái_Đáng_Yêu" for a in (alts or [])
+    )
+
+
+def test_live_nghi_tall_text_bounds_tap_stays_above_flower_zone() -> None:
+    """Regression: shell open band must sit above tall text wrapper / flower zone."""
+    shell = (42, 1403, 1218, 2663)
+    text = (105, 1801, 1155, 2285)
+    open_bounds = post_open_pipeline._wallpaper_shell_open_tap_bounds(shell, text_bounds=text)
+    assert open_bounds[3] < 1801
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        open_bounds, tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
+    )
+    assert cy < 1801
+    assert cx > 300
+
+
+def test_tuan_nguyen_video_carousel_does_not_tap_video_tile() -> None:
+    """Live Codex VN dump: caption + photo/video carousel must not open the reel player."""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "facebook"
+        / "tuan_nguyen_video_carousel_feed.xml"
+    )
+    xml = path.read_text(encoding="utf-8")
+    top, alts = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert (top.get("post") or {}).get("author") == "Tuấn Nguyễn"
+    assert top["tap_kind"] != "post_media"
+    assert not top.get("gradient_wallpaper")
+    assert "thước phim" not in (top.get("tap_label") or "").casefold()
+    assert top["tap_kind"] in {"author_row_gap", "post_body", "timestamp", "metadata"}
+
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]),
+        tap_kind=str(top["tap_kind"]),
+        gradient_wallpaper=bool(top.get("gradient_wallpaper")),
+        screen_w=1260,
+    )
+    video_bounds = (0, 1531, 1260, 2159)
+    photo_bounds = (0, 899, 1260, 1520)
+    vx1, vy1, vx2, vy2 = video_bounds
+    px1, py1, px2, py2 = photo_bounds
+    assert not (vx1 <= cx <= vx2 and vy1 <= cy <= vy2), (
+        f"tap ({cx},{cy}) landed on video carousel tile"
+    )
+    assert not (px1 <= cx <= px2 and py1 <= cy <= py2), (
+        f"tap ({cx},{cy}) landed on photo carousel tile"
+    )
+    assert cy < 900, f"tap ({cx},{cy}) should stay in header/caption band"
+
+
+def test_wallpaper_high_centered_text_tap_stays_above_overlay() -> None:
+    """Regression: centered copy high in shell must not tap the text overlay."""
+    shell = (42, 1890, 1218, 2800)
+    text = (105, 1920, 1155, 2480)
+    open_bounds = post_open_pipeline._wallpaper_shell_open_tap_bounds(
+        shell, text_bounds=text, body_top=1890
+    )
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        open_bounds, tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
+    )
+    assert not (text[0] <= cx <= text[2] and text[1] <= cy <= text[3])

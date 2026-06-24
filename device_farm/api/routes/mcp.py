@@ -6,10 +6,15 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from api.deps import CurrentUser, require_permission
+from api.deps import CurrentUser, DB, require_permission
 from api.auth.rbac import is_superadmin
+from db.crud.mcp_token import (
+    create_mcp_token as create_mcp_token_row,
+    list_mcp_tokens as list_mcp_token_rows,
+    revoke_mcp_token as revoke_mcp_token_row,
+    row_to_record,
+)
 from mcp import server as mcp_server
-from mcp import token_store
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -91,18 +96,25 @@ async def list_mcp_audit_log(
     "/tokens",
     dependencies=[Depends(require_permission("mcp", "read"))],
 )
-async def list_mcp_tokens(user: CurrentUser, include_revoked: bool = False):
+async def list_mcp_tokens(
+    user: CurrentUser,
+    db: DB,
+    include_revoked: bool = False,
+):
     superadmin = is_superadmin(user)
     user_org_id = _user_org_id(user)
     if superadmin:
-        records = token_store.list_tokens(include_revoked=include_revoked)
+        rows = await list_mcp_token_rows(db, include_revoked=include_revoked)
     elif user_org_id:
-        records = token_store.list_tokens(
+        rows = await list_mcp_token_rows(
+            db,
             include_revoked=include_revoked,
             org_id=user_org_id,
+            owner_user_id=str(user.id),
         )
     else:
-        records = []
+        rows = []
+    records = [row_to_record(row) for row in rows]
     return {
         "preview": True,
         "contract_version": mcp_server.CONTRACT_VERSION,
@@ -118,7 +130,7 @@ async def list_mcp_tokens(user: CurrentUser, include_revoked: bool = False):
     dependencies=[Depends(require_permission("mcp", "manage"))],
     status_code=status.HTTP_201_CREATED,
 )
-async def create_mcp_token(body: McpTokenCreate, user: CurrentUser):
+async def create_mcp_token(body: McpTokenCreate, user: CurrentUser, db: DB):
     if not body.preview_consent:
         raise HTTPException(
             status_code=400,
@@ -130,13 +142,15 @@ async def create_mcp_token(body: McpTokenCreate, user: CurrentUser):
             status_code=403,
             detail={"code": "MCP_ORG_CONTEXT_REQUIRED"},
         )
-    record, plaintext = token_store.create_token(
+    row, plaintext = await create_mcp_token_row(
+        db,
         name=body.name,
         scope_type=body.scope_type,
         scope_ref=body.scope_ref,
         owner_user_id=str(user.id),
         org_id=org_id,
     )
+    record = row_to_record(row)
     return {
         "preview": True,
         "contract_version": mcp_server.CONTRACT_VERSION,
@@ -150,11 +164,11 @@ async def create_mcp_token(body: McpTokenCreate, user: CurrentUser):
     "/tokens/{token_id}/revoke",
     dependencies=[Depends(require_permission("mcp", "manage"))],
 )
-async def revoke_mcp_token(token_id: str, user: CurrentUser):
+async def revoke_mcp_token(token_id: str, user: CurrentUser, db: DB):
     superadmin = is_superadmin(user)
     org_id = None if superadmin else _user_org_id(user)
     if org_id is None and not superadmin:
         raise HTTPException(status_code=404, detail={"code": "MCP_TOKEN_NOT_FOUND"})
-    if not token_store.revoke_token(token_id, org_id=org_id):
+    if not await revoke_mcp_token_row(db, token_id, org_id=org_id):
         raise HTTPException(status_code=404, detail={"code": "MCP_TOKEN_NOT_FOUND"})
     return {"ok": True, "token_id": token_id}

@@ -180,7 +180,8 @@ export function useSaveOrgScenarioBody() {
       body: OrgScenarioBodyIn;
       force?: boolean;
     }) => orgScenariosApi.saveBody(scenarioId, body, force),
-    onSuccess: (_, { scenarioId }) => {
+    onSuccess: (saved, { scenarioId }) => {
+      qc.setQueryData(KEYS.body(scenarioId), saved);
       qc.invalidateQueries({ queryKey: KEYS.detail(scenarioId) });
       qc.invalidateQueries({ queryKey: KEYS.body(scenarioId) });
       qc.invalidateQueries({ queryKey: KEYS.list });

@@ -30,6 +30,7 @@ export function useH264Video(
     restartKey?: number;
     onFrame?: (frame?: { mostlyBlack: boolean }) => void;
     onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
+    notifyStallWithVisibleFrame?: boolean;
     onStats?: (stats: {
       decodeQueueSize: number;
       droppedDelta: number;
@@ -55,6 +56,9 @@ export function useH264Video(
   const onFrameRef = useRef(opts?.onFrame);
   const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
+  const notifyStallWithVisibleFrameRef = useRef(
+    opts?.notifyStallWithVisibleFrame
+  );
   const serialRef = useRef(serial);
   const wsConnectedRef = useRef(false);
   // Reset+replay on ws_status=true is only needed for true reconnects (close→open).
@@ -66,6 +70,7 @@ export function useH264Video(
   onFrameRef.current = opts?.onFrame;
   onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
+  notifyStallWithVisibleFrameRef.current = opts?.notifyStallWithVisibleFrame;
   serialRef.current = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
@@ -83,7 +88,7 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=26');
+    const worker = new Worker('/h264-worker.js?v=28');
     workerRef.current = worker;
     mountedAtRef.current = Date.now();
 
@@ -229,7 +234,7 @@ export function useH264Video(
       }
       // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
-  }, [serial, restartKey]);
+  }, [canvasRef, serial, restartKey]);
 
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
@@ -413,8 +418,10 @@ export function useH264Video(
       // scrcpy may emit very few frames on a static screen.
       if (packetAgeMs > 3000 && now - lastRecoveryAtRef.current > 3000) {
         lastRecoveryAtRef.current = now;
+        w.postMessage({ type: 'reset' });
+        clearLatestFrame();
         requestIdr(s, 0);
-        if (!lastRenderedAt) {
+        if (!lastRenderedAt || notifyStallWithVisibleFrameRef.current) {
           onStallRef.current?.('no_packets');
         }
         return;
@@ -422,9 +429,10 @@ export function useH264Video(
 
       // Packets are arriving but no frame has rendered recently: reset the
       // browser decoder and request a keyframe to rebuild the reference chain.
-      // Static screens may decode few visible frames while packets still flow;
-      // tolerate longer gaps once we have rendered at least one good frame.
-      const renderedStaleMs = lastRenderedAt ? 12_000 : 1800;
+      // The detail screen must recover faster than the user's perception of a
+      // frozen mirror. Packets flowing without rendered frames means the browser
+      // decoder/canvas path is stale even if the backend stream is healthy.
+      const renderedStaleMs = lastRenderedAt ? 5_000 : 1800;
       if (
         packetAgeMs < 2000 &&
         renderedAgeMs > renderedStaleMs &&

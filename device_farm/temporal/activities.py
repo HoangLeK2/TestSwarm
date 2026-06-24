@@ -8,6 +8,7 @@ import functools
 import logging
 import re
 import threading
+import time
 import xml.etree.ElementTree as ET
 from typing import Any, Callable
 
@@ -36,12 +37,75 @@ from services.execution.dsl_runtime import materialize_legacy_step
 from services.scenario_step_contract import (
     extract_data_var_for_strategy,
     normalize_extract_step,
+    normalize_fb_tap_comment_step,
     normalize_save_extraction_step,
 )
 
 log = logging.getLogger(__name__)
 
 _SERIAL_RE = re.compile(r"^[\w.:_-]{1,128}$")
+
+
+def _finalize_step_results(
+    *,
+    success: bool,
+    step_results: list,
+    persisted_step_results: list,
+) -> list[dict[str, Any]]:
+    workflow_results = [s for s in step_results if isinstance(s, dict)]
+    if success or workflow_results:
+        return workflow_results
+    return [s for s in persisted_step_results if isinstance(s, dict)]
+
+
+def _finalize_error_message(
+    *,
+    failed_steps: list[dict[str, Any]],
+    workflow_failed_message: str | None,
+) -> str | None:
+    if failed_steps:
+        message = failed_steps[-1].get("message")
+        if message:
+            return str(message)
+    return workflow_failed_message
+
+
+def _finalize_is_cancelled(
+    *,
+    failed_steps: list[dict[str, Any]],
+    workflow_failed_message: str | None,
+) -> bool:
+    texts: list[str] = []
+    if workflow_failed_message:
+        texts.append(str(workflow_failed_message))
+    for step in failed_steps:
+        if isinstance(step, dict):
+            texts.extend(
+                str(step.get(key) or "")
+                for key in ("message", "failed_message", "reason_code")
+            )
+    return any("cancelled" in text.lower() or "canceled" in text.lower() for text in texts)
+
+
+def _ignored_step_warnings_from_results(
+    step_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for entry in step_results:
+        if not isinstance(entry, dict) or not entry.get("ignored_failure"):
+            continue
+        warnings.append(
+            {
+                "step_index": entry.get("index"),
+                "step_type": entry.get("type") or "unknown",
+                "message": (
+                    entry.get("ignored_message")
+                    or entry.get("message")
+                    or "step warning"
+                ),
+            }
+        )
+    return warnings
 
 
 def _prepare_activity_step(step: dict[str, Any]) -> dict[str, Any]:
@@ -51,10 +115,31 @@ def _prepare_activity_step(step: dict[str, Any]) -> dict[str, Any]:
     prepared = materialize_legacy_step(dict(step))
     if prepared.get("type") == "extract":
         prepared = normalize_extract_step(prepared)
+    elif prepared.get("type") in {"fb_tap_comment_button", "tap_fb_comment_button"}:
+        prepared = normalize_fb_tap_comment_step(prepared)
     elif prepared.get("type") == "save_extraction":
         prepared = normalize_save_extraction_step(prepared)
     # Workflow-level durable retry (DF-T-04-011) owns the attempt loop in Temporal.
     return step_for_single_attempt(prepared)
+
+
+def _copy_runtime_context(raw: dict[str, Any] | None) -> dict[str, Any]:
+    ctx: dict[str, Any] = {}
+    for key, value in (raw or {}).items():
+        ctx[key] = list(value) if isinstance(value, list) else value
+    return ctx
+
+
+def _merge_runtime_context(
+    base: dict[str, Any],
+    update: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not update:
+        return base
+    merged = dict(base)
+    for key, value in update.items():
+        merged[key] = list(value) if isinstance(value, list) else value
+    return merged
 
 
 def _build_activity_mini_scenario(step: dict[str, Any], inp: Any) -> dict[str, Any]:
@@ -73,13 +158,220 @@ def _build_activity_mini_scenario(step: dict[str, Any], inp: Any) -> dict[str, A
     if campaign_vars:
         mini_scenario["_campaign_vars"] = dict(campaign_vars)
     scenario_config = getattr(inp, "scenario_config", None) or {}
-    for key in ("visual_anchor", "implicit_wait", "capture_steps", "capture_throttle", "settle_timeout_ms", "preview_collection"):
+    for key in (
+        "visual_anchor",
+        "implicit_wait",
+        "capture_steps",
+        "capture_throttle",
+        "capture_mode",
+        "settle_timeout_ms",
+        "preview_collection",
+        "recovery_policy",
+    ):
         if key in scenario_config:
             mini_scenario[key] = scenario_config[key]
     registry = getattr(inp, "scenario_registry", None)
     if registry:
         mini_scenario["_scenario_registry"] = registry
     return mini_scenario
+
+
+_STEP_EVENT_CONTEXT_MISSING = object()
+_U2_BATCH_ACTION_ERROR_RE = re.compile(r"action\[(\d+)\]")
+
+
+class _ExecutionFlagProbe:
+    """Throttle Redis pause/cancel probes while still honoring local flags immediately."""
+
+    def __init__(self, execution_id: str | None, *, ttl_s: float = 0.25) -> None:
+        self.execution_id = execution_id
+        self.ttl_s = max(0.0, float(ttl_s))
+        self._cancel_checked_at = 0.0
+        self._cancel_value = False
+        self._pause_checked_at = 0.0
+        self._pause_value = False
+
+    async def cancelled(self, *, force: bool = False) -> bool:
+        if not self.execution_id:
+            return False
+        from services.execution_pause_flags import (
+            is_execution_cancelled_async,
+            is_execution_cancelled_local,
+        )
+
+        if is_execution_cancelled_local(self.execution_id):
+            self._cancel_value = True
+            self._cancel_checked_at = time.monotonic()
+            return True
+        now = time.monotonic()
+        if not force and self._cancel_checked_at and now - self._cancel_checked_at <= self.ttl_s:
+            return self._cancel_value
+        self._cancel_value = bool(await is_execution_cancelled_async(self.execution_id))
+        self._cancel_checked_at = now
+        return self._cancel_value
+
+    async def paused(self, *, force: bool = False) -> bool:
+        if not self.execution_id:
+            return False
+        from services.execution_pause_flags import (
+            is_execution_paused_async,
+            is_execution_paused_local,
+        )
+
+        if is_execution_paused_local(self.execution_id):
+            self._pause_value = True
+            self._pause_checked_at = time.monotonic()
+            return True
+        now = time.monotonic()
+        if not force and self._pause_checked_at and now - self._pause_checked_at <= self.ttl_s:
+            return self._pause_value
+        self._pause_value = bool(await is_execution_paused_async(self.execution_id))
+        self._pause_checked_at = now
+        return self._pause_value
+
+
+async def _resolve_step_event_context(
+    inp: DeviceActionInput | DeviceActionBatchInput,
+) -> tuple[Any, Any] | None:
+    execution_id = getattr(inp, "execution_id", None)
+    if not execution_id:
+        return None
+    from db.database import activity_session
+    from services.execution.event_publisher import resolve_execution_event_context
+
+    async with activity_session() as db:
+        _, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
+    if not org_id:
+        return None
+    return org_id, (getattr(inp, "campaign_id", None) or camp_id)
+
+
+async def _cached_step_event_context(
+    inp: DeviceActionInput | DeviceActionBatchInput,
+    cache: dict[str, Any],
+) -> tuple[Any, Any] | None:
+    if "value" not in cache:
+        cache["value"] = await _resolve_step_event_context(inp)
+    return cache["value"]
+
+
+def _screen_size(device: Any) -> tuple[int, int]:
+    w = int(getattr(device, "screen_width", 0) or 1080)
+    h = int(getattr(device, "screen_height", 0) or 1920)
+    return w, h
+
+
+def _tap_position_action(step: dict[str, Any], device: Any) -> dict[str, Any]:
+    pos = str(step.get("pos") or "middle_center")
+    if pos == "top_center":
+        rx, ry = 0.5, 0.1
+    elif pos == "search_bar":
+        rx, ry = 0.5, 0.18
+    elif pos == "bottom_center":
+        rx, ry = 0.5, 0.9
+    else:
+        rx, ry = 0.5, 0.5
+    w, h = _screen_size(device)
+    return {
+        "op": "click",
+        "x": max(0, min(w - 1, int(rx * w))),
+        "y": max(0, min(h - 1, int(ry * h))),
+    }
+
+
+def _swipe_ratio_action(step: dict[str, Any], device: Any) -> dict[str, Any]:
+    try:
+        rx1 = float(step.get("x1", 0.5))
+        ry1 = float(step.get("y1", 0.5))
+        rx2 = float(step.get("x2", 0.5))
+        ry2 = float(step.get("y2", 0.5))
+        duration_ms = int(step.get("duration_ms", 300) or 300)
+    except Exception:
+        rx1, ry1, rx2, ry2, duration_ms = 0.5, 0.5, 0.5, 0.5, 300
+    w, h = _screen_size(device)
+    return {
+        "op": "swipe",
+        "fx": max(0, min(w - 1, int(rx1 * w))),
+        "fy": max(0, min(h - 1, int(ry1 * h))),
+        "tx": max(0, min(w - 1, int(rx2 * w))),
+        "ty": max(0, min(h - 1, int(ry2 * h))),
+        "duration": max(0.0, duration_ms / 1000.0),
+    }
+
+
+def _primitive_touch_action(step: dict[str, Any], device: Any) -> dict[str, Any] | None:
+    if step.get("ignore_error"):
+        return None
+    step_type = str(step.get("type") or "")
+    if step_type == "tap_position":
+        return _tap_position_action(step, device)
+    if step_type == "swipe_ratio":
+        return _swipe_ratio_action(step, device)
+    return None
+
+
+def _primitive_touch_timeout(actions: list[dict[str, Any]]) -> float:
+    total = 0.0
+    for action in actions:
+        if action.get("op") == "swipe":
+            total += max(1.5, float(action.get("duration", 0.0) or 0.0) + 0.8)
+        else:
+            total += 1.5
+    return min(30.0, max(1.5, total))
+
+
+def _u2_batch_failure_action_index(exc: BaseException, action_count: int) -> int:
+    match = _U2_BATCH_ACTION_ERROR_RE.search(str(exc))
+    if not match:
+        return 0
+    try:
+        idx = int(match.group(1))
+    except Exception:
+        return 0
+    return max(0, min(idx, max(0, action_count - 1)))
+
+
+def _u2_batch_failure_results(exc: BaseException) -> list[dict[str, Any]]:
+    results = getattr(exc, "results", None)
+    if not isinstance(results, list):
+        return []
+    return [item for item in results if isinstance(item, dict)]
+
+
+def _primitive_touch_batch_size(inp: DeviceActionBatchInput) -> int:
+    scenario_config = getattr(inp, "scenario_config", None) or {}
+    try:
+        size = int(scenario_config.get("primitive_touch_batch_size", 10) or 10)
+    except Exception:
+        size = 10
+    return max(1, min(size, 10))
+
+
+def _collect_primitive_touch_batch(
+    *,
+    steps: list[dict[str, Any]],
+    step_indices: list[int],
+    start: int,
+    device: Any,
+    max_actions: int = 1,
+) -> tuple[list[dict[str, Any]], list[int], list[dict[str, Any]], float]:
+    if not callable(getattr(device, "_batch_enabled", None)) or not device._batch_enabled():
+        return [], [], [], 0.0
+
+    prepared_steps: list[dict[str, Any]] = []
+    original_indices: list[int] = []
+    actions: list[dict[str, Any]] = []
+    for pos in range(start, len(steps)):
+        if len(actions) >= max(1, max_actions):
+            break
+        prepared = _prepare_activity_step(steps[pos])
+        action = _primitive_touch_action(prepared, device)
+        if action is None:
+            break
+        prepared_steps.append(prepared)
+        original_indices.append(step_indices[pos])
+        actions.append(action)
+    return prepared_steps, original_indices, actions, _primitive_touch_timeout(actions)
 
 # Global device registry reference — set by worker at startup (before any activity runs).
 _device_registry = None
@@ -120,6 +412,7 @@ async def _to_thread_with_heartbeat(
     cooperative_cancel_event: threading.Event | None = None,
     cancel_grace_s: float = 5.0,
     execution_id: str | None = None,
+    stop_on_pause: bool = False,
     **kwargs: Any,
 ) -> Any:
     """Run a sync blocking function in the thread pool while sending Temporal heartbeats.
@@ -169,6 +462,17 @@ async def _to_thread_with_heartbeat(
                         reason="execution_cancel_flag",
                     )
                     return True
+            if stop_on_pause:
+                with contextlib.suppress(Exception):
+                    from services.execution_pause_flags import is_execution_paused_async
+                    if await is_execution_paused_async(execution_id):
+                        cancel_event.set()
+                        trace_log.warning(
+                            "temporal_thread_cancel",
+                            **thread_ctx,
+                            reason="execution_pause_flag",
+                        )
+                        return True
         return False
 
     async def _heartbeat_loop() -> None:
@@ -259,6 +563,8 @@ async def _emit_step_events_for_activity(
     step_index: int,
     step_result: dict[str, Any] | None = None,
     phase: str,
+    event_context: tuple[Any, Any] | None | object = _STEP_EVENT_CONTEXT_MISSING,
+    event_context_cache: dict[str, Any] | None = None,
 ) -> None:
     execution_id = getattr(inp, "execution_id", None)
     if not execution_id:
@@ -269,11 +575,19 @@ async def _emit_step_events_for_activity(
 
     from tenancy.context import tenant_context
 
+    if event_context is _STEP_EVENT_CONTEXT_MISSING and event_context_cache is not None:
+        event_context = await _cached_step_event_context(inp, event_context_cache)
+    if event_context is None:
+        return
+
     async with activity_session() as db:
-        _, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
-        if not org_id:
-            return
-        campaign_id = getattr(inp, "campaign_id", None) or camp_id
+        if event_context is _STEP_EVENT_CONTEXT_MISSING:
+            _, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
+            if not org_id:
+                return
+            campaign_id = getattr(inp, "campaign_id", None) or camp_id
+        else:
+            org_id, campaign_id = event_context
         with tenant_context(org_id):
             if phase == "started":
                 await emit_step_started(
@@ -283,6 +597,7 @@ async def _emit_step_events_for_activity(
                     campaign_id=campaign_id,
                     step=step,
                     step_index=step_index,
+                    depth=getattr(inp, "depth", 0),
                 )
             elif phase == "finished" and step_result is not None:
                 await emit_step_finished(
@@ -293,6 +608,7 @@ async def _emit_step_events_for_activity(
                     step=step,
                     step_index=step_index,
                     step_result=step_result,
+                    depth=getattr(inp, "depth", 0),
                 )
             await process_outbox_batch(db)
             await db.commit()
@@ -430,6 +746,7 @@ class DeviceActivities:
                 run_scenario_task,
                 device,
                 mini_scenario,
+                context=_copy_runtime_context(getattr(inp, "context", None)),
                 _var_ctx=var_ctx,
                 cancel_event=cancel_event,
                 cooperative_cancel_event=cancel_event,
@@ -458,6 +775,7 @@ class DeviceActivities:
                     ok=sr.get("ok", False),
                     message=sr.get("message") or "",
                     details=details,
+                    context=_copy_runtime_context(result.get("context")),
                 )
 
             # No step results — check overall success
@@ -528,31 +846,278 @@ class DeviceActivities:
             device_model=getattr(device, "model", ""),
         )
         cancel_event = threading.Event()
+        batch_context = _copy_runtime_context(getattr(inp, "context", None))
+        flag_probe = _ExecutionFlagProbe(inp.execution_id)
+        event_context_cache: dict[str, Any] = {}
+        touch_batch_size = _primitive_touch_batch_size(inp)
 
-        from services.execution_pause_flags import is_execution_cancelled_async, is_execution_paused_async
-
-        for batch_pos, (step, step_idx) in enumerate(zip(inp.steps, inp.step_indices)):
+        batch_pos = 0
+        while batch_pos < len(inp.steps):
             _safe_activity_heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
             if activity.is_cancelled():
                 return DeviceActionBatchResult(
                     results=results,
                     first_failure_index=-1,
                     cancelled_mid_batch=True,
+                    context=batch_context,
                 )
-            if inp.execution_id and await is_execution_cancelled_async(inp.execution_id):
+            if await flag_probe.cancelled():
                 return DeviceActionBatchResult(
                     results=results,
                     first_failure_index=-1,
                     cancelled_mid_batch=True,
+                    context=batch_context,
                 )
             with contextlib.suppress(Exception):
                 device.ensure_u2_healthy(ping_timeout=2.0)
-            if inp.execution_id and await is_execution_paused_async(inp.execution_id):
+            if await flag_probe.paused():
                 return DeviceActionBatchResult(
                     results=results,
                     first_failure_index=-1,
                     paused_mid_batch=True,
+                    context=batch_context,
                 )
+
+            touch_steps, touch_indices, touch_actions, touch_timeout = _collect_primitive_touch_batch(
+                steps=inp.steps,
+                step_indices=inp.step_indices,
+                start=batch_pos,
+                device=device,
+                max_actions=touch_batch_size,
+            )
+            if touch_actions:
+                try:
+                    batch_u2_results = await _to_thread_with_heartbeat(
+                        device.u2_batch,
+                        touch_actions,
+                        timeout=touch_timeout,
+                        cancel_event=cancel_event,
+                        cooperative_cancel_event=cancel_event,
+                        execution_id=inp.execution_id,
+                        stop_on_pause=True,
+                    )
+
+                    consumed = 0
+                    for rel, (touch_step, touch_idx) in enumerate(zip(touch_steps, touch_indices)):
+                        action_result = (
+                            batch_u2_results[rel]
+                            if isinstance(batch_u2_results, list) and rel < len(batch_u2_results)
+                            else {"ok": False, "error": "u2_batch returned no result"}
+                        )
+                        ok = bool(isinstance(action_result, dict) and action_result.get("ok"))
+                        message = "" if ok else str(
+                            action_result.get("error")
+                            if isinstance(action_result, dict)
+                            else action_result
+                        )
+                        sr = {
+                            "index": touch_idx,
+                            "type": touch_step.get("type", ""),
+                            "ok": ok,
+                            "message": message,
+                        }
+                        entry = {
+                            "index": touch_idx,
+                            "type": touch_step.get("type", ""),
+                            "ok": ok,
+                            "message": message,
+                            "details": {},
+                        }
+                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
+                        await _emit_step_events_for_activity(
+                            inp,
+                            step=touch_step,
+                            step_index=touch_idx,
+                            phase="started",
+                            event_context_cache=event_context_cache,
+                        )
+                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_finished")
+                        await _emit_step_events_for_activity(
+                            inp,
+                            step=touch_step,
+                            step_index=touch_idx,
+                            step_result=sr,
+                            phase="finished",
+                            event_context_cache=event_context_cache,
+                        )
+                        results.append(entry)
+                        consumed += 1
+                        if not ok:
+                            first_failure_index = batch_pos + rel
+                            break
+
+                    if first_failure_index != -1:
+                        break
+                    if cancel_event.is_set() and await flag_probe.paused(force=True):
+                        return DeviceActionBatchResult(
+                            results=results,
+                            first_failure_index=-1,
+                            paused_mid_batch=True,
+                            context=batch_context,
+                        )
+                    if cancel_event.is_set() or await flag_probe.cancelled(force=cancel_event.is_set()):
+                        return DeviceActionBatchResult(
+                            results=results,
+                            first_failure_index=-1,
+                            cancelled_mid_batch=True,
+                            context=batch_context,
+                        )
+                    if await flag_probe.paused():
+                        return DeviceActionBatchResult(
+                            results=results,
+                            first_failure_index=-1,
+                            paused_mid_batch=True,
+                            context=batch_context,
+                        )
+
+                    batch_pos += consumed
+                    continue
+                except BaseException as exc:
+                    step = touch_steps[0]
+                    step_idx = touch_indices[0]
+                    step_type = step.get("type", "")
+                    partial_results = _u2_batch_failure_results(exc)
+                    if cancel_event.is_set():
+                        for rel, action_result in enumerate(partial_results):
+                            if rel >= len(touch_steps):
+                                break
+                            if not bool(action_result.get("ok")):
+                                break
+                            touch_step = touch_steps[rel]
+                            touch_idx = touch_indices[rel]
+                            sr = {
+                                "index": touch_idx,
+                                "type": touch_step.get("type", ""),
+                                "ok": True,
+                                "message": "",
+                            }
+                            entry = {
+                                "index": touch_idx,
+                                "type": touch_step.get("type", ""),
+                                "ok": True,
+                                "message": "",
+                                "details": {},
+                            }
+                            _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
+                            await _emit_step_events_for_activity(
+                                inp,
+                                step=touch_step,
+                                step_index=touch_idx,
+                                phase="started",
+                                event_context_cache=event_context_cache,
+                            )
+                            _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_finished")
+                            await _emit_step_events_for_activity(
+                                inp,
+                                step=touch_step,
+                                step_index=touch_idx,
+                                step_result=sr,
+                                phase="finished",
+                                event_context_cache=event_context_cache,
+                            )
+                            results.append(entry)
+                        if await flag_probe.paused(force=True):
+                            return DeviceActionBatchResult(
+                                results=results,
+                                first_failure_index=-1,
+                                paused_mid_batch=True,
+                                context=batch_context,
+                            )
+                        if await flag_probe.cancelled(force=True):
+                            return DeviceActionBatchResult(
+                                results=results,
+                                first_failure_index=-1,
+                                cancelled_mid_batch=True,
+                                context=batch_context,
+                            )
+                        return DeviceActionBatchResult(
+                            results=results,
+                            first_failure_index=-1,
+                            cancelled_mid_batch=True,
+                            context=batch_context,
+                        )
+                    if _is_cancellation_exc(exc):
+                        log.info(
+                            "[%s] batch activity cooperatively cancelled at step#%d (%s) pos=%d/%d",
+                            inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
+                        )
+                        return DeviceActionBatchResult(
+                            results=results,
+                            first_failure_index=-1,
+                            cancelled_mid_batch=True,
+                            context=batch_context,
+                        )
+                    if not isinstance(exc, Exception):
+                        raise
+                    stopped_at = getattr(exc, "stopped_at", None)
+                    failure_rel = _u2_batch_failure_action_index(exc, len(touch_steps))
+                    if stopped_at is not None:
+                        with contextlib.suppress(Exception):
+                            failure_rel = int(stopped_at)
+                    failure_rel = max(0, min(failure_rel, len(touch_steps) - 1))
+                    log.error(
+                        "[%s] batch touch step#%d (%s): %s",
+                        inp.device_serial,
+                        touch_indices[failure_rel],
+                        touch_steps[failure_rel].get("type", ""),
+                        exc,
+                    )
+                    for rel, (touch_step, touch_idx) in enumerate(
+                        zip(touch_steps[: failure_rel + 1], touch_indices[: failure_rel + 1])
+                    ):
+                        action_result = (
+                            partial_results[rel]
+                            if rel < len(partial_results)
+                            else None
+                        )
+                        ok = (
+                            bool(action_result.get("ok"))
+                            if isinstance(action_result, dict)
+                            else rel < failure_rel
+                        )
+                        message = ""
+                        if not ok:
+                            message = str(
+                                action_result.get("error")
+                                if isinstance(action_result, dict) and action_result.get("error")
+                                else exc
+                            )
+                        sr = {
+                            "index": touch_idx,
+                            "type": touch_step.get("type", ""),
+                            "ok": ok,
+                            "message": message,
+                        }
+                        entry = {
+                            "index": touch_idx,
+                            "type": touch_step.get("type", ""),
+                            "ok": ok,
+                            "message": message,
+                            "details": {},
+                        }
+                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
+                        await _emit_step_events_for_activity(
+                            inp,
+                            step=touch_step,
+                            step_index=touch_idx,
+                            phase="started",
+                            event_context_cache=event_context_cache,
+                        )
+                        _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_finished")
+                        await _emit_step_events_for_activity(
+                            inp,
+                            step=touch_step,
+                            step_index=touch_idx,
+                            step_result=sr,
+                            phase="finished",
+                            event_context_cache=event_context_cache,
+                        )
+                        results.append(entry)
+                    first_failure_index = batch_pos + failure_rel
+                    break
+
+            step = inp.steps[batch_pos]
+            step_idx = inp.step_indices[batch_pos]
             step_type = step.get("type", "")
             step = _prepare_activity_step(step)
             step_type = step.get("type", "")
@@ -561,20 +1126,27 @@ class DeviceActivities:
             try:
                 _safe_activity_heartbeat(f"batch:{batch_pos}:emit_started")
                 await _emit_step_events_for_activity(
-                    inp, step=step, step_index=step_idx, phase="started",
+                    inp,
+                    step=step,
+                    step_index=step_idx,
+                    phase="started",
+                    event_context_cache=event_context_cache,
                 )
                 result = await _to_thread_with_heartbeat(
                     run_scenario_task,
                     device,
                     mini_scenario,
+                    context=batch_context,
                     _var_ctx=var_ctx,
                     cancel_event=cancel_event,
                     cooperative_cancel_event=cancel_event,
                     execution_id=inp.execution_id,
                 )
-                if cancel_event.is_set() or (
-                    inp.execution_id and await is_execution_cancelled_async(inp.execution_id)
-                ):
+                batch_context = _merge_runtime_context(
+                    batch_context,
+                    result.get("context") if isinstance(result.get("context"), dict) else None,
+                )
+                if cancel_event.is_set() or await flag_probe.cancelled():
                     log.info(
                         "[%s] batch cooperatively cancelled at step#%d (%s) pos=%d/%d",
                         inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
@@ -583,6 +1155,7 @@ class DeviceActivities:
                         results=results,
                         first_failure_index=-1,
                         cancelled_mid_batch=True,
+                        context=batch_context,
                     )
                 step_results = result.get("step_results", [])
                 if step_results:
@@ -596,7 +1169,12 @@ class DeviceActivities:
                     }
                     _safe_activity_heartbeat(f"batch:{batch_pos}:emit_finished")
                     await _emit_step_events_for_activity(
-                        inp, step=step, step_index=step_idx, step_result=sr, phase="finished",
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=sr,
+                        phase="finished",
+                        event_context_cache=event_context_cache,
                     )
                 else:
                     entry = {
@@ -624,8 +1202,13 @@ class DeviceActivities:
             if not entry["ok"] and not step.get("ignore_error"):
                 first_failure_index = batch_pos
                 break
+            batch_pos += 1
 
-        return DeviceActionBatchResult(results=results, first_failure_index=first_failure_index)
+        return DeviceActionBatchResult(
+            results=results,
+            first_failure_index=first_failure_index,
+            context=batch_context,
+        )
 
     @activity.defn
     async def check_element_exists(self, inp: ElementCheckInput) -> ElementCheckResult:
@@ -1039,6 +1622,7 @@ class DeviceActivities:
             execution_id = None
             device_serial = None
             step_results: list = []
+            workflow_failed_message = None
         else:
             campaign_id = inp.get("campaign_id", "")
             success = bool(inp.get("success", True))
@@ -1055,15 +1639,21 @@ class DeviceActivities:
             try:
                 from datetime import datetime, timezone as _tz
                 from db.database import activity_session
-                from db.crud.execution import get_execution, update_execution, upsert_execution_result
+                from db.crud.execution import (
+                    cancel_execution_record,
+                    get_execution,
+                    update_execution,
+                    upsert_execution_result,
+                )
                 from db.crud.device import get_device_by_serial
                 from services.execution.step_store import (
+                    execution_step_to_legacy_dict,
                     persist_execution_steps_from_results,
                     slim_step_results,
                 )
                 er_status = "passed" if success else "failed"
-                passed_steps = slim_step_results([s for s in step_results if s.get("ok")])
-                failed_steps = slim_step_results([s for s in step_results if not s.get("ok")])
+                passed_steps: list[dict[str, Any]] = []
+                failed_steps: list[dict[str, Any]] = []
                 _device_id = None
                 async with activity_session() as db:
                     from services.execution.event_publisher import resolve_execution_org_id
@@ -1083,21 +1673,95 @@ class DeviceActivities:
                     campaign_row = None
                     device = None
                     with tenant_context(org_id_epic):
-                        if ex_row and ex_row.campaign_id:
+                        execution_campaign_id = getattr(ex_row, "campaign_id", None) if ex_row else None
+                        execution_user_id = getattr(ex_row, "user_id", None) if ex_row else None
+                        if execution_campaign_id:
                             from db.crud import campaign_entity as campaign_entity_repo
 
                             campaign_row = await campaign_entity_repo.get_campaign_entity(
-                                db, ex_row.campaign_id
+                                db, execution_campaign_id
                             )
                         device = await get_device_by_serial(db, device_serial)
                         if device:
                             _device_id = device.id
                             finished_at = datetime.now(_tz.utc)
-                            await persist_execution_steps_from_results(
-                                db,
-                                execution_id=execution_id,
-                                step_results=step_results,
-                                default_ended_at=finished_at,
+                            try:
+                                await persist_execution_steps_from_results(
+                                    db,
+                                    execution_id=execution_id,
+                                    step_results=step_results,
+                                    default_ended_at=finished_at,
+                                )
+                            except Exception as exc:
+                                log.warning(
+                                    "finalize_campaign: execution_steps persist failed "
+                                    "(%s/%s): %s",
+                                    execution_id,
+                                    device_serial,
+                                    exc,
+                                )
+                            if not success and not step_results:
+                                try:
+                                    from db.crud.execution_steps import list_execution_steps
+
+                                    persisted_rows = await list_execution_steps(db, execution_id)
+                                    persisted_step_results = [
+                                        execution_step_to_legacy_dict(row)
+                                        for row in persisted_rows
+                                    ]
+                                except Exception as exc:
+                                    log.warning(
+                                        "finalize_campaign: execution_steps fallback read failed "
+                                        "(%s/%s): %s",
+                                        execution_id,
+                                        device_serial,
+                                        exc,
+                                    )
+                                    persisted_step_results = []
+                                step_results = _finalize_step_results(
+                                    success=success,
+                                    step_results=step_results,
+                                    persisted_step_results=persisted_step_results,
+                                )
+                            else:
+                                step_results = _finalize_step_results(
+                                    success=success,
+                                    step_results=step_results,
+                                    persisted_step_results=[],
+                                )
+                            passed_steps = slim_step_results(
+                                [s for s in step_results if s.get("ok")]
+                            )
+                            failed_steps = slim_step_results(
+                                [s for s in step_results if not s.get("ok")]
+                            )
+                            if execution_campaign_id:
+                                from services.campaign.events import emit_campaign_step_warning
+
+                                campaign_name = (
+                                    getattr(campaign_row, "name", None)
+                                    if campaign_row is not None
+                                    else None
+                                )
+                                for warning in _ignored_step_warnings_from_results(step_results):
+                                    await emit_campaign_step_warning(
+                                        db,
+                                        org_id=org_id_epic,
+                                        campaign_id=execution_campaign_id,
+                                        campaign_name=campaign_name,
+                                        execution_id=execution_id,
+                                        device_serial=device_serial,
+                                        step_index=warning.get("step_index"),
+                                        step_type=str(warning.get("step_type") or "unknown"),
+                                        message=str(warning.get("message") or "step warning"),
+                                        user_id=execution_user_id,
+                                    )
+                            cancelled_terminal = (
+                                not success
+                                and _finalize_is_cancelled(
+                                    failed_steps=failed_steps,
+                                    workflow_failed_message=workflow_failed_message,
+                                )
                             )
                             await upsert_execution_result(
                                 db,
@@ -1108,12 +1772,23 @@ class DeviceActivities:
                                 failed_steps=failed_steps,
                                 finished_at=finished_at,
                             )
-                            terminal = "completed" if success else "dlq_open"
-                            if not success:
+                            terminal = (
+                                "completed" if success
+                                else "cancelled" if cancelled_terminal
+                                else "dlq_open"
+                            )
+                            if cancelled_terminal:
+                                await cancel_execution_record(
+                                    db,
+                                    execution_id,
+                                    reason=workflow_failed_message or "workflow_cancelled",
+                                )
+                            elif not success:
                                 from services.campaign.dlq_service import open_dlq_for_failed_execution
 
-                                error_msg = (
-                                    failed_steps[-1].get("message") if failed_steps else workflow_failed_message
+                                error_msg = _finalize_error_message(
+                                    failed_steps=failed_steps,
+                                    workflow_failed_message=workflow_failed_message,
                                 )
                                 await open_dlq_for_failed_execution(
                                     db,
@@ -1122,9 +1797,9 @@ class DeviceActivities:
                                     step_results=step_results,
                                     error_msg=error_msg,
                                     org_id=org_id_epic,
-                                    user_id=ex_row.user_id if ex_row else None,
+                                    user_id=execution_user_id,
                                 )
-                            elif ex_row and ex_row.status not in ("cancelled", "paused"):
+                            elif ex_row and getattr(ex_row, "status", None) not in ("cancelled", "paused"):
                                 await update_execution(db, execution_id, status=terminal)
                                 from services.execution.event_publisher import (
                                     enqueue_execution_event,
@@ -1137,23 +1812,22 @@ class DeviceActivities:
                                     event_type=EXECUTION_COMPLETED,
                                     execution_id=execution_id,
                                     organization_id=org_id_epic,
-                                    campaign_id=ex_row.campaign_id,
+                                    campaign_id=execution_campaign_id,
                                     payload={"device_serial": device_serial},
                                     execution=ex_row,
                                 )
                                 await process_outbox_batch(db)
-                            if ex_row and (ex_row.meta or {}).get("dispatch_source"):
+                            if ex_row and (getattr(ex_row, "meta", {}) or {}).get("dispatch_source"):
                                 from services.campaign.dispatcher import finish_fan_out_execution
                                 from services.campaign.execution_runtime import (
                                     maybe_promote_sequential_execution,
                                 )
 
-                                terminal = "completed" if success else "dlq_open"
                                 await finish_fan_out_execution(
                                     db,
                                     ex_row,
                                     org_id=org_id_epic,
-                                    actor_user_id=ex_row.user_id or "system",
+                                    actor_user_id=execution_user_id or "system",
                                     status=terminal,
                                 )
                                 temporal_client = None
@@ -1170,7 +1844,7 @@ class DeviceActivities:
                                         ex_row,
                                         campaign=campaign_row,
                                         org_id=org_id_epic,
-                                        actor_user_id=ex_row.user_id or "system",
+                                        actor_user_id=execution_user_id or "system",
                                         temporal_client=temporal_client,
                                         temporal_config=_temporal_config,
                                         manager=None,
@@ -1250,7 +1924,7 @@ class DeviceActivities:
 
                 async with activity_session() as db:
                     ex_row = await get_execution(db, execution_id)
-                    if ex_row and (ex_row.meta or {}).get("dispatch_source"):
+                    if ex_row and (getattr(ex_row, "meta", {}) or {}).get("dispatch_source"):
                         return
             except Exception:
                 pass

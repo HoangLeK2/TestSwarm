@@ -115,6 +115,32 @@ def explicit_capture_steps(scenario: dict[str, Any]) -> bool | None:
     return None
 
 
+def error_only_capture_mode(scenario: dict[str, Any]) -> bool:
+    """True when pre/post captures are disabled and only failures capture.
+
+    Older saved scenarios may contain pre_capture/post_capture=true on every
+    step because those flags were once injected as defaults. Campaign runs use
+    this mode so normal success paths never capture screens; failed steps still
+    use capture_on_fail to record error evidence.
+    """
+    raw = scenario.get("capture_mode") or scenario.get("capture_policy")
+    if raw is None:
+        campaign_vars = scenario.get("_campaign_vars") or {}
+        if isinstance(campaign_vars, dict):
+            raw = campaign_vars.get("__CAPTURE_MODE__") or campaign_vars.get("capture_mode")
+    return str(raw or "").strip().lower() in {"error_only", "fail_only", "failure_only"}
+
+
+def extract_only_capture_mode(scenario: dict[str, Any]) -> bool:
+    """True when legacy explicit pre/post flags should not widen capture."""
+    raw = scenario.get("capture_mode") or scenario.get("capture_policy")
+    if raw is None:
+        campaign_vars = scenario.get("_campaign_vars") or {}
+        if isinstance(campaign_vars, dict):
+            raw = campaign_vars.get("__CAPTURE_MODE__") or campaign_vars.get("capture_mode")
+    return str(raw or "").strip().lower() in {"extract_only", "extraction_only"}
+
+
 def epic04_capture_default_enabled(scenario: dict[str, Any]) -> bool:
     explicit = explicit_capture_steps(scenario)
     if explicit is not None:
@@ -127,6 +153,15 @@ def epic04_capture_default_enabled(scenario: dict[str, Any]) -> bool:
         os.environ.get("CAPTURE_STEPS", "").lower() in {"1", "true", "yes"}
         or os.environ.get("DEBUG_AUTO", "").lower() in {"1", "true", "yes"}
     )
+
+
+def _pre_post_capture_allowed(sc: "ScenarioContext", step: dict[str, Any]) -> bool:
+    if error_only_capture_mode(sc.scenario):
+        return False
+    if not extract_only_capture_mode(sc.scenario):
+        return True
+    cfg = StepCaptureConfig.from_step(step)
+    return cfg.require_capture or default_capture_enabled_for_step(step)
 
 
 def get_capture_session(sc: "ScenarioContext") -> CaptureSession:
@@ -208,6 +243,7 @@ def _artifact_ref(
     capture_type: str,
     execution_id: str | None,
     step_id: str | None,
+    step_type: str | None,
     step_index: int,
     attempt_index: int,
     payload: dict[str, Any],
@@ -219,6 +255,7 @@ def _artifact_ref(
         "type": capture_type,
         "execution_id": execution_id,
         "step_id": step_id,
+        "step_type": step_type,
         "step_index": step_index,
         "attempt_index": attempt_index,
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -330,10 +367,12 @@ def _record_capture_result(
     dedup_ref: str | None = None,
 ) -> None:
     step_id = str(step.get("id") or step.get("_id") or "") or None
+    step_type = str(step.get("type") or "") or None
     ref = _artifact_ref(
         capture_type=capture_type,
         execution_id=sc.execution_id,
         step_id=step_id,
+        step_type=step_type,
         step_index=step_idx,
         attempt_index=attempt_index,
         payload=payload,
@@ -381,6 +420,8 @@ def capture_before_step(
         return
     cfg = StepCaptureConfig.from_step(step)
     if not cfg.pre_capture:
+        return
+    if not _pre_post_capture_allowed(sc, step):
         return
     # Nested branch steps (then/else, loop bodies) inherit the parent's screen
     # context — skip per-step capture unless explicitly required, to avoid
@@ -495,6 +536,8 @@ def capture_after_step(
         return
     cfg = StepCaptureConfig.from_step(step)
     if not cfg.post_capture:
+        return
+    if not _pre_post_capture_allowed(sc, step):
         return
     if _is_nested_depth(sc) and not cfg.require_capture:
         return

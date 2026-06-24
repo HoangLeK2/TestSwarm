@@ -13,6 +13,8 @@ from services.execution_control import (
     pause_campaign_executions,
     pause_execution,
     resume_execution,
+    _resolve_workflow_ids_for_campaign,
+    _resolve_workflow_ids_for_execution,
 )
 
 
@@ -242,3 +244,56 @@ async def test_campaign_pause_signals_once():
     sig.assert_awaited_once()
     assert sig.await_args[0][1] == ["wf-1", "wf-2"]
     assert out["workflows_signalled"] == 2
+
+
+@pytest.mark.asyncio
+async def test_campaign_workflow_resolution_ignores_other_campaign_meta():
+    db = AsyncMock()
+    ex = _execution(
+        campaign_id="camp-2",
+        meta={
+            "workflow_ids": [
+                "exec_other",
+                "campaign:camp-1:device:SN001:scenario:shared",
+            ],
+        },
+    )
+
+    with patch(
+        "db.crud.execution.list_execution_devices",
+        AsyncMock(return_value=[SimpleNamespace(serial="SN001")]),
+    ):
+        ids = await _resolve_workflow_ids_for_campaign(
+            db,
+            "camp-2",
+            [ex],
+            temporal_client=None,
+        )
+
+    assert ids == ["campaign:camp-2:device:SN001:scenario:__sequence__"]
+
+
+@pytest.mark.asyncio
+async def test_execution_workflow_resolution_ignores_other_campaign_meta():
+    db = AsyncMock()
+    ex = _execution(
+        campaign_id="camp-2",
+        meta={
+            "workflow_ids": [
+                "exec_other",
+                "campaign:camp-1:device:SN001:scenario:shared",
+            ],
+        },
+    )
+
+    with patch(
+        "db.crud.execution.list_execution_devices",
+        AsyncMock(return_value=[SimpleNamespace(serial="SN001")]),
+    ):
+        ids = await _resolve_workflow_ids_for_execution(
+            db,
+            ex,
+            temporal_client=None,
+        )
+
+    assert ids == ["campaign:camp-2:device:SN001:scenario:__sequence__"]

@@ -103,8 +103,13 @@ export function FlowEditor({
   }, []);
 
   useEffect(() => {
-    if (selectedStep) pendingDetailRef.current = selectedStep;
-  }, [selectedStep, selectedIndex]);
+    if (selectedIndex == null) {
+      pendingDetailRef.current = null;
+      return;
+    }
+    const step = stepsRef.current[selectedIndex];
+    if (step) pendingDetailRef.current = step;
+  }, [selectedIndex]);
   const availableVariables = useMemo(
     () => collectVariableNames(steps),
     [steps]

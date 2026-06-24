@@ -53,7 +53,7 @@ def test_epic09_event_schema_template_and_safe_adhoc_contract():
         app_base_url="https://farm.example",
     )
     assert "hoan thanh" in rendered.title.lower()
-    assert rendered.deep_link == "https://farm.example/campaigns/camp-a-1"
+    assert rendered.deep_link == "https://farm.example/dashboard/campaigns/camp-a-1/monitor"
     assert build_deep_link("device", "serial-1", "https://farm.example/") == (
         "https://farm.example/devices/serial-1"
     )
@@ -75,6 +75,101 @@ def test_epic09_event_schema_template_and_safe_adhoc_contract():
             to_date=date(2026, 1, 2),
         )
     assert exc.value.code == "UNSUPPORTED_DIMENSION"
+
+
+def test_campaign_notification_templates_include_operational_payload():
+    from services.notification_events import (
+        lint_templates,
+        parse_domain_event,
+        render_notification,
+    )
+
+    completed = parse_domain_event(
+        {
+            "type": "campaign.completed",
+            "org_id": ORG_A,
+            "campaign_id": "camp-a-1",
+            "resource_name": "Facebook comment crawl",
+            "status": "completed",
+            "collected_count": 128,
+            "execution_completed": 4,
+            "execution_failed": 0,
+        }
+    )
+    rendered_completed = render_notification(
+        completed,
+        app_base_url="https://farm.example",
+    )
+    assert rendered_completed.title == "Campaign Facebook comment crawl completed"
+    assert "Status: completed" in rendered_completed.body
+    assert "Collected: 128 items" in rendered_completed.body
+    assert "Executions: 4 completed, 0 failed" in rendered_completed.body
+
+    failed = parse_domain_event(
+        {
+            "type": "campaign.failed",
+            "org_id": ORG_A,
+            "campaign_id": "camp-a-1",
+            "campaign_name": "Facebook comment crawl",
+            "status": "failed",
+            "content_count": "37",
+            "completed_executions": 1,
+            "failed_executions": 3,
+            "reason": "executions_failed",
+        }
+    )
+    rendered_failed = render_notification(
+        failed,
+        app_base_url="https://farm.example",
+    )
+    assert rendered_failed.title == "Campaign Facebook comment crawl failed"
+    assert "Error: executions_failed" in rendered_failed.body
+    assert "Collected: 37 items" in rendered_failed.body
+    assert "Executions: 1 completed, 3 failed" in rendered_failed.body
+
+    dispatched = parse_domain_event(
+        {
+            "type": "campaign.dispatched",
+            "org_id": ORG_A,
+            "campaign_id": "camp-a-1",
+            "resource_name": "Facebook comment crawl",
+            "status": "running",
+            "execution_total": 4,
+        }
+    )
+    rendered_dispatched = render_notification(
+        dispatched,
+        locale="vi",
+        app_base_url="https://farm.example",
+    )
+    assert rendered_dispatched.title == "Campaign Facebook comment crawl da dispatch"
+    assert "Trang thai: running" in rendered_dispatched.body
+    assert "Executions: 4" in rendered_dispatched.body
+
+    warning = parse_domain_event(
+        {
+            "type": "campaign.step_warning",
+            "org_id": ORG_A,
+            "campaign_id": "camp-a-1",
+            "resource_name": "Facebook comment crawl",
+            "status": "warning",
+            "execution_id": "exec-1",
+            "device_serial": "serial-1",
+            "step_index": 2,
+            "step_type": "run_scenario",
+            "error_message": "incident recovery playbooks did not resolve the step",
+        }
+    )
+    rendered_warning = render_notification(
+        warning,
+        app_base_url="https://farm.example",
+    )
+    assert rendered_warning.title == "Campaign Facebook comment crawl step warning"
+    assert "Step: run_scenario #2" in rendered_warning.body
+    assert "Device: serial-1" in rendered_warning.body
+    assert "Campaign continues" in rendered_warning.body
+
+    assert lint_templates() == []
 
 
 @pytest.mark.asyncio

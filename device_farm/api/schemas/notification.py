@@ -16,6 +16,7 @@ NOTIFICATION_EVENTS = [
     "campaign.completed",
     "campaign.dispatched",
     "campaign.failed",
+    "campaign.step_warning",
     "campaign.dlq_opened",
     "schedule.triggered",
     "schedule.failed",
@@ -116,6 +117,11 @@ class NotificationListOut(BaseModel):
 
 class UnreadCountOut(BaseModel):
     count: int
+
+
+class NotificationChannelTestRequest(BaseModel):
+    type: str = Field(..., pattern="^(in_app|telegram|webhook|email|slack)$")
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class TestNotificationOut(BaseModel):

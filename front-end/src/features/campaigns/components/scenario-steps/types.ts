@@ -281,7 +281,10 @@ export function getStepLabel(step: FlowStep): string {
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
-      return `Bấm Bình luận (OK: ${thenN} bước${elseN ? `, Không thấy: ${elseN} bước` : ''})`;
+      const requirePostPart = step.require_post_before_comment
+        ? ' · cần mở bài'
+        : '';
+      return `Bấm Bình luận (OK: ${thenN} bước${requirePostPart}${elseN ? `, Không thấy: ${elseN} bước` : ''})`;
     }
     case 'input_selector':
       return `input [${step.by}="${step.value}"] "${step.text}"`;
@@ -527,6 +530,7 @@ export function createDefaultStep(
         switch_to_all_comments: true,
         post_tap_wait_s: 0.8,
         ignore_error: true,
+        require_post_before_comment: false,
         pre_scroll: false,
         pre_scroll_distance: 0.24,
         then: createDefaultFbCommentThenSteps(),
@@ -672,6 +676,7 @@ export function createDefaultStep(
         extract_profile: 'balanced',
         open_post_before_extract: true,
         open_post_press_back_after_extract: false,
+        require_open_post_detail: true,
         max_items: 50,
         stop_if_no_new: true,
         no_new_threshold: 30,
@@ -690,16 +695,20 @@ export function createDefaultStep(
         strategy: 'fb_comments',
         edge_extra_data: true,
         strategy_version: 'fb_comments:v1',
+        extract_profile: 'balanced',
         parent_post_id_var: '_fb_comment_parent_pid',
-        max_items: 500,
-        comment_scroll_passes: 40,
-        comment_swipes_per_dump: 6,
+        max_items: 220,
+        comment_scroll_passes: 16,
+        comment_swipes_per_dump: 4,
         comment_scroll_distance: 0.52,
         comment_scroll_duration_ms: 120,
         comment_scroll_pause_s: 0.03,
-        comment_no_growth_break: 2,
-        min_comment_scan_passes: 1,
-        stop_if_no_new: false,
+        comment_no_growth_break: 3,
+        min_comment_scan_passes: 2,
+        comment_max_snapshots: 12,
+        comment_scroll_wall_s: 25,
+        comment_stop_if_no_new: true,
+        stop_if_no_new: true,
         no_new_threshold: 3,
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',
@@ -725,6 +734,7 @@ export function createDefaultStep(
         extract_profile: 'balanced',
         open_post_before_extract: true,
         open_post_press_back_after_extract: false,
+        require_open_post_detail: true,
         max_items: 50,
         stop_if_no_new: false,
         collection: '${SAVE_COLLECTION}',

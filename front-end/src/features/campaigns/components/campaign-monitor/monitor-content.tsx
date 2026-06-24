@@ -65,10 +65,18 @@ function MonitorSidePanels({
   pollAggressive: boolean;
 }) {
   return (
-    <>
-      <ArtifactPanel campaignId={campaignId} pollAggressive={pollAggressive} />
-      <DlqPanel campaignId={campaignId} pollAggressive={pollAggressive} />
-    </>
+    <div className='flex w-full flex-col border-t md:flex-row md:divide-x'>
+      <div className='min-w-0 overflow-hidden border-b md:w-[46%] md:shrink-0 md:border-b-0'>
+        <ArtifactPanel
+          campaignId={campaignId}
+          pollAggressive={pollAggressive}
+          variant='split'
+        />
+      </div>
+      <div className='min-w-0 flex-1 overflow-hidden'>
+        <DlqPanel campaignId={campaignId} pollAggressive={pollAggressive} />
+      </div>
+    </div>
   );
 }
 

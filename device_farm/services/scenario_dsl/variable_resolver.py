@@ -142,6 +142,8 @@ class EffectiveVariableResolver:
             return str(uuid.uuid4())
         if name == "__STEP_INDEX__":
             return step_index
+        if name == "__LOOP_INDEX__":
+            return 0
         return None
 
     @staticmethod

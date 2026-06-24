@@ -51,6 +51,7 @@ class CampaignView:
     status: str
     vars: dict[str, Any]
     per_device_overrides: dict[str, Any]
+    recovery_policy: dict[str, Any]
     account_group_id: str | None
     scenario_account_id: str | None
     per_device_accounts: dict[str, str]
@@ -72,6 +73,7 @@ class CampaignView:
             "status": self.status,
             "vars": self.vars,
             "per_device_overrides": self.per_device_overrides,
+            "recovery_policy": self.recovery_policy,
             "account_group_id": self.account_group_id,
             "scenario_account_id": self.scenario_account_id,
             "per_device_accounts": self.per_device_accounts,
@@ -128,6 +130,7 @@ def _view_from_row(
         status=row.status,
         vars=dict(row.variables or {}),
         per_device_overrides=dict(row.per_device_overrides or {}),
+        recovery_policy=dict(getattr(row, "recovery_policy", None) or {}),
         account_group_id=getattr(row, "account_group_id", None),
         scenario_account_id=getattr(row, "scenario_account_id", None),
         per_device_accounts={
@@ -181,6 +184,7 @@ async def create_campaign(
     description: str = "",
     vars: dict[str, Any] | None = None,
     per_device_overrides: dict[str, Any] | None = None,
+    recovery_policy: dict[str, Any] | None = None,
     account_group_id: str | None = None,
     scenario_account_id: str | None = None,
     per_device_accounts: dict[str, str] | None = None,
@@ -196,6 +200,7 @@ async def create_campaign(
             description=description,
             vars=vars,
             per_device_overrides=per_device_overrides,
+            recovery_policy=recovery_policy,
             account_group_id=account_group_id,
             scenario_account_id=scenario_account_id,
             per_device_accounts=per_device_accounts,
@@ -213,6 +218,7 @@ async def _create_campaign_in_tenant(
     description: str = "",
     vars: dict[str, Any] | None = None,
     per_device_overrides: dict[str, Any] | None = None,
+    recovery_policy: dict[str, Any] | None = None,
     account_group_id: str | None = None,
     scenario_account_id: str | None = None,
     per_device_accounts: dict[str, str] | None = None,
@@ -245,6 +251,20 @@ async def _create_campaign_in_tenant(
             code="SCENARIO_REQUIRED",
         )
 
+    from services.execution.recovery_policy import (
+        RecoveryPolicyError,
+        validate_recovery_policy_references,
+    )
+
+    try:
+        normalized_recovery_policy = await validate_recovery_policy_references(
+            db,
+            org_id=org_id,
+            raw=recovery_policy or {},
+        )
+    except RecoveryPolicyError as exc:
+        raise CampaignValidationError(str(exc), code=exc.code) from exc
+
     bind_accounts = bool(
         account_group_id or scenario_account_id or (per_device_accounts or {})
     )
@@ -272,6 +292,7 @@ async def _create_campaign_in_tenant(
             description=description,
             variables=vars,
             per_device_overrides=per_device_overrides,
+            recovery_policy=normalized_recovery_policy,
             account_group_id=account_group_id,
             scenario_account_id=scenario_account_id,
             per_device_accounts=per_device_accounts,
@@ -343,6 +364,7 @@ async def update_campaign(
     description: str | None = None,
     vars: dict[str, Any] | None = None,
     per_device_overrides: dict[str, Any] | None = None,
+    recovery_policy: dict[str, Any] | None = None,
     tags: list[str] | None = None,
     scenario_refs: list[dict[str, Any]] | None = None,
 ) -> CampaignView:
@@ -356,6 +378,7 @@ async def update_campaign(
             description=description,
             vars=vars,
             per_device_overrides=per_device_overrides,
+            recovery_policy=recovery_policy,
             tags=tags,
             scenario_refs=scenario_refs,
         )
@@ -371,6 +394,7 @@ async def _update_campaign_in_tenant(
     description: str | None = None,
     vars: dict[str, Any] | None = None,
     per_device_overrides: dict[str, Any] | None = None,
+    recovery_policy: dict[str, Any] | None = None,
     tags: list[str] | None = None,
     scenario_refs: list[dict[str, Any]] | None = None,
 ) -> CampaignView:
@@ -393,6 +417,22 @@ async def _update_campaign_in_tenant(
         try:
             validate_per_device_overrides_size(per_device_overrides)
         except OverridePayloadTooLargeError as exc:
+            raise CampaignValidationError(str(exc), code=exc.code) from exc
+
+    normalized_recovery_policy = None
+    if recovery_policy is not None:
+        from services.execution.recovery_policy import (
+            RecoveryPolicyError,
+            validate_recovery_policy_references,
+        )
+
+        try:
+            normalized_recovery_policy = await validate_recovery_policy_references(
+                db,
+                org_id=org_id,
+                raw=recovery_policy,
+            )
+        except RecoveryPolicyError as exc:
             raise CampaignValidationError(str(exc), code=exc.code) from exc
 
     if name is not None:
@@ -421,6 +461,7 @@ async def _update_campaign_in_tenant(
         description=description,
         variables=vars,
         per_device_overrides=per_device_overrides,
+        recovery_policy=normalized_recovery_policy,
         tags=tags,
     )
     if resolved is not None:

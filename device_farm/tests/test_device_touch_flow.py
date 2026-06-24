@@ -340,6 +340,30 @@ class TestInputTextFallbackFlow:
         assert msg["type"] == "type"
         assert msg["text"] == "hello"
 
+    def test_sync_input_text_uses_adb_keyboard_replace(self):
+        d = _make_device()
+        d._scrcpy_receiver = None
+        mock_u2 = MagicMock()
+        d._u2 = mock_u2
+        d.sync_input_text("việt")
+        mock_u2.adb_keyboard_replace_text.assert_called_once_with("việt")
+
+    def test_sync_input_text_clear_uses_adb_keyboard(self):
+        d = _make_device()
+        d._scrcpy_receiver = None
+        mock_u2 = MagicMock()
+        d._u2 = mock_u2
+        d.clear_live_input()
+        mock_u2.adb_keyboard_clear_text.assert_called_once()
+
+    def test_append_input_text_uses_ime_append(self):
+        d = _make_device()
+        d._scrcpy_receiver = None
+        mock_u2 = MagicMock()
+        d._u2 = mock_u2
+        d.append_input_text("x")
+        mock_u2.send_keys_append.assert_called_once_with("x")
+
 
 class TestGetScrcpyControl:
     def test_returns_none_when_no_receiver(self):

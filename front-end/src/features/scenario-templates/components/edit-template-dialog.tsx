@@ -19,7 +19,7 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { FlowEditor } from '@/features/campaigns/components/flow-editor';
+import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';

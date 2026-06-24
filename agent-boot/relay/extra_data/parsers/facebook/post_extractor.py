@@ -287,6 +287,53 @@ def _is_noise_text(text: str) -> bool:
     return False
 
 
+def _strip_wallpaper_chrome(text: str, *, author: str = "") -> str:
+    """Remove FB gradient/wallpaper a11y chrome prefix from post copy."""
+    s = unicodedata.normalize("NFC", (text or "").strip())
+    if not s:
+        return ""
+    if author:
+        a = author.strip()
+        if a and s.startswith(a):
+            s = s[len(a) :].lstrip(" ,·•")
+    changed = True
+    while changed:
+        changed = False
+        m = re.match(r"^hình\s+minh\s+họa[^,]*,?\s*", s, flags=re.IGNORECASE)
+        if m:
+            s = s[m.end() :].lstrip(" ,")
+            changed = True
+            continue
+        for prefix in ("hình nền", "background", "wallpaper"):
+            if s.casefold().startswith(prefix):
+                remainder = s[len(prefix) :].lstrip(" ,")
+                s = remainder
+                changed = True
+                break
+    return s.strip()
+
+
+def _is_wallpaper_meta_only(text: str) -> bool:
+    """True when the string is only wallpaper/background chrome, not post copy."""
+    s = _strip_wallpaper_chrome(text or "")
+    if not s:
+        return True
+    if len(s) <= 72 and re.match(
+        r"^(?:hình\s+minh\s+họa|hình\s+nền|background|wallpaper)\b",
+        s,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _clean_extracted_post_body(body: str, *, author: str = "") -> str:
+    cleaned = _strip_wallpaper_chrome(body, author=author)
+    if _is_wallpaper_meta_only(cleaned):
+        return ""
+    return cleaned
+
+
 def _is_post_action_delimiter(text: str) -> bool:
     t = (text or "").strip()
     tl = t.lower()
@@ -321,10 +368,38 @@ _RE_STORY_OPENER = re.compile(
     r"^mở tin của\s+(.+?)(?:,\s*tin chưa xem)?\.?$",
     re.IGNORECASE,
 )
+_RE_COAUTHOR_HEADER = re.compile(
+    r"^(.+?)\s*[.\u00b7•]?\s*(?:cùng với|with)\s+(.+?)\s*\.?$",
+    re.IGNORECASE,
+)
 _GROUP_COVER_MARKERS = (
     "ảnh bìa của nhóm",
     "group cover photo",
 )
+
+
+def _looks_like_pinned_post_timestamp_prefix(head: str) -> bool:
+    """Pinned-post chrome before the date must not be treated as poster name."""
+    hl = head.lower().strip()
+    if not hl:
+        return False
+    if "ghim" in hl and any(tok in hl for tok in ("bài viết", "bài đăng", "post")):
+        return True
+    return hl in {"đã ghim", "pinned", "pinned post"}
+
+
+def _normalize_post_author(author: Optional[str]) -> Optional[str]:
+    """Strip co-author chrome ('M-TP . cùng với Tyga.') down to primary poster."""
+    if not author:
+        return author
+    s = author.strip()
+    match = _RE_COAUTHOR_HEADER.match(s)
+    if match:
+        primary = match.group(1).strip().rstrip(".·•")
+        if 2 <= len(primary) <= 60:
+            return primary
+    cleaned = s.rstrip(".·• ").strip()
+    return cleaned or author
 
 
 def _split_author_prefix_from_timestamp(timestamp: str) -> Tuple[Optional[str], str]:
@@ -343,6 +418,8 @@ def _split_author_prefix_from_timestamp(timestamp: str) -> Tuple[Optional[str], 
         tail_lower = tail.lower()
         if _RE_TS.search(tail) or "chia sẻ với" in tail_lower or "shared with" in tail_lower:
             if not _RE_TS.search(head) and 2 <= len(head) <= 60:
+                if _looks_like_pinned_post_timestamp_prefix(head):
+                    continue
                 return head, tail
     return None, raw
 
@@ -386,18 +463,26 @@ def _refine_comment_sheet_post_author(
     cluster: List[Dict[str, Any]],
     author: Optional[str],
     timestamp: str,
+    badges: Optional[List[str]] = None,
 ) -> Tuple[Optional[str], str]:
     """Prefer real poster over group title chrome on comment-sheet post headers."""
+    from .filters import _comment_line_is_badge
+
     embedded, ts_clean = _split_author_prefix_from_timestamp(timestamp)
     story_author = _author_from_story_opener(cluster)
     if embedded:
-        author = embedded
-        timestamp = ts_clean
+        if _comment_line_is_badge(embedded):
+            if badges is not None:
+                badges.append(embedded.strip())
+            timestamp = ts_clean
+        else:
+            author = embedded
+            timestamp = ts_clean
     elif story_author and _looks_like_group_header_author(author, cluster):
         author = story_author
     elif story_author and not author:
         author = story_author
-    return author, timestamp
+    return _normalize_post_author(author), timestamp
 
 
 def _find_post_time_anchor(cluster: List[Dict[str, Any]]) -> Tuple[int, str]:
@@ -448,6 +533,8 @@ def _extract_post(
     permalink_candidates: Optional[List[str]] = None,
     feed_item_index: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
+    from .filters import _comment_line_is_badge
+
     if not cluster:
         return None
     anchor_idx, timestamp = _find_post_time_anchor(cluster)
@@ -464,6 +551,7 @@ def _extract_post(
         post_type = "text"
 
     author: Optional[str] = next((n["text"] for n in cluster if n.get("is_author_hint") and n["text"]), None)
+    badges: List[str] = []
     body_parts: List[str] = []
     reactions = comments = shares = views = None
     image_desc: Optional[str] = None
@@ -478,6 +566,9 @@ def _extract_post(
             continue
         if node.get("is_author_hint"):
             continue
+        if _comment_line_is_badge(t):
+            badges.append(t.strip())
+            continue
         if len(t) <= 1 and not _RE_ACTION_BAR_COUNT.match(t):
             continue
         if _is_noise_text(t) and not (i > anchor_idx and t_lower in ("bình luận", "comment")):
@@ -490,6 +581,14 @@ def _extract_post(
             if image_desc is None:
                 image_desc = t
             continue
+        t_wp = _strip_wallpaper_chrome(t)
+        if _is_wallpaper_meta_only(t_wp):
+            if image_desc is None and _RE_IMAGE_TYPE.match(t_lower):
+                image_desc = t
+            continue
+        if t_wp and len(t_wp) >= 8 and t_wp != t:
+            t = t_wp
+            t_lower = t.lower()
         if (
             i < anchor_idx
             and author is None
@@ -499,6 +598,7 @@ def _extract_post(
             and "http" not in t_lower
             and "www." not in t_lower
             and not _is_hashtag_chip(t)
+            and not _comment_line_is_badge(t)
         ):
             author = t
             continue
@@ -506,14 +606,16 @@ def _extract_post(
             if first_author_idx is not None and i < first_author_idx:
                 continue
             if image_desc is None and _RE_IMAGE_TYPE.match(t_lower) and 8 < len(t) < 300:
-                image_desc = t
+                if not _is_wallpaper_meta_only(t):
+                    image_desc = t
                 continue
             body_parts.append(t)
             continue
 
         if i > anchor_idx:
             if image_desc is None and _RE_IMAGE_TYPE.match(t_lower) and 8 < len(t) < 300:
-                image_desc = t
+                if not _is_wallpaper_meta_only(t):
+                    image_desc = t
                 continue
             if _is_post_action_delimiter(t):
                 if first_author_idx is not None and i < first_author_idx:
@@ -548,9 +650,14 @@ def _extract_post(
 
     comment_preview = " ".join(comment_preview_parts).strip() or None
     body = " ".join(body_parts).strip()
-    author, timestamp = _refine_comment_sheet_post_author(cluster, author, timestamp)
+    author, timestamp = _refine_comment_sheet_post_author(
+        cluster, author, timestamp, badges
+    )
+    body = _clean_extracted_post_body(body, author=author or "")
     if not body and image_desc:
-        body = image_desc.strip()
+        fallback = _strip_wallpaper_chrome(image_desc, author=author or "")
+        if fallback and not _is_wallpaper_meta_only(fallback):
+            body = fallback
     if body and "chia sẻ với: nhóm công khai" in body.lower() and len(body) < 60:
         body = ""
     permalinks = list(permalink_candidates or [])
@@ -560,7 +667,7 @@ def _extract_post(
     if not has_signal:
         return None
     incomplete = not (author and body)
-    if image_desc and post_type == "text":
+    if image_desc and post_type == "text" and not _is_wallpaper_meta_only(image_desc):
         post_type = "photo"
     post_type = _merge_post_type(
         post_type,
@@ -604,6 +711,17 @@ def _extract_post(
     }
     if feed_item_index is not None:
         out["feed_item_index"] = feed_item_index
+    if badges:
+        seen_b: set[str] = set()
+        deduped: List[str] = []
+        for b in badges:
+            k = unicodedata.normalize("NFC", (b or "").strip()).lower()
+            if not k or k in seen_b:
+                continue
+            seen_b.add(k)
+            deduped.append(b.strip())
+        if deduped:
+            out["badges"] = deduped
     if incomplete:
         out["_incomplete"] = True
     return out

@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import AuthContext, policy
 from api.auth.rbac import build_enforcer_for_user_from_db, is_superadmin, permission_domain
-from api.auth.context import AuthError, TokenExpiredError, decode_access_token, extract_bearer
+from api.auth.context import (
+    AuthError,
+    TokenExpiredError,
+    decode_access_token,
+    decode_access_token_async,
+    extract_bearer,
+)
 from db.database import AsyncSessionLocal
 from db.models import Organization, User
 from db import crud as repo
@@ -55,12 +61,14 @@ def _auth_http_401(exc: AuthError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
 
 
-def _auth_context_from_creds(
+async def _auth_context_from_creds(
     credentials: HTTPAuthorizationCredentials | None,
+    *,
+    db: AsyncSession | None = None,
 ) -> AuthContext:
     raw = credentials.credentials if credentials else None
     try:
-        return decode_access_token(raw or "")
+        return await decode_access_token_async(raw or "", db=db)
     except AuthError as exc:
         raise _auth_http_401(exc) from exc
 
@@ -70,7 +78,7 @@ async def _get_auth_context(
 ) -> AuthContext:
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    return _auth_context_from_creds(credentials)
+    return await _auth_context_from_creds(credentials)
 
 
 async def _organization_exists(db: AsyncSession, org_id: str) -> bool:
@@ -237,7 +245,7 @@ async def _current_user_from_request(request: Request, db: AsyncSession) -> User
                 detail="Not authenticated",
             )
         try:
-            ctx = decode_access_token(raw_token)
+            ctx = await decode_access_token_async(raw_token, db=db)
         except AuthError as exc:
             raise _auth_http_401(exc) from exc
         try:
@@ -376,7 +384,7 @@ def make_device_auth_dependency(db_enabled: bool):
                 detail="Not authenticated",
             )
         try:
-            ctx = decode_access_token(_raw_token)
+            ctx = await decode_access_token_async(_raw_token)
         except AuthError as exc:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

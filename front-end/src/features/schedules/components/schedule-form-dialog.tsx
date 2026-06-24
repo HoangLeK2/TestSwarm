@@ -15,7 +15,7 @@ import type {
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { CronBuilder } from './cron-builder';
 import { VariableEditor } from '@/components/variable-editor';
-import { FlowEditor } from '@/features/campaigns/components/flow-editor';
+import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import { Button } from '@/components/ui/button';
@@ -412,8 +412,9 @@ export function ScheduleFormDialog({
           {/* ── Lịch cron ── */}
           <div className='space-y-2'>
             <CronBuilder
+              key={`${mode}-${schedule?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
               value={cronExpression}
-              onChange={(next) => setCronExpression(next)}
+              onChange={setCronExpression}
             />
           </div>
 

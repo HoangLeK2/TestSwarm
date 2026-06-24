@@ -18,6 +18,7 @@ from tasks.scenario.utils import (
     _evaluate_condition,
     _eval_ru_condition,
     _wait_element_gone,
+    _execute_tap,
     _IW_DEFAULT_TIMEOUT,
     _IW_DEFAULT_POLL,
     ScenarioCancelled,
@@ -164,6 +165,165 @@ class TestWaitForElement:
         assert result is None
         assert elapsed < 2.0
         assert u2.find_element.call_count >= 1
+
+
+# ── _execute_tap diagnostics ─────────────────────────────────────────────────
+
+class TestExecuteTapDiagnostics:
+    def test_selector_success_message_includes_phase_coords_and_bounds(self):
+        class FakeU2:
+            def find_element(self, by, value, timeout=None):
+                assert by == "text"
+                assert value == "Login"
+                return "eid-1"
+
+            def find_element_with_bounds(self, by, value):
+                return {
+                    "eid": "eid-1",
+                    "bounds": {"left": 100, "top": 200, "right": 300, "bottom": 280},
+                }
+
+        device = MagicMock()
+        device.serial = "SER-1"
+        device.screen_width = 1080
+        device.screen_height = 1920
+        device.u2 = FakeU2()
+        device._batch_enabled.return_value = False
+
+        ok, message, bounds = _execute_tap(
+            device,
+            by="text",
+            value="Login",
+            fallback_rx=None,
+            fallback_ry=None,
+            implicit_wait_timeout=0.1,
+            implicit_wait_poll=0.01,
+        )
+
+        assert ok is True
+        assert bounds == {"left": 100, "top": 200, "right": 300, "bottom": 280}
+        assert "method=selector" in message
+        assert "tap=(200,240)" in message
+        assert "bounds=[100,200][300,280]" in message
+
+    def test_stable_unique_group_description_moved_from_recorded_point_taps_selector_center(self):
+        class FakeU2:
+            def find_element(self, by, value, timeout=None):
+                assert by == "description"
+                assert value == "Target Group, 42K members"
+                return "eid-1"
+
+            def find_element_with_bounds(self, by, value):
+                return {
+                    "eid": "eid-1",
+                    "bounds": {"left": 850, "top": 1400, "right": 1050, "bottom": 1500},
+                }
+
+        device = MagicMock()
+        device.serial = "SER-1"
+        device.screen_width = 1080
+        device.screen_height = 1920
+        device.u2 = FakeU2()
+        device._batch_enabled.return_value = False
+        device.hierarchy_xml.return_value = """
+        <hierarchy>
+          <node package="com.facebook.katana" class="android.widget.TextView"
+                content-desc="Target Group, 42K members"
+                bounds="[850,1400][1050,1500]" />
+        </hierarchy>
+        """
+
+        ok, message, bounds = _execute_tap(
+            device,
+            by="description",
+            value="Target Group, 42K members",
+            fallback_rx=100 / 1080,
+            fallback_ry=240 / 1920,
+            implicit_wait_timeout=0.1,
+            implicit_wait_poll=0.01,
+        )
+
+        assert ok is True
+        assert "method=selector" in message
+        assert "tap=(950,1450)" in message
+        device.tap.assert_called_once_with(950, 1450)
+        assert bounds == {"left": 850, "top": 1400, "right": 1050, "bottom": 1500}
+
+    def test_volatile_bounds_xpath_missing_match_fails_closed_without_position_tap(self):
+        class FakeU2:
+            def find_element(self, by, value, timeout=None):
+                assert by == "xpath"
+                assert value == '//*[@bounds="[850,1400][1050,1500]"]'
+                return None
+
+        device = MagicMock()
+        device.serial = "SER-1"
+        device.screen_width = 1080
+        device.screen_height = 1920
+        device.u2 = FakeU2()
+        device._batch_enabled.return_value = False
+        device.hierarchy_xml.return_value = """
+        <hierarchy>
+          <node package="com.facebook.katana" class="android.widget.TextView"
+                text="Other Group" bounds="[80,210][600,270]" />
+        </hierarchy>
+        """
+
+        ok, message, bounds = _execute_tap(
+            device,
+            by="xpath",
+            value='//*[@bounds="[850,1400][1050,1500]"]',
+            fallback_rx=100 / 1080,
+            fallback_ry=240 / 1920,
+            implicit_wait_timeout=0.1,
+            implicit_wait_poll=0.01,
+        )
+
+        assert ok is False
+        assert "selector xpath=" in message
+        assert bounds is None
+        device.tap.assert_not_called()
+
+    def test_volatile_bounds_xpath_currently_matches_same_bounds_but_still_fails_closed(self):
+        class FakeU2:
+            def find_element(self, by, value, timeout=None):
+                assert by == "xpath"
+                assert value == '//*[@bounds="[850,1400][1050,1500]"]'
+                return "eid-other"
+
+            def find_element_with_bounds(self, by, value):
+                return {
+                    "eid": "eid-other",
+                    "bounds": {"left": 850, "top": 1400, "right": 1050, "bottom": 1500},
+                }
+
+        device = MagicMock()
+        device.serial = "SER-1"
+        device.screen_width = 1080
+        device.screen_height = 1920
+        device.u2 = FakeU2()
+        device._batch_enabled.return_value = False
+        device.hierarchy_xml.return_value = """
+        <hierarchy>
+          <node package="com.facebook.katana" class="android.widget.Button"
+                text="Tham gia" bounds="[850,1400][1050,1500]" />
+        </hierarchy>
+        """
+
+        ok, message, bounds = _execute_tap(
+            device,
+            by="xpath",
+            value='//*[@bounds="[850,1400][1050,1500]"]',
+            fallback_rx=950 / 1080,
+            fallback_ry=1450 / 1920,
+            implicit_wait_timeout=0.1,
+            implicit_wait_poll=0.01,
+        )
+
+        assert ok is False
+        assert "selector xpath=" in message
+        assert bounds is None
+        device.tap.assert_not_called()
 
 
 # ── _evaluate_condition ───────────────────────────────────────────────────────

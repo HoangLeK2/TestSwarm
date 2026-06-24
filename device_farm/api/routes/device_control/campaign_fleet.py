@@ -38,6 +38,9 @@ log = logging.getLogger(__name__)
 # count colons; instead we use a greedy .+ for the serial segment.
 _TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
 _WORKFLOW_CAMPAIGN_RE = re.compile(r"^campaign:([^:]+):")
+_WORKFLOW_CONTEXT_RE = re.compile(
+    r"^campaign:(?P<campaign_id>[^:]+):device:(?P<device_serial>.+):scenario:(?P<scenario_id>[^:]+)$"
+)
 _INTERRUPT_TEMPORAL_DEADLINE_S = 3.0
 _INTERRUPT_CANCEL_TIMEOUT_S = 1.0
 _INTERRUPT_CANCEL_CONCURRENCY = 16
@@ -77,6 +80,24 @@ def _interrupt_execution_ids(executions) -> list[str]:
         if execution_id and execution_id not in ids:
             ids.append(execution_id)
     return ids
+
+
+def _workflow_context_from_workflow_id(workflow_id: str) -> dict:
+    match = _WORKFLOW_CONTEXT_RE.match(workflow_id or "")
+    if not match:
+        return {}
+    scenario_id = match.group("scenario_id")
+    return {
+        "campaign_id": match.group("campaign_id"),
+        "campaign_name": None,
+        "scenario_id": None if scenario_id == "__sequence__" else scenario_id,
+        "scenario_name": None,
+        "scenario_count": None,
+        "device_serial": match.group("device_serial"),
+        "workflow_kind": "main",
+        "execution_id": None,
+        "dispatch_source": None,
+    }
 
 
 async def _mark_interrupt_executions_cancelled(executions) -> None:
@@ -168,6 +189,93 @@ def build_campaign_fleet_router(
         campaign = await repo.get_campaign(db, campaign_id)
         if campaign is None or str(getattr(campaign, "user_id", "")) != str(user.id):
             raise HTTPException(status_code=404, detail="Workflow not found")
+
+    async def _workflow_context_from_execution(
+        db: DB,
+        execution,
+        *,
+        device_serial: str | None = None,
+        campaign_name_cache: dict[str, str | None] | None = None,
+    ) -> dict:
+        meta = getattr(execution, "meta", None) or {}
+        cfg = getattr(execution, "device_config", None) or {}
+        campaign_id = str(getattr(execution, "campaign_id", "") or "") or None
+        scenario_ids = [
+            str(item)
+            for item in (meta.get("scenario_ids") or [])
+            if str(item or "").strip()
+        ]
+        scenario_id = (
+            str(getattr(execution, "scenario_id", "") or "")
+            or str(meta.get("org_scenario_id") or "")
+            or (scenario_ids[0] if len(scenario_ids) == 1 else "")
+            or None
+        )
+        scenario_steps: list[dict] = []
+        if scenario_ids:
+            from db.crud import org_scenario as org_scenario_repo
+
+            bodies = await org_scenario_repo.get_org_scenario_bodies_by_ids(
+                db,
+                str(getattr(execution, "org_id", "") or ""),
+                scenario_ids,
+            )
+            names = await org_scenario_repo.get_org_scenario_names_by_ids(
+                db,
+                str(getattr(execution, "org_id", "") or ""),
+                scenario_ids,
+            )
+            bodies_by_id = {
+                sid: body if isinstance(body, dict) else {}
+                for sid, _kind, body in bodies
+            }
+            if len(scenario_ids) == 1:
+                body = bodies_by_id.get(scenario_ids[0]) or {}
+                scenario_steps = list(body.get("steps") or [])
+            else:
+                for sid in scenario_ids:
+                    body = bodies_by_id.get(sid) or {}
+                    steps = list(body.get("steps") or [])
+                    if not steps:
+                        continue
+                    scenario_steps.append(
+                        {
+                            "type": "run_scenario",
+                            "scenario_id": sid,
+                            "title": names.get(sid) or sid,
+                            "steps": steps,
+                        }
+                    )
+        campaign_name: str | None = None
+        if campaign_id:
+            cache = campaign_name_cache if campaign_name_cache is not None else {}
+            if campaign_id not in cache:
+                campaign = await repo.get_campaign(db, campaign_id)
+                cache[campaign_id] = getattr(campaign, "name", None) if campaign else None
+            campaign_name = cache.get(campaign_id)
+        resolved_serial = (
+            device_serial
+            or str(cfg.get("device_serial") or "")
+            or str(meta.get("device_serial") or "")
+            or None
+        )
+        return {
+            "execution_id": getattr(execution, "id", None),
+            "campaign_id": campaign_id,
+            "campaign_name": campaign_name,
+            "scenario_id": scenario_id,
+            "scenario_name": (
+                meta.get("org_scenario_name")
+                or meta.get("scenario_name")
+                or None
+            ),
+            "scenario_steps": scenario_steps,
+            "scenario_count": int(meta.get("scenarios_count") or len(scenario_ids) or 0)
+            or None,
+            "device_serial": resolved_serial,
+            "workflow_kind": "main",
+            "dispatch_source": meta.get("dispatch_source"),
+        }
 
     # ── Campaign → Temporal workflow ─────────────────────────────────
 
@@ -355,8 +463,18 @@ def build_campaign_fleet_router(
 
             from db.crud.execution import list_running_executions_for_campaign
 
+            execution_context_by_wf: dict[str, dict] = {}
+            campaign_name_cache: dict[str, str | None] = {}
             for ex in await list_running_executions_for_campaign(db, campaign_id):
                 wf_id = (ex.meta or {}).get("workflow_id")
+                if wf_id:
+                    execution_context_by_wf[str(wf_id)] = (
+                        await _workflow_context_from_execution(
+                            db,
+                            ex,
+                            campaign_name_cache=campaign_name_cache,
+                        )
+                    )
                 if not wf_id or wf_id in latest_by_workflow_id:
                     continue
                 try:
@@ -380,6 +498,8 @@ def build_campaign_fleet_router(
                     "run_id": run_id,
                     "status": ui_st,
                     "start_time": start_time.isoformat() if start_time else None,
+                    **_workflow_context_from_workflow_id(wf_id),
+                    **execution_context_by_wf.get(wf_id, {}),
                 }
 
             workflows = list(await asyncio.gather(*(_one(r) for r in latest_by_workflow_id.values())))
@@ -413,6 +533,7 @@ def build_campaign_fleet_router(
             raise HTTPException(status_code=404, detail="Device not found")
 
         workflows_by_id: dict[str, dict] = {}
+        campaign_name_cache: dict[str, str | None] = {}
 
         def _append_workflow(
             wf_id: str,
@@ -420,13 +541,16 @@ def build_campaign_fleet_router(
             run_id: str | None = None,
             status: str = "RUNNING",
             start_time: str | None = None,
+            context: dict | None = None,
         ) -> None:
             prev = workflows_by_id.get(wf_id)
             if prev is not None and prev.get("status") == "RUNNING":
                 return
+            merged = {**(prev or {}), **(context or {})}
             workflows_by_id[wf_id] = {
+                **merged,
                 "workflow_id": wf_id,
-                "run_id": run_id or prev.get("run_id") if prev else None,
+                "run_id": run_id or (prev.get("run_id") if prev else None),
                 "status": status,
                 "start_time": start_time or (prev.get("start_time") if prev else None),
             }
@@ -444,6 +568,12 @@ def build_campaign_fleet_router(
                 wf_id,
                 status=ui_status,
                 start_time=ex.started_at.isoformat() if ex.started_at else None,
+                context=await _workflow_context_from_execution(
+                    db,
+                    ex,
+                    device_serial=serial,
+                    campaign_name_cache=campaign_name_cache,
+                ),
             )
 
         if not config.temporal.enabled:
@@ -467,6 +597,7 @@ def build_campaign_fleet_router(
                     run_id=wf.run_id,
                     status=wf.status.name if wf.status else "UNKNOWN",
                     start_time=wf.start_time.isoformat() if wf.start_time else None,
+                    context=_workflow_context_from_workflow_id(wf.id),
                 )
 
             # Enrich exec_* rows with live Temporal status when possible.

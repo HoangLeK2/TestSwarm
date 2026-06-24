@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import type { FlowStep } from '../scenario-steps/types';
 import {
   StepPanelField,
@@ -165,7 +166,7 @@ export function ScrollDownStepFields({
 
       <StepPanelSection title={t('anchorSectionTitle')}>
         <p className='text-[11px] leading-relaxed text-muted-foreground'>
-          {t('anchorHint')}
+          {t('anchorHint', { varToken: SCENARIO_VAR_TOKENS.SCROLL_X_RATIO })}
         </p>
         <div className='flex flex-wrap gap-1.5'>
           {X_PRESETS.map((p) => (
@@ -184,7 +185,9 @@ export function ScrollDownStepFields({
         <StepPanelField label={t('startXCustomLabel')}>
           <Input
             className='h-9 font-mono text-xs'
-            placeholder={t('startXRatioPlaceholder')}
+            placeholder={t('startXRatioPlaceholder', {
+              varToken: SCENARIO_VAR_TOKENS.SCROLL_X_RATIO
+            })}
             value={xRatioDisplay(step)}
             onChange={(e) => {
               const parsed = parseXRatio(e.target.value);

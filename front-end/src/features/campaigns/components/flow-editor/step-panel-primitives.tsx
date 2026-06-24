@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -65,18 +66,24 @@ export function StepPanelInput({
   const [draft, setDraft] = useState(String(value ?? ''));
   const draftRef = useRef(draft);
   draftRef.current = draft;
-
-  useEffect(() => {
-    setDraft(String(value ?? ''));
-  }, [value]);
+  const committedValueRef = useRef(String(value ?? ''));
 
   const debouncedCommit = useDebouncedCallback(onValueCommit, commitDelayMs);
 
+  useEffect(() => {
+    const next = String(value ?? '');
+    committedValueRef.current = next;
+    setDraft(next);
+  }, [value]);
+
   useEffect(
     () => () => {
-      debouncedCommit(draftRef.current);
+      const pending = draftRef.current;
+      if (pending === committedValueRef.current) return;
+      onValueCommit(pending);
+      committedValueRef.current = pending;
     },
-    [debouncedCommit]
+    [onValueCommit]
   );
 
   return (
@@ -89,7 +96,9 @@ export function StepPanelInput({
         debouncedCommit(next);
       }}
       onBlur={(e) => {
-        onValueCommit(draftRef.current);
+        const pending = draftRef.current;
+        onValueCommit(pending);
+        committedValueRef.current = pending;
         onBlur?.(e);
       }}
     />
@@ -116,18 +125,24 @@ export function StepPanelTextarea({
   const [draft, setDraft] = useState(value ?? '');
   const draftRef = useRef(draft);
   draftRef.current = draft;
-
-  useEffect(() => {
-    setDraft(value ?? '');
-  }, [value]);
+  const committedValueRef = useRef(value ?? '');
 
   const debouncedCommit = useDebouncedCallback(onValueCommit, commitDelayMs);
 
+  useEffect(() => {
+    const next = value ?? '';
+    committedValueRef.current = next;
+    setDraft(next);
+  }, [value]);
+
   useEffect(
     () => () => {
-      debouncedCommit(draftRef.current);
+      const pending = draftRef.current;
+      if (pending === committedValueRef.current) return;
+      onValueCommit(pending);
+      committedValueRef.current = pending;
     },
-    [debouncedCommit]
+    [onValueCommit]
   );
 
   return (
@@ -141,7 +156,9 @@ export function StepPanelTextarea({
         debouncedCommit(next);
       }}
       onBlur={(e) => {
-        onValueCommit(draftRef.current);
+        const pending = draftRef.current;
+        onValueCommit(pending);
+        committedValueRef.current = pending;
         onBlur?.(e);
       }}
     />
@@ -199,9 +216,9 @@ export function StepPanelToggle({
   className?: string;
 }) {
   return (
-    <div
+    <label
       className={cn(
-        'flex items-start gap-3 rounded-lg border border-border/60 bg-background/90 px-3 py-2.5 transition-colors',
+        'flex cursor-pointer items-start gap-3 rounded-lg border border-border/60 bg-background/90 px-3 py-2.5 transition-colors',
         checked && 'border-primary/25 bg-primary/[0.04]',
         className
       )}
@@ -211,18 +228,7 @@ export function StepPanelToggle({
         onCheckedChange={onCheckedChange}
         className='mt-0.5 shrink-0'
       />
-      <div
-        role='button'
-        tabIndex={0}
-        className='min-w-0 flex-1 cursor-pointer space-y-0.5'
-        onClick={() => onCheckedChange(!checked)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onCheckedChange(!checked);
-          }
-        }}
-      >
+      <div className='min-w-0 flex-1 space-y-0.5'>
         <div className='text-xs font-medium leading-snug text-foreground'>
           {label}
         </div>
@@ -232,7 +238,7 @@ export function StepPanelToggle({
           </div>
         ) : null}
       </div>
-    </div>
+    </label>
   );
 }
 
@@ -405,6 +411,10 @@ export function StepRetryPolicySection({
   update: (patch: Partial<FlowStep>) => void;
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.retryPolicy');
+  const suppressRetryPatchRef = useRef(false);
+  const suppressRetryPatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const enabled = !!(
     step.retry &&
     typeof step.retry === 'object' &&
@@ -412,9 +422,41 @@ export function StepRetryPolicySection({
   );
   const policy = coerceStepRetryPolicy(step.retry);
 
-  const updateRetry = (retry: unknown) => {
-    update({ retry: coerceStepRetryPolicy(retry) });
-  };
+  useEffect(
+    () => () => {
+      if (suppressRetryPatchTimerRef.current) {
+        clearTimeout(suppressRetryPatchTimerRef.current);
+      }
+    },
+    []
+  );
+
+  const updateRetry = useCallback(
+    (retry: unknown) => {
+      if (suppressRetryPatchRef.current) return;
+      update({ retry: coerceStepRetryPolicy(retry) });
+    },
+    [update]
+  );
+
+  const setRetryEnabled = useCallback(
+    (checked: boolean) => {
+      if (!checked) {
+        suppressRetryPatchRef.current = true;
+        if (suppressRetryPatchTimerRef.current) {
+          clearTimeout(suppressRetryPatchTimerRef.current);
+        }
+        update(retryPatchForEnabledState(step, false));
+        suppressRetryPatchTimerRef.current = setTimeout(() => {
+          suppressRetryPatchRef.current = false;
+          suppressRetryPatchTimerRef.current = null;
+        }, 300);
+        return;
+      }
+      update(retryPatchForEnabledState(step, true));
+    },
+    [step, update]
+  );
 
   const setCap = (raw: string) => {
     const next = coerceStepRetryPolicy(step.retry);
@@ -440,9 +482,7 @@ export function StepRetryPolicySection({
         label={t('enableLabel')}
         description={t('enableDescription')}
         checked={enabled}
-        onCheckedChange={(checked) =>
-          update(retryPatchForEnabledState(step, checked))
-        }
+        onCheckedChange={setRetryEnabled}
       />
 
       {enabled ? (

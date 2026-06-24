@@ -105,6 +105,18 @@ class _PingThenDisconnectWebSocket:
         self.sent.append(msg)
 
 
+class _BootstrapFailOnceWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self._failed = False
+
+    async def send_bytes(self, data: bytes) -> None:
+        if not self._failed:
+            self._failed = True
+            raise RuntimeError("bootstrap send failed")
+        self.sent.append(data)
+
+
 def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
     dev = _FakeDevice(serial="SN001")
     mgr = _FakeManager([dev])
@@ -130,6 +142,32 @@ def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
         assert buf1 != buf2
 
         ws.send_json({"type": "unwatch_serial", "serial": "SN001"})
+
+
+@pytest.mark.asyncio
+async def test_device_sender_keeps_live_subscription_when_bootstrap_send_fails():
+    class BootstrapDevice(_FakeDevice):
+        def get_stream_bootstrap(self, *_args, **_kwargs):
+            return _h264_cfg(self.serial), None
+
+    dev = BootstrapDevice(serial="SN_BOOT")
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
+    ws = _BootstrapFailOnceWebSocket()
+    task = asyncio.create_task(ws_manager._device_sender(ws, dev, asyncio.Lock()))
+
+    try:
+        for _ in range(20):
+            if ws.sent:
+                break
+            await asyncio.sleep(0.05)
+        assert ws.sent
+        assert ws.sent[0][0] in (0x10, 0x11)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 @pytest.mark.asyncio

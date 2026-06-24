@@ -8,9 +8,14 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from api.auth.context import decode_access_token
+from api.auth.context import decode_access_token, decode_access_token_async
 from api.routes import mcp as mcp_routes
+from db.crud.mcp_token import create_mcp_token as create_mcp_token_row
+from db.crud.mcp_token import revoke_mcp_token as revoke_mcp_token_row
+from db.crud.mcp_token import row_to_record
+from db.database import Base
 from mcp import server
 from mcp import token_store
 
@@ -79,6 +84,31 @@ def test_tools_list_exposes_epic10_preview_contract(monkeypatch):
         assert tools[name]["metadata"]["token_scope"] in {"device", "user", "any"}
 
 
+def test_ui_element_tools_describe_safe_selector_contract(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
+
+    response = server.handle_tools_list(
+        server.McpContext(initialized=True),
+        {"id": "list-1", "jsonrpc": "2.0", "method": "tools/list"},
+    )
+
+    tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+    ui_tool = tools["df_get_ui_elements"]
+    tap_tool = tools["df_tap_selector"]
+
+    assert "selector_reason" in ui_tool["description"]
+    assert "selector_volatile" in ui_tool["description"]
+    assert tap_tool["inputSchema"]["properties"]["by"]["enum"] == [
+        "resource-id",
+        "text",
+        "description",
+        "descriptionContains",
+        "descriptionStartsWith",
+        "xpath",
+        "class name",
+    ]
+
+
 def test_stdio_startup_requires_at_least_one_token(monkeypatch):
     monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("DEVICE_FARM_MCP_ALLOW_UNAUTH", raising=False)
@@ -89,6 +119,21 @@ def test_stdio_startup_requires_at_least_one_token(monkeypatch):
 
     assert exc.value.code == 2
     assert "MCP_AUTH_TOKEN" in sys.stderr.getvalue()
+
+
+def test_tool_call_returns_structured_content_for_output_schema_tools(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "user-token")
+
+    response = _tool_call("df_mcp_registry")
+
+    assert "error" not in response
+    result = response["result"]
+    assert result.get("isError") is not True
+    structured = result.get("structuredContent")
+    assert isinstance(structured, dict)
+    assert structured.get("preview") is True
+    assert "tools" in structured
+    assert result["content"]
 
 
 def test_tool_error_contract_has_df_code_without_traceback(monkeypatch, tmp_path):
@@ -174,22 +219,61 @@ def test_dashboard_minted_token_decodes_to_auth_context(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_minted_token_decodes_from_running_event_loop(monkeypatch, tmp_path):
+    monkeypatch.delenv("DEVICE_FARM_MCP_TOKEN_STORE", raising=False)
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    async with session_factory() as db:
+        _row, plaintext = await create_mcp_token_row(
+            db,
+            name="agent",
+            scope_type="user",
+            owner_user_id="user-1",
+            org_id="org-1",
+        )
+        await db.commit()
+
+        ctx = await decode_access_token_async(plaintext, db=db)
+
+    assert ctx.user_id == "user-1"
+    assert ctx.org_id == "org-1"
+    assert ctx.token_type == "mcp"
+
+
+@pytest.mark.asyncio
 async def test_mcp_api_filters_tokens_audit_and_revoke_by_org(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVICE_FARM_MCP_TOKEN_STORE", str(tmp_path / "tokens.json"))
+    monkeypatch.delenv("DEVICE_FARM_MCP_TOKEN_STORE", raising=False)
     audit_path = tmp_path / "audit.jsonl"
     monkeypatch.setenv("DEVICE_FARM_MCP_AUDIT_LOG_PATH", str(audit_path))
-    token_a, _plain_a = token_store.create_token(
-        name="a",
-        scope_type="user",
-        owner_user_id="user-a",
-        org_id="org-a",
-    )
-    token_b, _plain_b = token_store.create_token(
-        name="b",
-        scope_type="user",
-        owner_user_id="user-b",
-        org_id="org-b",
-    )
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    async with session_factory() as db:
+        token_a_row, _plain_a = await create_mcp_token_row(
+            db,
+            name="a",
+            scope_type="user",
+            owner_user_id="user-a",
+            org_id="org-a",
+        )
+        token_b_row, _plain_b = await create_mcp_token_row(
+            db,
+            name="b",
+            scope_type="user",
+            owner_user_id="user-b",
+            org_id="org-b",
+        )
+        await db.commit()
+        token_a = row_to_record(token_a_row)
+        token_b = row_to_record(token_b_row)
+
     audit_path.write_text(
         "\n".join(
             [
@@ -202,43 +286,54 @@ async def test_mcp_api_filters_tokens_audit_and_revoke_by_org(monkeypatch, tmp_p
     )
     user_a = SimpleNamespace(id="user-a", org_id="org-a", role="operator")
 
-    token_response = await mcp_routes.list_mcp_tokens(user=user_a)
-    audit_response = await mcp_routes.list_mcp_audit_log(
-        user=user_a,
-        limit=50,
-        offset=0,
-    )
+    async with session_factory() as db:
+        token_response = await mcp_routes.list_mcp_tokens(user=user_a, db=db)
+        audit_response = await mcp_routes.list_mcp_audit_log(
+            user=user_a,
+            limit=50,
+            offset=0,
+        )
 
     assert [record["id"] for record in token_response["tokens"]] == [token_a.id]
     assert [entry["tool_name"] for entry in audit_response["entries"]] == ["df_device_list"]
-    assert token_store.revoke_token(token_b.id, org_id="org-a") is False
-    assert await mcp_routes.revoke_mcp_token(token_a.id, user=user_a) == {
-        "ok": True,
-        "token_id": token_a.id,
-    }
+
+    async with session_factory() as db:
+        assert await revoke_mcp_token_row(db, token_b.id, org_id="org-a") is False
+        await db.commit()
+        assert await mcp_routes.revoke_mcp_token(token_a.id, user=user_a, db=db) == {
+            "ok": True,
+            "token_id": token_a.id,
+        }
+        await db.commit()
+
     user_without_org = SimpleNamespace(id="user-no-org", org_id=None, role="operator")
-    no_org_tokens = await mcp_routes.list_mcp_tokens(user=user_without_org)
-    no_org_audit = await mcp_routes.list_mcp_audit_log(
-        user=user_without_org,
-        limit=50,
-        offset=0,
-    )
+    async with session_factory() as db:
+        no_org_tokens = await mcp_routes.list_mcp_tokens(user=user_without_org, db=db)
+        no_org_audit = await mcp_routes.list_mcp_audit_log(
+            user=user_without_org,
+            limit=50,
+            offset=0,
+        )
 
     assert no_org_tokens["tokens"] == []
     assert no_org_audit["entries"] == []
-    with pytest.raises(HTTPException) as create_exc:
-        await mcp_routes.create_mcp_token(
-            mcp_routes.McpTokenCreate(
-                name="bad",
-                scope_type="user",
-                preview_consent=True,
-            ),
-            user=user_without_org,
-        )
-    assert create_exc.value.status_code == 403
-    with pytest.raises(HTTPException) as exc:
-        await mcp_routes.revoke_mcp_token(token_b.id, user=user_without_org)
-    assert exc.value.status_code == 404
+    async with session_factory() as db:
+        with pytest.raises(HTTPException) as create_exc:
+            await mcp_routes.create_mcp_token(
+                mcp_routes.McpTokenCreate(
+                    name="bad",
+                    scope_type="user",
+                    preview_consent=True,
+                ),
+                user=user_without_org,
+                db=db,
+            )
+        assert create_exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            await mcp_routes.revoke_mcp_token(token_b.id, user=user_without_org, db=db)
+        assert exc.value.status_code == 404
+
+    await engine.dispose()
 
 
 def test_mcp_auth_token_is_forwarded_to_device_and_user_tools(monkeypatch):

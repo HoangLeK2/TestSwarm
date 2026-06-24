@@ -1,5 +1,6 @@
 export interface Device {
   serial: string;
+  registered_serial?: string;
   name?: string;
   display_name?: string;
   brand: string;

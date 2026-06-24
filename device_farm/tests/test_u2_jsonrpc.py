@@ -20,7 +20,9 @@ except ImportError:
     import xml.etree.ElementTree as _ET
 
 from runtime.transports.u2_jsonrpc import (
+    U2BatchError,
     U2JsonRpcClient,
+    _BatchRelaySession,
     _WatcherBuilder,
     _WatcherContext,
     _WatcherEntry,
@@ -60,6 +62,39 @@ SIMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
         checkable="false" checked="false" clickable="true" enabled="true"
         focusable="true" focused="false" scrollable="false" selected="false"/>
 </hierarchy>"""
+
+
+class TestBatchRelaySession(unittest.TestCase):
+
+    def test_batch_error_preserves_partial_results(self):
+        class _Future:
+            def result(self, timeout=None):
+                return {
+                    "ok": False,
+                    "stopped_at": 1,
+                    "results": [
+                        {"op": "click", "ok": True},
+                        {"op": "click", "ok": False, "error": "tap failed"},
+                    ],
+                    "error": "tap failed",
+                }
+
+        class _Loop:
+            pass
+
+        class _Manager:
+            def u2_batch(self, serial, actions, timeout=30.0):
+                return {}
+
+        with patch("asyncio.run_coroutine_threadsafe", return_value=_Future()):
+            session = _BatchRelaySession(_Manager(), "SN001", _Loop())
+            with self.assertRaises(U2BatchError) as ctx:
+                session.batch([{"op": "click"}, {"op": "click"}], timeout=3.0)
+
+        self.assertEqual(str(ctx.exception), "tap failed")
+        self.assertEqual(ctx.exception.stopped_at, 1)
+        self.assertEqual(ctx.exception.results[0]["ok"], True)
+        self.assertEqual(ctx.exception.results[1]["error"], "tap failed")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -700,6 +735,39 @@ class TestFindElementWithBounds(unittest.TestCase):
         r = self.client.find_element_with_bounds("xpath", "//node")
         self.assertIsNotNone(r)
 
+    def test_xpath_with_bounds_uses_caller_timeout(self):
+        client = _make_client(timeout=20.0)
+        captured = []
+
+        def fake_page_source(timeout=None, compressed=False):
+            captured.append(timeout)
+            return SIMPLE_XML
+
+        client.page_source = fake_page_source
+        result = client._find_element_xpath_with_bounds('//*[@text="Home"]', timeout=0.25)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["bounds"]["right"], 100)
+        self.assertTrue(captured)
+        self.assertLess(captured[0], 2.0)
+
+    def test_spec_with_bounds_uses_instant_obj_info_first(self):
+        from services.scenario_selector import ScenarioSelectorSpec
+
+        client = _make_client(timeout=20.0)
+        client._rpc = Mock(return_value={"bounds": "[0,0][100,50]"})
+
+        result = client.find_element_with_bounds_spec(
+            ScenarioSelectorSpec(by="resource-id", value="com.app:id/login"),
+            timeout=0.5,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["eid"], "resource-id::com.app:id/login")
+        self.assertEqual(result["bounds"]["right"], 100)
+        self.assertEqual(client._rpc.call_count, 1)
+        self.assertEqual(client._rpc.call_args[0][0], "objInfo")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # U2JsonRpcClient — page_source
@@ -750,6 +818,33 @@ class TestPageSource(unittest.TestCase):
         with patch("time.sleep"):
             xml = self.client.page_source()
         self.assertIn("<hierarchy", xml)
+
+    def test_compressed_uses_dump_window_hierarchy2(self):
+        self.client._rpc = Mock(return_value=SIMPLE_XML)
+
+        xml = self.client.page_source(compressed=True)
+
+        self.assertIn("<hierarchy", xml)
+        self.client._rpc.assert_called_once()
+        method, options = self.client._rpc.call_args[0][:2]
+        self.assertEqual(method, "dumpWindowHierarchy2")
+        self.assertEqual(options["compressed"], True)
+        self.assertEqual(options["waitForIdleMs"], 0)
+        self.assertEqual(options["trimFalseAttributes"], True)
+
+    def test_compressed_falls_back_when_dump_window_hierarchy2_missing(self):
+        self.client._rpc = Mock(side_effect=[
+            RuntimeError("JSON-RPC error for method='dumpWindowHierarchy2': Method not found"),
+            SIMPLE_XML,
+        ])
+
+        xml = self.client.page_source(compressed=True)
+
+        self.assertIn("<hierarchy", xml)
+        self.assertEqual(self.client._rpc.call_count, 2)
+        self.assertEqual(self.client._rpc.call_args_list[0][0][0], "dumpWindowHierarchy2")
+        self.assertEqual(self.client._rpc.call_args_list[1][0][0], "dumpWindowHierarchy")
+        self.assertIs(self.client._dump_hierarchy2_supported, False)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1086,6 +1181,47 @@ class TestSendKeys(unittest.TestCase):
         self.client._rpc = rpc
         self.client.send_keys("hello")
         self.assertIn("setFastInputText", call_log)
+
+    def test_send_keys_append_uses_adb_keyboard(self):
+        """Live append uses AdbKeyboard IME broadcast (incremental typing)."""
+        call_log = []
+        def adb_shell(cmd: str) -> str:
+            call_log.append(cmd)
+            if "ADB_KEYBOARD_INPUT_TEXT" in cmd:
+                return "Broadcast completed: result=-1"
+            return ""
+        self.client._adb_shell = adb_shell
+        def rpc(method, *args, **kw):
+            raise RuntimeError("no jsonrpc ime")
+        self.client._rpc = rpc
+        self.client.send_keys_append("việt")
+        self.assertTrue(any("ime enable" in c for c in call_log))
+        self.assertTrue(any("ADB_KEYBOARD_INPUT_TEXT" in c for c in call_log))
+        self.assertNotIn("setText", [c for c in call_log])
+
+    def test_set_text_focused(self):
+        call_log = []
+        def rpc(method, *args, **kw):
+            call_log.append(method)
+            if method == "objInfo":
+                return {"text": "old"}
+            return True
+        self.client._rpc = rpc
+        self.client.set_text_focused("việt")
+        self.assertEqual(call_log, ["objInfo", "setText"])
+
+    def test_paste_clipboard_text(self):
+        call_log = []
+        def rpc(method, *args, **kw):
+            call_log.append((method, args))
+            return True
+        self.client._rpc = rpc
+        self.client.paste_clipboard_text("café")
+        self.assertEqual(
+            call_log,
+            [("setClipboard", ("device-farm", "café")), ("pasteClipboard", ())],
+        )
+
 
 
 if __name__ == "__main__":

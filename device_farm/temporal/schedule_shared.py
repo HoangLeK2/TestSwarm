@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 class ScheduleRunInput:
     """Input to ScheduleRunWorkflow — passed when Temporal Schedule fires."""
     schedule_id: str
+    run_id: str | None = None
 
 
 @dataclass

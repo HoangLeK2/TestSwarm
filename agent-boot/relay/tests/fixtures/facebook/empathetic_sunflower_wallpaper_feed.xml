@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" package="com.facebook.katana" bounds="[0,0][1260,2800]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,287][1260,2800]">
+      <node class="android.view.ViewGroup" bounds="[0,1200][1260,2800]">
+        <node class="android.view.ViewGroup" bounds="[0,1200][1260,2800]">
+          <node class="android.view.ViewGroup" bounds="[0,1200][1260,1424]">
+            <node class="android.widget.ImageView" content-desc="Ảnh đại diện của EmpatheticSunflower8012" clickable="true" bounds="[42,1242][182,1382]"/>
+            <node text="EmpatheticSunflower8012" content-desc="EmpatheticSunflower8012" bounds="[210,1243][1085,1309]">
+              <node text="EmpatheticSunflower8012" class="android.widget.Button" clickable="true" bounds="[210,1243][906,1309]"/>
+            </node>
+            <node text="10 giờ•Chia sẻ với: Nhóm công khai" content-desc="10 giờ•Chia sẻ với: Nhóm công khai" clickable="true" bounds="[224,1323][434,1372]"/>
+            <node content-desc="Lựa chọn khác cho bài viết của EmpatheticSunflower8012" clickable="true" bounds="[1113,1200][1260,1346]"/>
+          </node>
+          <node class="android.view.ViewGroup" bounds="[42,1424][1218,2650]">
+            <node content-desc="Hình nền" bounds="[42,1424][1218,2650]">
+              <node text="Có ai gặp lỗi khi lấy trial plus 1 tháng mà báo thanh toán thành công mà tk vẫn là free chưa ạ" content-desc="Có ai gặp lỗi khi lấy trial plus 1 tháng mà báo thanh toán thành công mà tk vẫn là free chưa ạ" clickable="true" bounds="[105,1755][1155,2500]"/>
+            </node>
+          </node>
+          <node class="android.view.ViewGroup" clickable="true" bounds="[0,2650][1260,2800]">
+            <node class="android.widget.Button" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." text="Bình luận" clickable="true" bounds="[227,2650][457,2800]"/>
+          </node>
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>

@@ -71,7 +71,7 @@ async def test_collect_comment_snapshots_swipe_inside_scrollable_node() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collect_comment_snapshots_uses_220ms_swipe_floor() -> None:
+async def test_collect_comment_snapshots_honors_fast_explicit_swipe_duration() -> None:
     xml = _sheet_xml()
     exec_ = _CommentScrollExecutor(xml)
     snapshots, err = await collect_xml_snapshots(
@@ -89,7 +89,41 @@ async def test_collect_comment_snapshots_uses_220ms_swipe_floor() -> None:
     assert snapshots
     swipes = [a for batch in exec_.batches for a in batch if a.get("op") == "swipe"]
     assert swipes
-    assert swipes[0]["duration"] == pytest.approx(0.22)
+    assert swipes[0]["duration"] == pytest.approx(0.12)
+
+
+@pytest.mark.asyncio
+async def test_collect_comment_snapshots_screen_fallback_uses_configured_distance(monkeypatch) -> None:
+    xml = _sheet_xml()
+    exec_ = _CommentScrollExecutor(xml)
+
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.resolve_comment_scroll_swipe_from_xml",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.scroll_swipe.resolve_feed_scroll_swipe_from_xml",
+        lambda *_args, **_kwargs: None,
+    )
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 1,
+            "comment_scroll_distance": 0.52,
+            "comment_scroll_duration_ms": 120,
+            "min_comment_scan_passes": 0,
+            "comment_scroll_pause_s": 0,
+        },
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [a for batch in exec_.batches for a in batch if a.get("op") == "swipe"]
+    assert swipes
+    assert swipes[0]["fy"] - swipes[0]["ty"] >= int(1600 * 0.40)
 
 
 class _RotatingCommentScrollExecutor(_CommentScrollExecutor):

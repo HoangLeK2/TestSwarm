@@ -36,7 +36,6 @@ import { EditCampaignEntityDialog } from '../edit-campaign-entity-dialog';
 import { CampaignMonitorDialog } from '../campaign-monitor';
 import { ROUTES } from '@/config/routes';
 import { cn } from '@/lib/utils';
-import { CampaignRunProgress } from './CampaignRunProgress';
 import {
   useCampaignDevices,
   useCampaignWorkflows,
@@ -64,6 +63,7 @@ import {
   isCampaignMetadataEditable,
   isDispatchableStatus
 } from '../../types';
+import { summarizeDispatchResult } from '../../lib/campaign-dispatch-result';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useConfirm } from '@/providers/modal-provider';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
@@ -91,11 +91,12 @@ export function CampaignRowActions({
     campaign.id,
     perms.canExecute || perms.canUpdate
   );
+  const effectiveCampaign = campaignDetail ?? campaign;
   const isEntityCampaign =
-    isCampaignEntityOut(campaign) ||
+    isCampaignEntityOut(effectiveCampaign) ||
     (campaignDetail != null && isCampaignEntityOut(campaignDetail));
   const entityDetail: CampaignEntityOut | null = (() => {
-    const row = campaignDetail ?? campaign;
+    const row = effectiveCampaign;
     return isCampaignEntityOut(row) ? row : null;
   })();
   const scenarioRefIds = useMemo(
@@ -133,9 +134,9 @@ export function CampaignRowActions({
   const runMutation = useRunCampaign(() => toast.success(t('campaignDone')), {
     onTemporalFallback: () => toast.warning(t('temporalFallback'))
   });
-  const dispatchMutation = useDispatchCampaign(() =>
-    toast.success(t('campaignDone'))
-  );
+  const dispatchMutation = useDispatchCampaign((summary) => {
+    if (!summary?.allFailed) toast.success(t('campaignDone'));
+  });
   const { mutate: runCampaign, isPending: isRunning } = runMutation;
   const { mutate: dispatchCampaign, isPending: isDispatching } =
     dispatchMutation;
@@ -295,8 +296,7 @@ export function CampaignRowActions({
     }
   };
 
-  const running =
-    isCampaignActiveExecution(campaign.status) || isStopping;
+  const running = isCampaignActiveExecution(campaign.status) || isStopping;
   const showPause =
     campaign.status === 'running' &&
     (hasActiveWorkflows || runningWorkflowIds.length > 0);
@@ -318,8 +318,6 @@ export function CampaignRowActions({
           layout === 'stacked' ? 'w-full flex-wrap' : 'flex-nowrap'
         )}
       >
-        <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
-
         {canDispatch && perms.canExecute && (
           <>
             <Tooltip>
@@ -344,7 +342,7 @@ export function CampaignRowActions({
             <RunCampaignDialog
               open={runDialogOpen && !isEntityCampaign}
               campaignId={campaign.id}
-              campaignVariables={campaign.variables ?? {}}
+              campaignVariables={effectiveCampaign.variables ?? {}}
               onClose={() => setRunDialogOpen(false)}
               devices={devices}
               scenarios={scenarios}
@@ -388,10 +386,7 @@ export function CampaignRowActions({
                     { id: campaign.id, body },
                     {
                       onSuccess: (data) => {
-                        const failed =
-                          data.executions?.filter(
-                            (e) => e.status === 'failed' || e.failure_reason
-                          ).length ?? 0;
+                        const summary = summarizeDispatchResult(data);
                         const usedFallback =
                           executionRuntime?.campaign_run
                             ?.fallback_mode_active ||
@@ -403,13 +398,29 @@ export function CampaignRowActions({
                             duration: 8000
                           });
                         }
+                        if (summary.allFailed) {
+                          toast.error(
+                            summary.allFailuresAreDeviceClaim
+                              ? t('dispatchAllDevicesBusy', {
+                                  count: summary.deviceClaimFailed
+                                })
+                              : t('dispatchAllFailed', {
+                                  count: summary.failed
+                                }),
+                            {
+                              description: campaign.name,
+                              duration: 8000
+                            }
+                          );
+                          return;
+                        }
                         toast.success(
                           t('dispatchStarted', { count: data.target_count }),
                           {
                             description:
-                              failed > 0
+                              summary.failed > 0
                                 ? t('dispatchPartialFailures', {
-                                    count: failed
+                                    count: summary.failed
                                   })
                                 : campaign.name,
                             duration: 5000
@@ -586,7 +597,7 @@ export function CampaignRowActions({
       </ScenarioListDialog>
 
       <EditCampaignEntityDialog
-        campaign={campaign}
+        campaign={effectiveCampaign}
         open={entityEditOpen}
         onOpenChange={setEntityEditOpen}
       />

@@ -3,23 +3,34 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import httpx
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.database import AsyncSessionLocal
 from db.crud.user import get_user_org_id
 from db.models.analytics import WebhookDLQ, WebhookDeliveryLog
 from db.models.notification import Notification, NotificationChannel
 from services.activity_logger import log_activity
 from services.notification_events import parse_domain_event, render_notification
+from services.notification_telegram import format_telegram_message
 from services.webhook_dispatcher import _is_safe_webhook_url
 from tenancy.background import DeviceRef, lookup_device_by_serial
 from tenancy.context import get_current_org_id, tenant_context
 
 log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _notification_db_session() -> AsyncGenerator[AsyncSession, None]:
+    from db.database import activity_session
+
+    async with activity_session() as db:
+        yield db
+
 
 DEFAULT_EVENTS = [
     "device.disconnect",
@@ -32,6 +43,7 @@ DEFAULT_EVENTS = [
     "campaign.completed",
     "campaign.dispatched",
     "campaign.failed",
+    "campaign.step_warning",
     "campaign.dlq_opened",
     "schedule.triggered",
     "schedule.failed",
@@ -119,7 +131,7 @@ class NotificationService:
         data: Optional[dict[str, Any]] = None,
         user_id: Optional[str] = None,
     ) -> list[Notification]:
-        async with AsyncSessionLocal() as db:
+        async with _notification_db_session() as db:
             try:
                 channels = await self._channels_for_event(db, event, user_id)
                 saved: list[Notification] = []
@@ -131,7 +143,13 @@ class NotificationService:
                             )
                             saved.append(notification)
                         elif channel.type == "telegram":
-                            await self._send_telegram(channel, title, body)
+                            await self._send_telegram(
+                                channel,
+                                title,
+                                body,
+                                event=event,
+                                data=data,
+                            )
                         elif channel.type == "email":
                             await self._send_email(channel, title, body, data or {})
                         elif channel.type == "slack":
@@ -167,7 +185,7 @@ class NotificationService:
             locale=str(payload.get("locale") or "en"),
             app_base_url=str(payload.get("app_base_url") or "").strip(),
         )
-        async with AsyncSessionLocal() as db:
+        async with _notification_db_session() as db:
             await log_activity(
                 db,
                 action=event.event_type,
@@ -199,19 +217,81 @@ class NotificationService:
             )
 
     async def send_test(self, db: AsyncSession, channel: NotificationChannel, user_id: str) -> None:
+        await self._send_test_payload(db, channel.type, channel.config or {}, user_id, channel)
+
+    async def send_test_draft(
+        self,
+        db: AsyncSession,
+        channel_type: str,
+        config: dict[str, Any],
+        user_id: str,
+    ) -> None:
+        await self._send_test_payload(db, channel_type, config, user_id, channel=None)
+
+    async def _send_test_payload(
+        self,
+        db: AsyncSession,
+        channel_type: str,
+        config: dict[str, Any],
+        user_id: str,
+        channel: NotificationChannel | None,
+    ) -> None:
         event = "task.failed"
         title = "Test notification"
         body = "Device Farm notification channel is working."
-        if channel.type == "in_app":
+        if channel_type == "in_app":
+            if channel is None:
+                raise ValueError("in_app channels do not require a connection test")
             notification = await self._send_in_app(
                 db, channel, event, title, body, {"test": True}, user_id
             )
             await db.flush()
             await self._push_in_app(notification)
-        elif channel.type == "telegram":
-            await self._send_telegram(channel, title, body)
-        elif channel.type == "webhook":
-            await self._send_webhook(channel, event, title, body, {"test": True})
+        elif channel_type == "telegram":
+            await self._send_telegram(
+                self._draft_channel(channel_type, config),
+                title,
+                body,
+                event=event,
+            )
+        elif channel_type == "webhook":
+            await self._send_webhook_draft(config, event, title, body, {"test": True})
+        else:
+            raise ValueError(f"connection test is not supported for {channel_type} channels")
+
+    @staticmethod
+    def _draft_channel(channel_type: str, config: dict[str, Any]) -> NotificationChannel:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(type=channel_type, config=config)  # type: ignore[return-value]
+
+    async def _send_webhook_draft(
+        self,
+        config: dict[str, Any],
+        event: str,
+        title: str,
+        body: Optional[str],
+        data: dict[str, Any],
+    ) -> None:
+        url = str(config.get("url") or "").strip()
+        if not url:
+            raise ValueError("webhook channel requires url")
+        if not _is_safe_webhook_url(url):
+            raise ValueError("unsafe webhook url")
+        headers = config.get("headers") or config.get("custom_headers")
+        if not isinstance(headers, dict):
+            headers = {}
+        timeout = min(max(int(config.get("timeout_seconds") or 10), 1), 30)
+        payload = {
+            "event_type": event,
+            "title": title,
+            "body": body,
+            "data": data,
+            "test": True,
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
 
     def bind_device_events(self, recorder) -> None:
         recorder.add_listener(self._on_device_event)
@@ -258,7 +338,7 @@ class NotificationService:
         if not serial:
             return None
         try:
-            async with AsyncSessionLocal() as db:
+            async with _notification_db_session() as db:
                 return await lookup_device_by_serial(db, serial)
         except Exception:
             return None
@@ -382,17 +462,26 @@ class NotificationService:
         channel: NotificationChannel,
         title: str,
         body: Optional[str],
+        *,
+        event: str | None = None,
+        data: dict[str, Any] | None = None,
     ) -> None:
         config = channel.config or {}
         token = str(config.get("bot_token") or "").strip()
         chat_id = str(config.get("chat_id") or "").strip()
         if not token or not chat_id:
             raise ValueError("telegram channel requires bot_token and chat_id")
-        text = f"{title}\n{body or ''}".strip()
+        text = format_telegram_message(event=event, title=title, body=body, data=data)
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text},
+                json=payload,
                 timeout=10,
             )
             resp.raise_for_status()
@@ -552,7 +641,7 @@ class NotificationService:
         latency_ms: int,
         error: str | None,
     ) -> None:
-        async with AsyncSessionLocal() as db:
+        async with _notification_db_session() as db:
             db.add(
                 WebhookDeliveryLog(
                     org_id=channel.org_id,
@@ -573,7 +662,7 @@ class NotificationService:
         payload: dict[str, Any],
         error: str,
     ) -> None:
-        async with AsyncSessionLocal() as db:
+        async with _notification_db_session() as db:
             db.add(
                 WebhookDLQ(
                     org_id=channel.org_id,

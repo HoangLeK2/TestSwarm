@@ -61,7 +61,8 @@ export function getOrgScenarioColumns(
         const isSystem = isSystemTemplateItem(item);
         const isArchived = item.status === 'archived';
         const recoveryUsageCount = item.recovery_usage_count ?? 0;
-        const isRecovery = item.is_recovery_scenario === true || recoveryUsageCount > 0;
+        const isRecovery =
+          item.is_recovery_scenario === true || recoveryUsageCount > 0;
         return (
           <button
             type='button'
@@ -96,9 +97,7 @@ export function getOrgScenarioColumns(
                     variant='outline'
                     className='h-5 gap-1 px-1.5 text-[10px] font-medium'
                   >
-                    {isRecovery ? (
-                      <Wrench className='size-3' />
-                    ) : null}
+                    {isRecovery ? <Wrench className='size-3' /> : null}
                     {isRecovery
                       ? t('recoveryScenarioBadge', {
                           count: recoveryUsageCount

@@ -41,8 +41,7 @@ function WorkflowStatusBadge({ status }: { status: string }) {
       variant='outline'
       className={cn(
         'h-5 gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-wide',
-        status === 'RUNNING' &&
-          'border-primary/40 bg-primary/5 text-primary',
+        status === 'RUNNING' && 'border-primary/40 bg-primary/5 text-primary',
         status === 'COMPLETED' &&
           'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400',
         status === 'FAILED' &&

@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 import { useTranslations } from 'next-intl';
 import {
   SortableContext,
@@ -163,9 +170,7 @@ function BranchLane({
       <SectionLabel
         label={label}
         color=''
-        variant={
-          variant === 'then' || variant === 'else' ? variant : undefined
-        }
+        variant={variant === 'then' || variant === 'else' ? variant : undefined}
       />
       <div className='space-y-0 px-1 pb-1.5'>{children}</div>
     </div>

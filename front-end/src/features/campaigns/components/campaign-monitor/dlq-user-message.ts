@@ -13,15 +13,17 @@ type Translate = (
   values?: Record<string, string | number>
 ) => string;
 
-const UNKNOWN_MSG_RE =
-  /execution failed without a recorded error message/i;
+const UNKNOWN_MSG_RE = /execution failed without a recorded error message/i;
 const SERVER_RESTART_RE = /interrupted by server restart at step (\d+)/i;
 const LOOP_RE = /^loop:\s*iteration\s+(\d+)\s+failed\s*[—–-]\s*(.+)$/i;
 const RUN_SCENARIO_PREFIX_RE =
   /^run_scenario:\s*sub-scenario\s+'[^']+'\s+failed\s*[—–-]\s*/i;
 
 function normalizeRaw(raw: string): string {
-  return raw.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  return raw
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function stripRunScenarioPrefix(text: string): string {
@@ -131,7 +133,10 @@ export function humanizeDlqMessage(raw: string, t: Translate): DlqHumanMessage {
   // Last resort: drop UUID-ish noise but keep readable tail.
   const simplified = withoutScenario
     .replace(/sub-scenario\s+'[0-9a-f-]{36}'/gi, t('monitorDlqErrSubScenario'))
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '')
+    .replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+      ''
+    )
     .replace(/\s{2,}/g, ' ')
     .trim();
 

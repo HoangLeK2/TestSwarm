@@ -29,7 +29,12 @@ function loadSteps(): FlowStep[] {
   return raw.scenario.body.steps;
 }
 
-function bench(label: string, fn: () => void, iterations: number, maxMs: number) {
+function bench(
+  label: string,
+  fn: () => void,
+  iterations: number,
+  maxMs: number
+) {
   const t0 = performance.now();
   for (let i = 0; i < iterations; i++) fn();
   const elapsed = performance.now() - t0;
@@ -45,7 +50,12 @@ test('perf: walkFlowStepsWithPaths stays fast on real crawl scenario', () => {
   const steps = loadSteps();
   const visits = walkFlowStepsWithPaths(steps);
   assert.ok(visits.length >= 20, `expected many nodes, got ${visits.length}`);
-  bench('walkFlowStepsWithPaths', () => walkFlowStepsWithPaths(steps), 5000, 80);
+  bench(
+    'walkFlowStepsWithPaths',
+    () => walkFlowStepsWithPaths(steps),
+    5000,
+    80
+  );
 });
 
 test('perf: resolveStepAtPath for deepest comment extract stays fast', () => {
@@ -86,16 +96,21 @@ test('perf: patchStepByFlowgramId on amplified loop stays fast', () => {
   const base = loadSteps();
   const amplified = amplifyLoopSteps(base, 20);
   const visits = walkFlowStepsWithPaths(amplified);
-  assert.ok(visits.length >= 200, `expected amplified tree, got ${visits.length}`);
+  assert.ok(
+    visits.length >= 200,
+    `expected amplified tree, got ${visits.length}`
+  );
 
   const withFg = amplified.map((s) => {
     if (s.type !== 'loop') return s;
     return {
       ...s,
-      steps: ((s as FlowStep & { steps?: FlowStep[] }).steps ?? []).map((c, i) => ({
-        ...c,
-        _fgId: `node-${i}`
-      }))
+      steps: ((s as FlowStep & { steps?: FlowStep[] }).steps ?? []).map(
+        (c, i) => ({
+          ...c,
+          _fgId: `node-${i}`
+        })
+      )
     } as FlowStep;
   });
   const targetFg = 'node-1';
@@ -121,7 +136,12 @@ test('perf summary logs node count and budgets', () => {
     (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
   );
   assert.ok(extract);
-  const walk = bench('walk (report)', () => walkFlowStepsWithPaths(steps), 1000, 30);
+  const walk = bench(
+    'walk (report)',
+    () => walkFlowStepsWithPaths(steps),
+    1000,
+    30
+  );
   const resolve = bench(
     'resolve (report)',
     () => resolveStepAtPath(steps, extract.path),

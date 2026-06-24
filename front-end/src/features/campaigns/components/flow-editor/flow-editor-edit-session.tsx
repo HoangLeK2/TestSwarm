@@ -26,15 +26,15 @@ export function FlowEditorEditSessionProvider({
   const openCountRef = useRef(0);
   const setChildEditorOpen = useCallback(
     (open: boolean) => {
-      openCountRef.current = Math.max(0, openCountRef.current + (open ? 1 : -1));
+      openCountRef.current = Math.max(
+        0,
+        openCountRef.current + (open ? 1 : -1)
+      );
       onChildStepEditorOpenChange?.(openCountRef.current > 0);
     },
     [onChildStepEditorOpenChange]
   );
-  const value = useMemo(
-    () => ({ setChildEditorOpen }),
-    [setChildEditorOpen]
-  );
+  const value = useMemo(() => ({ setChildEditorOpen }), [setChildEditorOpen]);
   if (!onChildStepEditorOpenChange) return children;
   return (
     <FlowEditorEditSessionContext.Provider value={value}>

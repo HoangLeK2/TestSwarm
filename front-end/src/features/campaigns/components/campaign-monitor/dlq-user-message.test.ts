@@ -7,7 +7,8 @@ const t = (key: string, values?: Record<string, string | number>) => {
     monitorDlqErrUnknown: 'Lỗi không rõ — thử chạy lại',
     monitorDlqErrNoRelay: 'Relay chưa kết nối',
     monitorDlqErrLoopIteration: `Vòng ${values?.iteration}: ${values?.detail}`,
-    monitorDlqErrExtraDataFailed: 'Thu thập dữ liệu bài viết thất bại trên thiết bị.',
+    monitorDlqErrExtraDataFailed:
+      'Thu thập dữ liệu bài viết thất bại trên thiết bị.',
     monitorDlqErrSelectorNotFound: `Không thấy "${values?.selector}"`,
     monitorDlqNoErrorMessage: 'Không có mô tả'
   };

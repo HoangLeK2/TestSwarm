@@ -220,13 +220,13 @@ export function RecoveryPolicyEditor({
       {policy.enabled ? (
         <div className='space-y-3'>
           {!canRecordOnDevice ? (
-            <p className='rounded-md border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
+            <p className='bg-amber-500/8 rounded-md border border-amber-500/25 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
               {t('recordRequiresCampaign')}
             </p>
           ) : null}
 
           {!scenarios.length ? (
-            <p className='rounded-md border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
+            <p className='bg-amber-500/8 rounded-md border border-amber-500/25 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
               {t('noRunnableScenarios')}
             </p>
           ) : null}
@@ -320,7 +320,9 @@ export function RecoveryPolicyEditor({
                         <SelectValue placeholder={t('scenarioNone')} />
                       </SelectTrigger>
                       <SelectContent className='z-[10001]'>
-                        <SelectItem value='_none'>{t('scenarioNone')}</SelectItem>
+                        <SelectItem value='_none'>
+                          {t('scenarioNone')}
+                        </SelectItem>
                         {scenarios.map((scenario) => (
                           <SelectItem key={scenario.id} value={scenario.id}>
                             {scenario.name}
@@ -395,7 +397,7 @@ export function RecoveryPolicyEditor({
                     <span className='truncate'>{t('editScenario')}</span>
                   </Button>
 
-                  <div className='min-w-0 w-full'>
+                  <div className='w-full min-w-0'>
                     <CreateOrgScenarioDialog
                       onCreated={(created) => {
                         const nextPolicy = policyWithRulePatch(index, {
@@ -414,7 +416,9 @@ export function RecoveryPolicyEditor({
                           disabled={disabled || !canRecordOnDevice}
                         >
                           <Plus size={14} className='shrink-0' />
-                          <span className='truncate'>{t('createScenario')}</span>
+                          <span className='truncate'>
+                            {t('createScenario')}
+                          </span>
                         </Button>
                       }
                     />

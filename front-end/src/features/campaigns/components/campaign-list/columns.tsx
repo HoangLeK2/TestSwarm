@@ -174,7 +174,10 @@ export function getCampaignColumns(
       size: 120,
       meta: responsiveCol(CELL, 'xl'),
       cell: ({ row }) => (
-        <CampaignRunStats campaignId={row.original.id} status={row.original.status} />
+        <CampaignRunStats
+          campaignId={row.original.id}
+          status={row.original.status}
+        />
       )
     },
     {

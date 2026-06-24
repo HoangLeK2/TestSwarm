@@ -14,7 +14,8 @@ import {
 import type { ExecutionArtifact } from '../types.ts';
 
 function mockArtifact(
-  overrides: Partial<ExecutionArtifact> & Pick<ExecutionArtifact, 'artifact_type'>
+  overrides: Partial<ExecutionArtifact> &
+    Pick<ExecutionArtifact, 'artifact_type'>
 ): ExecutionArtifact {
   return {
     execution_id: 'exec-1',
@@ -31,7 +32,8 @@ function mockArtifact(
 }
 
 function mockResolved(
-  overrides: Partial<ResolvedMonitorArtifact> & Pick<ResolvedMonitorArtifact, 'key'>
+  overrides: Partial<ResolvedMonitorArtifact> &
+    Pick<ResolvedMonitorArtifact, 'key'>
 ): ResolvedMonitorArtifact {
   return {
     artifact: mockArtifact({ artifact_type: 'screenshot_post' }),
@@ -51,7 +53,9 @@ test('artifactIsFailShot detects fail screenshots', () => {
     true
   );
   assert.equal(
-    artifactIsFailShot(mockArtifact({ artifact_type: 'screenshot_post', ok: false })),
+    artifactIsFailShot(
+      mockArtifact({ artifact_type: 'screenshot_post', ok: false })
+    ),
     true
   );
   assert.equal(
@@ -99,14 +103,35 @@ test('neighborArtifactKeys walks filtered list', () => {
 });
 
 test('filterArtifactsByDevice keeps all when filter is all', () => {
-  const items = [mockResolved({ key: 'a' }), mockResolved({ key: 'b', deviceLabel: 'X' })];
+  const items = [
+    mockResolved({ key: 'a' }),
+    mockResolved({ key: 'b', deviceLabel: 'X' })
+  ];
   assert.equal(filterArtifactsByDevice(items, 'all').length, 2);
 });
 
 test('sortExecutionsForArtifactPanel puts runs with shots first', () => {
   const executions = [
-    { id: 'empty', status: 'completed', created_at: '2026-06-21T10:00:00Z', run_type: 'campaign', campaign_id: 'c1', scenario_id: null, started_at: null, finished_at: null },
-    { id: 'shots', status: 'failed', created_at: '2026-06-20T10:00:00Z', run_type: 'campaign', campaign_id: 'c1', scenario_id: null, started_at: null, finished_at: null }
+    {
+      id: 'empty',
+      status: 'completed',
+      created_at: '2026-06-21T10:00:00Z',
+      run_type: 'campaign',
+      campaign_id: 'c1',
+      scenario_id: null,
+      started_at: null,
+      finished_at: null
+    },
+    {
+      id: 'shots',
+      status: 'failed',
+      created_at: '2026-06-20T10:00:00Z',
+      run_type: 'campaign',
+      campaign_id: 'c1',
+      scenario_id: null,
+      started_at: null,
+      finished_at: null
+    }
   ] as import('../types.ts').ExecutionOut[];
   const counts = new Map([
     ['empty', 0],
@@ -118,8 +143,26 @@ test('sortExecutionsForArtifactPanel puts runs with shots first', () => {
 
 test('pickDefaultExecutionId prefers first run with shots', () => {
   const executions = [
-    { id: 'empty', status: 'completed', created_at: '2026-06-21T10:00:00Z', run_type: 'campaign', campaign_id: 'c1', scenario_id: null, started_at: null, finished_at: null },
-    { id: 'shots', status: 'failed', created_at: '2026-06-20T10:00:00Z', run_type: 'campaign', campaign_id: 'c1', scenario_id: null, started_at: null, finished_at: null }
+    {
+      id: 'empty',
+      status: 'completed',
+      created_at: '2026-06-21T10:00:00Z',
+      run_type: 'campaign',
+      campaign_id: 'c1',
+      scenario_id: null,
+      started_at: null,
+      finished_at: null
+    },
+    {
+      id: 'shots',
+      status: 'failed',
+      created_at: '2026-06-20T10:00:00Z',
+      run_type: 'campaign',
+      campaign_id: 'c1',
+      scenario_id: null,
+      started_at: null,
+      finished_at: null
+    }
   ] as import('../types.ts').ExecutionOut[];
   const counts = new Map([
     ['empty', 0],
@@ -131,8 +174,26 @@ test('pickDefaultExecutionId prefers first run with shots', () => {
 
 test('filterExecutionsWithShots hides empty runs when enabled', () => {
   const executions = [
-    { id: 'empty', status: 'completed', created_at: '2026-06-21T10:00:00Z', run_type: 'campaign', campaign_id: 'c1', scenario_id: null, started_at: null, finished_at: null },
-    { id: 'shots', status: 'failed', created_at: '2026-06-20T10:00:00Z', run_type: 'campaign', campaign_id: 'c1', scenario_id: null, started_at: null, finished_at: null }
+    {
+      id: 'empty',
+      status: 'completed',
+      created_at: '2026-06-21T10:00:00Z',
+      run_type: 'campaign',
+      campaign_id: 'c1',
+      scenario_id: null,
+      started_at: null,
+      finished_at: null
+    },
+    {
+      id: 'shots',
+      status: 'failed',
+      created_at: '2026-06-20T10:00:00Z',
+      run_type: 'campaign',
+      campaign_id: 'c1',
+      scenario_id: null,
+      started_at: null,
+      finished_at: null
+    }
   ] as import('../types.ts').ExecutionOut[];
   const counts = new Map([
     ['empty', 0],

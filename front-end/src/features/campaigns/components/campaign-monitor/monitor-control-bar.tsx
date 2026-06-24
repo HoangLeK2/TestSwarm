@@ -29,8 +29,7 @@ export function MonitorControlBar({ campaign }: Props) {
 
   const { isStopping, activeWorkflowCount, activeExecutionCount } =
     useCampaignStopDrain(campaign.id, campaign.status);
-  const running =
-    isCampaignActiveExecution(campaign.status) || isStopping;
+  const running = isCampaignActiveExecution(campaign.status) || isStopping;
   const { data: wfData } = useCampaignWorkflows(campaign.id, running);
   const workflows = wfData?.workflows ?? [];
 
@@ -49,12 +48,9 @@ export function MonitorControlBar({ campaign }: Props) {
   }
 
   const showPause =
-    !isStopping &&
-    campaign.status === 'running' &&
-    runningCount > 0;
+    !isStopping && campaign.status === 'running' && runningCount > 0;
   const showResume =
-    !isStopping &&
-    (campaign.status === 'paused' || pausedCount > 0);
+    !isStopping && (campaign.status === 'paused' || pausedCount > 0);
 
   const handleCancelAll = async () => {
     const ok = await confirm({

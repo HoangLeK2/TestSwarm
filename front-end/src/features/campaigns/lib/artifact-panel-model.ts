@@ -73,14 +73,12 @@ export function executionRunLabel(
   statusLabel: (status: string) => string
 ): string {
   const when =
-    execution.finished_at ??
-    execution.started_at ??
-    execution.created_at;
+    execution.finished_at ?? execution.started_at ?? execution.created_at;
   const date = when ? new Date(when) : null;
   const whenLabel =
     date && !Number.isNaN(date.getTime())
       ? date.toLocaleString()
-      : when ?? '—';
+      : (when ?? '—');
   return `${whenLabel} · ${statusLabel(execution.status)}`;
 }
 
@@ -112,7 +110,9 @@ export function sortExecutionsForArtifactPanel(
     const bTime = Date.parse(
       b.finished_at ?? b.started_at ?? b.created_at ?? ''
     );
-    return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+    return (
+      (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime)
+    );
   });
 }
 
@@ -122,10 +122,7 @@ export function pickDefaultExecutionId(
   currentId: string | null
 ): string | null {
   if (!executions.length) return null;
-  if (
-    currentId &&
-    executions.some((execution) => execution.id === currentId)
-  ) {
+  if (currentId && executions.some((execution) => execution.id === currentId)) {
     return currentId;
   }
   const withShots = executions.find(

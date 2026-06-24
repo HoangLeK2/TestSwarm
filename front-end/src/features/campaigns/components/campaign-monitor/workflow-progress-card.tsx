@@ -176,7 +176,8 @@ export function WorkflowProgressCard({
 
   const executionId = useMemo(
     () =>
-      wf.execution_id || resolveExecutionIdForWorkflow(wf.workflow_id, executions),
+      wf.execution_id ||
+      resolveExecutionIdForWorkflow(wf.workflow_id, executions),
     [wf.execution_id, wf.workflow_id, executions]
   );
 

@@ -64,7 +64,9 @@ export function MonitorSectionHeader({
         </Badge>
       </div>
       {actions ? (
-        <div className='flex min-w-0 flex-wrap items-center gap-2'>{actions}</div>
+        <div className='flex min-w-0 flex-wrap items-center gap-2'>
+          {actions}
+        </div>
       ) : null}
     </div>
   );

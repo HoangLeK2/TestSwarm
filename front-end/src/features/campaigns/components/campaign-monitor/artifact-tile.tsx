@@ -29,9 +29,7 @@ interface Props {
 
 function isBlobLike(value: unknown): value is Blob {
   return (
-    typeof Blob !== 'undefined' &&
-    value instanceof Blob &&
-    value.size >= 0
+    typeof Blob !== 'undefined' && value instanceof Blob && value.size >= 0
   );
 }
 
@@ -59,9 +57,7 @@ function useMonitorArtifactImageSrc(artifact: ExecutionArtifact, href: string) {
   );
 
   const needsProxy =
-    directFailed ||
-    !directUrl ||
-    shouldProxyArtifactFetch(artifact.url, href);
+    directFailed || !directUrl || shouldProxyArtifactFetch(artifact.url, href);
 
   const {
     data: blob,
@@ -151,10 +147,14 @@ export function ArtifactMonitorTile({
             </Badge>
           ) : null}
           {!hideDeviceLabel ? (
-            <span className='truncate text-xs font-semibold'>{deviceLabel}</span>
+            <span className='truncate text-xs font-semibold'>
+              {deviceLabel}
+            </span>
           ) : null}
         </div>
-        <p className='text-[11px] leading-snug text-muted-foreground'>{subtitle}</p>
+        <p className='text-[11px] leading-snug text-muted-foreground'>
+          {subtitle}
+        </p>
         {timeLabel ? (
           <p className='text-[10px] text-muted-foreground'>{timeLabel}</p>
         ) : null}

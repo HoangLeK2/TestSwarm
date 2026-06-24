@@ -59,7 +59,9 @@ export function shouldProbeCancelledDrain(
   campaignStatus: string | undefined,
   explicitDrain: boolean
 ): boolean {
-  return Boolean(campaignId) && campaignStatus === 'cancelled' && !explicitDrain;
+  return (
+    Boolean(campaignId) && campaignStatus === 'cancelled' && !explicitDrain
+  );
 }
 
 /**
@@ -86,7 +88,11 @@ export function useCampaignStopDrain(
   const { data: recoverySnapshot } = useQuery({
     queryKey: ['campaign-stop-drain-recovery', campaignId],
     queryFn: () => fetchDrainSnapshot(campaignId),
-    enabled: shouldProbeCancelledDrain(campaignId, campaignStatus, explicitDrain),
+    enabled: shouldProbeCancelledDrain(
+      campaignId,
+      campaignStatus,
+      explicitDrain
+    ),
     staleTime: DRAIN_RECOVERY_STALE_MS,
     refetchOnWindowFocus: false,
     refetchInterval: false,
@@ -111,8 +117,9 @@ export function useCampaignStopDrain(
     refetchInterval: (query) => {
       if (!explicitDrain) return false;
       const startedAt =
-        qc.getQueryData<CampaignStopDrainState>(campaignStopDrainKey(campaignId))
-          ?.startedAt ?? 0;
+        qc.getQueryData<CampaignStopDrainState>(
+          campaignStopDrainKey(campaignId)
+        )?.startedAt ?? 0;
       if (startedAt && Date.now() - startedAt > DRAIN_TIMEOUT_MS) {
         return false;
       }
@@ -134,18 +141,16 @@ export function useCampaignStopDrain(
     }
   }, [activeWorkflowCount, activeExecutionCount]);
   const drainComplete =
-    explicitDrain &&
-    snapshot != null &&
-    isCampaignDrainComplete(snapshot);
+    explicitDrain && snapshot != null && isCampaignDrainComplete(snapshot);
   const isStopping =
     explicitDrain &&
     !drainComplete &&
-    (snapshot == null ||
-      activeWorkflowCount + activeExecutionCount > 0);
+    (snapshot == null || activeWorkflowCount + activeExecutionCount > 0);
   const isDraining = explicitDrain && !drainComplete;
 
   useEffect(() => {
-    if (!drainComplete || !explicitDrain || completedNotifiedRef.current) return;
+    if (!drainComplete || !explicitDrain || completedNotifiedRef.current)
+      return;
     completedNotifiedRef.current = true;
 
     const state = qc.getQueryData<CampaignStopDrainState>(

@@ -48,7 +48,9 @@ function assertAllStepsHaveType(steps: FlowStep[], label: string): void {
   }
 }
 
-const FB_GROUP_STEPS = loadJsonSteps('device_farm/scenarios/fb_group_crawl.json');
+const FB_GROUP_STEPS = loadJsonSteps(
+  'device_farm/scenarios/fb_group_crawl.json'
+);
 const CRAWL_GROUP_STEPS = loadJsonSteps('agent-boot/Crawl group (2).json');
 
 const REQUIRED_CRAWL_TYPES = [
@@ -70,7 +72,10 @@ test('crawl fixtures have well-formed step types', () => {
 test('crawl fixtures contain comment crawl node chain', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const types = countStepTypes(steps);
-    assert.ok(types.get('fb_tap_comment_button')! >= 1, 'missing fb_tap_comment_button');
+    assert.ok(
+      types.get('fb_tap_comment_button')! >= 1,
+      'missing fb_tap_comment_button'
+    );
     const commentExtracts = walkFlowStepsWithPaths(steps).filter(
       (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
     );
@@ -86,7 +91,10 @@ test('every nested step is reachable via resolveStepAtPath', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     for (const visit of walkFlowStepsWithPaths(steps)) {
       const resolved = resolveStepAtPath(steps, visit.path);
-      assert.ok(resolved, `unresolved path depth=${visit.depth} type=${visit.step.type}`);
+      assert.ok(
+        resolved,
+        `unresolved path depth=${visit.depth} type=${visit.step.type}`
+      );
       assert.equal(resolved.type, visit.step.type);
     }
   }
@@ -124,17 +132,24 @@ test('fb_tap_comment_button then-branch edits via bracket-step-tree helpers', ()
       const extractIdx = thenSteps.findIndex(
         (s) => s.type === 'extract' && s.strategy === 'fb_comments'
       );
-      assert.ok(extractIdx >= 0, 'fb_tap_comment_button then branch missing fb_comments extract');
+      assert.ok(
+        extractIdx >= 0,
+        'fb_tap_comment_button then branch missing fb_comments extract'
+      );
       const extract = getChildStep(step, 'then', extractIdx)!;
       assert.equal(extract.type, 'extract');
       assert.equal(extract.strategy, 'fb_comments');
       const edited = { ...extract, max_items: 55 } as FlowStep;
       const nextTap = updateChildInStep(step, 'then', extractIdx, edited);
       assert.equal(getChildStep(nextTap, 'then', extractIdx)?.max_items, 55);
-      const viaApply = applyChildStepEdit(nextTap, { listKey: 'then', ci: extractIdx }, {
-        ...edited,
-        max_items: 66
-      } as FlowStep);
+      const viaApply = applyChildStepEdit(
+        nextTap,
+        { listKey: 'then', ci: extractIdx },
+        {
+          ...edited,
+          max_items: 66
+        } as FlowStep
+      );
       assert.equal(getChildStep(viaApply!, 'then', extractIdx)?.max_items, 66);
     }
   }
@@ -165,8 +180,8 @@ test('patchStepByFlowgramId updates nested extract when _fgId is present', () =>
     s.type === 'loop'
       ? ({
           ...s,
-          steps: ((s as FlowStep & { steps?: FlowStep[] }).steps ?? []).map((c) =>
-            c.type === 'fb_tap_comment_button' ? tapWithFg : c
+          steps: ((s as FlowStep & { steps?: FlowStep[] }).steps ?? []).map(
+            (c) => (c.type === 'fb_tap_comment_button' ? tapWithFg : c)
           )
         } as FlowStep)
       : s

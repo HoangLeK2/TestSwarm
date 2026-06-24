@@ -428,9 +428,7 @@ export function ExtractStepFields({
               selected={strategy === s.value}
               selectedLabel={t('strategySelected')}
               onSelect={() =>
-                onChange(
-                  applyExtractStrategySwitch(step, s.value, saveEnabled)
-                )
+                onChange(applyExtractStrategySwitch(step, s.value, saveEnabled))
               }
             />
           ))}

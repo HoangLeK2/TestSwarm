@@ -3,10 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CornerDownLeft, Eraser, Keyboard } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import {
-  Collapsible,
-  CollapsibleContent
-} from '@/components/ui/collapsible';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import {
   Tooltip,
   TooltipContent,
@@ -26,7 +23,11 @@ type LiveInputCoreProps = {
 
 const LIVE_INPUT_SYNC_MS = 80;
 
-function useLiveInputCore({ serial, wsSend, disabled = false }: LiveInputCoreProps) {
+function useLiveInputCore({
+  serial,
+  wsSend,
+  disabled = false
+}: LiveInputCoreProps) {
   const [value, setValue] = useState('');
   const prevValueRef = useRef('');
   const composingRef = useRef(false);
@@ -262,7 +263,7 @@ export function DeviceLiveInputBar({
       onOpenChange={onOpenChange}
       className={cn('w-full', className)}
     >
-      <CollapsibleContent className='overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down'>
+      <CollapsibleContent className='data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden'>
         <div
           className={cn(
             'flex items-center gap-0.5 rounded-2xl bg-zinc-900 p-1',
@@ -273,10 +274,7 @@ export function DeviceLiveInputBar({
             {t('label')}
           </label>
           <div className='flex min-w-0 flex-1 items-center gap-1.5 pl-2.5'>
-            <Keyboard
-              className='size-3.5 shrink-0 text-zinc-500'
-              aria-hidden
-            />
+            <Keyboard className='size-3.5 shrink-0 text-zinc-500' aria-hidden />
             <input
               ref={inputRef}
               id={`live-input-${serial}`}

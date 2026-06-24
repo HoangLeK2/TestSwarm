@@ -34,7 +34,9 @@ function normalizeStatus(status: string | null | undefined) {
 }
 
 function isFailedExecution(row: DispatchExecutionResult) {
-  return Boolean(row.failure_reason) || normalizeStatus(row.status) === 'failed';
+  return (
+    Boolean(row.failure_reason) || normalizeStatus(row.status) === 'failed'
+  );
 }
 
 function isTerminalExecution(row: DispatchExecutionResult) {

@@ -214,7 +214,11 @@ function ChannelTypeSetup({
             onClick={onTestConnection}
             disabled={testing}
           >
-            {testing ? <Loader2 className='size-4 animate-spin' /> : <Send className='size-4' />}
+            {testing ? (
+              <Loader2 className='size-4 animate-spin' />
+            ) : (
+              <Send className='size-4' />
+            )}
             {t('actions.testConnection')}
           </Button>
         ) : null}
@@ -269,7 +273,11 @@ function ChannelTypeSetup({
           onClick={onTestConnection}
           disabled={testing}
         >
-          {testing ? <Loader2 className='size-4 animate-spin' /> : <Send className='size-4' />}
+          {testing ? (
+            <Loader2 className='size-4 animate-spin' />
+          ) : (
+            <Send className='size-4' />
+          )}
           {t('actions.testConnection')}
         </Button>
       ) : null}
@@ -455,7 +463,10 @@ function ChannelDialog({
             form={form}
             setForm={setForm}
             t={t}
-            canTest={perms.canExecute && (form.type === 'telegram' || form.type === 'webhook')}
+            canTest={
+              perms.canExecute &&
+              (form.type === 'telegram' || form.type === 'webhook')
+            }
             testing={testing}
             onTestConnection={testConnection}
           />

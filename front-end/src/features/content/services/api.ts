@@ -150,7 +150,9 @@ export const contentApi = {
     const data = response.data;
     if (data instanceof Blob) return data;
     if (data instanceof ArrayBuffer) {
-      const contentType = String(response.headers['content-type'] ?? 'image/png');
+      const contentType = String(
+        response.headers['content-type'] ?? 'image/png'
+      );
       return new Blob([data], { type: contentType });
     }
     throw new TypeError('Artifact download did not return a Blob');

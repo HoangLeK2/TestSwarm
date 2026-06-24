@@ -1,39 +1,40 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
 import {
   computeLiveInputDeltas,
   normalizeLiveInputText
-} from './live-input-delta';
+  // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
+} from './live-input-delta.ts';
 
-describe('computeLiveInputDeltas', () => {
-  it('returns empty when unchanged', () => {
-    expect(computeLiveInputDeltas('abc', 'abc')).toEqual([]);
-  });
+test('computeLiveInputDeltas returns empty when unchanged', () => {
+  assert.deepEqual(computeLiveInputDeltas('abc', 'abc'), []);
+});
 
-  it('appends suffix', () => {
-    expect(computeLiveInputDeltas('open', 'openclaw')).toEqual([
-      { kind: 'append', text: 'claw' }
-    ]);
-  });
+test('computeLiveInputDeltas appends suffix', () => {
+  assert.deepEqual(computeLiveInputDeltas('open', 'openclaw'), [
+    { kind: 'append', text: 'claw' }
+  ]);
+});
 
-  it('deletes trailing chars', () => {
-    expect(computeLiveInputDeltas('openclaw', 'open')).toEqual([
-      { kind: 'delete', count: 4 }
-    ]);
-  });
+test('computeLiveInputDeltas deletes trailing chars', () => {
+  assert.deepEqual(computeLiveInputDeltas('openclaw', 'open'), [
+    { kind: 'delete', count: 4 }
+  ]);
+});
 
-  it('resets on paste or middle edit', () => {
-    expect(computeLiveInputDeltas('abc', 'xyz')).toEqual([
-      { kind: 'delete', count: 3 },
-      { kind: 'reset_append', text: 'xyz' }
-    ]);
-  });
+test('computeLiveInputDeltas resets on paste or middle edit', () => {
+  assert.deepEqual(computeLiveInputDeltas('abc', 'xyz'), [
+    { kind: 'delete', count: 3 },
+    { kind: 'reset_append', text: 'xyz' }
+  ]);
+});
 
-  it('normalizes vietnamese to NFC before diffing', () => {
-    const nfd = 'e\u0301'; // é as e + combining acute
-    const nfc = '\u00e9';
-    expect(normalizeLiveInputText(nfd)).toBe(nfc);
-    expect(computeLiveInputDeltas('', nfd)).toEqual([
-      { kind: 'append', text: nfc }
-    ]);
-  });
+test('normalizeLiveInputText normalizes vietnamese to NFC before diffing', () => {
+  const nfd = 'e\u0301'; // é as e + combining acute
+  const nfc = '\u00e9';
+  assert.equal(normalizeLiveInputText(nfd), nfc);
+  assert.deepEqual(computeLiveInputDeltas('', nfd), [
+    { kind: 'append', text: nfc }
+  ]);
 });

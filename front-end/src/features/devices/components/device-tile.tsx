@@ -245,60 +245,60 @@ export function DeviceTile({
                 )}
                 style={compact ? undefined : { height: mirrorRowHeightPx }}
               >
-              <DeviceAndroidFrame
-                screenWidth={mockupScreenWidth}
-                deviceWidth={device.screen_width}
-                deviceHeight={device.screen_height}
-                className='h-full shrink-0'
-              >
-                <div className='relative flex h-full min-h-0 w-full flex-col'>
-                  {isActive ? (
-                    <DeviceScreen
-                      device={device}
-                      wsSend={wsSend}
-                      mode={mode}
-                      onTap={onTap}
-                      onSwipe={onSwipe}
-                      onDragGesture={onDragGesture}
-                      highlightBounds={highlightBounds}
-                      gestureMode={gestureMode}
-                      captionBelowFrame
-                      interactive={!readOnlyPreview}
-                      streamFetchPriority={streamFetchPriority}
-                      streamTransport={streamTransport}
-                    />
-                  ) : (
-                    <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
-                      {t('deviceInactive')}
-                    </div>
-                  )}
-                  {isActive ? screenOverlay : null}
-                </div>
-              </DeviceAndroidFrame>
-              {!hideControls && !compact ? (
-                <DeviceControls
-                  serial={device.serial}
-                  mode={mode}
-                  layout='rail'
-                  className='h-full min-h-0 self-stretch'
-                  onToggleMode={() => onToggleMode(device.serial)}
-                  onKey={(key) =>
-                    wsSend({ type: 'key', serial: device.serial, key })
-                  }
-                  onRestart={() => onRestart(device.serial)}
-                  gestureMode={gestureMode}
-                  onGestureMode={setGestureMode}
-                  onPinch={minimalRailControls ? undefined : handlePinch}
-                  onSwipeExt={handleSwipeExt}
-                  onScreenOn={handleScreenOn}
-                  onScreenOff={handleScreenOff}
-                  onUnlock={handleUnlock}
-                  hidePinch={minimalRailControls}
-                  hideRestart={minimalRailControls}
-                  deviceOps={deviceOps}
-                  liveInput={liveInputConfig}
-                />
-              ) : null}
+                <DeviceAndroidFrame
+                  screenWidth={mockupScreenWidth}
+                  deviceWidth={device.screen_width}
+                  deviceHeight={device.screen_height}
+                  className='h-full shrink-0'
+                >
+                  <div className='relative flex h-full min-h-0 w-full flex-col'>
+                    {isActive ? (
+                      <DeviceScreen
+                        device={device}
+                        wsSend={wsSend}
+                        mode={mode}
+                        onTap={onTap}
+                        onSwipe={onSwipe}
+                        onDragGesture={onDragGesture}
+                        highlightBounds={highlightBounds}
+                        gestureMode={gestureMode}
+                        captionBelowFrame
+                        interactive={!readOnlyPreview}
+                        streamFetchPriority={streamFetchPriority}
+                        streamTransport={streamTransport}
+                      />
+                    ) : (
+                      <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
+                        {t('deviceInactive')}
+                      </div>
+                    )}
+                    {isActive ? screenOverlay : null}
+                  </div>
+                </DeviceAndroidFrame>
+                {!hideControls && !compact ? (
+                  <DeviceControls
+                    serial={device.serial}
+                    mode={mode}
+                    layout='rail'
+                    className='h-full min-h-0 self-stretch'
+                    onToggleMode={() => onToggleMode(device.serial)}
+                    onKey={(key) =>
+                      wsSend({ type: 'key', serial: device.serial, key })
+                    }
+                    onRestart={() => onRestart(device.serial)}
+                    gestureMode={gestureMode}
+                    onGestureMode={setGestureMode}
+                    onPinch={minimalRailControls ? undefined : handlePinch}
+                    onSwipeExt={handleSwipeExt}
+                    onScreenOn={handleScreenOn}
+                    onScreenOff={handleScreenOff}
+                    onUnlock={handleUnlock}
+                    hidePinch={minimalRailControls}
+                    hideRestart={minimalRailControls}
+                    deviceOps={deviceOps}
+                    liveInput={liveInputConfig}
+                  />
+                ) : null}
               </div>
               {liveInputConfig ? (
                 <DeviceLiveInputBar

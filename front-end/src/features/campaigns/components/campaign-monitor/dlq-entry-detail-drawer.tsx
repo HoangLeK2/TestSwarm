@@ -35,13 +35,13 @@ import {
 import { ROUTES } from '@/config/routes';
 import { Z_CAMPAIGN_MONITOR_NESTED } from '@/lib/z-index';
 import { cn } from '@/lib/utils';
-import { useCampaignExecutions, useCampaignDevices } from '../../hooks/use-campaigns';
+import {
+  useCampaignExecutions,
+  useCampaignDevices
+} from '../../hooks/use-campaigns';
 import type { DlqEntry, ExecutionOut } from '../../types';
 import { dlqDisplayMessage, dlqHasExplicitMessage } from './dlq-message';
-import {
-  humanizeDlqMessage,
-  resolveDlqDeviceLabel
-} from './dlq-user-message';
+import { humanizeDlqMessage, resolveDlqDeviceLabel } from './dlq-user-message';
 import {
   executionRunTypeLabel,
   executionScenarioLabel,

@@ -22,10 +22,7 @@ import {
   artifactIsImage,
   resolvedArtifactHref
 } from '../../lib/artifact-monitor-utils';
-import {
-  executionStatusLabel,
-  formatTs
-} from './dlq-run-summary';
+import { executionStatusLabel, formatTs } from './dlq-run-summary';
 import { MonitorSectionHeader } from './monitor-section-header';
 import { ArtifactMonitorTile } from './artifact-tile';
 
@@ -109,7 +106,9 @@ function sortExecutionsByRecency(executions: ExecutionOut[]): ExecutionOut[] {
     const bTime = Date.parse(
       b.finished_at ?? b.started_at ?? b.created_at ?? ''
     );
-    return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+    return (
+      (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime)
+    );
   });
 }
 
@@ -142,9 +141,7 @@ function RunHistoryRow({
         )}
       >
         {formatTs(
-          execution.finished_at ??
-            execution.started_at ??
-            execution.created_at
+          execution.finished_at ?? execution.started_at ?? execution.created_at
         )}
       </span>
       <Badge
@@ -252,14 +249,16 @@ function DeviceFilterChips({
         </Badge>
       </Button>
       {devices.map((device) => {
-        const count = runArtifacts.filter((a) => a.deviceLabel === device).length;
+        const count = runArtifacts.filter(
+          (a) => a.deviceLabel === device
+        ).length;
         return (
           <Button
             key={device}
             type='button'
             size='sm'
             variant={deviceFilter === device ? 'default' : 'outline'}
-            className='h-7 gap-1.5 px-2.5 text-xs font-mono'
+            className='h-7 gap-1.5 px-2.5 font-mono text-xs'
             onClick={() => onChange(device)}
           >
             {device}
@@ -303,7 +302,11 @@ export function ArtifactPanel({
     data: rawArtifacts = [],
     isLoading: artifactsLoading,
     isFetching: artifactsFetching
-  } = useExecutionArtifacts(selectedExecutionId, Boolean(selectedExecutionId), false);
+  } = useExecutionArtifacts(
+    selectedExecutionId,
+    Boolean(selectedExecutionId),
+    false
+  );
 
   useEffect(() => {
     setDeviceFilter('all');
@@ -434,7 +437,9 @@ export function ArtifactPanel({
           {grouped.map((group) => (
             <div key={group.device}>
               <div className='mb-2 flex items-center justify-between gap-2'>
-                <p className='font-mono text-sm font-semibold'>{group.device}</p>
+                <p className='font-mono text-sm font-semibold'>
+                  {group.device}
+                </p>
                 <span className='text-xs tabular-nums text-muted-foreground'>
                   {t('monitorArtifactGroupShotCount', {
                     count: group.shots.length
@@ -472,7 +477,9 @@ export function ArtifactPanel({
             compact={split}
           />
         </div>
-      ) : selectedExecutionId && !artifactsBusy && filteredArtifacts.length > 0 ? (
+      ) : selectedExecutionId &&
+        !artifactsBusy &&
+        filteredArtifacts.length > 0 ? (
         <p className='mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-sm text-muted-foreground'>
           {t('monitorArtifactSelectShotHint')}
         </p>

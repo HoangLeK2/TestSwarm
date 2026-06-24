@@ -716,7 +716,6 @@ export function VariableEditor({
           {t('footerTipTrail')}
         </p>
       ) : null}
-
     </div>
   );
 }

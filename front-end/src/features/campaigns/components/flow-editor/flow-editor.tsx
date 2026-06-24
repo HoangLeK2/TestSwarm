@@ -577,7 +577,9 @@ export function FlowEditor({
                   </SortableFlowRow>
                 </div>
               ))}
-              <InsertGap onInsert={(s) => insertAt(stepsRef.current.length, s)} />
+              <InsertGap
+                onInsert={(s) => insertAt(stepsRef.current.length, s)}
+              />
             </SortableContext>
           </DndContext>
 

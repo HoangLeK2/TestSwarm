@@ -40,9 +40,7 @@ export function resolveRecoveryScenarioName(
   if (rawName && !looksLikeUuid(rawName)) return rawName;
 
   const scenarioId =
-    incident.recovery_scenario_id?.trim() ||
-    incident.scenario_id?.trim() ||
-    '';
+    incident.recovery_scenario_id?.trim() || incident.scenario_id?.trim() || '';
   if (scenarioId && namesById.has(scenarioId)) {
     return namesById.get(scenarioId) ?? '';
   }

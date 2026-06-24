@@ -52,9 +52,8 @@ export function resolveStepForInlineRunKey(
     if (listKey.startsWith('branches.')) {
       const bi = Number.parseInt(listKey.split('.')[1] ?? '0', 10);
       node =
-        (
-          node as FlowStep & { branches?: Array<{ steps?: FlowStep[] }> }
-        ).branches?.[bi]?.steps?.[childIndex] ?? null;
+        (node as FlowStep & { branches?: Array<{ steps?: FlowStep[] }> })
+          .branches?.[bi]?.steps?.[childIndex] ?? null;
     } else {
       node =
         ((node as Record<string, unknown>)[listKey] as FlowStep[])?.[

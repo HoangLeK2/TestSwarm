@@ -1,5 +1,5 @@
-import type { FlowStep } from '../scenario-steps/types.ts';
-import { isContainerType } from '../scenario-steps/types.ts';
+import type { FlowStep } from '../scenario-steps/types';
+import { isContainerType } from '../scenario-steps/types';
 
 export type BracketChildRef = { listKey: string; ci: number };
 

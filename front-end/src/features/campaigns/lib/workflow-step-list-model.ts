@@ -295,7 +295,7 @@ export function mergeStepLogEntries(
         map.set(key, entry);
         continue;
       }
-      if (existing.status === 'running' && entry.status !== 'running') {
+      if (existing.status === 'running') {
         map.set(key, entry);
       }
     }

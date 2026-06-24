@@ -2121,7 +2121,7 @@ export function ScenarioDialog({
                         <Button
                           size='sm'
                           variant='destructive'
-                          onClick={hardStopPreview}
+                          onClick={() => hardStopPreview()}
                         >
                           Dừng
                         </Button>

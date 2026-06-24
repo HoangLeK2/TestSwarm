@@ -262,9 +262,21 @@ export function usePatchCampaignEntity() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: CampaignEntityUpdate }) =>
       campaignsApi.patchEntity(id, data),
-    onSuccess: (_data, { id }) => {
-      qc.invalidateQueries({ queryKey: KEYS.list });
-      qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+    onSuccess: (data, { id }) => {
+      const campaign = normalizeCampaignOut(data);
+      if (campaign) {
+        qc.setQueryData(KEYS.detail(id), campaign);
+        qc.setQueryData(['campaign', id, 'global-vars-preview'], campaign);
+        qc.setQueryData<CampaignOut[] | undefined>(KEYS.list, (old) =>
+          old?.map((row) => (row.id === id ? { ...row, ...campaign } : row))
+        );
+      }
+      qc.invalidateQueries({ queryKey: KEYS.list, exact: true });
+      qc.invalidateQueries({ queryKey: KEYS.detail(id), exact: true });
+      qc.invalidateQueries({
+        queryKey: ['campaign', id, 'global-vars-preview'],
+        exact: true
+      });
     }
   });
 }

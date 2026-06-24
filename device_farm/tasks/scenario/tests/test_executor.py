@@ -163,6 +163,90 @@ class TestScenarioExecutor:
         attempts = failed_step["retry_attempts"]
         assert [attempt["wait_ms_before_next"] for attempt in attempts] == [2500, 5000, None]
 
+    def test_recovery_failure_preserves_original_step_message(self):
+        from tasks.scenario.executor import ScenarioExecutor
+        from tasks.scenario.steps import _STEP_HANDLERS
+
+        def failing_scroll(_sc, _step, _idx, result):
+            result["ok"] = False
+            result["reason_code"] = "element_not_found"
+            result["message"] = "scroll_to text='codex' not found after 5 swipes"
+
+        def failing_recovery(_sc, _step, _idx, result):
+            result["ok"] = False
+            result["message"] = "recovery tap failed"
+
+        sc = _make_sc(
+            steps=[{"type": "scroll_to"}],
+        )
+        sc.scenario["recovery_policy"] = {
+            "enabled": True,
+            "rules": [
+                {
+                    "id": "rule-1",
+                    "incident_type": "unknown",
+                    "scenario_name": "recover_scroll",
+                    "on_failure": "fail",
+                }
+            ],
+        }
+        sc.scenario["_scenario_registry"] = {
+            "by_campaign_name": {
+                "recover_scroll": {
+                    "steps": [{"type": "recovery_fail"}],
+                    "variables": {},
+                }
+            }
+        }
+
+        with patch.dict(
+            _STEP_HANDLERS,
+            {
+                "scroll_to": failing_scroll,
+                "recovery_fail": failing_recovery,
+            },
+        ):
+            result = ScenarioExecutor(sc).run()
+
+        assert result["success"] is False
+        failed_step = result["step_results"][0]
+        assert failed_step["message"] == "scroll_to text='codex' not found after 5 swipes"
+        assert (
+            failed_step["recovery_failed_message"]
+            == "incident recovery playbooks did not resolve the step"
+        )
+        assert failed_step["reason_code"] == "element_not_found"
+
+    def test_loop_wrapped_u2_transient_retries_without_declared_retry_policy(self):
+        from tasks.scenario.executor import ScenarioExecutor
+        from tasks.scenario.steps import _STEP_HANDLERS
+
+        calls = {"swipe": 0}
+
+        def flaky_swipe(_sc, _step, _idx, result):
+            calls["swipe"] += 1
+            if calls["swipe"] <= 3:
+                result["ok"] = False
+                result["message"] = "u2_transient_error"
+                result["reason_code"] = "u2_transient_error"
+            else:
+                result["message"] = "ok"
+
+        sc = _make_sc(steps=[{"type": "loop", "count": 1, "steps": [{"type": "swipe_ratio"}]}])
+        sc.device._recover_u2_ws_mode = MagicMock()
+
+        with patch.dict(_STEP_HANDLERS, {"swipe_ratio": flaky_swipe}), patch(
+            "services.execution.step_runner.time.sleep"
+        ) as sleep:
+            result = ScenarioExecutor(sc).run()
+
+        assert result["success"] is True
+        assert calls["swipe"] == 4
+        loop_step = result["step_results"][0]
+        assert loop_step["ok"] is True
+        assert loop_step["retry_attempts"][0]["error_reason"] == "u2_transient_error"
+        assert sleep.call_count == 3
+
     def test_loop_caps_retained_sub_results_without_losing_iteration_count(self):
         from tasks.scenario.executor import ScenarioExecutor
         from tasks.scenario.steps import _STEP_HANDLERS

@@ -39,8 +39,6 @@ def _error_policy(step: Dict[str, Any], scenario: Dict[str, Any]) -> str:
         return scenario_policy
     if scenario.get("continue_on_error"):
         return "continue"
-    if step_type == "run_scenario":
-        return "continue"
     return "stop"
 
 

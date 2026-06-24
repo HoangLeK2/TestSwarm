@@ -13,12 +13,9 @@ IMPLICIT_RECOVERY_FORBIDDEN = True
 
 
 def effective_error_policy(step: dict[str, Any]) -> str:
-    """Return explicit error policy; run_scenario defaults to continue."""
+    """Return explicit error policy; undeclared failures stop by default."""
     raw = step.get("error_policy")
     if raw is None or raw == "":
-        step_type = str(step.get("type") or "")
-        if step_type in {"run_scenario", "composition.run_scenario"}:
-            return "ignore"
         return "stop"
     policy = str(raw)
     if policy == "continue":

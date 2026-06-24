@@ -197,7 +197,7 @@ def test_run_scenario_not_found_returns_error():
         "_scenario_registry": _registry(),
     }
     result = run_scenario_task(_make_device(), scenario)
-    assert result["success"] is True
+    assert result["success"] is False
     sr = result["step_results"][0]
     assert sr["ok"] is False
     assert "not found" in sr["message"]
@@ -209,7 +209,7 @@ def test_run_scenario_missing_id_and_name():
         "_scenario_registry": _registry(),
     }
     result = run_scenario_task(_make_device(), scenario)
-    assert result["success"] is True
+    assert result["success"] is False
     sr = result["step_results"][0]
     assert sr["ok"] is False
     assert "missing" in sr["message"]
@@ -221,7 +221,7 @@ def test_run_scenario_empty_registry():
         # No _scenario_registry key at all
     }
     result = run_scenario_task(_make_device(), scenario)
-    assert result["success"] is True
+    assert result["success"] is False
     assert "not found" in result["step_results"][0]["message"]
 
 
@@ -239,8 +239,8 @@ def test_circular_self_reference_detected():
     # First call: A not in empty call_stack → enters A.
     # Inside A: A IS in call_stack → circular reference error.
     result = run_scenario_task(_make_device(), scenario)
-    # Top-level call succeeds structurally (run_scenario step is processed),
-    # but sub_result inside fails due to circular ref.
+    # Top-level run_scenario step is processed, then fails because the child
+    # reports a circular reference.
     sr = result["step_results"][0]
     # The outer run_scenario(A) should fail because its sub (A again) errors out.
     assert sr["ok"] is False
@@ -264,8 +264,8 @@ def test_circular_indirect_reference_detected():
         "_scenario_registry": reg,
     }
     result = run_scenario_task(_make_device(), scenario)
-    # Entire chain records failure, but default parent policy continues.
-    assert result["success"] is True
+    # Entire chain records failure and the default parent policy stops.
+    assert result["success"] is False
     assert result["step_results"][0]["ok"] is False
 
 
@@ -284,7 +284,7 @@ def test_max_depth_guard_blocks_deep_nesting():
     }
     # At _depth=10, run_scenario_task immediately returns error (depth guard)
     result = run_scenario_task(_make_device(), scenario, _depth=10)
-    assert result["success"] is True
+    assert result["success"] is False
     assert result["step_results"][0]["ok"] is False
     assert "depth" in result["step_results"][0].get("message", "").lower()
 
@@ -414,8 +414,8 @@ def test_run_scenario_registry_passed_to_nested_sub():
     assert result["success"] is True
 
 
-def test_run_scenario_child_failure_continues_parent_by_default():
-    """A child failure is recorded, but run_scenario wrapper continues by default."""
+def test_run_scenario_child_failure_stops_parent_by_default():
+    """A child failure should fail the parent unless the run_scenario step opts in to continue."""
     reg = _registry(
         by_campaign_name={
             "bad_child": _sub_def([{"type": "unknown_bad_step"}]),
@@ -434,22 +434,21 @@ def test_run_scenario_child_failure_continues_parent_by_default():
 
     result = run_scenario_task(_make_device(), scenario)
 
-    assert result["success"] is True
+    assert result["success"] is False
     assert [step["type"] for step in result["step_results"]] == [
         "set_variable",
         "run_scenario",
-        "set_variable",
     ]
     run_step = result["step_results"][1]
-    assert run_step["ok"] is True
-    assert run_step["error_policy"] == "continue"
-    assert run_step["error_ignored"] is True
-    assert run_step["marked_ignored"] is True
-    assert run_step["ignored_failure"] is True
+    assert run_step["ok"] is False
+    assert run_step["error_policy"] == "stop"
+    assert not run_step.get("error_ignored")
+    assert not run_step.get("marked_ignored")
+    assert not run_step.get("ignored_failure")
     assert any(not step.get("ok", True) for step in run_step["sub_result"]["step_results"])
 
 
-def test_run_scenario_recovery_unresolved_does_not_fail_parent_wrapper():
+def test_run_scenario_recovery_unresolved_can_be_ignored_when_parent_chooses_continue():
     from tasks.scenario.steps import register_step
 
     @register_step("test_recovery_unresolved")
@@ -464,7 +463,11 @@ def test_run_scenario_recovery_unresolved_does_not_fail_parent_wrapper():
     )
     scenario = {
         "steps": [
-            {"type": "run_scenario", "scenario_name": "bad_child"},
+            {
+                "type": "run_scenario",
+                "scenario_name": "bad_child",
+                "on_error": "continue",
+            },
             {"type": "set_variable", "name": "PARENT_AFTER", "value": "1"},
         ],
         "_scenario_registry": reg,

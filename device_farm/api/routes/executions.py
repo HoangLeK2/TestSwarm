@@ -1217,9 +1217,43 @@ _ARTIFACT_REF_FIELDS = (
 )
 
 
+def _artifact_message_for_step(
+    step: dict[str, Any],
+    step_index: Any,
+    step_type: Any,
+) -> str | None:
+    current_index = step.get("index")
+    current_type = step.get("type")
+    points_to_current = (
+        step_index is None
+        or step_index == current_index
+    ) and (
+        not step_type
+        or step_type == current_type
+    )
+    if points_to_current:
+        message = step.get("message")
+        return str(message) if message is not None else None
+
+    for nested in _nested_step_results_for_artifacts(step):
+        if not isinstance(nested, dict):
+            continue
+        nested_index = nested.get("index")
+        nested_type = nested.get("type")
+        if step_index is not None and nested_index != step_index:
+            continue
+        if step_type and nested_type != step_type:
+            continue
+        message = nested.get("message")
+        return str(message) if message is not None else None
+    return None
+
+
 def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, created_at: _datetime) -> list[ExecutionArtifactOut]:
     out: list[ExecutionArtifactOut] = []
     for step in steps or []:
+        if not isinstance(step, dict):
+            continue
         screenshots: list[tuple[str, str | None, dict[str, Any]]] = []
         if isinstance(step.get("screenshot"), str):
             screenshots.append(("screenshot", _normalize_artifact_url(step.get("screenshot")), {}))
@@ -1258,26 +1292,113 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
                 metadata: dict[str, Any] = {"content_type": content_type}
                 if artifact_id:
                     metadata["artifact_id"] = artifact_id
+                for meta_key in (
+                    "step_id",
+                    "step_type",
+                    "step_index",
+                    "attempt_index",
+                    "captured_at",
+                    "device_state_summary",
+                ):
+                    if art.get(meta_key) is not None:
+                        metadata[meta_key] = art.get(meta_key)
                 screenshots.append((f"{art_type}.{label}", resolved_url, metadata))
 
         for art_type, url, metadata in screenshots:
             if not url:
                 continue
+            step_index = metadata.get("step_index", step.get("index"))
+            step_type = metadata.get("step_type") or step.get("type")
+            message = _artifact_message_for_step(step, step_index, step_type)
             out.append(
                 ExecutionArtifactOut(
                     artifact_type=art_type,
                     execution_id=execution_id,
                     device_serial=device_serial,
-                    step_index=step.get("index"),
-                    step_type=step.get("type"),
+                    step_index=step_index,
+                    step_type=step_type,
                     ok=step.get("ok"),
-                    message=step.get("message"),
+                    message=message,
                     url=url,
                     metadata=metadata,
                     created_at=created_at,
                 )
             )
+        out.extend(
+            _extract_step_artifacts(
+                execution_id,
+                device_serial,
+                _nested_step_results_for_artifacts(step),
+                created_at,
+            )
+        )
     return out
+
+
+def _nested_step_results_for_artifacts(step: dict[str, Any]) -> list[dict[str, Any]]:
+    nested: list[dict[str, Any]] = []
+
+    sub_result = step.get("sub_result")
+    if isinstance(sub_result, dict):
+        nested.extend(
+            item
+            for item in (sub_result.get("step_results") or [])
+            if isinstance(item, dict)
+        )
+
+    for entry in step.get("sub_results") or []:
+        if not isinstance(entry, dict):
+            continue
+        result = entry.get("result")
+        if isinstance(result, dict):
+            nested.extend(
+                item
+                for item in (result.get("step_results") or [])
+                if isinstance(item, dict)
+            )
+        elif isinstance(entry.get("step_results"), list):
+            nested.extend(
+                item for item in entry["step_results"] if isinstance(item, dict)
+            )
+
+    return nested
+
+
+def _merge_step_artifact_context(
+    persisted_steps: list[dict[str, Any]],
+    result_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_index = {
+        int(step.get("index")): step
+        for step in result_steps
+        if isinstance(step, dict) and isinstance(step.get("index"), int)
+    }
+    merged: list[dict[str, Any]] = []
+    seen_indexes: set[int] = set()
+
+    for step in persisted_steps:
+        out = dict(step)
+        idx = step.get("index")
+        if isinstance(idx, int):
+            seen_indexes.add(idx)
+            richer = by_index.get(idx)
+            if richer:
+                for key in ("sub_result", "sub_results"):
+                    if key in richer and key not in out:
+                        out[key] = richer[key]
+                if not out.get("artifacts_json") and richer.get("artifacts_json"):
+                    out["artifacts_json"] = richer["artifacts_json"]
+                    out["artifacts"] = richer["artifacts_json"]
+        merged.append(out)
+
+    for step in result_steps:
+        idx = step.get("index") if isinstance(step, dict) else None
+        if isinstance(idx, int) and idx in seen_indexes:
+            continue
+        if isinstance(step, dict):
+            merged.append(step)
+
+    return merged
 
 
 async def _legacy_step_dicts_for_artifacts(db, execution_id: str) -> list[dict[str, Any]]:
@@ -1286,14 +1407,16 @@ async def _legacy_step_dicts_for_artifacts(db, execution_id: str) -> list[dict[s
     from services.execution.step_store import execution_step_to_legacy_dict
 
     rows = await list_execution_steps(db, execution_id)
-    if rows:
-        return [execution_step_to_legacy_dict(row) for row in rows]
+    results = await list_execution_results(db, execution_id)
 
     legacy: list[dict[str, Any]] = []
-    results = await list_execution_results(db, execution_id)
     for er in results:
         legacy.extend((er.passed_steps or []) + (er.failed_steps or []))
-    return legacy
+    if not rows:
+        return legacy
+
+    persisted = [execution_step_to_legacy_dict(row) for row in rows]
+    return _merge_step_artifact_context(persisted, legacy)
 
 
 @router.get(
@@ -1401,4 +1524,3 @@ async def unpin_execution(execution_id: str, db: DB, user: CurrentUser):
     execution.meta = meta
     await db.flush()
     return {"execution_id": execution_id, "pinned": False}
-

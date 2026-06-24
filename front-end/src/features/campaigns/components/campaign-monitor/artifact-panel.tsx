@@ -74,6 +74,10 @@ function buildResolvedArtifact(
           type: typeLabel
         });
   }
+  const message = artifact.message?.trim();
+  if (message && artifactIsFailShot(artifact)) {
+    subtitle = `${subtitle} - ${message}`;
+  }
   const timeLabel = artifact.created_at ? formatTs(artifact.created_at) : '';
   return {
     key: `${artifact.execution_id}-${artifact.artifact_type}-${artifact.step_index ?? 'x'}-${idx}`,

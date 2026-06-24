@@ -368,10 +368,38 @@ _RE_STORY_OPENER = re.compile(
     r"^mở tin của\s+(.+?)(?:,\s*tin chưa xem)?\.?$",
     re.IGNORECASE,
 )
+_RE_COAUTHOR_HEADER = re.compile(
+    r"^(.+?)\s*[.\u00b7•]?\s*(?:cùng với|with)\s+(.+?)\s*\.?$",
+    re.IGNORECASE,
+)
 _GROUP_COVER_MARKERS = (
     "ảnh bìa của nhóm",
     "group cover photo",
 )
+
+
+def _looks_like_pinned_post_timestamp_prefix(head: str) -> bool:
+    """Pinned-post chrome before the date must not be treated as poster name."""
+    hl = head.lower().strip()
+    if not hl:
+        return False
+    if "ghim" in hl and any(tok in hl for tok in ("bài viết", "bài đăng", "post")):
+        return True
+    return hl in {"đã ghim", "pinned", "pinned post"}
+
+
+def _normalize_post_author(author: Optional[str]) -> Optional[str]:
+    """Strip co-author chrome ('M-TP . cùng với Tyga.') down to primary poster."""
+    if not author:
+        return author
+    s = author.strip()
+    match = _RE_COAUTHOR_HEADER.match(s)
+    if match:
+        primary = match.group(1).strip().rstrip(".·•")
+        if 2 <= len(primary) <= 60:
+            return primary
+    cleaned = s.rstrip(".·• ").strip()
+    return cleaned or author
 
 
 def _split_author_prefix_from_timestamp(timestamp: str) -> Tuple[Optional[str], str]:
@@ -390,6 +418,8 @@ def _split_author_prefix_from_timestamp(timestamp: str) -> Tuple[Optional[str], 
         tail_lower = tail.lower()
         if _RE_TS.search(tail) or "chia sẻ với" in tail_lower or "shared with" in tail_lower:
             if not _RE_TS.search(head) and 2 <= len(head) <= 60:
+                if _looks_like_pinned_post_timestamp_prefix(head):
+                    continue
                 return head, tail
     return None, raw
 
@@ -452,7 +482,7 @@ def _refine_comment_sheet_post_author(
         author = story_author
     elif story_author and not author:
         author = story_author
-    return author, timestamp
+    return _normalize_post_author(author), timestamp
 
 
 def _find_post_time_anchor(cluster: List[Dict[str, Any]]) -> Tuple[int, str]:

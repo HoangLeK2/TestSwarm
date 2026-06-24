@@ -141,14 +141,14 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         if _cancelled(sc):
             _mark_cancelled(result, "loop: cancelled by user")
             break
-        # F4.1 — persist mid-loop iteration index so resume picks up cleanly.
-        _persist_loop_iter(sc, i + 1)
         if not nested_result.get("success"):
             result["ok"] = False
             result["message"] = (
                 f"loop: iteration {i} failed — {nested_result.get('failed_message', '')}"
             )
             break
+        # F4.1 — persist only successful iterations so resume never skips a failed one.
+        _persist_loop_iter(sc, i + 1)
         if sc.ctx.pop("_break", False):
             log.info(f"[{sc.serial}] loop: break at iteration {i}")
             break

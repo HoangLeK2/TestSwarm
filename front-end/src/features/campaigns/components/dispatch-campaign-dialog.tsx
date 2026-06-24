@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/select';
 import {
   DeviceVarsJsonPanel,
-  formatInitialDeviceVars,
+  formatDeviceVarsJson,
   mergeCampaignScenarioVariables,
   parseDeviceVarsJson,
   splitDeviceOverridesFromMerged
@@ -34,8 +34,13 @@ import {
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
-import { campaignsApi } from '../services/api';
-import type { CampaignDeviceOut } from '../types';
+import {
+  campaignPerDeviceOverrides as readCampaignPerDeviceOverrides,
+  campaignVariables as readCampaignVariables,
+  campaignsApi,
+  normalizeCampaignOut
+} from '../services/api';
+import type { CampaignDeviceOut, CampaignOut } from '../types';
 import type { CampaignDispatchIn } from '../../device-farm/services/generated/DeviceFarmApi';
 
 function deviceLabel(d: CampaignDeviceOut) {
@@ -87,6 +92,10 @@ export function DispatchCampaignDialog({
     Record<string, boolean>
   >({});
   const [dirtyKeys, setDirtyKeys] = useState<Record<string, true>>({});
+  const [backendCampaign, setBackendCampaign] = useState<CampaignOut | null>(
+    null
+  );
+  const [backendCampaignLoading, setBackendCampaignLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const allDeviceIds = useMemo(() => devices.map((d) => d.id), [devices]);
@@ -109,6 +118,56 @@ export function DispatchCampaignDialog({
     [activeScenarioId, scenarios]
   );
   const deviceKey = activeDevice?.id ?? '';
+  const effectiveCampaignVariables = useMemo(
+    () =>
+      backendCampaign != null
+        ? readCampaignVariables(backendCampaign)
+        : open
+          ? {}
+          : campaignVariables,
+    [backendCampaign, campaignVariables, open]
+  );
+  const effectivePerDeviceOverrides = useMemo(
+    () =>
+      backendCampaign != null
+        ? readCampaignPerDeviceOverrides(backendCampaign)
+        : open
+          ? {}
+          : perDeviceOverrides,
+    [backendCampaign, open, perDeviceOverrides]
+  );
+
+  useEffect(() => {
+    if (!open || !campaignId) {
+      setBackendCampaign(null);
+      setBackendCampaignLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setBackendCampaign(null);
+    setBackendCampaignLoading(true);
+    campaignsApi
+      .get(campaignId)
+      .then((campaign) => {
+        if (cancelled) return;
+        setBackendCampaign(campaign);
+        qc.setQueryData(['campaigns', campaignId], campaign);
+        qc.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
+          old?.map((row) =>
+            row.id === campaignId ? { ...row, ...campaign } : row
+          )
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setBackendCampaign(null);
+      })
+      .finally(() => {
+        if (!cancelled) setBackendCampaignLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId, open, qc]);
 
   useEffect(() => {
     if (!open) return;
@@ -132,25 +191,34 @@ export function DispatchCampaignDialog({
 
   useEffect(() => {
     if (!open || !deviceKey) return;
-    const savedVars = perDeviceOverrides[deviceKey] ?? {};
+    if (dirtyKeys[deviceKey]) return;
+    const savedVars = effectivePerDeviceOverrides[deviceKey] ?? {};
+    const nextDraft = formatDeviceVarsJson(savedVars);
+    const nextEnabled = Object.prototype.hasOwnProperty.call(
+      effectivePerDeviceOverrides,
+      deviceKey
+    );
     setDrafts((prev) => {
-      if (prev[deviceKey] !== undefined) return prev;
+      if (prev[deviceKey] === nextDraft) return prev;
       return {
         ...prev,
-        [deviceKey]: formatInitialDeviceVars(
-          savedVars,
-          activeScenario?.variables
-        )
+        [deviceKey]: nextDraft
       };
     });
     setDeviceVarEnabled((prev) => {
-      if (prev[deviceKey] !== undefined) return prev;
+      if (prev[deviceKey] === nextEnabled) return prev;
       return {
         ...prev,
-        [deviceKey]: Object.keys(savedVars).length > 0
+        [deviceKey]: nextEnabled
       };
     });
-  }, [activeScenario?.variables, deviceKey, open, perDeviceOverrides]);
+  }, [
+    activeScenario?.variables,
+    deviceKey,
+    dirtyKeys,
+    effectivePerDeviceOverrides,
+    open
+  ]);
 
   const allSelected =
     allDeviceIds.length > 0 && allDeviceIds.every((id) => selectedIds.has(id));
@@ -168,24 +236,18 @@ export function DispatchCampaignDialog({
   const globalVariablesPreview = useMemo(
     () =>
       mergeCampaignScenarioVariables(
-        campaignVariables,
+        effectiveCampaignVariables,
         activeScenario?.variables
       ),
-    [campaignVariables, activeScenario?.variables]
+    [effectiveCampaignVariables, activeScenario?.variables]
   );
 
-  const campaignVarsFlat = useMemo(
-    () => mergeCampaignScenarioVariables(campaignVariables, undefined),
-    [campaignVariables]
-  );
+  const globalVarsFlat = globalVariablesPreview;
 
   const currentDraft = deviceKey
     ? (drafts[deviceKey] ??
-      formatInitialDeviceVars(
-        perDeviceOverrides[deviceKey] ?? {},
-        activeScenario?.variables
-      ))
-    : formatInitialDeviceVars({}, activeScenario?.variables);
+      formatDeviceVarsJson(effectivePerDeviceOverrides[deviceKey] ?? {}))
+    : formatDeviceVarsJson({});
 
   const currentDeviceVarsEnabled = deviceKey
     ? deviceVarEnabled[deviceKey] === true
@@ -235,9 +297,7 @@ export function DispatchCampaignDialog({
     setDeviceVarEnabled((prev) => ({ ...prev, [deviceKey]: enabled }));
     setDrafts((prev) => ({
       ...prev,
-      [deviceKey]:
-        prev[deviceKey] ??
-        formatInitialDeviceVars({}, activeScenario?.variables)
+      [deviceKey]: prev[deviceKey] ?? formatDeviceVarsJson({})
     }));
     setDirtyKeys((prev) => ({ ...prev, [deviceKey]: true }));
   };
@@ -260,7 +320,7 @@ export function DispatchCampaignDialog({
     setIsSaving(true);
     try {
       const nextOverrides: Record<string, Record<string, unknown>> = {
-        ...perDeviceOverrides
+        ...effectivePerDeviceOverrides
       };
       for (const key of keys) {
         if (deviceVarEnabled[key] !== true) {
@@ -268,17 +328,23 @@ export function DispatchCampaignDialog({
           continue;
         }
         const merged = parseDeviceVarsJson(drafts[key] ?? '{}', parseMsgs);
-        const delta = splitDeviceOverridesFromMerged(merged, campaignVarsFlat);
-        if (Object.keys(delta).length) {
-          nextOverrides[key] = delta;
-        } else {
-          delete nextOverrides[key];
-        }
+        const delta = splitDeviceOverridesFromMerged(merged, globalVarsFlat);
+        nextOverrides[key] = delta;
       }
-      await campaignsApi.patchEntity(campaignId, {
+      const updated = await campaignsApi.patchEntity(campaignId, {
         per_device_overrides: nextOverrides
       });
+      const campaign = normalizeCampaignOut(updated);
+      if (campaign) {
+        qc.setQueryData(['campaigns', campaignId], campaign);
+        qc.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
+          old?.map((row) =>
+            row.id === campaignId ? { ...row, ...campaign } : row
+          )
+        );
+      }
       qc.invalidateQueries({ queryKey: ['campaigns', campaignId] as const });
+      qc.invalidateQueries({ queryKey: ['campaigns'], exact: true });
       setDirtyKeys({});
       return true;
     } catch (err) {
@@ -500,9 +566,10 @@ export function DispatchCampaignDialog({
                   onEnabledChange={handleDeviceVarsToggle}
                   draft={currentDraft}
                   onDraftChange={handleDraftChange}
+                  loading={backendCampaignLoading}
                   jsonError={currentJsonError}
                   deviceLabel={activeDevice?.serial}
-                  baseVariables={activeScenario?.variables}
+                  baseVariables={globalVariablesPreview}
                   globalVariablesPreview={globalVariablesPreview}
                   className='flex min-h-0 min-w-0 flex-1 flex-col'
                   editorClassName='min-h-[180px] flex-1 md:min-h-[220px]'

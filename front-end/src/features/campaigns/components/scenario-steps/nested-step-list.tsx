@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
+import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import {
   type FlowStep,
   isControlFlow,
@@ -219,7 +220,9 @@ function ActionStepFields({
           <span className='text-[11px] text-muted-foreground'>=</span>
           <input
             className={`${inputCls} flex-1`}
-            placeholder={t('placeholder.valueOrBuiltin')}
+            placeholder={t('placeholder.valueOrBuiltin', {
+              varToken: SCENARIO_VAR_TOKENS.BUILTIN
+            })}
             value={step.value ?? ''}
             onChange={(e) => onChange('value', e.target.value)}
           />

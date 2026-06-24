@@ -4542,35 +4542,44 @@ class DeviceClient:
         if is_empty and self._scrcpy_receiver is not None and self._loop:
             async def _debounced_stop() -> None:
                 await asyncio.sleep(SCRCPY_AUTO_STOP_IDLE_S)
+                should_detach = False
+                reason = "unsubscribe_frames:idle_no_viewers"
                 with self._frame_lock:
-                    if len(self._frame_queues) == 0:
-                        _now = time.monotonic()
-                        if (
-                            self._scrcpy_attached_at > 0
-                            and (_now - self._scrcpy_attached_at) < SCRCPY_STOP_GRACE_S
-                        ):
-                            _remain = SCRCPY_STOP_GRACE_S - (_now - self._scrcpy_attached_at)
-                            self._logger.info(
-                                "scrcpy auto-stop skipped (within grace %.1fs < %.1fs)",
-                                (_now - self._scrcpy_attached_at),
-                                SCRCPY_STOP_GRACE_S,
-                            )
-                            if _remain > 0:
-                                await asyncio.sleep(_remain)
-                            with self._frame_lock:
-                                if len(self._frame_queues) != 0:
-                                    return
-                            self.detach_scrcpy_stream(reason="unsubscribe_frames:post_grace_idle")
-                            self._logger.info(
-                                "scrcpy auto-stopped after grace window (%.1fs)",
-                                SCRCPY_STOP_GRACE_S,
-                            )
-                            return
-                        self.detach_scrcpy_stream(reason="unsubscribe_frames:idle_no_viewers")
-                        self._logger.info(
-                            "scrcpy auto-stopped (no viewers for %.1fs)",
-                            SCRCPY_AUTO_STOP_IDLE_S,
-                        )
+                    no_viewers = len(self._frame_queues) == 0
+                if not no_viewers:
+                    return
+
+                _now = time.monotonic()
+                if (
+                    self._scrcpy_attached_at > 0
+                    and (_now - self._scrcpy_attached_at) < SCRCPY_STOP_GRACE_S
+                ):
+                    _remain = SCRCPY_STOP_GRACE_S - (_now - self._scrcpy_attached_at)
+                    self._logger.info(
+                        "scrcpy auto-stop skipped (within grace %.1fs < %.1fs)",
+                        (_now - self._scrcpy_attached_at),
+                        SCRCPY_STOP_GRACE_S,
+                    )
+                    if _remain > 0:
+                        await asyncio.sleep(_remain)
+                    with self._frame_lock:
+                        should_detach = len(self._frame_queues) == 0
+                    reason = "unsubscribe_frames:post_grace_idle"
+                    if not should_detach:
+                        return
+                    self._logger.info(
+                        "scrcpy auto-stopped after grace window (%.1fs)",
+                        SCRCPY_STOP_GRACE_S,
+                    )
+                else:
+                    should_detach = True
+                    self._logger.info(
+                        "scrcpy auto-stopped (no viewers for %.1fs)",
+                        SCRCPY_AUTO_STOP_IDLE_S,
+                    )
+
+                if should_detach:
+                    self.detach_scrcpy_stream(reason=reason)
 
             task = asyncio.run_coroutine_threadsafe(_debounced_stop(), self._loop)
             # Store as a cancellable Future (not asyncio.Task, but cancel() works the same)

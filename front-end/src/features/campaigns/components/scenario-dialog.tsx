@@ -73,6 +73,7 @@ import { VariableEditor } from '@/components/variable-editor';
 import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { FlowEditor } from './flow-editor/flow-editor';
+import { sanitizeScenarioStepsForApi } from '@/features/devices/lib/sanitize-scenario-steps-for-api';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
 import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';
@@ -155,81 +156,6 @@ function normalizeSelectorBy(
     return 'class name';
   }
   return fallback;
-}
-
-function sanitizeScenarioStep(step: any): any {
-  if (!step || typeof step !== 'object') return step;
-  const next: any = { ...step };
-  delete next._id;
-  delete next._fgId;
-
-  if (next.by != null) {
-    next.by = normalizeSelectorBy(next.by);
-  }
-  if (next.type === 'repeat') {
-    const c = Number(next.count);
-    if (!Number.isFinite(c) || c < 1) next.count = 3;
-  }
-  if (next.type === 'random_pick' && Array.isArray(next.branches)) {
-    next.branches = next.branches.filter(
-      (br: any) => Array.isArray(br?.steps) && br.steps.length > 0
-    );
-  }
-  if (next.selector && typeof next.selector === 'object') {
-    next.selector = {
-      ...next.selector,
-      ...(next.selector.by != null
-        ? { by: normalizeSelectorBy(next.selector.by) }
-        : {})
-    };
-  }
-  if (next.condition && typeof next.condition === 'object') {
-    const cond = { ...(next.condition as Record<string, any>) };
-    if (
-      cond.element_exists &&
-      typeof cond.element_exists === 'object' &&
-      cond.element_exists.by != null
-    ) {
-      cond.element_exists = {
-        ...cond.element_exists,
-        by: normalizeSelectorBy(cond.element_exists.by)
-      };
-    }
-    if (
-      cond.element_not_exists &&
-      typeof cond.element_not_exists === 'object' &&
-      cond.element_not_exists.by != null
-    ) {
-      cond.element_not_exists = {
-        ...cond.element_not_exists,
-        by: normalizeSelectorBy(cond.element_not_exists.by)
-      };
-    }
-    next.condition = cond;
-  }
-
-  if (Array.isArray(next.then)) next.then = next.then.map(sanitizeScenarioStep);
-  if (Array.isArray(next.else)) next.else = next.else.map(sanitizeScenarioStep);
-  if (Array.isArray(next.steps))
-    next.steps = next.steps.map(sanitizeScenarioStep);
-  if (Array.isArray(next.branches)) {
-    next.branches = next.branches.map((br: any) => {
-      if (!br || typeof br !== 'object') return br;
-      return {
-        ...br,
-        ...(Array.isArray(br.steps)
-          ? { steps: br.steps.map(sanitizeScenarioStep) }
-          : {})
-      };
-    });
-  }
-
-  return normalizeSelectorStepFields(next);
-}
-
-function sanitizeScenarioStepsForApi(input: unknown): any[] {
-  if (!Array.isArray(input)) return [];
-  return input.map(sanitizeScenarioStep);
 }
 
 function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
@@ -642,6 +568,7 @@ export function ScenarioDialog({
   const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  const flowDetailSyncingRef = useRef(false);
   const flowRunAbortRef = useRef<AbortController | null>(null);
   const stepRunAbortRef = useRef<AbortController | null>(null);
   const previewAllAbortRef = useRef<AbortController | null>(null);
@@ -732,11 +659,14 @@ export function ScenarioDialog({
       setFlowDetailStep(null);
       return;
     }
-    const found = findStepByFlowgramId(steps as FlowStep[], flowSelectedFgId);
+    const found = findStepByFlowgramId(
+      stepsRef.current as FlowStep[],
+      flowSelectedFgId
+    );
     setFlowDetailStep(
       found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null
     );
-  }, [flowSelectedFgId, steps]);
+  }, [flowSelectedFgId]);
 
   // Debounced graph sync: stepsToGraph is O(n) — avoid running on every keystroke.
   // Structural changes (add/remove/reorder) call this after updating steps.
@@ -893,23 +823,28 @@ export function ScenarioDialog({
 
   const handleFlowDetailChange = useCallback(
     (next: FlowStep) => {
-      setFlowDetailStep(JSON.parse(JSON.stringify(next)) as FlowStep);
+      const cloned = JSON.parse(JSON.stringify(next)) as FlowStep;
+      setFlowDetailStep(cloned);
       if (flowDetailDebounceRef.current)
         clearTimeout(flowDetailDebounceRef.current);
       flowDetailDebounceRef.current = setTimeout(() => {
+        flowDetailDebounceRef.current = null;
         const fgId = flowSelectedFgIdRef.current;
         const ctx = flowCtxRef.current;
         if (!fgId || !ctx) return;
+        flowDetailSyncingRef.current = true;
         const patched = patchStepByFlowgramId(
           stepsRef.current as FlowStep[],
           fgId,
-          next
+          cloned
         );
         try {
           const synced = applyStepsToFlowgramDocument(ctx, patched);
           replaceStepsAndGraph(synced as Step[]);
         } catch (e) {
           toast.error(`Không áp dụng được lên canvas: ${String(e)}`);
+        } finally {
+          flowDetailSyncingRef.current = false;
         }
       }, 240);
     },
@@ -2230,6 +2165,7 @@ export function ScenarioDialog({
                           flowCtxRef.current = ctx;
                         }}
                         onStepsChange={(newSteps) => {
+                          if (flowDetailSyncingRef.current) return;
                           replaceStepsAndGraph(newSteps as Step[]);
                         }}
                       />

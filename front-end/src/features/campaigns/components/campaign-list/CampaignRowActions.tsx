@@ -36,7 +36,6 @@ import { EditCampaignEntityDialog } from '../edit-campaign-entity-dialog';
 import { CampaignMonitorDialog } from '../campaign-monitor';
 import { ROUTES } from '@/config/routes';
 import { cn } from '@/lib/utils';
-import { CampaignRunProgress } from './CampaignRunProgress';
 import {
   useCampaignDevices,
   useCampaignWorkflows,
@@ -92,11 +91,12 @@ export function CampaignRowActions({
     campaign.id,
     perms.canExecute || perms.canUpdate
   );
+  const effectiveCampaign = campaignDetail ?? campaign;
   const isEntityCampaign =
-    isCampaignEntityOut(campaign) ||
+    isCampaignEntityOut(effectiveCampaign) ||
     (campaignDetail != null && isCampaignEntityOut(campaignDetail));
   const entityDetail: CampaignEntityOut | null = (() => {
-    const row = campaignDetail ?? campaign;
+    const row = effectiveCampaign;
     return isCampaignEntityOut(row) ? row : null;
   })();
   const scenarioRefIds = useMemo(
@@ -296,8 +296,7 @@ export function CampaignRowActions({
     }
   };
 
-  const running =
-    isCampaignActiveExecution(campaign.status) || isStopping;
+  const running = isCampaignActiveExecution(campaign.status) || isStopping;
   const showPause =
     campaign.status === 'running' &&
     (hasActiveWorkflows || runningWorkflowIds.length > 0);
@@ -319,8 +318,6 @@ export function CampaignRowActions({
           layout === 'stacked' ? 'w-full flex-wrap' : 'flex-nowrap'
         )}
       >
-        <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
-
         {canDispatch && perms.canExecute && (
           <>
             <Tooltip>
@@ -345,7 +342,7 @@ export function CampaignRowActions({
             <RunCampaignDialog
               open={runDialogOpen && !isEntityCampaign}
               campaignId={campaign.id}
-              campaignVariables={campaign.variables ?? {}}
+              campaignVariables={effectiveCampaign.variables ?? {}}
               onClose={() => setRunDialogOpen(false)}
               devices={devices}
               scenarios={scenarios}
@@ -600,7 +597,7 @@ export function CampaignRowActions({
       </ScenarioListDialog>
 
       <EditCampaignEntityDialog
-        campaign={campaign}
+        campaign={effectiveCampaign}
         open={entityEditOpen}
         onOpenChange={setEntityEditOpen}
       />

@@ -243,6 +243,7 @@ def _artifact_ref(
     capture_type: str,
     execution_id: str | None,
     step_id: str | None,
+    step_type: str | None,
     step_index: int,
     attempt_index: int,
     payload: dict[str, Any],
@@ -254,6 +255,7 @@ def _artifact_ref(
         "type": capture_type,
         "execution_id": execution_id,
         "step_id": step_id,
+        "step_type": step_type,
         "step_index": step_index,
         "attempt_index": attempt_index,
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -365,10 +367,12 @@ def _record_capture_result(
     dedup_ref: str | None = None,
 ) -> None:
     step_id = str(step.get("id") or step.get("_id") or "") or None
+    step_type = str(step.get("type") or "") or None
     ref = _artifact_ref(
         capture_type=capture_type,
         execution_id=sc.execution_id,
         step_id=step_id,
+        step_type=step_type,
         step_index=step_idx,
         attempt_index=attempt_index,
         payload=payload,

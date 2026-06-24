@@ -103,6 +103,11 @@ function DeviceTilePreviewInner({
   const isActive =
     device.state &&
     !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+  const deviceState = String(device.state || '')
+    .replace('DeviceState.', '')
+    .toUpperCase();
+  const automationBusy =
+    deviceState === 'BUSY' || (device.scenario_active ?? 0) > 0;
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
@@ -142,6 +147,7 @@ function DeviceTilePreviewInner({
   const [h264Active, setH264Active] = useState(false);
   const [hasH264Slot, setHasH264Slot] = useState(false);
   const [h264Suppressed, setH264Suppressed] = useState(false);
+  const [h264RestartKey, setH264RestartKey] = useState(0);
   const [scrcpyAttachReady, setScrcpyAttachReady] = useState(false);
   const [scrcpyAttachRetryTick, setScrcpyAttachRetryTick] = useState(0);
   const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({
@@ -149,6 +155,7 @@ function DeviceTilePreviewInner({
     frames: 0
   });
   const h264BlackStreakRef = useRef(0);
+  const h264BusyRecoveryAtRef = useRef(0);
   const scrcpyAttachRetryTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
@@ -471,6 +478,8 @@ function DeviceTilePreviewInner({
     tabActive && h264SubscriptionAllowed ? device.serial : '',
     canvasRef,
     {
+      restartKey: h264RestartKey,
+      notifyStallWithVisibleFrame: automationBusy,
       onFrame: useCallback(
         (frame?: { mostlyBlack: boolean }) => {
           if (frame?.mostlyBlack) {
@@ -501,16 +510,34 @@ function DeviceTilePreviewInner({
         },
         [h264Active]
       ),
-      onStall: useCallback(() => {
-        // Soft recovery: keep canvas visible when possible; only nudge MJPEG
-        // when we never got a first frame.
-        h264WarmupRef.current = { startedAt: 0, frames: 0 };
-        h264BlackStreakRef.current = 0;
-        if (!hasFrame) {
-          setMjpegFailed(false);
-          setMjpegAttempt((n) => n + 1);
-        }
-      }, [hasFrame])
+      onStall: useCallback(
+        (reason: 'no_packets' | 'decoder_stalled') => {
+          // Soft recovery: keep canvas visible when possible; only nudge MJPEG
+          // when we never got a first frame.
+          h264WarmupRef.current = { startedAt: 0, frames: 0 };
+          h264BlackStreakRef.current = 0;
+          if (automationBusy) {
+            const now = Date.now();
+            if (now - h264BusyRecoveryAtRef.current > 2500) {
+              h264BusyRecoveryAtRef.current = now;
+              setH264Active(false);
+              setHasFrame(false);
+              setH264RestartKey((key) => key + 1);
+              requestIdr(device.serial, 0);
+            }
+            if (reason === 'no_packets') {
+              setMjpegFailed(false);
+              setMjpegAttempt((n) => n + 1);
+            }
+            return;
+          }
+          if (!hasFrame) {
+            setMjpegFailed(false);
+            setMjpegAttempt((n) => n + 1);
+          }
+        },
+        [automationBusy, device.serial, hasFrame]
+      )
     }
   );
 
@@ -529,6 +556,7 @@ function DeviceTilePreviewInner({
     setH264Active(false);
     setH264Suppressed(false);
     if (!h264SubscriptionAllowed) setScrcpyAttachReady(false);
+    h264BusyRecoveryAtRef.current = 0;
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     h264BlackStreakRef.current = 0;
   }, [device.serial, h264SubscriptionAllowed]);
@@ -813,6 +841,7 @@ function tilePreviewPropsEqual(
     pd.brand === nd.brand &&
     pd.model === nd.model &&
     pd.battery === nd.battery &&
+    pd.scenario_active === nd.scenario_active &&
     pd.relay_scrcpy_enabled === nd.relay_scrcpy_enabled &&
     pd.screen_width === nd.screen_width &&
     pd.screen_height === nd.screen_height

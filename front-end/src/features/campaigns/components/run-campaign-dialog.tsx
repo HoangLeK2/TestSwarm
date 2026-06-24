@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/select';
 import {
   DeviceVarsJsonPanel,
-  formatInitialDeviceVars,
+  formatDeviceVarsJson,
   mergeCampaignScenarioVariables,
   parseDeviceVarsJson
 } from '@/components/device-vars-json-panel';
@@ -94,6 +94,16 @@ export function RunCampaignDialog({
       ? makePairKey(activeScenarioId, activeDevice.id)
       : '';
 
+  const campaignDetailQuery = useQuery({
+    queryKey: ['campaigns', campaignId],
+    queryFn: () => campaignsApi.get(campaignId),
+    enabled: open && !!campaignId,
+    staleTime: 0,
+    refetchOnMount: 'always'
+  });
+  const effectiveCampaignVariables =
+    campaignDetailQuery.data?.variables ?? campaignVariables;
+
   useEffect(() => {
     if (!open) return;
     setSelected(new Set(allSerials));
@@ -124,37 +134,46 @@ export function RunCampaignDialog({
         activeScenarioId,
         activeDevice!.id
       ),
-    enabled: open && !!campaignId && !!activeScenarioId && !!activeDevice?.id
+    enabled: open && !!campaignId && !!activeScenarioId && !!activeDevice?.id,
+    staleTime: 0,
+    refetchOnMount: 'always'
   });
 
   useEffect(() => {
     if (!pairKey || !variableQuery.data) return;
+    if (dirtyKeys[pairKey]) return;
     const savedVars = variableQuery.data?.vars ?? {};
+    const nextDraft = formatDeviceVarsJson(savedVars);
+    const nextEnabled = Object.keys(savedVars).length > 0;
     setDrafts((prev) => {
-      if (prev[pairKey] !== undefined) return prev;
+      if (prev[pairKey] === nextDraft) return prev;
       return {
         ...prev,
-        [pairKey]: formatInitialDeviceVars(savedVars, activeScenario?.variables)
+        [pairKey]: nextDraft
       };
     });
     setDeviceVarEnabled((prev) => {
-      if (prev[pairKey] !== undefined) return prev;
+      if (prev[pairKey] === nextEnabled) return prev;
       return {
         ...prev,
-        [pairKey]: Object.keys(savedVars).length > 0
+        [pairKey]: nextEnabled
       };
     });
-  }, [activeScenario?.variables, pairKey, variableQuery.data]);
+  }, [
+    activeScenario?.variables,
+    dirtyKeys,
+    pairKey,
+    variableQuery.data,
+    variableQuery.dataUpdatedAt
+  ]);
 
   const allSelected =
     allSerials.length > 0 && allSerials.every((s) => selected.has(s));
   const someSelected = allSerials.some((s) => selected.has(s));
   const currentDraft = pairKey
     ? (drafts[pairKey] ??
-      (variableQuery.isLoading
-        ? ''
-        : formatInitialDeviceVars({}, activeScenario?.variables)))
-    : formatInitialDeviceVars({}, activeScenario?.variables);
+      (variableQuery.isLoading ? '' : formatDeviceVarsJson({})))
+    : formatDeviceVarsJson({});
   const currentDeviceVarsEnabled = pairKey
     ? deviceVarEnabled[pairKey] === true
     : false;
@@ -184,10 +203,10 @@ export function RunCampaignDialog({
   const globalVariablesPreview = useMemo(
     () =>
       mergeCampaignScenarioVariables(
-        campaignVariables,
+        effectiveCampaignVariables,
         activeScenario?.variables
       ),
-    [campaignVariables, activeScenario?.variables]
+    [effectiveCampaignVariables, activeScenario?.variables]
   );
 
   const toggle = (serial: string) => {
@@ -218,8 +237,7 @@ export function RunCampaignDialog({
     setDeviceVarEnabled((prev) => ({ ...prev, [pairKey]: enabled }));
     setDrafts((prev) => ({
       ...prev,
-      [pairKey]:
-        prev[pairKey] ?? formatInitialDeviceVars({}, activeScenario?.variables)
+      [pairKey]: prev[pairKey] ?? formatDeviceVarsJson({})
     }));
     setDirtyKeys((prev) => ({ ...prev, [pairKey]: true }));
   };
@@ -243,7 +261,7 @@ export function RunCampaignDialog({
 
     setIsSaving(true);
     try {
-      await Promise.all(
+      const results = await Promise.all(
         keys.map((key) => {
           const [scenarioId, deviceId] = key.split('::');
           const vars =
@@ -260,6 +278,17 @@ export function RunCampaignDialog({
           );
         })
       );
+      results.forEach((result) => {
+        qc.setQueryData(
+          [
+            'campaign-device-variables',
+            campaignId,
+            result.scenario_id,
+            result.device_id
+          ],
+          result
+        );
+      });
       keys.forEach((key) => {
         const [scenarioId, deviceId] = key.split('::');
         qc.invalidateQueries({
@@ -419,10 +448,12 @@ export function RunCampaignDialog({
                   onEnabledChange={handleDeviceVarsToggle}
                   draft={currentDraft}
                   onDraftChange={handleDraftChange}
-                  loading={variableQuery.isLoading}
+                  loading={
+                    variableQuery.isLoading || campaignDetailQuery.isFetching
+                  }
                   jsonError={currentJsonError}
                   deviceLabel={activeDevice?.serial}
-                  baseVariables={activeScenario?.variables}
+                  baseVariables={globalVariablesPreview}
                   globalVariablesPreview={globalVariablesPreview}
                   className='flex min-h-0 min-w-0 flex-1 flex-col'
                   editorClassName='min-h-[200px] flex-1 md:min-h-[260px]'

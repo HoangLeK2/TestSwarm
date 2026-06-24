@@ -315,40 +315,6 @@ async def _u2_click_post_open_target(
     gradient_wallpaper = bool(target.get("gradient_wallpaper"))
     screen_w, _screen_h = await _window_size(executor, serial)
     timeout = _float_context(context, "post_open_click_timeout_s", 0.35, 0.1, 4.0)
-    u2_click = target.get("u2_click") if isinstance(target.get("u2_click"), dict) else {}
-
-    # Wallpaper posts: click the text node directly (coords often land on image padding).
-    if gradient_wallpaper and u2_click:
-        spec = u2_click.get("spec") if isinstance(u2_click.get("spec"), dict) else None
-        if spec and await _u2_click_spec(executor, serial, spec, timeout=timeout):
-            logger.info(
-                "[%s] open_post tap kind=%s route=click_spec wallpaper=True label=%r",
-                serial,
-                tap_kind,
-                (target.get("tap_label") or "")[:60],
-            )
-            return True, "click_spec"
-        xpath = u2_click.get("xpath")
-        if xpath and await _u2_click_spec(
-            executor, serial, {"xpath": xpath}, timeout=timeout
-        ):
-            logger.info(
-                "[%s] open_post tap kind=%s route=click_spec_xpath wallpaper=True",
-                serial,
-                tap_kind,
-            )
-            return True, "click_spec_xpath"
-        selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
-        if selector and await _u2_click_selector(
-            executor, serial, selector, timeout=timeout
-        ):
-            logger.info(
-                "[%s] open_post tap kind=%s route=click_selector wallpaper=True",
-                serial,
-                tap_kind,
-            )
-            return True, "click_selector"
-
     cx, cy = post_header_tap_point(
         (x1, y1, x2, y2),
         tap_kind=tap_kind,

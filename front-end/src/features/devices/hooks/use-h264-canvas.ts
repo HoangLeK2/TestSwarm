@@ -30,6 +30,7 @@ export function useH264Video(
     restartKey?: number;
     onFrame?: (frame?: { mostlyBlack: boolean }) => void;
     onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
+    notifyStallWithVisibleFrame?: boolean;
     onStats?: (stats: {
       decodeQueueSize: number;
       droppedDelta: number;
@@ -55,6 +56,9 @@ export function useH264Video(
   const onFrameRef = useRef(opts?.onFrame);
   const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
+  const notifyStallWithVisibleFrameRef = useRef(
+    opts?.notifyStallWithVisibleFrame
+  );
   const serialRef = useRef(serial);
   const wsConnectedRef = useRef(false);
   // Reset+replay on ws_status=true is only needed for true reconnects (close→open).
@@ -66,6 +70,7 @@ export function useH264Video(
   onFrameRef.current = opts?.onFrame;
   onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
+  notifyStallWithVisibleFrameRef.current = opts?.notifyStallWithVisibleFrame;
   serialRef.current = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
@@ -416,7 +421,7 @@ export function useH264Video(
         w.postMessage({ type: 'reset' });
         clearLatestFrame();
         requestIdr(s, 0);
-        if (!lastRenderedAt) {
+        if (!lastRenderedAt || notifyStallWithVisibleFrameRef.current) {
           onStallRef.current?.('no_packets');
         }
         return;

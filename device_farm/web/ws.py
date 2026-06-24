@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import base64
 import ipaddress
 import inspect
@@ -748,19 +749,24 @@ class WebSocketManager:
                         self._conn_sender_groups[conn_id] = group
                         log.info("watch_serial: started video sender for %s", serial)
                 else:
+                    cancelled_tasks: list[asyncio.Task] = []
                     async with self._lock:
                         group = self._conn_sender_groups.get(conn_id, [])
                         cancelled = 0
                         for t in list(group):
                             if getattr(t, "_device_serial", None) == serial and not t.done():
                                 t.cancel()
+                                cancelled_tasks.append(t)
                                 cancelled += 1
                         self._conn_sender_groups[conn_id] = group
-                        log.info(
-                            "unwatch_serial: serial=%s cancelled_senders=%d",
-                            serial,
-                            cancelled,
-                        )
+                    for t in cancelled_tasks:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await t
+                    log.info(
+                        "unwatch_serial: serial=%s cancelled_senders=%d",
+                        serial,
+                        cancelled,
+                    )
                 continue
             device = self.manager.get_device(serial) if serial else None
             if not device:

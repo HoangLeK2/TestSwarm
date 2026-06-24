@@ -69,9 +69,20 @@ def _auth(user_id: str = "user-1") -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 class _FakeDevice:
-    def __init__(self, serial: str, user_id: str = "user-1") -> None:
+    def __init__(
+        self,
+        serial: str,
+        user_id: str = "user-1",
+        *,
+        adb_serial: str = "",
+        adb_ip: str = "",
+        adb_port: int = 5555,
+    ) -> None:
         self.serial = serial
         self.user_id = user_id
+        self.adb_serial = adb_serial
+        self.adb_ip = adb_ip
+        self.adb_port = adb_port
 
 
 class _FakeRuntimeDevice:
@@ -298,6 +309,53 @@ class TestLiveDevices:
         assert data["total"] == 1
         assert data["devices"][0]["serial"] == "serial-live"
         assert data["devices"][0]["state"] == "READY"
+
+    @pytest.mark.anyio
+    async def test_wifi_ip_change_keeps_registered_device_visible_via_hardware_serial(self):
+        """A phone that changes WiFi IP should remain visible under its registered UID."""
+        db_devices = [
+            _FakeDevice(
+                "HW123",
+                user_id="user-1",
+                adb_serial="10.0.0.2:5555",
+                adb_ip="10.0.0.2",
+            )
+        ]
+        manager = _mock_manager(
+            [
+                _FakeRuntimeDevice(
+                    "10.0.0.9:41111",
+                    state="READY",
+                    u2_ready=False,
+                )
+            ]
+        )
+        relay = MagicMock()
+        relay.get_capabilities.return_value = {
+            "hardware_serial": "HW123",
+            "wlan_ip": "10.0.0.9",
+        }
+        relay.relay_for_serial.side_effect = lambda serial: (
+            object() if serial == "10.0.0.9:41111" else None
+        )
+
+        with (
+            _jwt_patch(),
+            _db_patch(db_devices),
+            patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay),
+            patch("runtime.transports.agent_control_servicer.get_control_servicer", return_value=None),
+        ):
+            app = _make_public_app(db_enabled=True, manager=manager)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.get("/api/devices/live", headers=_auth("user-1"))
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        device = data["devices"][0]
+        assert device["serial"] == "10.0.0.9:41111"
+        assert device["registered_serial"] == "HW123"
+        assert device["state"] == "READY"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

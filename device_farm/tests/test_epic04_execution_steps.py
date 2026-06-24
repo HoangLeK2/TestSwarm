@@ -1,6 +1,8 @@
 """Tests for execution_steps subtable and artifacts_json (DF-T-04-010 / DF-T-04-014)."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 pytest_plugins = ["tests.test_epic04_scenario_entity"]
@@ -28,6 +30,140 @@ def test_extract_artifacts_json_from_workflow_details():
     arts = extract_artifacts_json(workflow_entry)
     assert len(arts) == 1
     assert arts[0]["type"] == "fail"
+
+
+def test_extract_step_artifacts_prefers_capture_step_metadata():
+    from api.routes.executions import _extract_step_artifacts
+
+    created_at = datetime(2026, 6, 23, tzinfo=timezone.utc)
+    artifacts = _extract_step_artifacts(
+        "exec-1",
+        "10AE",
+        [
+            {
+                "index": 0,
+                "type": "run_scenario",
+                "ok": False,
+                "message": "run_scenario: child failed",
+                "artifacts_json": [
+                    {
+                        "type": "fail",
+                        "step_id": "tap-child",
+                        "step_index": 3,
+                        "step_type": "tap_selector",
+                        "screenshot_url": "/captures/fail.png",
+                    }
+                ],
+            }
+        ],
+        created_at,
+    )
+
+    assert len(artifacts) == 1
+    assert artifacts[0].step_index == 3
+    assert artifacts[0].step_type == "tap_selector"
+    assert artifacts[0].metadata["step_id"] == "tap-child"
+    assert artifacts[0].message is None
+
+
+def test_extract_step_artifacts_uses_nested_step_message_for_child_metadata():
+    from api.routes.executions import _extract_step_artifacts
+
+    created_at = datetime(2026, 6, 23, tzinfo=timezone.utc)
+    artifacts = _extract_step_artifacts(
+        "exec-1",
+        "10AE",
+        [
+            {
+                "index": 0,
+                "type": "run_scenario",
+                "ok": False,
+                "message": "run_scenario: sub-scenario 'child' failed",
+                "artifacts_json": [
+                    {
+                        "type": "fail",
+                        "step_index": 0,
+                        "step_type": "scroll_to",
+                        "screenshot_url": "/captures/scroll-fail.png",
+                    }
+                ],
+                "sub_result": {
+                    "step_results": [
+                        {
+                            "index": 0,
+                            "type": "scroll_to",
+                            "ok": False,
+                            "message": "scroll_to text='codex' not found after 5 swipes",
+                        }
+                    ]
+                },
+            }
+        ],
+        created_at,
+    )
+
+    assert len(artifacts) == 1
+    assert artifacts[0].step_index == 0
+    assert artifacts[0].step_type == "scroll_to"
+    assert artifacts[0].message == "scroll_to text='codex' not found after 5 swipes"
+
+
+def test_artifact_context_merge_recovers_nested_run_scenario_artifacts():
+    from api.routes.executions import (
+        _extract_step_artifacts,
+        _merge_step_artifact_context,
+    )
+
+    persisted_steps = [
+        {
+            "index": 0,
+            "type": "run_scenario",
+            "ok": False,
+            "message": "run_scenario: child failed",
+            "artifacts_json": [],
+            "artifacts": [],
+        }
+    ]
+    result_steps = [
+        {
+            "index": 0,
+            "type": "run_scenario",
+            "ok": False,
+            "sub_result": {
+                "step_results": [
+                    {
+                        "index": 2,
+                        "type": "tap_selector",
+                        "ok": False,
+                        "message": "not found",
+                        "artifacts_json": [
+                            {
+                                "type": "fail",
+                                "step_id": "tap-child",
+                                "step_index": 2,
+                                "step_type": "tap_selector",
+                                "screenshot_url": "/captures/child-fail.png",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    ]
+
+    merged_steps = _merge_step_artifact_context(persisted_steps, result_steps)
+    artifacts = _extract_step_artifacts(
+        "exec-1",
+        "10AE",
+        merged_steps,
+        datetime(2026, 6, 23, tzinfo=timezone.utc),
+    )
+
+    assert len(artifacts) == 1
+    assert artifacts[0].step_index == 2
+    assert artifacts[0].step_type == "tap_selector"
+    assert artifacts[0].message == "not found"
+    assert artifacts[0].url == "/captures/child-fail.png"
 
 
 def test_slim_step_result_strips_nested_details_artifacts():

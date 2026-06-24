@@ -1524,8 +1524,12 @@ class WsRelayAgentSession:
         except Exception as exc:
             logger.warning("relay WS stream error (relay=%s): %s", relay_id, exc)
         finally:
-            await write_queue.put(None)
-            writer_task.cancel()
+            with contextlib.suppress(Exception):
+                await write_queue.put(None)
+            if not writer_task.done():
+                writer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await writer_task
             if relay_id:
                 await self._manager.unregister(relay_id, "relay disconnected")
             try:

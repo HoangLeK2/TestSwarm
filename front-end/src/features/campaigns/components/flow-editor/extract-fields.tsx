@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
+import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import {
   F,
   StepPanelField,
@@ -936,12 +937,16 @@ export function ExtractStepFields({
             <F label={t('saveCollectionLabel')}>
               <Input
                 className='h-9 text-xs'
-                placeholder={t('saveCollectionPlaceholder')}
+                placeholder={t('saveCollectionPlaceholder', {
+                  varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
+                })}
                 value={step.collection ?? ''}
                 onChange={(e) => update({ collection: e.target.value })}
               />
               <p className='mt-1 text-[10px] text-muted-foreground'>
-                {t('saveCollectionHint')}
+                {t('saveCollectionHint', {
+                  varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
+                })}
               </p>
             </F>
 
@@ -1016,7 +1021,9 @@ export function ExtractStepFields({
                   }
                 />
                 <p className='mt-1 text-[10px] text-muted-foreground'>
-                  {t('saveTagsHint')}
+                  {t('saveTagsHint', {
+                    varToken: SCENARIO_VAR_TOKENS.GROUP_NAME
+                  })}
                 </p>
               </F>
               {strategy === 'fb_comments' ? (

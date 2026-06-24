@@ -3,7 +3,9 @@ from __future__ import annotations
 from api.routes.public import (
     _apply_realtime_connectivity,
     _build_live_device_alias_index,
+    _live_device_realtime_aliases,
     _live_device_aliases,
+    _match_live_device,
 )
 
 
@@ -157,3 +159,51 @@ def test_live_device_alias_index_does_not_match_unknown_runtime_serial():
     index = _build_live_device_alias_index(allowed_devices)
 
     assert index.get("unknown-device") is None
+
+
+class _FakeRelayCaps:
+    def __init__(self, caps_by_serial: dict[str, dict[str, str]]) -> None:
+        self._caps_by_serial = caps_by_serial
+
+    def get_capabilities(self, serial: str) -> dict[str, str] | None:
+        return self._caps_by_serial.get(serial)
+
+
+def test_live_device_match_uses_hardware_serial_when_wifi_ip_changes():
+    allowed_devices = {
+        "HW123": {
+            "display_name": "Pixel Lab",
+            "relay_aliases": ["HW123", "10.0.0.2", "10.0.0.2:5555"],
+        }
+    }
+    relay = _FakeRelayCaps(
+        {
+            "10.0.0.9:41111": {
+                "hardware_serial": "HW123",
+                "wlan_ip": "10.0.0.9",
+            }
+        }
+    )
+
+    index = _build_live_device_alias_index(allowed_devices)
+    registered_serial, info = _match_live_device(
+        "10.0.0.9:41111",
+        index,
+        relay=relay,
+    )
+
+    assert registered_serial == "HW123"
+    assert info["display_name"] == "Pixel Lab"
+
+
+def test_live_device_realtime_aliases_include_runtime_serial_after_wifi_ip_changes():
+    aliases = _live_device_realtime_aliases(
+        "HW123",
+        "10.0.0.9:41111",
+        {
+            "relay_aliases": ["HW123", "10.0.0.2", "10.0.0.2:5555"],
+        },
+    )
+
+    assert "10.0.0.2:5555" in aliases
+    assert "10.0.0.9:41111" in aliases

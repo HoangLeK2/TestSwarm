@@ -90,14 +90,25 @@ def build_sequence_steps(
     device_index: int,
     effective_vars: dict[str, Any],
     account_vars: dict[str, Any],
+    campaign_vars: dict[str, Any] | None = None,
     scenario_device_vars: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
+    campaign_defaults = dict(campaign_vars or {})
+    device_override_vars = (
+        {
+            key: value
+            for key, value in (effective_vars or {}).items()
+            if campaign_defaults.get(key) != value
+        }
+        if campaign_vars is not None
+        else dict(effective_vars or {})
+    )
     for scenario_idx, ref in enumerate(scenario_refs):
         scenario_id = str(ref["scenario_id"])
         scoped_vars = dict((scenario_device_vars or {}).get(scenario_id) or {})
         merged_vars = {
-            **effective_vars,
+            **device_override_vars,
             **scoped_vars,
             **account_vars,
             "DEVICE_INDEX": str(device_index),
@@ -165,11 +176,16 @@ async def prepare_scenario_input(
         org_id=org_id,
         scenario_refs=registry_refs,
     )
+    campaign_vars = dict(campaign.variables or {})
+    owner = campaign.created_by or campaign.user_id
+    if owner:
+        campaign_vars.setdefault("__USER_ID__", str(owner))
     sequence_steps = build_sequence_steps(
         refs,
         device_index=device_index,
         effective_vars=effective_vars,
         account_vars=account_vars,
+        campaign_vars=campaign_vars,
         scenario_device_vars=await _load_scenario_device_vars_for_execution(
             db,
             campaign_id=campaign.id,
@@ -180,10 +196,6 @@ async def prepare_scenario_input(
     if not sequence_steps:
         return None
 
-    campaign_vars = dict(campaign.variables or {})
-    owner = campaign.created_by or campaign.user_id
-    if owner:
-        campaign_vars.setdefault("__USER_ID__", str(owner))
     start_step = int((execution.meta or {}).get("start_step") or execution.checkpoint_step or 0)
     scenario_config: dict[str, Any] = {"capture_mode": "error_only"}
     if recovery_policy:

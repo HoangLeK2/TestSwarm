@@ -104,6 +104,34 @@ def test_build_sequence_steps_keeps_device_vars_scoped_per_scenario():
     assert steps[1]["variables"]["kw"] == "scenario-two"
 
 
+def test_build_sequence_steps_does_not_promote_campaign_globals_to_scenario_overrides():
+    refs = [{"scenario_id": "s1"}]
+    steps = build_sequence_steps(
+        refs,
+        device_index=0,
+        campaign_vars={
+            "GROUP_NAME": "openclaw vn",
+            "GROUP_TEXT": "OpenClaw VN",
+            "SAVE_COLLECTION": "fb_group_posts",
+        },
+        effective_vars={
+            "GROUP_NAME": "openclaw vn",
+            "GROUP_TEXT": "OpenClaw VN",
+            "SAVE_COLLECTION": "custom_collection",
+            "DEVICE_ONLY": "device-value",
+        },
+        account_vars={"__ACCOUNT_ID__": "acct-1"},
+        scenario_device_vars={"s1": {"GROUP_TEXT": "device text"}},
+    )
+
+    step_vars = steps[0]["variables"]
+    assert "GROUP_NAME" not in step_vars
+    assert step_vars["GROUP_TEXT"] == "device text"
+    assert step_vars["SAVE_COLLECTION"] == "custom_collection"
+    assert step_vars["DEVICE_ONLY"] == "device-value"
+    assert step_vars["__ACCOUNT_ID__"] == "acct-1"
+
+
 def test_recovery_refs_extend_registry_refs_without_sequence_refs():
     main_refs = [{"scenario_id": "main-1"}]
     registry_refs = _scenario_refs_with_recovery_refs(

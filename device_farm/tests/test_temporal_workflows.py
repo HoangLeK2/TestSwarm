@@ -44,6 +44,7 @@ from temporal.workflows import (
     _handle_set_variable,
     _lookup_var,
     _resolve_step,
+    _workflow_failure_message,
 )
 
 
@@ -64,6 +65,27 @@ def test_sub_result_retention_caps_large_loop_payloads():
     assert sub_results[-1]["truncated"] is True
     assert sub_results[-1]["omitted"] == 25
     assert sub_results[-1]["last"] == {"iteration": 74, "success": True}
+
+
+def test_workflow_failure_message_prefers_nested_cause():
+    inner = RuntimeError("tap_selector: element not found")
+    outer = Exception("Child Workflow execution failed")
+    outer.__cause__ = inner
+
+    assert _workflow_failure_message(outer) == "tap_selector: element not found"
+
+
+def test_workflow_failure_message_replaces_generic_child_failure():
+    exc = Exception("Child Workflow execution failed")
+
+    assert _workflow_failure_message(exc, fallback="child failed without step detail") == (
+        "child failed without step detail"
+    )
+
+    verbose_exc = Exception("Child Workflow execution failed: child closed")
+    assert _workflow_failure_message(verbose_exc, fallback="child failed without step detail") == (
+        "child failed without step detail"
+    )
 
 
 class TestResolveStep:

@@ -229,9 +229,9 @@ def test_fr04_20_effective_policy_stops_regular_steps_unless_declared():
     assert effective_error_policy({"id": "x", "type": "input_wait.wait", "error_policy": "stop"}) == "stop"
 
 
-def test_run_scenario_default_policy_continues_parent_flow():
-    assert effective_error_policy({"id": "x", "type": "run_scenario"}) == "ignore"
-    assert effective_error_policy({"id": "x", "type": "composition.run_scenario"}) == "ignore"
+def test_run_scenario_default_policy_stops_parent_flow():
+    assert effective_error_policy({"id": "x", "type": "run_scenario"}) == "stop"
+    assert effective_error_policy({"id": "x", "type": "composition.run_scenario"}) == "stop"
     assert effective_error_policy({"id": "x", "type": "run_scenario", "error_policy": "stop"}) == "stop"
 
 
@@ -357,6 +357,65 @@ async def test_get_scenario_body(session_factory):
         resp = await client.get(f"/api/scenarios/{scenario_id}/body")
     assert resp.status_code == 200
     assert resp.json()["body_json"]["steps"][0]["id"] == "w"
+
+
+@pytest.mark.asyncio
+async def test_post_scenario_body_replaces_previous_body_on_reload(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/scenarios",
+            json={"name": "ReloadLatestBody", "kind": "sequence"},
+        )
+        scenario_id = created.json()["id"]
+        first = await client.post(
+            f"/api/scenarios/{scenario_id}/body",
+            json={
+                "steps": [
+                    {
+                        "id": "scroll",
+                        "type": "input_wait.wait",
+                        "description": "old description",
+                        "config": {"seconds": 1},
+                    }
+                ],
+                "variables": {"GROUP_TEXT": "old group"},
+            },
+        )
+        second = await client.post(
+            f"/api/scenarios/{scenario_id}/body",
+            json={
+                "steps": [
+                    {
+                        "id": "scroll",
+                        "type": "input_wait.wait",
+                        "description": "${GROUP_TEXT}",
+                        "config": {"seconds": 2, "x": "${SCROLL_X_RATIO}"},
+                    }
+                ],
+                "variables": {
+                    "GROUP_TEXT": "Codex VN,Cong khai - 193K thanh vien",
+                    "SCROLL_X_RATIO": 0.18,
+                },
+            },
+        )
+        reloaded = await client.get(f"/api/scenarios/{scenario_id}/body")
+        detail = await client.get(f"/api/scenarios/{scenario_id}")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    body = reloaded.json()["body_json"]
+    assert reloaded.status_code == 200
+    assert body["steps"][0]["description"] == "${GROUP_TEXT}"
+    assert body["steps"][0]["config"]["seconds"] == 2
+    assert body["steps"][0]["config"]["x"] == "${SCROLL_X_RATIO}"
+    assert body["variables"]["GROUP_TEXT"] == "Codex VN,Cong khai - 193K thanh vien"
+    detail_body = detail.json()["body_json"]
+    assert detail.status_code == 200
+    assert detail_body["steps"][0]["description"] == "${GROUP_TEXT}"
+    assert detail_body["steps"][0]["config"]["seconds"] == 2
 
 
 @pytest.mark.asyncio

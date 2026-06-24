@@ -26,6 +26,7 @@ _U2_TRANSIENT_AUTO_ATTEMPTS = 3
 _U2_TRANSIENT_BACKOFF_MS = 2500
 _U2_TRANSIENT_BACKOFF_CAP_MS = 10_000
 _U2_TRANSIENT_MARKERS = (
+    _U2_TRANSIENT_REASON,
     "json-rpc http 502",
     "json-rpc http 503",
     "json-rpc http 504",
@@ -137,6 +138,19 @@ def _trigger_u2_transient_recovery(sc: "ScenarioContext") -> None:
             recover()
         except Exception as exc:
             log.debug("[%s] u2 transient recovery trigger failed: %s", sc.serial, exc)
+
+
+def _record_recovery_failure(
+    step_result: Dict[str, Any],
+    recovery_message: str | None,
+) -> None:
+    msg = str(recovery_message or "").strip()
+    if not msg:
+        return
+    step_result["recovery_failed_message"] = msg
+    if not str(step_result.get("message") or "").strip():
+        step_result["message"] = msg
+    step_result.setdefault("reason_code", "incident_recovery_failed")
 
 
 def execute_step_with_retry(
@@ -289,8 +303,7 @@ def execute_step_with_retry(
                     step_start_t = time.monotonic()
                     continue
                 elif recovery.fail_message:
-                    merged["message"] = recovery.fail_message
-                    merged.setdefault("reason_code", "incident_recovery_failed")
+                    _record_recovery_failure(merged, recovery.fail_message)
 
         if will_retry:
             if explicit_retry and retry_policy is not None:

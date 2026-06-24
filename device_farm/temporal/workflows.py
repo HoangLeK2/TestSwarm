@@ -96,6 +96,47 @@ def _is_temporal_cancelled_error(exc: BaseException) -> bool:
         return "cancelled" in text or "canceled" in text
     return False
 
+
+_GENERIC_TEMPORAL_FAILURE_MESSAGES = {
+    "activity error",
+    "activity execution failed",
+    "activity task failed",
+    "child workflow execution failed",
+    "workflow execution failed",
+}
+
+
+def _is_generic_temporal_failure_message(message: str) -> bool:
+    lowered = message.lower()
+    return (
+        lowered in _GENERIC_TEMPORAL_FAILURE_MESSAGES
+        or lowered.startswith("child workflow execution failed")
+        or lowered.startswith("workflow execution failed")
+    )
+
+
+def _workflow_failure_message(
+    exc: BaseException,
+    *,
+    fallback: str = "Workflow failed before recording step details",
+) -> str:
+    """Return the most useful deterministic error text from a Temporal exception."""
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).strip()
+        if text:
+            messages.append(text)
+        current = current.__cause__ or current.__context__
+
+    for message in reversed(messages):
+        if not _is_generic_temporal_failure_message(message):
+            return message
+    return fallback
+
+
 def _lookup_var(name: str, *dicts: dict[str, Any]) -> Any:
     """Lookup a variable in multiple dicts by priority. Returns None if not found.
 
@@ -131,8 +172,7 @@ def _error_policy(step: dict, cfg: dict) -> str:
     """Return error handling policy: 'pause' | 'continue' | 'stop'.
 
     Priority: step-level on_error → step-level ignore_error → scenario-level on_error
-    → scenario-level continue_on_error → run_scenario default 'continue'
-    → other step default 'stop'.
+    → scenario-level continue_on_error → default 'stop'.
 
     Usage in scenario JSON:
         Step-level:     {"type": "tap", ..., "on_error": "pause"}
@@ -154,8 +194,6 @@ def _error_policy(step: dict, cfg: dict) -> str:
     if cfg_policy in ("pause", "continue", "stop"):
         return cfg_policy
     if cfg.get("continue_on_error"):
-        return "continue"
-    if step_type == "run_scenario":
         return "continue"
     return "stop"
 
@@ -382,15 +420,19 @@ class ScenarioWorkflow:
                     failed_message="Cancelled by Temporal",
                 )
             self._progress.status = WorkflowStatus.FAILED.value
+            failed_message = _workflow_failure_message(
+                exc,
+                fallback="Child workflow failed before recording step details",
+            )
             await self._finalize(
                 inp.campaign_id, inp.run_id, success=False,
                 execution_id=inp.execution_id, device_serial=inp.device_serial,
-                failed_message=f"Workflow error: {exc}",
+                failed_message=failed_message,
             )
             return StepsResult(
                 success=False,
                 steps_executed=result.steps_executed if result else 0,
-                failed_message=f"Workflow error: {exc}",
+                failed_message=failed_message,
             )
 
     async def _forward_signal(self, signal_name: str) -> None:
@@ -817,32 +859,56 @@ class ScenarioStepsWorkflow:
             if not _pending_steps:
                 return True, "", -1
             n = len(_pending_steps)
-            batch_result: DeviceActionBatchResult = await workflow.execute_activity(
-                "execute_device_action_batch",
-                DeviceActionBatchInput(
-                    device_serial=inp.device_serial,
-                    steps=list(_pending_steps),
-                    step_indices=list(_pending_indices),
-                    variables=inp.variables,
-                    campaign_vars=inp.campaign_vars,
-                    scenario_config=getattr(inp, "scenario_config", {}),
-                    scenario_registry=inp.scenario_registry,
-                    execution_id=inp.execution_id,
-                    campaign_id=inp.campaign_id,
-                    depth=inp.depth,
-                    context=dict(runtime_context),
-                ),
-                result_type=DeviceActionBatchResult,
-                start_to_close_timeout=_batch_start_to_close_timeout(
-                    n,
-                    getattr(inp, "scenario_config", {}),
-                ),
-                retry_policy=_DEVICE_ACTION_RETRY,
-                # Extract/comment steps can run minutes; keep margin over 5s heartbeat loop.
-                heartbeat_timeout=timedelta(seconds=60),
-            )
             orig_steps = list(_pending_steps)      # snapshot before clear
             orig_indices = list(_pending_indices)  # snapshot before clear
+            try:
+                batch_result: DeviceActionBatchResult = await workflow.execute_activity(
+                    "execute_device_action_batch",
+                    DeviceActionBatchInput(
+                        device_serial=inp.device_serial,
+                        steps=list(_pending_steps),
+                        step_indices=list(_pending_indices),
+                        variables=inp.variables,
+                        campaign_vars=inp.campaign_vars,
+                        scenario_config=getattr(inp, "scenario_config", {}),
+                        scenario_registry=inp.scenario_registry,
+                        execution_id=inp.execution_id,
+                        campaign_id=inp.campaign_id,
+                        depth=inp.depth,
+                        context=dict(runtime_context),
+                    ),
+                    result_type=DeviceActionBatchResult,
+                    start_to_close_timeout=_batch_start_to_close_timeout(
+                        n,
+                        getattr(inp, "scenario_config", {}),
+                    ),
+                    retry_policy=_DEVICE_ACTION_RETRY,
+                    # Extract/comment steps can run minutes; keep margin over 5s heartbeat loop.
+                    heartbeat_timeout=timedelta(seconds=60),
+                )
+            except Exception as exc:
+                if _is_temporal_cancelled_error(exc):
+                    raise
+                failed_orig_idx = orig_indices[0] if orig_indices else -1
+                failed_step = orig_steps[0] if orig_steps else {}
+                failed_type = str(failed_step.get("type") or "batch")
+                failed_message = _workflow_failure_message(
+                    exc,
+                    fallback=f"{failed_type}: activity failed before returning a step result",
+                )
+                _pending_steps.clear()
+                _pending_indices.clear()
+                if len(orig_steps) > 1:
+                    _pending_steps[:0] = orig_steps[1:]
+                    _pending_indices[:0] = orig_indices[1:]
+                _append({
+                    "index": failed_orig_idx if failed_orig_idx >= 0 else 0,
+                    "type": failed_type,
+                    "ok": False,
+                    "message": failed_message,
+                })
+                steps_executed += 1
+                return False, failed_message, failed_orig_idx
             _pending_steps.clear()
             _pending_indices.clear()
             if batch_result.context:

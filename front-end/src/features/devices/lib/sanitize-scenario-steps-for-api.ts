@@ -1,3 +1,4 @@
+import { applyStepRetrySanitize } from '../../campaigns/components/flow-editor/step-retry-policy';
 import { normalizeSelectorStepFields } from './scenario-selector-step';
 
 type SelectorBy =
@@ -105,6 +106,7 @@ export function sanitizeScenarioStep(step: any): any {
         : br
     );
   }
+  applyStepRetrySanitize(next);
   return normalizeSelectorStepFields(next);
 }
 

@@ -1455,6 +1455,7 @@ export function useControlRecord(
     steps: {
       items: steps,
       setItems: setSteps,
+      cleanItems: cleanSteps,
       addWait: addWaitStep,
       addFlow: addFlowStep,
       appendSteps,

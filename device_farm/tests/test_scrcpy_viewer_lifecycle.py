@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from api.routes.device_control.scrcpy import build_scrcpy_router
+from core.config import Config
+from runtime.core import device_client as device_client_module
+from runtime.core.device_client import DeviceClient
 
 
 class _FakeScrcpyDevice:
@@ -218,6 +222,32 @@ async def test_scrcpy_detach_grace_is_cancelled_by_fast_reattach() -> None:
     assert detach.json()["stop_scheduled"] is True
     assert device.attach_calls == 1
     assert device.detach_calls == 0
+
+
+@pytest.mark.anyio
+async def test_device_client_auto_stop_grace_does_not_hold_frame_lock(monkeypatch) -> None:
+    monkeypatch.setattr(device_client_module, "SCRCPY_AUTO_STOP_IDLE_S", 0.0)
+    monkeypatch.setattr(device_client_module, "SCRCPY_STOP_GRACE_S", 10.0)
+
+    device = DeviceClient(serial="serial-lock", index=0, config=Config())
+    device._loop = asyncio.get_running_loop()
+    device._scrcpy_receiver = object()  # type: ignore[assignment]
+    device._scrcpy_attached_at = time.monotonic()
+    frame_q: asyncio.Queue[bytes] = asyncio.Queue()
+    device._frame_queues.append(frame_q)
+
+    device.unsubscribe_frames(frame_q)
+    await asyncio.sleep(0.05)
+
+    acquired = device._frame_lock.acquire(blocking=False)
+    if acquired:
+        device._frame_lock.release()
+    stop_task = device._scrcpy_stop_task
+    if stop_task is not None:
+        stop_task.cancel()
+        await asyncio.sleep(0)
+
+    assert acquired is True
 
 
 @pytest.mark.anyio

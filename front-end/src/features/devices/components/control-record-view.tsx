@@ -2,7 +2,12 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient
+} from '@tanstack/react-query';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +30,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   DeviceVarsJsonPanel,
-  formatInitialDeviceVars,
+  formatDeviceVarsJson,
   mergeCampaignScenarioVariables,
   parseDeviceVarsJson,
   splitDeviceOverridesFromMerged
@@ -111,8 +116,10 @@ import {
   campaignPerDeviceOverrides,
   campaignVariables,
   campaignsApi,
+  normalizeCampaignOut,
   type ScenarioDeviceVariablesOut
 } from '@/features/campaigns/services/api';
+import type { CampaignOut } from '@/features/campaigns/types';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
@@ -182,6 +189,31 @@ import {
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
+
+function syncCampaignDetailCaches(
+  queryClient: QueryClient,
+  campaignId: string,
+  rawCampaign: unknown
+) {
+  const campaign = normalizeCampaignOut(
+    rawCampaign as CampaignOut | Record<string, unknown> | null | undefined
+  );
+  if (!campaign) return;
+
+  queryClient.setQueryData(
+    ['campaign', campaignId, 'global-vars-preview'],
+    campaign
+  );
+  queryClient.setQueryData(['campaigns', campaignId], campaign);
+  queryClient.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
+    old?.map((row) => (row.id === campaignId ? { ...row, ...campaign } : row))
+  );
+  void queryClient.invalidateQueries({
+    queryKey: ['campaigns', campaignId],
+    exact: true
+  });
+  void queryClient.invalidateQueries({ queryKey: ['campaigns'], exact: true });
+}
 
 /**
  * Template variables are stored as metadata dicts:
@@ -401,7 +433,10 @@ export function ControlRecordView({
       toast.warning(tOrg('saveOrgNoSteps'));
       return;
     }
-    const body = buildOrgScenarioBodyPayload(steps.items, scenarioVariables);
+    const body = buildOrgScenarioBodyPayload(
+      flushPendingFlowDetailStep(),
+      scenarioVariables
+    );
     const check = validateScenarioStepsForApi(body.steps ?? []);
     if (!check.ok) {
       toast.error(check.message);
@@ -884,13 +919,11 @@ export function ControlRecordView({
     save.editingContext?.campaignId ??
     (savingOrgScenario ? (initialCampaignId ?? null) : null);
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
-  const activeDeviceVarScenarioId =
-    activeScenarioId ??
-    (savingOrgScenario ? (initialOrgScenarioId ?? null) : null);
+  const activeDeviceVarScenarioId = savingOrgScenario ? null : activeScenarioId;
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const usesCampaignDeviceOverrides = Boolean(
-    activeCampaignId && savingOrgScenario && !activeDeviceVarScenarioId
+    activeCampaignId && savingOrgScenario
   );
   const canManageDeviceVars = Boolean(
     activeCampaignId &&
@@ -1001,7 +1034,8 @@ export function ControlRecordView({
       !!activeCampaignId &&
       (deviceVarDialogOpen || canManageDeviceVars),
     queryFn: () => campaignsApi.get(activeCampaignId!),
-    staleTime: 30_000
+    staleTime: 0,
+    refetchOnMount: 'always'
   });
   useEffect(() => {
     if (!deviceVarDialogOpen) {
@@ -1012,17 +1046,15 @@ export function ControlRecordView({
   const selectScenarioDeviceForVars = useCallback(
     (deviceId: string, serial: string) => {
       setSelectedScenarioDeviceId(deviceId);
-      setDeviceVarEnabledByDevice((prev) => ({ ...prev, [deviceId]: true }));
       setDeviceVarJsonDrafts((prev) => ({
         ...prev,
-        [deviceId]:
-          prev[deviceId] ?? formatInitialDeviceVars({}, scenarioVariables)
+        [deviceId]: prev[deviceId] ?? formatDeviceVarsJson({})
       }));
       if (device.connectedDevices.some((d) => d.serial === serial)) {
         device.setSelectedSerial(serial);
       }
     },
-    [device.connectedDevices, device.setSelectedSerial, scenarioVariables]
+    [device.connectedDevices, device.setSelectedSerial]
   );
   useEffect(() => {
     if (!deviceVarDialogOpen) return;
@@ -1038,23 +1070,17 @@ export function ControlRecordView({
       selectScenarioDeviceForVars(pickId, pickSerial);
     } else {
       setSelectedScenarioDeviceId(pickId);
-      if (deviceVarEnabledByDevice[pickId] !== true) {
-        setDeviceVarEnabledByDevice((prev) => ({ ...prev, [pickId]: true }));
-        setDeviceVarJsonDrafts((prev) => ({
-          ...prev,
-          [pickId]:
-            prev[pickId] ?? formatInitialDeviceVars({}, scenarioVariables)
-        }));
-      }
+      setDeviceVarJsonDrafts((prev) => ({
+        ...prev,
+        [pickId]: prev[pickId] ?? formatDeviceVarsJson({})
+      }));
     }
   }, [
     deviceVarDialogOpen,
     selectedDeviceId,
     selectedSerial,
     campaignDevicesQuery.data,
-    selectScenarioDeviceForVars,
-    deviceVarEnabledByDevice,
-    scenarioVariables
+    selectScenarioDeviceForVars
   ]);
   const selectedDeviceLabel = useMemo(() => {
     const source = campaignDevicesQuery.data ?? devicesQuery.data ?? [];
@@ -1073,8 +1099,8 @@ export function ControlRecordView({
   ]);
   const currentDeviceVarJsonDraft = selectedScenarioDeviceId
     ? (deviceVarJsonDrafts[selectedScenarioDeviceId] ??
-      formatInitialDeviceVars({}, scenarioVariables))
-    : formatInitialDeviceVars({}, scenarioVariables);
+      formatDeviceVarsJson({}))
+    : formatDeviceVarsJson({});
   const currentDeviceVarsEnabled = selectedScenarioDeviceId
     ? deviceVarEnabledByDevice[selectedScenarioDeviceId] === true
     : false;
@@ -1111,11 +1137,10 @@ export function ControlRecordView({
       setDeviceVarJsonDrafts((prev) => ({
         ...prev,
         [selectedScenarioDeviceId]:
-          prev[selectedScenarioDeviceId] ??
-          formatInitialDeviceVars({}, scenarioVariables)
+          prev[selectedScenarioDeviceId] ?? formatDeviceVarsJson({})
       }));
     },
-    [scenarioVariables, selectedScenarioDeviceId]
+    [selectedScenarioDeviceId]
   );
   const setCurrentDeviceVarJsonDraft = useCallback(
     (value: string) => {
@@ -1167,7 +1192,7 @@ export function ControlRecordView({
     }
 
     const applySeeds = (
-      entries: Array<readonly [string, Record<string, any>]>
+      entries: Array<readonly [string, Record<string, any>, boolean?]>
     ) => {
       setDeviceVarJsonDrafts((prev) =>
         Object.fromEntries(
@@ -1177,20 +1202,22 @@ export function ControlRecordView({
             deviceVarUserEditedRef.current.has(deviceId) &&
             prev[deviceId] !== undefined
               ? prev[deviceId]
-              : formatInitialDeviceVars(vars, scenarioVariables)
+              : formatDeviceVarsJson(vars)
           ])
         )
       );
-      if (!deviceVarDialogOpen) {
-        setDeviceVarEnabledByDevice(
-          Object.fromEntries(
-            entries.map(([deviceId, vars]) => [
-              deviceId,
-              Object.keys(vars).length > 0
-            ])
-          )
-        );
-      }
+      setDeviceVarEnabledByDevice((prev) =>
+        Object.fromEntries(
+          entries.map(([deviceId, vars, enabled]) => [
+            deviceId,
+            deviceVarDialogOpen &&
+            deviceVarUserEditedRef.current.has(deviceId) &&
+            prev[deviceId] !== undefined
+              ? prev[deviceId]
+              : (enabled ?? Object.keys(vars).length > 0)
+          ])
+        )
+      );
       deviceVarsHydratedKeyRef.current = hydrationKey;
     };
 
@@ -1199,13 +1226,17 @@ export function ControlRecordView({
       (async () => {
         const detail = await campaignsApi.get(activeCampaignId!);
         if (cancelled) return;
-        queryClient.setQueryData(
-          ['campaign', activeCampaignId, 'global-vars-preview'],
-          detail
-        );
+        syncCampaignDetailCaches(queryClient, activeCampaignId!, detail);
         const overrides = campaignPerDeviceOverrides(detail);
         applySeeds(
-          devices.map((d) => [d.id, { ...(overrides[d.id] ?? {}) }] as const)
+          devices.map(
+            (d) =>
+              [
+                d.id,
+                { ...(overrides[d.id] ?? {}) },
+                Object.prototype.hasOwnProperty.call(overrides, d.id)
+              ] as const
+          )
         );
         const dataUpdatedAt = queryClient.getQueryState([
           'campaign',
@@ -1227,7 +1258,7 @@ export function ControlRecordView({
       const base = pendingScenarioDeviceVarsDraftMap ?? {};
       for (const d of devices) {
         const vars = { ...(base[d.id] ?? {}) };
-        seeded[d.id] = formatInitialDeviceVars(vars, scenarioVariables);
+        seeded[d.id] = formatDeviceVarsJson(vars);
         enabled[d.id] = Object.keys(vars).length > 0;
       }
       setDeviceVarJsonDrafts(seeded);
@@ -1316,11 +1347,7 @@ export function ControlRecordView({
           } catch {
             throw new Error(tDv('invalidAtDevice', { serial: d.serial }));
           }
-          if (Object.keys(deviceOnly).length) {
-            nextOverrides[d.id] = deviceOnly;
-          } else {
-            delete nextOverrides[d.id];
-          }
+          nextOverrides[d.id] = deviceOnly;
         }
         await campaignsApi.patchEntity(activeCampaignId, {
           per_device_overrides: nextOverrides
@@ -1363,19 +1390,13 @@ export function ControlRecordView({
         const devices = campaignDevicesQuery.data ?? [];
         if (usesCampaignDeviceOverrides) {
           const detail = await campaignsApi.get(activeCampaignId);
-          queryClient.setQueryData(
-            ['campaign', activeCampaignId, 'global-vars-preview'],
-            detail
-          );
+          syncCampaignDetailCaches(queryClient, activeCampaignId, detail);
           const overrides = campaignPerDeviceOverrides(detail);
           setDeviceVarJsonDrafts(
             Object.fromEntries(
               devices.map((d) => [
                 d.id,
-                formatInitialDeviceVars(
-                  { ...(overrides[d.id] ?? {}) },
-                  scenarioVariables
-                )
+                formatDeviceVarsJson({ ...(overrides[d.id] ?? {}) })
               ])
             )
           );
@@ -1383,7 +1404,7 @@ export function ControlRecordView({
             Object.fromEntries(
               devices.map((d) => [
                 d.id,
-                Object.keys(overrides[d.id] ?? {}).length > 0
+                Object.prototype.hasOwnProperty.call(overrides, d.id)
               ])
             )
           );
@@ -1408,7 +1429,7 @@ export function ControlRecordView({
             Object.fromEntries(
               entries.map(([deviceId, vars]) => [
                 deviceId,
-                formatInitialDeviceVars(vars, scenarioVariables)
+                formatDeviceVarsJson(vars)
               ])
             )
           );
@@ -1459,7 +1480,7 @@ export function ControlRecordView({
           Object.fromEntries(
             entries.map(([deviceId, vars]) => [
               deviceId,
-              formatInitialDeviceVars(vars, scenarioVariables)
+              formatDeviceVarsJson(vars)
             ])
           )
         );
@@ -1520,17 +1541,14 @@ export function ControlRecordView({
       setFlowDetailStep(null);
       return;
     }
-    if (flowDetailDebounceRef.current || flowDetailSyncingRef.current) {
-      return;
-    }
     const found = findStepByFlowgramId(
-      steps.items as FlowStep[],
+      stepsItemsRef.current as FlowStep[],
       flowSelectedFgId
     );
     setFlowDetailStep(
       found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null
     );
-  }, [flowSelectedFgId, steps.items]);
+  }, [flowSelectedFgId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1626,12 +1644,8 @@ export function ControlRecordView({
           const synced = applyStepsToFlowgramDocument(ctx, patched);
           flowStepsRef.current = synced as typeof steps.items;
           steps.setItems(synced as typeof steps.items);
-          const updated = findStepByFlowgramId(synced, fgId);
-          if (updated) {
-            const normalized = JSON.parse(JSON.stringify(updated)) as FlowStep;
-            flowDetailPendingRef.current = normalized;
-            setFlowDetailStep(normalized);
-          }
+          flowDetailPendingRef.current = latest;
+          setFlowDetailStep(latest);
         } catch (e) {
           toast.error(`Không áp dụng được lên canvas: ${String(e)}`);
         } finally {
@@ -1641,6 +1655,40 @@ export function ControlRecordView({
     },
     [steps]
   );
+
+  const flushPendingFlowDetailStep = useCallback(() => {
+    const fgId = flowSelectedFgIdRef.current;
+    const latest = flowDetailPendingRef.current;
+    const current = stepsItemsRef.current as FlowStep[];
+    if (flowDetailDebounceRef.current) {
+      clearTimeout(flowDetailDebounceRef.current);
+      flowDetailDebounceRef.current = null;
+    }
+    if (!fgId || !latest) return current as typeof steps.items;
+
+    const patched = patchStepByFlowgramId(current, fgId, latest);
+    const ctx = flowCtxRef.current;
+    if (!ctx) {
+      flowStepsRef.current = patched as typeof steps.items;
+      steps.setItems(patched as typeof steps.items);
+      return patched as typeof steps.items;
+    }
+
+    try {
+      flowDetailSyncingRef.current = true;
+      const synced = applyStepsToFlowgramDocument(ctx, patched);
+      flowStepsRef.current = synced as typeof steps.items;
+      steps.setItems(synced as typeof steps.items);
+      flowDetailPendingRef.current = latest;
+      setFlowDetailStep(latest);
+      return synced as typeof steps.items;
+    } catch (e) {
+      toast.error(`Không áp dụng được lên canvas: ${String(e)}`);
+      return current as typeof steps.items;
+    } finally {
+      flowDetailSyncingRef.current = false;
+    }
+  }, [steps]);
 
   const flowWorkbench = useMemo(
     () => ({
@@ -3273,6 +3321,7 @@ export function ControlRecordView({
                               flowCtxRef.current = ctx;
                             }}
                             onStepsChange={(newSteps) => {
+                              if (flowDetailSyncingRef.current) return;
                               flowStepsRef.current = newSteps as any;
                               steps.setItems(newSteps as any);
                             }}
@@ -3502,7 +3551,7 @@ export function ControlRecordView({
                     onDraftChange={setCurrentDeviceVarJsonDraft}
                     jsonError={currentDeviceVarJsonError}
                     deviceLabel={selectedDeviceLabel}
-                    baseVariables={scenarioVariables}
+                    baseVariables={deviceVarGlobalPreview}
                     globalVariablesPreview={deviceVarGlobalPreview}
                     editorClassName='min-h-[330px]'
                     emptyClassName='min-h-[330px]'

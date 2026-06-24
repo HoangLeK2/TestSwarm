@@ -54,6 +54,43 @@ def _build_live_device_alias_index(
     return index
 
 
+def _match_live_device(
+    runtime_serial: str,
+    alias_index: dict[str, tuple[str, dict[str, object]]],
+    *,
+    relay=None,
+) -> Optional[tuple[str, dict[str, object]]]:
+    runtime_serial = str(runtime_serial or "").strip()
+    if not runtime_serial:
+        return None
+
+    match = alias_index.get(runtime_serial)
+    if match is not None:
+        return match
+
+    try:
+        caps = relay.get_capabilities(runtime_serial) if relay is not None else None
+    except Exception:
+        caps = None
+    if isinstance(caps, dict):
+        hardware_serial = str(caps.get("hardware_serial") or "").strip()
+        if hardware_serial:
+            return alias_index.get(hardware_serial)
+    return None
+
+
+def _live_device_realtime_aliases(
+    registered_serial: str,
+    runtime_serial: str,
+    info: dict[str, object],
+) -> list[str]:
+    aliases = _live_device_aliases(registered_serial, info)
+    runtime_serial = str(runtime_serial or "").strip()
+    if runtime_serial and runtime_serial not in aliases:
+        aliases.append(runtime_serial)
+    return aliases
+
+
 def _apply_realtime_connectivity(
     device: dict,
     *,
@@ -196,23 +233,6 @@ def build_public_router(
         limit: Optional[int] = None,
         offset: int = 0,
     ):
-        allowed_devices = await _get_live_device_map(request, db_enabled)
-        devices = [d.status_dict() for d in manager.all_devices()]
-        if allowed_devices is not None:
-            alias_index = _build_live_device_alias_index(allowed_devices)
-            visible_devices = []
-            for d in devices:
-                serial = str(d.get("serial") or "").strip()
-                match = alias_index.get(serial)
-                if match is None:
-                    continue
-                registered_serial, info = match
-                d["registered_serial"] = registered_serial
-                d[_LIVE_DEVICE_INFO_KEY] = info
-                d["name"] = info.get("name", "")
-                d["display_name"] = info.get("display_name", d.get("serial", ""))
-                visible_devices.append(d)
-            devices = visible_devices
         try:
             from runtime.transports.adb_relay_server import get_relay_manager
             from runtime.transports.agent_control_servicer import get_control_servicer
@@ -222,6 +242,24 @@ def build_public_router(
         except Exception:
             relay = None
             ctrl = None
+
+        allowed_devices = await _get_live_device_map(request, db_enabled)
+        devices = [d.status_dict() for d in manager.all_devices()]
+        if allowed_devices is not None:
+            alias_index = _build_live_device_alias_index(allowed_devices)
+            visible_devices = []
+            for d in devices:
+                serial = str(d.get("serial") or "").strip()
+                match = _match_live_device(serial, alias_index, relay=relay)
+                if match is None:
+                    continue
+                registered_serial, info = match
+                d["registered_serial"] = registered_serial
+                d[_LIVE_DEVICE_INFO_KEY] = info
+                d["name"] = info.get("name", "")
+                d["display_name"] = info.get("display_name", d.get("serial", ""))
+                visible_devices.append(d)
+            devices = visible_devices
 
         def _relay_online_for_serial(serial: str) -> bool:
             serial = str(serial or "").strip()
@@ -239,8 +277,9 @@ def build_public_router(
             if not isinstance(info, dict):
                 info = {}
             requires_relay = bool(info.get("requires_relay"))
-            aliases = _live_device_aliases(
+            aliases = _live_device_realtime_aliases(
                 str(d.get("registered_serial") or serial),
+                serial,
                 info,
             )
             relay_online = any(_relay_online_for_serial(str(alias)) for alias in aliases)

@@ -759,7 +759,7 @@ async def test_post_open_defaults_to_coordinate_tap() -> None:
 
     assert ok is True
     assert route == "click_coord"
-    assert exec_.clicks == [(240, 230)]
+    assert exec_.clicks == [(308, 230)]
 
 
 @pytest.mark.asyncio
@@ -785,7 +785,7 @@ async def test_post_open_u2_click_is_explicit_fallback_only() -> None:
 
     assert ok is False
     assert route == "tap_failed"
-    assert exec_.clicks == [(240, 230)]
+    assert exec_.clicks == [(308, 230)]
     assert exec_.batches[0][0]["op"] == "click_spec"
     assert exec_.batches[0][0]["timeout"] == 0.25
 

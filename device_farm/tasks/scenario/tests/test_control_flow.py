@@ -50,6 +50,24 @@ def test_loop_step_propagates_nested_failure():
     assert result["iterations"] == 2
 
 
+def test_loop_does_not_persist_failed_iteration_as_complete():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 3, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        return_value={"success": False, "failed_message": "u2_transient_error"},
+    ), patch("tasks.scenario.steps.control_flow._persist_loop_iter") as persist:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False
+    assert result["iterations"] == 1
+    persist.assert_not_called()
+
+
 def test_loop_step_stops_when_cancel_event_set():
     from tasks.scenario.steps.control_flow import handle_loop
 

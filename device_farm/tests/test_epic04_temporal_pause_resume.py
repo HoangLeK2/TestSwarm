@@ -28,10 +28,10 @@ def _batch_indices(inp) -> list[int]:
     return list(raw or [])
 
 
-def test_temporal_error_policy_defaults_run_scenario_to_continue():
+def test_temporal_error_policy_defaults_run_scenario_to_stop():
     from temporal.workflows import _error_policy
 
-    assert _error_policy({"type": "run_scenario"}, {}) == "continue"
+    assert _error_policy({"type": "run_scenario"}, {}) == "stop"
     assert _error_policy({"type": "tap"}, {}) == "stop"
 
 
@@ -74,6 +74,59 @@ def pause_coord():
         "step1_running": asyncio.Event(),
         "step1_finish_allowed": asyncio.Event(),
     }
+
+
+@pytest.mark.asyncio
+async def test_batch_activity_exception_returns_failed_step_instead_of_child_workflow_error():
+    try:
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+        from temporalio import activity as temporal_activity
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(_inp):
+        raise RuntimeError("adb relay timed out")
+
+    steps_inp = StepsInput(
+        device_serial="V2352A",
+        steps=[{"type": "wait", "seconds": 0}],
+        scenario_config={"batch_size": 1},
+        execution_id="exec-batch-error-test",
+    )
+
+    try:
+        env = await WorkflowEnvironment.start_time_skipping()
+    except RuntimeError as exc:
+        if "Operation not permitted" in str(exc):
+            pytest.skip("Temporal test server blocked by sandbox")
+        raise
+
+    async with env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioStepsWorkflow],
+            activities=[mock_batch],
+        ):
+            result = await env.client.execute_workflow(
+                ScenarioStepsWorkflow.run,
+                steps_inp,
+                id="test-batch-activity-exception-step-result",
+                task_queue=TASK_QUEUE_NAME,
+            )
+
+    assert result.success is False
+    assert result.step_results
+    assert result.step_results[0]["index"] == 0
+    assert result.step_results[0]["type"] == "wait"
+    assert result.step_results[0]["ok"] is False
+    assert "adb relay timed out" in result.step_results[0]["message"]
+    assert "Child Workflow execution failed" not in result.failed_message
+    assert "Workflow error" not in result.failed_message
 
 
 @pytest.mark.asyncio

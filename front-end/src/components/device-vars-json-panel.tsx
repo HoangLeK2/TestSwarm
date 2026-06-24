@@ -50,7 +50,7 @@ export function buildDeviceVarsTemplate(
   return Object.keys(out).length ? out : { ...DEFAULT_DEVICE_VARIABLES };
 }
 
-/** Same resolution stack as runtime: campaign then scenario (scenario wins on same key). */
+/** Resolve globals for device vars: campaign values fill gaps, scenario values win on duplicate keys. */
 export function mergeCampaignScenarioVariables(
   campaignVariables?: Record<string, unknown> | null,
   scenarioVariables?: Record<string, unknown> | null
@@ -220,15 +220,6 @@ function VariablesFieldGrid({
   );
 }
 
-export function formatInitialDeviceVars(
-  vars: Record<string, unknown>,
-  baseVariables?: Record<string, unknown>
-) {
-  return formatDeviceVarsJson(
-    Object.keys(vars).length ? vars : buildDeviceVarsTemplate(baseVariables)
-  );
-}
-
 type DeviceVarsJsonPanelProps = {
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
@@ -276,19 +267,18 @@ export function DeviceVarsJsonPanel({
   }
 
   const globalPreview = globalVariablesPreview ?? {};
-  /** Keys already shown in merged editor (global ∪ device) — template chips only for keys truly absent there. */
-  const effectiveMergedForTemplate = useMemo(() => {
+  const effectiveDeviceVarsForTemplate = useMemo(() => {
     if (!enabled) return {} as Record<string, unknown>;
-    if (parsedDraft === null) return { ...globalPreview };
-    return { ...globalPreview, ...parsedDraft };
-  }, [enabled, globalPreview, parsedDraft]);
+    if (parsedDraft === null) return {};
+    return parsedDraft;
+  }, [enabled, parsedDraft]);
 
   const missingTemplateKeys = useMemo(() => {
     if (!enabled) return [];
     return Object.keys(templateVars)
-      .filter((key) => !(key in effectiveMergedForTemplate))
+      .filter((key) => !(key in effectiveDeviceVarsForTemplate))
       .slice(0, 16);
-  }, [enabled, templateVars, effectiveMergedForTemplate]);
+  }, [enabled, templateVars, effectiveDeviceVarsForTemplate]);
 
   const addTemplateKey = (key: string) => {
     const current = parsedDraft ?? {};
@@ -299,27 +289,23 @@ export function DeviceVarsJsonPanel({
   const globalJson = JSON.stringify(globalPreview, null, 2);
   const hasGlobalPreview = Object.keys(globalPreview).length > 0;
 
-  const mergedEditorValue = useMemo(() => {
+  const overrideEditorValue = useMemo(() => {
     if (!enabled) return '';
     if (parsedDraft === null) return draft;
-    return formatDeviceVarsJson({ ...globalPreview, ...parsedDraft });
-  }, [draft, enabled, globalPreview, parsedDraft]);
+    return formatDeviceVarsJson(parsedDraft);
+  }, [draft, enabled, parsedDraft]);
 
-  const handleMergedEditorChange = useCallback(
+  const handleOverrideEditorChange = useCallback(
     (text: string) => {
       if (!enabled) return;
       try {
-        const merged = parseDeviceVarsJson(text, parseMsgs);
-        const deviceOnly = splitDeviceOverridesFromMerged(
-          merged,
-          globalPreview
-        );
+        const deviceOnly = parseDeviceVarsJson(text, parseMsgs);
         onDraftChange(formatDeviceVarsJson(deviceOnly));
       } catch {
         onDraftChange(text);
       }
     },
-    [enabled, globalPreview, onDraftChange, parseMsgs]
+    [enabled, onDraftChange, parseMsgs]
   );
 
   const globalReadOnlyBlock = (
@@ -402,10 +388,10 @@ export function DeviceVarsJsonPanel({
               'min-h-[200px] flex-1 resize-none font-mono text-xs leading-5',
               editorClassName
             )}
-            value={mergedEditorValue}
+            value={overrideEditorValue}
             disabled={loading}
             spellCheck={false}
-            onChange={(event) => handleMergedEditorChange(event.target.value)}
+            onChange={(event) => handleOverrideEditorChange(event.target.value)}
           />
         </div>
       ) : (

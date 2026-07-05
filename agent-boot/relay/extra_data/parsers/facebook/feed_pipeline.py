@@ -365,17 +365,22 @@ def parse_fb_count_text(text: Any) -> int:
     """Parse FB count badges: ``70``, ``1.2K``, ``45M`` → int (0 on failure)."""
     if text is None:
         return 0
-    s = str(text).replace(",", "").strip()
+    s = str(text).strip()
     if not s:
         return 0
     m = _COUNT_RE.search(s)
     if not m:
         return 0
+    raw_number = m.group(1)
+    suffix = (m.group(2) or "").lower()
+    if suffix and "," in raw_number and "." not in raw_number:
+        raw_number = raw_number.replace(",", ".")
+    else:
+        raw_number = raw_number.replace(",", "")
     try:
-        val = float(m.group(1))
+        val = float(raw_number)
     except (ValueError, TypeError):
         return 0
-    suffix = (m.group(2) or "").lower()
     if suffix == "k":
         val *= 1_000
     elif suffix == "m":
@@ -387,23 +392,66 @@ def parse_fb_count_text(text: Any) -> int:
 
 def extract_post_comment_count_from_xml(xml: str) -> Optional[int]:
     """Read total comment count shown on the post (action bar or header stats)."""
-    from .parser import _parse_xml
+    from .parser import _hierarchy_is_fb_comment_sheet, _parse_xml
     from .post_extractor import _extract_post_action_bar_stats
 
     root = _parse_xml(xml)
     if root is None:
         return None
 
-    for raw in (
-        (_extract_post_action_bar_stats(root) or {}).get("comments"),
-        (_extract_header_stats(root) or {}).get("comments"),
-    ):
-        if not raw:
+    action_raw = (_extract_post_action_bar_stats(root) or {}).get("comments")
+    header_raw = (_extract_header_stats(root) or {}).get("comments")
+
+    counts: list[int | None] = []
+    for raw in (action_raw, header_raw):
+        if raw is None or str(raw).strip() == "":
+            counts.append(None)
             continue
-        count = parse_fb_count_text(raw)
-        if count > 0:
-            return count
+        counts.append(parse_fb_count_text(raw))
+    action_count, header_count = counts
+
+    if action_count is not None and action_count > 0:
+        return action_count
+    if header_count is not None and header_count > 0:
+        return header_count
+    if action_count is not None:
+        return action_count
+    if header_count is not None:
+        return header_count
+    if _hierarchy_is_fb_comment_sheet(root) and _comment_sheet_action_bar_implies_zero_comments(root):
+        return 0
     return None
+
+
+def _comment_sheet_action_bar_implies_zero_comments(root) -> bool:
+    from .parser import _normalize_fb_ui_spacing
+    from .post_extractor import _extract_post_action_bar_stats
+
+    def _label(node) -> str:
+        raw = (node.get("content-desc") or "").strip() or (node.get("text") or "").strip()
+        return _normalize_fb_ui_spacing(raw).casefold()
+
+    for node in root.iter("node"):
+        label = _label(node)
+        if "nút chia sẻ" not in label or "bài viết" not in label:
+            continue
+        cur = node.getparent()
+        for _ in range(4):
+            if cur is None:
+                break
+            labels = [_label(child) for child in cur.iter("node")]
+            has_comment_button = any(
+                value == "bình luận"
+                or value.startswith("nút bình luận")
+                or value.startswith("comment button")
+                for value in labels
+            )
+            has_post_share = any("nút chia sẻ" in value and "bài viết" in value for value in labels)
+            if has_comment_button and has_post_share:
+                stats = _extract_post_action_bar_stats(cur)
+                return stats.get("comments") is None
+            cur = cur.getparent()
+    return False
 
 
 def resolve_comment_crawl_target(
@@ -412,7 +460,9 @@ def resolve_comment_crawl_target(
 ) -> int:
     """Cap crawl target by the smaller of ``max_items`` and on-screen post comment count."""
     target = max(1, int(max_items))
-    if post_comment_count is not None and post_comment_count > 0:
+    if post_comment_count is not None and post_comment_count <= 0:
+        return 0
+    if post_comment_count is not None:
         target = min(target, post_comment_count)
     return target
 
@@ -427,4 +477,3 @@ __all__ = [
     "parse_fb_posts_from_xml_with_diagnostic",
     "resolve_comment_crawl_target",
 ]
-

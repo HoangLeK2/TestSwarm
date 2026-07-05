@@ -13,12 +13,10 @@ import {
   RunScenarioFields,
   type RunScenarioCampaignOption
 } from '../scenario-steps/run-scenario-editor';
-import {
-  createDefaultFbCommentThenSteps,
-  type FlowStep
-} from '../scenario-steps/types';
+import { type FlowStep } from '../scenario-steps/types';
 import { SCENARIO_VAR_TOKENS } from '../../i18n/scenario-var-tokens';
 import { ExtractStepFields } from './extract-fields';
+import { AppAutomationStepFields } from './app-automation-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
 import {
@@ -259,7 +257,6 @@ export function StepDetailPanel({
     step.rx1 != null && step.ry1 != null && step.rx2 != null && step.ry2 != null
       ? 'ratio'
       : 'absolute';
-
   return (
     <div className='flex flex-col bg-card'>
       <StepPanelHeader step={step} />
@@ -690,6 +687,18 @@ export function StepDetailPanel({
             </div>
           )}
 
+          {[
+            'login_if_needed',
+            'fill_form',
+            'assert_app_state'
+          ].includes(step.type) && (
+            <AppAutomationStepFields
+              step={step}
+              update={update}
+              availableVariables={availableVariables}
+            />
+          )}
+
           {step.type === 'input_text' && (
             <>
               <F label='Nội dung nhập'>
@@ -953,104 +962,12 @@ export function StepDetailPanel({
             </F>
           )}
 
-          {(step.type === 'fb_tap_comment_button' ||
-            step.type === 'tap_fb_comment_button') && (
+          {step.type === 'fb_find_comment_button' && (
             <>
-              {/* ── Mô tả ── */}
-              <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
-                <div className='mb-1 font-semibold'>
-                  Bấm nút "Bình luận" (Facebook)
-                </div>
-                <div className='space-y-0.5'>
-                  <div>
-                    ① <b>Tìm</b> bài đầu tiên có nút Bình luận đang hiện trên
-                    màn hình
-                  </div>
-                  <div>
-                    ② <b>Ghi nhớ bài đó</b> — comment thu thập sau sẽ gắn đúng
-                    bài này
-                  </div>
-                  <div>
-                    ③ <b>Bấm nút</b> → sheet bình luận mở
-                  </div>
-                  <div>
-                    ④ <b>Chọn bộ lọc</b> trong sheet 3 option (tùy chọn)
-                  </div>
-                  <div>
-                    ⑤ Chạy nhánh <b>Khi bấm được</b> hoặc <b>Không thấy nút</b>
-                  </div>
-                </div>
-                <div className='mt-2 rounded bg-amber-50 px-2 py-1.5 text-[10px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200'>
-                  <b>Bước này không tự thu thập comment.</b> Để lấy comment, đặt
-                  bước
-                  <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
-                    extract fb_comments
-                  </code>
-                  vào nhánh <b>Khi bấm được</b> — lúc đó comment sẽ tự động gắn
-                  đúng bài vừa bấm.
-                </div>
-                {(!Array.isArray(step.then) || step.then.length === 0) && (
-                  <div className='mt-2 flex flex-wrap items-center gap-2 rounded bg-background/70 px-2 py-1.5'>
-                    <span className='text-[10px] text-muted-foreground'>
-                      Nhánh Khi bấm được đang trống.
-                    </span>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      className='h-7 px-2 text-[10px]'
-                      onClick={() =>
-                        update({ then: createDefaultFbCommentThenSteps() })
-                      }
-                    >
-                      Thêm 5 bước lấy bình luận
-                    </Button>
-                  </div>
-                )}
+              <div className='rounded-md border border-sky-400/40 bg-sky-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-sky-950 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-100'>
+                Tìm nút Bình luận đúng bài viết và cache target trong runtime.
+                Step này không bấm.
               </div>
-
-              {/* ── Phase 1: Tìm nút ── */}
-              <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                ① Tìm nút Bình luận
-              </div>
-              <div className='rounded border border-border/50 bg-muted/30 px-2.5 py-2 text-[11px] text-muted-foreground'>
-                Tìm node <code className='rounded bg-muted px-1'>Button</code>{' '}
-                có text / content-desc là{' '}
-                <code className='rounded bg-muted px-1'>"Bình luận"</code> hoặc{' '}
-                <code className='rounded bg-muted px-1'>"Comment"</code>. Nếu
-                không thấy Button, tự động fallback sang node{' '}
-                <code className='rounded bg-muted px-1'>clickable=true</code>{' '}
-                cùng text. Không tìm thấy → chạy nhánh <b>Không thấy nút</b>.
-              </div>
-
-              <StepPanelToggle
-                label='Cuộn nhẹ trước khi tìm'
-                description='Hé lộ hàng Thích / Bình luận khi bài viết dài (thay cho bước scroll_down riêng trước bước này).'
-                checked={!!step.pre_scroll}
-                onCheckedChange={(checked) => update({ pre_scroll: checked })}
-              />
-
-              {step.pre_scroll && (
-                <F label='Khoảng cách cuộn (0–1, tỉ lệ màn hình)'>
-                  <Input
-                    type='number'
-                    min={0.05}
-                    max={0.6}
-                    step={0.01}
-                    className='h-8 w-28 text-xs'
-                    value={step.pre_scroll_distance ?? 0.24}
-                    onChange={(e) =>
-                      update({
-                        pre_scroll_distance: Math.min(
-                          0.6,
-                          Math.max(0.05, Number(e.target.value) || 0.24)
-                        )
-                      })
-                    }
-                  />
-                </F>
-              )}
-
               <div className='grid grid-cols-2 gap-2'>
                 <F label='Chờ nút tối đa (giây)'>
                   <Input
@@ -1081,10 +998,20 @@ export function StepDetailPanel({
                   />
                 </F>
               </div>
+              <StepPanelToggle
+                label='Bỏ qua lỗi nếu không thấy nút'
+                description='Tắt để scenario fail ngay khi không resolve được nút Bình luận.'
+                checked={step.ignore_error !== false}
+                onCheckedChange={(checked) => update({ ignore_error: checked })}
+              />
+            </>
+          )}
 
-              {/* ── Phase 2: Sau khi tap ── */}
-              <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                ② Sau khi bấm
+          {step.type === 'fb_tap_comment_target' && (
+            <>
+              <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
+                Bấm target đã được cache bởi bước Tìm nút Bình luận, rồi xác
+                minh sheet bình luận đã mở.
               </div>
               <F label='Chờ sheet bình luận mở (giây)'>
                 <Input
@@ -1092,23 +1019,33 @@ export function StepDetailPanel({
                   min={0}
                   step={0.1}
                   className='h-8 w-28 text-xs'
-                  value={step.post_tap_wait_s ?? 0.8}
+                  value={step.post_tap_wait_s ?? 0.35}
                   onChange={(e) =>
                     update({
                       post_tap_wait_s: Math.max(
                         0,
-                        Number(e.target.value) || 0.8
+                        Number(e.target.value) || 0.35
                       )
                     })
                   }
                 />
               </F>
+              <StepPanelToggle
+                label='Bỏ qua lỗi nếu không mở được sheet'
+                description='Tắt để scenario fail khi tap xong nhưng sheet bình luận không verify được.'
+                checked={step.ignore_error !== false}
+                onCheckedChange={(checked) => update({ ignore_error: checked })}
+              />
+            </>
+          )}
 
-              {/* ── Phase 3: Bộ lọc ── */}
-              <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                ③ Bộ lọc bình luận
+          {step.type === 'fb_apply_comment_filter' && (
+            <>
+              <div className='rounded-md border border-emerald-400/40 bg-emerald-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-emerald-950 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-100'>
+                Đổi bộ lọc trong sheet bình luận đang mở. Đặt step này sau
+                bước Bấm target Bình luận.
               </div>
-              <F label='Sắp xếp bình luận sau khi mở sheet'>
+              <F label='Bộ lọc bình luận'>
                 <select
                   className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
                   value={
@@ -1140,42 +1077,57 @@ export function StepDetailPanel({
                   <option value='all_comments'>Tất cả bình luận</option>
                 </select>
               </F>
-              <p className='text-[10px] leading-relaxed text-muted-foreground'>
-                Mở sheet bằng hàng &quot;Nhấn để thay đổi bộ lọc&quot;, rồi tap
-                đúng một trong ba dòng tiêu đề (không tap dòng mô tả spam bên
-                dưới).
-              </p>
-
-              {/* ── Phase 4: Nhận diện bài ── */}
-              <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                ④ Nhận diện bài viết
-              </div>
-              <StepPanelToggle
-                label='Chỉ bấm khi đã mở chi tiết bài'
-                description='Bật khi bước trước đã extract fb_posts với mở bài — bỏ qua nếu chưa xác minh parent bài viết trên màn hình chi tiết.'
-                checked={!!step.require_post_before_comment}
-                onCheckedChange={(checked) =>
-                  update({ require_post_before_comment: checked })
-                }
-              />
-              <F label='Trường hash bài (giữ mặc định nếu không rõ)'>
+              <F label='Chờ sau khi đổi filter (giây)'>
                 <Input
-                  className='h-8 font-mono text-xs'
-                  value={step.dedupe_field ?? 'post_key'}
+                  type='number'
+                  min={0}
+                  step={0.1}
+                  className='h-8 w-28 text-xs'
+                  value={step.comment_filter_settle_s ?? 0.45}
                   onChange={(e) =>
-                    update({ dedupe_field: e.target.value || 'post_key' })
+                    update({
+                      comment_filter_settle_s: Math.max(
+                        0,
+                        Number(e.target.value) || 0.45
+                      )
+                    })
                   }
-                  placeholder='post_key'
                 />
               </F>
+            </>
+          )}
 
-              {/* ── Khi lỗi ── */}
-              <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                ⑤ Khi không tìm thấy nút
+          {(step.type === 'fb_tap_comment_button' ||
+            step.type === 'tap_fb_comment_button') && (
+            <>
+              <div className='rounded-md border border-amber-400/50 bg-amber-50/70 px-3 py-2.5 text-[11px] leading-relaxed text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100'>
+                <div className='mb-1 font-semibold'>
+                  Legacy compound node
+                </div>
+                <div>
+                  Node này được giữ để chạy scenario cũ. Với flow mới, hãy dùng
+                  các node tuần tự riêng:
+                  <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
+                    Tìm nút Bình luận
+                  </code>
+                  →
+                  <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
+                    Bấm target Bình luận
+                  </code>
+                  →
+                  <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
+                    Áp dụng bộ lọc
+                  </code>
+                  →
+                  <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
+                    extract fb_comments
+                  </code>
+                  .
+                </div>
               </div>
               <StepPanelToggle
                 label='Bỏ qua khi không thấy nút'
-                description='Khuyến nghị bật — không có nút Bình luận không bị tính là lỗi. Bỏ tick để dừng kịch bản khi không tìm thấy nút.'
+                description='Compatibility setting cho scenario cũ. Flow mới nên cấu hình lỗi trên node Tìm/Bấm riêng.'
                 checked={step.ignore_error !== false}
                 onCheckedChange={(checked) => update({ ignore_error: checked })}
               />

@@ -5,6 +5,7 @@ import type { FlowStep } from '../scenario-steps/types';
 import { applyTapPointToSteps } from './coordinate-pick.ts';
 import {
   decodeScenarioInlineRunKey,
+  deriveNestedInlineRunStates,
   encodeScenarioInlineRunKey,
   resolveLatestStepForInlineRun,
   resolveStepForInlineRunKey
@@ -82,4 +83,41 @@ test('pick target path matches inline run key for nested then branch', () => {
   const resolved = resolveStepForInlineRunKey(afterPick, runKey);
   assert.equal((resolved as { x?: number }).x, 0.55);
   assert.equal((resolved as { y?: number }).y, 0.66);
+});
+
+test('deriveNestedInlineRunStates maps parent branch sub_result to child keys', () => {
+  const states = deriveNestedInlineRunStates('0', {
+    event: 'step_done',
+    ok: true,
+    branch: 'then',
+    sub_result: {
+      step_results: [
+        { ok: true },
+        { ok: true },
+        { ok: false, sub_result: { step_results: [{ ok: true }] } }
+      ]
+    }
+  });
+
+  assert.deepEqual(states, {
+    '0/then:0': 'ok',
+    '0/then:1': 'ok',
+    '0/then:2': 'error',
+    '0/then:2/steps:0': 'ok'
+  });
+});
+
+test('deriveNestedInlineRunStates maps random branch result to branch key', () => {
+  const states = deriveNestedInlineRunStates('2', {
+    event: 'step_done',
+    ok: true,
+    chosen_branch: 1,
+    sub_result: {
+      step_results: [{ ok: true }]
+    }
+  });
+
+  assert.deepEqual(states, {
+    '2/branches.1.steps:0': 'ok'
+  });
 });

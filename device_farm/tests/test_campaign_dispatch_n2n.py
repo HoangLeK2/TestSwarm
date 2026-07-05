@@ -155,6 +155,57 @@ async def test_dispatch_device_vars_share_namespace_and_override_global_vars():
 
 
 @pytest.mark.asyncio
+async def test_fb_groups_per_device_guard_uses_referenced_device_var_key():
+    db = _make_db_mock()
+    temporal = AsyncMock()
+    temporal.start_workflow = AsyncMock()
+    execution = SimpleNamespace(id="exec-profile-text", meta={"scenarios_count": 1})
+    devices = [_device("dev-1", "SN001"), _device("dev-2", "SN002")]
+    scenario = _scenario("sc-profile-text")
+    scenario.name = "fb_groups_per_device"
+    scenario.variables = {"profile_text": ""}
+    scenario.steps = [
+        {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${profile_text}"},
+        {"type": "wait", "seconds": 0},
+    ]
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-profile-text")))
+        stack.enter_context(patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=devices))
+        stack.enter_context(
+            patch("services.campaign_dispatch.repo.list_scenarios", return_value=[scenario])
+        )
+        stack.enter_context(patch("services.campaign_dispatch.repo.update_campaign_status", new_callable=AsyncMock))
+        stack.enter_context(patch("db.crud.scenario_template.list_templates", new_callable=AsyncMock, return_value=[]))
+        stack.enter_context(patch("services.campaign_dispatch._get_device_account_vars", new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(
+                "services.campaign_dispatch.get_scenario_device_variables_bulk",
+                new_callable=AsyncMock,
+                return_value={
+                    ("sc-profile-text", "dev-1"): {"profile_text": "Group A"},
+                    ("sc-profile-text", "dev-2"): {"profile_text": "Group B"},
+                },
+            )
+        )
+        stack.enter_context(patch("db.crud.execution.create_execution", new_callable=AsyncMock, return_value=execution))
+        stack.enter_context(patch("db.crud.execution.add_device_to_execution", new_callable=AsyncMock))
+        stack.enter_context(patch("db.crud.execution.update_execution", new_callable=AsyncMock))
+
+        result, status = await enqueue_campaign_run_temporal("camp-profile-text", temporal)
+
+    assert status == 200
+    assert len(result["workflow_ids"]) == 2
+    started_inputs = [call.args[1] for call in temporal.start_workflow.await_args_list]
+    values = {
+        inp.device_serial: inp.steps[0]["variables"]["profile_text"]
+        for inp in started_inputs
+    }
+    assert values == {"SN001": "Group A", "SN002": "Group B"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_multi_device_multi_scenario_starts_one_sequence_per_device():
     db = _make_db_mock()
     temporal = AsyncMock()

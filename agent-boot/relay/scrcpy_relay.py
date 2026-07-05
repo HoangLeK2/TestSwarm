@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import socket
 import struct
 import subprocess
@@ -29,13 +28,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from relay.adb import _adb_command
+
 logger = logging.getLogger("relay.scrcpy")
 
 _SCRCPY_PATH_ON_DEVICE = "/data/local/tmp/scrcpy-server"
 _CACHE_DIR = Path.home() / ".cache" / "device-farm"
 _PTS_CONFIG_MASK = 0x8000_0000_0000_0000
-_ADB = shutil.which("adb") or "adb"
-
 # Bundled JAR — agent-boot owns the scrcpy-server binary, no need to receive
 # it from the farm server over gRPC.
 _BUNDLED_JAR = Path(__file__).parent / "scrcpy-server"
@@ -295,10 +294,7 @@ def _adb_forward_host() -> str:
 
 def _adb(*args: str, serial: Optional[str] = None, timeout: int = 15) -> tuple[str, int]:
     """Run `adb [-s serial] <args>`. Returns (output, returncode). Never raises."""
-    cmd = [_ADB]
-    if serial:
-        cmd += ["-s", serial]
-    cmd += list(args)
+    cmd = _adb_command(*args, serial=serial)
     # Suppress macOS MallocStackLogging spam
     env = os.environ.copy()
     env.pop("MallocStackLogging", None)
@@ -773,7 +769,7 @@ class ScrcpyRelaySession:
         env.pop("MallocStackLoggingNoCompact", None)
 
         self._server_proc = subprocess.Popen(
-            [_ADB, "-s", self._serial, "shell", server_cmd],
+            _adb_command("shell", server_cmd, serial=self._serial),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=env,
@@ -941,16 +937,18 @@ class ScrcpyRelaySession:
             except socket.timeout:
                 raise RuntimeError(f"scrcpy mid-frame timeout ({_IDR_REQUEST_AFTER}s) — encoder stalled mid-NAL")
 
-            last_good_frame = time.monotonic()
-            # We got a frame again — clear the stall window so future bursts
-            # are measured independently.
-            idr_window_start = 0.0
-            idr_request_count = 0
-
-            self.last_frame_time = time.monotonic()
-
             is_cfg = bool(pts_raw & _PTS_CONFIG_MASK)
             is_key = (not is_cfg) and _is_idr(data)
+
+            if not is_cfg:
+                last_good_frame = time.monotonic()
+                # We got a real video frame again — clear the stall window so
+                # future bursts are measured independently. Config/SPS packets
+                # after a capture reset do not prove the encoder recovered.
+                idr_window_start = 0.0
+                idr_request_count = 0
+
+                self.last_frame_time = time.monotonic()
 
             # Convert video frames Annex-B → AVCC here in the relay thread so the
             # farm's asyncio event loop never has to do the O(n) conversion at 30fps.

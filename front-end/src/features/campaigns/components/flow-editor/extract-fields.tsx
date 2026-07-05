@@ -495,12 +495,14 @@ export function ExtractStepFields({
           checked={expand}
           onCheckedChange={(checked) => update({ expand_see_more: checked })}
         />
-        <StepPanelToggle
-          label={t('stopIfNoNewLabel')}
-          description={t('stopIfNoNewDescription')}
-          checked={step.stop_if_no_new ?? true}
-          onCheckedChange={(checked) => update({ stop_if_no_new: checked })}
-        />
+        {strategy !== 'fb_comments' ? (
+          <StepPanelToggle
+            label={t('stopIfNoNewLabel')}
+            description={t('stopIfNoNewDescription')}
+            checked={step.stop_if_no_new ?? false}
+            onCheckedChange={(checked) => update({ stop_if_no_new: checked })}
+          />
+        ) : null}
       </StepPanelSection>
 
       {strategy === 'fb_posts' ||
@@ -526,6 +528,7 @@ export function ExtractStepFields({
           >
             <Input
               className='h-8 font-mono text-xs'
+              disabled
               value={
                 step.strategy_version ??
                 (strategy === 'fb_comments'
@@ -533,9 +536,6 @@ export function ExtractStepFields({
                   : strategy === 'text_nodes'
                     ? 'text_nodes:v1'
                     : 'fb_posts:v1')
-              }
-              onChange={(e) =>
-                update({ strategy_version: e.target.value || undefined })
               }
             />
           </CompactField>
@@ -671,17 +671,42 @@ export function ExtractStepFields({
                   />
                 </CompactField>
                 <CompactField
+                  label={t('commentEarlyStopLabel')}
+                  hint={t('commentEarlyStopHint')}
+                >
+                  <select
+                    className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                    value={
+                      (step.comment_stop_if_no_new ?? step.stop_if_no_new)
+                        ? 'no_new'
+                        : 'off'
+                    }
+                    onChange={(e) => {
+                      const enabled = e.target.value === 'no_new';
+                      update({
+                        comment_stop_if_no_new: enabled,
+                        stop_if_no_new: enabled
+                      });
+                    }}
+                  >
+                    <option value='off'>{t('commentEarlyStopOff')}</option>
+                    <option value='no_new'>
+                      {t('commentEarlyStopNoNew')}
+                    </option>
+                  </select>
+                </CompactField>
+                <CompactField
                   label={t('commentNoGrowthBreakLabel')}
                   hint={t('commentNoGrowthBreakHint')}
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_no_growth_break ?? 3)}
+                    value={String(step.comment_no_growth_break ?? 0)}
                     onChange={(e) =>
                       update({
                         comment_no_growth_break: parseNumOrVar(
                           e.target.value,
-                          3
+                          0
                         )
                       })
                     }

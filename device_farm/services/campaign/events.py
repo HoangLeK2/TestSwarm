@@ -229,7 +229,7 @@ async def _emit_campaign_status_notification(
                 "error_message": reason,
                 "actor_user_id": user_id,
                 "recipient_user_id": user_id,
-                "app_base_url": device_farm_frontend_url(),
+                "app_base_url": device_farm_frontend_url(fallback=""),
             },
         )
     except Exception as exc:
@@ -293,7 +293,7 @@ async def emit_campaign_step_warning(
                 "error_message": error_message,
                 "actor_user_id": user_id,
                 "recipient_user_id": user_id,
-                "app_base_url": device_farm_frontend_url(),
+                "app_base_url": device_farm_frontend_url(fallback=""),
             },
         )
     except Exception as exc:

@@ -197,6 +197,10 @@ def _node_matches_selector(node: Any, by: str, value: str) -> bool:
         return (node.get("resource-id") or "") == value
     if by in ("description", "content-desc", "accessibility id"):
         return (node.get("content-desc") or "") == value
+    if by == "descriptionContains":
+        return value in (node.get("content-desc") or "")
+    if by in ("descriptionStartsWith", "descriptionStartswith"):
+        return (node.get("content-desc") or "").startswith(value)
     if by in ("class name", "className"):
         return (node.get("class") or "") == value
     if by in ("package", "packageName"):

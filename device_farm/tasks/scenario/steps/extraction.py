@@ -222,9 +222,6 @@ _BALANCED_FB_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
 _LEGACY_BALANCED_COMMENT_FINGERPRINTS: tuple[tuple[tuple[str, Any], ...], ...] = (
     (("max_items", 500), ("comment_scroll_passes", 40), ("comment_swipes_per_dump", 6)),
     (("max_items", 400), ("comment_scroll_passes", 40), ("comment_swipes_per_dump", 6)),
-    (("comment_scroll_passes", 16), ("comment_swipes_per_dump", 4)),
-    (("comment_swipes_per_dump", 4), ("comment_scroll_duration_ms", 120)),
-    (("comment_swipes_per_dump", 4), ("comment_scroll_pause_s", 0.03)),
 )
 
 
@@ -253,7 +250,21 @@ def _apply_balanced_comment_runtime_overrides(
         return
     for key in _BALANCED_FB_COMMENT_RUNTIME_KEYS:
         if key in profile_defaults:
+            if key == "max_items":
+                continue
             context[key] = profile_defaults[key]
+
+
+_COMMENT_FILTER_SOFT_FAILURE_REASONS = {
+    "disabled",
+}
+
+
+def _comment_filter_apply_failed(filter_report: Dict[str, Any]) -> bool:
+    reason = str(filter_report.get("reason_code") or "")
+    if filter_report.get("switched") or reason in _COMMENT_FILTER_APPLIED_REASONS:
+        return False
+    return reason not in _COMMENT_FILTER_SOFT_FAILURE_REASONS
 
 
 def _normalize_legacy_balanced_comment_budget(
@@ -758,13 +769,25 @@ def request_edge_extra_data(
             reason = str(filter_report.get("reason_code") or "")
             if filter_report.get("switched") or reason in _COMMENT_FILTER_APPLIED_REASONS:
                 ctx["_fb_comment_filter_applied"] = target_filter
-            elif reason not in {"", "disabled", "no_relay", "cancelled", "request_failed", "ingest_failed"}:
+            elif reason == "cancelled" or (cancel_event is not None and cancel_event.is_set()):
+                result["ok"] = False
+                result["message"] = f"edge extra_data {strategy}: cancelled"
+                result["cancelled"] = True
+                return True
+            elif _comment_filter_apply_failed(filter_report):
                 log.info(
                     "[%s] fb_comments extract filter apply reason=%s switched=%s",
                     serial,
                     reason,
                     filter_report.get("switched"),
                 )
+                result["ok"] = False
+                result["message"] = (
+                    f"edge extra_data fb_comments: comment filter {target_filter} "
+                    f"not verified ({reason or 'unknown'})"
+                )
+                result["reason_code"] = f"comment_filter:{reason or 'unknown'}"
+                return True
             if cancel_event is not None and cancel_event.is_set():
                 result["ok"] = False
                 result["message"] = f"edge extra_data {strategy}: cancelled"
@@ -941,6 +964,7 @@ def request_edge_comment_target(
     step: Dict[str, Any],
     result: Dict[str, Any],
     cancel_event: Any = None,
+    agent_tap: Optional[bool] = None,
 ) -> dict[str, Any] | None:
     if not _relay_extra_data_available(device):
         result["ok"] = False
@@ -999,7 +1023,12 @@ def request_edge_comment_target(
         or os.environ.get("EDGE_COMMENT_TARGET_TIMEOUT_S", "12")
     )
     try:
-        strategy = "fb_comment_target_tap" if _env_bool("EDGE_COMMENT_TARGET_AGENT_TAP", True) else "fb_comment_target"
+        should_agent_tap = (
+            _env_bool("EDGE_COMMENT_TARGET_AGENT_TAP", True)
+            if agent_tap is None
+            else bool(agent_tap)
+        )
+        strategy = "fb_comment_target_tap" if should_agent_tap else "fb_comment_target"
         summary = device.request_extra_data_xml(
             strategy=strategy,
             context=context,

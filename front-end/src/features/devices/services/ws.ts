@@ -104,6 +104,7 @@ const lastIdrRequestBySerial = new Map<string, number>();
 // watch serials that at least one component is decoding.
 const watchRefCountBySerial = new Map<string, number>();
 const watchedSerialsOnSocket = new Set<string>();
+const WATCH_SERIAL_UNWATCH_DEBOUNCE_MS = 15_000;
 const pendingUnwatchTimersBySerial = new Map<
   string,
   ReturnType<typeof setTimeout>
@@ -306,7 +307,7 @@ function scheduleUnwatchSerial(serial: string) {
       } catch {
         // ignore; socket may be closing
       }
-    }, 1000)
+    }, WATCH_SERIAL_UNWATCH_DEBOUNCE_MS)
   );
 }
 

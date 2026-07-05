@@ -13,6 +13,7 @@ import { Smartphone } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { farmApi } from '@/lib/farm-api';
 import type { DeviceFarmStreamingConfig } from '../types';
+import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
 
 const DEFAULT_GRID_PAGE_SIZE = (() => {
   const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PAGE_SIZE ?? 10);
@@ -63,11 +64,7 @@ export function DeviceFarm() {
   const { devices, tasks, wsConnected, error } = useDeviceFarm();
 
   const activeDevices = useMemo(
-    () =>
-      devices.filter(
-        (d) =>
-          d.state && !['DISCONNECTED', 'DEAD'].includes(d.state.toUpperCase())
-      ),
+    () => devices.filter(isVisibleDeviceFarmActiveDevice),
     [devices]
   );
 

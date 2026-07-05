@@ -93,6 +93,38 @@ def test_relay_bootstrap_skips_atx_u2_restart_when_healthy(monkeypatch) -> None:
     assert '"u2_ime_ready": true' in output
 
 
+def test_u2_atx_health_rejects_wedged_http_even_when_ports_listen(monkeypatch) -> None:
+    checked_ports: list[int] = []
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "192.168.1.5")
+    monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (False, "Remote end closed connection without response"))
+
+    def fake_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
+        checked_ports.append(port)
+        return True
+
+    monkeypatch.setattr(relay_adb, "_device_port_listening", fake_port_listening)
+
+    assert relay_adb._u2_atx_healthy("serial-1") is False
+    assert checked_ports == []
+
+
+def test_u2_atx_health_falls_back_to_ports_when_lan_ip_unavailable(monkeypatch) -> None:
+    checked_ports: list[int] = []
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (False, "device LAN IP unavailable"))
+
+    def fake_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
+        checked_ports.append(port)
+        return True
+
+    monkeypatch.setattr(relay_adb, "_device_port_listening", fake_port_listening)
+
+    assert relay_adb._u2_atx_healthy("serial-1") is True
+    assert checked_ports == [7912, 9008]
+
+
 def test_ensure_u2_input_ime_pins_adb_keyboard(monkeypatch) -> None:
     calls: list[str] = []
 

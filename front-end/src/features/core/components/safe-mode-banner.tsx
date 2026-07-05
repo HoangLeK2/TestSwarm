@@ -6,16 +6,22 @@ import { useServerStatus } from '@/features/core/services/use-server-status';
 /**
  * Status banner for config safe-mode and DB-degraded safe mode.
  */
-export function SafeModeBanner({ className = '' }: { className?: string }) {
+export function SafeModeBanner({
+  className = '',
+  poll = true
+}: {
+  className?: string;
+  poll?: boolean;
+}) {
   const { read_only, stream_hierarchy } = useSafeMode();
-  const { safe_mode, db_connected } = useServerStatus();
+  const { safe_mode, db_connected } = useServerStatus({ poll });
 
   if (!read_only && stream_hierarchy && !safe_mode && db_connected) return null;
 
   const parts: string[] = [];
   if (safe_mode || !db_connected) {
     parts.push(
-      'Hệ thống đang ở chế độ giới hạn . Một số chức năng tạm không dùng được. Auto-refresh trong 30s…'
+      'Hệ thống đang ở chế độ giới hạn. Một số chức năng tạm không dùng được.'
     );
   }
   if (read_only) parts.push('Read-only (không cho sửa/điều khiển)');

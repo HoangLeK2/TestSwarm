@@ -8,12 +8,23 @@ export type FetchHierarchyOptions = {
    * auto-refresh/poll request that may have started on an older screen.
    */
   bypassInFlight?: boolean;
+  /**
+   * User-triggered refresh must always reach the backend. Background callers
+   * still honor cooldown so a recovering uiautomator2 service is not spammed.
+   */
+  bypassBackoff?: boolean;
 };
 
 export function shouldReuseHierarchyInFlight(
   options?: FetchHierarchyOptions
 ): boolean {
   return options?.bypassInFlight !== true;
+}
+
+export function shouldRespectHierarchyBackoff(
+  options?: FetchHierarchyOptions
+): boolean {
+  return options?.bypassBackoff !== true;
 }
 
 export function shouldBackoffHierarchyError(err: unknown): boolean {

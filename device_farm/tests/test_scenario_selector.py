@@ -35,6 +35,31 @@ def test_normalize_nested_selector():
     assert spec.conditions.get("className") == "android.widget.TextView"
 
 
+def test_normalize_description_startswith_legacy_case():
+    step = {
+        "type": "tap_selector",
+        "selector": {"by": "descriptionStartswith", "value": "Nút Thích"},
+    }
+    spec = normalize_step_selector(step)
+    assert spec is not None
+    assert spec.by == "descriptionStartswith"
+    assert spec.value == "Nút Thích"
+
+
+def test_spec_to_rpc_description_startswith_alias():
+    spec = ScenarioSelectorSpec(by="descriptionStartswith", value="Nút Thích")
+    rpc = spec_to_rpc_selector(spec)
+    assert rpc.get("descriptionStartsWith") == "Nút Thích"
+    assert rpc["mask"] & 0x200
+
+
+def test_spec_to_rpc_description_contains():
+    spec = ScenarioSelectorSpec(by="descriptionContains", value="Thích")
+    rpc = spec_to_rpc_selector(spec)
+    assert rpc.get("descriptionContains") == "Thích"
+    assert rpc["mask"] & 0x80
+
+
 def test_spec_to_rpc_multi_condition():
     spec = ScenarioSelectorSpec(
         by="text",
@@ -91,6 +116,38 @@ def test_pydantic_nested_selector_validates():
     })
     assert step.selector is not None
     assert step.selector.value == "Login"
+
+
+def test_pydantic_selector_conditions_description_startswith_validates():
+    from api.schemas.scenario import TapSelectorStep
+
+    step = TapSelectorStep.model_validate({
+        "type": "tap_selector",
+        "selector": {
+            "by": "description",
+            "value": "ignored",
+            "conditions": {"descriptionStartsWith": "Nút Thích"},
+        },
+        "timeout": 8,
+    })
+    assert step.selector is not None
+    assert step.selector.conditions is not None
+    assert step.selector.conditions.descriptionStartsWith == "Nút Thích"
+
+
+def test_node_matches_description_fuzzy_selectors():
+    from tasks.scenario.utils import _node_matches_selector
+
+    class Node:
+        def get(self, key, default=None):
+            if key == "content-desc":
+                return "Nút Thích bình luận của Hoàng"
+            return default
+
+    node = Node()
+    assert _node_matches_selector(node, "descriptionContains", "bình luận")
+    assert _node_matches_selector(node, "descriptionStartsWith", "Nút Thích")
+    assert _node_matches_selector(node, "descriptionStartswith", "Nút Thích")
 
 
 def test_normalize_xpath_at_sugar():

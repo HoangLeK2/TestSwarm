@@ -260,6 +260,7 @@ def post_header_tap_point(
     screen_w: int = 1080,
     tap_kind: str | None = None,
     gradient_wallpaper: bool = False,
+    profile_tab_min_y: int | None = None,
 ) -> Tuple[int, int]:
     """Pick tap coords by target kind — post body center; header taps avoid Follow on the right."""
     x1, y1, x2, y2 = bounds
@@ -279,26 +280,58 @@ def post_header_tap_point(
             cx = x1 + max(32, width // 4)
             cy = y1 + max(24, height // 4)
             cx = max(cx, _AVATAR_COLUMN_GUARD_X)
-        return cx, cy
-
-    if kind in {"author_row_gap", "geometric"}:
+    elif kind in {"author_row_gap", "geometric"}:
         # Gap is author→menu; right side is often Theo dõi / Follow — stay left of gap.
         cx = x1 + int(width * 0.2)
-        return max(x1 + 8, min(x2 - 8, cx)), (y1 + y2) // 2
-
-    if kind == "timestamp":
+        cx, cy = max(x1 + 8, min(x2 - 8, cx)), (y1 + y2) // 2
+    elif kind == "timestamp":
         # On Codex VN group feeds, the right segment ("Chia sẻ với…") opens post detail;
         # left segment ("2 ngày") under author often opens profile.
         cx = x1 + int(width * 0.52)
-        return max(x1 + 6, min(x2 - 6, cx)), (y1 + y2) // 2
+        cx, cy = max(x1 + 6, min(x2 - 6, cx)), (y1 + y2) // 2
+    else:
+        # metadata / privacy / fallback: mild right bias but not into menu column
+        min_x = int(screen_w * 0.38)
+        preferred = x1 + int(width * 0.45)
+        cx = max(x1 + 6, min(x2 - 6, preferred))
+        if cx < min_x and x2 > min_x:
+            cx = min(x2 - 6, max(x1 + 6, min_x))
+        cx, cy = cx, (y1 + y2) // 2
 
-    # metadata / privacy / fallback: mild right bias but not into menu column
-    min_x = int(screen_w * 0.38)
-    preferred = x1 + int(width * 0.45)
-    cx = max(x1 + 6, min(x2 - 6, preferred))
-    if cx < min_x and x2 > min_x:
-        cx = min(x2 - 6, max(x1 + 6, min_x))
-    return cx, (y1 + y2) // 2
+    if profile_tab_min_y is not None and cy < profile_tab_min_y:
+        cy = profile_tab_min_y
+    return cx, cy
+
+
+def _post_open_tap_cleared_profile_tabs(
+    candidate: Dict[str, Any],
+    *,
+    screen_w: int,
+    profile_tab_min_y: int | None,
+) -> bool:
+    """Reject header taps that land on the sticky profile tab strip overlay."""
+    if profile_tab_min_y is None:
+        return True
+    kind = candidate.get("tap_kind") or ""
+    if kind in {"post_body", "post_media"}:
+        return True
+    tb = candidate.get("tap_bounds") or candidate["bounds"]
+    if isinstance(tb, list):
+        tb = tuple(tb)
+    _x1, y1, _x2, y2 = tb
+    if y2 <= profile_tab_min_y:
+        return False
+    cx, cy = post_header_tap_point(
+        tb,
+        tap_kind=kind,
+        screen_w=screen_w,
+        gradient_wallpaper=bool(candidate.get("gradient_wallpaper")),
+    )
+    return cy >= profile_tab_min_y and not (y1 < profile_tab_min_y <= y2 and kind in {
+        "author_row_gap",
+        "geometric",
+        "metadata",
+    })
 
 
 def _looks_like_avatar_node(n: Dict[str, Any]) -> bool:
@@ -1162,6 +1195,9 @@ def _classify_header_node(
     if _is_header_badge_label(merged):
         return None
 
+    if _is_see_more_label(text) or _is_see_more_label(desc):
+        return None
+
     if text and 2 <= len(text) <= 80 and x1 >= ax2 - 16:
         return "metadata"
 
@@ -1221,6 +1257,8 @@ def _list_post_open_taps_for_card(
     card_bounds: Tuple[int, int, int, int],
     nodes: Optional[List[Dict[str, Any]]] = None,
     author_bounds: Optional[Tuple[int, int, int, int]] = None,
+    profile_tab_min_y: int | None = None,
+    screen_w: int = 1080,
 ) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     header_candidates: List[Dict[str, Any]] = []
@@ -1427,9 +1465,24 @@ def _list_post_open_taps_for_card(
         if non_ts:
             candidates = non_ts
 
+    if profile_tab_min_y is not None:
+        cleared = [
+            c
+            for c in candidates
+            if _post_open_tap_cleared_profile_tabs(
+                c,
+                screen_w=screen_w,
+                profile_tab_min_y=profile_tab_min_y,
+            )
+        ]
+        if cleared:
+            candidates = cleared
+
     def _sort_key(c: Dict[str, Any]) -> Tuple[int, int, int]:
         kind = c.get("tap_kind") or "metadata"
         rank = _TAP_KIND_RANK.get(kind, 9)
+        if profile_tab_min_y is not None and kind == "timestamp":
+            rank = min(rank, 0)
         if c.get("gradient_wallpaper") and kind == "post_body":
             rank = 3
         if is_anonymous:
@@ -1454,12 +1507,16 @@ def _pick_header_tap_for_card(
     card_bounds: Tuple[int, int, int, int],
     nodes: Optional[List[Dict[str, Any]]] = None,
     author_bounds: Optional[Tuple[int, int, int, int]] = None,
+    profile_tab_min_y: int | None = None,
+    screen_w: int = 1080,
 ) -> Optional[Dict[str, Any]]:
     taps = _list_post_open_taps_for_card(
         element,
         card_bounds=card_bounds,
         nodes=nodes,
         author_bounds=author_bounds,
+        profile_tab_min_y=profile_tab_min_y,
+        screen_w=screen_w,
     )
     return taps[0] if taps else None
 
@@ -1468,6 +1525,8 @@ def _build_post_open_candidate(
     element,
     *,
     feed_item_index: int,
+    profile_tab_min_y: int | None = None,
+    screen_w: int = 1080,
 ) -> Optional[Dict[str, Any]]:
     from .feed_pipeline import _is_ad_container
     from .parser import _collect_text_nodes, _parse_bounds
@@ -1492,6 +1551,8 @@ def _build_post_open_candidate(
         card_bounds=card_bounds,
         nodes=nodes,
         author_bounds=author_bounds,
+        profile_tab_min_y=profile_tab_min_y,
+        screen_w=screen_w,
     )
     if not taps:
         return None
@@ -1836,6 +1897,7 @@ def resolve_post_open_targets_from_xml(
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """Rank feed cards by mid-screen heuristic; pick header tap per card."""
     from .parser import _infer_screen_size, _parse_xml
+    from .ui_expansion import profile_tab_strip_min_tap_y
 
     root = _parse_xml(xml)
     if root is None:
@@ -1849,13 +1911,19 @@ def resolve_post_open_targets_from_xml(
         screen_h = 2200
     if screen_w <= 0:
         screen_w = 1080
+    profile_tab_min_y = profile_tab_strip_min_tap_y(root)
 
     containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
     scan = _discover_post_open_scan_elements(root)
 
     scored: List[Dict[str, Any]] = []
     for feed_item_index, element in scan:
-        cand = _build_post_open_candidate(element, feed_item_index=feed_item_index)
+        cand = _build_post_open_candidate(
+            element,
+            feed_item_index=feed_item_index,
+            profile_tab_min_y=profile_tab_min_y,
+            screen_w=screen_w,
+        )
         if cand is None:
             continue
         if not _post_open_candidate_passes_filter(cand, screen_h=screen_h, band_low=band_low, band_high=band_high):
@@ -1898,6 +1966,7 @@ def resolve_post_open_targets_from_xml(
         "score": top.get("score"),
         "gradient_wallpaper": bool(top.get("gradient_wallpaper")),
         "tap_alternates": top.get("tap_alternates") or [],
+        "profile_tab_min_y": profile_tab_min_y,
     }
     alternates = [
         {

@@ -32,25 +32,23 @@ def _assert_comment_extract_dedupe_comment_key(steps: list[dict[str, Any]]) -> N
 
 def _assert_comment_flow_stays_on_detail_until_comments(steps: list[dict[str, Any]]) -> None:
     sibling_flows = _post_comment_sibling_flows(steps)
-    assert sibling_flows, "expected at least one fb_posts -> fb_tap_comment_button sibling flow"
-    for flow_steps, post_index, tap_index in sibling_flows:
-        intervening_steps = flow_steps[post_index + 1 : tap_index]
-        assert not any(_is_back_step(step) for step in intervening_steps)
-        assert all(_is_comment_step(step) for step in intervening_steps)
+    assert sibling_flows, "expected at least one fb_posts -> split comment node sibling flow"
+    for flow_steps, post_index, find_index, tap_index, filter_index, comment_index in sibling_flows:
+        assert post_index < find_index < tap_index < filter_index < comment_index
 
-        tap_step = flow_steps[tap_index]
-        then_steps = tap_step.get("then")
-        assert isinstance(then_steps, list), tap_step
-        comment_index = _first_step_index(then_steps, _is_fb_comment_extract)
-        assert comment_index is not None, tap_step
-        return_steps = then_steps[comment_index + 1 :]
-        assert return_steps and _is_back_step(return_steps[0]), tap_step
+        intervening_steps = flow_steps[post_index + 1 : comment_index]
+        assert not any(_is_back_step(step) for step in intervening_steps)
+
+        comment_step = flow_steps[comment_index]
+        assert comment_step.get("require_verified_parent") is True, comment_step
+        return_steps = flow_steps[comment_index + 1 :]
+        assert return_steps and _is_back_step(return_steps[0]), comment_step
         assert any(
             step.get("type") == "if_element"
             and step.get("by") == "text"
             and step.get("value") == "Bài viết"
             for step in return_steps
-        ), tap_step
+        ), comment_step
 
 
 def test_index_json_comment_extract_uses_comment_key_dedupe() -> None:
@@ -65,12 +63,23 @@ def test_scenario_fb_group_crawl_comment_extract_uses_comment_key_dedupe() -> No
     _assert_comment_flow_stays_on_detail_until_comments(data.get("steps", []))
 
 
-def _post_comment_sibling_flows(steps: list[dict[str, Any]]) -> list[tuple[list[dict[str, Any]], int, int]]:
-    flows: list[tuple[list[dict[str, Any]], int, int]] = []
+def _post_comment_sibling_flows(
+    steps: list[dict[str, Any]],
+) -> list[tuple[list[dict[str, Any]], int, int, int, int, int]]:
+    flows: list[tuple[list[dict[str, Any]], int, int, int, int, int]] = []
     post_index = _first_step_index(steps, _is_fb_post_extract)
-    tap_index = _first_step_index(steps, lambda step: step.get("type") == "fb_tap_comment_button")
-    if post_index is not None and tap_index is not None:
-        flows.append((steps, post_index, tap_index))
+    find_index = _first_step_index(steps, lambda step: step.get("type") == "fb_find_comment_button")
+    tap_index = _first_step_index(steps, lambda step: step.get("type") == "fb_tap_comment_target")
+    filter_index = _first_step_index(steps, lambda step: step.get("type") == "fb_apply_comment_filter")
+    comment_index = _first_step_index(steps, _is_fb_comment_extract)
+    if (
+        post_index is not None
+        and find_index is not None
+        and tap_index is not None
+        and filter_index is not None
+        and comment_index is not None
+    ):
+        flows.append((steps, post_index, find_index, tap_index, filter_index, comment_index))
 
     for step in steps:
         if step.get("type") == "loop":
@@ -99,7 +108,3 @@ def _is_fb_comment_extract(step: dict[str, Any]) -> bool:
 
 def _is_back_step(step: dict[str, Any]) -> bool:
     return step.get("type") == "key" and step.get("key") == "back"
-
-
-def _is_comment_step(step: dict[str, Any]) -> bool:
-    return "_comment" in step and "type" not in step

@@ -66,7 +66,7 @@ async def test_collect_comment_snapshots_swipe_inside_scrollable_node() -> None:
     assert 200 < fy < 1550
     assert ty < fy
     assert fy - ty >= 220
-    assert swipes[0]["duration"] >= 0.32
+    assert swipes[0]["duration"] == pytest.approx(0.08)
     assert len(snapshots) >= 1
 
 

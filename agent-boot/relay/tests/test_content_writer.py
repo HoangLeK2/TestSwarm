@@ -64,6 +64,63 @@ def test_build_content_item_row_maps_fields_and_scopes_hash() -> None:
     assert row["content_hash"] == scope_content_hash(compute_content_hash(raw, "post_key"), "scope")
 
 
+def test_build_content_item_row_parses_vietnamese_decimal_suffix_counts() -> None:
+    row = build_content_item_row(
+        {"post_key": "p1", "text": "hello", "reactions": "60,5K"},
+        {"collection": "fb", "content_type": "post"},
+    )
+
+    assert row["likes_count"] == 60500
+
+
+@pytest.mark.asyncio
+async def test_update_content_stats_updates_existing_root_post() -> None:
+    class _Acquire:
+        def __init__(self, conn):
+            self.conn = conn
+
+        async def __aenter__(self):
+            return self.conn
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _Conn:
+        def __init__(self):
+            self.fetchrow_calls = []
+
+        async def fetchrow(self, *args):
+            self.fetchrow_calls.append(args)
+            return {"content_hash": "parent-hash"}
+
+    class _Pool:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def acquire(self):
+            return _Acquire(self.conn)
+
+    conn = _Conn()
+    writer = ContentItemWriter(database_url="postgres://example")
+    writer._pool = _Pool(conn)
+
+    updated = await writer.update_content_stats(
+        content_hash="parent-hash",
+        likes_count="12",
+        comments_count="60,5K",
+        shares_count="2",
+    )
+
+    assert updated is True
+    sql, content_hash, likes, comments, shares = conn.fetchrow_calls[0]
+    assert "UPDATE content_items" in sql
+    assert "item_level = 0" in sql
+    assert content_hash == "parent-hash"
+    assert likes == 12
+    assert comments == 60500
+    assert shares == 2
+
+
 def test_parent_hash_is_scoped_for_comments() -> None:
     row = build_content_item_row(
         {"comment_key": "c1", "text": "comment"},

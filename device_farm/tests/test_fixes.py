@@ -311,6 +311,134 @@ class TestTemporalFallback:
         set_cancelled.assert_awaited_once_with("exec-1")
 
     @pytest.mark.anyio
+    async def test_takeover_pauses_executions_without_cancel_flags(self):
+        """Manual takeover pauses automation instead of cancelling it."""
+        from core.config import Config, TemporalConfig, DatabaseConfig
+
+        config = Config()
+        config.temporal = TemporalConfig(enabled=True, server_url="localhost:7233")
+        config.database = DatabaseConfig(enabled=True)
+
+        db_device = MagicMock(id="dev-1", serial="SN001")
+        execution = MagicMock(
+            id="exec-1",
+            status="running",
+            meta={"workflow_id": "exec_exec-1"},
+        )
+        runtime_device = MagicMock()
+        manager = MagicMock()
+        manager.get_device.return_value = runtime_device
+        temporal_client = MagicMock()
+        db = AsyncMock()
+        pause_result = MagicMock(
+            execution_id="exec-1",
+            status="paused",
+            effective_transition=True,
+            workflows_signalled=1,
+        )
+
+        with patch(
+            "api.routes.device_control.campaign_fleet.repo.get_device_by_serial",
+            AsyncMock(return_value=db_device),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.device_visible_to_user",
+            AsyncMock(return_value=True),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.repo.list_running_executions_for_device",
+            AsyncMock(return_value=[execution]),
+        ), patch(
+            "api.routes.device_control.campaign_fleet.get_temporal_client",
+            AsyncMock(return_value=temporal_client),
+        ), patch(
+            "services.execution_control.pause_execution",
+            AsyncMock(return_value=pause_result),
+        ) as pause_execution, patch(
+            "services.execution_pause_flags.set_execution_cancelled",
+            AsyncMock(),
+        ) as set_cancelled, patch(
+            "services.manual_takeover.set_manual_takeover",
+            AsyncMock(),
+        ) as set_takeover:
+            from api.routes.device_control.campaign_fleet import build_campaign_fleet_router
+
+            router = build_campaign_fleet_router(manager, MagicMock(), config)
+            handler = next(
+                route.endpoint
+                for route in router.routes
+                if getattr(route, "path", "") == "/devices/{serial}/takeover"
+            )
+
+            result = await handler("SN001", db=db, user=MagicMock(id="u1"))
+
+        assert result["ok"] is True
+        assert result["action"] == "paused_for_takeover"
+        assert result["manual_takeover_active"] is True
+        assert result["paused_executions"] == [
+            {
+                "execution_id": "exec-1",
+                "status": "paused",
+                "effective_transition": True,
+                "workflows_signalled": 1,
+            }
+        ]
+        pause_execution.assert_awaited_once_with(
+            db,
+            "exec-1",
+            user_id="u1",
+            temporal_client=temporal_client,
+            workflow_ids=["exec_exec-1"],
+            signal_temporal=True,
+        )
+        set_takeover.assert_awaited_once_with("SN001")
+        set_cancelled.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_busy_guard_allows_manual_takeover_flag(self):
+        from api.routes.device_control.guards import reject_manual_control_if_busy
+        from runtime.core import DeviceState
+
+        device = MagicMock(serial="SN001", state=DeviceState.READY, _scenario_active=1)
+
+        with patch(
+            "services.manual_takeover.is_manual_takeover_active",
+            AsyncMock(return_value=True),
+        ):
+            blocked = await reject_manual_control_if_busy(device)
+
+        assert blocked is None
+
+    @pytest.mark.anyio
+    async def test_live_devices_enriches_manual_control_state_from_redis(self):
+        from api.routes.public import _enrich_live_manual_control_state
+
+        class _Redis:
+            async def get(self, key: str):
+                assert key == "df:device:SN001:scenario_active"
+                return "2"
+
+        devices = [
+            {
+                "serial": "SN001",
+                "state": "READY",
+                "scenario_active": 0,
+                "manual_takeover_active": False,
+            }
+        ]
+
+        with patch("services.redis_store.enabled", return_value=True), patch(
+            "services.redis_store.client", return_value=_Redis()
+        ), patch(
+            "services.redis_store.key", side_effect=lambda name: f"df:{name}"
+        ), patch(
+            "services.manual_takeover.is_manual_takeover_active",
+            AsyncMock(return_value=True),
+        ):
+            await _enrich_live_manual_control_state(devices)
+
+        assert devices[0]["scenario_active"] == 2
+        assert devices[0]["manual_takeover_active"] is True
+
+    @pytest.mark.anyio
     async def test_interrupt_cancel_workflows_runs_concurrently(self):
         """A slow workflow cancel must not block later workflow cancels in sequence."""
         from api.routes.device_control import campaign_fleet

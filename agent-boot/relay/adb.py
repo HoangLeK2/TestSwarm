@@ -32,6 +32,37 @@ logger = logging.getLogger("relay.adb")
 
 _ADB: str = shutil.which("adb") or "adb"
 
+
+def _adb_server_flags_from_env() -> list[str]:
+    """Return explicit adb server flags for Docker/remote-ADB mode.
+
+    Some adb client builds do not reliably honor ADB_SERVER_SOCKET for every
+    subprocess invocation. Passing -H/-P keeps recovery commands on the same
+    host ADB server that the Docker entrypoint already checked.
+    """
+    host = _os.environ.get("ADB_HOST", "").strip()
+    port = _os.environ.get("ADB_PORT", "").strip()
+    sock = _os.environ.get("ADB_SERVER_SOCKET", "").strip()
+    if sock.startswith("tcp:"):
+        rest = sock[4:]
+        if ":" in rest:
+            sock_host, sock_port = rest.rsplit(":", 1)
+            host = sock_host.strip() or host
+            port = sock_port.strip() or port
+        elif rest.isdigit():
+            port = rest
+    if host and port:
+        return ["-H", host, "-P", port]
+    return []
+
+
+def _adb_command(*args: str, serial: Optional[str] = None) -> list[str]:
+    cmd = [_ADB, *_adb_server_flags_from_env()]
+    if serial:
+        cmd += ["-s", serial]
+    cmd += list(args)
+    return cmd
+
 # ── Asset resolution ──────────────────────────────────────────────────────────
 # agent-boot/relay/adb.py lives here; assets are looked up in this order:
 #   1. AGENT_BOOT_ASSETS env var (explicit override)
@@ -83,10 +114,7 @@ def _run(
     Run `adb [-s serial] <args>` and return (stdout+stderr, returncode).
     Never raises — all exceptions become ("error", -1) pairs.
     """
-    cmd = [_ADB]
-    if serial:
-        cmd += ["-s", serial]
-    cmd += list(args)
+    cmd = _adb_command(*args, serial=serial)
     # Suppress macOS MallocStackLogging spam in subprocess output
     env = _os.environ.copy()
     env.pop("MallocStackLogging", None)
@@ -461,10 +489,7 @@ def _run_bytes(
     timeout: int = 30,
 ) -> tuple[bytes, int]:
     """Like _run() but returns raw stdout bytes (for binary data like screencap)."""
-    cmd = [_ADB]
-    if serial:
-        cmd += ["-s", serial]
-    cmd += list(args)
+    cmd = _adb_command(*args, serial=serial)
     env = _os.environ.copy()
     env.pop("MallocStackLogging", None)
     env.pop("MallocStackLoggingDirectory", None)
@@ -768,10 +793,11 @@ def _u2_atx_healthy(serial: str) -> bool:
     """True when atx-agent and u2 instrumentation are already up (skip cold restart)."""
     atx_host = _resolve_device_lan_ip(serial)
     atx_ok, ping_err = _atx_http_ping(serial, host=atx_host)
-    if not atx_ok and not ping_err.startswith("device LAN IP unavailable"):
+    if not atx_ok and ping_err.startswith("device LAN IP unavailable"):
         atx_ok = _device_port_listening(serial, 7912)
     elif not atx_ok:
-        atx_ok = _device_port_listening(serial, 7912)
+        logger.warning("[%s] atx-agent HTTP unhealthy: %s", serial, ping_err)
+        return False
     return atx_ok and _device_port_listening(serial, 9008)
 
 

@@ -38,6 +38,9 @@ FACEBOOK_STEP_TYPES = [
     "fb_share_post",
     "fb_follow_user",
     "fb_tap_comment_button",
+    "fb_find_comment_button",
+    "fb_tap_comment_target",
+    "fb_apply_comment_filter",
 ]
 
 FACEBOOK_ALIASES = {

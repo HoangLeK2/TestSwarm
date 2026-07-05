@@ -171,6 +171,12 @@ async def test_screenshot_returns_base64(executor):
     assert base64.b64decode(b64_val) == b"\x89PNG\r\n"
 
 
+def test_selector_normalizes_description_startswith_alias(mock_device):
+    _resolve(mock_device, {"descriptionStartswith": "Nút Thích"})
+
+    mock_device.assert_called_once_with(descriptionStartsWith="Nút Thích")
+
+
 @pytest.mark.asyncio
 async def test_click_selector_default_timeout_is_fast(executor):
     exc, dev, pool = executor
@@ -211,6 +217,18 @@ async def test_swipe_default_duration_is_fast(executor):
 
     assert result["ok"] is True
     dev.swipe.assert_called_once_with(100, 1000, 100, 300, duration=0.12)
+
+
+@pytest.mark.asyncio
+async def test_run_batch_sleep_op_is_bounded(executor, monkeypatch):
+    exc, dev, pool = executor
+    calls: list[float] = []
+    monkeypatch.setattr("relay.u2_executor.time.sleep", calls.append)
+
+    result = await exc.run_batch("serial", [{"op": "sleep", "seconds": 9.0}])
+
+    assert result["ok"] is True
+    assert calls == [3.0]
 
 
 @pytest.mark.asyncio

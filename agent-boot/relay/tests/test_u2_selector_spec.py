@@ -17,6 +17,24 @@ def test_resolve_spec_flat():
     assert obj is anchor
 
 
+def test_resolve_spec_description_startswith_by_value():
+    dev = MagicMock()
+    anchor = MagicMock()
+    dev.return_value = anchor
+    obj = _resolve_spec(dev, {"by": "descriptionStartsWith", "value": "Nút Thích"})
+    dev.assert_called_once_with(descriptionStartsWith="Nút Thích")
+    assert obj is anchor
+
+
+def test_resolve_spec_description_startswith_legacy_case():
+    dev = MagicMock()
+    anchor = MagicMock()
+    dev.return_value = anchor
+    obj = _resolve_spec(dev, {"by": "descriptionStartswith", "value": "Nút Thích"})
+    dev.assert_called_once_with(descriptionStartsWith="Nút Thích")
+    assert obj is anchor
+
+
 def test_resolve_spec_relative_chain():
     dev = MagicMock()
     anchor = MagicMock()

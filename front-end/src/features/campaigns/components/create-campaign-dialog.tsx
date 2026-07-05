@@ -16,7 +16,13 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 import { useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
@@ -102,6 +108,8 @@ export function CreateCampaignDialog({
   });
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const variablesRef = useRef<Record<string, any>>({});
+  const userEditedVariablesRef = useRef(false);
   const [tags, setTags] = useState('');
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>(
@@ -109,6 +117,29 @@ export function CreateCampaignDialog({
   );
   const bodyQueries = useOrgScenarioBodies(selectedScenarioIds, open);
   const lastMergedSelectionRef = useRef<string>('');
+
+  const replaceVariables = useCallback((next: Record<string, any>) => {
+    variablesRef.current = next;
+    setVariables(next);
+  }, []);
+
+  const handleVariablesChange = useCallback(
+    (next: Record<string, any>) => {
+      userEditedVariablesRef.current = true;
+      replaceVariables(next);
+    },
+    [replaceVariables]
+  );
+
+  const handleSelectedScenarioIdsChange = useCallback(
+    (ids: string[]) => {
+      userEditedVariablesRef.current = false;
+      lastMergedSelectionRef.current = '';
+      setSelectedScenarioIds(ids);
+      replaceVariables({});
+    },
+    [replaceVariables]
+  );
 
   useEffect(() => {
     if (!initialOpen) return;
@@ -140,7 +171,10 @@ export function CreateCampaignDialog({
     const selectionKey = selectedScenarioIds.join(',');
     if (!selectedScenarioIds.length) {
       lastMergedSelectionRef.current = '';
-      setVariables({});
+      userEditedVariablesRef.current = false;
+      if (Object.keys(variablesRef.current).length) {
+        replaceVariables({});
+      }
       return;
     }
     if (selectionKey === lastMergedSelectionRef.current) return;
@@ -148,6 +182,10 @@ export function CreateCampaignDialog({
       (_id, index) => bodyQueries[index]?.isLoading
     );
     if (pending) return;
+    if (userEditedVariablesRef.current) {
+      lastMergedSelectionRef.current = selectionKey;
+      return;
+    }
     const layers = bodyQueries.map((query) => {
       const body = query.data?.body_json;
       if (!body || typeof body !== 'object') return {};
@@ -155,9 +193,15 @@ export function CreateCampaignDialog({
         | Record<string, unknown>
         | undefined;
     });
-    setVariables(mergeScenarioVariables(...layers) as Record<string, any>);
+    replaceVariables(mergeScenarioVariables(...layers) as Record<string, any>);
     lastMergedSelectionRef.current = selectionKey;
-  }, [open, selectedScenarioIds, scenarioBodiesKey, bodyQueries]);
+  }, [
+    open,
+    selectedScenarioIds,
+    scenarioBodiesKey,
+    bodyQueries,
+    replaceVariables
+  ]);
 
   const [accountBinding, setAccountBinding] =
     useState<CampaignAccountBindingValue>({
@@ -181,7 +225,8 @@ export function CreateCampaignDialog({
         name: defaultCampaignName ?? '',
         description: ''
       });
-      setVariables({});
+      userEditedVariablesRef.current = false;
+      replaceVariables({});
       setTags('');
       setRecoveryPolicy({});
       setAccountBinding({
@@ -207,7 +252,9 @@ export function CreateCampaignDialog({
       {
         name: data.name,
         description: data.description,
-        vars: Object.keys(variables).length ? variables : {},
+        vars: Object.keys(variablesRef.current).length
+          ? variablesRef.current
+          : {},
         tags: tags
           .split(',')
           .map((tag) => tag.trim())
@@ -221,7 +268,8 @@ export function CreateCampaignDialog({
       {
         onSuccess: (created) => {
           reset();
-          setVariables({});
+          userEditedVariablesRef.current = false;
+          replaceVariables({});
           setTags('');
           setRecoveryPolicy({});
           setSelectedScenarioIds(preselectedScenarioIds);
@@ -299,7 +347,7 @@ export function CreateCampaignDialog({
             <Section icon={Library} title={t('libraryScenariosLabel')}>
               <CampaignOrgScenarioPicker
                 selectedIds={selectedScenarioIds}
-                onSelectedIdsChange={setSelectedScenarioIds}
+                onSelectedIdsChange={handleSelectedScenarioIdsChange}
               />
             </Section>
             <hr className='border-border' />
@@ -317,7 +365,7 @@ export function CreateCampaignDialog({
               </p>
               <VariableEditor
                 variables={variables}
-                onChange={setVariables}
+                onChange={handleVariablesChange}
                 allowAdd={false}
                 lockKeys
                 allowRemove={false}

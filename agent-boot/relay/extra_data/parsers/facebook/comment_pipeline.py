@@ -98,6 +98,9 @@ def _resolve_comment_button_bounds(node) -> Optional[Tuple[Tuple[int, int, int, 
         if parent is None:
             break
         cur = parent
+    bnds = _parse_bounds_from_node(node)
+    if bnds:
+        return bnds, False
     return None
 
 
@@ -172,7 +175,19 @@ def _resolve_comment_button_click_meta(
         if parent is None:
             break
         cur = parent
-    return compact_best
+    if compact_best:
+        return compact_best
+    bnds = _parse_bounds_from_node(node)
+    if not bnds:
+        return None
+    height = bnds[3] - bnds[1]
+    if max_tap_height and height > max_tap_height:
+        return None
+    return {
+        "bounds": bnds,
+        "is_button": False,
+        "u2_click": None,
+    }
 
 
 def _post_action_bar_row_band(root, screen_h: int) -> Optional[Tuple[int, int]]:
@@ -1607,6 +1622,45 @@ def _has_feed_inline_comment_markers(root, y_min: int) -> bool:
     return False
 
 
+def _extract_comment_sheet_post_stats(root, action_btn_y2: Optional[int]) -> Optional[Dict[str, Any]]:
+    """Read parent post stats from the comment-sheet action bar/header."""
+    from .feed_pipeline import _extract_header_stats
+    from .post_extractor import _extract_post_action_bar_stats
+
+    def _from_action_bar_row() -> Optional[Dict[str, Any]]:
+        for node in root.iter("node"):
+            label = _norm_fb_ui(
+                (node.get("content-desc") or "").strip()
+                or (node.get("text") or "").strip()
+            ).casefold()
+            if "nút chia sẻ" not in label or "bài viết" not in label:
+                continue
+            cur = node.getparent()
+            for _ in range(4):
+                if cur is None:
+                    break
+                stats = _extract_post_action_bar_stats(cur)
+                if stats.get("comments") is not None or stats.get("shares") is not None:
+                    out: Dict[str, Any] = {"_type": "post_stats"}
+                    for key in ("reactions", "comments", "shares"):
+                        value = stats.get(key)
+                        if value is not None:
+                            out[key] = value
+                    return out
+                cur = cur.getparent()
+        return None
+
+    action_stats = _from_action_bar_row()
+    header_stats = _extract_header_stats(root, y_max=action_btn_y2)
+    if not action_stats:
+        return header_stats
+    if header_stats:
+        for key in ("reactions", "comments", "shares"):
+            if action_stats.get(key) is None and header_stats.get(key) is not None:
+                action_stats[key] = header_stats[key]
+    return action_stats
+
+
 def parse_fb_comments_from_xml_with_diagnostic(
     xml: str,
     parent_post_id: Optional[str] = None,
@@ -1629,7 +1683,6 @@ def parse_fb_comments_from_xml_with_diagnostic(
         _scan_special_screen,
     )
     from .post_extractor import _compute_post_id_from_nodes
-    from .feed_pipeline import _extract_header_stats
 
     t0 = time.monotonic()
 
@@ -1701,6 +1754,7 @@ def parse_fb_comments_from_xml_with_diagnostic(
     anchor_found = action_btn_y2 is not None
     screen_w, screen_h = _infer_screen_size(root)
     comment_x_max = max(380, int(screen_w * 0.76))
+    post_stats = _extract_comment_sheet_post_stats(root, action_btn_y2)
 
     def _include_comment_text_node(n: Dict[str, Any]) -> bool:
         x0 = int(n["bounds"][0])
@@ -1740,6 +1794,19 @@ def parse_fb_comments_from_xml_with_diagnostic(
             comment_nodes.append(n)
 
     if not comment_nodes:
+        if post_stats:
+            return [post_stats], {
+                "reason_code": "ok",
+                "comments_returned": 0,
+                "anchor_button_found": anchor_found,
+                "nodes_in_band": 0,
+                "candidate_clusters": 0,
+                "screen_size": [screen_w, screen_h],
+                "locale_tokens_hit": [],
+                "has_header_stats": True,
+                "parse_mode": "feed_inline" if feed_inline else "comment_sheet",
+                "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
+            }
         reason = "anchor_not_found" if not anchor_found else "no_nodes_in_band"
         return [], _diag(
             reason,
@@ -1766,13 +1833,12 @@ def parse_fb_comments_from_xml_with_diagnostic(
         result.append(comment)
         last_kept_body = comment
 
-    header_stats = _extract_header_stats(root, y_max=action_btn_y2)
-    if header_stats:
-        result.insert(0, header_stats)
+    if post_stats:
+        result.insert(0, post_stats)
 
-    _pr = header_stats.get("reactions") if header_stats else None
-    _ps = header_stats.get("shares") if header_stats else None
-    _pc = header_stats.get("comments") if header_stats else None
+    _pr = post_stats.get("reactions") if post_stats else None
+    _ps = post_stats.get("shares") if post_stats else None
+    _pc = post_stats.get("comments") if post_stats else None
     if _pr is not None or _ps is not None or _pc is not None:
         for c in result:
             if c.get("_type") == "post_stats":
@@ -1801,7 +1867,7 @@ def parse_fb_comments_from_xml_with_diagnostic(
         "candidate_clusters": len(clusters),
         "screen_size": [screen_w, screen_h],
         "locale_tokens_hit": [],
-        "has_header_stats": bool(header_stats),
+        "has_header_stats": bool(post_stats),
         "parse_mode": "feed_inline" if feed_inline else "comment_sheet",
         "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
     }

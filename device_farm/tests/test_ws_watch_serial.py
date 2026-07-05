@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Optional
@@ -9,6 +10,7 @@ import pytest
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
+import web.ws as ws_module
 from web.ws import WebSocketManager
 
 
@@ -142,6 +144,37 @@ def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
         assert buf1 != buf2
 
         ws.send_json({"type": "unwatch_serial", "serial": "SN001"})
+
+
+def test_ws_watch_serial_reassert_cancels_pending_unwatch(monkeypatch):
+    monkeypatch.setattr(ws_module, "STREAM_WS_UNWATCH_GRACE_MS", 50.0)
+    dev = _FakeDevice(serial="SN001")
+    mgr = _FakeManager([dev])
+    ws_manager = WebSocketManager(mgr, db_enabled=False, read_only=False)
+
+    app = FastAPI()
+
+    @app.websocket("/ws")
+    async def _ws(ws: WebSocket):
+        await ws_manager.connect(ws, user_id=None)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as ws:
+        _ = ws.receive_json()
+        ws.send_json({"type": "watch_serial", "serial": "SN001"})
+        _ = ws.receive_bytes()
+        _ = ws.receive_bytes()
+
+        ws.send_json({"type": "unwatch_serial", "serial": "SN001"})
+        ws.send_json({"type": "watch_serial", "serial": "SN001"})
+
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            if dev._q is None:
+                break
+            time.sleep(0.02)
+
+        assert dev._q is not None
 
 
 @pytest.mark.asyncio

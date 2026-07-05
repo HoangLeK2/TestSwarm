@@ -6,6 +6,9 @@ while _running is True, and MUST NOT fire on a clean stop().
 from __future__ import annotations
 
 import asyncio
+import select
+import socket
+import struct
 from unittest.mock import patch
 
 import pytest
@@ -26,6 +29,14 @@ def _make_session(on_fatal) -> ScrcpyRelaySession:
         loop=loop,
         on_fatal=on_fatal,
     )
+
+
+class _FakeSocket:
+    def setsockopt(self, *_args, **_kwargs):
+        return None
+
+    def settimeout(self, *_args, **_kwargs):
+        return None
 
 
 def test_on_fatal_fires_once_on_budget_exhaustion():
@@ -66,6 +77,41 @@ def test_on_fatal_not_fired_on_clean_stop():
         session._relay_loop()
 
     assert fatal_calls == []
+
+
+def test_config_packets_do_not_reset_no_frame_watchdog():
+    fatal_calls: list[tuple[str, str]] = []
+    session = _make_session(lambda s, r: fatal_calls.append((s, r)))
+    session._enable_control_channel = False
+    session._running = True
+
+    cfg_header = struct.pack(">QI", mod._PTS_CONFIG_MASK, 4)
+    calls = iter(
+        [
+            b"\x00",
+            b"test-device".ljust(64, b"\x00"),
+            struct.pack(">III", 0, 720, 1280),
+            cfg_header,
+            b"cfg!",
+            socket.timeout(),
+        ]
+    )
+
+    def fake_recvall(_sock, _n):
+        value = next(calls)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    times = iter([0.0, 21.0])
+
+    with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
+         patch.object(mod, "_recvall", side_effect=fake_recvall), \
+         patch.object(select, "select", return_value=([_FakeSocket()], [], [])), \
+         patch.object(mod.time, "monotonic", side_effect=lambda: next(times)), \
+         patch.object(mod, "_FRAME_TIMEOUT", 20.0):
+        with pytest.raises(RuntimeError, match="frame timeout"):
+            session._connect_and_stream()
 
 
 def test_on_fatal_not_fired_on_keyboard_interrupt():

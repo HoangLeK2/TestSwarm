@@ -24,6 +24,9 @@ SCENARIO_STEP_TYPES = [
     "long_tap_selector",
     "scroll_to",
     "input_text",
+    "login_if_needed",
+    "fill_form",
+    "assert_app_state",
     "key",
     "adb_shell",
     "scroll_down",
@@ -37,6 +40,9 @@ SCENARIO_STEP_TYPES = [
     "if_variable",
     "fb_tap_comment_button",
     "tap_fb_comment_button",
+    "fb_find_comment_button",
+    "fb_tap_comment_target",
+    "fb_apply_comment_filter",
     "random_pick",
     "run_scenario",
     "extract",
@@ -189,6 +195,24 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [],
         "description": "Gõ text vào element đang focused. via: u2. Ưu tiên dùng input_selector.",
     },
+    "login_if_needed": {
+        "required": [],
+        "optional": ["profile", "clear_first", "implicit_wait"],
+        "description": (
+            "Profile-driven login. Detects logged-in state first, fills login_recipe fields from "
+            "account/scenario/variables/secret references, then submits."
+        ),
+    },
+    "fill_form": {
+        "required": [],
+        "optional": ["profile", "recipe", "clear_first", "implicit_wait"],
+        "description": "Fill a named form recipe from an app automation profile.",
+    },
+    "assert_app_state": {
+        "required": [],
+        "optional": ["profile", "package", "any_text", "all_text", "not_text", "locator"],
+        "description": "Assert current app state using package/text checks and optional semantic locator.",
+    },
     "key": {
         "required": ["key"],
         "optional": [],
@@ -316,6 +340,43 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "Canonical Facebook comment-button step. Same behavior as legacy "
             "tap_fb_comment_button: find + tap the visible Facebook comment "
             "button and set parent context for following extract fb_comments."
+        ),
+    },
+    "fb_find_comment_button": {
+        "required": [],
+        "optional": [
+            "timeout",
+            "poll",
+            "dedupe_field",
+            "ignore_error",
+            "switch_to_all_comments",
+            "comment_filter",
+        ],
+        "description": (
+            "Find the visible Facebook comment button for the current post and "
+            "cache its target without tapping. Use before fb_tap_comment_target."
+        ),
+    },
+    "fb_tap_comment_target": {
+        "required": [],
+        "optional": ["ignore_error", "post_tap_wait_s"],
+        "description": (
+            "Tap the cached Facebook comment target from fb_find_comment_button, "
+            "verify the comment sheet opened, and set parent context for following fb_comments extraction."
+        ),
+    },
+    "fb_apply_comment_filter": {
+        "required": [],
+        "optional": [
+            "switch_to_all_comments",
+            "comment_filter",
+            "comment_filter_settle_s",
+            "comment_filter_step_pause_s",
+            "comment_filter_post_select_s",
+        ],
+        "description": (
+            "Apply the Facebook comment sheet filter. "
+            "comment_filter: most_relevant | newest | all_comments, or none to skip."
         ),
     },
     "tap_fb_comment_button": {

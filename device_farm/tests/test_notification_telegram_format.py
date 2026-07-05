@@ -4,6 +4,33 @@ from services.notification_events import parse_domain_event, render_notification
 from services.notification_telegram import format_telegram_message
 
 
+def test_campaign_notification_uses_relative_link_without_public_frontend_url(monkeypatch):
+    monkeypatch.delenv("DEVICE_FARM_FRONTEND_URL", raising=False)
+    monkeypatch.delenv("FRONTEND_URL", raising=False)
+
+    from core.env import device_farm_frontend_url
+
+    event = parse_domain_event(
+        {
+            "type": "campaign.failed",
+            "org_id": "org-1",
+            "campaign_id": "camp-1",
+            "resource_name": "test12",
+            "status": "failed",
+            "execution_completed": 0,
+            "execution_failed": 1,
+            "execution_cancelled": 0,
+            "dispatch_id": "run-1",
+            "error_message": "all_executions_dlq_open",
+        }
+    )
+    rendered = render_notification(event, app_base_url=device_farm_frontend_url(fallback=""))
+
+    assert "localhost" not in rendered.body
+    assert rendered.deep_link == "/dashboard/campaigns/camp-1/monitor"
+    assert "Open: /dashboard/campaigns/camp-1/monitor" in rendered.body
+
+
 def test_format_telegram_campaign_dispatched():
     event = parse_domain_event(
         {

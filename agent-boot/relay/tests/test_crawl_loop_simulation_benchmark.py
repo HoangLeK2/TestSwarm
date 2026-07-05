@@ -58,7 +58,7 @@ LEGACY_BALANCED_FB_COMMENTS_CONTEXT: dict[str, Any] = {
     "comment_swipes_per_dump": 6,
     "comment_scroll_distance": 0.52,
     "comment_scroll_duration_ms": 120,
-    "comment_scroll_pause_s": 0.03,
+    "comment_scroll_pause_s": 0.0,
     "comment_recover_chrome": False,
     "comment_no_growth_break": 2,
     "min_comment_scan_passes": 1,
@@ -85,6 +85,7 @@ CRAWL_TAP_CONTEXT: dict[str, Any] = {
     "comment_target_verify_back_settle_s": 0,
     "comment_sheet_u2_wait": 0,
     "comment_sheet_wait_s": 0,
+    "comment_target_tap_enabled": True,
 }
 
 
@@ -99,13 +100,19 @@ class OpStats:
     wait_exists: int = 0
     total_ops: int = 0
     total_sim_ms: float = 0.0
+    total_device_ms: float = 0.0
     wall_ms: float = 0.0
     _sim_by_op: dict[str, float] = field(default_factory=dict)
+    _device_by_op: dict[str, float] = field(default_factory=dict)
 
-    def record(self, op: str, sim_ms: float) -> None:
+    def record(self, op: str, sim_ms: float, device_ms: float | None = None) -> None:
+        if device_ms is None:
+            device_ms = sim_ms
         self.total_ops += 1
         self.total_sim_ms += sim_ms
+        self.total_device_ms += device_ms
         self._sim_by_op[op] = self._sim_by_op.get(op, 0.0) + sim_ms
+        self._device_by_op[op] = self._device_by_op.get(op, 0.0) + device_ms
         if op == "dump_hierarchy":
             self.dump += 1
         elif op == "swipe":
@@ -139,6 +146,7 @@ class OpStats:
             "click": click_total,
             "press_key": self.press_key,
             "sim_total_ms": round(self.total_sim_ms, 2),
+            "device_total_ms": round(self.total_device_ms, 2),
             "avg_sim_ms_per_op": round(avg_op, 3),
             "avg_sim_ms_per_dump": round(dump_sim / self.dump, 3) if self.dump else 0,
             "avg_sim_ms_per_swipe": round(swipe_sim / self.swipe, 3) if self.swipe else 0,
@@ -175,7 +183,12 @@ class _InstrumentedExecutor(_FakeExecutor):
                 "press_key": _SIM_KEY_MS,
                 "wait_exists": 0.2,
             }.get(op, 0.1)
-            self.stats.record(op, sim)
+            device_ms = sim
+            if op == "swipe":
+                device_ms = max(sim, float(act.get("duration") or 0) * 1000.0)
+            elif op == "sleep":
+                device_ms = max(sim, float(act.get("seconds", act.get("duration", 0)) or 0) * 1000.0)
+            self.stats.record(op, sim, device_ms)
             if sim > 0:
                 await asyncio.sleep(sim / 1000.0)
             if op in {"click", "click_spec", "click_selector"} and not self._opened_sheet:
@@ -214,7 +227,12 @@ class _InstrumentedSessionExecutor(_SessionFakeExecutor):
                 "press_key": _SIM_KEY_MS,
                 "wait_exists": 0.2,
             }.get(op, 0.1)
-            self.stats.record(op, sim)
+            device_ms = sim
+            if op == "swipe":
+                device_ms = max(sim, float(act.get("duration") or 0) * 1000.0)
+            elif op == "sleep":
+                device_ms = max(sim, float(act.get("seconds", act.get("duration", 0)) or 0) * 1000.0)
+            self.stats.record(op, sim, device_ms)
             if sim > 0:
                 await asyncio.sleep(sim / 1000.0)
             if op in {"click", "click_spec", "click_selector"} and not self._opened_sheet:
@@ -291,7 +309,14 @@ def _load_crawl_group_comment_context() -> dict[str, Any]:
 
 
 def _current_balanced_comment_context() -> dict[str, Any]:
-    from services.extract_profiles import get_profile_defaults
+    try:
+        from services.extract_profiles import get_profile_defaults
+    except ModuleNotFoundError:
+        import sys
+
+        repo_root = Path(__file__).resolve().parents[3]
+        sys.path.insert(0, str(repo_root / "device_farm"))
+        from services.extract_profiles import get_profile_defaults
 
     ctx = dict(get_profile_defaults("balanced", "fb_comments"))
     ctx["comment_recover_chrome"] = False
@@ -302,15 +327,8 @@ def _current_balanced_comment_context() -> dict[str, Any]:
 
 
 def _estimate_comment_device_ms(stats: OpStats, context: dict[str, Any], snapshots: int) -> float:
-    dump_ms = float(context.get("hierarchy_dump_timeout_s") or 2.2) * 1000.0
-    swipe_ms = float(context.get("comment_scroll_duration_ms") or 120)
-    pause_ms = float(context.get("comment_scroll_pause_s") or 0) * 1000.0
     parse_ms_per_snapshot = 80.0
-    return (
-        stats.dump * dump_ms
-        + stats.swipe * (swipe_ms + pause_ms)
-        + snapshots * parse_ms_per_snapshot
-    )
+    return stats.total_device_ms + snapshots * parse_ms_per_snapshot
 
 
 async def _simulate_long_comment_thread(context: dict[str, Any]) -> dict[str, Any]:
@@ -492,7 +510,7 @@ async def test_crawl_comments_deep_scroll_profile_matches_production() -> None:
 
 
 @pytest.mark.asyncio
-async def test_crawl_comments_balanced_profile_speedup_benchmark() -> None:
+async def test_crawl_comments_default_fast_timing_keeps_requested_budget() -> None:
     legacy = await _simulate_long_comment_thread(LEGACY_BALANCED_FB_COMMENTS_CONTEXT)
     current = await _simulate_long_comment_thread(_current_balanced_comment_context())
 
@@ -510,6 +528,8 @@ async def test_crawl_comments_balanced_profile_speedup_benchmark() -> None:
     )
 
     assert legacy["swipe"] == 40
+    assert legacy["dump"] == 8
+    assert legacy["sim_wall_ms"] < 300
     assert current["swipe"] <= 16
     assert current["dump"] < legacy["dump"]
     assert reduction["estimated_device_pct"] >= 40

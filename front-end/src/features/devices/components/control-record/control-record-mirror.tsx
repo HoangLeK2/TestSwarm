@@ -5,6 +5,9 @@ import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
 import type { DeviceOpsConfig } from '../device-ops-rail';
 import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
+import {
+  isManualControlBlockedByAutomation
+} from '../../lib/control-record-device-state';
 
 type Props = {
   device: Device;
@@ -33,10 +36,7 @@ type Props = {
 };
 
 function isManualControlBlocked(device: Device): boolean {
-  return (
-    (device.state || '').replace('DeviceState.', '') === 'BUSY' ||
-    (device.scenario_active ?? 0) > 0
-  );
+  return isManualControlBlockedByAutomation(device);
 }
 
 function deviceMirrorPropsEqual(prev: Props, next: Props) {
@@ -78,6 +78,7 @@ function deviceMirrorPropsEqual(prev: Props, next: Props) {
     pd.screen_width === nd.screen_width &&
     pd.screen_height === nd.screen_height &&
     pd.scenario_active === nd.scenario_active &&
+    pd.manual_takeover_active === nd.manual_takeover_active &&
     pd.relay_scrcpy_enabled === nd.relay_scrcpy_enabled
   );
 }
@@ -110,13 +111,9 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   const compactPadding = mirrorSize !== 'default';
   const compactOverlay = mirrorSize !== 'default';
 
-  const deviceScenarioActive = device.scenario_active ?? 0;
-  const deviceState = device.state;
+  const manualControlBlocked = isManualControlBlocked(device);
   const screenOverlay = useMemo(() => {
-    if (
-      (deviceState || '').replace('DeviceState.', '') !== 'BUSY' &&
-      deviceScenarioActive <= 0
-    ) {
+    if (!manualControlBlocked) {
       return undefined;
     }
     return (
@@ -129,8 +126,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   }, [
     canTakeControl,
     compactOverlay,
-    deviceScenarioActive,
-    deviceState,
+    manualControlBlocked,
     onTakeControl
   ]);
 

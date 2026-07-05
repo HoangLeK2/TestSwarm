@@ -73,6 +73,28 @@ def _interrupt_workflow_ids_from_executions(executions) -> list[str]:
     return workflow_ids
 
 
+def _takeover_workflow_ids_from_execution(execution) -> list[str]:
+    workflow_ids: list[str] = []
+
+    def _add(workflow_id: str | None) -> None:
+        workflow_id = str(workflow_id or "").strip()
+        if not workflow_id:
+            return
+        if workflow_id.endswith(":steps"):
+            workflow_id = workflow_id[:-6]
+        if workflow_id and workflow_id not in workflow_ids:
+            workflow_ids.append(workflow_id)
+
+    meta = getattr(execution, "meta", None) or {}
+    for workflow_id in meta.get("workflow_ids") or []:
+        _add(workflow_id)
+    _add(meta.get("workflow_id"))
+    execution_id = str(getattr(execution, "id", "") or "").strip()
+    if execution_id:
+        _add(f"exec_{execution_id}")
+    return workflow_ids
+
+
 def _interrupt_execution_ids(executions) -> list[str]:
     ids: list[str] = []
     for execution in executions:
@@ -130,6 +152,51 @@ async def _cancel_interrupt_workflows(client, workflow_ids: list[str]) -> list[s
 
     results = await asyncio.gather(*(_cancel_one(workflow_id) for workflow_id in workflow_ids))
     return [workflow_id for workflow_id in results if workflow_id]
+
+
+async def _pause_takeover_executions(
+    db,
+    executions,
+    *,
+    user_id: str | None,
+    temporal_client,
+) -> tuple[list[dict], int]:
+    from services.execution_control import ExecutionControlError, pause_execution
+
+    paused: list[dict] = []
+    workflows_signalled = 0
+    for execution in executions:
+        if getattr(execution, "status", "running") not in ("running", "paused"):
+            continue
+        workflow_ids = _takeover_workflow_ids_from_execution(execution)
+        try:
+            result = await pause_execution(
+                db,
+                execution.id,
+                user_id=user_id,
+                temporal_client=temporal_client,
+                workflow_ids=workflow_ids or None,
+                signal_temporal=temporal_client is not None,
+            )
+            workflows_signalled += result.workflows_signalled
+            paused.append(
+                {
+                    "execution_id": result.execution_id,
+                    "status": result.status,
+                    "effective_transition": result.effective_transition,
+                    "workflows_signalled": result.workflows_signalled,
+                }
+            )
+        except ExecutionControlError as exc:
+            paused.append(
+                {
+                    "execution_id": execution.id,
+                    "status": getattr(execution, "status", None),
+                    "effective_transition": False,
+                    "error": exc.message,
+                }
+            )
+    return paused, workflows_signalled
 
 
 async def _workflow_ui_status(client, workflow_id: str, temporal_status: str) -> str:
@@ -830,6 +897,58 @@ def build_campaign_fleet_router(
             return JSONResponse(
                 {"error": f"Failed to cancel: {exc}"}, status_code=500,
             )
+
+    @router.post(
+        "/devices/{serial}/takeover",
+        dependencies=[Depends(require_permission("devices", "execute"))],
+    )
+    async def api_device_takeover(serial: str, db: DB, user: CurrentUser):
+        """Pause running scenarios on a device and allow manual input takeover."""
+        db_device = await repo.get_device_by_serial(db, serial)
+        if not await device_visible_to_user(db, user, db_device):
+            raise HTTPException(status_code=404, detail="Device not found")
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+
+        executions = await repo.list_running_executions_for_device(db, db_device.id)
+        temporal_client = None
+        if config.temporal.enabled:
+            try:
+                temporal_client = await asyncio.wait_for(
+                    get_temporal_client(config.temporal),
+                    timeout=_INTERRUPT_TEMPORAL_DEADLINE_S,
+                )
+            except asyncio.TimeoutError:
+                log.warning("takeover: temporal connect timed out for %s", serial)
+            except Exception as exc:
+                log.warning("takeover: temporal unavailable for %s: %s", serial, exc)
+
+        paused, workflows_signalled = await _pause_takeover_executions(
+            db,
+            executions,
+            user_id=getattr(user, "id", None),
+            temporal_client=temporal_client,
+        )
+
+        from services.manual_takeover import set_manual_takeover
+
+        await set_manual_takeover(serial)
+        publish = getattr(device, "_publish_status", None)
+        if publish is not None:
+            try:
+                publish()
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "serial": serial,
+            "action": "paused_for_takeover",
+            "paused_executions": paused,
+            "workflows_signalled": workflows_signalled,
+            "manual_takeover_active": True,
+        }
 
     @router.post(
         "/devices/{serial}/interrupt",

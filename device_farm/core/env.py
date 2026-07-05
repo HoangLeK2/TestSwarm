@@ -184,11 +184,11 @@ def rate_limit_enabled() -> bool:
 # ── SMTP / organization invites ─────────────────────────────────────────────
 
 
-def device_farm_frontend_url() -> str:
+def device_farm_frontend_url(*, fallback: str = "http://localhost:3000") -> str:
     return (
         os.environ.get("DEVICE_FARM_FRONTEND_URL", "").strip()
         or os.environ.get("FRONTEND_URL", "").strip()
-        or "http://localhost:3000"
+        or fallback
     )
 
 

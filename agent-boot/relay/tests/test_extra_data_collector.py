@@ -45,6 +45,8 @@ class _FakeExecutor:
                 results.append({"op": op, "ok": True, "value": self._dump_xml})
             elif op == "swipe":
                 results.append({"op": op, "ok": True})
+            elif op == "u2_swipe_batch":
+                results.append({"op": op, "ok": True, "value": int(act.get("count") or 0)})
             elif op == "click":
                 self.clicks.append((int(act["x"]), int(act["y"])))
                 results.append({"op": op, "ok": True})
@@ -59,6 +61,8 @@ class _FakeExecutor:
                 results.append({"op": op, "ok": True, "value": hit})
             elif op == "press_key":
                 self.press_back_calls += 1
+                results.append({"op": op, "ok": True})
+            elif op == "sleep":
                 results.append({"op": op, "ok": True})
             else:
                 return {"ok": False, "results": results, "error": "unexpected"}
@@ -160,7 +164,7 @@ async def test_collect_fb_comments_default_scan_is_bounded() -> None:
         if action.get("op") == "dump_hierarchy"
     ]
     assert len(swipes) <= 6
-    assert len(dumps) <= 3
+    assert len(dumps) <= 5
 
 
 @pytest.mark.asyncio
@@ -226,6 +230,105 @@ async def test_comment_scroll_wall_clock_cap_stops_early() -> None:
 
 
 @pytest.mark.asyncio
+async def test_comment_scroll_lifts_low_wall_cap_when_post_count_requires_budget(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    action_bar = (
+        ACTION_BAR_SNIPPET.replace('text="23"', 'text="196"')
+        .replace('content-desc="23"', 'content-desc="196"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node class="android.widget.Button" text="Đóng"',
+        f"{action_bar}<node class=\"android.widget.Button\" text=\"Đóng\"",
+    )
+
+    parse_calls = 0
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        nonlocal parse_calls
+        parse_calls += 1
+        return [
+            {
+                "author": f"user-{parse_calls}",
+                "text": f"comment body {parse_calls}",
+                "comment_key": f"ck-{parse_calls}",
+            }
+        ], {"reason_code": "ok"}
+
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.parse_fb_comments_from_xml_with_diagnostic",
+        fake_parse,
+    )
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 220,
+        "comment_scroll_passes": 18,
+        "comment_swipes_per_dump": 3,
+        "comment_scroll_wall_s": 0.0001,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_large_target_fast_scroll": True,
+        "comment_target_comments_per_swipe": 4,
+        "comment_recover_chrome": False,
+        "comment_no_growth_break": 0,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "min_comment_scan_passes": 0,
+    }
+    exec_ = _RotatingSheetExecutor()
+    snapshots, err = await collect_xml_snapshots(exec_, "dev1", "fb_comments", context)
+
+    assert err is None
+    swipe_actions = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") in {"swipe", "u2_swipe_batch"}
+    ]
+    total_swipes = sum(
+        int(action.get("count") or 0)
+        if action.get("op") == "u2_swipe_batch"
+        else 1
+        for action in swipe_actions
+    )
+    assert total_swipes == 49
+    u2_batches = [
+        action for action in swipe_actions if action.get("op") == "u2_swipe_batch"
+    ]
+    assert u2_batches
+    assert u2_batches[0]["count"] == 6
+    assert u2_batches[0]["duration"] == pytest.approx(0.08)
+    assert context["post_comment_count"] == 196
+    assert context["comment_target_effective"] == 196
+    assert context["comment_scroll_passes_configured"] == 18
+    assert context["comment_scroll_passes_effective"] == 49
+    assert context["comment_swipes_per_dump_configured"] == 3
+    assert context["comment_swipes_per_dump_effective"] == 6
+    assert context["comment_scroll_driver"] == "u2_http_batch"
+    assert context["comment_scroll_wall_s_effective"] > context["comment_scroll_wall_s"]
+    assert len(snapshots) == 10
+    scroll_batches = [
+        batch
+        for batch in exec_.batches
+        if any(action.get("op") in {"swipe", "u2_swipe_batch"} for action in batch)
+    ]
+    assert scroll_batches
+    assert all(batch[-1].get("op") == "dump_hierarchy" for batch in scroll_batches)
+
+
+@pytest.mark.asyncio
 async def test_comment_scroll_honors_stop_if_no_new_alias() -> None:
     from relay.tests.test_comment_filter import _sheet_xml
 
@@ -234,10 +337,18 @@ async def test_comment_scroll_honors_stop_if_no_new_alias() -> None:
             super().__init__(xml=_sheet_xml())
             self._n = 0
 
-        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
             if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
                 self._n += 1
-                self._dump_xml = _sheet_xml().replace('rotation="0"', f'rotation="{self._n}"')
+                self._dump_xml = _sheet_xml().replace(
+                    'rotation="0"',
+                    f'rotation="{self._n}"',
+                )
             return await super().run_batch(serial, actions, early_exit=early_exit)
 
     exec_ = _GrowingSheetExecutor()
@@ -267,10 +378,18 @@ async def test_comment_scroll_no_new_waits_when_probe_finds_no_comment_keys() ->
             super().__init__(xml=_sheet_xml())
             self._n = 0
 
-        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
             if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
                 self._n += 1
-                self._dump_xml = _sheet_xml().replace('rotation="0"', f'rotation="{self._n}"')
+                self._dump_xml = _sheet_xml().replace(
+                    'rotation="0"',
+                    f'rotation="{self._n}"',
+                )
             return await super().run_batch(serial, actions, early_exit=early_exit)
 
     exec_ = _GrowingEmptySheetExecutor()
@@ -290,6 +409,38 @@ async def test_comment_scroll_no_new_waits_when_probe_finds_no_comment_keys() ->
 
     assert err is None
     assert len(snapshots) >= 4
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_no_growth_is_disabled_unless_user_sets_break() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    context = {
+        "comment_scroll_passes": 5,
+        "comment_swipes_per_dump": 1,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+    }
+    exec_ = _FakeExecutor(xml=_sheet_xml())
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    assert len(swipes) == 5
+    assert context["comment_scroll_passes_effective"] == 5
+    assert len(snapshots) == 1
 
 
 @pytest.mark.asyncio
@@ -363,6 +514,525 @@ async def test_comment_scroll_stops_when_post_comment_target_reached(monkeypatch
     ]
     assert len(swipes) <= 3
     assert parse_calls >= 3
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_skips_when_post_comment_count_is_zero() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    zero_action_bar = (
+        ACTION_BAR_SNIPPET
+        .replace('text="23"', 'text="0"')
+        .replace('content-desc="23"', 'content-desc="0"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node class="android.widget.Button" text="Đóng"',
+        f"{zero_action_bar}<node class=\"android.widget.Button\" text=\"Đóng\"",
+    )
+    context = {
+        "comment_scroll_passes": 20,
+        "comment_swipes_per_dump": 1,
+        "comment_scroll_pause_s": 0,
+    }
+    exec_ = _FakeExecutor(xml=sheet)
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots == [sheet]
+    assert context["post_comment_count"] == 0
+    assert context["comment_target_effective"] == 0
+    assert context["comment_scroll_skipped_reason"] == "post_comment_count_zero"
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    assert swipes == []
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_skips_when_comment_sheet_action_bar_has_no_comment_badge() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_NO_COMMENT_COUNT_SNIPPET
+
+    sheet = _sheet_xml().replace(
+        '<node package="com.facebook.katana" clickable="true" bounds="[40,180][680,260]"',
+        f"{ACTION_BAR_NO_COMMENT_COUNT_SNIPPET}"
+        '<node package="com.facebook.katana" clickable="true" bounds="[40,180][680,260]"',
+    )
+    context = {
+        "comment_scroll_passes": 20,
+        "comment_swipes_per_dump": 1,
+        "comment_scroll_pause_s": 0,
+    }
+    exec_ = _FakeExecutor(xml=sheet)
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots == [sheet]
+    assert context["post_comment_count"] == 0
+    assert context["comment_scroll_skipped_reason"] == "post_comment_count_zero"
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    assert swipes == []
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_does_not_skip_when_comment_count_is_unknown() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    sheet = _sheet_xml()
+    context = {
+        "comment_scroll_passes": 3,
+        "comment_swipes_per_dump": 1,
+        "comment_no_growth_break": 0,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "comment_scroll_pause_s": 0,
+        "comment_recover_chrome": False,
+    }
+    exec_ = _FakeExecutor(xml=sheet)
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert context["post_comment_count"] is None
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    assert len(swipes) == 3
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_keeps_requested_budget_when_count_unknown() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    sheet = _sheet_xml()
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 220,
+        "comment_scroll_passes": 18,
+        "comment_swipes_per_dump": 3,
+        "comment_scroll_wall_s": 16,
+        "comment_hard_budget": True,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_no_growth_break": 0,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "min_comment_scan_passes": 0,
+    }
+    exec_ = _RotatingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    swipe_actions = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") in {"swipe", "u2_swipe_batch"}
+    ]
+    total_swipes = sum(
+        int(action.get("count") or 0)
+        if action.get("op") == "u2_swipe_batch"
+        else 1
+        for action in swipe_actions
+    )
+    assert context["post_comment_count"] is None
+    assert context["comment_target_effective"] == 220
+    assert context["comment_target_source"] == "max_items"
+    assert "comment_scroll_passes_configured" not in context
+    assert context["comment_scroll_passes_effective"] == 18
+    assert context["comment_scroll_wall_s_effective"] == 16
+    assert total_swipes == 18
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_uses_requested_target_for_large_visible_post_count() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    action_bar = (
+        ACTION_BAR_SNIPPET
+        .replace('text="23"', 'text="500"')
+        .replace('content-desc="23"', 'content-desc="500"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node package="com.facebook.katana" clickable="true" bounds="[40,180][680,260]"',
+        f"{action_bar}"
+        '<node package="com.facebook.katana" clickable="true" bounds="[40,180][680,260]"',
+    )
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 500,
+        "comment_scroll_passes": 16,
+        "comment_swipes_per_dump": 6,
+        "comment_max_snapshots": 10,
+        "comment_scroll_wall_s": 16,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_no_growth_break": 0,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "min_comment_scan_passes": 0,
+    }
+    exec_ = _RotatingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    swipe_actions = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") in {"swipe", "u2_swipe_batch"}
+    ]
+    total_swipes = sum(
+        int(action.get("count") or 0)
+        if action.get("op") == "u2_swipe_batch"
+        else 1
+        for action in swipe_actions
+    )
+    assert context["post_comment_count"] == 500
+    assert context["max_items"] == 500
+    assert context["comment_target_effective"] == 500
+    assert context["comment_target_source"] == "post_count"
+    assert context["comment_scroll_passes_configured"] == 16
+    assert context["comment_scroll_passes_effective"] == 500
+    assert context["comment_scroll_wall_s_effective"] > 16
+    assert total_swipes == 500
+    assert len(snapshots) > 10
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_hard_budget_keeps_max_items_below_visible_post_count() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    action_bar = (
+        ACTION_BAR_SNIPPET
+        .replace('text="23"', 'text="500"')
+        .replace('content-desc="23"', 'content-desc="500"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node package="com.facebook.katana" clickable="true" bounds="[40,180][680,260]"',
+        f"{action_bar}"
+        '<node package="com.facebook.katana" clickable="true" bounds="[40,180][680,260]"',
+    )
+    context = {
+        "max_items": 220,
+        "comment_scroll_passes": 16,
+        "comment_swipes_per_dump": 6,
+        "comment_max_snapshots": 10,
+        "comment_scroll_wall_s": 16,
+        "comment_hard_budget": True,
+        "comment_scroll_pause_s": 0,
+    }
+
+    snapshots, err = await collect_xml_snapshots(
+        _FakeExecutor(xml=sheet),
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert context["post_comment_count"] == 500
+    assert context["max_items"] == 220
+    assert context["comment_target_effective"] == 220
+    assert "comment_target_lifted_from_post_count" not in context
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_lifts_cap_when_only_max_items_is_explicit() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    sheet = _sheet_xml()
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 120,
+        "comment_swipes_per_dump": 3,
+        "comment_scroll_wall_s": 16,
+        "comment_target_budget_unknown_count": True,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_no_growth_break": 0,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "min_comment_scan_passes": 0,
+    }
+    exec_ = _RotatingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    assert context["post_comment_count"] is None
+    assert context["comment_target_effective"] == 120
+    assert context["comment_target_source"] == "max_items"
+    assert context["comment_scroll_passes_configured"] == 4
+    assert context["comment_scroll_passes_effective"] == 120
+    assert context["comment_scroll_wall_s_effective"] > 16
+    assert len(swipes) == 120
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_unknown_count_stops_when_max_items_target_seen(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    sheet = _sheet_xml()
+
+    parse_calls = 0
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        nonlocal parse_calls
+        parse_calls += 1
+        count = 50 if parse_calls == 1 else 120
+        return [
+            {
+                "author": f"user-{idx}",
+                "text": f"comment body {idx}",
+                "comment_key": f"ck-{idx}",
+            }
+            for idx in range(count)
+        ], {"reason_code": "ok"}
+
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.parse_fb_comments_from_xml_with_diagnostic",
+        fake_parse,
+    )
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 100,
+        "comment_scroll_passes": 40,
+        "comment_swipes_per_dump": 3,
+        "comment_scroll_wall_s": 16,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_no_growth_break": 0,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "min_comment_scan_passes": 0,
+    }
+    exec_ = _RotatingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    assert context["post_comment_count"] is None
+    assert context["comment_target_source"] == "max_items"
+    assert len(swipes) == 3
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_honors_explicit_budget_above_legacy_cap() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=_sheet_xml())
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = _sheet_xml().replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    exec_ = _RotatingSheetExecutor()
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 120,
+            "comment_swipes_per_dump": 6,
+            "comment_no_growth_break": 0,
+            "comment_stop_if_no_new": False,
+            "stop_if_no_new": False,
+            "min_comment_scan_passes": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    assert err is None
+    assert len(snapshots) == 21
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert len(swipes) == 120
+    assert len(dumps) == 21
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_raises_stale_snapshot_cap_for_explicit_budget() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=_sheet_xml())
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = _sheet_xml().replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    exec_ = _RotatingSheetExecutor()
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 120,
+            "comment_swipes_per_dump": 4,
+            "comment_max_snapshots": 12,
+            "comment_no_growth_break": 0,
+            "comment_stop_if_no_new": False,
+            "stop_if_no_new": False,
+            "min_comment_scan_passes": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert err is None
+    assert len(snapshots) == 31
+    assert len(swipes) == 120
+    assert len(dumps) == 31
 
 
 @pytest.mark.asyncio
@@ -582,6 +1252,201 @@ async def test_collect_fb_comments_honors_explicit_deep_scroll_context() -> None
 
 
 @pytest.mark.asyncio
+async def test_collect_fb_comments_default_fast_timing_preserves_requested_budget() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    class _GrowingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=_sheet_xml())
+            self._n = 0
+
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = _sheet_xml().replace(
+                    'rotation="0"',
+                    f'rotation="{self._n}"',
+                )
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 500,
+        "comment_scroll_passes": 5,
+        "comment_swipes_per_dump": 1,
+        "comment_no_growth_break": 0,
+        "min_comment_scan_passes": 0,
+        "comment_max_snapshots": 10,
+        "comment_scroll_wall_s": 0,
+        "comment_scroll_duration_ms": 300,
+        "comment_scroll_pause_s": 0.001,
+        "comment_scroll_settle_s": 0.002,
+        "comment_recover_chrome": False,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+    }
+    exec_ = _GrowingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert len(swipes) == 5
+    assert len(dumps) == 6
+    assert {action["duration"] for action in swipes} == {0.3}
+    assert not any(str(key).startswith("comment_fast") for key in context)
+    assert context["comment_target_effective"] == 500
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_large_xml_honors_explicit_budget() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    payload = '<node class="android.widget.TextView" text="' + ("x" * (640 * 1024)) + '" />'
+
+    def _big_sheet(n: int) -> str:
+        return _sheet_xml().replace(
+            "</hierarchy>",
+            f'<node text="rotation-{n}" />{payload}</hierarchy>',
+        )
+
+    class _LargeSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=_big_sheet(0))
+            self._n = 0
+
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = _big_sheet(self._n)
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    exec_ = _LargeSheetExecutor()
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 120,
+            "comment_swipes_per_dump": 6,
+            "comment_no_growth_break": 0,
+            "comment_stop_if_no_new": False,
+            "stop_if_no_new": False,
+            "min_comment_scan_passes": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert err is None
+    assert len(snapshots) == 21
+    assert len(swipes) == 120
+    assert len(dumps) == 21
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_deep_scroll_context_keeps_requested_budget() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    class _GrowingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=_sheet_xml())
+            self._n = 0
+
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = _sheet_xml().replace(
+                    'rotation="0"',
+                    f'rotation="{self._n}"',
+                )
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 500,
+        "comment_scroll_passes": 40,
+        "comment_swipes_per_dump": 1,
+        "comment_no_growth_break": 0,
+        "min_comment_scan_passes": 3,
+        "comment_max_snapshots": 50,
+        "comment_scroll_wall_s": 0,
+        "comment_scroll_pause_s": 0,
+        "comment_recover_chrome": False,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+    }
+    exec_ = _GrowingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert len(swipes) == 40
+    assert len(dumps) == 41
+    assert context["comment_target_effective"] == 500
+    assert not any(str(key).startswith("comment_fast") for key in context)
+
+
+@pytest.mark.asyncio
 async def test_collect_fb_comments_stops_when_cancel_event_is_set() -> None:
     from relay.tests.test_comment_filter import _sheet_xml
 
@@ -697,7 +1562,11 @@ async def test_collect_fb_comment_target_prefers_click_spec() -> None:
         _snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
             exec_,
             "dev1",
-            {"post_tap_wait_s": 0.0, "comment_target_verify": False},
+            {
+                "post_tap_wait_s": 0.0,
+                "comment_target_verify": False,
+                "comment_target_tap_enabled": True,
+            },
         )
     assert err is None
     assert tapped is True
@@ -791,6 +1660,34 @@ async def test_post_open_u2_click_is_explicit_fallback_only() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collect_fb_comment_target_tap_disabled_by_default() -> None:
+    exec_ = _SessionFakeExecutor()
+    diagnostic = {
+        "reason_code": "ok",
+        "target": {"bounds": [100, 200, 300, 250]},
+        "alternates": [],
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=([], diagnostic),
+    ):
+        snapshots, err, tapped, diagnostic = await collect_fb_comment_target_with_tap(
+            exec_,
+            "dev1",
+            {"post_tap_wait_s": 0.0},
+        )
+
+    assert err is None
+    assert tapped is False
+    assert snapshots == [_SAMPLE_XML]
+    assert exec_.clicks == []
+    assert diagnostic["tap_disabled"] is True
+    assert diagnostic["target"] is None
+    assert diagnostic["resolved_target"] == {"bounds": [100, 200, 300, 250]}
+    assert diagnostic["verify_attempts"][0]["reason"] == "comment_target_tap_disabled"
+
+
+@pytest.mark.asyncio
 async def test_collect_fb_comment_target_with_tap_same_session() -> None:
     exec_ = _SessionFakeExecutor()
     diagnostic = {
@@ -808,7 +1705,7 @@ async def test_collect_fb_comment_target_with_tap_same_session() -> None:
         snapshots, err, tapped, diagnostic = await collect_fb_comment_target_with_tap(
             exec_,
             "dev1",
-            {"post_tap_wait_s": 0.0},
+            {"post_tap_wait_s": 0.0, "comment_target_tap_enabled": True},
         )
     assert err is None
     assert tapped is True
@@ -855,6 +1752,7 @@ async def test_collect_fb_comment_target_retries_when_sheet_did_not_open() -> No
                 "post_tap_wait_s": 0.0,
                 "comment_target_verify_back_settle_s": 0.0,
                 "comment_target_verify_max_retries": 1,
+                "comment_target_tap_enabled": True,
             },
         )
 
@@ -902,6 +1800,7 @@ async def test_collect_fb_comment_target_skips_back_on_group_feed() -> None:
                 "post_tap_wait_s": 0.0,
                 "comment_target_verify_back_settle_s": 0.0,
                 "comment_target_verify_max_retries": 1,
+                "comment_target_tap_enabled": True,
             },
         )
 
@@ -929,7 +1828,11 @@ async def test_collect_fb_comment_target_skips_verify_when_disabled() -> None:
         snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
             exec_,
             "dev1",
-            {"post_tap_wait_s": 0.0, "comment_target_verify": False},
+            {
+                "post_tap_wait_s": 0.0,
+                "comment_target_verify": False,
+                "comment_target_tap_enabled": True,
+            },
         )
 
     assert err is None
@@ -1062,6 +1965,88 @@ async def test_open_post_success_returns_opened_post_metadata() -> None:
         "timestamp": "5 ngày",
         "text_prefix": "opened post body",
     }
+
+
+@pytest.mark.asyncio
+async def test_open_post_default_batches_tap_sleep_and_dump() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][280,504]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+    }
+    ctx: dict = {
+        "open_post_before_extract": True,
+        "post_open_verify": True,
+    }
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "hierarchy_is_fb_post_detail_from_xml",
+        side_effect=[False, True],
+    ), patch("asyncio.sleep") as sleep_mock:
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == _SAMPLE_XML
+    assert diag["reason_code"] == "ok"
+    sleep_mock.assert_not_called()
+    assert exec_.batches[0][0]["op"] == "click"
+    assert exec_.batches[0][1] == {"op": "sleep", "seconds": 0.1}
+    assert exec_.batches[0][2]["op"] == "dump_hierarchy"
+
+
+@pytest.mark.asyncio
+async def test_open_post_explicit_settle_is_not_clamped() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][280,504]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+    }
+    ctx: dict = {
+        "open_post_before_extract": True,
+        "post_open_verify": True,
+        "post_open_tap_settle_s": 0.9,
+    }
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "hierarchy_is_fb_post_detail_from_xml",
+        side_effect=[False, True],
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == _SAMPLE_XML
+    assert diag["reason_code"] == "ok"
+    assert exec_.batches[0][1] == {"op": "sleep", "seconds": 0.9}
 
 
 @pytest.mark.asyncio
@@ -1211,6 +2196,103 @@ async def test_comment_scroll_suppresses_back_on_group_collection() -> None:
     assert exec_.press_back_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_collect_xml_snapshots_attaches_preparsed_fb_comments(monkeypatch) -> None:
+    import relay.extra_data.parsers.facebook as facebook
+
+    def fake_parse(xml, parent_post_id=None, max_items=400):
+        return [{"comment_key": "c1", "text": "first"}], {"reason_code": "ok"}
+
+    monkeypatch.setattr(facebook, "parse_fb_comments_from_xml_with_diagnostic", fake_parse)
+
+    context = {
+        "collection": "c1",
+        "comment_scroll_passes": 0,
+        "comment_respect_post_count": False,
+        "preparse_fb_comments": True,
+    }
+    snapshots, err = await collect_xml_snapshots(
+        _FakeExecutor(xml=_SAMPLE_XML),
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots == [_SAMPLE_XML]
+    assert context["agent_boot_preparsed_comments"] is True
+    payload = build_ingest_payload(
+        serial="dev1",
+        strategy="fb_comments",
+        context=context,
+        snapshots=snapshots,
+    )
+    assert payload["preparsed"]["items"] == [{"comment_key": "c1", "text": "first"}]
+    assert "xml_snapshots" not in payload
+
+
+@pytest.mark.asyncio
+async def test_collect_xml_snapshots_preparsed_comments_merge_multiple_frames(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    import relay.extra_data.parsers.facebook as facebook
+
+    def fake_parse(xml, parent_post_id=None, max_items=400):
+        if "frame-2" in xml:
+            return [
+                {"comment_key": "c1", "text": "duplicate"},
+                {"comment_key": "c2", "text": "second"},
+            ], {"reason_code": "ok"}
+        return [{"comment_key": "c1", "text": "first"}], {"reason_code": "ok"}
+
+    monkeypatch.setattr(facebook, "parse_fb_comments_from_xml_with_diagnostic", fake_parse)
+
+    def _frame_xml(idx: int) -> str:
+        return _sheet_xml().replace(
+            "</hierarchy>",
+            f'<node text="frame-{idx}" /></hierarchy>',
+        )
+
+    class _TwoFrameExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=_frame_xml(1))
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = _frame_xml(min(self._n, 2))
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "collection": "c1",
+        "comment_scroll_passes": 1,
+        "comment_respect_post_count": False,
+        "comment_stop_if_no_new": False,
+        "stop_if_no_new": False,
+        "comment_no_growth_break": 0,
+        "preparse_fb_comments": True,
+    }
+    snapshots, err = await collect_xml_snapshots(
+        _TwoFrameExecutor(),
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert len(snapshots) == 2
+    payload = build_ingest_payload(
+        serial="dev1",
+        strategy="fb_comments",
+        context=context,
+        snapshots=snapshots,
+    )
+    assert [item["comment_key"] for item in payload["preparsed"]["items"]] == ["c1", "c2"]
+    assert payload["preparsed"]["snapshot_count"] == 2
+    assert "xml_snapshots" not in payload
+
+
 def test_build_ingest_payload_includes_snapshots() -> None:
     payload = build_ingest_payload(
         serial="dev1",
@@ -1223,4 +2305,47 @@ def test_build_ingest_payload_includes_snapshots() -> None:
     assert payload["strategy"] == "fb_comments"
     assert payload["xml"] == _SAMPLE_XML
     assert payload["snapshot_count"] == 2
+    assert "xml_snapshots" in payload
+
+
+def test_build_ingest_payload_uses_preparsed_comments_without_raw_snapshots() -> None:
+    context = {
+        "collection": "c1",
+        "agent_boot_preparsed_comments": True,
+        "_preparsed_fb_comment_items": [{"comment_key": "c1", "text": "first"}],
+        "_preparsed_fb_comment_diagnostic": {"reason_code": "ok", "comments_returned": 1},
+        "_preparsed_fb_comment_snapshot_count": 2,
+        "_preparsed_fb_comment_xml_bytes": 1234,
+    }
+
+    payload = build_ingest_payload(
+        serial="dev1",
+        strategy="fb_comments",
+        context=context,
+        snapshots=[_SAMPLE_XML, _SAMPLE_XML + " "],
+        request_id="extra-abc",
+    )
+
+    assert payload["preparsed"]["items"] == [{"comment_key": "c1", "text": "first"}]
+    assert payload["preparsed"]["snapshot_count"] == 2
+    assert payload["preparsed"]["xml_bytes"] == 1234
+    assert "xml_snapshots" not in payload
+    assert "_preparsed_fb_comment_items" not in payload["context"]
+    assert context["_preparsed_fb_comment_items"] == [{"comment_key": "c1", "text": "first"}]
+
+
+def test_build_ingest_payload_can_keep_debug_snapshots_with_preparsed_comments() -> None:
+    payload = build_ingest_payload(
+        serial="dev1",
+        strategy="fb_comments",
+        context={
+            "collection": "c1",
+            "debug_xml_snapshots": True,
+            "agent_boot_preparsed_comments": True,
+            "_preparsed_fb_comment_items": [{"comment_key": "c1", "text": "first"}],
+        },
+        snapshots=[_SAMPLE_XML, _SAMPLE_XML + " "],
+    )
+
+    assert "preparsed" in payload
     assert "xml_snapshots" in payload

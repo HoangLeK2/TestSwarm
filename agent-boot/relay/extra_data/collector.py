@@ -14,17 +14,24 @@ logger = logging.getLogger("relay.extra_data.collector")
 
 _collect_locks: dict[str, asyncio.Lock] = {}
 _CANCEL_EVENT_CONTEXT_KEY = "_cancel_event"
+_PREPARSED_FB_COMMENT_ITEMS_KEY = "_preparsed_fb_comment_items"
+_PREPARSED_FB_COMMENT_DIAGNOSTIC_KEY = "_preparsed_fb_comment_diagnostic"
+_PREPARSED_FB_COMMENT_SNAPSHOT_COUNT_KEY = "_preparsed_fb_comment_snapshot_count"
+_PREPARSED_FB_COMMENT_XML_BYTES_KEY = "_preparsed_fb_comment_xml_bytes"
 _COMMENT_SCROLL_MAX_SWIPES = 4
 _COMMENT_SWIPES_PER_DUMP = 1
 _COMMENT_NO_GROWTH_BREAK = 1
 _COMMENT_MIN_SCAN_PASSES = 1
-_COMMENT_SCROLL_DURATION_MS = 360
-_COMMENT_SCROLL_PAUSE_S = 0.05
-_COMMENT_DEEP_SCROLL_MAX_SWIPES = 80
+_COMMENT_SCROLL_DURATION_MS = 80
+_COMMENT_SCROLL_PAUSE_S = 0.0
+_COMMENT_DEEP_SCROLL_MAX_SWIPES = 10_000
 _COMMENT_DEEP_SWIPES_PER_DUMP = 6
 _COMMENT_DEEP_NO_GROWTH_BREAK = 24
 _COMMENT_STALL_SWIPES_PER_DUMP = 2
-_COMMENT_MIN_SCROLL_DURATION_S = 0.10
+_COMMENT_DEEP_MAX_SNAPSHOTS = 2_000
+_COMMENT_MIN_SCROLL_DURATION_S = 0.06
+_COMMENT_SCROLL_SETTLE_S = 0.0
+_POST_OPEN_TAP_SETTLE_S = 0.10
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -176,6 +183,78 @@ def should_capture_screenshot(context: dict[str, Any]) -> bool:
     )
 
 
+def _preparse_fb_comments_enabled(context: dict[str, Any]) -> bool:
+    return _bool_context(
+        context,
+        "preparse_fb_comments",
+        _env_bool("AGENT_BOOT_PREPARSE_FB_COMMENTS", False),
+    )
+
+
+def _include_debug_xml_snapshots(context: dict[str, Any]) -> bool:
+    return _bool_context(
+        context,
+        "debug_xml_snapshots",
+        _env_bool("AGENT_BOOT_DEBUG_XML_SNAPSHOTS", False),
+    )
+
+
+def _clear_preparsed_fb_comments(context: dict[str, Any]) -> None:
+    for key in (
+        _PREPARSED_FB_COMMENT_ITEMS_KEY,
+        _PREPARSED_FB_COMMENT_DIAGNOSTIC_KEY,
+        _PREPARSED_FB_COMMENT_SNAPSHOT_COUNT_KEY,
+        _PREPARSED_FB_COMMENT_XML_BYTES_KEY,
+        "agent_boot_preparsed_comments",
+    ):
+        context.pop(key, None)
+
+
+def _attach_preparsed_fb_comment_snapshots(
+    context: dict[str, Any],
+    snapshots: list[str],
+) -> None:
+    _clear_preparsed_fb_comments(context)
+    if not snapshots or not _preparse_fb_comments_enabled(context):
+        return
+    _raise_if_cancelled(context)
+    started = time.perf_counter()
+    try:
+        from relay.extra_data.ingest import _parse_items, merge_fb_comment_frames
+
+        max_items = _int_context(context, "max_items", 400, 1, 10_000)
+        frame_results: list[tuple[list[dict[str, Any]], dict[str, Any]]] = []
+        for idx, snapshot in enumerate(snapshots):
+            _raise_if_cancelled(context)
+            items, diagnostic = _parse_items(
+                "fb_comments",
+                snapshot,
+                {**context, "source_index": idx},
+            )
+            frame_results.append((items, diagnostic))
+        _raise_if_cancelled(context)
+        items, diagnostic = merge_fb_comment_frames(frame_results, max_items=max_items)
+    except asyncio.CancelledError:
+        _clear_preparsed_fb_comments(context)
+        raise
+    except Exception as exc:
+        context["preparse_fb_comments_error"] = str(exc)[:200]
+        logger.debug("fb_comments preparsed snapshot parse failed: %s", exc)
+        return
+
+    _raise_if_cancelled(context)
+    xml_bytes = sum(len(snapshot.encode("utf-8")) for snapshot in snapshots)
+    diagnostic = dict(diagnostic)
+    diagnostic["snapshot_count"] = len(snapshots)
+    diagnostic["xml_bytes"] = xml_bytes
+    diagnostic["preparse_ms"] = int((time.perf_counter() - started) * 1000)
+    context[_PREPARSED_FB_COMMENT_ITEMS_KEY] = items
+    context[_PREPARSED_FB_COMMENT_DIAGNOSTIC_KEY] = diagnostic
+    context[_PREPARSED_FB_COMMENT_SNAPSHOT_COUNT_KEY] = len(snapshots)
+    context[_PREPARSED_FB_COMMENT_XML_BYTES_KEY] = xml_bytes
+    context["agent_boot_preparsed_comments"] = True
+
+
 def _open_post_debug_dump_enabled(context: dict[str, Any]) -> bool:
     if _bool_context(context, "open_post_debug_dump", False):
         return True
@@ -298,6 +377,13 @@ async def _u2_click_comment_target(
     return False, "tap_failed"
 
 
+def _profile_tab_min_y_from_target(target: dict[str, Any]) -> int | None:
+    raw = target.get("profile_tab_min_y")
+    if isinstance(raw, (int, float)) and int(raw) > 0:
+        return int(raw)
+    return None
+
+
 async def _u2_click_post_open_target(
     executor: Any,
     serial: str,
@@ -320,6 +406,7 @@ async def _u2_click_post_open_target(
         tap_kind=tap_kind,
         screen_w=screen_w,
         gradient_wallpaper=gradient_wallpaper,
+        profile_tab_min_y=_profile_tab_min_y_from_target(target),
     )
     logger.info(
         "[%s] open_post tap kind=%s at (%d,%d) bounds=%s wallpaper=%s",
@@ -349,6 +436,63 @@ async def _u2_click_post_open_target(
         if allow_selector and selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
             return True, "click_selector"
     return False, "tap_failed"
+
+
+async def _u2_click_post_open_target_and_dump(
+    executor: Any,
+    serial: str,
+    target: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    settle_s: float,
+) -> tuple[bool, str, str | None]:
+    """Coordinate tap and post-tap dump in one executor batch."""
+    from relay.extra_data.parsers.facebook.post_open_pipeline import post_header_tap_point
+
+    bounds = target.get("bounds")
+    if not (isinstance(bounds, list) and len(bounds) == 4):
+        return False, "invalid_bounds", None
+    x1, y1, x2, y2 = [int(v) for v in bounds]
+    tap_kind = str(target.get("tap_kind") or "")
+    screen_w, _screen_h = await _window_size(executor, serial)
+    cx, cy = post_header_tap_point(
+        (x1, y1, x2, y2),
+        tap_kind=tap_kind,
+        screen_w=screen_w,
+        gradient_wallpaper=bool(target.get("gradient_wallpaper")),
+        profile_tab_min_y=_profile_tab_min_y_from_target(target),
+    )
+    logger.info(
+        "[%s] open_post batched tap kind=%s at (%d,%d) bounds=%s",
+        serial,
+        tap_kind,
+        cx,
+        cy,
+        bounds,
+    )
+    compressed = _bool_context(context, "hierarchy_compressed", False)
+    dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
+    batch = await executor.run_batch(
+        serial,
+        [
+            {"op": "click", "x": cx, "y": cy},
+            {"op": "sleep", "seconds": settle_s},
+            {"op": "dump_hierarchy", "compressed": compressed, "timeout": dump_timeout},
+        ],
+        early_exit=True,
+    )
+    if not batch.get("ok"):
+        return False, "click_dump_batch_failed", None
+    results = batch.get("results") or []
+    clicked = bool(results and results[0].get("ok"))
+    if not clicked:
+        return False, "tap_failed", None
+    xml = None
+    if len(results) >= 3 and results[2].get("ok"):
+        value = results[2].get("value")
+        if isinstance(value, str) and _looks_like_hierarchy_xml(value):
+            xml = value
+    return True, "click_coord_batch_dump", xml
 
 
 def _opened_post_payload_from_post(post: dict[str, Any]) -> dict[str, Any] | None:
@@ -459,14 +603,41 @@ async def _maybe_open_fb_post_detail(
         )
         return None, {"reason_code": "post_open_target_not_found", "diagnostic": diag, "debug_xml": debug_path}
 
-    settle_s = _float_context(context, "post_open_tap_settle_s", 0.65, 0.0, 3.0)
+    profile_tab_min_y = _profile_tab_min_y_from_target(primary or {})
+    if profile_tab_min_y is not None:
+        context["profile_tab_min_y"] = profile_tab_min_y
+
+    settle_s = _float_context(
+        context,
+        "post_open_tap_settle_s",
+        _POST_OPEN_TAP_SETTLE_S,
+        0.0,
+        3.0,
+    )
     verify = _bool_context(context, "post_open_verify", True)
     max_attempts = _int_context(context, "post_open_max_attempts", 2, 1, 4)
     back_settle_s = _float_context(context, "post_open_back_settle_s", 0.5, 0.0, 3.0)
     attempts: list[dict[str, Any]] = []
 
     for idx, target in enumerate(attempt_targets[:max_attempts]):
-        click_ok, route = await _u2_click_post_open_target(executor, serial, target, context)
+        detail_xml: str | None = None
+        use_batch_dump = _bool_context(
+            context,
+            "post_open_batch_dump",
+            True,
+        )
+        if use_batch_dump:
+            click_ok, route, detail_xml = await _u2_click_post_open_target_and_dump(
+                executor,
+                serial,
+                target,
+                context,
+                settle_s=settle_s,
+            )
+            if click_ok and not detail_xml:
+                detail_xml = await _dump_hierarchy(executor, serial, context)
+        else:
+            click_ok, route = await _u2_click_post_open_target(executor, serial, target, context)
         if not click_ok:
             attempts.append({"index": idx, "tapped": False, "reason": "tap_failed", "route": route})
             continue
@@ -478,9 +649,10 @@ async def _maybe_open_fb_post_detail(
             route,
             (target.get("tap_label") or "")[:60],
         )
-        if settle_s > 0:
+        if not use_batch_dump and settle_s > 0:
             await asyncio.sleep(settle_s)
-        detail_xml = await _dump_hierarchy(executor, serial, context)
+        if detail_xml is None:
+            detail_xml = await _dump_hierarchy(executor, serial, context)
         opened = bool(detail_xml and hierarchy_is_fb_post_detail_from_xml(detail_xml))
         comment_sheet_opened = bool(detail_xml and _diag_sheet_opened(detail_xml))
         attempts.append(
@@ -665,14 +837,10 @@ async def _u2_swipe_vertical(
     return bool(result.get("ok"))
 
 
-# Text selectors only — xpath on Facebook can scan the tree for 10s+ per attempt.
+# Caption "xem thêm" only — avoid profile tab strip "Xem thêm" (capital X, trong số).
 _SEE_MORE_U2_SELECTORS: tuple[dict[str, str], ...] = (
-    {"textContains": "Xem thêm"},
-    {"text": "Xem thêm"},
-    {"textContains": "See more"},
-    {"text": "See more"},
-    {"descriptionContains": "Xem thêm"},
-    {"descriptionContains": "See more"},
+    {"text": "xem thêm"},
+    {"text": "see more"},
 )
 
 
@@ -774,7 +942,9 @@ async def _expand_see_more_xml_probe_tap(
     from relay.extra_data.parsers.facebook.ui_expansion import _bounds_center, _collect_see_more_tap_plan
 
     if _bool_context(context, "expand_see_more_fast", True):
-        if await _try_u2_see_more_selectors(executor, serial, context):
+        if not context.get("profile_tab_min_y") and await _try_u2_see_more_selectors(
+            executor, serial, context
+        ):
             settle_s = _float_context(context, "expand_post_tap_settle_s", 0.35, 0.15, 2.0)
             await asyncio.sleep(settle_s)
             final_xml = await _dump_hierarchy(executor, serial, context)
@@ -1061,6 +1231,8 @@ async def _collect_comment_snapshots(
     """Swipe through the comment list, dumping hierarchy every N swipes (not every swipe)."""
     _raise_if_cancelled(context)
     explicit_scroll_budget = "comment_scroll_passes" in context
+    explicit_item_target = "max_items" in context
+    explicit_target_budget = explicit_scroll_budget or explicit_item_target
     swipe_budget = _int_context(
         context,
         "comment_scroll_passes",
@@ -1079,16 +1251,22 @@ async def _collect_comment_snapshots(
         1,
         _COMMENT_DEEP_SWIPES_PER_DUMP if explicit_swipes_per_dump else _COMMENT_SWIPES_PER_DUMP,
     )
-    dump_cycles = max(1, (swipe_budget + swipes_per_dump - 1) // swipes_per_dump)
-    adaptive_dump_cycles = 1 + max(
-        0,
-        (
-            max(0, swipe_budget - swipes_per_dump)
-            + _COMMENT_STALL_SWIPES_PER_DUMP
-            - 1
+    def _dump_cycle_count(swipes: int, per_dump: int) -> int:
+        return max(1, (swipes + per_dump - 1) // per_dump)
+
+    def _adaptive_dump_cycle_count(swipes: int, per_dump: int) -> int:
+        return 1 + max(
+            0,
+            (
+                max(0, swipes - per_dump)
+                + _COMMENT_STALL_SWIPES_PER_DUMP
+                - 1
+            )
+            // _COMMENT_STALL_SWIPES_PER_DUMP,
         )
-        // _COMMENT_STALL_SWIPES_PER_DUMP,
-    )
+
+    dump_cycles = _dump_cycle_count(swipe_budget, swipes_per_dump)
+    adaptive_dump_cycles = _adaptive_dump_cycle_count(swipe_budget, swipes_per_dump)
     min_dumps = _int_context(
         context,
         "min_comment_scan_passes",
@@ -1100,15 +1278,23 @@ async def _collect_comment_snapshots(
     no_growth_break = _int_context(
         context,
         "comment_no_growth_break",
-        _COMMENT_NO_GROWTH_BREAK,
+        _COMMENT_NO_GROWTH_BREAK if explicit_no_growth else 0,
         0,
         _COMMENT_DEEP_NO_GROWTH_BREAK if explicit_no_growth else _COMMENT_NO_GROWTH_BREAK,
     )
-    stop_if_no_new_default = _bool_context(context, "stop_if_no_new", True)
-    stop_if_no_new_comments = _bool_context(
-        context,
-        "comment_stop_if_no_new",
-        stop_if_no_new_default,
+    explicit_stop_if_no_new = (
+        "comment_stop_if_no_new" in context
+        or "stop_if_no_new" in context
+    )
+    stop_if_no_new_default = _bool_context(context, "stop_if_no_new", False)
+    stop_if_no_new_comments = (
+        _bool_context(
+            context,
+            "comment_stop_if_no_new",
+            stop_if_no_new_default,
+        )
+        if explicit_stop_if_no_new
+        else False
     )
     no_new_comment_threshold = _int_context(
         context,
@@ -1117,33 +1303,63 @@ async def _collect_comment_snapshots(
         1,
         1000,
     )
-    max_snapshots = _int_context(
-        context, "comment_max_snapshots", max(20, adaptive_dump_cycles + 1), 1, 50
+    initial_xml_bytes = len(initial_xml.encode("utf-8"))
+    snapshot_cap = (
+        _COMMENT_DEEP_MAX_SNAPSHOTS
+        if explicit_target_budget or "comment_max_snapshots" in context
+        else 50
     )
-    max_xml_bytes = _int_context(context, "comment_xml_max_bytes", 6 * 1024 * 1024, 512 * 1024, 7 * 1024 * 1024)
-    # Fast by default, but explicit crawl profiles keep their requested scroll tuning.
+    max_snapshots = _int_context(
+        context,
+        "comment_max_snapshots",
+        min(snapshot_cap, max(20, adaptive_dump_cycles + 1)),
+        1,
+        snapshot_cap,
+    )
+    if explicit_target_budget:
+        max_snapshots = max(
+            max_snapshots,
+            min(snapshot_cap, adaptive_dump_cycles + 1),
+        )
+    explicit_xml_byte_cap = "comment_xml_max_bytes" in context
+    xml_byte_hi = 512 * 1024 * 1024 if explicit_xml_byte_cap or explicit_target_budget else 7 * 1024 * 1024
+    xml_byte_default = 6 * 1024 * 1024
+    if not explicit_xml_byte_cap and explicit_target_budget:
+        projected_xml_bytes = max_snapshots * max(initial_xml_bytes, 512 * 1024)
+        xml_byte_default = min(xml_byte_hi, max(xml_byte_default, projected_xml_bytes))
+    max_xml_bytes = _int_context(
+        context,
+        "comment_xml_max_bytes",
+        xml_byte_default,
+        512 * 1024,
+        xml_byte_hi,
+    )
+    # Fast defaults, but explicit crawl profiles keep their requested scroll tuning.
     distance = _float_context(context, "comment_scroll_distance", 0.28, 0.08, 0.85)
+    explicit_duration = "comment_scroll_duration_ms" in context
     duration_ms = _int_context(
         context,
         "comment_scroll_duration_ms",
         _COMMENT_SCROLL_DURATION_MS,
-        100,
-        800 if "comment_scroll_duration_ms" in context else _COMMENT_SCROLL_DURATION_MS,
+        int(_COMMENT_MIN_SCROLL_DURATION_S * 1000),
+        800 if explicit_duration else _COMMENT_SCROLL_DURATION_MS,
     )
+    explicit_pause = "comment_scroll_pause_s" in context
     swipe_pause_s = _float_context(
         context,
         "comment_scroll_pause_s",
         _COMMENT_SCROLL_PAUSE_S,
         0.0,
-        4.0 if "comment_scroll_pause_s" in context else _COMMENT_SCROLL_PAUSE_S,
+        4.0 if explicit_pause else _COMMENT_SCROLL_PAUSE_S,
     )
-    settle_default = max(swipe_pause_s, 0.03 if "comment_scroll_pause_s" in context else 0.05)
+    settle_default = max(swipe_pause_s, _COMMENT_SCROLL_SETTLE_S)
+    explicit_settle = "comment_scroll_settle_s" in context
     settle_after_batch_s = _float_context(
         context,
         "comment_scroll_settle_s",
         settle_default,
         0.0,
-        2.0,
+        2.0 if explicit_settle else _COMMENT_SCROLL_SETTLE_S,
     )
     recover_chrome = _bool_context(context, "comment_recover_chrome", True)
     retry_screen_swipe_on_stuck = _bool_context(context, "comment_screen_swipe_retry_on_stuck", False)
@@ -1151,7 +1367,10 @@ async def _collect_comment_snapshots(
     # the comment phase independently of the swipe budget so a single huge post
     # cannot stall the crawl loop indefinitely. Early-stop (no-new / no-growth)
     # still ends short threads well before this cap.
-    comment_scroll_wall_s = _float_context(context, "comment_scroll_wall_s", 0.0, 0.0, 600.0)
+    configured_comment_scroll_wall_s = _float_context(
+        context, "comment_scroll_wall_s", 0.0, 0.0, 600.0
+    )
+    comment_scroll_wall_s = configured_comment_scroll_wall_s
     max_items = _int_context(context, "max_items", 400, 1, 10_000)
     respect_post_count = _bool_context(context, "comment_respect_post_count", True)
     post_comment_count: int | None = None
@@ -1164,6 +1383,15 @@ async def _collect_comment_snapshots(
 
         post_comment_count = extract_post_comment_count_from_xml(initial_xml)
         effective_comment_target = resolve_comment_crawl_target(max_items, post_comment_count)
+        if post_comment_count == 0:
+            context["post_comment_count"] = post_comment_count
+            context["comment_target_effective"] = 0
+            context["comment_scroll_skipped_reason"] = "post_comment_count_zero"
+            logger.info(
+                "[%s] extra_data comment scroll skipped: post comment count is zero",
+                serial,
+            )
+            return [initial_xml]
         if (
             post_comment_count is not None
             and post_comment_count > 0
@@ -1179,6 +1407,126 @@ async def _collect_comment_snapshots(
             )
         context["post_comment_count"] = post_comment_count
         context["comment_target_effective"] = effective_comment_target
+    large_comment_target = explicit_target_budget and effective_comment_target >= 100
+    if large_comment_target:
+        context["comment_target_source"] = (
+            "post_count" if post_comment_count is not None else "max_items"
+        )
+    target_budget_unknown_count = _bool_context(
+        context,
+        "comment_target_budget_unknown_count",
+        False,
+    )
+    hard_comment_budget = _bool_context(context, "comment_hard_budget", False) or _bool_context(
+        context,
+        "lock_comment_crawl_profile",
+        False,
+    )
+    large_target_fast_scroll = (
+        large_comment_target
+        and post_comment_count is not None
+        and _bool_context(context, "comment_large_target_fast_scroll", False)
+    )
+    if large_target_fast_scroll:
+        fast_swipes_per_dump = _int_context(
+            context,
+            "comment_large_target_swipes_per_dump",
+            _COMMENT_DEEP_SWIPES_PER_DUMP,
+            1,
+            _COMMENT_DEEP_SWIPES_PER_DUMP,
+        )
+        if swipes_per_dump < fast_swipes_per_dump:
+            configured_swipes_per_dump = swipes_per_dump
+            swipes_per_dump = fast_swipes_per_dump
+            context["comment_swipes_per_dump_configured"] = configured_swipes_per_dump
+            context["comment_swipes_per_dump_effective"] = swipes_per_dump
+            logger.info(
+                "[%s] extra_data comment swipe batch lifted %d -> %d "
+                "(target=%d post=%s)",
+                serial,
+                configured_swipes_per_dump,
+                swipes_per_dump,
+                effective_comment_target,
+                post_comment_count,
+            )
+        fast_distance_floor = _float_context(
+            context,
+            "comment_large_target_scroll_distance",
+            0.68,
+            0.08,
+            0.85,
+        )
+        if distance < fast_distance_floor:
+            context["comment_scroll_distance_configured"] = distance
+            distance = fast_distance_floor
+            context["comment_scroll_distance_effective"] = distance
+        fast_duration_cap_ms = _int_context(
+            context,
+            "comment_large_target_duration_ms",
+            80,
+            int(_COMMENT_MIN_SCROLL_DURATION_S * 1000),
+            240,
+        )
+        if duration_ms > fast_duration_cap_ms:
+            context["comment_scroll_duration_ms_configured"] = duration_ms
+            duration_ms = fast_duration_cap_ms
+            context["comment_scroll_duration_ms_effective"] = duration_ms
+        dump_cycles = _dump_cycle_count(swipe_budget, swipes_per_dump)
+        adaptive_dump_cycles = _adaptive_dump_cycle_count(swipe_budget, swipes_per_dump)
+        max_snapshots = max(
+            max_snapshots,
+            min(snapshot_cap, adaptive_dump_cycles + 1),
+        )
+
+    if (
+        large_comment_target
+        and not hard_comment_budget
+        and (post_comment_count is not None or target_budget_unknown_count)
+        and _bool_context(context, "comment_target_budget", True)
+    ):
+        comments_per_swipe = _int_context(
+            context,
+            "comment_target_comments_per_swipe",
+            1,
+            1,
+            20,
+        )
+        target_swipe_budget = min(
+            _COMMENT_DEEP_SCROLL_MAX_SWIPES,
+            max(
+                swipe_budget,
+                (effective_comment_target + comments_per_swipe - 1)
+                // comments_per_swipe,
+            ),
+        )
+        if target_swipe_budget > swipe_budget:
+            configured_swipe_budget = swipe_budget
+            swipe_budget = target_swipe_budget
+            dump_cycles = _dump_cycle_count(swipe_budget, swipes_per_dump)
+            adaptive_dump_cycles = _adaptive_dump_cycle_count(swipe_budget, swipes_per_dump)
+            max_snapshots = max(
+                max_snapshots,
+                min(snapshot_cap, adaptive_dump_cycles + 1),
+            )
+            if not explicit_xml_byte_cap:
+                projected_xml_bytes = max_snapshots * max(initial_xml_bytes, 512 * 1024)
+                max_xml_bytes = max(
+                    max_xml_bytes,
+                    min(xml_byte_hi, projected_xml_bytes),
+                )
+            context["comment_scroll_passes_configured"] = configured_swipe_budget
+            logger.info(
+                "[%s] extra_data comment swipe budget lifted %d -> %d "
+                "(target=%d post=%s comments_per_swipe=%d)",
+                serial,
+                configured_swipe_budget,
+                swipe_budget,
+                effective_comment_target,
+                post_comment_count,
+                comments_per_swipe,
+            )
+    context["comment_scroll_passes_effective"] = swipe_budget
+    context.setdefault("comment_swipes_per_dump_effective", swipes_per_dump)
 
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         detect_comment_sheet_interrupt_from_xml,
@@ -1264,7 +1612,8 @@ async def _collect_comment_snapshots(
         return [initial_xml]
     snapshots: list[str] = [initial_xml]
     seen_xml: set[str] = {_sha256_hex(initial_xml)}
-    track_comment_keys = stop_if_no_new_comments or (
+    target_from_max_items = large_comment_target and post_comment_count is None
+    track_comment_keys = stop_if_no_new_comments or target_from_max_items or (
         post_comment_count is not None and post_comment_count > 0
     )
     seen_comment_keys: set[str] = (
@@ -1275,7 +1624,9 @@ async def _collect_comment_snapshots(
     def _comment_target_reached() -> bool:
         if not track_comment_keys:
             return False
-        if post_comment_count is None or post_comment_count <= 0:
+        if post_comment_count is None:
+            return target_from_max_items and len(seen_comment_keys) >= effective_comment_target
+        if post_comment_count <= 0:
             return False
         return len(seen_comment_keys) >= effective_comment_target
 
@@ -1291,14 +1642,48 @@ async def _collect_comment_snapshots(
         )
         return snapshots
 
-    total_xml_bytes = len(initial_xml.encode("utf-8"))
+    total_xml_bytes = initial_xml_bytes
     # Stop after N consecutive dumps with identical hierarchy (end of list / scroll stuck).
     unchanged_dumps = 0
     no_new_comment_dumps = 0
     scroll_xml = initial_xml
     # Keep enough press time for Android to treat the gesture as scroll, not tap.
     duration_s = max(_COMMENT_MIN_SCROLL_DURATION_S, duration_ms / 1000.0)
+    if (
+        configured_comment_scroll_wall_s > 0
+        and large_comment_target
+        and (post_comment_count is not None or target_budget_unknown_count)
+    ):
+        dump_timeout_s = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
+        estimated_dump_cycles = max(dump_cycles, adaptive_dump_cycles)
+        budget_floor_s = (
+            estimated_dump_cycles * (dump_timeout_s + max(0.25, settle_after_batch_s))
+            + swipe_budget * (duration_s + swipe_pause_s)
+        )
+        target_floor_s = effective_comment_target * 0.18
+        effective_wall_s = min(600.0, max(20.0, budget_floor_s, target_floor_s))
+        if effective_wall_s > configured_comment_scroll_wall_s:
+            comment_scroll_wall_s = effective_wall_s
+            context["comment_scroll_wall_s_configured"] = configured_comment_scroll_wall_s
+            logger.info(
+                "[%s] extra_data comment wall-clock cap lifted %.1fs -> %.1fs "
+                "(target=%d post=%s swipes=%d dumps=%d)",
+                serial,
+                configured_comment_scroll_wall_s,
+                comment_scroll_wall_s,
+                effective_comment_target,
+                post_comment_count,
+                swipe_budget,
+                estimated_dump_cycles,
+            )
+    context["comment_scroll_wall_s_effective"] = comment_scroll_wall_s
     use_screen_swipe = False
+    use_u2_swipe_batch = _bool_context(
+        context,
+        "comment_u2_swipe_batch",
+        large_target_fast_scroll,
+    )
+    context["comment_scroll_driver"] = "u2_http_batch" if use_u2_swipe_batch else "u2_batch"
     swipes_done = 0
     stall_detected = False
 
@@ -1338,23 +1723,84 @@ async def _collect_comment_snapshots(
             return node_swipe
         return await _screen_swipe_coords()
 
-    async def _do_swipe(coords: tuple[int, int, int, int] | None = None) -> bool:
+    async def _swipe_batch_and_dump(
+        coords: tuple[int, int, int, int],
+        count: int,
+    ) -> tuple[str | None, int, bool]:
         _raise_if_cancelled(context)
-        fx, fy, tx, ty = coords if coords is not None else await _swipe_coords()
-        swipe_result = await executor.run_batch(
-            serial,
-            [{
-                "op": "swipe",
+        fx, fy, tx, ty = coords
+        actions: list[dict[str, Any]] = []
+        if use_u2_swipe_batch:
+            actions.append({
+                "op": "u2_swipe_batch",
+                "count": count,
                 "fx": fx,
                 "fy": fy,
                 "tx": tx,
                 "ty": ty,
                 "duration": duration_s,
-            }],
+                "pause_s": swipe_pause_s,
+            })
+        else:
+            for idx in range(count):
+                actions.append({
+                    "op": "swipe",
+                    "fx": fx,
+                    "fy": fy,
+                    "tx": tx,
+                    "ty": ty,
+                    "duration": duration_s,
+                })
+                if swipe_pause_s > 0 and idx + 1 < count:
+                    actions.append({"op": "sleep", "seconds": swipe_pause_s})
+        if settle_after_batch_s > 0:
+            actions.append({"op": "sleep", "seconds": settle_after_batch_s})
+        compressed = _bool_context(context, "hierarchy_compressed", False)
+        dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
+        actions.append({
+            "op": "dump_hierarchy",
+            "compressed": compressed,
+            "timeout": dump_timeout,
+        })
+
+        started = time.monotonic()
+        result = await executor.run_batch(
+            serial,
+            actions,
             early_exit=True,
         )
         _raise_if_cancelled(context)
-        return bool(swipe_result.get("ok"))
+        results = result.get("results") or []
+        completed_swipes = 0
+        for entry in results:
+            if entry.get("op") == "swipe" and entry.get("ok"):
+                completed_swipes += 1
+            elif entry.get("op") == "u2_swipe_batch" and entry.get("ok"):
+                completed_swipes += max(0, int(entry.get("value") or 0))
+        if not result.get("ok"):
+            return None, completed_swipes, False
+        dump_entry = next(
+            (
+                entry
+                for entry in reversed(results)
+                if entry.get("op") == "dump_hierarchy"
+            ),
+            None,
+        )
+        elapsed = time.monotonic() - started
+        if not dump_entry or not dump_entry.get("ok"):
+            return None, completed_swipes, True
+        xml = dump_entry.get("value")
+        if not isinstance(xml, str) or not _looks_like_hierarchy_xml(xml):
+            return None, completed_swipes, True
+        logger.info(
+            "[%s] dump_hierarchy ok in-batch after %d swipes in %.2fs bytes=%d",
+            serial,
+            completed_swipes,
+            elapsed,
+            len(xml.encode("utf-8")),
+        )
+        return xml, completed_swipes, True
 
     wall_deadline = (
         time.monotonic() + comment_scroll_wall_s if comment_scroll_wall_s > 0 else None
@@ -1384,24 +1830,21 @@ async def _collect_comment_snapshots(
         batch_swipes = min(effective_swipes_per_dump, swipe_budget - swipes_done)
         swipes_before_batch = swipes_done
         batch_coords = await _swipe_coords()
-        for _ in range(batch_swipes):
-            _raise_if_cancelled(context)
-            if not await _do_swipe(batch_coords):
-                logger.warning(
-                    "[%s] extra_data comment swipe failed at swipe %d",
-                    serial,
-                    swipes_done + 1,
-                )
-                return snapshots
-            swipes_done += 1
-            if swipe_pause_s > 0:
-                await _sleep_cancelable(context, swipe_pause_s)
-
-        if settle_after_batch_s > 0:
-            await _sleep_cancelable(context, settle_after_batch_s)
-
-        _raise_if_cancelled(context)
-        next_xml = await _dump_hierarchy(executor, serial, context)
+        next_xml, completed_swipes, batch_ok = await _swipe_batch_and_dump(
+            batch_coords,
+            batch_swipes,
+        )
+        swipes_done += completed_swipes
+        if completed_swipes < batch_swipes or not batch_ok:
+            logger.warning(
+                "[%s] extra_data comment swipe batch failed at swipe %d "
+                "(completed=%d/%d)",
+                serial,
+                swipes_done + 1,
+                completed_swipes,
+                batch_swipes,
+            )
+            return snapshots
         if not next_xml:
             break
         next_xml, abort_scroll = await _recover_comment_chrome(next_xml)
@@ -1414,6 +1857,10 @@ async def _collect_comment_snapshots(
 
         next_bytes = len(next_xml.encode("utf-8"))
         if total_xml_bytes + next_bytes > max_xml_bytes:
+            context["comment_scroll_stopped_reason"] = "xml_byte_cap_reached"
+            context["comment_xml_bytes_total"] = total_xml_bytes
+            context["comment_xml_bytes_next"] = next_bytes
+            context["comment_xml_max_bytes_effective"] = max_xml_bytes
             logger.info("[%s] extra_data comment XML byte cap reached", serial)
             break
 
@@ -1622,6 +2069,32 @@ async def collect_fb_comment_target_with_tap(
             alternates_raw = diagnostic.get("alternates") if isinstance(diagnostic.get("alternates"), list) else []
             alternates = [t for t in alternates_raw if isinstance(t, dict)]
             candidates = ([primary] if primary else []) + alternates
+            tap_enabled = _bool_context(
+                context,
+                "comment_target_tap_enabled",
+                _env_bool("AGENT_BOOT_COMMENT_TARGET_TAP_ENABLED", False),
+            )
+            if not tap_enabled:
+                attempts = []
+                if primary is not None:
+                    attempts.append({
+                        "index": 0,
+                        "tapped": False,
+                        "verified": "skipped",
+                        "reason": "comment_target_tap_disabled",
+                    })
+                diagnostic["target"] = None
+                diagnostic["resolved_target"] = primary
+                diagnostic["verify_attempts"] = attempts
+                diagnostic["verified"] = False
+                diagnostic["chosen_index"] = None
+                diagnostic["tap_disabled"] = True
+                logger.info(
+                    "[%s] extra_data fb_comment_target_tap: tap disabled; target resolved=%s",
+                    serial,
+                    primary is not None,
+                )
+                return [xml], None, False, diagnostic
 
             verify_enabled = _bool_context(context, "comment_target_verify", True)
             verify_max_retries = _int_context(
@@ -2064,8 +2537,28 @@ async def collect_xml_snapshots(
             return snapshots, None
 
         if hasattr(executor, "with_session"):
-            return await executor.with_session(serial, _collect)
-        return await _collect()
+            result = await executor.with_session(serial, _collect)
+        else:
+            result = await _collect()
+        snapshots, err = result
+        if err is None and strategy == "fb_comments":
+            if _preparse_fb_comments_enabled(context):
+                loop = asyncio.get_running_loop()
+                try:
+                    from relay.runtime import cpu_executor as _cpu_exec
+                    parse_executor = _cpu_exec()
+                except Exception:
+                    parse_executor = None
+                await loop.run_in_executor(
+                    parse_executor,
+                    _attach_preparsed_fb_comment_snapshots,
+                    context,
+                    snapshots,
+                )
+                _raise_if_cancelled(context)
+            else:
+                _clear_preparsed_fb_comments(context)
+        return snapshots, err
 
 
 def build_ingest_payload(
@@ -2078,18 +2571,39 @@ def build_ingest_payload(
 ) -> dict[str, Any]:
     primary = snapshots[0]
     server_strategy = "fb_comment_target" if strategy == "fb_comment_target_tap" else strategy
+    payload_context = dict(context)
+    preparsed_items = payload_context.pop(_PREPARSED_FB_COMMENT_ITEMS_KEY, None)
+    preparsed_diagnostic = payload_context.pop(_PREPARSED_FB_COMMENT_DIAGNOSTIC_KEY, None)
+    preparsed_snapshot_count = payload_context.pop(
+        _PREPARSED_FB_COMMENT_SNAPSHOT_COUNT_KEY,
+        None,
+    )
+    preparsed_xml_bytes = payload_context.pop(_PREPARSED_FB_COMMENT_XML_BYTES_KEY, None)
 
     payload: dict[str, Any] = {
         "schema_version": 1,
         "request_id": request_id,
         "serial": serial,
         "strategy": server_strategy,
-        "context": context,
+        "context": payload_context,
         "xml": primary,
         "xml_sha256": _sha256_hex(primary),
         "snapshot_count": len(snapshots),
         "captured_at_ms": int(time.time() * 1000),
     }
-    if len(snapshots) > 1:
+    include_preparsed = (
+        server_strategy == "fb_comments"
+        and payload_context.get("agent_boot_preparsed_comments") is True
+        and isinstance(preparsed_items, list)
+    )
+    if include_preparsed:
+        payload["preparsed"] = {
+            "items": preparsed_items,
+            "diagnostic": preparsed_diagnostic if isinstance(preparsed_diagnostic, dict) else {},
+            "snapshot_count": preparsed_snapshot_count or len(snapshots),
+            "xml_bytes": preparsed_xml_bytes
+            or sum(len(snapshot.encode("utf-8")) for snapshot in snapshots),
+        }
+    if len(snapshots) > 1 and (not include_preparsed or _include_debug_xml_snapshots(payload_context)):
         payload["xml_snapshots"] = snapshots
     return payload

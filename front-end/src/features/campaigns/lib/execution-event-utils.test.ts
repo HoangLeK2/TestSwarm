@@ -29,6 +29,66 @@ test('foldEventsToStepLog keeps adb shell output fields from step event payload'
   assert.equal(rows[0].output_truncated, false);
 });
 
+test('foldEventsToStepLog keeps app automation monitor details', () => {
+  const rows = foldEventsToStepLog([
+    {
+      event_id: 'evt-app-1',
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      payload: {
+        step_index: 3,
+        step_type: 'fill_form',
+        message: 'fill_form: completed basic',
+        app_popup_watchers: [
+          {
+            name: 'close_update',
+            executed: true,
+            message: "tapped text 'Later'"
+          }
+        ],
+        form_fields: {
+          email: {
+            matched: true,
+            locator_name: 'email_field',
+            score: 0.9,
+            reason: 'resource_id_contains match'
+          }
+        },
+        submit_trace: {
+          matched: true,
+          locator_name: 'submit_text',
+          score: 1,
+          reason: "text='Save'"
+        }
+      }
+    } as any
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].step_type, 'fill_form');
+  assert.deepEqual(rows[0].details?.app_popup_watchers, [
+    {
+      name: 'close_update',
+      executed: true,
+      message: "tapped text 'Later'"
+    }
+  ]);
+  assert.deepEqual(rows[0].details?.form_fields, {
+    email: {
+      matched: true,
+      locator_name: 'email_field',
+      score: 0.9,
+      reason: 'resource_id_contains match'
+    }
+  });
+  assert.deepEqual(rows[0].details?.submit_trace, {
+    matched: true,
+    locator_name: 'submit_text',
+    score: 1,
+    reason: "text='Save'"
+  });
+});
+
 test('foldEventsToStepLog attaches incident events to the owning step', () => {
   const rows = foldEventsToStepLog([
     {

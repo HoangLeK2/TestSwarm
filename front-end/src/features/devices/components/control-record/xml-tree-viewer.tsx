@@ -25,6 +25,7 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useTranslations } from 'next-intl';
+import { hashXml } from '../../utils/control-record-xml';
 
 interface XmlTreeViewerProps {
   xml: string;
@@ -87,6 +88,10 @@ function XmlTreeViewerInner({
     const parsed = parseHierarchyTree(xml);
     return hideSystemUi ? filterSystemUiFromTree(parsed) : parsed;
   }, [xml, hideSystemUi]);
+  const expandSig = useMemo(() => {
+    const trimmed = xml.trim();
+    return trimmed ? `${hashXml(trimmed)}:hide=${hideSystemUi}` : '';
+  }, [xml, hideSystemUi]);
 
   // Auto-expand all nodes when hierarchy changes. Schedule via idle callback so
   // the first paint is not blocked on large XML (Facebook feed).
@@ -95,9 +100,8 @@ function XmlTreeViewerInner({
       setExpanded(new Set());
       return;
     }
-    const sig = `${xml.length}:${xml.slice(0, 96)}:hide=${hideSystemUi}`;
-    if (lastExpandSigRef.current === sig) return;
-    lastExpandSigRef.current = sig;
+    if (lastExpandSigRef.current === expandSig) return;
+    lastExpandSigRef.current = expandSig;
 
     const ids = new Set<number>();
     function collectAll(node: HierarchyTreeNode) {
@@ -124,7 +128,7 @@ function XmlTreeViewerInner({
       }
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
-  }, [root, xml, hideSystemUi]);
+  }, [root, expandSig]);
 
   const matchingIds = useMemo(
     () => (root && debouncedSearch ? searchTree(root, debouncedSearch) : null),

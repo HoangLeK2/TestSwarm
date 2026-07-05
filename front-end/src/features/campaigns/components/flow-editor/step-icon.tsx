@@ -63,6 +63,9 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   verify_screen: CheckCircle,
   assert_element: CheckCircle,
   dismiss_popup: XCircle,
+  login_if_needed: CheckCircle,
+  fill_form: Keyboard,
+  assert_app_state: CheckCircle,
   set_variable: Variable,
   set_var: Variable,
   repeat: Repeat,
@@ -84,6 +87,9 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   break_if: GitBranch,
   fb_tap_comment_button: GitBranch,
   tap_fb_comment_button: GitBranch,
+  fb_find_comment_button: Search,
+  fb_tap_comment_target: MousePointerClick,
+  fb_apply_comment_filter: CheckCircle,
   extract_fb_comments: Search,
   extract_fb_posts: Search
 };
@@ -116,6 +122,9 @@ const COLOR_MAP: Record<string, string> = {
   verify_screen: 'text-green-500',
   assert_element: 'text-green-600',
   dismiss_popup: 'text-red-400',
+  login_if_needed: 'text-emerald-500',
+  fill_form: 'text-cyan-600',
+  assert_app_state: 'text-green-600',
   double_tap: 'text-blue-400',
   pinch: 'text-sky-500',
   drag: 'text-blue-600',
@@ -137,6 +146,9 @@ const COLOR_MAP: Record<string, string> = {
   break_if: 'text-amber-500',
   fb_tap_comment_button: 'text-blue-600',
   tap_fb_comment_button: 'text-blue-600',
+  fb_find_comment_button: 'text-sky-600',
+  fb_tap_comment_target: 'text-blue-600',
+  fb_apply_comment_filter: 'text-emerald-600',
   extract_fb_comments: 'text-fuchsia-500',
   extract_fb_posts: 'text-fuchsia-500'
 };

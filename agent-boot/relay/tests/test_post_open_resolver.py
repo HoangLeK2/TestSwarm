@@ -827,3 +827,48 @@ def test_wallpaper_high_centered_text_tap_stays_above_overlay() -> None:
         open_bounds, tap_kind="post_body", gradient_wallpaper=True, screen_w=1260
     )
     assert not (text[0] <= cx <= text[2] and text[1] <= cy <= text[3])
+
+
+def test_profile_tab_strip_avoids_author_row_gap_and_tab_zone() -> None:
+    """Regression: M-TP profile sticky tabs must not receive open_post taps."""
+    from pathlib import Path
+
+    from relay.extra_data.parsers.facebook.ui_expansion import profile_tab_strip_min_tap_y
+
+    path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "facebook"
+        / "mtp_profile_tab_strip.xml"
+    )
+    xml = path.read_text(encoding="utf-8")
+    from relay.extra_data.parsers.facebook.parser import _parse_xml
+
+    root = _parse_xml(xml)
+    tab_min_y = profile_tab_strip_min_tap_y(root)
+    assert tab_min_y is not None
+    assert tab_min_y >= 430
+
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    assert top is not None
+    assert top["tap_kind"] != "author_row_gap"
+    assert top.get("profile_tab_min_y") == tab_min_y
+
+    cx, cy = post_open_pipeline.post_header_tap_point(
+        tuple(top["bounds"]),
+        tap_kind=str(top["tap_kind"]),
+        screen_w=1260,
+        profile_tab_min_y=tab_min_y,
+    )
+    assert cy >= tab_min_y
+    tabs = [
+        ("Tất cả", 42, 279, 301, 427),
+        ("Ảnh", 307, 495, 301, 427),
+        ("Reels", 523, 738, 301, 427),
+        ("Xem thêm(tab)", 766, 1167, 301, 427),
+    ]
+    for name, x1, x2, y1, y2 in tabs:
+        assert not (x1 <= cx <= x2 and y1 <= cy <= y2), f"tap hit tab {name}"
+
+    alt_labels = [a.get("tap_label", "") for a in top.get("tap_alternates") or []]
+    assert "xem thêm" not in [label.casefold() for label in alt_labels]

@@ -7,11 +7,23 @@ import { createWs } from '../services/ws';
 import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
 import { devicesApi, type DeviceOut } from '../services/manage-api';
 import { filterVisibleDeviceFarmDevices } from '../lib/device-farm-visible-devices';
+import { mergeLiveDeviceSnapshot } from '../lib/device-farm-live-snapshot';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { useTabNetworkActive } from './use-tab-network-active';
 
-export function useDeviceFarm() {
+const LIVE_DEVICE_REFRESH_MS = 5_000;
+
+type UseDeviceFarmOptions = {
+  liveRefreshMs?: number | false;
+  loadTasks?: boolean;
+  refreshRegisteredOnFocus?: boolean;
+};
+
+export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
+  const liveRefreshMs = options.liveRefreshMs ?? LIVE_DEVICE_REFRESH_MS;
+  const loadTasks = options.loadTasks ?? true;
+  const refreshRegisteredOnFocus = options.refreshRegisteredOnFocus ?? true;
   const [devices, setDevices] = useState<Device[]>([]);
   const [registeredDevices, setRegisteredDevices] = useState<DeviceOut[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -20,6 +32,7 @@ export function useDeviceFarm() {
   const [logs, setLogs] = useState<Record<string, string[]>>({});
   const [modes, setModes] = useState<Record<string, 'tap' | 'swipe'>>({});
   const [wifiDenseposeUrl, setWifiDenseposeUrl] = useState<string | null>(null);
+  const [devicesReady, setDevicesReady] = useState(false);
 
   const wsRef = useRef<ReturnType<typeof createWs> | null>(null);
   const t = useTranslations('devicesFarm');
@@ -31,18 +44,29 @@ export function useDeviceFarm() {
 
   const wsSend = useCallback((obj: object) => wsRef.current?.send(obj), []);
   const refreshTasks = useCallback(() => {
+    if (!loadTasks) return;
     if (!tabActive) return;
     fetchTasks()
       .then((data) => setTasks(Array.isArray(data) ? data : []))
       .catch(() => {});
-  }, [tabActive]);
+  }, [loadTasks, tabActive]);
 
   const refreshDevices = useCallback(() => {
     if (!tabActive) return;
     if (!currentOrgId) return;
     fetchLiveDevices(undefined)
-      .then((live) => setDevices(live))
-      .catch(() => {});
+      .then((live) => {
+        setDevices((previous) => mergeLiveDeviceSnapshot(previous, live));
+        setDevicesReady(true);
+      })
+      .catch(() => {
+        setDevicesReady(true);
+      });
+  }, [currentOrgId, tabActive]);
+
+  const refreshRegisteredDevices = useCallback(() => {
+    if (!tabActive) return;
+    if (!currentOrgId) return;
     devicesApi
       .list()
       .then((list) => setRegisteredDevices(list))
@@ -51,29 +75,50 @@ export function useDeviceFarm() {
 
   useEffect(() => {
     refreshDevices();
-  }, [refreshDevices]);
+    refreshRegisteredDevices();
+  }, [refreshDevices, refreshRegisteredDevices]);
+
+  useEffect(() => {
+    if (!tabActive || !currentOrgId) return;
+    if (liveRefreshMs === false) return;
+    const timer = window.setInterval(refreshDevices, liveRefreshMs);
+    return () => window.clearInterval(timer);
+  }, [currentOrgId, liveRefreshMs, refreshDevices, tabActive]);
 
   useEffect(() => {
     setDevices([]);
     setRegisteredDevices([]);
+    setDevicesReady(false);
   }, [currentOrgId]);
 
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         refreshDevices();
+        if (refreshRegisteredOnFocus) refreshRegisteredDevices();
         refreshTasks();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', refreshDevices);
+    if (refreshRegisteredOnFocus) {
+      window.addEventListener('focus', refreshRegisteredDevices);
+    }
     window.addEventListener('focus', refreshTasks);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', refreshDevices);
+      if (refreshRegisteredOnFocus) {
+        window.removeEventListener('focus', refreshRegisteredDevices);
+      }
       window.removeEventListener('focus', refreshTasks);
     };
-  }, [refreshDevices, refreshTasks]);
+  }, [
+    refreshDevices,
+    refreshRegisteredDevices,
+    refreshRegisteredOnFocus,
+    refreshTasks
+  ]);
 
   useEffect(() => {
     fetchConfig()
@@ -95,6 +140,7 @@ export function useDeviceFarm() {
     wsRef.current = createWs((msg: WsMessage) => {
       if (msg.type === 'ws_status') {
         setWsConnected(msg.connected);
+        if (msg.connected) queueMicrotask(refreshDevices);
         return;
       }
 
@@ -116,7 +162,8 @@ export function useDeviceFarm() {
                 touch_method: msg.touch_method,
                 minitouch_ready: msg.minitouch_ready,
                 u2_ready: msg.u2_ready,
-                scenario_active: msg.scenario_active ?? 0
+                scenario_active: msg.scenario_active ?? 0,
+                manual_takeover_active: Boolean(msg.manual_takeover_active)
               }
             ];
           }
@@ -137,7 +184,11 @@ export function useDeviceFarm() {
                   scenario_active:
                     'scenario_active' in msg
                       ? (msg.scenario_active ?? 0)
-                      : d.scenario_active
+                      : d.scenario_active,
+                  manual_takeover_active:
+                    'manual_takeover_active' in msg
+                      ? Boolean(msg.manual_takeover_active)
+                      : d.manual_takeover_active
                 }
               : d
           );
@@ -184,7 +235,7 @@ export function useDeviceFarm() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [tabActive]);
+  }, [refreshDevices, tabActive]);
 
   const handleToggleMode = useCallback((serial: string) => {
     setModes((prev) => ({
@@ -217,6 +268,7 @@ export function useDeviceFarm() {
 
   return {
     devices: myDevices,
+    devicesReady,
     tasks,
     wsConnected,
     error,

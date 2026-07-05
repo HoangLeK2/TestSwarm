@@ -7,10 +7,13 @@ These tests exercise the pure pieces of the comment-target ranking logic
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from relay.extra_data.parsers.facebook import comment_pipeline
 
 
 SCREEN_H = 2200
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "facebook"
 
 
 def _cand(
@@ -275,3 +278,14 @@ def test_legacy_center_wrapper_returns_none_when_empty(monkeypatch) -> None:
     )
     post, bounds = comment_pipeline.resolve_center_comment_target_from_xml("<hierarchy />")
     assert post is None and bounds is None
+
+
+def test_profile_post_static_comment_label_resolves_target() -> None:
+    xml = (FIXTURES / "mtp_profile_coauthor_pinned.xml").read_text(encoding="utf-8")
+
+    top, ranked = comment_pipeline.resolve_comment_targets_from_xml(xml)
+
+    assert top is not None
+    assert top["comment_bounds"] == (284, 2032, 585, 2186)
+    assert top["post"]["author"] == "M-TP"
+    assert ranked

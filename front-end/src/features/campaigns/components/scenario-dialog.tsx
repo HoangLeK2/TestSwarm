@@ -73,6 +73,7 @@ import { VariableEditor } from '@/components/variable-editor';
 import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { FlowEditor } from './flow-editor/flow-editor';
+import { deriveNestedInlineRunStates } from './flow-editor/inline-run-key';
 import { sanitizeScenarioStepsForApi } from '@/features/devices/lib/sanitize-scenario-steps-for-api';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
 import { stepsToGraph } from '../utils/steps-to-graph';
@@ -721,7 +722,8 @@ export function ScenarioDialog({
       if (ev.event === 'step_done') {
         setStates((s) => ({
           ...s,
-          [runKey]: ev.ok ? 'ok' : 'error'
+          [runKey]: ev.ok ? 'ok' : 'error',
+          ...deriveNestedInlineRunStates(runKey, ev)
         }));
         if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
         return;
@@ -759,7 +761,14 @@ export function ScenarioDialog({
       setTimeout(() => {
         setStates((s) => {
           const n = { ...s };
-          if (n[runKey] !== 'running') delete n[runKey];
+          for (const key of Object.keys(n)) {
+            if (
+              (key === runKey || key.startsWith(`${runKey}/`)) &&
+              n[key] !== 'running'
+            ) {
+              delete n[key];
+            }
+          }
           return n;
         });
       }, 2800);

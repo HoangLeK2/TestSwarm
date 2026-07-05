@@ -50,18 +50,14 @@ function replaceInStep(
     return setListKeyOnNode(step, listKey, newList);
   }
   const [head, ...rest] = path;
-  const arr = [
-    ...(((step as Record<string, unknown>)[head.listKey] as
-      | FlowStep[]
-      | undefined) ?? [])
-  ];
+  const arr = [...readListKeyFromNode(step, head.listKey)];
   arr[head.childIndex] = replaceInStep(
     arr[head.childIndex]!,
     rest,
     listKey,
     newList
   );
-  return { ...step, [head.listKey]: arr } as FlowStep;
+  return setListKeyOnNode(step, head.listKey, arr);
 }
 
 export function readFlowList(steps: FlowStep[], ref: FlowListRef): FlowStep[] {
@@ -70,10 +66,8 @@ export function readFlowList(steps: FlowStep[], ref: FlowListRef): FlowStep[] {
   if (!root) return [];
   let node: FlowStep = root;
   for (const seg of ref.pathToBracket) {
-    const arr = (node as Record<string, unknown>)[seg.listKey] as
-      | FlowStep[]
-      | undefined;
-    node = arr?.[seg.childIndex]!;
+    const arr = readListKeyFromNode(node, seg.listKey);
+    node = arr[seg.childIndex]!;
     if (!node) return [];
   }
   return readListKeyFromNode(node, ref.listKey);
@@ -237,6 +231,130 @@ export function insertStepInList(
   return writeFlowList(steps, ref, arr);
 }
 
+type StepPathSegment = { listKey: string; childIndex: number };
+
+function samePath(a: StepPathSegment[], b: StepPathSegment[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (seg, i) =>
+        seg.listKey === b[i]?.listKey && seg.childIndex === b[i]?.childIndex
+    )
+  );
+}
+
+function flowListOwnerPath(ref: FlowListRef): StepPathSegment[] {
+  if (ref.kind === 'root') return [];
+  return [
+    { listKey: 'steps', childIndex: ref.rootIndex },
+    ...ref.pathToBracket
+  ];
+}
+
+function flowListRefFromOwnerPath(
+  ref: FlowListRef,
+  ownerPath: StepPathSegment[]
+): FlowListRef | null {
+  if (ref.kind === 'root') return ref;
+  const [root, ...pathToBracket] = ownerPath;
+  if (!root || root.listKey !== 'steps') return null;
+  return {
+    kind: 'nested',
+    rootIndex: root.childIndex,
+    pathToBracket,
+    listKey: ref.listKey
+  };
+}
+
+function sourceListLocation(
+  ref: FlowListRef,
+  sourceIndex: number
+): {
+  parentPath: StepPathSegment[];
+  listKey: string;
+  sourcePath: StepPathSegment[];
+} {
+  if (ref.kind === 'root') {
+    return {
+      parentPath: [],
+      listKey: 'steps',
+      sourcePath: [{ listKey: 'steps', childIndex: sourceIndex }]
+    };
+  }
+  const parentPath = flowListOwnerPath(ref);
+  return {
+    parentPath,
+    listKey: ref.listKey,
+    sourcePath: [
+      ...parentPath,
+      { listKey: ref.listKey, childIndex: sourceIndex }
+    ]
+  };
+}
+
+function isDescendantPath(
+  path: StepPathSegment[],
+  ancestor: StepPathSegment[]
+): boolean {
+  return (
+    path.length >= ancestor.length &&
+    ancestor.every(
+      (seg, i) =>
+        seg.listKey === path[i]?.listKey &&
+        seg.childIndex === path[i]?.childIndex
+    )
+  );
+}
+
+function adjustOwnerPathAfterRemoval(
+  ownerPath: StepPathSegment[],
+  sourceParentPath: StepPathSegment[],
+  sourceListKey: string,
+  sourceIndex: number
+): StepPathSegment[] | null {
+  if (ownerPath.length === 0) return ownerPath;
+  const next = ownerPath.map((seg) => ({ ...seg }));
+
+  for (let i = 0; i < next.length; i++) {
+    const parentPath = next.slice(0, i);
+    const seg = next[i]!;
+    if (
+      !samePath(parentPath, sourceParentPath) ||
+      seg.listKey !== sourceListKey
+    ) {
+      continue;
+    }
+    if (seg.childIndex === sourceIndex) return null;
+    if (seg.childIndex > sourceIndex) {
+      seg.childIndex -= 1;
+    }
+    break;
+  }
+
+  return next;
+}
+
+function adjustFlowListRefAfterRemoval(
+  ref: FlowListRef,
+  sourceRef: FlowListRef,
+  sourceIndex: number
+): FlowListRef | null {
+  if (ref.kind === 'root') return ref;
+
+  const ownerPath = flowListOwnerPath(ref);
+  const source = sourceListLocation(sourceRef, sourceIndex);
+  if (isDescendantPath(ownerPath, source.sourcePath)) return null;
+
+  const adjustedOwnerPath = adjustOwnerPathAfterRemoval(
+    ownerPath,
+    source.parentPath,
+    source.listKey,
+    sourceIndex
+  );
+  if (!adjustedOwnerPath) return null;
+  return flowListRefFromOwnerPath(ref, adjustedOwnerPath);
+}
+
 export function applyFlowDragEnd(
   event: DragEndEvent,
   steps: FlowStep[],
@@ -248,9 +366,8 @@ export function applyFlowDragEnd(
   const activeContainer = active.data.current?.sortable?.containerId as
     | string
     | undefined;
-  const overContainer = over.data.current?.sortable?.containerId as
-    | string
-    | undefined;
+  const overContainer = (over.data.current?.sortable?.containerId ??
+    over.data.current?.flowListContainerId) as string | undefined;
   if (!activeContainer || !overContainer) return;
 
   const activeRef = decodeFlowListRef(activeContainer);
@@ -279,13 +396,25 @@ export function applyFlowDragEnd(
   const { steps: without, removed } = removeStepByDragId(steps, dragId);
   if (!removed) return;
 
-  const overList = readFlowList(without, overRef);
+  const sourceList = readFlowList(steps, activeRef);
+  const sourceIds = sourceList.map((s, i) => stableStepDnDId(s, i));
+  const sourceIndex = sourceIds.indexOf(dragId);
+  if (sourceIndex < 0) return;
+
+  const adjustedOverRef = adjustFlowListRefAfterRemoval(
+    overRef,
+    activeRef,
+    sourceIndex
+  );
+  if (!adjustedOverRef) return;
+
+  const overList = readFlowList(without, adjustedOverRef);
   const overIds = overList.map((s, i) => stableStepDnDId(s, i));
   let insertIndex = overIds.indexOf(String(over.id));
   if (insertIndex < 0) {
     insertIndex = overList.length;
   }
 
-  const next = insertStepInList(without, overRef, insertIndex, removed);
+  const next = insertStepInList(without, adjustedOverRef, insertIndex, removed);
   onChange(next);
 }

@@ -12,7 +12,6 @@ import { scenarioTemplatesApi } from '@/features/scenario-templates/services/api
 import type { CampaignOut, ScenarioOut } from '@/features/campaigns/types';
 import type { Device } from '../types';
 import type { ScenarioStep } from '../types/scenario';
-import { scenarioToJson } from '../types/scenario';
 import {
   fetchHierarchy,
   fetchScreenshotB64,
@@ -37,7 +36,12 @@ import { orgScenariosApi } from '@/features/org-scenarios/services/api';
 import { extractPreviewSteps } from '@/features/org-scenarios/lib/parse-scenario-body';
 import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 import { canApplyDeviceScopedResult } from '../lib/control-record-multi';
-import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
+import {
+  isControlRecordConnectedDevice,
+  resolveControlRecordHierarchySerial,
+  resolveControlRecordConnectedDevices
+} from '../lib/control-record-device-state';
+import { mergeCampaignScenarioVariables } from '@/components/device-vars-json-model';
 
 let _stepIdCounter = 0;
 function nextStepId() {
@@ -48,8 +52,8 @@ export type StepWithId = ScenarioStep & { _id: string };
 
 const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
 const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
-const HIERARCHY_BOOTSTRAP_RETRY_MS = 1500;
-const HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS = 20;
+const HIERARCHY_APP_CHANGE_FETCH_COOLDOWN_MS = 10_000;
+const HIERARCHY_BOOTSTRAP_FETCH_COOLDOWN_MS = 10_000;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
 
@@ -65,7 +69,7 @@ function upsertSavedScenario(rows: ScenarioOut[], row: ScenarioOut) {
   return [...next].sort(bySavedScenarioOrder);
 }
 
-function syncSavedScenarioCaches(
+export function syncSavedScenarioCaches(
   queryClient: QueryClient,
   campaignId: string,
   scenario: ScenarioOut
@@ -209,18 +213,46 @@ export function useControlRecord(
     handleToggleMode,
     handleRestart,
     wsConnected,
-    error
-  } = useDeviceFarm();
+    error,
+    devicesReady
+  } = useDeviceFarm({
+    liveRefreshMs: 30_000,
+    loadTasks: false,
+    refreshRegisteredOnFocus: false
+  });
   const tabActive = useTabNetworkActive();
   const queryClient = useQueryClient();
 
   // ── Device ───────────────────────────────────────────────────────────────
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const initialSerialAppliedRef = useRef(false);
+  const [lastConnectedDevices, setLastConnectedDevices] = useState<Device[]>(
+    []
+  );
 
-  const connectedDevices = useMemo(
+  const liveConnectedDevices = useMemo(
     () => devices.filter(isControlRecordConnectedDevice),
     [devices]
+  );
+
+  useEffect(() => {
+    if (liveConnectedDevices.length > 0) {
+      setLastConnectedDevices(liveConnectedDevices);
+      return;
+    }
+    if (
+      devices.length > 0 &&
+      lastConnectedDevices.length > 0 &&
+      resolveControlRecordConnectedDevices(devices, lastConnectedDevices)
+        .length === 0
+    ) {
+      setLastConnectedDevices([]);
+    }
+  }, [devices, liveConnectedDevices, lastConnectedDevices]);
+
+  const connectedDevices = useMemo(
+    () => resolveControlRecordConnectedDevices(devices, lastConnectedDevices),
+    [devices, lastConnectedDevices]
   );
 
   const selectedDevice = useMemo(
@@ -720,31 +752,6 @@ export function useControlRecord(
     [steps]
   );
 
-  const copyJson = useCallback(() => {
-    const text = scenarioToJson(cleanSteps());
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(
-        () => toast.success(t('toast.copyJsonSuccess')),
-        () => toast.error(t('toast.copyJsonError'))
-      );
-      return;
-    }
-    // Fallback for non-HTTPS (HTTP dev server accessed via IP)
-    const el = document.createElement('textarea');
-    el.value = text;
-    el.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
-    document.body.appendChild(el);
-    el.focus();
-    el.select();
-    try {
-      document.execCommand('copy');
-      toast.success(t('toast.copyJsonSuccess'));
-    } catch {
-      toast.error(t('toast.copyJsonError'));
-    }
-    document.body.removeChild(el);
-  }, [cleanSteps, t]);
-
   // ── Editing context (pre-loaded from URL params) ─────────────────────────
   const [editingContext, setEditingContext] = useState<{
     campaignId: string;
@@ -799,11 +806,11 @@ export function useControlRecord(
             )
           : [];
         setSteps(loaded);
-        const mergedVars = {
-          ...((campaign as { variables?: Record<string, any> } | null)
-            ?.variables ?? {}),
-          ...(sc.variables ?? {})
-        };
+        const mergedVars = mergeCampaignScenarioVariables(
+          (campaign as { variables?: Record<string, any> } | null)?.variables ??
+            {},
+          sc.variables ?? {}
+        );
         setEditingContext({
           campaignId: initialCampaignId,
           scenarioId: initialScenarioId,
@@ -897,13 +904,26 @@ export function useControlRecord(
     let cancelled = false;
     Promise.all([
       orgScenariosApi.get(initialOrgScenarioId),
-      orgScenariosApi.getBody(initialOrgScenarioId)
+      orgScenariosApi.getBody(initialOrgScenarioId),
+      initialCampaignId
+        ? campaignsApi.get(initialCampaignId).catch(() => null)
+        : Promise.resolve(null)
     ])
-      .then(([meta, bodyOut]) => {
+      .then(([meta, bodyOut, campaign]) => {
         if (cancelled) return;
         setEditingContext(null);
         setTemplateContext(null);
         const bodyJson = (bodyOut.body_json ?? {}) as Record<string, unknown>;
+        const scenarioVariables = normalizeScenarioVariables(
+          bodyJson.variables as Record<string, unknown> | undefined
+        );
+        const variables = initialCampaignId
+          ? mergeCampaignScenarioVariables(
+              (campaign as { variables?: Record<string, any> } | null)
+                ?.variables ?? {},
+              scenarioVariables
+            )
+          : scenarioVariables;
         const previewSteps = extractPreviewSteps(bodyJson);
         const loaded = previewSteps.map(
           (s) => ({ ...s, _id: nextStepId() }) as StepWithId
@@ -917,9 +937,7 @@ export function useControlRecord(
             meta.is_recovery_scenario === true ||
             (meta.recovery_usage_count ?? 0) > 0,
           recoveryUsageCount: meta.recovery_usage_count ?? 0,
-          variables: normalizeScenarioVariables(
-            bodyJson.variables as Record<string, unknown> | undefined
-          )
+          variables
         });
         if (loaded.length > 0) {
           toast.info(
@@ -937,7 +955,7 @@ export function useControlRecord(
     return () => {
       cancelled = true;
     };
-  }, [initialOrgScenarioId, initialTemplateId, t]);
+  }, [initialCampaignId, initialOrgScenarioId, initialTemplateId, t]);
 
   const saveToTemplate = useCallback(
     async (variables?: Record<string, any>) => {
@@ -1173,11 +1191,20 @@ export function useControlRecord(
   );
 
   // ── Hierarchy / Inspector ────────────────────────────────────────────────
-  const [autoRefreshHierarchy, setAutoRefreshHierarchy] = useState(true);
+  const [autoRefreshHierarchy, setAutoRefreshHierarchy] = useState(false);
+  const autoRefreshHierarchyUserChangedRef = useRef(false);
   const [hierarchyPaused, setHierarchyPaused] = useState(false);
   const lastHierarchyFetchAtRef = useRef(0);
+  const lastHierarchyAppFetchAtRef = useRef(0);
   const lastHierarchyAppRef = useRef<string>('');
-  const selectedHierarchySerial = selectedDevice?.serial ?? null;
+  const lastHierarchyBootstrapAtRef = useRef(0);
+  const lastHierarchyBootstrapSerialRef = useRef<string | null>(null);
+  const [manualHierarchyLoading, setManualHierarchyLoading] = useState(false);
+  const selectedHierarchySerial = resolveControlRecordHierarchySerial(
+    selectedSerial,
+    selectedDevice?.serial
+  );
+  const previousHierarchySerialRef = useRef<string | null>(selectedHierarchySerial);
   const selectedHierarchyApp = selectedDevice?.current_app ?? '';
   const hierarchyQueryKey = useMemo(
     () => ['device-hierarchy', selectedHierarchySerial ?? 'none'] as const,
@@ -1195,15 +1222,39 @@ export function useControlRecord(
     () => hierarchyQuery.data ?? '',
     [hierarchyQuery.data]
   );
-  const hierarchyLoading = hierarchyQuery.isFetching;
+  const hierarchyLoading = hierarchyQuery.isFetching && !hierarchyXml.trim();
+
+  useEffect(() => {
+    if (autoRefreshHierarchyUserChangedRef.current) return;
+    setAutoRefreshHierarchy(false);
+  }, []);
+
+  const setAutoRefreshHierarchyFromUser = useCallback((next: boolean) => {
+    autoRefreshHierarchyUserChangedRef.current = true;
+    setAutoRefreshHierarchy(next);
+  }, []);
 
   const fetchAndSetHierarchy = useCallback(
-    async (serial: string, refresh: boolean): Promise<string> => {
+    async (
+      serial: string,
+      refresh: boolean,
+      options?: Parameters<typeof fetchHierarchy>[2] & {
+        allowSerialMismatch?: boolean;
+      }
+    ): Promise<string> => {
       if (!tabActive) return '';
-      const xml = (await fetchHierarchy(serial, refresh)) ?? '';
+      const xml = (await fetchHierarchy(serial, refresh, options)) ?? '';
       if (
+        !options?.allowSerialMismatch &&
         !canApplyDeviceScopedResult(serial, selectedDeviceSerialRef.current)
       ) {
+        return '';
+      }
+      if (!xml.trim()) {
+        queryClient.setQueryData<string>(
+          ['device-hierarchy', serial],
+          (current) => (current?.trim() ? current : '')
+        );
         return '';
       }
       queryClient.setQueryData(['device-hierarchy', serial], xml);
@@ -1213,66 +1264,76 @@ export function useControlRecord(
   );
 
   useEffect(() => {
+    const previousSerial = previousHierarchySerialRef.current;
+    previousHierarchySerialRef.current = selectedHierarchySerial;
+    if (previousSerial === selectedHierarchySerial) return;
+
     setRecordXml(null);
     recordXmlRef.current = null;
     recordXmlSerialRef.current = null;
     pollingXmlRef.current = false;
     setPollingXml(false);
     lastHierarchyFetchAtRef.current = 0;
+    lastHierarchyAppFetchAtRef.current = 0;
     lastHierarchyAppRef.current = '';
-    if (selectedHierarchySerial) {
-      queryClient.setQueryData(
-        ['device-hierarchy', selectedHierarchySerial],
-        ''
-      );
-    }
+    lastHierarchyBootstrapAtRef.current = 0;
+    lastHierarchyBootstrapSerialRef.current = null;
   }, [queryClient, selectedHierarchySerial]);
 
-  const refreshHierarchy = useCallback(() => {
-    if (!selectedHierarchySerial) return;
-    fetchAndSetHierarchy(selectedHierarchySerial, true).catch((e) => {
-      queryClient.setQueryData(
-        hierarchyQueryKey,
-        `${errorPrefix} ${String(e)}`
-      );
-    });
+  const refreshHierarchy = useCallback((serialOverride?: string | null) => {
+    const serial = (serialOverride ?? selectedHierarchySerial ?? '').trim();
+    if (!serial) return;
+    setManualHierarchyLoading(true);
+    fetchAndSetHierarchy(serial, true, {
+      allowSerialMismatch: Boolean(serialOverride),
+      bypassBackoff: true,
+      bypassInFlight: true
+    })
+      .catch((e) => {
+        queryClient.setQueryData(
+          ['device-hierarchy', serial],
+          `${errorPrefix} ${String(e)}`
+        );
+      })
+      .finally(() => setManualHierarchyLoading(false));
   }, [
     selectedHierarchySerial,
     fetchAndSetHierarchy,
     queryClient,
-    hierarchyQueryKey,
     errorPrefix
   ]);
 
-  // Bootstrap hierarchy on device select / app change. u2 may not be ready on the
-  // first request after client-side navigation — retry until XML arrives instead
-  // of leaving the tree blank until a full page refresh.
+  // Bootstrap hierarchy once on screen entry so the tree has initial data.
+  // The Auto toggle only controls follow-up refreshes from app changes/actions.
   useEffect(() => {
-    if (
-      !tabActive ||
-      !autoRefreshHierarchy ||
-      !selectedHierarchySerial ||
-      hierarchyPaused
-    )
+    if (!tabActive || !selectedHierarchySerial || hierarchyPaused)
       return;
     if (hierarchyXml?.trim()) return;
-    lastHierarchyAppRef.current = selectedHierarchyApp;
-
+    const now = Date.now();
+    if (
+      lastHierarchyBootstrapSerialRef.current === selectedHierarchySerial &&
+      now - lastHierarchyBootstrapAtRef.current <
+        HIERARCHY_BOOTSTRAP_FETCH_COOLDOWN_MS
+    ) {
+      return;
+    }
     let cancelled = false;
-    let attempts = 0;
 
     const bootstrap = async () => {
-      while (!cancelled && attempts < HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS) {
-        attempts += 1;
-        try {
-          const xml = await fetchAndSetHierarchy(selectedHierarchySerial, true);
-          if (xml?.trim() || cancelled) return;
-        } catch {
-          /* retry */
-        }
-        await new Promise((resolve) =>
-          setTimeout(resolve, HIERARCHY_BOOTSTRAP_RETRY_MS)
-        );
+      try {
+        if (cancelled) return;
+        lastHierarchyBootstrapSerialRef.current = selectedHierarchySerial;
+        lastHierarchyBootstrapAtRef.current = Date.now();
+        lastHierarchyAppRef.current = selectedHierarchyApp;
+        setManualHierarchyLoading(true);
+        await fetchAndSetHierarchy(selectedHierarchySerial, true, {
+          bypassBackoff: true,
+          bypassInFlight: true
+        });
+      } catch {
+        /* user can retry with the refresh button; avoid a hidden tight loop */
+      } finally {
+        if (!cancelled) setManualHierarchyLoading(false);
       }
     };
 
@@ -1295,7 +1356,6 @@ export function useControlRecord(
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
   }, [
-    autoRefreshHierarchy,
     tabActive,
     selectedHierarchySerial,
     selectedHierarchyApp,
@@ -1314,8 +1374,17 @@ export function useControlRecord(
       hierarchyPaused
     )
       return;
-    const app = selectedHierarchyApp;
+    const app = selectedHierarchyApp.trim();
+    if (!app) return;
     if (lastHierarchyAppRef.current === app) return;
+    const now = Date.now();
+    if (
+      now - lastHierarchyAppFetchAtRef.current <
+      HIERARCHY_APP_CHANGE_FETCH_COOLDOWN_MS
+    ) {
+      lastHierarchyAppRef.current = app;
+      return;
+    }
     lastHierarchyAppRef.current = app;
     const tid = setTimeout(() => {
       hierarchyQuery.refetch().catch((e) => {
@@ -1324,6 +1393,7 @@ export function useControlRecord(
           `${errorPrefix} ${String(e)}`
         );
       });
+      lastHierarchyAppFetchAtRef.current = Date.now();
     }, 220);
     return () => clearTimeout(tid);
   }, [
@@ -1433,6 +1503,7 @@ export function useControlRecord(
 
     device: {
       connectedDevices,
+      devicesReady,
       wsConnected,
       selectedDevice,
       selectedSerial,
@@ -1459,7 +1530,6 @@ export function useControlRecord(
       addWait: addWaitStep,
       addFlow: addFlowStep,
       appendSteps,
-      copyJson,
       openSave: openSaveDialog
     },
 
@@ -1483,9 +1553,9 @@ export function useControlRecord(
 
     hierarchy: {
       xml: hierarchyXml,
-      loading: hierarchyLoading,
+      loading: hierarchyLoading || manualHierarchyLoading,
       autoRefresh: autoRefreshHierarchy,
-      setAutoRefresh: setAutoRefreshHierarchy,
+      setAutoRefresh: setAutoRefreshHierarchyFromUser,
       refresh: refreshHierarchy,
       nodes: parsedHierarchyNodes,
       setPaused: setHierarchyPaused

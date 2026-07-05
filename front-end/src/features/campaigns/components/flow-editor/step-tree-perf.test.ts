@@ -24,7 +24,7 @@ const REPO_ROOT = join(__dir, '../../../../../../');
 
 function loadSteps(): FlowStep[] {
   const raw = JSON.parse(
-    readFileSync(join(REPO_ROOT, 'agent-boot/Crawl group (2).json'), 'utf8')
+    readFileSync(join(REPO_ROOT, 'agent-boot/dist/Crawl group 3.json'), 'utf8')
   ) as { scenario: { body: { steps: FlowStep[] } } };
   return raw.scenario.body.steps;
 }

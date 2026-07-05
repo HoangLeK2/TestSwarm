@@ -33,7 +33,13 @@ def _normalize_nested_steps(step: dict[str, Any], normalizer) -> None:
 def normalize_fb_tap_comment_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     step = deepcopy(raw_step)
     step_type = str(step.get("type") or "")
-    if step_type not in {"fb_tap_comment_button", "tap_fb_comment_button"}:
+    if step_type not in {
+        "fb_tap_comment_button",
+        "tap_fb_comment_button",
+        "fb_find_comment_button",
+        "fb_tap_comment_target",
+        "fb_apply_comment_filter",
+    }:
         return step
     for key, val in _FB_TAP_COMMENT_DEFAULTS.items():
         step.setdefault(key, val)
@@ -48,7 +54,13 @@ def normalize_scenario_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     step_type = str(step.get("type") or "")
     if step_type == "extract":
         return normalize_extract_step(step)
-    if step_type in {"fb_tap_comment_button", "tap_fb_comment_button"}:
+    if step_type in {
+        "fb_tap_comment_button",
+        "tap_fb_comment_button",
+        "fb_find_comment_button",
+        "fb_tap_comment_target",
+        "fb_apply_comment_filter",
+    }:
         return normalize_fb_tap_comment_step(step)
     _normalize_nested_steps(step, normalize_scenario_step)
     return step

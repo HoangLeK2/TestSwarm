@@ -31,18 +31,35 @@ export function OrganizationProvider({
   children: React.ReactNode;
 }) {
   const queryClient = useQueryClient();
-  const { user } = useAuthContext();
+  const { pending: authPending, user } = useAuthContext();
   const {
-    data: organizations = [],
+    data: organizationData,
+    isFetching,
     isLoading,
+    isPending,
     isError,
     refetch
   } = useOrganizationsQuery();
+  const organizations = React.useMemo(
+    () => organizationData ?? [],
+    [organizationData]
+  );
   const [currentOrg, setCurrentOrgState] =
     React.useState<ProtoOrganization | null>(null);
 
   React.useEffect(() => {
+    if (authPending) return;
+
+    if (!user) {
+      setCurrentOrgState(null);
+      return;
+    }
+
+    const queryInFlightOrUnreliable =
+      !organizationData || isLoading || isPending || isFetching || isError;
+
     if (!organizations.length) {
+      if (queryInFlightOrUnreliable) return;
       setCurrentOrgState(null);
       return;
     }
@@ -70,7 +87,18 @@ export function OrganizationProvider({
 
       return picked;
     });
-  }, [organizations, user?.defaultOrgId, user?.email]);
+  }, [
+    authPending,
+    isError,
+    isFetching,
+    isLoading,
+    isPending,
+    organizationData,
+    organizations,
+    user,
+    user?.defaultOrgId,
+    user?.email
+  ]);
 
   const setCurrentOrg = React.useCallback((org: ProtoOrganization | null) => {
     setCurrentOrgState(org);

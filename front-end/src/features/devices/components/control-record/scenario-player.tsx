@@ -218,6 +218,7 @@ export function ScenarioPlayer({
   registerStop
 }: ScenarioPlayerProps) {
   const t = useTranslations('devicesControlRecord.scenarioPlayer');
+  const tView = useTranslations('devicesControlRecord.view');
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
     null
@@ -354,13 +355,13 @@ export function ScenarioPlayer({
       return vars;
     } catch (e: any) {
       const msg =
-        e?.response?.data?.detail || e?.message || 'Không lấy được tài khoản';
+        e?.response?.data?.detail || e?.message || t('accountResolveFailed');
       toast.error(String(msg));
       return null;
     } finally {
       resolvingAccountRef.current = false;
     }
-  }, [sessionAccountVars, activeAccountGroupId]);
+  }, [sessionAccountVars, activeAccountGroupId, t]);
 
   // Clear the cached account when the user switches scenarios or swaps the
   // active account group — next play picks a fresh one.
@@ -765,7 +766,9 @@ export function ScenarioPlayer({
           pool without going back to the save dialog. Picking resets any
           cached session account so the next Play/Step resolves a fresh one. */}
       <div className='flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[11px]'>
-        <span className='shrink-0 text-muted-foreground'>Nhóm tài khoản:</span>
+        <span className='shrink-0 text-muted-foreground'>
+          {tView('accountGroupLabel')}:
+        </span>
         <Select
           value={activeAccountGroupId ?? '_none'}
           onValueChange={(v) => {
@@ -776,11 +779,11 @@ export function ScenarioPlayer({
           disabled={playing}
         >
           <SelectTrigger className='h-7 min-w-[200px] text-[11px]'>
-            <SelectValue placeholder='— Không dùng —' />
+            <SelectValue placeholder={tView('accountGroupNone')} />
           </SelectTrigger>
           <SelectContent className='z-[10010]'>
             <SelectItem value='_none' className='text-xs'>
-              — Không dùng —
+              {tView('accountGroupNone')}
             </SelectItem>
             {accountGroupsList.map((g) => (
               <SelectItem key={g.id} value={g.id} className='text-xs'>

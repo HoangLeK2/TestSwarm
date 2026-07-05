@@ -41,6 +41,7 @@ import {
   detachScrcpyStream,
   scrcpyAttachErrorMessage
 } from '../services/scrcpy-stream';
+import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
@@ -100,9 +101,7 @@ function DeviceTilePreviewInner({
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
-  const isActive =
-    device.state &&
-    !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+  const isActive = isVisibleDeviceFarmActiveDevice(device);
   const deviceState = String(device.state || '')
     .replace('DeviceState.', '')
     .toUpperCase();

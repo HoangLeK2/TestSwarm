@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from services.campaign.dispatcher import FanOutExecutionView, FanOutResult
+from services.campaign_dispatch import _build_device_sequence_steps
 from services.campaign.execution_runtime import (
     DISPATCH_SOURCE_FALLBACK,
     DISPATCH_SOURCE_TEMPORAL,
@@ -104,7 +105,7 @@ def test_build_sequence_steps_keeps_device_vars_scoped_per_scenario():
     assert steps[1]["variables"]["kw"] == "scenario-two"
 
 
-def test_build_sequence_steps_does_not_promote_campaign_globals_to_scenario_overrides():
+def test_build_sequence_steps_promotes_campaign_vars_as_campaign_scoped_overrides():
     refs = [{"scenario_id": "s1"}]
     steps = build_sequence_steps(
         refs,
@@ -125,11 +126,44 @@ def test_build_sequence_steps_does_not_promote_campaign_globals_to_scenario_over
     )
 
     step_vars = steps[0]["variables"]
-    assert "GROUP_NAME" not in step_vars
+    assert step_vars["GROUP_NAME"] == "openclaw vn"
     assert step_vars["GROUP_TEXT"] == "device text"
     assert step_vars["SAVE_COLLECTION"] == "custom_collection"
     assert step_vars["DEVICE_ONLY"] == "device-value"
     assert step_vars["__ACCOUNT_ID__"] == "acct-1"
+
+
+def test_build_sequence_steps_campaign_vars_override_scenario_defaults_without_leaking_system_vars():
+    steps = build_sequence_steps(
+        [{"scenario_id": "s1"}],
+        device_index=0,
+        campaign_vars={"COMMENT_TEXT": "campaign text", "__USER_ID__": "user-1"},
+        effective_vars={"COMMENT_TEXT": "campaign text"},
+        account_vars={},
+    )
+
+    assert steps[0]["variables"]["COMMENT_TEXT"] == "campaign text"
+    assert "__USER_ID__" not in steps[0]["variables"]
+
+
+def test_legacy_device_sequence_steps_promotes_campaign_vars_without_leaking_system_vars():
+    steps = _build_device_sequence_steps(
+        scenarios=[
+            SimpleNamespace(
+                id="s1",
+                name="Scenario 1",
+                steps=[{"type": "noop"}],
+            )
+        ],
+        device=SimpleNamespace(id="d1"),
+        slot_idx=0,
+        campaign_vars={"COMMENT_TEXT": "campaign text", "__USER_ID__": "user-1"},
+        per_scenario_device_vars={},
+        per_scenario_device_runtime_vars={},
+    )
+
+    assert steps[0]["variables"]["COMMENT_TEXT"] == "campaign text"
+    assert "__USER_ID__" not in steps[0]["variables"]
 
 
 def test_recovery_refs_extend_registry_refs_without_sequence_refs():

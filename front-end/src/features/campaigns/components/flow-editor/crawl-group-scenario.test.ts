@@ -6,12 +6,6 @@ import test from 'node:test';
 
 import type { FlowStep } from '../scenario-steps/types';
 import {
-  applyChildStepEdit,
-  getChildStep,
-  updateChildInStep
-  // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
-} from './bracket-step-tree.ts';
-import {
   countStepTypes,
   resolveStepAtPath,
   updateStepAtPath,
@@ -51,12 +45,14 @@ function assertAllStepsHaveType(steps: FlowStep[], label: string): void {
 const FB_GROUP_STEPS = loadJsonSteps(
   'device_farm/scenarios/fb_group_crawl.json'
 );
-const CRAWL_GROUP_STEPS = loadJsonSteps('agent-boot/Crawl group (2).json');
+const CRAWL_GROUP_STEPS = loadJsonSteps('agent-boot/dist/Crawl group 3.json');
 
 const REQUIRED_CRAWL_TYPES = [
   'loop',
   'extract',
-  'fb_tap_comment_button',
+  'fb_find_comment_button',
+  'fb_tap_comment_target',
+  'fb_apply_comment_filter',
   'if_element',
   'scroll_down',
   'key',
@@ -66,16 +62,16 @@ const REQUIRED_CRAWL_TYPES = [
 
 test('crawl fixtures have well-formed step types', () => {
   assertAllStepsHaveType(FB_GROUP_STEPS, 'fb_group_crawl');
-  assertAllStepsHaveType(CRAWL_GROUP_STEPS, 'crawl group (2)');
+  assertAllStepsHaveType(CRAWL_GROUP_STEPS, 'crawl group 3');
 });
 
 test('crawl fixtures contain comment crawl node chain', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const types = countStepTypes(steps);
-    assert.ok(
-      types.get('fb_tap_comment_button')! >= 1,
-      'missing fb_tap_comment_button'
-    );
+    assert.ok(types.get('fb_find_comment_button')! >= 1, 'missing fb_find_comment_button');
+    assert.ok(types.get('fb_tap_comment_target')! >= 1, 'missing fb_tap_comment_target');
+    assert.ok(types.get('fb_apply_comment_filter')! >= 1, 'missing fb_apply_comment_filter');
+    assert.equal(types.get('fb_tap_comment_button') ?? 0, 0, 'template should not use legacy comment node');
     const commentExtracts = walkFlowStepsWithPaths(steps).filter(
       (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
     );
@@ -121,68 +117,38 @@ test('fb_comments extract fields round-trip through updateStepAtPath', () => {
   }
 });
 
-test('fb_tap_comment_button then-branch edits via bracket-step-tree helpers', () => {
+test('split comment sequence keeps editable fb_comments extract as a normal step', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
-    const taps = walkFlowStepsWithPaths(steps).filter(
-      (v) => v.step.type === 'fb_tap_comment_button'
+    const commentExtract = walkFlowStepsWithPaths(steps).find(
+      (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
     );
-    assert.ok(taps.length >= 1);
-    for (const { step } of taps) {
-      const thenSteps = (step as FlowStep & { then?: FlowStep[] }).then ?? [];
-      const extractIdx = thenSteps.findIndex(
-        (s) => s.type === 'extract' && s.strategy === 'fb_comments'
-      );
-      assert.ok(
-        extractIdx >= 0,
-        'fb_tap_comment_button then branch missing fb_comments extract'
-      );
-      const extract = getChildStep(step, 'then', extractIdx)!;
-      assert.equal(extract.type, 'extract');
-      assert.equal(extract.strategy, 'fb_comments');
-      const edited = { ...extract, max_items: 55 } as FlowStep;
-      const nextTap = updateChildInStep(step, 'then', extractIdx, edited);
-      assert.equal(getChildStep(nextTap, 'then', extractIdx)?.max_items, 55);
-      const viaApply = applyChildStepEdit(
-        nextTap,
-        { listKey: 'then', ci: extractIdx },
-        {
-          ...edited,
-          max_items: 66
-        } as FlowStep
-      );
-      assert.equal(getChildStep(viaApply!, 'then', extractIdx)?.max_items, 66);
-    }
+    assert.ok(commentExtract, 'missing fb_comments extract');
+    const edited = {
+      ...commentExtract.step,
+      max_items: 66
+    } as FlowStep;
+    const next = updateStepAtPath(steps, commentExtract.path, edited);
+    const updated = resolveStepAtPath(next, commentExtract.path);
+    assert.ok(updated);
+    assert.equal(updated.max_items, 66);
   }
 });
 
 test('patchStepByFlowgramId updates nested extract when _fgId is present', () => {
   const loop = CRAWL_GROUP_STEPS.find((s) => s.type === 'loop');
   assert.ok(loop);
-  const tap = ((loop as FlowStep & { steps?: FlowStep[] }).steps ?? []).find(
-    (s) => s.type === 'fb_tap_comment_button'
-  );
-  assert.ok(tap);
-  const thenSteps = (tap as FlowStep & { then?: FlowStep[] }).then ?? [];
-  const extractIdx = thenSteps.findIndex(
+  const body = (loop as FlowStep & { steps?: FlowStep[] }).steps ?? [];
+  const extractIdx = body.findIndex(
     (s) => s.type === 'extract' && s.strategy === 'fb_comments'
   );
   assert.ok(extractIdx >= 0);
-  const extract = thenSteps[extractIdx]!;
+  const extract = body[extractIdx]!;
   const fgId = 'perf-extract-fg';
-  const tapWithFg = {
-    ...tap,
-    _fgId: 'tap-fg',
-    then: thenSteps.map((s, i) =>
-      i === extractIdx ? { ...s, _fgId: fgId } : s
-    )
-  } as FlowStep;
   const stepsWithFg = CRAWL_GROUP_STEPS.map((s) =>
     s.type === 'loop'
       ? ({
           ...s,
-          steps: ((s as FlowStep & { steps?: FlowStep[] }).steps ?? []).map(
-            (c) => (c.type === 'fb_tap_comment_button' ? tapWithFg : c)
-          )
+          steps: body.map((c, i) => (i === extractIdx ? { ...c, _fgId: fgId } : c))
         } as FlowStep)
       : s
   );
@@ -211,7 +177,7 @@ test('comment extract contract: dedupe_field and require_verified_parent', () =>
   }
 });
 
-test('post extract stays before fb_tap_comment_button inside loop (no back between)', () => {
+test('post extract stays before split comment sequence inside loop (no back before comments)', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const loop = steps.find((s) => s.type === 'loop') as FlowStep & {
       steps?: FlowStep[];
@@ -221,12 +187,18 @@ test('post extract stays before fb_tap_comment_button inside loop (no back betwe
     const postIdx = body.findIndex(
       (s) => s.type === 'extract' && s.strategy === 'fb_posts'
     );
-    const tapIdx = body.findIndex((s) => s.type === 'fb_tap_comment_button');
-    assert.ok(postIdx >= 0 && tapIdx >= 0);
-    const between = body.slice(postIdx + 1, tapIdx);
+    const findIdx = body.findIndex((s) => s.type === 'fb_find_comment_button');
+    const tapIdx = body.findIndex((s) => s.type === 'fb_tap_comment_target');
+    const filterIdx = body.findIndex((s) => s.type === 'fb_apply_comment_filter');
+    const commentIdx = body.findIndex(
+      (s) => s.type === 'extract' && s.strategy === 'fb_comments'
+    );
+    assert.ok(postIdx >= 0 && findIdx >= 0 && tapIdx >= 0 && filterIdx >= 0 && commentIdx >= 0);
+    assert.ok(postIdx < findIdx && findIdx < tapIdx && tapIdx < filterIdx && filterIdx < commentIdx);
+    const between = body.slice(postIdx + 1, commentIdx);
     assert.ok(
       !between.some((s) => s.type === 'key' && s.key === 'back'),
-      'back step between post extract and comment tap breaks detail flow'
+      'back step before comment extract breaks detail flow'
     );
   }
 });

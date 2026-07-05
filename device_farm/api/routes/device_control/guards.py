@@ -36,7 +36,16 @@ async def reject_manual_control_if_busy(device) -> Optional[JSONResponse]:
     """Reject manual control when a scenario or busy dispatcher owns the device."""
     is_busy_state = getattr(device, "state", None) == DeviceState.BUSY
     scenario_active_local = int(getattr(device, "_scenario_active", 0) or 0) > 0
-    scenario_active = scenario_active_local or await _redis_scenario_active(getattr(device, "serial", ""))
+    serial = getattr(device, "serial", "")
+    scenario_active = scenario_active_local or await _redis_scenario_active(serial)
+    if is_busy_state or scenario_active:
+        try:
+            from services.manual_takeover import is_manual_takeover_active
+
+            if await is_manual_takeover_active(serial):
+                return None
+        except Exception:
+            pass
     if not (is_busy_state or scenario_active):
         return None
     reason = "busy_state" if is_busy_state else "scenario_active"

@@ -153,6 +153,16 @@ def _record_recovery_failure(
     step_result.setdefault("reason_code", "incident_recovery_failed")
 
 
+def _run_app_popup_watchers(sc: "ScenarioContext", step: Dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from tasks.scenario.app_automation_watchers import run_app_popup_watchers
+
+        return run_app_popup_watchers(sc, step)
+    except Exception as exc:
+        log.debug("[%s] app popup watcher hook failed: %s", sc.serial, exc)
+        return [{"executed": False, "message": f"watcher hook failed: {exc}"}]
+
+
 def execute_step_with_retry(
     sc: "ScenarioContext",
     step: Dict[str, Any],
@@ -202,6 +212,7 @@ def execute_step_with_retry(
             except Exception:
                 deadline_event.cancel()
                 deadline_event = None
+        watcher_events = _run_app_popup_watchers(sc, step)
         try:
             handler_result = dispatch_step(sc, step, idx)
         except Exception as exc:
@@ -220,6 +231,8 @@ def execute_step_with_retry(
 
         merged: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
         merged.update(handler_result)
+        if watcher_events:
+            merged["app_popup_watchers"] = watcher_events
         if deadline_event is not None:
             timed_out = deadline_event.deadline_triggered
             deadline_event.cancel()

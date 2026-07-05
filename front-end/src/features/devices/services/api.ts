@@ -6,6 +6,7 @@ import {
   HIERARCHY_FAILURE_COOLDOWN_MS,
   HIERARCHY_REQUEST_TIMEOUT_MS,
   shouldBackoffHierarchyError,
+  shouldRespectHierarchyBackoff,
   shouldReuseHierarchyInFlight
 } from '../lib/hierarchy-request';
 import { createSingleFlight } from '../lib/single-flight';
@@ -162,10 +163,14 @@ export async function fetchHierarchy(
 ): Promise<string> {
   const key = serial;
   const now = Date.now();
-  // A failing hierarchy dump can block backend relay/u2 for seconds. Back off
-  // even for refresh=true so bootstrap/interaction pulses do not starve screen
-  // streaming while uiautomator2 is recovering.
-  if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
+  // A failing hierarchy dump can block backend relay/u2 for seconds. Background
+  // callers back off so bootstrap/interaction pulses do not starve screen
+  // streaming while uiautomator2 is recovering. Manual refresh bypasses this.
+  if (
+    shouldRespectHierarchyBackoff(options) &&
+    (hierarchyFailureUntil.get(key) ?? 0) > now
+  )
+    return '';
   const reuseInFlight = shouldReuseHierarchyInFlight(options);
   const pending = hierarchyInFlight.get(key);
   if (reuseInFlight && pending) return pending;
@@ -625,5 +630,33 @@ export async function interruptDevice(
     ok: boolean;
     cancelled_workflows: string[];
   }>(`/devices/${encodeURIComponent(serial)}/interrupt`);
+  return data;
+}
+
+/** Pause running scenarios on a device so the user can take manual control. */
+export async function takeOverDevice(serial: string): Promise<{
+  ok: boolean;
+  action: 'paused_for_takeover';
+  paused_executions: Array<{
+    execution_id: string;
+    status?: string | null;
+    effective_transition?: boolean;
+    workflows_signalled?: number;
+    error?: string;
+  }>;
+  manual_takeover_active: boolean;
+}> {
+  const { data } = await farmApi.post<{
+    ok: boolean;
+    action: 'paused_for_takeover';
+    paused_executions: Array<{
+      execution_id: string;
+      status?: string | null;
+      effective_transition?: boolean;
+      workflows_signalled?: number;
+      error?: string;
+    }>;
+    manual_takeover_active: boolean;
+  }>(`/devices/${encodeURIComponent(serial)}/takeover`);
   return data;
 }

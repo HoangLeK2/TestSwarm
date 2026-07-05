@@ -537,6 +537,21 @@ class TestBuildSelector(unittest.TestCase):
         self.assertEqual(s["description"], "Back")
         self.assertEqual(s["mask"], 0x40)
 
+    def test_descriptionContains(self):
+        s = self.client._build_selector("descriptionContains", "Back")
+        self.assertEqual(s["descriptionContains"], "Back")
+        self.assertEqual(s["mask"], 0x80)
+
+    def test_descriptionStartsWith(self):
+        s = self.client._build_selector("descriptionStartsWith", "Back")
+        self.assertEqual(s["descriptionStartsWith"], "Back")
+        self.assertEqual(s["mask"], 0x200)
+
+    def test_descriptionStartswith_legacy_case(self):
+        s = self.client._build_selector("descriptionStartswith", "Back")
+        self.assertEqual(s["descriptionStartsWith"], "Back")
+        self.assertEqual(s["mask"], 0x200)
+
     def test_accessibility_id_alias(self):
         s = self.client._build_selector("accessibility id", "Back")
         self.assertEqual(s["description"], "Back")

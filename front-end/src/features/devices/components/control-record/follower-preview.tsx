@@ -1,6 +1,7 @@
 'use client';
 
 import { memo } from 'react';
+import { useTranslations } from 'next-intl';
 import type { Device } from '../../types';
 import { DeviceAndroidFrame } from '../device-android-frame';
 import { DeviceScreen } from '../device-screen';
@@ -38,6 +39,7 @@ export const FollowerPreview = memo(function FollowerPreview({
   wsSend,
   onPromote
 }: Props) {
+  const t = useTranslations('devicesControlRecord.view');
   const label = formatFollowerLabel(device);
   const state = String(device.state || '')
     .replace('DeviceState.', '')
@@ -73,7 +75,7 @@ export const FollowerPreview = memo(function FollowerPreview({
               />
             ) : (
               <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[10px] text-zinc-500'>
-                OFF
+                {t('followerOffline')}
               </div>
             )}
           </DeviceAndroidFrame>

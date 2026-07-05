@@ -2,11 +2,13 @@ const DEFAULT_BACKEND_BASE = (
   process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
 ).replace(/\/+$/, '');
 
-const OBJECT_STORAGE_PUBLIC_BASE = (
-  process.env.NEXT_PUBLIC_OBJECT_STORAGE_PUBLIC_BASE_URL ||
-  process.env.NEXT_PUBLIC_R2_PUBLIC_BASE_URL ||
-  ''
-).replace(/\/+$/, '');
+function objectStoragePublicBase() {
+  return (
+    process.env.NEXT_PUBLIC_OBJECT_STORAGE_PUBLIC_BASE_URL ||
+    process.env.NEXT_PUBLIC_R2_PUBLIC_BASE_URL ||
+    ''
+  ).replace(/\/+$/, '');
+}
 
 /** Rewrite legacy dev MinIO URLs (localhost:9000) to the public R2/CDN base. */
 export function rewriteLegacyObjectStorageUrl(
@@ -14,12 +16,13 @@ export function rewriteLegacyObjectStorageUrl(
 ): string | null {
   if (!url) return null;
   const value = url.trim();
-  if (!value || !OBJECT_STORAGE_PUBLIC_BASE) return value || null;
+  const publicBase = objectStoragePublicBase();
+  if (!value || !publicBase) return value || null;
   const match = value.match(
     /^https?:\/\/(?:localhost|127\.0\.0\.1):\d+(?:\/device-farm)?\/(content-screenshots\/[^?#]+)/i
   );
   if (!match) return value;
-  return `${OBJECT_STORAGE_PUBLIC_BASE}/${match[1]}`;
+  return `${publicBase}/${match[1]}`;
 }
 
 /** Resolve artifact preview/download URLs against the farm API origin. */

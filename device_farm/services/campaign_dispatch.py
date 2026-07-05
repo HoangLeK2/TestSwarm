@@ -14,7 +14,7 @@ from db.crud.scenario_device_variable import (
     get_scenario_device_variables as _get_scenario_device_variables_crud,
     get_scenario_device_variables_bulk,
 )
-from common.variable_resolver import normalize_device_vars
+from common.variable_resolver import _VAR_PATTERN, normalize_device_vars
 
 log = logging.getLogger(__name__)
 
@@ -209,6 +209,7 @@ def _build_device_sequence_steps(
     scenarios: list,
     device,
     slot_idx: int,
+    campaign_vars: Dict[str, Any] | None = None,
     per_scenario_device_vars: Dict[str, Dict[str, Dict[str, Any]]],
     per_scenario_device_runtime_vars: Dict[str, Dict[str, Dict[str, Any]]],
     scenario_registry: Dict[str, Any] | None = None,
@@ -220,6 +221,11 @@ def _build_device_sequence_steps(
     order, carrying the per-scenario device/account variables as overrides.
     """
     steps: list[Dict[str, Any]] = []
+    campaign_override_vars = {
+        key: value
+        for key, value in dict(campaign_vars or {}).items()
+        if not str(key).startswith("__")
+    }
     by_template_name = (scenario_registry or {}).get("by_template_name") or {}
     for scenario_idx, scen in enumerate(scenarios):
         # Some campaigns use ScenarioTemplates (stored separately) and keep
@@ -238,6 +244,7 @@ def _build_device_sequence_steps(
             "scenario_id": scen.id,
             "scenario_name": scen.name,
             "variables": {
+                **campaign_override_vars,
                 "DEVICE_INDEX": str(slot_idx),
                 "SCENARIO_INDEX": str(scenario_idx),
                 **device_runtime_vars,
@@ -245,6 +252,68 @@ def _build_device_sequence_steps(
             },
         })
     return steps
+
+
+def _scan_variable_refs(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return list(_VAR_PATTERN.findall(value))
+    if isinstance(value, dict):
+        refs: list[str] = []
+        for item in value.values():
+            refs.extend(_scan_variable_refs(item))
+        return refs
+    if isinstance(value, list):
+        refs: list[str] = []
+        for item in value:
+            refs.extend(_scan_variable_refs(item))
+        return refs
+    return []
+
+
+def _resolve_fb_group_device_var_keys(
+    scenario: Any,
+    token_map: Dict[str, Dict[str, Any]],
+) -> list[str]:
+    device_var_keys: list[str] = []
+    seen: set[str] = set()
+    for vars_for_device in token_map.values():
+        for key in vars_for_device.keys():
+            if key.startswith("__") or key in seen:
+                continue
+            seen.add(key)
+            device_var_keys.append(key)
+
+    device_key_set = set(device_var_keys)
+    refs: list[str] = []
+    for ref in _scan_variable_refs(getattr(scenario, "steps", None) or []):
+        if ref in device_key_set and ref not in refs:
+            refs.append(ref)
+    if refs:
+        return refs
+
+    aliases = [
+        key
+        for key in ("group_name", "GROUP_NAME", "group")
+        if key in device_key_set
+    ]
+    if aliases:
+        return aliases
+
+    if len(device_var_keys) == 1:
+        return device_var_keys
+
+    return ["group_name", "GROUP_NAME", "group"]
+
+
+def _first_non_empty_var(
+    vars_for_device: Dict[str, Any],
+    keys: list[str],
+) -> str:
+    for key in keys:
+        raw = str(vars_for_device.get(key) or "").strip()
+        if raw:
+            return raw
+    return ""
 
 
 async def enqueue_campaign_run_temporal(
@@ -431,16 +500,12 @@ async def enqueue_campaign_run_temporal(
         if getattr(scen, "name", "") != "fb_groups_per_device":
             continue
         token_map = per_scenario_device_runtime_vars.get(scen.id, {})
+        group_keys = _resolve_fb_group_device_var_keys(scen, token_map)
         missing_serials: list[str] = []
         group_to_serials: dict[str, list[str]] = {}
         for d in devices:
             vars_for_device = token_map.get(d.id, {})
-            raw_group = str(
-                vars_for_device.get("group_name")
-                or vars_for_device.get("GROUP_NAME")
-                or vars_for_device.get("group")
-                or ""
-            ).strip()
+            raw_group = _first_non_empty_var(vars_for_device, group_keys)
             if not raw_group:
                 missing_serials.append(d.serial)
                 continue
@@ -457,8 +522,9 @@ async def enqueue_campaign_run_temporal(
                 "missing_group_devices": missing_serials,
                 "duplicate_groups": duplicate_groups,
                 "hint": (
-                    "Set unique 'group_name' per device in scenario device variables "
-                    "and use the same ${group_name} key in scenario/global variables."
+                    "Set a unique per-device value for one of "
+                    f"{group_keys!r} in scenario device variables and use the same "
+                    "variable key in scenario/global variables."
                 ),
             }, 400
 
@@ -477,6 +543,7 @@ async def enqueue_campaign_run_temporal(
             scenarios=scenarios,
             device=d,
             slot_idx=slot_idx,
+            campaign_vars=_campaign_vars,
             per_scenario_device_vars=per_scenario_device_vars,
             per_scenario_device_runtime_vars=per_scenario_device_runtime_vars,
             scenario_registry=registry,

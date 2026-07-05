@@ -3,6 +3,8 @@ import type { FlowStep } from '../scenario-steps/types';
 /** Path segment from root step into nested lists (then/else/steps/branches…). */
 export type ScenarioStepPathSegment = { listKey: string; childIndex: number };
 
+export type InlineRunState = 'idle' | 'running' | 'ok' | 'error';
+
 /** Stable key for inline preview run state (root index + path to the step/block). */
 export function encodeScenarioInlineRunKey(
   rootIndex: number,
@@ -71,4 +73,62 @@ export function resolveLatestStepForInlineRun(
   clickSnapshot: FlowStep
 ): FlowStep {
   return resolveStepForInlineRunKey(steps, runKey) ?? clickSnapshot;
+}
+
+type PreviewStepResult = {
+  ok?: boolean;
+  branch?: string;
+  chosen_branch?: number;
+  sub_result?: { step_results?: PreviewStepResult[] };
+  sub_results?: Array<{ result?: { step_results?: PreviewStepResult[] } }>;
+};
+
+function appendInlineRunKey(runKey: string, listKey: string, childIndex: number) {
+  return `${runKey}/${listKey}:${childIndex}`;
+}
+
+function nestedListKeyForResult(result: PreviewStepResult): string {
+  if (typeof result.branch === 'string' && result.branch) {
+    return result.branch;
+  }
+  if (typeof result.chosen_branch === 'number') {
+    return `branches.${result.chosen_branch}.steps`;
+  }
+  return 'steps';
+}
+
+function collectNestedStates(
+  runKey: string,
+  result: PreviewStepResult,
+  out: Record<string, InlineRunState>
+) {
+  const directChildren = result.sub_result?.step_results;
+  if (Array.isArray(directChildren)) {
+    const listKey = nestedListKeyForResult(result);
+    directChildren.forEach((child, childIndex) => {
+      const childKey = appendInlineRunKey(runKey, listKey, childIndex);
+      out[childKey] = child.ok === false ? 'error' : 'ok';
+      collectNestedStates(childKey, child, out);
+    });
+  }
+
+  for (const entry of result.sub_results ?? []) {
+    const iterChildren = entry.result?.step_results;
+    if (!Array.isArray(iterChildren)) continue;
+    iterChildren.forEach((child, childIndex) => {
+      const childKey = appendInlineRunKey(runKey, 'steps', childIndex);
+      out[childKey] = child.ok === false ? 'error' : 'ok';
+      collectNestedStates(childKey, child, out);
+    });
+  }
+}
+
+export function deriveNestedInlineRunStates(
+  runKey: string,
+  event: PreviewStepResult & { event?: string }
+): Record<string, InlineRunState> {
+  if (event.event !== 'step_done') return {};
+  const out: Record<string, InlineRunState> = {};
+  collectNestedStates(runKey, event, out);
+  return out;
 }

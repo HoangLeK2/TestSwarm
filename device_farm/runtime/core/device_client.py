@@ -3232,8 +3232,9 @@ class DeviceClient:
                 self._scrcpy_receiver = receiver
                 self._scrcpy_active = True
                 self._scrcpy_attached_at = time.monotonic()
-                # Mark device as READY so the frontend shows it and plays video
-                if self.state == DeviceState.DISCONNECTED:
+                # Relay scrcpy gives us a live control/video transport even if
+                # bootstrap has not sent a full agent status yet.
+                if self.state in (DeviceState.DISCONNECTED, DeviceState.CONNECTING):
                     self.state = DeviceState.READY
                 ctrl_status = "control=ON (relay)" if enable_control else "video-only (relay)"
                 self._log(f"scrcpy stream attached via relay ({actual_serial}) — {ctrl_status}")
@@ -4643,6 +4644,12 @@ class DeviceClient:
             touch_method = "u2"
         else:
             touch_method = "agent_shell" if self._agent_send is not None else "none"
+        try:
+            from services.manual_takeover import is_manual_takeover_local
+
+            manual_takeover_active = is_manual_takeover_local(self.serial)
+        except Exception:
+            manual_takeover_active = False
         return {
             "type":             "status",
             "serial":           self.serial,
@@ -4667,6 +4674,7 @@ class DeviceClient:
             "touch_method":     touch_method,
             "stf_connected":    self._stf_service is not None and self._stf_service.connected,
             "scenario_active":  int(getattr(self, "_scenario_active", 0) or 0),
+            "manual_takeover_active": manual_takeover_active,
         }
 
     def get_log_lines(self) -> List[str]:

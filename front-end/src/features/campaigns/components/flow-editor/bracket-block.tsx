@@ -13,6 +13,7 @@ import {
   SortableContext,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
+import { useDroppable } from '@dnd-kit/core';
 import {
   Check,
   ChevronDown,
@@ -247,12 +248,18 @@ function ChildStepList({
     () => steps.map((s, i) => stableStepDnDId(s, i)),
     [steps]
   );
+  const { isOver, setNodeRef } = useDroppable({
+    id: sortableContainerId,
+    data: { flowListContainerId: sortableContainerId }
+  });
 
   return (
     <div
+      ref={setNodeRef}
       className={cn(
         'space-y-0',
-        depth > 0 && 'ml-0.5 border-l border-border/50 pl-2'
+        depth > 0 && 'ml-0.5 border-l border-border/50 pl-2',
+        isOver && 'rounded-md bg-primary/[0.04] ring-1 ring-primary/25'
       )}
     >
       <SortableContext
@@ -1030,7 +1037,7 @@ export function BracketBlock({
                   ? tFlow('fbTapBranchOnMiss')
                   : tFlow('branchElse');
                 const thenVariant = isFbTap ? 'body' : 'then';
-                const showElseLane = elseSteps.length > 0;
+                const showElseLane = !isFbTap || elseSteps.length > 0;
 
                 return (
                   <>

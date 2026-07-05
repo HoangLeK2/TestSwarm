@@ -47,6 +47,30 @@ def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> 
     return mapping
 
 
+def _latest_post_stats(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    for item in items:
+        if isinstance(item, dict) and item.get("_type") == "post_stats":
+            latest = item
+    if latest is None:
+        return None
+    stats: dict[str, Any] = {}
+    for src, dst in (
+        ("reactions", "reactions"),
+        ("likes", "reactions"),
+        ("likes_count", "reactions"),
+        ("comments", "comments"),
+        ("comment_count", "comments"),
+        ("comments_count", "comments"),
+        ("shares", "shares"),
+        ("shares_count", "shares"),
+    ):
+        value = latest.get(src)
+        if value is not None and str(value).strip() != "":
+            stats[dst] = value
+    return stats or None
+
+
 def _text_node_items(xml: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import xml.etree.ElementTree as ET
 
@@ -249,21 +273,18 @@ def _comment_dedupe_key(item: dict[str, Any]) -> str:
     )
 
 
-def _parse_fb_comment_snapshots(
-    snapshots: list[str],
-    context: dict[str, Any],
+def merge_fb_comment_frames(
+    frame_results: list[tuple[list[dict[str, Any]], dict[str, Any]]],
+    *,
+    max_items: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    # Match single-snapshot parse default (400) so multi-scroll runs are not capped at 50.
-    max_items = int(context.get("max_items") or 400)
     merged_comments: list[dict[str, Any]] = []
     seen: set[str] = set()
     latest_stats: dict[str, Any] | None = None
     frame_codes: list[str] = []
     last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
 
-    for idx, snapshot in enumerate(snapshots):
-        frame_context = {**context, "source_index": idx}
-        items, diagnostic = _parse_items("fb_comments", snapshot, frame_context)
+    for items, diagnostic in frame_results:
         last_diagnostic = diagnostic
         frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
         for item in items:
@@ -289,12 +310,57 @@ def _parse_fb_comment_snapshots(
     diagnostic = {
         **last_diagnostic,
         "reason_code": "ok" if merged_comments or latest_stats else last_diagnostic.get("reason_code", "no_comments"),
-        "snapshot_count": len(snapshots),
+        "snapshot_count": len(frame_results),
         "frame_reason_codes": frame_codes,
         "comments_returned": len(merged_comments[:max_items]),
         "has_header_stats": latest_stats is not None,
     }
     return merged, diagnostic
+
+
+def _parse_fb_comment_snapshots(
+    snapshots: list[str],
+    context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # Match single-snapshot parse default (400) so multi-scroll runs are not capped at 50.
+    max_items = int(context.get("max_items") or 400)
+    frame_results: list[tuple[list[dict[str, Any]], dict[str, Any]]] = []
+    for idx, snapshot in enumerate(snapshots):
+        frame_context = {**context, "source_index": idx}
+        items, diagnostic = _parse_items("fb_comments", snapshot, frame_context)
+        frame_results.append((items, diagnostic))
+    return merge_fb_comment_frames(frame_results, max_items=max_items)
+
+
+def _trusted_preparsed_fb_comments(
+    strategy: str,
+    context: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    if strategy != "fb_comments" or context.get("agent_boot_preparsed_comments") is not True:
+        return None
+    preparsed = payload.get("preparsed")
+    if not isinstance(preparsed, dict):
+        return None
+    raw_items = preparsed.get("items")
+    if not isinstance(raw_items, list):
+        return None
+    raw_diagnostic = preparsed.get("diagnostic")
+    diagnostic = dict(raw_diagnostic) if isinstance(raw_diagnostic, dict) else {}
+    items = [item for item in raw_items if isinstance(item, dict)]
+    comment_count = len([item for item in items if item.get("_type") != "post_stats"])
+    diagnostic.setdefault("reason_code", "ok" if items else "no_comments")
+    diagnostic.setdefault("comments_returned", comment_count)
+    for key in ("snapshot_count", "xml_bytes"):
+        value = preparsed.get(key)
+        if value is None:
+            continue
+        try:
+            diagnostic[key] = int(value)
+        except (TypeError, ValueError):
+            pass
+    diagnostic["preparsed"] = True
+    return items, diagnostic
 
 
 def _parse_payload_items(
@@ -304,9 +370,14 @@ def _parse_payload_items(
     payload: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
     snapshots = _xml_snapshots_from_payload(payload, xml)
-    if strategy == "fb_comments" and len(snapshots) > 1:
-        items, diagnostic = _parse_fb_comment_snapshots(snapshots, context)
-        return items, diagnostic, snapshots
+    if strategy == "fb_comments":
+        preparsed = _trusted_preparsed_fb_comments(strategy, context, payload)
+        if preparsed is not None:
+            items, diagnostic = preparsed
+            return items, diagnostic, snapshots
+        if len(snapshots) > 1:
+            items, diagnostic = _parse_fb_comment_snapshots(snapshots, context)
+            return items, diagnostic, snapshots
     items, diagnostic = _parse_items(strategy, xml, context)
     return items, diagnostic, snapshots
 
@@ -867,6 +938,9 @@ class ExtraDataIngestServer:
                 parent_id_scoped = False
             if is_comment_strategy:
                 items = _with_comment_parent_context(items, context, parent_id=parent_id)
+            post_stats = _latest_post_stats(items) if is_comment_strategy else None
+            if is_comment_strategy:
+                diagnostic["post_stats_found"] = bool(post_stats)
 
             evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
             if not evidence and snapshots:
@@ -924,7 +998,52 @@ class ExtraDataIngestServer:
                 "duplicates": 0,
                 "inserted_content_hashes": [],
             }
+            parent_stats_updated = False
+            if is_comment_strategy and post_stats:
+                if not should_persist:
+                    diagnostic["parent_stats_update_skipped_reason"] = "persist_disabled"
+                elif not parent_id:
+                    diagnostic["parent_stats_update_skipped_reason"] = "parent_missing"
+                elif not hasattr(self._writer, "update_content_stats"):
+                    diagnostic["parent_stats_update_skipped_reason"] = "writer_unsupported"
+                else:
+                    parent_stats_hash = (
+                        str(parent_id)
+                        if parent_id_scoped
+                        else scope_content_hash(
+                            str(parent_id),
+                            context.get("hash_scope") or context.get("execution_id"),
+                        )
+                    )
+                    try:
+                        parent_stats_updated = bool(
+                            await self._writer.update_content_stats(
+                                content_hash=parent_stats_hash,
+                                likes_count=post_stats.get("reactions"),
+                                comments_count=post_stats.get("comments"),
+                                shares_count=post_stats.get("shares"),
+                            )
+                        )
+                        if parent_stats_updated:
+                            diagnostic["post_stats_persisted"] = True
+                        else:
+                            diagnostic["parent_stats_update_skipped_reason"] = "parent_not_found"
+                    except Exception as exc:
+                        diagnostic["parent_stats_update_skipped_reason"] = "update_failed"
+                        logger.warning("extra-data parent stats update failed: %s", exc)
+            elif is_comment_strategy and should_persist:
+                diagnostic["parent_stats_update_skipped_reason"] = "post_stats_missing"
             db_ms = int((time.perf_counter() - db_started) * 1000)
+
+        payload_xml_bytes = sum(len(snapshot.encode("utf-8")) for snapshot in snapshots)
+        try:
+            xml_bytes = int(diagnostic.get("xml_bytes", payload_xml_bytes))
+        except (TypeError, ValueError):
+            xml_bytes = payload_xml_bytes
+        try:
+            snapshot_count = int(diagnostic.get("snapshot_count", len(snapshots)))
+        except (TypeError, ValueError):
+            snapshot_count = len(snapshots)
 
         result = {
             "ok": True,
@@ -937,13 +1056,17 @@ class ExtraDataIngestServer:
             "inserted_content_hashes": write.get("inserted_content_hashes") or [],
             "batch_content_hashes": [str(r["content_hash"]) for r in rows if r.get("content_hash")],
             "diagnostic": diagnostic,
-            "xml_bytes": sum(len(snapshot.encode("utf-8")) for snapshot in snapshots),
-            "snapshot_count": len(snapshots),
+            "xml_bytes": xml_bytes,
+            "snapshot_count": snapshot_count,
             "xml_sha256": actual_sha,
             "parse_ms": parse_ms,
             "db_ms": db_ms,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
         }
+        if payload_xml_bytes != xml_bytes:
+            result["payload_xml_bytes"] = payload_xml_bytes
+        if len(snapshots) != snapshot_count:
+            result["payload_snapshot_count"] = len(snapshots)
         if bool(context.get("return_items", False)):
             result["items"] = [
                 item

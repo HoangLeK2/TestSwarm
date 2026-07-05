@@ -19,7 +19,21 @@ from runtime.core import DeviceManager, TaskQueue
 
 
 _OFFLINE_LIVE_STATES = {"DISCONNECTED", "DEAD"}
+_CONNECTING_LIVE_STATES = {"CONNECTING"}
 _LIVE_DEVICE_INFO_KEY = "_live_device_info"
+
+
+def _cap_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _cap_int(value: object, default: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _live_device_aliases(serial: str, info: dict[str, object]) -> list[str]:
@@ -91,6 +105,168 @@ def _live_device_realtime_aliases(
     return aliases
 
 
+def _relay_online_for_serial(serial: str, *, relay=None, ctrl=None) -> bool:
+    serial = str(serial or "").strip()
+    if not serial:
+        return False
+    try:
+        if relay is not None and relay.relay_for_serial(serial):
+            return True
+    except Exception:
+        pass
+    try:
+        if ctrl is not None and ctrl.conn_for_serial(serial):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _relay_capabilities_for_serial(serial: str, *, relay=None) -> dict[str, object]:
+    if relay is None:
+        return {}
+    try:
+        caps = relay.get_capabilities(serial)
+    except Exception:
+        caps = None
+    return caps if isinstance(caps, dict) else {}
+
+
+def _resolve_relay_serial(serial: str, *, relay=None) -> str:
+    serial = str(serial or "").strip()
+    if not serial or relay is None:
+        return serial
+    try:
+        resolved = str(relay.resolve_serial(serial) or "").strip()
+    except Exception:
+        resolved = ""
+    return resolved or serial
+
+
+def _relay_list_devices(relay=None) -> list[dict[str, object]]:
+    if relay is None:
+        return []
+    try:
+        devices = relay.list_devices()
+    except Exception:
+        return []
+    if not isinstance(devices, list):
+        return []
+    return [device for device in devices if isinstance(device, dict)]
+
+
+def _caps_match_registered_device(
+    registered_serial: str,
+    info: dict[str, object],
+    runtime_serial: str,
+    caps: dict[str, object],
+) -> bool:
+    aliases = {alias.lower() for alias in _live_device_aliases(registered_serial, info)}
+    values = {
+        runtime_serial,
+        caps.get("serial"),
+        caps.get("hardware_serial"),
+        caps.get("device_serial"),
+        caps.get("android_serial"),
+        caps.get("adb_serial"),
+    }
+    wlan_ip = str(caps.get("wlan_ip") or "").strip()
+    if wlan_ip:
+        values.add(wlan_ip)
+        values.add(f"{wlan_ip}:5555")
+    return any(str(value or "").strip().lower() in aliases for value in values)
+
+
+def _relay_candidate_serials_for_registered(
+    registered_serial: str,
+    info: dict[str, object],
+    *,
+    relay=None,
+) -> list[str]:
+    candidates: list[str] = []
+
+    def add(serial: object) -> None:
+        value = str(serial or "").strip()
+        if value and value not in candidates:
+            candidates.append(value)
+
+    for alias in _live_device_aliases(registered_serial, info):
+        add(alias)
+        add(_resolve_relay_serial(alias, relay=relay))
+
+    for device in _relay_list_devices(relay):
+        runtime_serial = str(device.get("serial") or "").strip()
+        if not runtime_serial:
+            continue
+        if _caps_match_registered_device(
+            registered_serial,
+            info,
+            runtime_serial,
+            device,
+        ):
+            add(runtime_serial)
+
+    return candidates
+
+
+def _synthesize_live_device_from_relay(
+    registered_serial: str,
+    info: dict[str, object],
+    *,
+    relay=None,
+    ctrl=None,
+) -> Optional[dict]:
+    """Build a live device row from relay/control state when DeviceManager lags."""
+    runtime_serial = ""
+    relay_online = False
+    for candidate in _relay_candidate_serials_for_registered(
+        registered_serial,
+        info,
+        relay=relay,
+    ):
+        if _relay_online_for_serial(candidate, relay=relay, ctrl=ctrl):
+            runtime_serial = candidate
+            relay_online = _relay_online_for_serial(candidate, relay=relay)
+            break
+    if not runtime_serial:
+        return None
+
+    caps = _relay_capabilities_for_serial(runtime_serial, relay=relay)
+    if not caps:
+        for alias in _live_device_aliases(registered_serial, info):
+            caps = _relay_capabilities_for_serial(alias, relay=relay)
+            if caps:
+                break
+
+    has_u2 = _cap_bool(caps.get("has_u2") or caps.get("u2_ready"))
+    minitouch_ready = _cap_bool(caps.get("minitouch_ready"))
+    agent_connected = _relay_online_for_serial(runtime_serial, ctrl=ctrl)
+    brand = str(caps.get("brand") or "").strip()
+    model = str(caps.get("model") or "").strip()
+    touch_method = "u2" if has_u2 else "none"
+    control_ready = agent_connected or has_u2 or minitouch_ready
+    return {
+        "type": "status",
+        "serial": runtime_serial,
+        "registered_serial": registered_serial,
+        "name": info.get("name", ""),
+        "display_name": info.get("display_name", runtime_serial),
+        "brand": brand,
+        "model": model,
+        "state": "READY" if control_ready else "CONNECTING",
+        "battery": -1,
+        "current_app": "",
+        "screen_width": _cap_int(caps.get("screen_width"), 1080),
+        "screen_height": _cap_int(caps.get("screen_height"), 1920),
+        "agent_connected": agent_connected,
+        "u2_ready": has_u2,
+        "minitouch_ready": minitouch_ready,
+        "touch_method": touch_method,
+        "stf_connected": relay_online,
+        _LIVE_DEVICE_INFO_KEY: info,
+    }
+
+
 def _apply_realtime_connectivity(
     device: dict,
     *,
@@ -101,14 +277,22 @@ def _apply_realtime_connectivity(
     state = str(device.get("state") or "").upper()
     agent_connected = bool(device.get("agent_connected"))
     u2_ready = bool(device.get("u2_ready"))
+    minitouch_ready = bool(device.get("minitouch_ready"))
+    touch_ready = u2_ready or minitouch_ready
     if state == "DEAD":
-        if agent_connected or u2_ready:
+        if agent_connected or touch_ready:
             device["state"] = "READY"
         return
     if state in _OFFLINE_LIVE_STATES:
-        if agent_connected or u2_ready or relay_online:
+        if agent_connected or touch_ready:
             device["state"] = "READY"
+        elif relay_online:
+            device["state"] = "CONNECTING"
         return
+    if state in _CONNECTING_LIVE_STATES:
+        if agent_connected or touch_ready:
+            device["state"] = "READY"
+            return
 
     if requires_relay and not relay_online:
         device["state"] = "DISCONNECTED"
@@ -116,7 +300,12 @@ def _apply_realtime_connectivity(
         device["stf_connected"] = False
         return
 
-    if agent_connected or u2_ready or relay_online:
+    if agent_connected or touch_ready:
+        return
+    if relay_online:
+        device["state"] = "CONNECTING"
+        device["touch_method"] = "none"
+        device["stf_connected"] = True
         return
 
     device["state"] = "DISCONNECTED"
@@ -209,6 +398,36 @@ async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optio
     return set(device_map.keys())
 
 
+async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
+    try:
+        from services import redis_store
+        from services.manual_takeover import is_manual_takeover_active
+    except Exception:
+        return
+
+    redis_client = redis_store.client() if redis_store.enabled() else None
+    for d in devices:
+        serial = str(d.get("serial") or "").strip()
+        if not serial:
+            continue
+        scenario_active = _cap_int(d.get("scenario_active"), 0)
+        if redis_client is not None:
+            try:
+                raw = await redis_client.get(
+                    redis_store.key(f"device:{serial}:scenario_active")
+                )
+                scenario_active = max(scenario_active, _cap_int(raw, 0))
+            except Exception:
+                pass
+        d["scenario_active"] = scenario_active
+        try:
+            d["manual_takeover_active"] = bool(
+                await is_manual_takeover_active(serial)
+            )
+        except Exception:
+            d["manual_takeover_active"] = bool(d.get("manual_takeover_active"))
+
+
 def build_public_router(
     manager: DeviceManager,
     queue: TaskQueue,
@@ -248,6 +467,7 @@ def build_public_router(
         if allowed_devices is not None:
             alias_index = _build_live_device_alias_index(allowed_devices)
             visible_devices = []
+            seen_registered_serials = set()
             for d in devices:
                 serial = str(d.get("serial") or "").strip()
                 match = _match_live_device(serial, alias_index, relay=relay)
@@ -259,17 +479,21 @@ def build_public_router(
                 d["name"] = info.get("name", "")
                 d["display_name"] = info.get("display_name", d.get("serial", ""))
                 visible_devices.append(d)
+                seen_registered_serials.add(registered_serial)
+            for registered_serial, info in allowed_devices.items():
+                if registered_serial in seen_registered_serials:
+                    continue
+                relay_device = _synthesize_live_device_from_relay(
+                    registered_serial,
+                    info,
+                    relay=relay,
+                    ctrl=ctrl,
+                )
+                if relay_device is not None:
+                    visible_devices.append(relay_device)
             devices = visible_devices
 
-        def _relay_online_for_serial(serial: str) -> bool:
-            serial = str(serial or "").strip()
-            if not serial:
-                return False
-            if relay is not None and relay.relay_for_serial(serial):
-                return True
-            if ctrl is not None and ctrl.conn_for_serial(serial):
-                return True
-            return False
+        await _enrich_live_manual_control_state(devices)
 
         for d in devices:
             serial = str(d.get("serial") or "")
@@ -282,7 +506,10 @@ def build_public_router(
                 serial,
                 info,
             )
-            relay_online = any(_relay_online_for_serial(str(alias)) for alias in aliases)
+            relay_online = any(
+                _relay_online_for_serial(str(alias), relay=relay, ctrl=ctrl)
+                for alias in aliases
+            )
             _apply_realtime_connectivity(
                 d,
                 relay_online=relay_online,

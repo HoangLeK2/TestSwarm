@@ -2254,7 +2254,7 @@ export function ControlRecordView({
   ]);
 
   const mirrorDeviceOps = useMemo((): DeviceOpsConfig | undefined => {
-    const d = device.selectedDevice;
+    const d = selectedDeviceForControl;
     if (!d) return undefined;
     return {
       disabled: mirrorInputLocked.readOnlyPreview,
@@ -2267,7 +2267,7 @@ export function ControlRecordView({
       }
     };
   }, [
-    device.selectedDevice,
+    selectedDeviceForControl,
     mirrorInputLocked.readOnlyPreview,
     runDeviceOpStep,
     tDeviceOps,

@@ -2275,6 +2275,7 @@
     }
   },
   "devicesControlRecord": {
+    "pageTitle": "Control & record scenario",
     "loading": "Loading…",
     "errorPrefix": "Error:",
     "newScenarioName": "Recorded scenario {time}",

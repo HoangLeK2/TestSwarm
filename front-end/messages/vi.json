@@ -2279,6 +2279,7 @@
     }
   },
   "devicesControlRecord": {
+    "pageTitle": "Điều khiển & ghi kịch bản",
     "loading": "Đang tải…",
     "errorPrefix": "Lỗi:",
     "newScenarioName": "Scenario ghi {time}",

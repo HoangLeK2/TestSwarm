@@ -7,6 +7,8 @@ import { useCampaigns, useCreateCampaign } from '../hooks/use-campaigns';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { VariableEditor } from '@/components/variable-editor';
 import {
@@ -28,7 +30,17 @@ import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
 import { mergeScenarioVariables } from '@/lib/scenario-variables';
 import { useOrgScenarioBodies } from '@/features/org-scenarios/hooks/use-org-scenarios';
-import { Plus, Layers, FileText, Variable, Library } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  FileText,
+  Layers,
+  Library,
+  Plus,
+  Settings2,
+  Variable,
+  Wrench
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
@@ -45,6 +57,9 @@ type FormData = {
   name: string;
   description?: string;
 };
+
+const createSteps = ['basics', 'main', 'recovery', 'settings'] as const;
+type CreateStep = (typeof createSteps)[number];
 
 function Section({
   icon: Icon,
@@ -115,6 +130,7 @@ export function CreateCampaignDialog({
   const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>(
     preselectedScenarioIds
   );
+  const [currentStep, setCurrentStep] = useState<CreateStep>('basics');
   const bodyQueries = useOrgScenarioBodies(selectedScenarioIds, open);
   const lastMergedSelectionRef = useRef<string>('');
 
@@ -214,6 +230,7 @@ export function CreateCampaignDialog({
     register,
     handleSubmit,
     reset,
+    trigger: validateForm,
     formState: { errors }
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
@@ -229,6 +246,7 @@ export function CreateCampaignDialog({
       replaceVariables({});
       setTags('');
       setRecoveryPolicy({});
+      setCurrentStep('basics');
       setAccountBinding({
         mode: 'none',
         accountGroupId: '',
@@ -242,6 +260,59 @@ export function CreateCampaignDialog({
     selectedScenarioIds.length > 0
       ? selectedScenarioIds
       : preselectedScenarioIds;
+
+  const currentStepIndex = createSteps.indexOf(currentStep);
+  const isLastStep = currentStepIndex === createSteps.length - 1;
+  const stepItems: Array<{
+    id: CreateStep;
+    label: string;
+    hint: string;
+    icon: React.ElementType;
+  }> = [
+    {
+      id: 'basics',
+      label: t('stepBasics'),
+      hint: t('stepBasicsHint'),
+      icon: FileText
+    },
+    {
+      id: 'main',
+      label: t('stepMainScenarios'),
+      hint: t('stepMainScenariosHint'),
+      icon: Library
+    },
+    {
+      id: 'recovery',
+      label: t('stepRecovery'),
+      hint: t('stepRecoveryHint'),
+      icon: Wrench
+    },
+    {
+      id: 'settings',
+      label: t('stepSettings'),
+      hint: t('stepSettingsHint'),
+      icon: Settings2
+    }
+  ];
+
+  const goToPreviousStep = () => {
+    setCurrentStep(createSteps[Math.max(0, currentStepIndex - 1)] ?? 'basics');
+  };
+
+  const goToNextStep = async () => {
+    if (currentStep === 'basics') {
+      const valid = await validateForm('name');
+      if (!valid) return;
+    }
+    if (currentStep === 'main' && effectiveScenarioIds.length === 0) {
+      toast.error(t('libraryScenarioRequired'));
+      return;
+    }
+    setCurrentStep(
+      createSteps[Math.min(createSteps.length - 1, currentStepIndex + 1)] ??
+        'settings'
+    );
+  };
 
   const onSubmit = (data: FormData) => {
     if (!effectiveScenarioIds.length) {
@@ -273,6 +344,7 @@ export function CreateCampaignDialog({
           setTags('');
           setRecoveryPolicy({});
           setSelectedScenarioIds(preselectedScenarioIds);
+          setCurrentStep('basics');
           setAccountBinding({
             mode: 'none',
             accountGroupId: '',
@@ -302,7 +374,7 @@ export function CreateCampaignDialog({
         )}
       </DialogTrigger>
 
-      <DialogContent className='flex max-h-[92vh] min-w-[min(100%-2rem,720px)] max-w-5xl flex-col gap-0 overflow-y-auto p-0 sm:w-full'>
+      <DialogContent className='flex max-h-[92vh] min-w-[min(100%-2rem,720px)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:w-full'>
         <DialogHeader className='border-b px-5 py-4'>
           <div className='flex items-center gap-2'>
             <Layers size={15} className='text-primary' />
@@ -315,105 +387,208 @@ export function CreateCampaignDialog({
           </p>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)}>
-          <div className='space-y-5 px-5 py-5'>
-            <Section icon={FileText} title='Thông tin cơ bản'>
-              <div className='space-y-3'>
-                <div className='space-y-1.5'>
-                  <Label className='text-xs'>{t('nameLabel')}</Label>
-                  <Input
-                    placeholder={t('namePlaceholder')}
-                    className={cn('h-9', errors.name && 'border-destructive')}
-                    {...register('name')}
-                  />
-                  {errors.name && (
-                    <p className='text-[11px] text-destructive'>
-                      {errors.name.message}
-                    </p>
-                  )}
-                </div>
-                <div className='space-y-1.5'>
-                  <Label className='text-xs'>{t('descriptionLabel')}</Label>
-                  <Textarea
-                    placeholder={t('descriptionPlaceholder')}
-                    className='min-h-[60px] resize-none text-sm'
-                    {...register('description')}
-                  />
-                </div>
+        <form
+          onSubmit={handleSubmit(onSubmit)}
+          className='flex min-h-0 flex-1 flex-col'
+        >
+          <Tabs
+            value={currentStep}
+            onValueChange={(value) => setCurrentStep(value as CreateStep)}
+            className='min-h-0 flex-1 gap-0'
+          >
+            <div className='shrink-0 border-b px-5 py-3'>
+              <TabsList className='grid h-auto w-full grid-cols-2 gap-1.5 bg-muted/60 p-1.5 lg:grid-cols-4'>
+                {stepItems.map((step, index) => {
+                  return (
+                    <TabsTrigger
+                      key={step.id}
+                      value={step.id}
+                      className='flex h-auto w-full min-w-0 flex-col items-start justify-start gap-1 whitespace-normal rounded-md px-2.5 py-2 text-left lg:px-3'
+                    >
+                      <span className='flex w-full min-w-0 items-center gap-2'>
+                        <span
+                          className={cn(
+                            'flex size-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold tabular-nums',
+                            currentStep === step.id
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border text-muted-foreground'
+                          )}
+                        >
+                          {index + 1}
+                        </span>
+                        <span className='min-w-0 text-xs font-medium leading-snug'>
+                          {step.label}
+                        </span>
+                      </span>
+                      <span className='w-full pl-7 text-[11px] font-normal leading-snug text-muted-foreground'>
+                        {step.hint}
+                      </span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </div>
+
+            <div className='min-h-0 flex-1 overflow-y-auto'>
+              <div className='px-5 py-5'>
+                <TabsContent value='basics' className='m-0'>
+                  <Section icon={FileText} title={t('basicInfoSection')}>
+                    <div className='space-y-3'>
+                      <div className='space-y-1.5'>
+                        <Label className='text-xs'>{t('nameLabel')}</Label>
+                        <Input
+                          placeholder={t('namePlaceholder')}
+                          className={cn(
+                            'h-9',
+                            errors.name && 'border-destructive'
+                          )}
+                          {...register('name')}
+                        />
+                        {errors.name && (
+                          <p className='text-[11px] text-destructive'>
+                            {errors.name.message}
+                          </p>
+                        )}
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label className='text-xs'>
+                          {t('descriptionLabel')}
+                        </Label>
+                        <Textarea
+                          placeholder={t('descriptionPlaceholder')}
+                          className='min-h-[96px] resize-none text-sm'
+                          {...register('description')}
+                        />
+                      </div>
+                    </div>
+                  </Section>
+                </TabsContent>
+
+                <TabsContent value='main' className='m-0'>
+                  <Section
+                    icon={Library}
+                    title={t('mainScenariosLabel')}
+                    hint={t('mainScenariosHint')}
+                  >
+                    <CampaignOrgScenarioPicker
+                      selectedIds={selectedScenarioIds}
+                      onSelectedIdsChange={handleSelectedScenarioIdsChange}
+                      scenarioFilter='regular'
+                    />
+                  </Section>
+                </TabsContent>
+
+                <TabsContent value='recovery' className='m-0'>
+                  <Section
+                    icon={Wrench}
+                    title={t('recoveryScenariosLabel')}
+                    hint={t('recoveryScenariosHint')}
+                  >
+                    <RecoveryPolicyEditor
+                      value={recoveryPolicy}
+                      onChange={setRecoveryPolicy}
+                      scenarioFilter='recovery'
+                    />
+                  </Section>
+                </TabsContent>
+
+                <TabsContent value='settings' className='m-0'>
+                  <div className='space-y-5'>
+                    <Section icon={Variable} title={t('tagsLabel')}>
+                      <Input
+                        value={tags}
+                        onChange={(e) => setTags(e.target.value)}
+                        placeholder={t('tagsPlaceholder')}
+                      />
+                    </Section>
+                    <Separator />
+                    <Section icon={Variable} title={t('variablesLabel')}>
+                      <p className='mb-2 text-[11px] text-muted-foreground'>
+                        {t('libraryVariablesHint')}
+                      </p>
+                      <VariableEditor
+                        variables={variables}
+                        onChange={handleVariablesChange}
+                        allowAdd={false}
+                        lockKeys
+                        allowRemove={false}
+                        disabled={effectiveScenarioIds.length === 0}
+                      />
+                    </Section>
+                    <Separator />
+                    <Section icon={Layers} title={t('accountBindingSection')}>
+                      <p className='mb-2 text-[11px] text-muted-foreground'>
+                        {t('libraryAccountHint')}
+                      </p>
+                      <CampaignAccountBindingFields
+                        value={accountBinding}
+                        onChange={setAccountBinding}
+                      />
+                    </Section>
+                  </div>
+                </TabsContent>
               </div>
-            </Section>
+            </div>
+          </Tabs>
 
-            <hr className='border-border' />
-            <Section icon={Library} title={t('libraryScenariosLabel')}>
-              <CampaignOrgScenarioPicker
-                selectedIds={selectedScenarioIds}
-                onSelectedIdsChange={handleSelectedScenarioIdsChange}
-              />
-            </Section>
-            <hr className='border-border' />
-            <Section icon={Variable} title={t('tagsLabel')}>
-              <Input
-                value={tags}
-                onChange={(e) => setTags(e.target.value)}
-                placeholder={t('tagsPlaceholder')}
-              />
-            </Section>
-            <hr className='border-border' />
-            <Section icon={Variable} title={t('variablesLabel')}>
-              <p className='mb-2 text-[11px] text-muted-foreground'>
-                {t('libraryVariablesHint')}
-              </p>
-              <VariableEditor
-                variables={variables}
-                onChange={handleVariablesChange}
-                allowAdd={false}
-                lockKeys
-                allowRemove={false}
-                disabled={effectiveScenarioIds.length === 0}
-              />
-            </Section>
-            <hr className='border-border' />
-            <Section icon={Layers} title={t('accountBindingSection')}>
-              <p className='mb-2 text-[11px] text-muted-foreground'>
-                {t('libraryAccountHint')}
-              </p>
-              <CampaignAccountBindingFields
-                value={accountBinding}
-                onChange={setAccountBinding}
-              />
-            </Section>
-            <hr className='border-border' />
-            <Section icon={Layers} title={t('recoverySection')}>
-              <RecoveryPolicyEditor
-                value={recoveryPolicy}
-                onChange={setRecoveryPolicy}
-              />
-            </Section>
-          </div>
-
-          <div className='border-t bg-muted/30 px-5 py-3'>
+          <div className='shrink-0 border-t bg-muted/30 px-5 py-3'>
             {error && (
               <p className='mb-2 text-[11px] text-destructive'>
                 {formatFarmApiError(error, t('createFailed'))}
               </p>
             )}
-            <div className='flex justify-end gap-2'>
-              <Button
-                type='button'
-                variant='ghost'
-                size='sm'
-                onClick={() => handleOpenChange(false)}
-                disabled={isPending}
-              >
-                Huỷ
-              </Button>
-              <Button
-                type='submit'
-                size='sm'
-                disabled={isPending || effectiveScenarioIds.length === 0}
-              >
-                {isPending ? t('creating') : t('submit')}
-              </Button>
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+              <p className='text-[11px] text-muted-foreground'>
+                {t('stepProgress', {
+                  current: currentStepIndex + 1,
+                  total: createSteps.length
+                })}
+              </p>
+              <div className='flex justify-end gap-2'>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  onClick={() => handleOpenChange(false)}
+                  disabled={isPending}
+                >
+                  {t('cancel')}
+                </Button>
+                {currentStepIndex > 0 ? (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={goToPreviousStep}
+                    disabled={isPending}
+                    className='gap-1.5'
+                  >
+                    <ArrowLeft size={14} />
+                    {t('back')}
+                  </Button>
+                ) : null}
+                {!isLastStep ? (
+                  <Button
+                    type='button'
+                    size='sm'
+                    onClick={() => void goToNextStep()}
+                    disabled={isPending}
+                    className='gap-1.5'
+                  >
+                    {t('next')}
+                    <ArrowRight size={14} />
+                  </Button>
+                ) : null}
+                {isLastStep ? (
+                  <Button
+                    type='submit'
+                    size='sm'
+                    disabled={isPending || effectiveScenarioIds.length === 0}
+                  >
+                    {isPending ? t('creating') : t('submit')}
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
         </form>

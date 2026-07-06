@@ -1273,6 +1273,7 @@ export function DeviceScreen({
       );
 
       if (gestureMode === 'double_tap') {
+        if (!interactive) return;
         wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
         requestStreamRefreshAfterInput();
         return;
@@ -1280,8 +1281,10 @@ export function DeviceScreen({
       // Recording (`onTap`): still perform tap + capture ratios even if tile mode is "swipe"
       const allowTap = mode === 'tap' || !!onTap;
       if (!allowTap) return;
-      wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
-      requestStreamRefreshAfterInput();
+      if (interactive) {
+        wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
+        requestStreamRefreshAfterInput();
+      }
       if (onTap) {
         onTap(p.rx, p.ry);
       }
@@ -1289,6 +1292,7 @@ export function DeviceScreen({
     [
       mode,
       gestureMode,
+      interactive,
       clientToDevice,
       wsSend,
       device.serial,
@@ -1352,11 +1356,11 @@ export function DeviceScreen({
       <div
         {...(interactive ? bind() : {})}
         ref={wrapRef}
-        onClick={interactive ? handleClick : undefined}
+        onClick={interactive || onTap ? handleClick : undefined}
         onDoubleClick={interactive ? handleDoubleClick : undefined}
         onWheel={interactive ? handleWheel : undefined}
         className={`relative min-h-0 w-full flex-1 overflow-hidden bg-black ${
-          !interactive
+          !interactive && !onTap
             ? 'cursor-default'
             : gestureMode === 'double_tap'
               ? 'cursor-cell'

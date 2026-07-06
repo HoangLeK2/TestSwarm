@@ -156,6 +156,7 @@ import {
   isManualControlBlockedByAutomation,
   shouldShowControlRecordNoDeviceBanner
 } from '../lib/control-record-device-state';
+import { needsFreshMirrorSelectorXml } from '../lib/control-record-hierarchy';
 import {
   prepareInlinePreviewStep,
   preparePreviewStepPayload
@@ -215,6 +216,7 @@ export function ControlRecordView({
   const hierarchyAutoRefresh = hierarchy.autoRefresh;
   const setHierarchyAutoRefresh = hierarchy.setAutoRefresh;
   const refreshHierarchy = hierarchy.refresh;
+  const fetchFreshHierarchy = hierarchy.fetchFresh;
   const setHierarchyPaused = hierarchy.setPaused;
   const pickTargetPackage = useMemo(
     () =>
@@ -2040,8 +2042,21 @@ export function ControlRecordView({
 
   // When user taps the phone screen → hierarchy highlight + optional selector pick
   const handleScreenTap = useCallback(
-    (rx: number, ry: number) => {
-      const tree = parseHierarchyTree(hierarchyXml);
+    async (rx: number, ry: number) => {
+      const needsFreshXml = needsFreshMirrorSelectorXml({
+        selectorPickTarget,
+        flowSelectorPickFgId
+      });
+      const interactionXml =
+        needsFreshXml && selectedDeviceSerial
+          ? await fetchFreshHierarchy(selectedDeviceSerial, true, {
+              allowSerialMismatch: true,
+              bypassBackoff: true,
+              bypassInFlight: true
+            }).catch(() => '')
+          : hierarchyXml;
+
+      const tree = parseHierarchyTree(interactionXml);
       if (tree) {
         const nodeId = findNodeIdAtRatio(tree, rx, ry, {
           targetPackage: pickTargetPackage
@@ -2096,7 +2111,7 @@ export function ControlRecordView({
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
         const sel = findSelectorInXml(
-          hierarchyXml,
+          interactionXml,
           rx,
           ry,
           hierarchyPickOptions
@@ -2162,7 +2177,7 @@ export function ControlRecordView({
 
       if (selectorPickTarget) {
         const cands = listSelectorCandidatesInXml(
-          hierarchyXml,
+          interactionXml,
           rx,
           ry,
           hierarchyPickOptions
@@ -2189,6 +2204,8 @@ export function ControlRecordView({
     },
     [
       hierarchyXml,
+      fetchFreshHierarchy,
+      selectedDeviceSerial,
       selectorPickTarget,
       coordinatePickTarget,
       applyCandidateAtIndex,
@@ -2231,11 +2248,13 @@ export function ControlRecordView({
   const mirrorInputLocked = useMemo(() => {
     if (!selectedDeviceSerial)
       return { hideControls: true, readOnlyPreview: true };
+    const selectorPickingFromMirror =
+      selectorPickTarget != null || flowSelectorPickFgId != null;
+    if (selectorPickingFromMirror) {
+      return { hideControls: false, readOnlyPreview: true };
+    }
     const pickingFromMirror =
-      coordinatePickTarget != null ||
-      selectorPickTarget != null ||
-      flowCoordPick != null ||
-      flowSelectorPickFgId != null;
+      coordinatePickTarget != null || flowCoordPick != null;
     if (pickingFromMirror) {
       return { hideControls: false, readOnlyPreview: false };
     }

@@ -41,6 +41,7 @@ import {
   resolveControlRecordHierarchySerial,
   resolveControlRecordConnectedDevices
 } from '../lib/control-record-device-state';
+import { resolveInteractionHierarchyXml } from '../lib/control-record-hierarchy';
 import { mergeCampaignScenarioVariables } from '@/components/device-vars-json-model';
 
 let _stepIdCounter = 0;
@@ -669,10 +670,18 @@ export function useControlRecord(
 
         if (preTapHierarchyPromise) {
           void preTapHierarchyPromise.then((freshXml) => {
-            recordTapWithXml(freshXml ?? recordXmlRef.current);
+            recordTapWithXml(
+              resolveInteractionHierarchyXml(freshXml, recordXmlRef.current, {
+                freshAttempted: true
+              })
+            );
           });
         } else {
-          recordTapWithXml(recordXmlRef.current);
+          recordTapWithXml(
+            resolveInteractionHierarchyXml(null, recordXmlRef.current, {
+              freshAttempted: false
+            })
+          );
         }
         return;
       } else if (m.type === 'key' && m.key) {
@@ -1557,6 +1566,7 @@ export function useControlRecord(
       autoRefresh: autoRefreshHierarchy,
       setAutoRefresh: setAutoRefreshHierarchyFromUser,
       refresh: refreshHierarchy,
+      fetchFresh: fetchAndSetHierarchy,
       nodes: parsedHierarchyNodes,
       setPaused: setHierarchyPaused
     },

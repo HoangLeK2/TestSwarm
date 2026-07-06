@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
@@ -15,26 +16,42 @@ import {
 } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import type { OrgScenarioSummaryOut } from '@/features/org-scenarios/services/api';
 
+type ScenarioFilter = 'all' | 'regular' | 'recovery';
+
+function isRecoveryScenario(scenario: OrgScenarioSummaryOut): boolean {
+  return (
+    scenario.is_recovery_scenario === true ||
+    (scenario.recovery_usage_count ?? 0) > 0
+  );
+}
+
 export function CampaignOrgScenarioPicker({
   selectedIds,
   onSelectedIdsChange,
   disabled = false,
-  messagesNs = 'createDialog'
+  messagesNs = 'createDialog',
+  scenarioFilter = 'all'
 }: {
   selectedIds: string[];
   onSelectedIdsChange: (ids: string[]) => void;
   disabled?: boolean;
   messagesNs?: 'createDialog' | 'entityDialog';
+  scenarioFilter?: ScenarioFilter;
 }) {
   const t = useTranslations(`campaignsFeature.${messagesNs}`);
   const { data: orgScenarios } = useOrgScenarios();
 
   const selectableScenarios = useMemo(
     () =>
-      (orgScenarios ?? []).filter((scenario) =>
-        isOrgScenarioVisibleInCampaignPicker(scenario)
-      ),
-    [orgScenarios]
+      (orgScenarios ?? [])
+        .filter((scenario) => isOrgScenarioVisibleInCampaignPicker(scenario))
+        .filter((scenario) => {
+          const recovery = isRecoveryScenario(scenario);
+          if (scenarioFilter === 'regular') return !recovery;
+          if (scenarioFilter === 'recovery') return recovery;
+          return true;
+        }),
+    [orgScenarios, scenarioFilter]
   );
 
   const onScenarioCreated = (created: OrgScenarioSummaryOut) => {
@@ -84,6 +101,7 @@ export function CampaignOrgScenarioPicker({
         )}
         {selectableScenarios.map((scenario) => {
           const selectable = canSelectOrgScenarioForCampaign(scenario);
+          const recovery = isRecoveryScenario(scenario);
           return (
             <label
               key={scenario.id}
@@ -99,8 +117,18 @@ export function CampaignOrgScenarioPicker({
                   toggleScenario(scenario.id, checked === true)
                 }
               />
-              <span>
-                <span className='font-medium'>{scenario.name}</span>
+              <span className='min-w-0 flex-1'>
+                <span className='flex min-w-0 items-center gap-2'>
+                  <span className='truncate font-medium'>{scenario.name}</span>
+                  <Badge
+                    variant={recovery ? 'secondary' : 'outline'}
+                    className='shrink-0 text-[10px]'
+                  >
+                    {recovery
+                      ? t('recoveryScenarioBadgeShort')
+                      : t('runScenarioBadgeShort')}
+                  </Badge>
+                </span>
                 <span className='block text-xs text-muted-foreground'>
                   {scenario.kind} · v{scenario.scenario_version}
                   {!selectable ? ` · ${t('scenarioNotRunnable')}` : ''}

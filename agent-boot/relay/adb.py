@@ -286,10 +286,60 @@ def _device_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
     return bool(out.strip())
 
 
+def _atx_forward_host() -> str:
+    override = _os.environ.get("ATX_FORWARD_HOST", "").strip()
+    if override:
+        return override
+    sock = _os.environ.get("ADB_SERVER_SOCKET", "").strip()
+    if sock.startswith("tcp:"):
+        rest = sock[4:]
+        if ":" in rest:
+            host = rest.rsplit(":", 1)[0].strip()
+            if host:
+                return host
+    adb_host = _os.environ.get("ADB_HOST", "").strip()
+    if adb_host and adb_host not in ("127.0.0.1", "localhost"):
+        return adb_host
+    return "127.0.0.1"
+
+
+def _parse_adb_forward_port(output: str) -> int:
+    for token in (output or "").replace("\r", " ").split():
+        if token.isdigit():
+            return int(token)
+    return 0
+
+
+def _atx_http_ping_via_adb_forward(serial: str, timeout: float = 2.0) -> tuple[bool, str]:
+    if not serial or ":" in serial:
+        return False, "adb forward unavailable for tcp serial"
+    out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
+    if rc != 0:
+        return False, f"adb forward failed: {(out or '').strip()}"
+    port = _parse_adb_forward_port(out)
+    if port <= 0:
+        return False, f"adb forward returned no port: {(out or '').strip()}"
+    host = _atx_forward_host()
+    url = f"http://{host}:{port}/ping"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            body = resp.read(128).decode("utf-8", errors="replace").strip()
+            if 200 <= int(resp.status) < 300:
+                return True, body or f"HTTP {resp.status} via adb-forward"
+            return False, f"HTTP {resp.status} via adb-forward: {body}"
+    except urllib.error.HTTPError as exc:
+        body = exc.read(128).decode("utf-8", errors="replace") if exc.fp else ""
+        return False, f"HTTP {exc.code} via adb-forward: {body.strip()}"
+    except Exception as exc:
+        return False, f"adb-forward ping failed: {exc}"
+    finally:
+        _run("forward", "--remove", f"tcp:{port}", serial=serial, timeout=5)
+
+
 def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -> tuple[bool, str]:
     host = host or _resolve_device_lan_ip(serial)
     if not host:
-        return False, "device LAN IP unavailable"
+        return _atx_http_ping_via_adb_forward(serial, timeout=timeout)
     url = f"http://{host}:7912/ping"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -301,7 +351,10 @@ def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -
         body = exc.read(128).decode("utf-8", errors="replace") if exc.fp else ""
         return False, f"HTTP {exc.code}: {body.strip()}"
     except Exception as exc:
-        return False, str(exc)
+        forward_ok, forward_msg = _atx_http_ping_via_adb_forward(serial, timeout=timeout)
+        if forward_ok:
+            return True, forward_msg
+        return False, f"{exc}; {forward_msg}"
 
 
 def _wait_for_u2_port_state(

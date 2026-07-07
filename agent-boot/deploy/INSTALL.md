@@ -2,6 +2,8 @@
 
 ## Cài nhanh
 
+### macOS / Linux
+
 ```bash
 tar -xzf agent-boot-docker-0.1.0.tar.gz
 cd agent-boot-docker-0.1.0
@@ -11,6 +13,32 @@ cp .env.example .env          # sửa RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN (TLS
 ./scripts/docker-up.sh up -d    # bật ADB host + docker compose up -d
 ./scripts/docker-up.sh logs -f  # xem log relay
 ```
+
+### Windows (Docker Desktop)
+
+**Dùng file `.cmd`** (khuyến nghị — tránh lỗi `.ps1` mở Notepad khi double-click):
+
+```bat
+cd agent-boot-docker-0.1.0
+scripts\docker-load.cmd
+copy .env.example .env          rem sửa RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN
+scripts\docker-up.cmd up -d
+scripts\docker-up.cmd logs -f
+```
+
+Hoặc mở **PowerShell** (không double-click file `.ps1`):
+
+```powershell
+Expand-Archive agent-boot-docker-0.1.0.zip -DestinationPath .
+cd agent-boot-docker-0.1.0
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-load.ps1
+copy .env.example .env
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-up.ps1 up -d
+```
+
+> **Vì sao `.ps1` mở Notepad?** Windows mặc định gắn `.ps1` với trình soạn thảo văn bản. Phải chạy qua `docker-load.cmd` hoặc gọi `powershell -File ...` từ terminal.
+
+Yêu cầu: **Docker Desktop**, **Android Platform-Tools** (`adb` trong PATH), USB debugging trên điện thoại.
 
 Gói chứa **2 image nén** (`-amd64.tar.gz` + `-arm64.tar.gz`, ~165MB tổng). `docker-load.sh` tự chọn theo CPU máy (PC Linux / Mac Intel → amd64, Mac M-series → arm64).
 

@@ -17,6 +17,7 @@ import os
 import random
 import socket
 import struct
+import threading
 import uuid
 import time
 from typing import Any, Optional
@@ -24,7 +25,7 @@ from typing import Any, Optional
 from relay.adb           import (
     _list_serials, _adb_connect, _adb_shell,
     _restart_u2, _restart_atx, _probe_capabilities,
-    _resolve_device_lan_ip,
+    _resolve_device_lan_ip, _run,
     _screencap, _bootstrap_device,
     lock_portrait_rotation,
     lock_rotation_after_shell_enabled,
@@ -82,6 +83,28 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _atx_forward_host() -> str:
+    """Host for adb-forwarded atx-agent ports.
+
+    With Docker using a remote host ADB server, `adb forward tcp:N tcp:7912`
+    binds on the host machine, not inside the container.
+    """
+    override = os.getenv("ATX_FORWARD_HOST", "").strip()
+    if override:
+        return override
+    sock = os.getenv("ADB_SERVER_SOCKET", "").strip()
+    if sock.startswith("tcp:"):
+        rest = sock[4:]
+        if ":" in rest:
+            host = rest.rsplit(":", 1)[0].strip()
+            if host:
+                return host
+    adb_host = os.getenv("ADB_HOST", "").strip()
+    if adb_host and adb_host not in ("127.0.0.1", "localhost"):
+        return adb_host
+    return "127.0.0.1"
 
 
 def _looks_like_hierarchy_xml(body: str) -> bool:
@@ -241,6 +264,9 @@ class RelayAgent:
         self._scrcpy_logical_to_adb: dict[str, str] = {}
         # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
         self._atx_lan_host_cache: dict[str, str] = {}
+        # USB serial -> (host, forwarded port) when phone WLAN is unreachable.
+        self._atx_forward_cache: dict[str, tuple[str, int]] = {}
+        self._atx_forward_lock = threading.Lock()
         self._bootstrap_inflight: set[str] = set()
 
         # Runtime: bounded executors + task registry + watchdog.
@@ -1692,6 +1718,104 @@ class RelayAgent:
         )
         return serial
 
+    def _cached_atx_forward_endpoint(self, serial: str) -> tuple[str, int] | None:
+        if not serial or ":" in serial:
+            return None
+        with self._atx_forward_lock:
+            return self._atx_forward_cache.get(serial)
+
+    def _clear_atx_forward(self, serial: str) -> None:
+        if not serial:
+            return
+        with self._atx_forward_lock:
+            endpoint = self._atx_forward_cache.pop(serial, None)
+        if endpoint is None:
+            return
+        host, port = endpoint
+        try:
+            from relay.http_pool import default_pool
+            default_pool().drop_host(host, port)
+        except Exception:
+            pass
+        _run("forward", "--remove", f"tcp:{port}", serial=serial, timeout=5)
+
+    def _ensure_atx_forward_endpoint(self, serial: str) -> tuple[str, int] | None:
+        """Forward host tcp:N to device tcp:7912 for USB devices.
+
+        This is the path for Docker/Windows setups where USB ADB works but the
+        host cannot route to the phone's WLAN IP.
+        """
+        if not serial or ":" in serial:
+            return None
+        with self._atx_forward_lock:
+            cached = self._atx_forward_cache.get(serial)
+            if cached is not None:
+                return cached
+            out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
+            if rc != 0:
+                logger.warning(
+                    "u2 atx adb-forward failed serial=%s: %s",
+                    serial,
+                    (out or "").strip()[:200],
+                )
+                return None
+            port = 0
+            for token in (out or "").replace("\r", " ").split():
+                if token.isdigit():
+                    port = int(token)
+                    break
+            if port <= 0:
+                logger.warning(
+                    "u2 atx adb-forward returned no port serial=%s output=%r",
+                    serial,
+                    (out or "").strip()[:200],
+                )
+                return None
+            endpoint = (_atx_forward_host(), port)
+            self._atx_forward_cache[serial] = endpoint
+            logger.info(
+                "u2 atx adb-forward active serial=%s endpoint=%s:%s -> tcp:7912",
+                serial,
+                endpoint[0],
+                endpoint[1],
+            )
+            return endpoint
+
+    def _u2_http_request(
+        self,
+        host: str,
+        port: int,
+        method: str,
+        path: str,
+        body: str,
+        content_type: str,
+        timeout: float,
+    ) -> dict:
+        from relay.http_pool import default_pool
+
+        headers: dict[str, str] = {}
+        data: bytes | None = None
+        if body:
+            data = body.encode("utf-8") if isinstance(body, str) else body
+            headers["Content-Type"] = content_type or "application/json"
+
+        status, resp_headers, resp_body = default_pool().request(
+            host,
+            port,
+            method,
+            path,
+            body=data,
+            headers=headers,
+            timeout=timeout,
+        )
+        ok = 200 <= status < 400
+        return {
+            "ok": ok,
+            "status": status,
+            "body": resp_body.decode("utf-8", errors="replace"),
+            "content_type": resp_headers.get("Content-Type", ""),
+        }
+
     def _do_u2_http(
         self,
         serial: str,
@@ -1708,30 +1832,39 @@ class RelayAgent:
         call into a single request/response round trip — ~30-100ms saved
         per call on WiFi-attached phones.
         """
-        from relay.http_pool import default_pool
-
-        host = self._atx_http_host(serial)
-
-        headers: dict[str, str] = {}
-        data: bytes | None = None
-        if body:
-            data = body.encode("utf-8") if isinstance(body, str) else body
-            headers["Content-Type"] = content_type or "application/json"
+        forward_endpoint = self._cached_atx_forward_endpoint(serial)
+        host, port = forward_endpoint or (self._atx_http_host(serial), 7912)
 
         try:
-            status, resp_headers, resp_body = default_pool().request(
-                host, 7912, method, path,
-                body=data, headers=headers, timeout=timeout,
-            )
-            ok = 200 <= status < 400
-            return {
-                "ok":           ok,
-                "status":       status,
-                "body":         resp_body.decode("utf-8", errors="replace"),
-                "content_type": resp_headers.get("Content-Type", ""),
-            }
+            return self._u2_http_request(host, port, method, path, body, content_type, timeout)
         except Exception as exc:
-            logger.debug("u2 HTTP error %s http://%s:7912%s: %s", method, host, path, exc)
+            if forward_endpoint is not None:
+                self._clear_atx_forward(serial)
+            endpoint = self._ensure_atx_forward_endpoint(serial)
+            if endpoint is not None:
+                fwd_host, fwd_port = endpoint
+                try:
+                    return self._u2_http_request(
+                        fwd_host,
+                        fwd_port,
+                        method,
+                        path,
+                        body,
+                        content_type,
+                        timeout,
+                    )
+                except Exception as fwd_exc:
+                    self._clear_atx_forward(serial)
+                    logger.debug(
+                        "u2 HTTP adb-forward error %s http://%s:%s%s: %s",
+                        method,
+                        fwd_host,
+                        fwd_port,
+                        path,
+                        fwd_exc,
+                    )
+                    exc = RuntimeError(f"{exc}; adb-forward: {fwd_exc}")
+            logger.debug("u2 HTTP error %s http://%s:%s%s: %s", method, host, port, path, exc)
             return {
                 "ok":           False,
                 "status":       0,
@@ -2568,6 +2701,7 @@ class RelayAgent:
 
         # ATX cache + logical serial map can grow with phone churn.
         host = self._atx_lan_host_cache.pop(serial, None)
+        self._clear_atx_forward(serial)
         mapped_keys = [k for k, v in self._scrcpy_logical_to_adb.items() if v == serial]
         for k in mapped_keys:
             self._scrcpy_logical_to_adb.pop(k, None)

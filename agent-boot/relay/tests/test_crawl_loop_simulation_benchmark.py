@@ -32,6 +32,10 @@ _SIM_SWIPE_MS = 0.8
 _SIM_CLICK_MS = 1.5
 _SIM_KEY_MS = 0.4
 
+CRAWL_WINDOW_HOURS = 18
+SECONDS_PER_CRAWL_WINDOW = CRAWL_WINDOW_HOURS * 60 * 60
+TARGET_CRAWL_WINDOW_CONTENT_ITEMS = 50_000
+
 # Production crawl profile (balanced) — pause zeroed for deterministic bench.
 CRAWL_FB_COMMENTS_CONTEXT: dict[str, Any] = {
     "comment_scroll_passes": 48,
@@ -58,7 +62,7 @@ LEGACY_BALANCED_FB_COMMENTS_CONTEXT: dict[str, Any] = {
     "comment_swipes_per_dump": 6,
     "comment_scroll_distance": 0.52,
     "comment_scroll_duration_ms": 120,
-    "comment_scroll_pause_s": 0.03,
+    "comment_scroll_pause_s": 0.0,
     "comment_recover_chrome": False,
     "comment_no_growth_break": 2,
     "min_comment_scan_passes": 1,
@@ -85,6 +89,7 @@ CRAWL_TAP_CONTEXT: dict[str, Any] = {
     "comment_target_verify_back_settle_s": 0,
     "comment_sheet_u2_wait": 0,
     "comment_sheet_wait_s": 0,
+    "comment_target_tap_enabled": True,
 }
 
 
@@ -99,13 +104,19 @@ class OpStats:
     wait_exists: int = 0
     total_ops: int = 0
     total_sim_ms: float = 0.0
+    total_device_ms: float = 0.0
     wall_ms: float = 0.0
     _sim_by_op: dict[str, float] = field(default_factory=dict)
+    _device_by_op: dict[str, float] = field(default_factory=dict)
 
-    def record(self, op: str, sim_ms: float) -> None:
+    def record(self, op: str, sim_ms: float, device_ms: float | None = None) -> None:
+        if device_ms is None:
+            device_ms = sim_ms
         self.total_ops += 1
         self.total_sim_ms += sim_ms
+        self.total_device_ms += device_ms
         self._sim_by_op[op] = self._sim_by_op.get(op, 0.0) + sim_ms
+        self._device_by_op[op] = self._device_by_op.get(op, 0.0) + device_ms
         if op == "dump_hierarchy":
             self.dump += 1
         elif op == "swipe":
@@ -139,6 +150,7 @@ class OpStats:
             "click": click_total,
             "press_key": self.press_key,
             "sim_total_ms": round(self.total_sim_ms, 2),
+            "device_total_ms": round(self.total_device_ms, 2),
             "avg_sim_ms_per_op": round(avg_op, 3),
             "avg_sim_ms_per_dump": round(dump_sim / self.dump, 3) if self.dump else 0,
             "avg_sim_ms_per_swipe": round(swipe_sim / self.swipe, 3) if self.swipe else 0,
@@ -175,7 +187,12 @@ class _InstrumentedExecutor(_FakeExecutor):
                 "press_key": _SIM_KEY_MS,
                 "wait_exists": 0.2,
             }.get(op, 0.1)
-            self.stats.record(op, sim)
+            device_ms = sim
+            if op == "swipe":
+                device_ms = max(sim, float(act.get("duration") or 0) * 1000.0)
+            elif op == "sleep":
+                device_ms = max(sim, float(act.get("seconds", act.get("duration", 0)) or 0) * 1000.0)
+            self.stats.record(op, sim, device_ms)
             if sim > 0:
                 await asyncio.sleep(sim / 1000.0)
             if op in {"click", "click_spec", "click_selector"} and not self._opened_sheet:
@@ -214,7 +231,12 @@ class _InstrumentedSessionExecutor(_SessionFakeExecutor):
                 "press_key": _SIM_KEY_MS,
                 "wait_exists": 0.2,
             }.get(op, 0.1)
-            self.stats.record(op, sim)
+            device_ms = sim
+            if op == "swipe":
+                device_ms = max(sim, float(act.get("duration") or 0) * 1000.0)
+            elif op == "sleep":
+                device_ms = max(sim, float(act.get("seconds", act.get("duration", 0)) or 0) * 1000.0)
+            self.stats.record(op, sim, device_ms)
             if sim > 0:
                 await asyncio.sleep(sim / 1000.0)
             if op in {"click", "click_spec", "click_selector"} and not self._opened_sheet:
@@ -291,7 +313,14 @@ def _load_crawl_group_comment_context() -> dict[str, Any]:
 
 
 def _current_balanced_comment_context() -> dict[str, Any]:
-    from services.extract_profiles import get_profile_defaults
+    try:
+        from services.extract_profiles import get_profile_defaults
+    except ModuleNotFoundError:
+        import sys
+
+        repo_root = Path(__file__).resolve().parents[3]
+        sys.path.insert(0, str(repo_root / "device_farm"))
+        from services.extract_profiles import get_profile_defaults
 
     ctx = dict(get_profile_defaults("balanced", "fb_comments"))
     ctx["comment_recover_chrome"] = False
@@ -302,15 +331,52 @@ def _current_balanced_comment_context() -> dict[str, Any]:
 
 
 def _estimate_comment_device_ms(stats: OpStats, context: dict[str, Any], snapshots: int) -> float:
-    dump_ms = float(context.get("hierarchy_dump_timeout_s") or 2.2) * 1000.0
-    swipe_ms = float(context.get("comment_scroll_duration_ms") or 120)
-    pause_ms = float(context.get("comment_scroll_pause_s") or 0) * 1000.0
     parse_ms_per_snapshot = 80.0
-    return (
-        stats.dump * dump_ms
-        + stats.swipe * (swipe_ms + pause_ms)
-        + snapshots * parse_ms_per_snapshot
+    return stats.total_device_ms + snapshots * parse_ms_per_snapshot
+
+
+def _crawl_window_content_items(total_items: int, seconds_per_detail: float) -> float:
+    if seconds_per_detail <= 0:
+        return 0.0
+    return total_items * SECONDS_PER_CRAWL_WINDOW / seconds_per_detail
+
+
+def _required_items_per_detail(seconds_per_detail: float) -> float:
+    return TARGET_CRAWL_WINDOW_CONTENT_ITEMS * seconds_per_detail / SECONDS_PER_CRAWL_WINDOW
+
+
+def _crawl_window_content_items_for_mixed_distribution(
+    *,
+    commented_post_ratio: float,
+    avg_comments_per_commented_post: float,
+    seconds_per_post_scan: float,
+    seconds_per_commented_detail: float,
+) -> dict[str, float]:
+    ratio = max(0.0, min(1.0, commented_post_ratio))
+    seconds_per_seen_post = seconds_per_post_scan + ratio * seconds_per_commented_detail
+    items_per_seen_post = 1.0 + ratio * avg_comments_per_commented_post
+    window_posts_seen = (
+        SECONDS_PER_CRAWL_WINDOW / seconds_per_seen_post
+        if seconds_per_seen_post > 0
+        else 0.0
     )
+    window_items = window_posts_seen * items_per_seen_post
+    target_items_per_second = TARGET_CRAWL_WINDOW_CONTENT_ITEMS / SECONDS_PER_CRAWL_WINDOW
+    if ratio <= 0:
+        required_comments = float("inf")
+    else:
+        required_comments = (
+            target_items_per_second * seconds_per_seen_post - 1.0
+        ) / ratio
+    return {
+        "avg_comments_per_commented_post": avg_comments_per_commented_post,
+        "commented_post_ratio": ratio,
+        "estimated_window_items": window_items,
+        "items_per_seen_post": items_per_seen_post,
+        "required_comments_per_commented_post": max(0.0, required_comments),
+        "seconds_per_seen_post": seconds_per_seen_post,
+        "window_posts_seen": window_posts_seen,
+    }
 
 
 async def _simulate_long_comment_thread(context: dict[str, Any]) -> dict[str, Any]:
@@ -492,7 +558,7 @@ async def test_crawl_comments_deep_scroll_profile_matches_production() -> None:
 
 
 @pytest.mark.asyncio
-async def test_crawl_comments_balanced_profile_speedup_benchmark() -> None:
+async def test_crawl_comments_default_fast_timing_keeps_requested_budget() -> None:
     legacy = await _simulate_long_comment_thread(LEGACY_BALANCED_FB_COMMENTS_CONTEXT)
     current = await _simulate_long_comment_thread(_current_balanced_comment_context())
 
@@ -510,9 +576,121 @@ async def test_crawl_comments_balanced_profile_speedup_benchmark() -> None:
     )
 
     assert legacy["swipe"] == 40
+    assert legacy["dump"] == 8
+    assert legacy["sim_wall_ms"] < 300
     assert current["swipe"] <= 16
     assert current["dump"] < legacy["dump"]
     assert reduction["estimated_device_pct"] >= 40
+
+
+@pytest.mark.asyncio
+async def test_crawl_18h_content_throughput_reaches_50k_with_comment_yield() -> None:
+    current = await _simulate_long_comment_thread(_current_balanced_comment_context())
+    current_seconds = float(current["estimated_device_s"])
+    current_items_per_detail = 51  # 1 post + 50 comments.
+    current_window_items = _crawl_window_content_items(current_items_per_detail, current_seconds)
+
+    # Calibration row from an older live observation: fb_posts ~= 5.9s,
+    # fb_comments ~= 41.8s. This keeps the benchmark honest when synthetic
+    # op timings are much faster than a real phone/app session.
+    live_like_seconds = 47.7
+    live_like_items_per_detail = 51
+    live_like_window_items = _crawl_window_content_items(
+        live_like_items_per_detail,
+        live_like_seconds,
+    )
+    live_like_required_items = _required_items_per_detail(live_like_seconds)
+
+    report = {
+        "crawl_window_hours": CRAWL_WINDOW_HOURS,
+        "target_window_items": TARGET_CRAWL_WINDOW_CONTENT_ITEMS,
+        "target_items_per_second": round(
+            TARGET_CRAWL_WINDOW_CONTENT_ITEMS / SECONDS_PER_CRAWL_WINDOW,
+            3,
+        ),
+        "current_synthetic": {
+            "seconds_per_detail": current_seconds,
+            "items_per_detail": current_items_per_detail,
+            "estimated_window_items": round(current_window_items),
+            "required_items_per_detail": round(_required_items_per_detail(current_seconds), 2),
+            "profile": current,
+        },
+        "live_like_older_observation": {
+            "seconds_per_detail": live_like_seconds,
+            "items_per_detail": live_like_items_per_detail,
+            "estimated_window_items": round(live_like_window_items),
+            "required_items_per_detail": round(live_like_required_items, 2),
+        },
+    }
+    print(f"\n[crawl-bench-50k-18h] {json.dumps(report, ensure_ascii=False, sort_keys=True)}")
+
+    assert current_window_items >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    assert live_like_window_items >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    assert live_like_required_items <= live_like_items_per_detail
+
+
+def test_crawl_18h_mixed_comment_distribution_identifies_sparse_risk() -> None:
+    # Older live-like split: scanning/parsing a post ~= 5.9s; opening and
+    # crawling comments adds ~= 41.8s. Posts with zero comments should be
+    # counted as post items but should not pay the detail crawl cost.
+    seconds_per_post_scan = 5.9
+    seconds_per_commented_detail = 41.8
+    profiles = {
+        "dense_40pct_50_comments": _crawl_window_content_items_for_mixed_distribution(
+            commented_post_ratio=0.40,
+            avg_comments_per_commented_post=50,
+            seconds_per_post_scan=seconds_per_post_scan,
+            seconds_per_commented_detail=seconds_per_commented_detail,
+        ),
+        "sparse_10pct_50_comments": _crawl_window_content_items_for_mixed_distribution(
+            commented_post_ratio=0.10,
+            avg_comments_per_commented_post=50,
+            seconds_per_post_scan=seconds_per_post_scan,
+            seconds_per_commented_detail=seconds_per_commented_detail,
+        ),
+        "sparse_10pct_110_comments": _crawl_window_content_items_for_mixed_distribution(
+            commented_post_ratio=0.10,
+            avg_comments_per_commented_post=110,
+            seconds_per_post_scan=seconds_per_post_scan,
+            seconds_per_commented_detail=seconds_per_commented_detail,
+        ),
+    }
+    report = {
+        "crawl_window_hours": CRAWL_WINDOW_HOURS,
+        "target_window_items": TARGET_CRAWL_WINDOW_CONTENT_ITEMS,
+        "target_items_per_second": round(
+            TARGET_CRAWL_WINDOW_CONTENT_ITEMS / SECONDS_PER_CRAWL_WINDOW,
+            3,
+        ),
+        "assumptions": {
+            "seconds_per_post_scan": seconds_per_post_scan,
+            "seconds_per_commented_detail": seconds_per_commented_detail,
+        },
+        "profiles": {
+            name: {
+                key: round(value, 2)
+                for key, value in profile.items()
+            }
+            for name, profile in profiles.items()
+        },
+    }
+    print(
+        "\n[crawl-bench-50k-18h-mixed] "
+        f"{json.dumps(report, ensure_ascii=False, sort_keys=True)}"
+    )
+
+    assert (
+        profiles["dense_40pct_50_comments"]["estimated_window_items"]
+        >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    )
+    assert (
+        profiles["sparse_10pct_50_comments"]["estimated_window_items"]
+        < TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    )
+    assert (
+        profiles["sparse_10pct_110_comments"]["estimated_window_items"]
+        >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    )
 
 
 @pytest.mark.asyncio

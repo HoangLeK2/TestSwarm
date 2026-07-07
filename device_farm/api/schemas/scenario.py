@@ -60,6 +60,7 @@ class FlowEdgeModel(BaseModel):
 
 SelectorBy = Literal["resource-id", "text", "xpath", "class name",
                       "description", "descriptionContains", "descriptionStartsWith",
+                      "descriptionStartswith",
                       "content-desc"]
 
 # Fields that support ${VAR} interpolation at runtime use these types.
@@ -127,6 +128,7 @@ class SelectorConditions(BaseModel):
     className: Optional[str] = None
     description: Optional[str] = None
     descriptionContains: Optional[str] = None
+    descriptionStartsWith: Optional[str] = None
     packageName: Optional[str] = None
     clickable: Optional[bool] = None
     checked: Optional[bool] = None
@@ -423,6 +425,32 @@ class InputTextStep(StepBase):
     text: str
     via: Literal["u2", "a11y_key"] = "u2"
 
+
+class LoginIfNeededStep(StepBase):
+    type: Literal["login_if_needed"]
+    profile: Dict[str, Any] = Field(default_factory=dict)
+    clear_first: bool = True
+    implicit_wait: Optional[ImplicitWait] = None
+
+
+class FillFormStep(StepBase):
+    type: Literal["fill_form"]
+    profile: Dict[str, Any] = Field(default_factory=dict)
+    recipe: Optional[str] = None
+    clear_first: bool = True
+    implicit_wait: Optional[ImplicitWait] = None
+
+
+class AssertAppStateStep(StepBase):
+    type: Literal["assert_app_state"]
+    profile: Dict[str, Any] = Field(default_factory=dict)
+    package: Optional[str] = None
+    any_text: List[str] = Field(default_factory=list)
+    all_text: List[str] = Field(default_factory=list)
+    not_text: List[str] = Field(default_factory=list)
+    locator: Optional[str] = None
+
+
 class KeyStep(StepBase):
     type: Literal["key"]
     key: str = Field(min_length=1)
@@ -529,6 +557,28 @@ class TapFbCommentButtonStep(StepBase):
 
 class FbTapCommentButtonStep(TapFbCommentButtonStep):
     type: Literal["fb_tap_comment_button"]
+
+class FbFindCommentButtonStep(StepBase):
+    type: Literal["fb_find_comment_button"]
+    timeout: NumOrVar = 6.0
+    poll: NumOrVar = 0.4
+    dedupe_field: str = "post_key"
+    ignore_error: bool = True
+    switch_to_all_comments: bool = True
+    comment_filter: Optional[str] = None
+
+class FbTapCommentTargetStep(StepBase):
+    type: Literal["fb_tap_comment_target"]
+    ignore_error: bool = True
+    post_tap_wait_s: NumOrVar = 0.35
+
+class FbApplyCommentFilterStep(StepBase):
+    type: Literal["fb_apply_comment_filter"]
+    switch_to_all_comments: bool = True
+    comment_filter: Optional[str] = "all_comments"
+    comment_filter_settle_s: NumOrVar = 0.45
+    comment_filter_step_pause_s: NumOrVar = 0.35
+    comment_filter_post_select_s: NumOrVar = 0.85
 
 class RandomPickStep(StepBase):
     type: Literal["random_pick"]
@@ -710,6 +760,9 @@ StepModel = Annotated[
         Annotated[LongTapSelectorStep, Tag("long_tap_selector")],
         Annotated[ScrollToStep, Tag("scroll_to")],
         Annotated[InputTextStep, Tag("input_text")],
+        Annotated[LoginIfNeededStep, Tag("login_if_needed")],
+        Annotated[FillFormStep, Tag("fill_form")],
+        Annotated[AssertAppStateStep, Tag("assert_app_state")],
         Annotated[KeyStep, Tag("key")],
         Annotated[AdbShellStep, Tag("adb_shell")],
         Annotated[ScrollDownStep, Tag("scroll_down")],
@@ -723,6 +776,9 @@ StepModel = Annotated[
         Annotated[IfVariableStep, Tag("if_variable")],
         Annotated[TapFbCommentButtonStep, Tag("tap_fb_comment_button")],
         Annotated[FbTapCommentButtonStep, Tag("fb_tap_comment_button")],
+        Annotated[FbFindCommentButtonStep, Tag("fb_find_comment_button")],
+        Annotated[FbTapCommentTargetStep, Tag("fb_tap_comment_target")],
+        Annotated[FbApplyCommentFilterStep, Tag("fb_apply_comment_filter")],
         Annotated[RandomPickStep, Tag("random_pick")],
         Annotated[LoopStep, Tag("loop")],
         Annotated[BreakIfStep, Tag("break_if")],

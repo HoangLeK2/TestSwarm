@@ -35,6 +35,7 @@ _SKIP_VAR_SCAN_KEYS = frozenset({
     "else",
     "else_steps",
     "branches",
+    "tags",
 })
 
 

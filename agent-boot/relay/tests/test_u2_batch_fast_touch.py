@@ -22,6 +22,9 @@ class _FakeDevice:
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
 
+    def swipe(self, *_args, **_kwargs) -> None:
+        raise AssertionError("u2 HTTP swipe batch must not call Python u2 swipe")
+
 
 @pytest.mark.asyncio
 async def test_u2_batch_coordinate_touch_uses_http_fast_path(monkeypatch):
@@ -76,6 +79,44 @@ async def test_u2_batch_coordinate_touch_uses_http_fast_path(monkeypatch):
         )
     ]
     agent._u2_executor.run_batch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_u2_executor_u2_swipe_batch_uses_http_rpc():
+    calls: list[tuple[str, dict, float]] = []
+
+    def fake_http_rpc(serial: str, payload: dict, timeout: float):
+        calls.append((serial, payload, timeout))
+        return True, ""
+
+    executor = U2Executor(
+        _FakePool(),
+        asyncio.get_running_loop(),
+        http_rpc=fake_http_rpc,
+    )
+    result = await executor.run_batch(
+        "10AE7S00HD002JK",
+        [
+            {
+                "op": "u2_swipe_batch",
+                "count": 3,
+                "fx": 540,
+                "fy": 1200,
+                "tx": 540,
+                "ty": 360,
+                "duration": 0.08,
+                "pause_s": 0,
+            }
+        ],
+    )
+
+    assert result["ok"] is True
+    assert result["results"] == [{"op": "u2_swipe_batch", "ok": True, "value": 3}]
+    assert len(calls) == 3
+    assert all(call[0] == "10AE7S00HD002JK" for call in calls)
+    assert [call[1]["method"] for call in calls] == ["swipe", "swipe", "swipe"]
+    assert calls[0][1]["params"] == [540, 1200, 540, 360, 3]
+    assert calls[0][2] >= 1.5
 
 
 @pytest.mark.asyncio

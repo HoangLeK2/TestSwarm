@@ -37,6 +37,11 @@ import {
   resolveCurrentRootIndex,
   type WorkflowStepRowStatus
 } from '../lib/workflow-step-list-model';
+import {
+  appAutomationDetailsFromLog,
+  shortTrace,
+  watcherLabel
+} from '../lib/app-automation-monitor';
 import type { ExecutionEventOut } from '../../device-farm/services/generated/DeviceFarmApi';
 import type { StepLogEntry, WorkflowInfo } from '../types';
 import type { FlowStep } from './scenario-steps/types';
@@ -190,6 +195,65 @@ function IncidentStepCard({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function detailRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function AppAutomationTracePanel({ logEntry }: { logEntry?: StepLogEntry }) {
+  const t = useTranslations('campaignsFeature.list');
+  const details = appAutomationDetailsFromLog(logEntry);
+  if (!details) return null;
+  const watchers = Array.isArray(details.app_popup_watchers)
+    ? details.app_popup_watchers
+    : [];
+  const formFields = detailRecord(details.form_fields);
+  const assertions = detailRecord(details.assertions);
+  const hasFormFields = Object.keys(formFields).length > 0;
+  const hasAssertions = Object.keys(assertions).length > 0;
+  const traceLabels = { score: t('appAutomationTraceScore') };
+
+  return (
+    <div className='mt-1.5 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 text-[10px] text-emerald-950 dark:text-emerald-50'>
+      <div className='mb-1 font-semibold'>{t('appAutomationTraceTitle')}</div>
+      <div className='space-y-1'>
+        {watchers.map((watcher, watcherIndex) => (
+          <div key={`watcher-${watcherIndex}`} className='truncate'>
+            {t('appAutomationTraceWatcher')}: {watcherLabel(watcher)}
+          </div>
+        ))}
+        {details.locator_trace ? (
+          <div className='truncate'>
+            {t('appAutomationTraceLocator')}:{' '}
+            {shortTrace(details.locator_trace, traceLabels)}
+          </div>
+        ) : null}
+        {details.submit_trace ? (
+          <div className='truncate'>
+            {t('appAutomationTraceSubmit')}:{' '}
+            {shortTrace(details.submit_trace, traceLabels)}
+          </div>
+        ) : null}
+        {hasFormFields ? (
+          <div className='space-y-0.5'>
+            {Object.entries(formFields).map(([name, trace]) => (
+              <div key={name} className='truncate'>
+                {name}: {shortTrace(trace, traceLabels)}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {hasAssertions ? (
+          <div className='truncate'>
+            {t('appAutomationTraceAssertions')}: {JSON.stringify(assertions)}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -503,6 +567,7 @@ export function StepRow({
               ))}
             </div>
           )}
+          <AppAutomationTracePanel logEntry={logEntry} />
           {adbOutput && (
             <div className='mt-1.5 rounded-md border border-border/60 bg-muted/35'>
               <div className='flex min-w-0 items-center gap-2 border-b border-border/50 px-2 py-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>

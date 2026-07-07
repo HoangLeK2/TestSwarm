@@ -17,6 +17,7 @@ import os
 import random
 import socket
 import struct
+import threading
 import uuid
 import time
 from typing import Any, Optional
@@ -24,7 +25,7 @@ from typing import Any, Optional
 from relay.adb           import (
     _list_serials, _adb_connect, _adb_shell,
     _restart_u2, _restart_atx, _probe_capabilities,
-    _resolve_device_lan_ip,
+    _resolve_device_lan_ip, _run,
     _screencap, _bootstrap_device,
     lock_portrait_rotation,
     lock_rotation_after_shell_enabled,
@@ -75,6 +76,35 @@ def _env_float(name: str, default: float) -> float:
         return float(os.getenv(name, str(default)))
     except Exception:
         return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _atx_forward_host() -> str:
+    """Host for adb-forwarded atx-agent ports.
+
+    With Docker using a remote host ADB server, `adb forward tcp:N tcp:7912`
+    binds on the host machine, not inside the container.
+    """
+    override = os.getenv("ATX_FORWARD_HOST", "").strip()
+    if override:
+        return override
+    sock = os.getenv("ADB_SERVER_SOCKET", "").strip()
+    if sock.startswith("tcp:"):
+        rest = sock[4:]
+        if ":" in rest:
+            host = rest.rsplit(":", 1)[0].strip()
+            if host:
+                return host
+    adb_host = os.getenv("ADB_HOST", "").strip()
+    if adb_host and adb_host not in ("127.0.0.1", "localhost"):
+        return adb_host
+    return "127.0.0.1"
 
 
 def _looks_like_hierarchy_xml(body: str) -> bool:
@@ -216,6 +246,13 @@ class RelayAgent:
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
         self._u2_executor: Optional[Any] = None
+        self._u2_warm_inflight: set[str] = set()
+        self._u2_warm_tasks: dict[str, asyncio.Task] = {}
+        self._u2_warm_fail_count: dict[str, int] = {}
+        self._u2_warm_retry_after: dict[str, float] = {}
+        self._u2_warm_retry_base_s = _env_float("U2_WARM_RETRY_BASE_S", 5.0)
+        self._u2_warm_retry_max_s = _env_float("U2_WARM_RETRY_MAX_S", 60.0)
+        self._u2_warm_on_heartbeat = _env_bool("AGENT_BOOT_U2_WARM_ON_HEARTBEAT", False)
         self._extra_ingest = extra_ingest
         # A11y control-plane workers
         self._a11y_max_queue = int(os.getenv("A11Y_MAX_QUEUE_PER_DEVICE", "100"))
@@ -227,6 +264,9 @@ class RelayAgent:
         self._scrcpy_logical_to_adb: dict[str, str] = {}
         # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
         self._atx_lan_host_cache: dict[str, str] = {}
+        # USB serial -> (host, forwarded port) when phone WLAN is unreachable.
+        self._atx_forward_cache: dict[str, tuple[str, int]] = {}
+        self._atx_forward_lock = threading.Lock()
         self._bootstrap_inflight: set[str] = set()
 
         # Runtime: bounded executors + task registry + watchdog.
@@ -372,6 +412,7 @@ class RelayAgent:
                 pool=self._u2_pool,
                 loop=loop,
                 http_dump=self._dump_hierarchy_http_sync,
+                http_rpc=self._u2_jsonrpc_sync,
             )
             register_stats_source(
                 "u2pool",
@@ -432,6 +473,11 @@ class RelayAgent:
                     await asyncio.sleep(delay)
         finally:
             await self._supervisor.stop()
+            await _cancel_and_await(*list(self._u2_warm_tasks.values()))
+            self._u2_warm_tasks.clear()
+            self._u2_warm_inflight.clear()
+            self._u2_warm_fail_count.clear()
+            self._u2_warm_retry_after.clear()
             if self._u2_pool:
                 await self._u2_pool.stop()
             await self._scrcpy_mgr.stop()
@@ -714,12 +760,95 @@ class RelayAgent:
             )
             if rc == 0:
                 logger.info("[%s] auto-bootstrap ok: %s", serial, output[:500])
+                self._schedule_u2_warm(serial, reason="auto-bootstrap")
             else:
                 logger.warning("[%s] auto-bootstrap failed (rc=%s): %s", serial, rc, output[:500])
         except Exception as exc:
             logger.warning("[%s] auto-bootstrap error: %s", serial, exc)
         finally:
             self._bootstrap_inflight.discard(serial)
+
+    def _clear_u2_warm_backoff(self, serial: str) -> None:
+        self._u2_warm_fail_count.pop(serial, None)
+        self._u2_warm_retry_after.pop(serial, None)
+
+    def _record_u2_warm_failed(self, serial: str, *, reason: str) -> None:
+        count = self._u2_warm_fail_count.get(serial, 0) + 1
+        self._u2_warm_fail_count[serial] = count
+        delay = min(self._u2_warm_retry_max_s, self._u2_warm_retry_base_s * (2 ** (count - 1)))
+        delay *= 1.0 + 0.2 * random.random()
+        self._u2_warm_retry_after[serial] = asyncio.get_running_loop().time() + delay
+        logger.debug(
+            "[%s] u2 warm session retry delayed %.1fs after failure #%d (%s)",
+            serial,
+            delay,
+            count,
+            reason,
+        )
+
+    def _schedule_u2_warm(self, serial: str, *, reason: str) -> None:
+        if not self._u2_pool or not serial:
+            return
+        mark_keep_warm = getattr(self._u2_pool, "mark_keep_warm", None)
+        if callable(mark_keep_warm) and mark_keep_warm(serial, True):
+            self._clear_u2_warm_backoff(serial)
+            return
+        has_session = getattr(self._u2_pool, "has_session", None)
+        if callable(has_session) and has_session(serial):
+            self._clear_u2_warm_backoff(serial)
+            return
+        ctx = self._registry.get(serial)
+        if ctx and ctx.state != DeviceState.ONLINE:
+            return
+        if serial in self._u2_warm_inflight:
+            return
+        retry_after = self._u2_warm_retry_after.get(serial, 0.0)
+        if retry_after > asyncio.get_running_loop().time():
+            return
+        self._u2_warm_inflight.add(serial)
+        task = asyncio.create_task(
+            self._warm_u2_session(serial, reason=reason),
+            name=f"u2-warm-{serial}",
+        )
+        self._u2_warm_tasks[serial] = task
+
+        def _done(done: asyncio.Task, *, s: str = serial) -> None:
+            self._u2_warm_inflight.discard(s)
+            if self._u2_warm_tasks.get(s) is done:
+                self._u2_warm_tasks.pop(s, None)
+
+        task.add_done_callback(_done)
+
+    async def _warm_u2_session(self, serial: str, *, reason: str) -> None:
+        try:
+            ctx = self._registry.get(serial)
+            if ctx and ctx.state != DeviceState.ONLINE:
+                return
+            warm = getattr(self._u2_pool, "warm_session", None)
+            if not callable(warm):
+                return
+            ok = await warm(serial, keep_warm=True)
+            ctx = self._registry.get(serial)
+            if ctx and ctx.state != DeviceState.ONLINE:
+                evict = getattr(self._u2_pool, "evict", None)
+                if callable(evict):
+                    await evict(serial)
+                return
+            if ok:
+                self._clear_u2_warm_backoff(serial)
+                logger.info("[%s] u2 warm session ready (%s)", serial, reason)
+            else:
+                self._record_u2_warm_failed(serial, reason=reason)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._record_u2_warm_failed(serial, reason=reason)
+            logger.debug("[%s] u2 warm session failed (%s): %s", serial, reason, exc)
+        finally:
+            self._u2_warm_inflight.discard(serial)
+            task = asyncio.current_task()
+            if task is not None and self._u2_warm_tasks.get(serial) is task:
+                self._u2_warm_tasks.pop(serial, None)
 
     async def _on_device_event(
         self, serial: str, adb_state: str, send_queue: asyncio.Queue
@@ -735,20 +864,22 @@ class RelayAgent:
             self._clear_tcp_suppress_for_usb_anchor(serial)
             self._atx_lan_host_cache.pop(serial, None)
 
+        if adb_state != "device" and self._u2_pool:
+            asyncio.create_task(self._u2_pool.evict(serial))
+
         if ctx.state == DeviceState.OFFLINE:
             # Device-offline cascade: tear down every relay component owned for
             # this serial so we don't waste retry budget hammering a dead device.
             # scrcpy_mgr.stop_all_for_serial emits reason="device_offline" which
             # _on_session_stopped treats as non-abnormal (no auto-resume until
             # the device comes back ONLINE).
-            if self._u2_pool:
-                asyncio.create_task(self._u2_pool.evict(serial))
             asyncio.create_task(
                 self._scrcpy_mgr.stop_all_for_serial(serial, reason="device_offline")
             )
             self._cleanup_serial_state(serial)
 
         if ctx.state == DeviceState.ONLINE:
+            self._schedule_u2_warm(serial, reason="device-online")
             if _auto_bootstrap_enabled():
                 asyncio.create_task(
                     self._auto_bootstrap_online_device(serial),
@@ -874,6 +1005,8 @@ class RelayAgent:
                 serial,
                 wlan_ip or "unset",
             )
+            if bool((caps or {}).get("u2", False)):
+                self._schedule_u2_warm(serial, reason="capability-probe")
 
     def _missing_capability_serials(self, serials: list[str]) -> list[str]:
         missing: list[str] = []
@@ -1006,6 +1139,11 @@ class RelayAgent:
                     source="heartbeat adb snapshot",
                 )
                 serials = self._registry.online_serials
+        if self._u2_warm_on_heartbeat:
+            for serial in serials:
+                ctx = self._registry.get(serial)
+                if ctx and bool((ctx.capabilities or {}).get("u2", False)):
+                    self._schedule_u2_warm(serial, reason="heartbeat")
         if schedule_capability_probe:
             self._schedule_capability_probe(serials, send_queue, loop)
 
@@ -1580,6 +1718,104 @@ class RelayAgent:
         )
         return serial
 
+    def _cached_atx_forward_endpoint(self, serial: str) -> tuple[str, int] | None:
+        if not serial or ":" in serial:
+            return None
+        with self._atx_forward_lock:
+            return self._atx_forward_cache.get(serial)
+
+    def _clear_atx_forward(self, serial: str) -> None:
+        if not serial:
+            return
+        with self._atx_forward_lock:
+            endpoint = self._atx_forward_cache.pop(serial, None)
+        if endpoint is None:
+            return
+        host, port = endpoint
+        try:
+            from relay.http_pool import default_pool
+            default_pool().drop_host(host, port)
+        except Exception:
+            pass
+        _run("forward", "--remove", f"tcp:{port}", serial=serial, timeout=5)
+
+    def _ensure_atx_forward_endpoint(self, serial: str) -> tuple[str, int] | None:
+        """Forward host tcp:N to device tcp:7912 for USB devices.
+
+        This is the path for Docker/Windows setups where USB ADB works but the
+        host cannot route to the phone's WLAN IP.
+        """
+        if not serial or ":" in serial:
+            return None
+        with self._atx_forward_lock:
+            cached = self._atx_forward_cache.get(serial)
+            if cached is not None:
+                return cached
+            out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
+            if rc != 0:
+                logger.warning(
+                    "u2 atx adb-forward failed serial=%s: %s",
+                    serial,
+                    (out or "").strip()[:200],
+                )
+                return None
+            port = 0
+            for token in (out or "").replace("\r", " ").split():
+                if token.isdigit():
+                    port = int(token)
+                    break
+            if port <= 0:
+                logger.warning(
+                    "u2 atx adb-forward returned no port serial=%s output=%r",
+                    serial,
+                    (out or "").strip()[:200],
+                )
+                return None
+            endpoint = (_atx_forward_host(), port)
+            self._atx_forward_cache[serial] = endpoint
+            logger.info(
+                "u2 atx adb-forward active serial=%s endpoint=%s:%s -> tcp:7912",
+                serial,
+                endpoint[0],
+                endpoint[1],
+            )
+            return endpoint
+
+    def _u2_http_request(
+        self,
+        host: str,
+        port: int,
+        method: str,
+        path: str,
+        body: str,
+        content_type: str,
+        timeout: float,
+    ) -> dict:
+        from relay.http_pool import default_pool
+
+        headers: dict[str, str] = {}
+        data: bytes | None = None
+        if body:
+            data = body.encode("utf-8") if isinstance(body, str) else body
+            headers["Content-Type"] = content_type or "application/json"
+
+        status, resp_headers, resp_body = default_pool().request(
+            host,
+            port,
+            method,
+            path,
+            body=data,
+            headers=headers,
+            timeout=timeout,
+        )
+        ok = 200 <= status < 400
+        return {
+            "ok": ok,
+            "status": status,
+            "body": resp_body.decode("utf-8", errors="replace"),
+            "content_type": resp_headers.get("Content-Type", ""),
+        }
+
     def _do_u2_http(
         self,
         serial: str,
@@ -1596,36 +1832,61 @@ class RelayAgent:
         call into a single request/response round trip — ~30-100ms saved
         per call on WiFi-attached phones.
         """
-        from relay.http_pool import default_pool
-
-        host = self._atx_http_host(serial)
-
-        headers: dict[str, str] = {}
-        data: bytes | None = None
-        if body:
-            data = body.encode("utf-8") if isinstance(body, str) else body
-            headers["Content-Type"] = content_type or "application/json"
+        forward_endpoint = self._cached_atx_forward_endpoint(serial)
+        host, port = forward_endpoint or (self._atx_http_host(serial), 7912)
 
         try:
-            status, resp_headers, resp_body = default_pool().request(
-                host, 7912, method, path,
-                body=data, headers=headers, timeout=timeout,
-            )
-            ok = 200 <= status < 400
-            return {
-                "ok":           ok,
-                "status":       status,
-                "body":         resp_body.decode("utf-8", errors="replace"),
-                "content_type": resp_headers.get("Content-Type", ""),
-            }
+            return self._u2_http_request(host, port, method, path, body, content_type, timeout)
         except Exception as exc:
-            logger.debug("u2 HTTP error %s http://%s:7912%s: %s", method, host, path, exc)
+            if forward_endpoint is not None:
+                self._clear_atx_forward(serial)
+            endpoint = self._ensure_atx_forward_endpoint(serial)
+            if endpoint is not None:
+                fwd_host, fwd_port = endpoint
+                try:
+                    return self._u2_http_request(
+                        fwd_host,
+                        fwd_port,
+                        method,
+                        path,
+                        body,
+                        content_type,
+                        timeout,
+                    )
+                except Exception as fwd_exc:
+                    self._clear_atx_forward(serial)
+                    logger.debug(
+                        "u2 HTTP adb-forward error %s http://%s:%s%s: %s",
+                        method,
+                        fwd_host,
+                        fwd_port,
+                        path,
+                        fwd_exc,
+                    )
+                    exc = RuntimeError(f"{exc}; adb-forward: {fwd_exc}")
+            logger.debug("u2 HTTP error %s http://%s:%s%s: %s", method, host, port, path, exc)
             return {
                 "ok":           False,
                 "status":       0,
                 "body":         str(exc),
                 "content_type": "",
             }
+
+    def _u2_jsonrpc_sync(
+        self,
+        serial: str,
+        payload: dict[str, Any],
+        timeout: float,
+    ) -> tuple[bool, str]:
+        res = self._do_u2_http(
+            serial,
+            "POST",
+            "/jsonrpc/0",
+            json.dumps(payload),
+            "application/json",
+            timeout,
+        )
+        return self._parse_u2_touch_rpc_result(res)
 
     async def _handle_u2_batch(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a batch of primitive u2 actions and return aggregated results."""
@@ -1944,6 +2205,25 @@ class RelayAgent:
             if evidence:
                 payload["evidence"] = evidence
             ingest = await self._extra_ingest.process_payload(payload)
+            ingest_diag = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
+            logger.info(
+                "extra_data ingest done serial=%s strategy=%s ok=%s parsed=%s inserted=%s duplicate=%s "
+                "post_stats_found=%s post_stats_persisted=%s parent_stats_skip=%s "
+                "comments_returned=%s snapshots=%s xml_bytes=%s elapsed_ms=%s",
+                serial,
+                strategy,
+                bool(ingest.get("ok")),
+                ingest.get("parsed_count"),
+                ingest.get("inserted_count"),
+                ingest.get("duplicate_count"),
+                ingest_diag.get("post_stats_found"),
+                ingest_diag.get("post_stats_persisted"),
+                ingest_diag.get("parent_stats_update_skipped_reason"),
+                ingest_diag.get("comments_returned"),
+                ingest.get("snapshot_count"),
+                ingest.get("xml_bytes"),
+                ingest.get("elapsed_ms"),
+            )
             if ingest.get("ok"):
                 reply["ok"] = True
                 reply_ingest = dict(ingest)
@@ -2399,6 +2679,12 @@ class RelayAgent:
         except Exception:
             pass
 
+        warm_task = self._u2_warm_tasks.pop(serial, None)
+        if warm_task is not None and not warm_task.done():
+            warm_task.cancel()
+        self._u2_warm_inflight.discard(serial)
+        self._clear_u2_warm_backoff(serial)
+
         # Supervisor circuit breaker — let a re-plugged device start fresh.
         breakers = getattr(self._supervisor, "_breakers", None)
         if isinstance(breakers, dict):
@@ -2415,6 +2701,7 @@ class RelayAgent:
 
         # ATX cache + logical serial map can grow with phone churn.
         host = self._atx_lan_host_cache.pop(serial, None)
+        self._clear_atx_forward(serial)
         mapped_keys = [k for k, v in self._scrcpy_logical_to_adb.items() if v == serial]
         for k in mapped_keys:
             self._scrcpy_logical_to_adb.pop(k, None)

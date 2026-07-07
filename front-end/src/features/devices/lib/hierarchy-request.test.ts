@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   HIERARCHY_REQUEST_TIMEOUT_MS,
   shouldBackoffHierarchyError,
+  shouldRespectHierarchyBackoff,
   shouldReuseHierarchyInFlight
 } from './hierarchy-request.ts';
 
@@ -28,4 +29,11 @@ test('interaction hierarchy requests bypass in-flight auto refresh requests', ()
   assert.equal(shouldReuseHierarchyInFlight({}), true);
   assert.equal(shouldReuseHierarchyInFlight({ bypassInFlight: false }), true);
   assert.equal(shouldReuseHierarchyInFlight({ bypassInFlight: true }), false);
+});
+
+test('manual hierarchy refresh bypasses failure cooldown', () => {
+  assert.equal(shouldRespectHierarchyBackoff(), true);
+  assert.equal(shouldRespectHierarchyBackoff({}), true);
+  assert.equal(shouldRespectHierarchyBackoff({ bypassBackoff: false }), true);
+  assert.equal(shouldRespectHierarchyBackoff({ bypassBackoff: true }), false);
 });

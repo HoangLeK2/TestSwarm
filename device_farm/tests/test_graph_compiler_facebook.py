@@ -63,7 +63,10 @@ def test_facebook_group_template_keeps_extra_data_tuning_in_steps_not_variables(
 
     assert variables.isdisjoint(extra_data_keys)
     assert not _contains_step_type(spec["steps"], "tap_fb_comment_button")
-    assert _contains_step_type(spec["steps"], "fb_tap_comment_button")
+    assert not _contains_step_type(spec["steps"], "fb_tap_comment_button")
+    assert _contains_step_type(spec["steps"], "fb_find_comment_button")
+    assert _contains_step_type(spec["steps"], "fb_tap_comment_target")
+    assert _contains_step_type(spec["steps"], "fb_apply_comment_filter")
 
     nodes, edges = steps_to_graph(spec["steps"])
     round_tripped = compile_graph_to_steps(nodes, edges)
@@ -72,27 +75,23 @@ def test_facebook_group_template_keeps_extra_data_tuning_in_steps_not_variables(
 
 
 def test_facebook_builtin_post_comment_flows_stay_on_detail_until_comments_extracted() -> None:
-    flows: list[tuple[str, list[dict], int, int]] = []
+    flows: list[tuple[str, list[dict], int, int, int, int, int]] = []
     for spec in BUILTIN_TEMPLATE_BY_NAME.values():
         if spec.get("category") != "facebook":
             continue
         flows.extend(
-            (spec["name"], sibling_steps, post_index, comment_tap_index)
-            for sibling_steps, post_index, comment_tap_index in _post_comment_sibling_flows(spec["steps"])
+            (spec["name"], sibling_steps, post_index, find_index, tap_index, filter_index, comment_index)
+            for sibling_steps, post_index, find_index, tap_index, filter_index, comment_index in _post_comment_sibling_flows(spec["steps"])
         )
 
     assert flows
-    for name, sibling_steps, post_index, comment_tap_index in flows:
-        assert comment_tap_index == post_index + 1, name
-        assert not any(_is_back_step(step) for step in sibling_steps[post_index + 1 : comment_tap_index]), name
+    for name, sibling_steps, post_index, find_index, tap_index, filter_index, comment_index in flows:
+        assert post_index < find_index < tap_index < filter_index < comment_index, name
+        assert not any(_is_back_step(step) for step in sibling_steps[post_index + 1 : comment_index]), name
 
-        tap_step = sibling_steps[comment_tap_index]
-        then_steps = tap_step.get("then")
-        assert isinstance(then_steps, list), name
-        comment_extract_index = _first_step_index(then_steps, _is_fb_comment_extract)
-        assert comment_extract_index is not None, name
-        assert then_steps[comment_extract_index].get("require_verified_parent") is True, name
-        return_steps = then_steps[comment_extract_index + 1 :]
+        comment_step = sibling_steps[comment_index]
+        assert comment_step.get("require_verified_parent") is True, name
+        return_steps = sibling_steps[comment_index + 1 :]
         assert return_steps and _is_back_step(return_steps[0]), name
         assert any(
             step.get("type") == "if_element"
@@ -122,12 +121,21 @@ def _contains_step_type(steps: list[dict], step_type: str) -> bool:
     return False
 
 
-def _post_comment_sibling_flows(steps: list[dict]) -> list[tuple[list[dict], int, int]]:
-    flows: list[tuple[list[dict], int, int]] = []
+def _post_comment_sibling_flows(steps: list[dict]) -> list[tuple[list[dict], int, int, int, int, int]]:
+    flows: list[tuple[list[dict], int, int, int, int, int]] = []
     post_index = _first_step_index(steps, _is_fb_post_extract)
-    comment_tap_index = _first_step_index(steps, lambda step: step.get("type") == "fb_tap_comment_button")
-    if post_index is not None and comment_tap_index is not None:
-        flows.append((steps, post_index, comment_tap_index))
+    find_index = _first_step_index(steps, lambda step: step.get("type") == "fb_find_comment_button")
+    tap_index = _first_step_index(steps, lambda step: step.get("type") == "fb_tap_comment_target")
+    filter_index = _first_step_index(steps, lambda step: step.get("type") == "fb_apply_comment_filter")
+    comment_index = _first_step_index(steps, _is_fb_comment_extract)
+    if (
+        post_index is not None
+        and find_index is not None
+        and tap_index is not None
+        and filter_index is not None
+        and comment_index is not None
+    ):
+        flows.append((steps, post_index, find_index, tap_index, filter_index, comment_index))
 
     for step in steps:
         for key in ("steps", "then", "else"):

@@ -84,6 +84,9 @@ export type ActionType =
   | 'wait_stable'
   | 'verify_screen'
   | 'dismiss_popup'
+  | 'login_if_needed'
+  | 'fill_form'
+  | 'assert_app_state'
   | 'input_text'
   | 'key'
   | 'adb_shell'
@@ -97,6 +100,9 @@ export type ActionType =
   | 'set_clipboard'
   | 'extract'
   | 'save_extraction'
+  | 'fb_find_comment_button'
+  | 'fb_tap_comment_target'
+  | 'fb_apply_comment_filter'
   | 'extract_text_hierarchy'
   | 'extract_text_ocr'
   | 'extract_text_ai'
@@ -174,7 +180,12 @@ export function getStepIcon(type: string): LucideIcon {
     case 'tap_position':
     case 'tap_selector':
     case 'double_tap':
+    case 'fb_tap_comment_target':
       return MousePointerClick;
+    case 'fb_find_comment_button':
+      return Search;
+    case 'fb_apply_comment_filter':
+      return ShieldCheck;
     case 'fb_tap_comment_button':
     case 'tap_fb_comment_button':
       return GitBranch;
@@ -182,6 +193,7 @@ export function getStepIcon(type: string): LucideIcon {
       return MoveRight;
     case 'input_text':
     case 'input_selector':
+    case 'fill_form':
     case 'key':
     case 'key_back':
       return Keyboard;
@@ -189,6 +201,7 @@ export function getStepIcon(type: string): LucideIcon {
       return Terminal;
     case 'wait_element':
     case 'assert_element':
+    case 'assert_app_state':
       return Scan;
     case 'scroll_down':
     case 'scroll_to':
@@ -203,6 +216,7 @@ export function getStepIcon(type: string): LucideIcon {
     case 'wait_stable':
       return Timer;
     case 'verify_screen':
+    case 'login_if_needed':
       return ShieldCheck;
     case 'pinch':
       return ZoomIn;
@@ -288,6 +302,12 @@ export function getStepLabel(step: FlowStep): string {
     }
     case 'input_selector':
       return `input [${step.by}="${step.value}"] "${step.text}"`;
+    case 'login_if_needed':
+      return `login_if_needed ${step.profile?.package || ''}`;
+    case 'fill_form':
+      return `fill_form ${step.recipe || ''}`;
+    case 'assert_app_state':
+      return `assert_app_state ${step.any_text?.[0] || step.locator || ''}`;
     case 'input_text':
       return `input_text "${step.text}"`;
     case 'adb_shell':
@@ -308,6 +328,20 @@ export function getStepLabel(step: FlowStep): string {
       return `extract_text_ai → ${step.save_as ?? 'ai_text'}`;
     case 'extract_screen_data':
       return `extract_screen_data → ${step.save_as ?? 'screen_data'}`;
+    case 'fb_find_comment_button':
+      return `Tìm nút Bình luận · chờ ${step.timeout ?? 6}s`;
+    case 'fb_tap_comment_target':
+      return `Bấm target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
+    case 'fb_apply_comment_filter': {
+      const filterLabels: Record<string, string> = {
+        most_relevant: 'Phù hợp nhất',
+        newest: 'Mới nhất',
+        all_comments: 'Tất cả bình luận',
+        none: 'Không đổi'
+      };
+      const filter = step.comment_filter ?? 'all_comments';
+      return `Lọc bình luận → ${filterLabels[filter] ?? filter}`;
+    }
     default:
       return step.type;
   }
@@ -331,9 +365,19 @@ export const ALL_STEP_TYPES: {
   { value: 'tap_ratio', label: 'tap_ratio', group: 'action' },
   { value: 'tap_selector', label: 'tap_selector', group: 'action' },
   {
-    value: 'fb_tap_comment_button',
-    label: 'Bấm nút Bình luận (FB) — có nhánh OK / Không thấy',
-    group: 'control'
+    value: 'fb_find_comment_button',
+    label: 'Tìm nút Bình luận (FB)',
+    group: 'action'
+  },
+  {
+    value: 'fb_tap_comment_target',
+    label: 'Bấm target Bình luận (FB)',
+    group: 'action'
+  },
+  {
+    value: 'fb_apply_comment_filter',
+    label: 'Áp dụng bộ lọc bình luận (FB)',
+    group: 'action'
   },
   { value: 'tap_position', label: 'tap_position', group: 'action' },
   { value: 'swipe_ratio', label: 'swipe_ratio', group: 'action' },
@@ -348,6 +392,9 @@ export const ALL_STEP_TYPES: {
   { value: 'wait_stable', label: 'wait_stable', group: 'action' },
   { value: 'verify_screen', label: 'verify_screen', group: 'action' },
   { value: 'dismiss_popup', label: 'dismiss_popup', group: 'action' },
+  { value: 'login_if_needed', label: 'login_if_needed', group: 'action' },
+  { value: 'fill_form', label: 'fill_form', group: 'action' },
+  { value: 'assert_app_state', label: 'assert_app_state', group: 'action' },
   { value: 'key', label: 'key', group: 'action' },
   { value: 'double_tap', label: 'double_tap', group: 'action' },
   { value: 'pinch', label: 'pinch', group: 'action' },
@@ -536,6 +583,34 @@ export function createDefaultStep(
         then: createDefaultFbCommentThenSteps(),
         else: []
       };
+    case 'fb_find_comment_button':
+      return {
+        ...base,
+        type,
+        timeout: 6,
+        poll: 0.4,
+        dedupe_field: 'post_key',
+        comment_filter: 'all_comments',
+        switch_to_all_comments: true,
+        ignore_error: true
+      };
+    case 'fb_tap_comment_target':
+      return {
+        ...base,
+        type,
+        post_tap_wait_s: 0.35,
+        ignore_error: true
+      };
+    case 'fb_apply_comment_filter':
+      return {
+        ...base,
+        type,
+        comment_filter: 'all_comments',
+        switch_to_all_comments: true,
+        comment_filter_settle_s: 0.45,
+        comment_filter_step_pause_s: 0.35,
+        comment_filter_post_select_s: 0.85
+      };
     case 'tap_position':
       return { ...base, type: 'tap_position', pos: 'middle_center' };
     case 'swipe_ratio':
@@ -632,6 +707,44 @@ export function createDefaultStep(
       };
     case 'dismiss_popup':
       return { ...base, type: 'dismiss_popup', retries: 3 };
+    case 'login_if_needed':
+      return {
+        ...base,
+        type: 'login_if_needed',
+        profile: {
+          package: '',
+          semantic_locators: {},
+          login_recipe: {
+            detect_logged_in: { any_text: [] },
+            fields: {},
+            submit: { tap_text_any: ['Login', 'Sign in'] }
+          }
+        },
+        clear_first: true
+      };
+    case 'fill_form':
+      return {
+        ...base,
+        type: 'fill_form',
+        profile: {
+          package: '',
+          semantic_locators: {},
+          form_recipes: {}
+        },
+        recipe: '',
+        clear_first: true
+      };
+    case 'assert_app_state':
+      return {
+        ...base,
+        type: 'assert_app_state',
+        profile: { package: '', semantic_locators: {} },
+        package: '',
+        any_text: [],
+        all_text: [],
+        not_text: [],
+        locator: ''
+      };
     case 'key':
       return { ...base, type: 'key', key: 'enter' };
     /** Insert-menu alias → Android BACK (same engine step as `key`). */
@@ -685,9 +798,8 @@ export function createDefaultStep(
         content_type: 'fb_post',
         dedupe_field: 'post_key'
       };
-    // Shortcut — creates an `extract` step preset for FB comments. Mirrors what
-    // fb_group_1h templates use inside `fb_tap_comment_button.then`. User can
-    // still tweak any field in the detail panel afterwards.
+    // Shortcut — creates an `extract` step preset for FB comments. Mirrors the
+    // split Facebook comment templates; users can still tweak fields later.
     case 'extract_fb_comments':
       return {
         ...base,
@@ -703,12 +815,12 @@ export function createDefaultStep(
         comment_scroll_distance: 0.52,
         comment_scroll_duration_ms: 120,
         comment_scroll_pause_s: 0.03,
-        comment_no_growth_break: 3,
+        comment_no_growth_break: 0,
         min_comment_scan_passes: 2,
         comment_max_snapshots: 12,
         comment_scroll_wall_s: 25,
-        comment_stop_if_no_new: true,
-        stop_if_no_new: true,
+        comment_stop_if_no_new: false,
+        stop_if_no_new: false,
         no_new_threshold: 3,
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',

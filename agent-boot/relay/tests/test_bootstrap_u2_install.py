@@ -4,6 +4,19 @@ import bootstrap
 from relay import adb as relay_adb
 
 
+class _FakeUrlopenResponse:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _limit: int = -1) -> bytes:
+        return b"pong"
+
+
 def test_bootstrap_step_install_u2_skips_when_both_packages_exist(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -91,6 +104,139 @@ def test_relay_bootstrap_skips_atx_u2_restart_when_healthy(monkeypatch) -> None:
     assert '"u2_ready": true' in output
     assert '"atx_ready": true' in output
     assert '"u2_ime_ready": true' in output
+
+
+def test_u2_atx_health_rejects_wedged_http_even_when_ports_listen(monkeypatch) -> None:
+    checked_ports: list[int] = []
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "192.168.1.5")
+    monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (False, "Remote end closed connection without response"))
+
+    def fake_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
+        checked_ports.append(port)
+        return True
+
+    monkeypatch.setattr(relay_adb, "_device_port_listening", fake_port_listening)
+
+    assert relay_adb._u2_atx_healthy("serial-1") is False
+    assert checked_ports == []
+
+
+def test_u2_atx_health_falls_back_to_ports_when_lan_ip_unavailable(monkeypatch) -> None:
+    checked_ports: list[int] = []
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (False, "device LAN IP unavailable"))
+
+    def fake_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
+        checked_ports.append(port)
+        return True
+
+    monkeypatch.setattr(relay_adb, "_device_port_listening", fake_port_listening)
+
+    assert relay_adb._u2_atx_healthy("serial-1") is True
+    assert checked_ports == [7912, 9008]
+
+
+def test_atx_http_ping_falls_back_to_adb_forward_when_lan_times_out(monkeypatch) -> None:
+    adb_calls: list[tuple[tuple[str, ...], str | None, int]] = []
+    urls: list[str] = []
+
+    def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
+        adb_calls.append((args, serial, timeout))
+        if args == ("forward", "tcp:0", "tcp:7912"):
+            return "43210\r\n", 0
+        if args == ("forward", "--remove", "tcp:43210"):
+            return "", 0
+        raise AssertionError(f"unexpected adb call: {args!r}")
+
+    def fake_urlopen(url: str, timeout: float):
+        urls.append(url)
+        if url == "http://192.168.105.63:7912/ping":
+            raise TimeoutError("timed out")
+        if url == "http://host.docker.internal:43210/ping":
+            return _FakeUrlopenResponse()
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(relay_adb, "_run", fake_run)
+    monkeypatch.setattr(relay_adb.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("ADB_SERVER_SOCKET", "tcp:host.docker.internal:5037")
+
+    ok, msg = relay_adb._atx_http_ping("usb-serial", host="192.168.105.63")
+
+    assert ok is True
+    assert msg == "pong"
+    assert urls == [
+        "http://192.168.105.63:7912/ping",
+        "http://host.docker.internal:43210/ping",
+    ]
+    assert adb_calls == [
+        (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
+        (("forward", "--remove", "tcp:43210"), "usb-serial", 5),
+    ]
+
+
+def test_atx_http_ping_uses_adb_forward_when_lan_ip_unavailable(monkeypatch) -> None:
+    adb_calls: list[tuple[tuple[str, ...], str | None, int]] = []
+    urls: list[str] = []
+
+    def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
+        adb_calls.append((args, serial, timeout))
+        if args == ("forward", "tcp:0", "tcp:7912"):
+            return "43210\n", 0
+        if args == ("forward", "--remove", "tcp:43210"):
+            return "", 0
+        raise AssertionError(f"unexpected adb call: {args!r}")
+
+    def fake_urlopen(url: str, timeout: float):
+        urls.append(url)
+        return _FakeUrlopenResponse()
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(relay_adb, "_run", fake_run)
+    monkeypatch.setattr(relay_adb.urllib.request, "urlopen", fake_urlopen)
+
+    ok, msg = relay_adb._atx_http_ping("usb-serial")
+
+    assert ok is True
+    assert msg == "pong"
+    assert urls == ["http://127.0.0.1:43210/ping"]
+    assert adb_calls == [
+        (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
+        (("forward", "--remove", "tcp:43210"), "usb-serial", 5),
+    ]
+
+
+def test_atx_http_ping_reports_forward_failure(monkeypatch) -> None:
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(
+        relay_adb,
+        "_run",
+        lambda *args, **kwargs: ("cannot bind", 1),
+    )
+
+    ok, msg = relay_adb._atx_http_ping("usb-serial")
+
+    assert ok is False
+    assert msg == "adb forward failed: cannot bind"
+
+
+def test_atx_http_ping_does_not_forward_tcp_serial(monkeypatch) -> None:
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, **_kwargs):
+        calls.append(args)
+        return "", 1
+
+    monkeypatch.setattr(relay_adb, "_run", fake_run)
+
+    ok, msg = relay_adb._atx_http_ping("192.168.105.63:5555")
+
+    assert ok is False
+    assert msg == "adb forward unavailable for tcp serial"
+    assert calls == []
 
 
 def test_ensure_u2_input_ime_pins_adb_keyboard(monkeypatch) -> None:

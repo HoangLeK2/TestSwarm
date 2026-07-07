@@ -70,7 +70,7 @@ def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
 
     module = Module()
 
-    def fake_resolve(_xml):
+    def fake_resolve(_xml, **_kwargs):
         top = {
             "post": {"_pid": "pid-1", "post_key": "post-1", "text": "hello", "author": "Alice"},
             "comment_bounds": (10, 20, 110, 60),
@@ -114,7 +114,7 @@ def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
 
 
 def test_fb_comment_target_uses_body_fallback_for_parent_anchor(monkeypatch) -> None:
-    def fake_resolve(_xml):
+    def fake_resolve(_xml, **_kwargs):
         top = {
             "post": {
                 "_pid": "pid-1",
@@ -144,7 +144,7 @@ def test_fb_comment_target_reports_empty_when_no_candidate(monkeypatch) -> None:
         pass
 
     module = Module()
-    module.resolve_comment_targets_from_xml = lambda _xml: (None, [])
+    module.resolve_comment_targets_from_xml = lambda _xml, **_kwargs: (None, [])
     monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
 
     items, diagnostic = _parse_items("fb_comment_target", "<hierarchy />", {})
@@ -755,6 +755,40 @@ async def test_process_payload_active_parent_uses_image_desc_text_fallback(monke
     assert result["active_parent_post"]["text_prefix"] == "image-only parent post"
 
 
+def test_merge_fb_comment_frames_dedupes_and_keeps_latest_stats() -> None:
+    items, diagnostic = extra_data_ingest.merge_fb_comment_frames(
+        [
+            (
+                [
+                    {"_type": "post_stats", "comment_count": 1},
+                    {"comment_key": "c1", "text": "first"},
+                ],
+                {"reason_code": "ok"},
+            ),
+            (
+                [
+                    {"_type": "post_stats", "comment_count": 2},
+                    {"comment_key": "c1", "text": "duplicate"},
+                    {"comment_key": "c2", "text": "second"},
+                    {"comment_key": "c3", "text": "third"},
+                ],
+                {"reason_code": "ok"},
+            ),
+        ],
+        max_items=2,
+    )
+
+    assert items == [
+        {"_type": "post_stats", "comment_count": 2},
+        {"comment_key": "c1", "text": "first"},
+        {"comment_key": "c2", "text": "second"},
+    ]
+    assert diagnostic["snapshot_count"] == 2
+    assert diagnostic["frame_reason_codes"] == ["ok", "ok"]
+    assert diagnostic["comments_returned"] == 2
+    assert diagnostic["has_header_stats"] is True
+
+
 @pytest.mark.asyncio
 async def test_process_payload_merges_fb_comment_snapshots(monkeypatch) -> None:
     class Module:
@@ -835,6 +869,168 @@ async def test_process_payload_merges_fb_comments_respects_high_max_items_defaul
     assert result["ok"] is True
     assert result["parsed_count"] == 2
     assert captured_max == [400, 400]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -> None:
+    def fail_parse(*args, **kwargs):
+        raise AssertionError("preparsed path should not parse XML")
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fail_parse)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    xml = '<hierarchy><node text="evidence" /></hierarchy>'
+
+    result = await server.process_payload({
+        "serial": "serial-1",
+        "strategy": "fb_comments",
+        "xml": xml,
+        "context": {
+            "persist": False,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+            "parent_id": "parent-1",
+            "require_verified_parent": False,
+        },
+        "preparsed": {
+            "items": [{"comment_key": "c1", "text": "first"}],
+            "diagnostic": {"reason_code": "ok", "comments_returned": 1},
+            "snapshot_count": 3,
+            "xml_bytes": 12345,
+        },
+    })
+
+    assert result["ok"] is True
+    assert result["snapshot_count"] == 3
+    assert result["payload_snapshot_count"] == 1
+    assert result["xml_bytes"] == 12345
+    assert result["payload_xml_bytes"] == len(xml.encode("utf-8"))
+    assert result["diagnostic"]["preparsed"] is True
+    assert result["items"][0]["comment_key"] == "c1"
+    assert result["items"][0]["parent_content_hash"] == "parent-1"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_persists_fb_comment_post_stats_to_parent(monkeypatch) -> None:
+    def fail_parse(*args, **kwargs):
+        raise AssertionError("preparsed path should not parse XML")
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fail_parse)
+
+    class FakeWriter:
+        def __init__(self) -> None:
+            self.rows = []
+            self.update_calls = []
+
+        async def prepare_context_for_persist(self, context):
+            return context
+
+        async def insert_rows(self, rows):
+            self.rows = rows
+            return {
+                "attempted": len(rows),
+                "inserted": len(rows),
+                "duplicates": 0,
+                "inserted_content_hashes": [row["content_hash"] for row in rows],
+            }
+
+        async def update_content_stats(self, **kwargs):
+            self.update_calls.append(kwargs)
+            return True
+
+    writer = FakeWriter()
+    server = ExtraDataIngestServer()
+    server._writer = writer
+    xml = '<hierarchy><node text="evidence" /></hierarchy>'
+
+    result = await server.process_payload({
+        "serial": "serial-1",
+        "strategy": "fb_comments",
+        "xml": xml,
+        "context": {
+            "collection": "fb",
+            "persist": True,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+            "parent_id": "parent-scoped-hash",
+            "parent_id_already_scoped": True,
+            "require_verified_parent": False,
+        },
+        "preparsed": {
+            "items": [
+                {"_type": "post_stats", "reactions": "12", "comments": "10", "shares": "2"},
+                {"comment_key": "c1", "text": "first"},
+            ],
+            "diagnostic": {"reason_code": "ok", "comments_returned": 1},
+        },
+    })
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 2
+    assert result["inserted_count"] == 1
+    assert len(writer.rows) == 1
+    assert writer.update_calls == [
+        {
+            "content_hash": "parent-scoped-hash",
+            "likes_count": "12",
+            "comments_count": "10",
+            "shares_count": "2",
+        }
+    ]
+    assert result["diagnostic"]["post_stats_found"] is True
+    assert result["diagnostic"]["post_stats_persisted"] is True
+    assert result["items"] == [
+        {
+            "comment_key": "c1",
+            "text": "first",
+            "parent_content_hash": "parent-scoped-hash",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_invalid_preparsed_fb_comments_falls_back(monkeypatch) -> None:
+    class Module:
+        pass
+
+    module = Module()
+    called = {"count": 0}
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        called["count"] += 1
+        return [{"comment_key": "c1", "text": "from-xml"}], {"reason_code": "ok"}
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+
+    result = await server.process_payload({
+        "serial": "serial-1",
+        "strategy": "fb_comments",
+        "xml": '<hierarchy><node text="frame-1" /></hierarchy>',
+        "context": {
+            "persist": False,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+        },
+        "preparsed": {"items": "invalid"},
+    })
+
+    assert result["ok"] is True
+    assert called["count"] == 1
+    assert result["diagnostic"].get("preparsed") is None
+    assert result["items"][0]["text"] == "from-xml"
 
 
 @pytest.mark.asyncio

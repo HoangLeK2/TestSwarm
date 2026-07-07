@@ -17,6 +17,8 @@ export interface Device {
   relay_scrcpy_enabled?: boolean;
   /** >0 when a Temporal scenario/campaign is actively driving this device */
   scenario_active?: number;
+  /** True after operator paused automation to take manual control. */
+  manual_takeover_active?: boolean;
 }
 
 export interface Task {
@@ -61,6 +63,7 @@ export type WsMessage =
       minitouch_ready?: boolean;
       u2_ready?: boolean;
       scenario_active?: number;
+      manual_takeover_active?: boolean;
     }
   | { type: 'log'; serial: string; line: string }
   | { type: 'ws_status'; connected: boolean }

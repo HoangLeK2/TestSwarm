@@ -20,6 +20,8 @@ from services.scenario_validation.models import ValidationResult
 from services.scenario_validation.ref_cache import ScenarioRefCache
 from services.scenario_validation.step_index import StepIndex
 from services.scenario_validation.validator import ScenarioValidator
+from services.org_scenario_validation.checks import check_variables as check_org_variables
+from services.org_scenario_validation.step_index import OrgStepIndex
 
 
 def _result() -> ValidationResult:
@@ -118,6 +120,35 @@ def test_declared_variable_in_scenario_defaults() -> None:
     steps = [{"type": "tap_selector", "selector": {"by": "text", "value": "${KEYWORD}"}}]
     check_variables(_idx(steps), {"KEYWORD": "hello"}, {}, result)
     assert not result.errors
+
+
+def test_tags_metadata_does_not_require_variable_declaration() -> None:
+    result = _result()
+    steps = [
+        {
+            "type": "extract",
+            "strategy": "fb_posts",
+            "tags": "group,crawl,${GROUP_NAME}",
+        }
+    ]
+    check_variables(_idx(steps), {}, {}, result)
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_org_tags_metadata_does_not_require_variable_declaration() -> None:
+    result = _result()
+    steps = [
+        {
+            "id": "extract_posts",
+            "type": "extraction.extract",
+            "config": {
+                "strategy": "fb_posts",
+                "tags": "group,crawl,${GROUP_NAME}",
+            },
+        }
+    ]
+    check_org_variables(OrgStepIndex.build(steps), {}, {}, result)
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
 
 
 def test_set_variable_declares_for_following_steps() -> None:

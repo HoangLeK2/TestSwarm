@@ -172,6 +172,25 @@ async def test_screenshot_returns_base64(executor):
 
 
 @pytest.mark.asyncio
+async def test_open_url_uses_uiautomator_device_open_url(executor):
+    exc, dev, pool = executor
+
+    result = await exc.run_batch("serial", [
+        {"op": "open_url", "url": "https://example.com/path?q=1"},
+    ])
+
+    assert result["ok"] is True
+    assert result["results"][0]["op"] == "open_url"
+    dev.open_url.assert_called_once_with("https://example.com/path?q=1")
+
+
+def test_selector_normalizes_description_startswith_alias(mock_device):
+    _resolve(mock_device, {"descriptionStartswith": "Nút Thích"})
+
+    mock_device.assert_called_once_with(descriptionStartsWith="Nút Thích")
+
+
+@pytest.mark.asyncio
 async def test_click_selector_default_timeout_is_fast(executor):
     exc, dev, pool = executor
     ui_obj = MagicMock()
@@ -211,6 +230,18 @@ async def test_swipe_default_duration_is_fast(executor):
 
     assert result["ok"] is True
     dev.swipe.assert_called_once_with(100, 1000, 100, 300, duration=0.12)
+
+
+@pytest.mark.asyncio
+async def test_run_batch_sleep_op_is_bounded(executor, monkeypatch):
+    exc, dev, pool = executor
+    calls: list[float] = []
+    monkeypatch.setattr("relay.u2_executor.time.sleep", calls.append)
+
+    result = await exc.run_batch("serial", [{"op": "sleep", "seconds": 9.0}])
+
+    assert result["ok"] is True
+    assert calls == [3.0]
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,9 @@ export const STEP_COLORS: Record<string, string> = {
   verify_screen: 'border-l-green-500',
   assert_element: 'border-l-green-500',
   dismiss_popup: 'border-l-green-500',
+  login_if_needed: 'border-l-emerald-500',
+  fill_form: 'border-l-cyan-600',
+  assert_app_state: 'border-l-green-600',
   double_tap: 'border-l-blue-400',
   pinch: 'border-l-sky-500',
   drag: 'border-l-blue-600',
@@ -38,6 +41,9 @@ export const STEP_COLORS: Record<string, string> = {
   loop: 'border-l-teal-500',
   extract: 'border-l-fuchsia-500',
   save_extraction: 'border-l-fuchsia-600',
+  fb_find_comment_button: 'border-l-sky-500',
+  fb_tap_comment_target: 'border-l-blue-500',
+  fb_apply_comment_filter: 'border-l-emerald-500',
   extract_text_hierarchy: 'border-l-fuchsia-500',
   extract_text_ocr: 'border-l-fuchsia-500',
   extract_text_ai: 'border-l-fuchsia-500',
@@ -151,6 +157,46 @@ function localizeCollection(collection?: string): string {
   return trimmed;
 }
 
+const COMMENT_FILTER_I18N_KEYS: Record<string, string> = {
+  most_relevant: 'commentFilterMostRelevant',
+  newest: 'commentFilterNewest',
+  all_comments: 'commentFilterAllComments',
+  none: 'commentFilterNone'
+};
+
+const COMMENT_FILTER_LABELS_VI: Record<string, string> = {
+  most_relevant: 'Phù hợp nhất',
+  newest: 'Mới nhất',
+  all_comments: 'Tất cả bình luận',
+  none: 'Không đổi'
+};
+
+const COMMENT_FILTER_LABELS_EN: Record<string, string> = {
+  most_relevant: 'Most relevant',
+  newest: 'Newest',
+  all_comments: 'All comments',
+  none: 'No change'
+};
+
+function localizeCommentFilter(
+  filter: string | undefined,
+  t?: FlowStepTranslator
+): string {
+  const key = filter ?? 'all_comments';
+  if (t) {
+    const i18nKey = COMMENT_FILTER_I18N_KEYS[key];
+    if (i18nKey) {
+      return t(`display.${i18nKey}`);
+    }
+  }
+  return COMMENT_FILTER_LABELS_EN[key] ?? key;
+}
+
+function localizeCommentFilterVi(filter: string | undefined): string {
+  const key = filter ?? 'all_comments';
+  return COMMENT_FILTER_LABELS_VI[key] ?? key;
+}
+
 function hasFbCommentExtract(steps: unknown): boolean {
   if (!Array.isArray(steps)) return false;
   return steps.some((raw) => {
@@ -238,6 +284,9 @@ export const INSERT_MENU_DEF = [
       'scroll_to',
       'assert_element',
       'dismiss_popup',
+      'login_if_needed',
+      'fill_form',
+      'assert_app_state',
       'double_tap',
       'pinch',
       'drag',
@@ -267,7 +316,13 @@ export const INSERT_MENU_DEF = [
   },
   {
     groupKey: 'facebook' as const,
-    items: ['fb_tap_comment_button', 'extract_fb_comments', 'extract_fb_posts']
+    items: [
+      'fb_find_comment_button',
+      'fb_tap_comment_target',
+      'fb_apply_comment_filter',
+      'extract_fb_comments',
+      'extract_fb_posts'
+    ]
   }
 ] as const;
 
@@ -366,6 +421,12 @@ export function getStepSummary(step: FlowStep): string {
       const val = step.selector?.value ?? step.value;
       return `"${step.text}" → [${by}] "${val}"`;
     }
+    case 'login_if_needed':
+      return step.profile?.package || '';
+    case 'fill_form':
+      return step.recipe || '';
+    case 'assert_app_state':
+      return step.any_text?.[0] || step.locator || step.package || '';
     case 'key':
       return step.key;
     case 'adb_shell':
@@ -467,6 +528,12 @@ export function getStepSummary(step: FlowStep): string {
         : '';
       return `OK: ${thenN} bước${commentPart}${requirePostPart}${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
     }
+    case 'fb_find_comment_button':
+      return `target nút Bình luận · chờ ${step.timeout ?? 6}s`;
+    case 'fb_tap_comment_target':
+      return `tap target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
+    case 'fb_apply_comment_filter':
+      return `Lọc bình luận → ${localizeCommentFilterVi(step.comment_filter)}`;
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return step.collection
@@ -591,6 +658,14 @@ export function getStepDisplay(
       };
     case 'dismiss_popup':
       return { target: step.retries != null ? `×${step.retries}` : '' };
+    case 'login_if_needed':
+      return { target: step.profile?.package ?? '' };
+    case 'fill_form':
+      return { target: step.recipe ?? '' };
+    case 'assert_app_state':
+      return {
+        target: step.any_text?.[0] ?? step.locator ?? step.package ?? ''
+      };
     case 'tap_position':
       return { target: step.pos ?? '' };
     case 'scroll_down': {
@@ -676,6 +751,28 @@ export function getStepDisplay(
       }
       return {
         target: `Comment · OK ${thenN}${commentPart}${requirePostPart}${elseN ? ` / miss ${elseN}` : ''}`
+      };
+    }
+    case 'fb_find_comment_button':
+      return {
+        target: t
+          ? td('fbFindCommentButton', { timeout: step.timeout ?? 6 })
+          : `Find comment button · ${step.timeout ?? 6}s`
+      };
+    case 'fb_tap_comment_target':
+      return {
+        target: t
+          ? td('fbTapCommentTarget', {
+              wait: step.post_tap_wait_s ?? 0.35
+            })
+          : `Tap cached target · ${step.post_tap_wait_s ?? 0.35}s`
+      };
+    case 'fb_apply_comment_filter': {
+      const filterLabel = localizeCommentFilter(step.comment_filter, t);
+      return {
+        target: t
+          ? td('fbApplyCommentFilter', { filter: filterLabel })
+          : `Filter · ${filterLabel}`
       };
     }
     case 'extract': {

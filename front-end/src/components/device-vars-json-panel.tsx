@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { mergeCampaignScenarioVariables as mergeCampaignScenarioVariablesModel } from './device-vars-json-model';
 
 export const DEFAULT_DEVICE_VARIABLES = {
   group_name: '',
@@ -50,15 +51,15 @@ export function buildDeviceVarsTemplate(
   return Object.keys(out).length ? out : { ...DEFAULT_DEVICE_VARIABLES };
 }
 
-/** Resolve globals for device vars: campaign values fill gaps, scenario values win on duplicate keys. */
+/** Resolve globals for device vars: scenario values are defaults, campaign values win per campaign. */
 export function mergeCampaignScenarioVariables(
   campaignVariables?: Record<string, unknown> | null,
   scenarioVariables?: Record<string, unknown> | null
 ) {
-  return {
-    ...flattenVariableDefinitions(campaignVariables ?? undefined),
-    ...flattenVariableDefinitions(scenarioVariables ?? undefined)
-  };
+  return mergeCampaignScenarioVariablesModel(
+    campaignVariables,
+    scenarioVariables
+  );
 }
 
 /** From merged view (global ∪ edits), keep only keys that differ from global or are not in global — matches what we persist as device overrides. */

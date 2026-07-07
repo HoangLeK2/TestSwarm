@@ -2,34 +2,26 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type QueryClient
-} from '@tanstack/react-query';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog';
-import { ControlRecordMirror } from './control-record/control-record-mirror';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ScenarioPlayer } from './control-record/scenario-player';
 import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
-import { MultiDevicePicker } from './control-record/multi-device-picker';
-import { MultiDeviceStage } from './control-record/multi-device-stage';
-import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
+import { ControlRecordTopBar } from './control-record/control-record-top-bar';
+import { ControlRecordHierarchyPanel } from './control-record/control-record-hierarchy-panel';
+import { ControlRecordMirrorPanel } from './control-record/control-record-mirror-panel';
+import { ControlRecordEditorToolbar } from './control-record/control-record-editor-toolbar';
+import {
+  ControlRecordDeviceVarsDialog,
+  ControlRecordExitConfirmDialog,
+  ControlRecordJsonDialog,
+  ControlRecordRecoveryDialog,
+  ControlRecordTakeoverConfirmDialog,
+  ControlRecordTemplatePreviewDialog,
+  ControlRecordVariablesDialog
+} from './control-record/control-record-dialogs';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import {
-  DeviceVarsJsonPanel,
   formatDeviceVarsJson,
   mergeCampaignScenarioVariables,
   parseDeviceVarsJson,
@@ -43,27 +35,14 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import {
-  Circle,
   Square,
-  Copy,
   Plus,
-  Save,
   ArrowLeft,
-  Play,
   ChevronLeft,
   ChevronRight,
-  RefreshCw,
   Crosshair,
-  HelpCircle,
-  SlidersHorizontal,
   MousePointerClick,
   Move,
-  Timer,
-  Keyboard,
-  CheckSquare,
-  Code2,
-  GitBranch,
-  List,
   AlertCircle
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -84,47 +63,43 @@ const FlowgramCanvas = dynamic(
   }
 );
 
-const VariableEditor = dynamic(
-  () => import('@/components/variable-editor').then((m) => m.VariableEditor),
-  { ssr: false }
-);
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 import { normalizeInternalAppPath } from '@/lib/i18n-path';
 import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import {
+  detectSingleVariableRename,
+  replaceScenarioVariableReferences
+} from '@/lib/scenario-variable-references';
 import { useRouter } from '@/i18n/navigation';
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger
-} from '@/components/ui/tooltip';
-import { useControlRecord } from '../hooks/use-control-record';
+  syncSavedScenarioCaches,
+  useControlRecord
+} from '../hooks/use-control-record';
+import { useControlRecordChunkReloadGuard } from '../hooks/use-control-record-chunk-reload';
+import { useControlRecordMultiDevice } from '../hooks/use-control-record-multi-device';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   campaignPerDeviceOverrides,
   campaignVariables,
   campaignsApi,
-  normalizeCampaignOut,
+  scenariosApi,
   type ScenarioDeviceVariablesOut
 } from '@/features/campaigns/services/api';
-import type { CampaignOut } from '@/features/campaigns/types';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { EmptyNodePicker } from './control-record/empty-node-picker';
-import { XmlTreeViewer } from './control-record/xml-tree-viewer';
 import {
   applySelectorToSteps,
   type SelectorPickTarget
@@ -134,9 +109,8 @@ import {
   applySwipeSegmentToSteps,
   type CoordinatePickTarget
 } from '@/features/campaigns/components/flow-editor/coordinate-pick';
-import { resolveLatestStepForInlineRun } from '@/features/campaigns/components/flow-editor/inline-run-key';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
-import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
+import { deriveNestedInlineRunStates } from '@/features/campaigns/components/flow-editor/inline-run-key';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import {
   findSelectorForTreeNode,
@@ -147,12 +121,12 @@ import {
 } from '../utils/control-record-xml';
 import type { ScenarioSelectorShape } from '../lib/scenario-selector-step';
 import { buildSelectorStep } from '../lib/scenario-selector-step';
-import { sanitizeScenarioStep } from '../lib/sanitize-scenario-steps-for-api';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import {
   previewScenarioStream,
   cancelPreviewStream,
   interruptDevice,
+  takeOverDevice,
   runAgentShell
 } from '../services/api';
 import {
@@ -163,7 +137,6 @@ import { devicesApi } from '../services/manage-api';
 import { useTranslations } from 'next-intl';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from '@/features/campaigns/components/flow-editor/step-detail-panel';
-import { RecoveryPolicyEditor } from '@/features/campaigns/components/recovery-policy-editor';
 import type { RecoveryPolicy } from '@/features/campaigns/types';
 import {
   findStepByFlowgramId,
@@ -177,114 +150,25 @@ import type { FlowgramRunState } from '@/features/scenario-templates/components/
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import {
-  deviceSelectFullTitle,
-  formatDeviceSelectLabel
-} from '@/features/devices/lib/device-select-label';
+  collectDeclaredDeviceVarKeys,
+  flattenVarDefs,
+  mergeDeclaredDeviceVarKeys,
+  mergeTemplateVariablesIntoEditor
+} from '../lib/control-record-variables';
 import {
-  getActiveMultiSerials,
-  getRenderSafeFollowerSerials,
-  resetFollowersAfterPrimaryChange,
-  sanitizeMultiFollowerSerials
-} from '../lib/control-record-multi';
+  deviceSerialMatches,
+  isManualControlBlockedByAutomation,
+  shouldShowControlRecordNoDeviceBanner
+} from '../lib/control-record-device-state';
+import { needsFreshMirrorSelectorXml } from '../lib/control-record-hierarchy';
+import {
+  prepareInlinePreviewStep,
+  preparePreviewStepPayload
+} from '../lib/control-record-preview-steps';
+import { syncCampaignDetailCaches } from '../lib/control-record-cache';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
-
-function syncCampaignDetailCaches(
-  queryClient: QueryClient,
-  campaignId: string,
-  rawCampaign: unknown
-) {
-  const campaign = normalizeCampaignOut(
-    rawCampaign as CampaignOut | Record<string, unknown> | null | undefined
-  );
-  if (!campaign) return;
-
-  queryClient.setQueryData(
-    ['campaign', campaignId, 'global-vars-preview'],
-    campaign
-  );
-  queryClient.setQueryData(['campaigns', campaignId], campaign);
-  queryClient.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
-    old?.map((row) => (row.id === campaignId ? { ...row, ...campaign } : row))
-  );
-  void queryClient.invalidateQueries({
-    queryKey: ['campaigns', campaignId],
-    exact: true
-  });
-  void queryClient.invalidateQueries({ queryKey: ['campaigns'], exact: true });
-}
-
-/**
- * Template variables are stored as metadata dicts:
- *   {"GROUP_NAME": {"type": "string", "default": "foo", "description": "..."}}
- * Flatten them to plain values so they can be used at runtime:
- *   {"GROUP_NAME": "foo"}
- */
-function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(vars)) {
-    if (
-      v !== null &&
-      typeof v === 'object' &&
-      !Array.isArray(v) &&
-      'type' in v &&
-      'default' in v
-    ) {
-      out[k] = v.default;
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
-}
-
-function deviceSerialMatches(a: string, b: string): boolean {
-  const left = a.trim().toLowerCase();
-  const right = b.trim().toLowerCase();
-  if (!left || !right) return false;
-  return left === right || left.endsWith(right) || right.endsWith(left);
-}
-
-function mergeTemplateVariablesIntoEditor(
-  prev: Record<string, any>,
-  templateVars: Record<string, any> | undefined
-): Record<string, any> {
-  if (!templateVars || Object.keys(templateVars).length === 0) return prev;
-  return flattenVarDefs({
-    ...prev,
-    ...flattenVarDefs(templateVars)
-  });
-}
-
-function isManualControlEligible(d: {
-  state?: string | null;
-  scenario_active?: number | null;
-}) {
-  const state = String(d.state || '')
-    .replace('DeviceState.', '')
-    .toUpperCase();
-  return state === 'READY' && (d.scenario_active ?? 0) <= 0;
-}
-
-function prepareInlinePreviewStep(
-  steps: FlowStep[],
-  runKey: string,
-  clickSnapshot: FlowStep
-): Record<string, any> {
-  const step = resolveLatestStepForInlineRun(steps, runKey, clickSnapshot);
-  return sanitizeScenarioStep(
-    JSON.parse(JSON.stringify(step)) as FlowStep
-  ) as Record<string, any>;
-}
-
-function preparePreviewStepPayload(step: FlowStep): Record<string, any> {
-  const payload = sanitizeScenarioStep(
-    JSON.parse(JSON.stringify(step)) as FlowStep
-  ) as Record<string, any>;
-  delete payload._fgId;
-  return payload;
-}
 
 type Props = {
   initialSerial?: string | null;
@@ -316,39 +200,7 @@ export function ControlRecordView({
   const tVar = useTranslations('components.variableEditor');
   const tRecovery = useTranslations('campaignsFeature.recoveryPolicy');
   const router = useRouter();
-
-  // Dev/HMR can leave a stale Turbopack chunk map in the tab; reload once on chunk 404.
-  useEffect(() => {
-    const reloadKey = 'control-record-chunk-reload';
-    const reloadOnce = (message: string) => {
-      if (
-        !message.includes('Failed to load chunk') &&
-        !message.includes('Loading chunk')
-      ) {
-        return;
-      }
-      if (sessionStorage.getItem(reloadKey)) return;
-      sessionStorage.setItem(reloadKey, '1');
-      window.location.reload();
-    };
-    const onError = (event: ErrorEvent) => reloadOnce(event.message ?? '');
-    const onRejection = (event: PromiseRejectionEvent) => {
-      const reason = event.reason;
-      const message =
-        typeof reason === 'string'
-          ? reason
-          : reason instanceof Error
-            ? reason.message
-            : String(reason ?? '');
-      reloadOnce(message);
-    };
-    window.addEventListener('error', onError);
-    window.addEventListener('unhandledrejection', onRejection);
-    return () => {
-      window.removeEventListener('error', onError);
-      window.removeEventListener('unhandledrejection', onRejection);
-    };
-  }, []);
+  useControlRecordChunkReloadGuard();
 
   const { error, device, record, steps, save, hierarchy, selector } =
     useControlRecord(
@@ -368,6 +220,7 @@ export function ControlRecordView({
   const hierarchyAutoRefresh = hierarchy.autoRefresh;
   const setHierarchyAutoRefresh = hierarchy.setAutoRefresh;
   const refreshHierarchy = hierarchy.refresh;
+  const fetchFreshHierarchy = hierarchy.fetchFresh;
   const setHierarchyPaused = hierarchy.setPaused;
   const pickTargetPackage = useMemo(
     () =>
@@ -420,7 +273,7 @@ export function ControlRecordView({
     const back = normalizeInternalAppPath(returnTo, ROUTES.ORG_SCENARIOS.ROOT);
     toast.error(tOrg('sequenceOnlyNoGraph'));
     router.replace(back);
-  }, [save.orgScenarioContext?.kind, returnTo, router, tOrg]);
+  }, [save.orgScenarioContext, returnTo, router, tOrg]);
 
   const handleSaveOrgScenario = async () => {
     const scenarioId = (initialOrgScenarioId ?? '').trim();
@@ -435,7 +288,7 @@ export function ControlRecordView({
     }
     const body = buildOrgScenarioBodyPayload(
       flushPendingFlowDetailStep(),
-      scenarioVariables
+      syncDeviceVarKeysIntoScenarioVariables()
     );
     const check = validateScenarioStepsForApi(body.steps ?? []);
     if (!check.ok) {
@@ -483,88 +336,76 @@ export function ControlRecordView({
   const [coordinatePickTarget, setCoordinatePickTarget] =
     useState<CoordinatePickTarget | null>(null);
   const mirrorColRef = useRef<HTMLDivElement>(null);
-  const leftCollapsedBeforeMultiRef = useRef<boolean | null>(null);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [flowMode, setFlowMode] = useState(false);
   useEffect(() => {
     if (!ENABLE_FLOWGRAM_CONTROL_UI) setFlowMode(false);
   }, []);
   const showFlowUi = ENABLE_FLOWGRAM_CONTROL_UI && flowMode;
-  const [multiFollowerSerials, setMultiFollowerSerials] = useState<string[]>(
-    []
-  );
-  const previousPrimarySerialRef = useRef<string | null>(null);
-  const [stepPickerOpen, setStepPickerOpen] = useState(true);
-  const selectedPrimarySerial = device.selectedDevice?.serial ?? null;
-  const multiFollowerOptions = useMemo(
+  const [optimisticTakeoverSerials, setOptimisticTakeoverSerials] = useState<
+    Set<string>
+  >(() => new Set());
+  const liveConnectedDevicesForControl = useMemo(
     () =>
-      device.connectedDevices.filter(
-        (d) => d.serial !== selectedPrimarySerial && isManualControlEligible(d)
+      device.connectedDevices.map((d) =>
+        optimisticTakeoverSerials.has(d.serial)
+          ? { ...d, manual_takeover_active: true }
+          : d
       ),
-    [device.connectedDevices, selectedPrimarySerial]
+    [device.connectedDevices, optimisticTakeoverSerials]
+  );
+  const [connectedDevicesForControl, setConnectedDevicesForControl] = useState(
+    liveConnectedDevicesForControl
   );
   useEffect(() => {
-    const allowed = multiFollowerOptions.map((d) => d.serial);
-    setMultiFollowerSerials((prev) =>
-      sanitizeMultiFollowerSerials(prev, allowed, MAX_MULTI_FOLLOWER_DEVICES)
-    );
-  }, [multiFollowerOptions]);
-  const renderSafeFollowerSerials = useMemo(
-    () =>
-      getRenderSafeFollowerSerials(
-        previousPrimarySerialRef.current,
-        selectedPrimarySerial,
-        multiFollowerSerials
-      ),
-    [selectedPrimarySerial, multiFollowerSerials]
-  );
-  useEffect(() => {
-    const nextPrimary = selectedPrimarySerial;
-    const previousPrimary = previousPrimarySerialRef.current;
-    setMultiFollowerSerials((prev) =>
-      resetFollowersAfterPrimaryChange(previousPrimary, nextPrimary, prev)
-    );
-    previousPrimarySerialRef.current = nextPrimary;
-  }, [selectedPrimarySerial]);
-  const activeMultiSerials = useMemo(
-    () =>
-      getActiveMultiSerials(selectedPrimarySerial, renderSafeFollowerSerials),
-    [selectedPrimarySerial, renderSafeFollowerSerials]
-  );
-  const selectedMultiFollowerDevices = useMemo(() => {
-    const selected = new Set(renderSafeFollowerSerials);
-    return device.connectedDevices.filter((d) => selected.has(d.serial));
-  }, [device.connectedDevices, renderSafeFollowerSerials]);
-  const hasMultiFollowers = renderSafeFollowerSerials.length > 0;
-  const multiFocusMode = hasMultiFollowers && !stepPickerOpen && !playerMode;
-  const showEditorPanel = !hasMultiFollowers || stepPickerOpen || playerMode;
-  const treePanelOpen = safeHierarchy && !leftCollapsed && !hasMultiFollowers;
-
-  const prevMultiRef = useRef(false);
-
-  useEffect(() => {
-    if (hasMultiFollowers) {
-      if (!prevMultiRef.current) {
-        setStepPickerOpen(false);
-      }
-      setLeftCollapsed((prev) => {
-        if (leftCollapsedBeforeMultiRef.current === null) {
-          leftCollapsedBeforeMultiRef.current = prev;
-        }
-        return true;
-      });
-    } else {
-      if (prevMultiRef.current) {
-        setStepPickerOpen(true);
-      }
-      if (leftCollapsedBeforeMultiRef.current !== null) {
-        const restore = leftCollapsedBeforeMultiRef.current;
-        leftCollapsedBeforeMultiRef.current = null;
-        setLeftCollapsed(restore);
-      }
+    if (liveConnectedDevicesForControl.length > 0) {
+      setConnectedDevicesForControl(liveConnectedDevicesForControl);
     }
-    prevMultiRef.current = hasMultiFollowers;
-  }, [hasMultiFollowers]);
+  }, [liveConnectedDevicesForControl]);
+
+  const rawSelectedDeviceForControl = useMemo(
+    () =>
+      device.selectedDevice &&
+      optimisticTakeoverSerials.has(device.selectedDevice.serial)
+        ? { ...device.selectedDevice, manual_takeover_active: true }
+        : device.selectedDevice,
+    [device.selectedDevice, optimisticTakeoverSerials]
+  );
+  const selectedDeviceForControl = useMemo(
+    () =>
+      rawSelectedDeviceForControl ??
+      connectedDevicesForControl.find(
+        (d) => d.serial === device.selectedSerial
+      ) ??
+      connectedDevicesForControl[0] ??
+      null,
+    [
+      connectedDevicesForControl,
+      device.selectedSerial,
+      rawSelectedDeviceForControl
+    ]
+  );
+  const selectedPrimarySerial = selectedDeviceForControl?.serial ?? null;
+  const {
+    leftCollapsed,
+    setLeftCollapsed,
+    multiFollowerSerials,
+    setMultiFollowerSerials,
+    stepPickerOpen,
+    setStepPickerOpen,
+    multiFollowerOptions,
+    activeMultiSerials,
+    selectedMultiFollowerDevices,
+    hasMultiFollowers,
+    multiFocusMode,
+    showEditorPanel,
+    treePanelOpen
+  } = useControlRecordMultiDevice({
+    connectedDevices: connectedDevicesForControl,
+    selectedPrimarySerial,
+    safeHierarchy,
+    playerMode,
+    maxFollowers: MAX_MULTI_FOLLOWER_DEVICES
+  });
   const sendAndRecord = record.sendAndRecord;
   const mirrorWsSend = useCallback(
     (obj: object) => {
@@ -790,12 +631,16 @@ export function ControlRecordView({
   }, [handleStopInlineRun, inlinePreviewRunning, playerPlaying]);
 
   const deviceSelectValue = useMemo(() => {
-    const serial = device.selectedSerial;
+    const serial = selectedDeviceForControl?.serial ?? device.selectedSerial;
     if (!serial) return '';
-    return device.connectedDevices.some((d) => d.serial === serial)
+    return connectedDevicesForControl.some((d) => d.serial === serial)
       ? serial
       : '';
-  }, [device.selectedSerial, device.connectedDevices]);
+  }, [
+    connectedDevicesForControl,
+    device.selectedSerial,
+    selectedDeviceForControl
+  ]);
 
   const handleFlowStepsChange = useCallback(
     (newSteps: FlowStep[]) => {
@@ -822,7 +667,8 @@ export function ControlRecordView({
     if (!serial || takeoverPending) return;
     setTakeoverPending(true);
     try {
-      await interruptDevice(serial);
+      await takeOverDevice(serial);
+      setOptimisticTakeoverSerials((prev) => new Set(prev).add(serial));
       toast.success(t('takeover.success'));
       setTakeoverDialogOpen(false);
     } catch (err) {
@@ -862,11 +708,7 @@ export function ControlRecordView({
         device.setSelectedSerial(serial);
       });
     },
-    [
-      device.selectedDevice?.serial,
-      device.setSelectedSerial,
-      guardWhilePreviewActive
-    ]
+    [device, guardWhilePreviewActive, setMultiFollowerSerials]
   );
 
   // Global guard: intercept sidebar/header links while preview is running.
@@ -901,6 +743,7 @@ export function ControlRecordView({
   const [scenarioVariables, setScenarioVariables] = useState<
     Record<string, any>
   >(() => flattenVarDefs(save.editingContext?.variables ?? {}));
+  const scenarioVariablesRef = useRef<Record<string, any>>(scenarioVariables);
   const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<
     Record<string, string>
   >({});
@@ -929,7 +772,7 @@ export function ControlRecordView({
     activeCampaignId &&
       (activeDeviceVarScenarioId || usesCampaignDeviceOverrides)
   );
-  const selectedSerial = device.selectedDevice?.serial ?? null;
+  const selectedSerial = selectedDeviceForControl?.serial ?? null;
   const { currentOrg } = useOrganization();
   const controlRecordOrgId = currentOrg?.id ?? null;
   const tabActive = useTabNetworkActive();
@@ -1006,6 +849,54 @@ export function ControlRecordView({
     }),
     [tDv]
   );
+  const declaredDeviceVarKeys = useMemo(
+    () =>
+      collectDeclaredDeviceVarKeys(
+        deviceVarJsonDrafts,
+        deviceVarEnabledByDevice,
+        deviceVarsParseMsgs,
+        parseDeviceVarsJson
+      ),
+    [deviceVarJsonDrafts, deviceVarEnabledByDevice, deviceVarsParseMsgs]
+  );
+  const scenarioVariablesWithDeviceKeys = useMemo(
+    () => mergeDeclaredDeviceVarKeys(scenarioVariables, declaredDeviceVarKeys),
+    [scenarioVariables, declaredDeviceVarKeys]
+  );
+  useEffect(() => {
+    scenarioVariablesRef.current = scenarioVariables;
+  }, [scenarioVariables]);
+  const handleScenarioVariablesChange = useCallback(
+    (next: Record<string, any>) => {
+      const rename = detectSingleVariableRename(
+        scenarioVariablesRef.current,
+        next
+      );
+      scenarioVariablesRef.current = next;
+      setScenarioVariables(next);
+      if (!rename) return;
+
+      const nextSteps = replaceScenarioVariableReferences(
+        stepsItemsRef.current,
+        rename
+      ) as typeof steps.items;
+      stepsItemsRef.current = nextSteps;
+      flowStepsRef.current = nextSteps;
+      steps.setItems(nextSteps);
+      setFlowDetailStep((current) =>
+        current ? replaceScenarioVariableReferences(current, rename) : current
+      );
+    },
+    [steps]
+  );
+  const syncDeviceVarKeysIntoScenarioVariables = useCallback(() => {
+    const next = mergeDeclaredDeviceVarKeys(
+      scenarioVariables,
+      declaredDeviceVarKeys
+    );
+    if (next !== scenarioVariables) setScenarioVariables(next);
+    return next;
+  }, [scenarioVariables, declaredDeviceVarKeys]);
   const inlineScenarioDeviceVars = useMemo(() => {
     if (!selectedDeviceId) return null;
     if (deviceVarEnabledByDevice[selectedDeviceId] !== true) return null;
@@ -1054,7 +945,7 @@ export function ControlRecordView({
         device.setSelectedSerial(serial);
       }
     },
-    [device.connectedDevices, device.setSelectedSerial]
+    [device]
   );
   useEffect(() => {
     if (!deviceVarDialogOpen) return;
@@ -1122,9 +1013,9 @@ export function ControlRecordView({
     () =>
       mergeCampaignScenarioVariables(
         campaignVariables(campaignForGlobalVarsQuery.data),
-        scenarioVariables
+        scenarioVariablesWithDeviceKeys
       ),
-    [campaignForGlobalVarsQuery.data, scenarioVariables]
+    [campaignForGlobalVarsQuery.data, scenarioVariablesWithDeviceKeys]
   );
   const setCurrentDeviceVarsEnabled = useCallback(
     (enabled: boolean) => {
@@ -1301,7 +1192,6 @@ export function ControlRecordView({
     activeDeviceVarScenarioId,
     usesCampaignDeviceOverrides,
     pendingScenarioDeviceVarsDraftMap,
-    scenarioVariables,
     tDvDlg,
     queryClient
   ]);
@@ -1317,6 +1207,7 @@ export function ControlRecordView({
       const devices = campaignDevicesQuery.data ?? [];
 
       if (usesCampaignDeviceOverrides) {
+        syncDeviceVarKeysIntoScenarioVariables();
         const detail = await campaignsApi.get(activeCampaignId);
         const existing = campaignPerDeviceOverrides(detail);
         const nextOverrides: Record<string, Record<string, unknown>> = {
@@ -1349,13 +1240,22 @@ export function ControlRecordView({
           }
           nextOverrides[d.id] = deviceOnly;
         }
+        const campaignVars = campaignVariables(detail);
+        const declaredCampaignVars = mergeDeclaredDeviceVarKeys(
+          campaignVars,
+          declaredDeviceVarKeys
+        );
         await campaignsApi.patchEntity(activeCampaignId, {
-          per_device_overrides: nextOverrides
+          per_device_overrides: nextOverrides,
+          ...(declaredCampaignVars !== campaignVars
+            ? { vars: declaredCampaignVars }
+            : {})
         });
         return;
       }
 
       if (!activeDeviceVarScenarioId) return;
+      const declaredVariables = syncDeviceVarKeysIntoScenarioVariables();
       await Promise.all(
         devices.map((d) => {
           let vars: Record<string, any> = {};
@@ -1379,6 +1279,16 @@ export function ControlRecordView({
           );
         })
       );
+      if (declaredVariables !== scenarioVariables) {
+        const updated = await scenariosApi.update(
+          activeCampaignId,
+          activeDeviceVarScenarioId,
+          {
+            variables: declaredVariables
+          }
+        );
+        syncSavedScenarioCaches(queryClient, activeCampaignId, updated);
+      }
     },
     onSuccess: async () => {
       if (!activeCampaignId) {
@@ -1507,21 +1417,25 @@ export function ControlRecordView({
     activeCampaignId,
     activeDeviceVarScenarioId,
     campaignDevicesQuery.data,
-    scenarioVariables,
     setScenarioDeviceVarsCache
   ]);
 
   useEffect(() => {
     if (save.editingContext?.variables) {
-      setScenarioVariables(flattenVarDefs(save.editingContext.variables));
+      const next = flattenVarDefs(save.editingContext.variables);
+      scenarioVariablesRef.current = next;
+      setScenarioVariables(next);
     }
   }, [save.editingContext]);
 
   useEffect(() => {
+    if (save.editingContext?.variables) return;
     if (save.orgScenarioContext?.variables) {
-      setScenarioVariables(flattenVarDefs(save.orgScenarioContext.variables));
+      const next = flattenVarDefs(save.orgScenarioContext.variables);
+      scenarioVariablesRef.current = next;
+      setScenarioVariables(next);
     }
-  }, [save.orgScenarioContext]);
+  }, [save.editingContext, save.orgScenarioContext]);
 
   useEffect(() => {
     flowSelectedFgIdRef.current = flowSelectedFgId;
@@ -1563,7 +1477,7 @@ export function ControlRecordView({
 
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
-      const serial = device.selectedDevice?.serial?.trim();
+      const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
@@ -1590,7 +1504,7 @@ export function ControlRecordView({
             }
           }),
           ctrl.signal,
-          scenarioVariables,
+          scenarioVariablesWithDeviceKeys,
           null,
           activeScenarioId,
           inlineScenarioDeviceVars
@@ -1614,8 +1528,8 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice,
-      scenarioVariables,
+      selectedDeviceForControl?.serial,
+      scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
       previewSession
     ]
@@ -1692,18 +1606,24 @@ export function ControlRecordView({
 
   const flowWorkbench = useMemo(
     () => ({
-      deviceSerial: device.selectedDevice?.serial ?? null,
+      deviceSerial: selectedDeviceForControl?.serial ?? null,
       selectedFgId: flowSelectedFgId,
       setSelectedFgId: setFlowSelectedFgId,
       runStates: flowRunStates,
       onRunLeafStep: handleFlowRunLeaf
     }),
-    [device.selectedDevice, flowSelectedFgId, flowRunStates, handleFlowRunLeaf]
+    [
+      selectedDeviceForControl?.serial,
+      flowSelectedFgId,
+      flowRunStates,
+      handleFlowRunLeaf
+    ]
   );
 
   const handleRunStep = useCallback(
     async (step: FlowStep, runKey: string) => {
-      if (!device.selectedDevice) {
+      const serial = selectedDeviceForControl?.serial?.trim();
+      if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
       }
@@ -1716,7 +1636,6 @@ export function ControlRecordView({
         ? `Bước ${Number(runKey) + 1}`
         : 'Bước';
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
-      const serial = device.selectedDevice.serial;
       // Ref synced every render — always read tree after mirror pick, not stale StepCard closure.
       const payload = prepareInlinePreviewStep(
         stepsItemsRef.current as FlowStep[],
@@ -1731,13 +1650,14 @@ export function ControlRecordView({
             if (event.event === 'step_done') {
               setStepRunStates((s) => ({
                 ...s,
-                [runKey]: event.ok ? 'ok' : 'error'
+                [runKey]: event.ok ? 'ok' : 'error',
+                ...deriveNestedInlineRunStates(runKey, event)
               }));
               if (!event.ok) toast.error(`${label}: ${event.message ?? 'Lỗi'}`);
             }
           }),
           ctrl.signal,
-          scenarioVariables,
+          scenarioVariablesWithDeviceKeys,
           null,
           activeScenarioId,
           inlineScenarioDeviceVars
@@ -1760,7 +1680,14 @@ export function ControlRecordView({
             () =>
               setStepRunStates((s) => {
                 const n = { ...s };
-                if (n[runKey] !== 'running') delete n[runKey];
+                for (const key of Object.keys(n)) {
+                  if (
+                    (key === runKey || key.startsWith(`${runKey}/`)) &&
+                    n[key] !== 'running'
+                  ) {
+                    delete n[key];
+                  }
+                }
                 return n;
               }),
             3000
@@ -1770,9 +1697,9 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice,
+      selectedDeviceForControl?.serial,
       stepRunStates,
-      scenarioVariables,
+      scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
       previewSession
     ]
@@ -1780,7 +1707,7 @@ export function ControlRecordView({
 
   const runDeviceOpStep = useCallback(
     async (step: FlowStep) => {
-      const serial = device.selectedDevice?.serial?.trim();
+      const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
@@ -1800,7 +1727,7 @@ export function ControlRecordView({
             }
           }),
           undefined,
-          scenarioVariables,
+          scenarioVariablesWithDeviceKeys,
           null,
           activeScenarioId,
           inlineScenarioDeviceVars
@@ -1814,10 +1741,10 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice?.serial,
+      selectedDeviceForControl?.serial,
       inlineScenarioDeviceVars,
       previewSession,
-      scenarioVariables
+      scenarioVariablesWithDeviceKeys
     ]
   );
 
@@ -1991,9 +1918,14 @@ export function ControlRecordView({
     []
   );
 
+  const selectedDeviceSerial = selectedDeviceForControl?.serial ?? null;
   const handleHierarchyRefresh = useCallback(() => {
-    if (device.selectedDevice) refreshHierarchy();
-  }, [device.selectedDevice, refreshHierarchy]);
+    if (!selectedDeviceSerial) return;
+    if (device.selectedSerial !== selectedDeviceSerial) {
+      device.setSelectedSerial(selectedDeviceSerial);
+    }
+    refreshHierarchy(selectedDeviceSerial);
+  }, [device, selectedDeviceSerial, refreshHierarchy]);
 
   // Apply the candidate at `index` to the active selector-pick step. With >1
   // candidate we keep pick mode open so the user can keep cycling overlapping
@@ -2160,8 +2092,21 @@ export function ControlRecordView({
 
   // When user taps the phone screen → hierarchy highlight + optional selector pick
   const handleScreenTap = useCallback(
-    (rx: number, ry: number) => {
-      const tree = parseHierarchyTree(hierarchyXml);
+    async (rx: number, ry: number) => {
+      const needsFreshXml = needsFreshMirrorSelectorXml({
+        selectorPickTarget,
+        flowSelectorPickFgId
+      });
+      const interactionXml =
+        needsFreshXml && selectedDeviceSerial
+          ? await fetchFreshHierarchy(selectedDeviceSerial, true, {
+              allowSerialMismatch: true,
+              bypassBackoff: true,
+              bypassInFlight: true
+            }).catch(() => '')
+          : hierarchyXml;
+
+      const tree = parseHierarchyTree(interactionXml);
       if (tree) {
         const nodeId = findNodeIdAtRatio(tree, rx, ry, {
           targetPackage: pickTargetPackage
@@ -2216,7 +2161,7 @@ export function ControlRecordView({
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
         const sel = findSelectorInXml(
-          hierarchyXml,
+          interactionXml,
           rx,
           ry,
           hierarchyPickOptions
@@ -2282,7 +2227,7 @@ export function ControlRecordView({
 
       if (selectorPickTarget) {
         const cands = listSelectorCandidatesInXml(
-          hierarchyXml,
+          interactionXml,
           rx,
           ry,
           hierarchyPickOptions
@@ -2309,9 +2254,10 @@ export function ControlRecordView({
     },
     [
       hierarchyXml,
+      fetchFreshHierarchy,
+      selectedDeviceSerial,
       selectorPickTarget,
       coordinatePickTarget,
-      applySelectorPick,
       applyCandidateAtIndex,
       hierarchyPickOptions,
       steps,
@@ -2319,7 +2265,7 @@ export function ControlRecordView({
       showFlowUi,
       flowCoordPick,
       flowSelectorPickFgId,
-      device.selectedDevice,
+      pickTargetPackage,
       selector
     ]
   );
@@ -2349,29 +2295,27 @@ export function ControlRecordView({
     [mirrorSwipeEnabled]
   );
 
-  const selectedDeviceSerial = device.selectedDevice?.serial ?? null;
-  const selectedDeviceState = device.selectedDevice?.state;
-  const selectedScenarioActive = device.selectedDevice?.scenario_active ?? 0;
   const mirrorInputLocked = useMemo(() => {
     if (!selectedDeviceSerial)
       return { hideControls: true, readOnlyPreview: true };
+    const selectorPickingFromMirror =
+      selectorPickTarget != null || flowSelectorPickFgId != null;
+    if (selectorPickingFromMirror) {
+      return { hideControls: false, readOnlyPreview: true };
+    }
     const pickingFromMirror =
-      coordinatePickTarget != null ||
-      selectorPickTarget != null ||
-      flowCoordPick != null ||
-      flowSelectorPickFgId != null;
+      coordinatePickTarget != null || flowCoordPick != null;
     if (pickingFromMirror) {
       return { hideControls: false, readOnlyPreview: false };
     }
-    const blocked =
-      (selectedDeviceState || '').replace('DeviceState.', '') === 'BUSY' ||
-      selectedScenarioActive > 0;
+    const blocked = selectedDeviceForControl
+      ? isManualControlBlockedByAutomation(selectedDeviceForControl)
+      : true;
     // Keep the control rail visible; only block tap/swipe on the live mirror.
     return { hideControls: false, readOnlyPreview: blocked };
   }, [
     selectedDeviceSerial,
-    selectedDeviceState,
-    selectedScenarioActive,
+    selectedDeviceForControl,
     coordinatePickTarget,
     selectorPickTarget,
     flowCoordPick,
@@ -2379,7 +2323,7 @@ export function ControlRecordView({
   ]);
 
   const mirrorDeviceOps = useMemo((): DeviceOpsConfig | undefined => {
-    const d = device.selectedDevice;
+    const d = selectedDeviceForControl;
     if (!d) return undefined;
     return {
       disabled: mirrorInputLocked.readOnlyPreview,
@@ -2392,8 +2336,7 @@ export function ControlRecordView({
       }
     };
   }, [
-    device.selectedDevice?.serial,
-    device.selectedDevice?.current_app,
+    selectedDeviceForControl,
     mirrorInputLocked.readOnlyPreview,
     runDeviceOpStep,
     tDeviceOps,
@@ -2409,12 +2352,35 @@ export function ControlRecordView({
     );
   }
 
-  const { selectedDevice } = device;
-  const noConnectedDevices = device.connectedDevices.length === 0;
+  const selectedDevice = selectedDeviceForControl;
+  const noConnectedDevices = shouldShowControlRecordNoDeviceBanner({
+    devicesReady: device.devicesReady,
+    connectedDeviceCount: connectedDevicesForControl.length
+  });
+  const topBarTitle = save.templateContext
+    ? save.templateContext.name
+    : save.editingContext
+      ? save.editingContext.name
+      : save.orgScenarioContext
+        ? save.orgScenarioContext.name
+        : t('pageTitle');
+  const topBarLabels = {
+    editingScenario: t('editingScenario'),
+    templateBadge: t('templateBadge'),
+    backToMainScenario: tRecovery('backToMainScenario'),
+    selectPhonePlaceholder: t('selectPhonePlaceholder'),
+    deviceCampaignBadge: t('deviceCampaignBadge'),
+    wsConnected: t('wsConnected'),
+    wsDisconnected: t('wsDisconnected'),
+    flowSwitchToList: t('flowSwitchToList'),
+    flowSwitchToFlow: t('flowSwitchToFlow'),
+    flowListLabel: t('flowListLabel'),
+    flowFlowLabel: t('flowFlowLabel')
+  };
 
   return (
     <div className='flex h-[calc(100vh-80px)] min-h-0 flex-col overflow-hidden bg-background'>
-      <SafeModeBanner className='mx-3 mt-2' />
+      <SafeModeBanner className='mx-3 mt-2' poll={false} />
       {noConnectedDevices ? (
         <div className='mx-3 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed border-amber-400/40 bg-amber-400/5 px-3 py-2 text-xs'>
           <div className='min-w-0'>
@@ -2434,471 +2400,113 @@ export function ControlRecordView({
         </div>
       ) : null}
 
-      {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <div className='flex min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b bg-background px-3 py-2'>
-        {/* Back */}
-        <Button
-          variant='ghost'
-          size='sm'
-          className='-ml-1 shrink-0 gap-1.5 text-muted-foreground hover:text-foreground'
-          onClick={() =>
-            guardWhilePreviewActive(() => router.push(ROUTES.DEVICES.ROOT))
+      <ControlRecordTopBar
+        title={topBarTitle}
+        eyebrow={save.templateContext ? t('templateEyebrow') : t('pageEyebrow')}
+        labels={topBarLabels}
+        editing={Boolean(save.editingContext)}
+        template={Boolean(save.templateContext)}
+        showRecoveryBack={Boolean(editingRecoveryScenario && recoveryReturnTo)}
+        onRecoveryBack={() =>
+          guardWhilePreviewActive(() => router.push(recoveryReturnTo))
+        }
+        devices={connectedDevicesForControl}
+        deviceSelectValue={deviceSelectValue}
+        onDeviceChange={(serial) =>
+          guardWhilePreviewActive(() => device.setSelectedSerial(serial))
+        }
+        multiFollowerOptions={multiFollowerOptions}
+        multiFollowerSerials={multiFollowerSerials}
+        onMultiFollowerSerialsChange={setMultiFollowerSerials}
+        maxMultiFollowers={MAX_MULTI_FOLLOWER_DEVICES}
+        maxMultiDevices={MAX_MULTI_CONTROL_DEVICES}
+        multiPickerDisabled={!selectedDevice || !canExecuteDevice}
+        multiPickerDisabledTitle={
+          !canExecuteDevice
+            ? safeReadOnly
+              ? t('safeModeReadOnly')
+              : t('noControlPermission')
+            : undefined
+        }
+        wsConnected={device.wsConnected}
+        flowEnabled={ENABLE_FLOWGRAM_CONTROL_UI}
+        flowMode={flowMode}
+        onToggleFlowMode={() => {
+          if (!flowMode) {
+            flowStepsRef.current = steps.items;
+            setFlowCanvasKey((k) => k + 1);
+          } else {
+            steps.setItems(flowStepsRef.current);
           }
-        >
-          <ArrowLeft className='size-3.5' />
-          Farm
-        </Button>
-
-        <div className='h-5 w-px bg-border' />
-
-        {/* Title */}
-        <div className='min-w-0 flex-1'>
-          <p className='truncate text-sm font-semibold leading-tight'>
-            {save.templateContext
-              ? save.templateContext.name
-              : save.editingContext
-                ? save.editingContext.name
-                : save.orgScenarioContext
-                  ? save.orgScenarioContext.name
-                  : t('pageTitle')}
-          </p>
-          <p className='text-[10px] text-muted-foreground'>
-            {save.templateContext ? t('templateEyebrow') : t('pageEyebrow')}
-          </p>
-        </div>
-
-        {save.editingContext && (
-          <Badge
-            variant='outline'
-            className='shrink-0 border-amber-400/40 bg-amber-400/10 text-[10px] font-medium text-amber-700 dark:text-amber-300'
-          >
-            {t('editingScenario')}
-          </Badge>
-        )}
-        {save.templateContext && (
-          <span className='inline-flex shrink-0 items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
-            {t('templateBadge')}
-          </span>
-        )}
-        {editingRecoveryScenario && recoveryReturnTo ? (
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-            onClick={() =>
-              guardWhilePreviewActive(() => router.push(recoveryReturnTo))
-            }
-          >
-            <ArrowLeft className='size-3.5' />
-            {tRecovery('backToMainScenario')}
-          </Button>
-        ) : null}
-
-        {/* Device selector + multi sync */}
-        <div className='flex min-w-0 shrink items-center gap-1.5'>
-          <div className='min-w-0 max-w-[min(240px,calc(100vw-16rem))]'>
-            <Select
-              value={deviceSelectValue}
-              onValueChange={(v) =>
-                guardWhilePreviewActive(() =>
-                  device.setSelectedSerial(v || null)
-                )
-              }
-            >
-              <SelectTrigger
-                className={cn(
-                  'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
-                  '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
-                )}
-              >
-                <SelectValue placeholder={t('selectPhonePlaceholder')} />
-              </SelectTrigger>
-              <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
-                {device.connectedDevices.map((d) => (
-                  <SelectItem
-                    key={d.serial}
-                    value={d.serial}
-                    title={deviceSelectFullTitle(d)}
-                    className='text-xs'
-                  >
-                    <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
-                      <span className='min-w-0 truncate'>
-                        {formatDeviceSelectLabel(d)}
-                      </span>
-                      {((d.state || '').replace('DeviceState.', '') ===
-                        'BUSY' ||
-                        (d.scenario_active ?? 0) > 0) && (
-                        <Badge
-                          variant='outline'
-                          className='h-4 shrink-0 border-amber-400/40 bg-amber-400/10 px-1 text-[9px] font-medium text-amber-700 dark:text-amber-300'
-                        >
-                          {t('deviceCampaignBadge')}
-                        </Badge>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <MultiDevicePicker
-            options={multiFollowerOptions}
-            selectedSerials={multiFollowerSerials}
-            onSelectedChange={setMultiFollowerSerials}
-            maxFollowers={MAX_MULTI_FOLLOWER_DEVICES}
-            maxTotalDevices={MAX_MULTI_CONTROL_DEVICES}
-            disabled={!selectedDevice || !canExecuteDevice}
-            disabledTitle={
-              !canExecuteDevice
-                ? safeReadOnly
-                  ? t('safeModeReadOnly')
-                  : t('noControlPermission')
-                : undefined
-            }
-          />
-        </div>
-
-        {/* WS status */}
-        <Badge
-          variant='outline'
-          className={cn(
-            'h-8 shrink-0 gap-1.5 rounded-full px-2.5 text-[11px] font-medium',
-            device.wsConnected
-              ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
-              : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
-          )}
-        >
-          <span
-            className={cn(
-              'size-1.5 rounded-full',
-              device.wsConnected ? 'bg-green-500' : 'bg-red-500'
-            )}
-          />
-          {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
-        </Badge>
-
-        <div className='h-5 w-px bg-border' />
-
-        {/* Flow / List — ẩn khi ENABLE_FLOWGRAM_CONTROL_UI = false (tạm tắt Flowgram) */}
-        {ENABLE_FLOWGRAM_CONTROL_UI && (
-          <Button
-            size='sm'
-            variant={flowMode ? 'default' : 'outline'}
-            className='h-8 shrink-0 gap-1.5 text-xs'
-            onClick={() => {
-              if (!flowMode) {
-                flowStepsRef.current = steps.items;
-                setFlowCanvasKey((k) => k + 1);
-              } else {
-                steps.setItems(flowStepsRef.current);
-              }
-              setFlowMode((v) => !v);
-            }}
-            title={flowMode ? t('flowSwitchToList') : t('flowSwitchToFlow')}
-          >
-            {flowMode ? (
-              <List className='size-3.5' />
-            ) : (
-              <GitBranch className='size-3.5' />
-            )}
-            {flowMode ? t('flowListLabel') : t('flowFlowLabel')}
-          </Button>
-        )}
-      </div>
+          setFlowMode((v) => !v);
+        }}
+      />
 
       {/* ── Main: cây XML + mirror + editor (Danh sách hoặc Flow cùng khung) ── */}
       <div className='flex flex-1 overflow-hidden'>
-        {/* ── COL 1: UI Hierarchy tree ──────────────────────────────────── */}
-        <div
-          className={cn(
-            'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-            treePanelOpen ? 'w-[280px]' : 'w-0 overflow-hidden'
+        <ControlRecordHierarchyPanel
+          open={treePanelOpen}
+          hiddenForMultiFollowers={hasMultiFollowers}
+          safeHierarchy={safeHierarchy}
+          xml={hierarchyXml}
+          loading={hierarchyLoading}
+          deviceActive={Boolean(
+            selectedDevice?.state &&
+              !['DISCONNECTED', 'DEAD'].includes(
+                String(selectedDevice.state).toUpperCase()
+              )
           )}
-        >
-          {/* Tree */}
-          <div className='min-h-0 flex-1 overflow-hidden'>
-            {!safeHierarchy ? (
-              <div className='p-3 text-[11px] text-muted-foreground'>
-                Safe mode: không stream cây giao diện.
-              </div>
-            ) : (
-              <XmlTreeViewer
-                xml={hierarchyXml}
-                loading={hierarchyLoading}
-                deviceActive={Boolean(
-                  selectedDevice?.state &&
-                    !['DISCONNECTED', 'DEAD'].includes(
-                      String(selectedDevice.state).toUpperCase()
-                    )
-                )}
-                wsConnected={Boolean(device.wsConnected)}
-                onNodeSelect={handleTreeNodeSelect}
-                selectedNodeId={selectedNodeId}
-                onRefresh={handleHierarchyRefresh}
-                autoRefresh={hierarchyAutoRefresh}
-                onAutoRefreshChange={setHierarchyAutoRefresh}
-              />
-            )}
-          </div>
+          wsConnected={Boolean(device.wsConnected)}
+          onNodeSelect={handleTreeNodeSelect}
+          selectedNodeId={selectedNodeId}
+          onRefresh={handleHierarchyRefresh}
+          autoRefresh={hierarchyAutoRefresh}
+          onAutoRefreshChange={setHierarchyAutoRefresh}
+          selectorBy={selector.by}
+          selectorValue={selector.value}
+          onTapSelector={() =>
+            selector.tap({ multiSerials: activeMultiSerials })
+          }
+          onAddStepFromSelector={addStepFromSelector}
+          canExecuteDevice={canExecuteDevice}
+          hasSelectedDevice={Boolean(selectedDevice)}
+          safeReadOnly={safeReadOnly}
+          collapsed={leftCollapsed}
+          onToggleCollapsed={() => setLeftCollapsed(!leftCollapsed)}
+          selectorBarHint={t('selectorBarHint')}
+        />
 
-          {/* Selector bar */}
-          <div
-            className={cn(
-              'shrink-0 border-t border-border/60 px-2.5 py-2',
-              selector.value ? 'bg-primary/5' : 'bg-muted/30'
-            )}
-          >
-            {selector.value ? (
-              <>
-                <div className='flex items-center gap-1.5 pb-1.5'>
-                  <span className='min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground'>
-                    <span className='font-bold text-primary'>
-                      [{selector.by}]
-                    </span>{' '}
-                    {selector.value}
-                  </span>
-                  <Button
-                    size='sm'
-                    variant='secondary'
-                    className='h-5 shrink-0 px-1.5 text-[9px]'
-                    onClick={() =>
-                      selector.tap({ multiSerials: activeMultiSerials })
-                    }
-                    disabled={!selectedDevice || !canExecuteDevice}
-                    title={
-                      !canExecuteDevice
-                        ? safeReadOnly
-                          ? 'Safe mode: read-only'
-                          : undefined
-                        : undefined
-                    }
-                  >
-                    Tap
-                  </Button>
-                </div>
-                {!canExecuteDevice ? (
-                  <p className='text-[10px] italic text-muted-foreground'>
-                    {safeReadOnly
-                      ? 'Safe mode: không cho điều khiển / thêm bước.'
-                      : 'Bạn không có quyền điều khiển thiết bị.'}
-                  </p>
-                ) : (
-                  <div className='flex flex-wrap gap-1'>
-                    <Tooltip delayDuration={300}>
-                      <TooltipTrigger asChild>
-                        <button
-                          type='button'
-                          onClick={() => addStepFromSelector('tap_selector')}
-                          className='flex items-center gap-0.5 rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-medium text-blue-700 hover:bg-blue-500/20 dark:text-blue-400'
-                        >
-                          <MousePointerClick className='size-2.5' /> Tap
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side='top' className='text-[10px]'>
-                        Thêm bước tap_selector
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip delayDuration={300}>
-                      <TooltipTrigger asChild>
-                        <button
-                          type='button'
-                          onClick={() =>
-                            addStepFromSelector('long_tap_selector')
-                          }
-                          className='flex items-center gap-0.5 rounded bg-purple-500/10 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 hover:bg-purple-500/20 dark:text-purple-400'
-                        >
-                          <MousePointerClick className='size-2.5' /> Long
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side='top' className='text-[10px]'>
-                        Thêm bước long_tap_selector
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip delayDuration={300}>
-                      <TooltipTrigger asChild>
-                        <button
-                          type='button'
-                          onClick={() => addStepFromSelector('wait_element')}
-                          className='flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400'
-                        >
-                          <Timer className='size-2.5' /> Wait
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side='top' className='text-[10px]'>
-                        Thêm bước wait_element
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip delayDuration={300}>
-                      <TooltipTrigger asChild>
-                        <button
-                          type='button'
-                          onClick={() => addStepFromSelector('assert_element')}
-                          className='flex items-center gap-0.5 rounded bg-green-500/10 px-1.5 py-0.5 text-[9px] font-medium text-green-700 hover:bg-green-500/20 dark:text-green-400'
-                        >
-                          <CheckSquare className='size-2.5' /> Assert
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side='top' className='text-[10px]'>
-                        Thêm bước assert_element
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip delayDuration={300}>
-                      <TooltipTrigger asChild>
-                        <button
-                          type='button'
-                          onClick={() => addStepFromSelector('input_selector')}
-                          className='flex items-center gap-0.5 rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] font-medium text-orange-700 hover:bg-orange-500/20 dark:text-orange-400'
-                        >
-                          <Keyboard className='size-2.5' /> Input
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side='top' className='text-[10px]'>
-                        Thêm bước input_selector
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className='text-[10px] text-muted-foreground'>
-                {t('selectorBarHint')}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Collapse toggle — hidden while multi-phone uses the freed horizontal space */}
-        {!hasMultiFollowers ? (
-          <button
-            type='button'
-            onClick={() => setLeftCollapsed(!leftCollapsed)}
-            className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
-            title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
-          >
-            {leftCollapsed ? (
-              <ChevronRight className='size-3' />
-            ) : (
-              <ChevronLeft className='size-3' />
-            )}
-          </button>
-        ) : null}
-
-        {/* ── COL 2: Phone screen ───────────────────────────────────────── */}
-        <div
+        <ControlRecordMirrorPanel
           ref={mirrorColRef}
-          className={cn(
-            'flex min-h-0 flex-col overflow-hidden bg-muted/20',
-            multiFocusMode
-              ? 'min-w-0 flex-1'
-              : 'w-[clamp(300px,30vw,360px)] shrink-0 border-r border-border/60'
-          )}
-        >
-          {selectedDevice ? (
-            hasMultiFollowers ? (
-              <MultiDeviceStage
-                mode={multiFocusMode ? 'focus' : 'edit'}
-                toolbar={
-                  multiFocusMode ? (
-                    <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/90 px-3 py-1.5'>
-                      <Button
-                        size='sm'
-                        variant={record.recording ? 'destructive' : 'default'}
-                        className='h-7 gap-1.5 px-2.5 text-xs'
-                        onClick={() => void record.toggleRecording()}
-                      >
-                        {record.recording ? (
-                          <Square className='size-3.5' />
-                        ) : (
-                          <Circle className='size-3.5 fill-current' />
-                        )}
-                        {record.recording
-                          ? t('stopRecording')
-                          : t('startRecording')}
-                      </Button>
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        className='h-7 gap-1.5 px-2.5 text-xs'
-                        onClick={() => setPlayerMode(true)}
-                        disabled={
-                          (selectedDevice.state || '').replace(
-                            'DeviceState.',
-                            ''
-                          ) === 'BUSY'
-                        }
-                      >
-                        <Play className='size-3.5' />
-                        {t('tryRun')}
-                      </Button>
-                      <div className='flex-1' />
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        className='h-7 gap-1.5 px-2.5 text-xs'
-                        onClick={() => setStepPickerOpen(true)}
-                      >
-                        <Plus className='size-3.5' />
-                        {t('multiControl.openPicker')}
-                      </Button>
-                    </div>
-                  ) : undefined
-                }
-                primaryMirror={
-                  <ControlRecordMirror
-                    device={selectedDevice}
-                    logLines={device.logs[selectedDevice.serial] ?? []}
-                    mode={device.mode}
-                    wsSend={mirrorWsSend}
-                    onToggleMode={recordHandleToggleMode}
-                    onRestart={recordHandleRestart}
-                    onTap={mirrorOnTap}
-                    onSwipe={mirrorOnSwipe}
-                    highlightBounds={highlightBounds}
-                    hideControls={mirrorInputLocked.hideControls}
-                    hideDeviceFunctions={mirrorInputLocked.hideControls}
-                    readOnlyPreview={mirrorInputLocked.readOnlyPreview}
-                    canTakeControl={canExecuteDevice}
-                    onTakeControl={handleTakeControl}
-                    mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
-                    deviceOps={mirrorDeviceOps}
-                  />
-                }
-                devices={selectedMultiFollowerDevices}
-                wsMode={device.mode}
-                wsSend={mirrorWsSend}
-                onPromote={promoteMultiFollower}
-              />
-            ) : (
-              <div className='flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden'>
-                <ControlRecordMirror
-                  device={selectedDevice}
-                  logLines={device.logs[selectedDevice.serial] ?? []}
-                  mode={device.mode}
-                  wsSend={mirrorWsSend}
-                  onToggleMode={recordHandleToggleMode}
-                  onRestart={recordHandleRestart}
-                  onTap={mirrorOnTap}
-                  onSwipe={mirrorOnSwipe}
-                  highlightBounds={highlightBounds}
-                  hideControls={mirrorInputLocked.hideControls}
-                  hideDeviceFunctions={mirrorInputLocked.hideControls}
-                  readOnlyPreview={mirrorInputLocked.readOnlyPreview}
-                  canTakeControl={canExecuteDevice}
-                  onTakeControl={handleTakeControl}
-                  deviceOps={mirrorDeviceOps}
-                />
-              </div>
-            )
-          ) : (
-            <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
-              <MirrorPhonePlaceholder />
-              <p className='text-xs text-muted-foreground'>
-                Chọn thiết bị từ thanh trên
-              </p>
-            </div>
-          )}
-        </div>
+          selectedDevice={selectedDevice}
+          logsBySerial={device.logs}
+          wsMode={device.mode}
+          wsSend={mirrorWsSend}
+          onToggleMode={recordHandleToggleMode}
+          onRestart={recordHandleRestart}
+          onTap={mirrorOnTap}
+          onSwipe={mirrorOnSwipe}
+          highlightBounds={highlightBounds}
+          mirrorInputLocked={mirrorInputLocked}
+          canExecuteDevice={canExecuteDevice}
+          onTakeControl={handleTakeControl}
+          deviceOps={mirrorDeviceOps}
+          hasMultiFollowers={hasMultiFollowers}
+          multiFocusMode={multiFocusMode}
+          selectedMultiFollowerDevices={selectedMultiFollowerDevices}
+          onPromoteFollower={promoteMultiFollower}
+          recording={record.recording}
+          onToggleRecording={() => void record.toggleRecording()}
+          onOpenPlayer={() => setPlayerMode(true)}
+          onOpenStepPicker={() => setStepPickerOpen(true)}
+          labels={{
+            startRecording: t('startRecording'),
+            stopRecording: t('stopRecording'),
+            tryRun: t('tryRun'),
+            openPicker: t('multiControl.openPicker'),
+            selectDevice: 'Chọn thiết bị từ thanh trên'
+          }}
+        />
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
         {showEditorPanel ? (
@@ -2917,7 +2525,7 @@ export function ControlRecordView({
                     steps.items.length > 0 ? (steps.items as any[]) : undefined
                   }
                   preloadedName={save.editingContext?.name}
-                  preloadedVariables={scenarioVariables}
+                  preloadedVariables={scenarioVariablesWithDeviceKeys}
                   preloadedScenarioId={activeScenarioId}
                   preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
                   preloadedAccountGroupId={
@@ -3065,231 +2673,92 @@ export function ControlRecordView({
                   </div>
                 )}
 
-                {/* Section header */}
-                <div className='flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/20 px-2 py-2'>
-                  {hasMultiFollowers && stepPickerOpen ? (
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='ghost'
-                      className='h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground'
-                      onClick={() => setStepPickerOpen(false)}
-                      title={t('multiControl.closePicker')}
-                    >
-                      <ChevronRight className='size-3.5' />
-                    </Button>
-                  ) : null}
-                  <div className='flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
-                    {record.pollingXml && (
-                      <RefreshCw
-                        size={12}
-                        className='animate-spin text-red-500/80'
-                      />
-                    )}
-                    <Button
-                      size='sm'
-                      variant={record.recording ? 'destructive' : 'default'}
-                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                      onClick={() => void record.toggleRecording()}
-                      disabled={!selectedDevice}
-                    >
-                      {record.recording ? (
-                        <Square className='size-3.5' />
-                      ) : (
-                        <Circle className='size-3.5 fill-current' />
-                      )}
-                      {record.recording
-                        ? t('stopRecording')
-                        : t('startRecording')}
-                    </Button>
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                      onClick={() => setPlayerMode(true)}
-                      disabled={
-                        !selectedDevice ||
-                        (selectedDevice.state || '').replace(
-                          'DeviceState.',
-                          ''
-                        ) === 'BUSY'
-                      }
-                      title={
-                        selectedDevice &&
-                        (selectedDevice.state || '').replace(
-                          'DeviceState.',
-                          ''
-                        ) === 'BUSY'
-                          ? 'Thiết bị đang chạy campaign — không cho chạy thử'
-                          : undefined
-                      }
-                    >
-                      <Play className='size-3.5' />
-                      {t('tryRun')}
-                    </Button>
-                    <Tooltip delayDuration={300}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size='sm'
-                          variant='ghost'
-                          className='h-7 w-7 shrink-0 p-0'
-                          onClick={() => setJsonDialogOpen(true)}
-                          disabled={steps.items.length === 0}
-                        >
-                          <Code2 className='size-3.5' />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side='bottom' className='text-xs'>
-                        Xem JSON
-                      </TooltipContent>
-                    </Tooltip>
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                      onClick={() => {
-                        if (save.templateContext) {
-                          save.saveToTemplate(scenarioVariables);
-                          return;
-                        }
-                        if (savingOrgScenario) {
-                          void handleSaveOrgScenario();
-                          return;
-                        }
-                        steps.openSave();
-                      }}
-                      disabled={
-                        steps.items.length === 0 ||
-                        !canSaveWork ||
-                        save.savingTemplate ||
-                        saveOrgBodyMutation.isPending
-                      }
-                      title={
-                        !canSaveWork
-                          ? safeReadOnly
-                            ? 'Safe mode: không cho lưu'
-                            : undefined
-                          : undefined
-                      }
-                    >
-                      <Save className='size-3.5' />
-                      {save.templateContext
-                        ? save.savingTemplate
-                          ? t('templateSaving')
-                          : t('templateSave')
-                        : savingOrgScenario
-                          ? saveOrgBodyMutation.isPending
-                            ? 'Đang lưu…'
-                            : 'Lưu'
-                          : 'Lưu'}
-                    </Button>
-                    <Tooltip delayDuration={400}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() => setVarDialogOpen(true)}
-                          className={cn(
-                            'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                            Object.keys(scenarioVariables).length > 0 &&
-                              'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
-                          )}
-                        >
-                          <SlidersHorizontal className='size-3.5' />
-                          Biến
-                          {Object.keys(scenarioVariables).length > 0 && (
-                            <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
-                              {Object.keys(scenarioVariables).length}
-                            </span>
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side='bottom' className='text-xs'>
-                        Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy
-                        thử bước
-                      </TooltipContent>
-                    </Tooltip>
-                    {!editingRecoveryScenario ? (
-                      <Tooltip delayDuration={400}>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size='sm'
-                            variant='outline'
-                            onClick={() => setRecoveryDialogOpen(true)}
-                            className={cn(
-                              'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                              recoveryPolicyEnabled &&
-                                'border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300'
-                            )}
-                          >
-                            <AlertCircle className='size-3.5' />
-                            {tRecovery('controlRecordTitle')}
-                            {recoveryPolicyEnabled && (
-                              <span className='rounded-full bg-amber-500/20 px-1.5 text-[10px] font-bold'>
-                                {tRecovery('enabledBadge')}
-                              </span>
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent
-                          side='bottom'
-                          className='max-w-xs text-xs'
-                        >
-                          {activeCampaignId
-                            ? tRecovery('controlRecordTooltip')
-                            : tRecovery('controlRecordNoCampaignTooltip')}
-                        </TooltipContent>
-                      </Tooltip>
-                    ) : null}
-                    <Tooltip delayDuration={400}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() => setDeviceVarDialogOpen(true)}
-                          disabled={!canOpenDeviceVarsDialog}
-                          className={cn(
-                            'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                            hasEnabledDeviceVars &&
-                              canManageDeviceVars &&
-                              selectedDeviceId
-                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
-                              : ''
-                          )}
-                        >
-                          <SlidersHorizontal className='size-3.5' />
-                          Biến thiết bị
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side='bottom' className='text-xs'>
-                        {!canManageDeviceVars
-                          ? savingOrgScenario
-                            ? 'Mở lại từ Campaign → Mở (URL cần orgScenarioId + campaignId)'
-                            : 'Mở trong ngữ cảnh chiến dịch để thiết lập'
-                          : !hasCampaignDevices
-                            ? 'Thêm thiết bị vào chiến dịch trước'
-                            : `Đang gắn cho: ${selectedDeviceLabel}`}
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip delayDuration={400}>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size='sm'
-                          variant='ghost'
-                          className='h-7 w-7 shrink-0 p-0'
-                        >
-                          <HelpCircle className='size-3.5' />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent
-                        side='bottom'
-                        className='max-w-xs text-xs'
-                      >
-                        {t('tooltipScenarioSection')}
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
+                <ControlRecordEditorToolbar
+                  showClosePicker={hasMultiFollowers && stepPickerOpen}
+                  onClosePicker={() => setStepPickerOpen(false)}
+                  pollingXml={record.pollingXml}
+                  recording={record.recording}
+                  onToggleRecording={() => void record.toggleRecording()}
+                  hasSelectedDevice={Boolean(selectedDevice)}
+                  selectedDeviceBusy={
+                    selectedDevice
+                      ? isManualControlBlockedByAutomation(selectedDevice)
+                      : false
+                  }
+                  onOpenPlayer={() => setPlayerMode(true)}
+                  onOpenJson={() => setJsonDialogOpen(true)}
+                  hasSteps={steps.items.length > 0}
+                  onSave={() => {
+                    if (save.templateContext) {
+                      save.saveToTemplate(
+                        syncDeviceVarKeysIntoScenarioVariables()
+                      );
+                      return;
+                    }
+                    if (savingOrgScenario) {
+                      void handleSaveOrgScenario();
+                      return;
+                    }
+                    steps.openSave();
+                  }}
+                  saveDisabled={
+                    steps.items.length === 0 ||
+                    !canSaveWork ||
+                    save.savingTemplate ||
+                    saveOrgBodyMutation.isPending
+                  }
+                  saveLabel={
+                    save.templateContext
+                      ? save.savingTemplate
+                        ? t('templateSaving')
+                        : t('templateSave')
+                      : savingOrgScenario
+                        ? saveOrgBodyMutation.isPending
+                          ? 'Đang lưu…'
+                          : 'Lưu'
+                        : 'Lưu'
+                  }
+                  onOpenVariables={() => setVarDialogOpen(true)}
+                  variableCount={
+                    Object.keys(scenarioVariablesWithDeviceKeys).length
+                  }
+                  showRecovery={!editingRecoveryScenario}
+                  recoveryEnabled={recoveryPolicyEnabled}
+                  onOpenRecovery={() => setRecoveryDialogOpen(true)}
+                  onOpenDeviceVars={() => setDeviceVarDialogOpen(true)}
+                  deviceVarsEnabled={Boolean(
+                    hasEnabledDeviceVars &&
+                      canManageDeviceVars &&
+                      selectedDeviceId
+                  )}
+                  deviceVarsDisabled={!canOpenDeviceVarsDialog}
+                  labels={{
+                    closePickerTitle: t('multiControl.closePicker'),
+                    startRecording: t('startRecording'),
+                    stopRecording: t('stopRecording'),
+                    tryRun: t('tryRun'),
+                    busyTitle:
+                      'Thiết bị đang chạy campaign — không cho chạy thử',
+                    jsonTooltip: 'Xem JSON',
+                    variables: 'Biến',
+                    variablesTooltip:
+                      'Chỉnh biến — giá trị thay thế cho ${VAR} khi chạy thử bước',
+                    recoveryTitle: tRecovery('controlRecordTitle'),
+                    recoveryEnabledBadge: tRecovery('enabledBadge'),
+                    recoveryTooltip: activeCampaignId
+                      ? tRecovery('controlRecordTooltip')
+                      : tRecovery('controlRecordNoCampaignTooltip'),
+                    deviceVars: 'Biến thiết bị',
+                    deviceVarsTooltip: !canManageDeviceVars
+                      ? savingOrgScenario
+                        ? 'Mở lại từ Campaign → Mở (URL cần orgScenarioId + campaignId)'
+                        : 'Mở trong ngữ cảnh chiến dịch để thiết lập'
+                      : !hasCampaignDevices
+                        ? 'Thêm thiết bị vào chiến dịch trước'
+                        : `Đang gắn cho: ${selectedDeviceLabel}`,
+                    helpTooltip: t('tooltipScenarioSection')
+                  }}
+                />
 
                 {/* Flow editor */}
                 <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
@@ -3451,261 +2920,125 @@ export function ControlRecordView({
         ) : null}
       </div>
 
-      {/* ── Variables dialog ────────────────────────────────────────────────── */}
-      <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
-        <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden'>
-          <DialogHeader className='shrink-0 space-y-1.5'>
-            <DialogTitle className='flex flex-wrap items-center gap-2 text-base'>
-              <SlidersHorizontal className='size-4 shrink-0' />
-              {tVar('title')}
-              {Object.keys(scenarioVariables).length > 0 ? (
-                <Badge
-                  variant='secondary'
-                  className='h-6 text-[11px] font-normal'
-                >
-                  {tVar('variableCount', {
-                    count: Object.keys(scenarioVariables).length
-                  })}
-                </Badge>
-              ) : null}
-            </DialogTitle>
-            <DialogDescription className='text-xs'>
-              {tVar('headerSubtitleLead')}{' '}
-              <code className='rounded bg-muted/80 px-1 py-0.5 font-mono text-[11px] text-foreground'>
-                {'${VAR}'}
-              </code>{' '}
-              {tVar('headerSubtitleTrail')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
-            <VariableEditor
-              variables={scenarioVariables}
-              onChange={setScenarioVariables}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ControlRecordVariablesDialog
+        open={varDialogOpen}
+        onOpenChange={setVarDialogOpen}
+        variables={scenarioVariablesWithDeviceKeys}
+        onVariablesChange={handleScenarioVariablesChange}
+        labels={{
+          title: tVar('title'),
+          variableCount:
+            Object.keys(scenarioVariablesWithDeviceKeys).length > 0
+              ? tVar('variableCount', {
+                  count: Object.keys(scenarioVariablesWithDeviceKeys).length
+                })
+              : null,
+          headerSubtitleLead: tVar('headerSubtitleLead'),
+          headerSubtitleTrail: tVar('headerSubtitleTrail')
+        }}
+      />
 
-      <Dialog open={deviceVarDialogOpen} onOpenChange={setDeviceVarDialogOpen}>
-        <DialogContent className='!grid max-h-[min(88dvh,760px)] !w-[min(94vw,980px)] !max-w-[980px] grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-4 overflow-hidden'>
-          <DialogHeader className='shrink-0'>
-            <DialogTitle className='flex items-center gap-2 text-base'>
-              <SlidersHorizontal className='size-4' />
-              {tDv('title')}
-            </DialogTitle>
-          </DialogHeader>
-          <p className='-mt-1 shrink-0 text-[12px] text-muted-foreground'>
-            {tDvDlg('scopeHint')}
-          </p>
-          <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
-            {tDvDlg('instructions')}
-          </div>
-          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
-            {(campaignDevicesQuery.data ?? []).length === 0 ? (
-              <p className='text-xs text-muted-foreground'>
-                {tDvDlg('noDevicesInCampaign')}
-              </p>
-            ) : (
-              <div className='grid min-h-[430px] grid-cols-[260px_1fr] divide-x rounded-md border'>
-                <div className='min-h-0 overflow-y-auto p-2'>
-                  {(campaignDevicesQuery.data ?? []).map((d) => {
-                    const active = selectedScenarioDeviceId === d.id;
-                    const enabled = deviceVarEnabledByDevice[d.id] === true;
-                    return (
-                      <button
-                        key={d.id}
-                        type='button'
-                        className={cn(
-                          'mb-1 flex w-full items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
-                          active && 'border-primary/30 bg-primary/[0.06]'
-                        )}
-                        onClick={() =>
-                          selectScenarioDeviceForVars(d.id, d.serial)
-                        }
-                      >
-                        <span className='min-w-0 flex-1'>
-                          <span className='block truncate font-medium'>
-                            {d.name || d.serial}
-                          </span>
-                          <span className='block truncate font-mono text-[10px] text-muted-foreground'>
-                            {d.serial}
-                          </span>
-                        </span>
-                        <Badge
-                          variant={enabled ? 'default' : 'secondary'}
-                          className='shrink-0 text-[10px]'
-                        >
-                          {enabled
-                            ? tDvDlg('badgePerDevice')
-                            : tDvDlg('badgeGlobal')}
-                        </Badge>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className='min-h-0 p-4'>
-                  <DeviceVarsJsonPanel
-                    enabled={currentDeviceVarsEnabled}
-                    onEnabledChange={setCurrentDeviceVarsEnabled}
-                    draft={currentDeviceVarJsonDraft}
-                    onDraftChange={setCurrentDeviceVarJsonDraft}
-                    jsonError={currentDeviceVarJsonError}
-                    deviceLabel={selectedDeviceLabel}
-                    baseVariables={deviceVarGlobalPreview}
-                    globalVariablesPreview={deviceVarGlobalPreview}
-                    editorClassName='min-h-[330px]'
-                    emptyClassName='min-h-[330px]'
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-          <div className='flex justify-end gap-2'>
-            <Button
-              variant='outline'
-              size='sm'
-              onClick={() => setDeviceVarDialogOpen(false)}
-            >
-              {tModal('cancel')}
-            </Button>
-            <Button
-              size='sm'
-              onClick={() => {
-                if (activeDeviceVarScenarioId || usesCampaignDeviceOverrides) {
-                  saveScenarioDeviceVarsMutation.mutate(
-                    deviceVarStateRef.current
-                  );
-                  return;
-                }
-                const parsedDrafts: Record<string, Record<string, any>> = {};
-                for (const d of campaignDevicesQuery.data ?? []) {
-                  if (deviceVarEnabledByDevice[d.id] !== true) {
-                    parsedDrafts[d.id] = {};
-                    continue;
-                  }
-                  try {
-                    parsedDrafts[d.id] = parseDeviceVarsJson(
-                      deviceVarJsonDrafts[d.id] ?? '{}',
-                      deviceVarsParseMsgs
-                    );
-                  } catch {
-                    toast.error(tDv('invalidAtDevice', { serial: d.serial }));
-                    return;
-                  }
-                }
-                setPendingScenarioDeviceVarsDraftMap(parsedDrafts);
-                setDeviceVarDialogOpen(false);
-                toast.info(tDvDlg('saveDraftToast'));
-              }}
-              disabled={
-                saveScenarioDeviceVarsMutation.isPending ||
-                (campaignDevicesQuery.data ?? []).length === 0 ||
-                !!currentDeviceVarJsonError
-              }
-            >
-              {saveScenarioDeviceVarsMutation.isPending
-                ? tDvDlg('saveLoading')
-                : activeDeviceVarScenarioId || usesCampaignDeviceOverrides
-                  ? tDvDlg('save')
-                  : tDvDlg('saveDraft')}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ControlRecordDeviceVarsDialog
+        open={deviceVarDialogOpen}
+        onOpenChange={setDeviceVarDialogOpen}
+        campaignDevices={campaignDevicesQuery.data ?? []}
+        selectedScenarioDeviceId={selectedScenarioDeviceId}
+        deviceVarEnabledByDevice={deviceVarEnabledByDevice}
+        selectScenarioDeviceForVars={selectScenarioDeviceForVars}
+        panel={{
+          enabled: currentDeviceVarsEnabled,
+          onEnabledChange: setCurrentDeviceVarsEnabled,
+          draft: currentDeviceVarJsonDraft,
+          onDraftChange: setCurrentDeviceVarJsonDraft,
+          jsonError: currentDeviceVarJsonError,
+          deviceLabel: selectedDeviceLabel,
+          baseVariables: deviceVarGlobalPreview,
+          globalVariablesPreview: deviceVarGlobalPreview
+        }}
+        onCancel={() => setDeviceVarDialogOpen(false)}
+        onSave={() => {
+          if (activeDeviceVarScenarioId || usesCampaignDeviceOverrides) {
+            syncDeviceVarKeysIntoScenarioVariables();
+            saveScenarioDeviceVarsMutation.mutate(deviceVarStateRef.current);
+            return;
+          }
+          const parsedDrafts: Record<string, Record<string, any>> = {};
+          for (const d of campaignDevicesQuery.data ?? []) {
+            if (deviceVarEnabledByDevice[d.id] !== true) {
+              parsedDrafts[d.id] = {};
+              continue;
+            }
+            try {
+              parsedDrafts[d.id] = parseDeviceVarsJson(
+                deviceVarJsonDrafts[d.id] ?? '{}',
+                deviceVarsParseMsgs
+              );
+            } catch {
+              toast.error(tDv('invalidAtDevice', { serial: d.serial }));
+              return;
+            }
+          }
+          syncDeviceVarKeysIntoScenarioVariables();
+          setPendingScenarioDeviceVarsDraftMap(parsedDrafts);
+          setDeviceVarDialogOpen(false);
+          toast.info(tDvDlg('saveDraftToast'));
+        }}
+        saveDisabled={
+          saveScenarioDeviceVarsMutation.isPending ||
+          (campaignDevicesQuery.data ?? []).length === 0 ||
+          !!currentDeviceVarJsonError
+        }
+        saveLabel={
+          saveScenarioDeviceVarsMutation.isPending
+            ? tDvDlg('saveLoading')
+            : activeDeviceVarScenarioId || usesCampaignDeviceOverrides
+              ? tDvDlg('save')
+              : tDvDlg('saveDraft')
+        }
+        labels={{
+          title: tDv('title'),
+          scopeHint: tDvDlg('scopeHint'),
+          instructions: tDvDlg('instructions'),
+          noDevicesInCampaign: tDvDlg('noDevicesInCampaign'),
+          badgePerDevice: tDvDlg('badgePerDevice'),
+          badgeGlobal: tDvDlg('badgeGlobal'),
+          cancel: tModal('cancel')
+        }}
+      />
 
-      <Dialog open={recoveryDialogOpen} onOpenChange={setRecoveryDialogOpen}>
-        <DialogContent className='flex max-h-[min(88dvh,720px)] max-w-lg flex-col gap-0 overflow-hidden p-0 sm:max-w-xl'>
-          <DialogHeader className='space-y-1.5 border-b px-5 py-4'>
-            <DialogTitle className='flex items-center gap-2 text-base'>
-              <AlertCircle className='size-4 shrink-0 text-amber-600' />
-              {tRecovery('controlRecordTitle')}
-            </DialogTitle>
-            <DialogDescription className='text-xs leading-relaxed'>
-              {tRecovery('controlRecordDescription')}
-            </DialogDescription>
-          </DialogHeader>
+      <ControlRecordRecoveryDialog
+        open={recoveryDialogOpen}
+        onOpenChange={setRecoveryDialogOpen}
+        activeCampaignId={activeCampaignId}
+        selectedSerial={selectedSerial}
+        value={recoveryPolicy}
+        onChange={setRecoveryPolicy}
+        savePending={saveRecoveryPolicyMutation.isPending}
+        onBeforeRecord={async (policy) => {
+          await saveRecoveryPolicyMutation.mutateAsync(policy);
+          setRecoveryDialogOpen(false);
+        }}
+        onCancel={() => setRecoveryDialogOpen(false)}
+        onSave={() => saveRecoveryPolicyMutation.mutate(recoveryPolicy)}
+        labels={{
+          title: tRecovery('controlRecordTitle'),
+          description: tRecovery('controlRecordDescription'),
+          standaloneWarning: tRecovery('standaloneWarning'),
+          cancel: tModal('cancel'),
+          saving: tRecovery('saving'),
+          save: tRecovery('save')
+        }}
+      />
 
-          <div className='min-h-0 flex-1 overflow-y-auto px-5 py-4'>
-            {!activeCampaignId ? (
-              <p className='bg-amber-500/8 mb-3 rounded-md border border-amber-500/25 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:text-amber-100'>
-                {tRecovery('standaloneWarning')}
-              </p>
-            ) : null}
-            <RecoveryPolicyEditor
-              value={recoveryPolicy}
-              onChange={setRecoveryPolicy}
-              disabled={saveRecoveryPolicyMutation.isPending}
-              recordCampaignId={activeCampaignId}
-              recordDeviceSerial={selectedSerial}
-              variant='embedded'
-              scenarioFilter='recovery'
-              onBeforeRecord={async (policy) => {
-                await saveRecoveryPolicyMutation.mutateAsync(policy);
-                setRecoveryDialogOpen(false);
-              }}
-            />
-          </div>
-
-          <div className='flex justify-end gap-2 border-t px-5 py-3'>
-            <Button
-              variant='ghost'
-              size='sm'
-              onClick={() => setRecoveryDialogOpen(false)}
-            >
-              {tModal('cancel')}
-            </Button>
-            <Button
-              size='sm'
-              onClick={() => saveRecoveryPolicyMutation.mutate(recoveryPolicy)}
-              disabled={
-                !activeCampaignId || saveRecoveryPolicyMutation.isPending
-              }
-            >
-              {saveRecoveryPolicyMutation.isPending
-                ? tRecovery('saving')
-                : tRecovery('save')}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── JSON viewer dialog ──────────────────────────────────────────────── */}
-      <Dialog open={jsonDialogOpen} onOpenChange={setJsonDialogOpen}>
-        <DialogContent className='max-h-[min(90dvh,920px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden'>
-          <DialogHeader className='shrink-0'>
-            <DialogTitle className='flex flex-wrap items-center gap-2 pr-8 text-base'>
-              <Code2 className='size-4 shrink-0' />
-              JSON kịch bản
-              {steps.items.length > 0 && (
-                <span className='rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary'>
-                  {steps.items.length} bước
-                </span>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-          <div className='relative flex min-h-0 flex-col'>
-            <Button
-              size='sm'
-              variant='outline'
-              className='absolute right-1 top-1 z-10 h-6 gap-1 px-2 text-[10px] shadow-sm'
-              onClick={steps.copyJson}
-            >
-              <Copy className='size-3' /> Sao chép
-            </Button>
-            <pre className='min-h-0 max-w-full flex-1 overflow-x-auto overflow-y-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 pb-10 pr-14 pt-9 font-mono text-[11px] leading-relaxed'>
-              {JSON.stringify(
-                steps.items.map((s: any) => {
-                  const { _id, ...rest } = s;
-                  void _id;
-                  return rest;
-                }),
-                null,
-                2
-              )}
-            </pre>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ControlRecordJsonDialog
+        open={jsonDialogOpen}
+        onOpenChange={setJsonDialogOpen}
+        steps={steps.items as Record<string, any>[]}
+        labels={{
+          title: 'JSON kịch bản',
+          stepCount: `${steps.items.length} bước`
+        }}
+      />
 
       {/* ── Save dialog ─────────────────────────────────────────────────────── */}
       <Dialog
@@ -3821,7 +3154,7 @@ export function ControlRecordView({
                   onClick={() =>
                     save.saveAsNew(
                       save.selectedCampaignId!,
-                      scenarioVariables,
+                      syncDeviceVarKeysIntoScenarioVariables(),
                       saveAccountGroupId || null
                     )
                   }
@@ -3846,7 +3179,7 @@ export function ControlRecordView({
                           save.saveTo(
                             save.selectedCampaignId!,
                             s.id,
-                            scenarioVariables,
+                            syncDeviceVarKeysIntoScenarioVariables(),
                             saveAccountGroupId || null
                           )
                         }
@@ -3868,196 +3201,84 @@ export function ControlRecordView({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
+      <ControlRecordExitConfirmDialog
         open={exitConfirm !== null}
         onOpenChange={(o) => {
           if (!o) setExitConfirm(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('exitConfirmTitle')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('exitConfirmDesc')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('exitConfirmCancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const action = exitConfirm;
-                setExitConfirm(null);
-                stopPlayerRef.current?.();
-                handleStopInlineRun();
-                if (action) action();
-              }}
-            >
-              {t('exitConfirmConfirm')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onConfirm={() => {
+          const action = exitConfirm;
+          setExitConfirm(null);
+          stopPlayerRef.current?.();
+          handleStopInlineRun();
+          if (action) action();
+        }}
+        labels={{
+          title: t('exitConfirmTitle'),
+          description: t('exitConfirmDesc'),
+          cancel: t('exitConfirmCancel'),
+          confirm: t('exitConfirmConfirm')
+        }}
+      />
 
-      <AlertDialog
+      <ControlRecordTakeoverConfirmDialog
         open={takeoverDialogOpen}
         onOpenChange={(o) => {
           if (!takeoverPending) setTakeoverDialogOpen(o);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('takeover.confirmTitle')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('takeover.confirmDesc')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={takeoverPending}>
-              {t('takeover.confirmCancel')}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={takeoverPending}
-              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
-              onClick={(e) => {
-                e.preventDefault();
-                void handleTakeoverConfirm();
-              }}
-            >
-              {t('takeover.confirmAction')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        pending={takeoverPending}
+        onConfirm={() => void handleTakeoverConfirm()}
+        labels={{
+          title: t('takeover.confirmTitle'),
+          description: t('takeover.confirmDesc'),
+          cancel: t('takeover.confirmCancel'),
+          confirm: t('takeover.confirmAction')
+        }}
+      />
 
-      {/* Template preview dialog — opened from the empty-state picker. */}
-      <Dialog
-        open={previewTemplate !== null}
+      <ControlRecordTemplatePreviewDialog
+        template={previewTemplate}
         onOpenChange={(o) => {
           if (!o) {
             stopPreviewIfActive();
             setPreviewTemplate(null);
           }
         }}
-      >
-        <DialogContent className='max-w-xl'>
-          <DialogHeader>
-            <DialogTitle className='flex items-center gap-2'>
-              <List className='size-4 text-emerald-600' />
-              <span className='truncate'>{previewTemplate?.name ?? ''}</span>
-              {previewTemplate?.is_builtin && (
-                <Badge
-                  variant='secondary'
-                  className='h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wide'
-                >
-                  {t('emptyNodePicker.templateBuiltinBadge')}
-                </Badge>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-          {previewTemplate && (
-            <div className='space-y-3'>
-              {previewTemplate.description && (
-                <p className='text-xs leading-relaxed text-muted-foreground'>
-                  {previewTemplate.description}
-                </p>
-              )}
-              <div className='flex items-center gap-2 text-xs text-muted-foreground'>
-                <span className='font-semibold text-foreground/80'>
-                  {t('emptyNodePicker.templateStepCount', {
-                    count: Array.isArray(previewTemplate.steps)
-                      ? previewTemplate.steps.length
-                      : 0
-                  })}
-                </span>
-                {previewTemplate.category && (
-                  <span>· {previewTemplate.category}</span>
-                )}
-              </div>
-              <div className='max-h-[50vh] overflow-y-auto rounded-md border border-border/60 bg-muted/30 p-2'>
-                {Array.isArray(previewTemplate.steps) &&
-                previewTemplate.steps.length > 0 ? (
-                  <ol className='space-y-1'>
-                    {previewTemplate.steps.map((step: any, i: number) => {
-                      const type =
-                        typeof step?.type === 'string' ? step.type : 'unknown';
-                      return (
-                        <li
-                          key={i}
-                          className='flex items-start gap-2 rounded border border-border/40 bg-background px-2 py-1.5 text-xs'
-                        >
-                          <span className='flex h-5 w-5 shrink-0 items-center justify-center rounded bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100'>
-                            <StepIcon type={type as any} size={12} />
-                          </span>
-                          <span className='min-w-0 flex-1'>
-                            <span className='mr-1 text-[10px] font-semibold uppercase text-muted-foreground'>
-                              #{i + 1}
-                            </span>
-                            <span className='font-medium text-foreground/90'>
-                              {type}
-                            </span>
-                            {(step?.name || step?.label) && (
-                              <span className='ml-1 text-muted-foreground'>
-                                · {String(step.name || step.label)}
-                              </span>
-                            )}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                ) : (
-                  <p className='py-4 text-center text-xs text-muted-foreground'>
-                    {t('emptyNodePicker.templateNoSteps')}
-                  </p>
-                )}
-              </div>
-              <div className='flex items-center justify-end gap-2 pt-1'>
-                <Button
-                  variant='outline'
-                  size='sm'
-                  onClick={() => {
-                    stopPreviewIfActive();
-                    setPreviewTemplate(null);
-                  }}
-                >
-                  {t('emptyNodePicker.templateCancel')}
-                </Button>
-                <Button
-                  size='sm'
-                  onClick={() => {
-                    stopPreviewIfActive();
-                    const tpl = previewTemplate;
-                    if (!tpl) return;
-                    setScenarioVariables((prev) =>
-                      mergeTemplateVariablesIntoEditor(prev, tpl.variables)
-                    );
-                    const n = steps.appendSteps(
-                      Array.isArray(tpl.steps) ? tpl.steps : []
-                    );
-                    setPreviewTemplate(null);
-                    if (n > 0) {
-                      toast.success(
-                        t('emptyNodePicker.templateLoaded', {
-                          name: tpl.name,
-                          count: n
-                        })
-                      );
-                    } else {
-                      toast.error(t('emptyNodePicker.templateEmptySteps'));
-                    }
-                  }}
-                  disabled={
-                    !Array.isArray(previewTemplate.steps) ||
-                    previewTemplate.steps.length === 0
-                  }
-                >
-                  {t('emptyNodePicker.templateAppend')}
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+        onCancel={() => {
+          stopPreviewIfActive();
+          setPreviewTemplate(null);
+        }}
+        onAppend={() => {
+          stopPreviewIfActive();
+          const tpl = previewTemplate;
+          if (!tpl) return;
+          setScenarioVariables((prev) =>
+            mergeTemplateVariablesIntoEditor(prev, tpl.variables)
+          );
+          const n = steps.appendSteps(
+            Array.isArray(tpl.steps) ? tpl.steps : []
+          );
+          setPreviewTemplate(null);
+          if (n > 0) {
+            toast.success(
+              t('emptyNodePicker.templateLoaded', {
+                name: tpl.name,
+                count: n
+              })
+            );
+          } else {
+            toast.error(t('emptyNodePicker.templateEmptySteps'));
+          }
+        }}
+        labels={{
+          builtinBadge: t('emptyNodePicker.templateBuiltinBadge'),
+          formatStepCount: (count) =>
+            t('emptyNodePicker.templateStepCount', { count }),
+          noSteps: t('emptyNodePicker.templateNoSteps'),
+          cancel: t('emptyNodePicker.templateCancel'),
+          append: t('emptyNodePicker.templateAppend')
+        }}
+      />
     </div>
   );
 }

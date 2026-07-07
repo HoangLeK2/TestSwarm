@@ -12,7 +12,8 @@ Templates use:
 Template step types used:
   launch_app, open_url, wait, wait_stable, wait_element, dismiss_popup, key,
   scroll_down, swipe_ratio, tap_selector, input_selector, input_text,
-  set_variable, repeat, repeat_until, if_element, random_pick,
+  set_variable, repeat, repeat_until, if_element, if_variable, random_pick,
+  login_if_needed, fill_form, assert_app_state,
   extract (optional collection → inline save), save_extraction (advanced), loop, break_if
 
 Design rules:
@@ -51,8 +52,284 @@ _FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS: List[Dict[str, Any]] = [
     {"type": "dismiss_popup", "retries": 1},
 ]
 
+
+def _fb_open_comments_steps(
+    *,
+    comment_filter: str = "all_comments",
+    timeout: int = 5,
+    post_tap_wait_s: float = 0.35,
+) -> List[Dict[str, Any]]:
+    """Open Facebook comments as explicit sequential nodes."""
+    return [
+        {
+            "type": "scroll_down",
+            "repeats": 1,
+            "start_x_ratio": 0.68,
+            "start_y_ratio": 0.65,
+            "end_y_ratio": 0.47,
+            "ignore_error": True,
+        },
+        {
+            "type": "fb_find_comment_button",
+            "timeout": timeout,
+            "require_post_before_comment": True,
+            "comment_filter": comment_filter,
+            "switch_to_all_comments": comment_filter == "all_comments",
+            "ignore_error": True,
+        },
+        {
+            "type": "fb_tap_comment_target",
+            "post_tap_wait_s": post_tap_wait_s,
+            "ignore_error": True,
+        },
+        {
+            "type": "fb_apply_comment_filter",
+            "comment_filter": comment_filter,
+            "switch_to_all_comments": comment_filter == "all_comments",
+            "comment_filter_settle_s": 0.45,
+            "comment_filter_step_pause_s": 0.35,
+            "comment_filter_post_select_s": 0.85,
+        },
+    ]
+
+
+_FB_DETECT_LOGGED_IN: Dict[str, Any] = {
+    "any_text": ["Trang chủ", "Home", "Tìm kiếm", "Bạn đang nghĩ gì?"],
+}
+
+_FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
+    "package": "com.facebook.katana",
+    "semantic_locators": {
+        "username_field": {
+            "candidates": [
+                {"by": "description", "value": "Số di động hoặc email,"},
+                {
+                    "text_near": ["Số di động hoặc email"],
+                    "target_class": "android.widget.EditText",
+                    "allow_coordinate_fallback": True,
+                },
+            ]
+        },
+        "password_field": {
+            "candidates": [
+                {"by": "description", "value": "Mật khẩu,"},
+                {
+                    "text_near": ["Mật khẩu"],
+                    "target_class": "android.widget.EditText",
+                    "allow_coordinate_fallback": True,
+                },
+            ]
+        },
+        "login_button": {
+            "candidates": [
+                {"by": "text", "value": "Đăng nhập"},
+                {"description_contains": "Đăng nhập", "class_name": "android.widget.Button"},
+            ]
+        },
+    },
+    "login_recipe": {
+        "detect_logged_in": _FB_DETECT_LOGGED_IN,
+        "fields": {
+            "username": {"locator": "username_field", "value_from": "account.username"},
+            "password": {"locator": "password_field", "value_from": "secret.login_password"},
+        },
+        "submit": {"locator": "login_button"},
+    },
+}
+
+_FB_LOGIN_PROFILE_GOOGLE: Dict[str, Any] = {
+    "package": "com.facebook.katana",
+    "semantic_locators": {
+        "fb_google_button": {
+            "candidates": [
+                {"by": "text", "value": "Continue with Google"},
+                {"by": "text", "value": "Tiếp tục với Google"},
+                {"description_contains": "Google"},
+            ]
+        },
+        "google_email_field": {
+            "candidates": [{"by": "resource-id", "value": "identifierId"}]
+        },
+        "google_next_button": {
+            "candidates": [
+                {"by": "text", "value": "NEXT"},
+                {"by": "text", "value": "Tiếp theo"},
+                {"by": "text", "value": "Tiếp tục"},
+            ]
+        },
+        "google_password_field": {
+            "candidates": [
+                {"by": "resource-id", "value": "password"},
+                {"by": "resource-id", "value": "Passwd"},
+            ]
+        },
+        "google_signin_button": {
+            "candidates": [
+                {"by": "text", "value": "Next"},
+                {"by": "text", "value": "NEXT"},
+                {"by": "text", "value": "Sign in"},
+                {"by": "text", "value": "Đăng nhập"},
+            ]
+        },
+    },
+    "login_recipe": {
+        "detect_logged_in": _FB_DETECT_LOGGED_IN,
+        "fields": {
+            "email": {"locator": "google_email_field", "value_from": "account.username"},
+        },
+        "submit": {"locator": "google_next_button"},
+    },
+    "form_recipes": {
+        "google_password": {
+            "fields": {
+                "password": {
+                    "locator": "google_password_field",
+                    "value_from": "secret.login_password",
+                }
+            },
+            "submit": {"locator": "google_signin_button"},
+        }
+    },
+    "popup_watchers": [
+        {
+            "name": "google_oauth_terms_en",
+            "when": {"text": "I agree"},
+            "action": {"tap_text": "I agree"},
+            "scope": {"package": "com.google.android.gms"},
+        },
+        {
+            "name": "google_oauth_terms_vi",
+            "when": {"text": "Tôi đồng ý"},
+            "action": {"tap_text": "Tôi đồng ý"},
+            "scope": {"package": "com.google.android.gms"},
+        },
+    ],
+}
+
+_FB_TAP_GOOGLE_BUTTON_STEPS: List[Dict[str, Any]] = [
+    {
+        "type": "if_element",
+        "by": "text",
+        "value": "Tiếp tục với Google",
+        "timeout": 4,
+        "then": [
+            {"type": "tap_selector", "by": "text", "value": "Tiếp tục với Google", "timeout": 4},
+        ],
+        "else": [
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Continue with Google",
+                "timeout": 3,
+                "then": [
+                    {"type": "tap_selector", "by": "text", "value": "Continue with Google", "timeout": 4},
+                ],
+                "else": [],
+            },
+        ],
+    },
+    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+]
+
+_FB_GOOGLE_LOGIN_STEPS: List[Dict[str, Any]] = [
+    *_FB_TAP_GOOGLE_BUTTON_STEPS,
+    {"type": "login_if_needed", "profile": _FB_LOGIN_PROFILE_GOOGLE, "clear_first": True},
+    {
+        "type": "fill_form",
+        "recipe": "google_password",
+        "profile": _FB_LOGIN_PROFILE_GOOGLE,
+        "clear_first": True,
+    },
+    {"type": "wait", "seconds": 8, "profile": _FB_LOGIN_PROFILE_GOOGLE},
+    {"type": "launch_app", "package": "com.facebook.katana"},
+    {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+]
+
+_FB_NATIVE_LOGIN_STEPS: List[Dict[str, Any]] = [
+    {"type": "login_if_needed", "profile": _FB_LOGIN_PROFILE_NATIVE, "clear_first": True},
+]
+
+_FB_LOGIN_METHOD_BRANCH: List[Dict[str, Any]] = [
+    {
+        "type": "if_variable",
+        "name": "LOGIN_METHOD",
+        "equals": "google",
+        "then": _FB_GOOGLE_LOGIN_STEPS,
+        "else": [
+            {
+                "type": "if_variable",
+                "name": "LOGIN_METHOD",
+                "equals": "native",
+                "then": _FB_NATIVE_LOGIN_STEPS,
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Tiếp tục với Google",
+                        "timeout": 3,
+                        "then": _FB_GOOGLE_LOGIN_STEPS,
+                        "else": [
+                            {
+                                "type": "if_element",
+                                "by": "text",
+                                "value": "Continue with Google",
+                                "timeout": 2,
+                                "then": _FB_GOOGLE_LOGIN_STEPS,
+                                "else": _FB_NATIVE_LOGIN_STEPS,
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
+]
+
 _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
+    {
+        "name": "Đăng nhập Facebook",
+        "display_name": "Đăng nhập Facebook",
+        "category": "facebook",
+        "description": (
+            "Mở Facebook và đăng nhập khi chưa có session. Hỗ trợ native (SĐT/email + mật khẩu FB) "
+            "và Google SSO (Gmail + mật khẩu Google). Account platform vẫn là facebook.\n"
+            "Biến LOGIN_METHOD: auto (mặc định — ưu tiên nút Google nếu thấy), native, google.\n"
+            "Account Google SSO: username = Gmail, tag google, mật khẩu Google qua secret.login_password."
+        ),
+        "tags": "facebook,login,app-automation,native,google",
+        "variables": {
+            "LOGIN_METHOD": "auto",
+        },
+        "steps": [
+            {"type": "launch_app", "package": "com.facebook.katana", "title": "Mở Facebook"},
+            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+            {"type": "dismiss_popup", "retries": 2},
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Bạn đang nghĩ gì?",
+                "timeout": 4,
+                "then": [],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Trang chủ",
+                        "timeout": 2,
+                        "then": [],
+                        "else": _FB_LOGIN_METHOD_BRANCH,
+                    },
+                ],
+            },
+            {"type": "login_if_needed", "profile": _FB_LOGIN_PROFILE_NATIVE},
+            {
+                "type": "assert_app_state",
+                "profile": _FB_LOGIN_PROFILE_NATIVE,
+                "any_text": ["Trang chủ", "Tìm kiếm", "Bạn đang nghĩ gì?"],
+            },
+        ],
+    },
 
     {
         "name": "Crawl bài viết + bình luận 1 nhóm Facebook",
@@ -139,56 +416,39 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "dedupe_field": "post_key",
                         "tags": "group,crawl,${GROUP_NAME}",
                     },
-                    # Atomic tap trên chính detail vừa mở: giữ parent context chính xác cho comments.
-                    # pre_scroll=True: cuộn nhẹ lộ nút/filter nếu cần.
+                    # Mở comments bằng node tuần tự để preview/runtime highlight từng hành động.
+                    *_fb_open_comments_steps(),
+                    {"type": "wait", "seconds": 0.3},
                     {
-                        "type": "fb_tap_comment_button",
-                        "timeout": 5,
-                        "require_post_before_comment": True,
-                        "pre_scroll": True,
-                        "pre_scroll_distance": 0.24,
-                        "post_tap_wait_s": 0.35,
-                        "enter_comment_sheet_timeout": 2.0,
-                        "comment_filter": "all_comments",
-                        "switch_to_all_comments": True,
-                        "comment_filter_settle_s": 0.45,
-                        "comment_filter_step_pause_s": 0.35,
-                        "comment_filter_post_select_s": 0.85,
-                        "then": [
-                            {"type": "wait", "seconds": 0.3},
-                            {
-                                "type": "extract",
-                                "strategy": "fb_comments",
-                                "edge_extra_data": True,
-                                "extract_profile": "balanced",
-                                "strategy_version": "fb_comments:v1",
-                                "parent_post_id_var": "_fb_comment_parent_pid",
-                                "require_verified_parent": True,
-                                "max_items": 220,
-                                "comment_scroll_passes": 16,
-                                "comment_swipes_per_dump": 4,
-                                "comment_scroll_distance": 0.52,
-                                "comment_scroll_duration_ms": 120,
-                                "comment_scroll_pause_s": 0.03,
-                                "comment_no_growth_break": 3,
-                                "min_comment_scan_passes": 2,
-                                "comment_max_snapshots": 12,
-                                "comment_scroll_wall_s": 25,
-                                "comment_stop_if_no_new": True,
-                                "stop_if_no_new": True,
-                                "no_new_threshold": 3,
-                                "collection": "${SAVE_COLLECTION}",
-                                "platform": "facebook",
-                                "content_type": "fb_comment",
-                                "dedupe_field": "comment_key",
-                                "tags": "group,comment,${GROUP_NAME}",
-                                "save_parent_id_var": "_active_comment_parent_hash",
-                                "item_level": 1,
-                            },
-                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
-                        ],
-                        "else": [],
+                        "type": "extract",
+                        "strategy": "fb_comments",
+                        "edge_extra_data": True,
+                        "extract_profile": "balanced",
+                        "strategy_version": "fb_comments:v1",
+                        "parent_post_id_var": "_fb_comment_parent_pid",
+                        "require_verified_parent": True,
+                        "max_items": 220,
+                        "comment_scroll_passes": 16,
+                        "comment_swipes_per_dump": 4,
+                        "comment_scroll_distance": 0.52,
+                        "comment_scroll_duration_ms": 120,
+                        "comment_scroll_pause_s": 0.03,
+                        "comment_no_growth_break": 0,
+                        "min_comment_scan_passes": 2,
+                        "comment_max_snapshots": 12,
+                        "comment_scroll_wall_s": 25,
+                        "comment_stop_if_no_new": False,
+                        "stop_if_no_new": False,
+                        "no_new_threshold": 3,
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "fb_comment",
+                        "dedupe_field": "comment_key",
+                        "tags": "group,comment,${GROUP_NAME}",
+                        "save_parent_id_var": "_active_comment_parent_hash",
+                        "item_level": 1,
                     },
+                    *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
 
                     # Scroll feed (neo trái tránh mở ảnh) + delay tự nhiên
                     {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
@@ -381,54 +641,38 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "dedupe_field": "post_key",
                                 "tags": "profile,crawl,${PROFILE_SEARCH}",
                             },
+                            *_fb_open_comments_steps(),
+                            {"type": "wait", "seconds": 0.3},
                             {
-                                "type": "fb_tap_comment_button",
-                                "timeout": 5,
-                                "require_post_before_comment": True,
-                                "pre_scroll": True,
-                                "pre_scroll_distance": 0.24,
-                                "post_tap_wait_s": 0.35,
-                                "enter_comment_sheet_timeout": 2.0,
-                                "comment_filter": "all_comments",
-                                "switch_to_all_comments": True,
-                                "comment_filter_settle_s": 0.45,
-                                "comment_filter_step_pause_s": 0.35,
-                                "comment_filter_post_select_s": 0.85,
-                                "then": [
-                                    {"type": "wait", "seconds": 0.3},
-                                    {
-                                        "type": "extract",
-                                        "strategy": "fb_comments",
-                                        "edge_extra_data": True,
-                                        "extract_profile": "balanced",
-                                        "strategy_version": "fb_comments:v1",
-                                        "parent_post_id_var": "_fb_comment_parent_pid",
-                                        "require_verified_parent": True,
-                                        "max_items": 220,
-                                        "comment_scroll_passes": 16,
-                                        "comment_swipes_per_dump": 4,
-                                        "comment_scroll_distance": 0.52,
-                                        "comment_scroll_duration_ms": 120,
-                                        "comment_scroll_pause_s": 0.03,
-                                        "comment_no_growth_break": 3,
-                                        "min_comment_scan_passes": 2,
-                                        "comment_max_snapshots": 12,
-                                        "comment_scroll_wall_s": 25,
-                                        "comment_stop_if_no_new": True,
-                                        "stop_if_no_new": True,
-                                        "no_new_threshold": 3,
-                                        "collection": "${SAVE_COLLECTION}",
-                                        "platform": "facebook",
-                                        "content_type": "fb_comment",
-                                        "dedupe_field": "comment_key",
-                                        "tags": "profile,comment,${PROFILE_SEARCH}",
-                                        "save_parent_id_var": "_active_comment_parent_hash",
-                                        "item_level": 1,
-                                    },
-                                    *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
-                                ],
-                                "else": [],
+                                "type": "extract",
+                                "strategy": "fb_comments",
+                                "edge_extra_data": True,
+                                "extract_profile": "balanced",
+                                "strategy_version": "fb_comments:v1",
+                                "parent_post_id_var": "_fb_comment_parent_pid",
+                                "require_verified_parent": True,
+                                "max_items": 220,
+                                "comment_scroll_passes": 16,
+                                "comment_swipes_per_dump": 4,
+                                "comment_scroll_distance": 0.52,
+                                "comment_scroll_duration_ms": 120,
+                                "comment_scroll_pause_s": 0.03,
+                                "comment_no_growth_break": 0,
+                                "min_comment_scan_passes": 2,
+                                "comment_max_snapshots": 12,
+                                "comment_scroll_wall_s": 25,
+                                "comment_stop_if_no_new": False,
+                                "stop_if_no_new": False,
+                                "no_new_threshold": 3,
+                                "collection": "${SAVE_COLLECTION}",
+                                "platform": "facebook",
+                                "content_type": "fb_comment",
+                                "dedupe_field": "comment_key",
+                                "tags": "profile,comment,${PROFILE_SEARCH}",
+                                "save_parent_id_var": "_active_comment_parent_hash",
+                                "item_level": 1,
                             },
+                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
                             {
                                 "type": "scroll_down",
                                 "repeats": 1,
@@ -546,56 +790,39 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "dedupe_field": "post_key",
                         "tags": "group,crawl,${GROUP_NAME}",
                     },
-                    # Atomic tap trên chính detail vừa mở: giữ parent context chính xác cho comments.
-                    # pre_scroll=True: cuộn nhẹ lộ nút/filter nếu cần.
+                    # Mở comments bằng node tuần tự để preview/runtime highlight từng hành động.
+                    *_fb_open_comments_steps(),
+                    {"type": "wait", "seconds": 0.3},
                     {
-                        "type": "fb_tap_comment_button",
-                        "timeout": 5,
-                        "require_post_before_comment": True,
-                        "pre_scroll": True,
-                        "pre_scroll_distance": 0.24,
-                        "post_tap_wait_s": 0.35,
-                        "enter_comment_sheet_timeout": 2.0,
-                        "comment_filter": "all_comments",
-                        "switch_to_all_comments": True,
-                        "comment_filter_settle_s": 0.45,
-                        "comment_filter_step_pause_s": 0.35,
-                        "comment_filter_post_select_s": 0.85,
-                        "then": [
-                            {"type": "wait", "seconds": 0.3},
-                            {
-                                "type": "extract",
-                                "strategy": "fb_comments",
-                                "edge_extra_data": True,
-                                "extract_profile": "balanced",
-                                "strategy_version": "fb_comments:v1",
-                                "parent_post_id_var": "_fb_comment_parent_pid",
-                                "require_verified_parent": True,
-                                "max_items": 220,
-                                "comment_scroll_passes": 16,
-                                "comment_swipes_per_dump": 4,
-                                "comment_scroll_distance": 0.52,
-                                "comment_scroll_duration_ms": 120,
-                                "comment_scroll_pause_s": 0.03,
-                                "comment_no_growth_break": 3,
-                                "min_comment_scan_passes": 2,
-                                "comment_max_snapshots": 12,
-                                "comment_scroll_wall_s": 25,
-                                "comment_stop_if_no_new": True,
-                                "stop_if_no_new": True,
-                                "no_new_threshold": 3,
-                                "collection": "${SAVE_COLLECTION}",
-                                "platform": "facebook",
-                                "content_type": "fb_comment",
-                                "dedupe_field": "comment_key",
-                                "tags": "group,comment,${GROUP_NAME}",
-                                "save_parent_id_var": "_active_comment_parent_hash",
-                                "item_level": 1,
-                            },
-                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
-                        ],
-                        "else": [],
+                        "type": "extract",
+                        "strategy": "fb_comments",
+                        "edge_extra_data": True,
+                        "extract_profile": "balanced",
+                        "strategy_version": "fb_comments:v1",
+                        "parent_post_id_var": "_fb_comment_parent_pid",
+                        "require_verified_parent": True,
+                        "max_items": 220,
+                        "comment_scroll_passes": 16,
+                        "comment_swipes_per_dump": 4,
+                        "comment_scroll_distance": 0.52,
+                        "comment_scroll_duration_ms": 120,
+                        "comment_scroll_pause_s": 0.03,
+                        "comment_no_growth_break": 0,
+                        "min_comment_scan_passes": 2,
+                        "comment_max_snapshots": 12,
+                        "comment_scroll_wall_s": 25,
+                        "comment_stop_if_no_new": False,
+                        "stop_if_no_new": False,
+                        "no_new_threshold": 3,
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "fb_comment",
+                        "dedupe_field": "comment_key",
+                        "tags": "group,comment,${GROUP_NAME}",
+                        "save_parent_id_var": "_active_comment_parent_hash",
+                        "item_level": 1,
                     },
+                    *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
 
                     # Scroll feed (neo trái tránh mở ảnh) + delay tự nhiên
                     {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
@@ -702,54 +929,38 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "dedupe_field": "post_key",
                         "tags": "group,crawl,${TARGET_GROUP_NAME}",
                     },
+                    *_fb_open_comments_steps(),
+                    {"type": "wait", "seconds": 0.3},
                     {
-                        "type": "fb_tap_comment_button",
-                        "timeout": 5,
-                        "require_post_before_comment": True,
-                        "pre_scroll": True,
-                        "pre_scroll_distance": 0.24,
-                        "post_tap_wait_s": 0.35,
-                        "enter_comment_sheet_timeout": 2,
-                        "comment_filter": "all_comments",
-                        "switch_to_all_comments": True,
-                        "comment_filter_settle_s": 0.45,
-                        "comment_filter_step_pause_s": 0.35,
-                        "comment_filter_post_select_s": 0.85,
-                        "then": [
-                            {"type": "wait", "seconds": 0.3},
-                            {
-                                "type": "extract",
-                                "strategy": "fb_comments",
-                                "edge_extra_data": True,
-                                "extract_profile": "balanced",
-                                "strategy_version": "fb_comments:v1",
-                                "parent_post_id_var": "_fb_comment_parent_pid",
-                                "require_verified_parent": True,
-                                "max_items": 220,
-                                "comment_scroll_passes": 16,
-                                "comment_swipes_per_dump": 4,
-                                "comment_scroll_distance": 0.52,
-                                "comment_scroll_duration_ms": 120,
-                                "comment_scroll_pause_s": 0.03,
-                                "comment_no_growth_break": 3,
-                                "min_comment_scan_passes": 2,
-                                "comment_max_snapshots": 12,
-                                "comment_scroll_wall_s": 25,
-                                "comment_stop_if_no_new": True,
-                                "stop_if_no_new": True,
-                                "no_new_threshold": 3,
-                                "collection": "${SAVE_COLLECTION}",
-                                "platform": "facebook",
-                                "content_type": "fb_comment",
-                                "dedupe_field": "comment_key",
-                                "tags": "group,comment,${TARGET_GROUP_NAME}",
-                                "save_parent_id_var": "_active_comment_parent_hash",
-                                "item_level": 1,
-                            },
-                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
-                        ],
-                        "else": [],
+                        "type": "extract",
+                        "strategy": "fb_comments",
+                        "edge_extra_data": True,
+                        "extract_profile": "balanced",
+                        "strategy_version": "fb_comments:v1",
+                        "parent_post_id_var": "_fb_comment_parent_pid",
+                        "require_verified_parent": True,
+                        "max_items": 220,
+                        "comment_scroll_passes": 16,
+                        "comment_swipes_per_dump": 4,
+                        "comment_scroll_distance": 0.52,
+                        "comment_scroll_duration_ms": 120,
+                        "comment_scroll_pause_s": 0.03,
+                        "comment_no_growth_break": 0,
+                        "min_comment_scan_passes": 2,
+                        "comment_max_snapshots": 12,
+                        "comment_scroll_wall_s": 25,
+                        "comment_stop_if_no_new": False,
+                        "stop_if_no_new": False,
+                        "no_new_threshold": 3,
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "fb_comment",
+                        "dedupe_field": "comment_key",
+                        "tags": "group,comment,${TARGET_GROUP_NAME}",
+                        "save_parent_id_var": "_active_comment_parent_hash",
+                        "item_level": 1,
                     },
+                    *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
                     {
                         "type": "scroll_down",
                         "repeats": 1,

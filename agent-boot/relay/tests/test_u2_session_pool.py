@@ -42,6 +42,58 @@ async def test_get_session_connects_once(pool):
 
 
 @pytest.mark.asyncio
+async def test_warm_session_preconnects_first_request(pool):
+    p, fn, dev = pool
+    await p.start()
+    try:
+        warmed = await p.warm_session("192.168.1.10:5555")
+        assert warmed is True
+        assert p._sessions["192.168.1.10:5555"].keep_warm is True
+        d1 = await p.get_session("192.168.1.10:5555")
+        assert d1 is dev
+        fn.assert_called_once()
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_warm_session_waits_for_active_entry_lock(pool):
+    p, fn, dev = pool
+    await p.start()
+    try:
+        await p.get_session("192.168.1.10:5555")
+        entry = p._sessions["192.168.1.10:5555"]
+
+        async with entry.lock:
+            task = asyncio.create_task(p.warm_session("192.168.1.10:5555"))
+            await asyncio.sleep(0)
+            assert not task.done()
+
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        fn.assert_called_once()
+        assert entry.device is dev
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_mark_keep_warm_pins_existing_session(pool):
+    p, fn, _dev = pool
+    await p.start()
+    try:
+        await p.get_session("192.168.1.10:5555")
+        entry = p._sessions["192.168.1.10:5555"]
+        assert entry.keep_warm is False
+
+        assert p.mark_keep_warm("192.168.1.10:5555") is True
+
+        assert entry.keep_warm is True
+        fn.assert_called_once()
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_get_session_safe(pool):
     """Two concurrent calls should only connect once (double-check pattern)."""
     p, fn, dev = pool
@@ -173,5 +225,39 @@ async def test_reap_loop_evicts_idle(event_loop):
         # Session should be gone
         async with p._global_lock:
             assert "192.168.1.10:5555" not in p._sessions
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_reap_loop_keeps_idle_warm_session(event_loop):
+    """Desired warm sessions are pinned while the device remains online."""
+    dev = MagicMock()
+    dev.alive = True
+    fn = MagicMock(return_value=dev)
+
+    p = U2SessionPool(loop=event_loop, connect_fn=fn)
+    await p.start()
+    try:
+        await p.warm_session("192.168.1.10:5555")
+
+        async with p._global_lock:
+            entry = p._sessions["192.168.1.10:5555"]
+            entry.last_used = time.monotonic() - SESSION_TTL_SECONDS - 10
+
+        now = time.monotonic()
+        stale = []
+        async with p._global_lock:
+            for s, e in p._sessions.items():
+                if e.keep_warm:
+                    continue
+                if now - e.last_used > SESSION_TTL_SECONDS:
+                    stale.append(s)
+        for s in stale:
+            await p.evict(s)
+
+        async with p._global_lock:
+            assert "192.168.1.10:5555" in p._sessions
+            assert p._sessions["192.168.1.10:5555"].keep_warm is True
     finally:
         await p.stop()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import time
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from relay.adb import lock_portrait_rotation, lock_rotation_after_shell_enabled
@@ -20,6 +21,7 @@ from relay.u2_xpath_util import normalize_u2_xpath
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+U2HttpRpc = Callable[[str, dict[str, Any], float], tuple[bool, str]]
 
 MAX_BATCH_ACTIONS = 100
 MAX_FLOW_TIMEOUT = 60.0
@@ -83,7 +85,16 @@ _SELECTOR_KEYS = frozenset({
     "clickable", "checked", "checkable", "enabled", "scrollable", "focused", "selected",
 })
 
+_SELECTOR_KEY_ALIASES = {
+    "descriptionStartswith": "descriptionStartsWith",
+}
+
 _BOOL_KEYS = frozenset({"clickable", "checked", "checkable", "enabled", "scrollable", "focused", "selected"})
+
+
+def _selector_key(key: object) -> str:
+    raw = str(key or "").strip()
+    return _SELECTOR_KEY_ALIASES.get(raw, raw)
 
 
 def _resolve(dev: Any, selector: dict) -> Any:
@@ -94,7 +105,7 @@ def _resolve(dev: Any, selector: dict) -> Any:
         return _resolve_spec(dev, selector["spec"])
     if "xpath" in selector:
         return dev.xpath(normalize_u2_xpath(selector["xpath"]))
-    kwargs = {k: v for k, v in selector.items() if k in _SELECTOR_KEYS}
+    kwargs = {_selector_key(k): v for k, v in selector.items() if _selector_key(k) in _SELECTOR_KEYS}
     if not kwargs:
         raise ValueError(f"unrecognised selector keys: {list(selector)}")
     return dev(**kwargs)
@@ -117,20 +128,26 @@ def _target_kwargs(target: dict) -> dict:
         kwargs["description"] = value
     elif by == "text" and value:
         kwargs["text"] = value
+    else:
+        by_key = _selector_key(by)
+        if by_key in _SELECTOR_KEYS and by_key not in _BOOL_KEYS and value:
+            kwargs[by_key] = value
     for k, v in cond.items():
-        if k in _SELECTOR_KEYS and v is not None:
-            if k in _BOOL_KEYS:
+        key = _selector_key(k)
+        if key in _SELECTOR_KEYS and v is not None:
+            if key in _BOOL_KEYS:
                 if v:
-                    kwargs[k] = True
+                    kwargs[key] = True
             else:
-                kwargs[k] = v
+                kwargs[key] = v
     for k, v in target.items():
-        if k in _SELECTOR_KEYS and k not in kwargs and v is not None:
-            if k in _BOOL_KEYS:
+        key = _selector_key(k)
+        if key in _SELECTOR_KEYS and key not in kwargs and v is not None:
+            if key in _BOOL_KEYS:
                 if v:
-                    kwargs[k] = True
+                    kwargs[key] = True
             else:
-                kwargs[k] = v
+                kwargs[key] = v
     for k in ("className", "resourceId", "text", "description"):
         if k in target and target[k] is not None and k not in kwargs:
             kwargs[k] = target[k]
@@ -152,13 +169,18 @@ def _anchor_kwargs(spec: dict) -> dict:
         kwargs["description"] = value
     elif by == "text" and value:
         kwargs["text"] = value
+    else:
+        by_key = _selector_key(by)
+        if by_key in _SELECTOR_KEYS and by_key not in _BOOL_KEYS and value:
+            kwargs[by_key] = value
     for k, v in cond.items():
-        if k in _SELECTOR_KEYS and v is not None:
-            if k in _BOOL_KEYS:
+        key = _selector_key(k)
+        if key in _SELECTOR_KEYS and v is not None:
+            if key in _BOOL_KEYS:
                 if v:
-                    kwargs[k] = True
+                    kwargs[key] = True
             else:
-                kwargs[k] = v
+                kwargs[key] = v
     if spec.get("instance") is not None:
         kwargs["instance"] = int(spec["instance"])
     if spec.get("index") is not None:
@@ -250,6 +272,12 @@ def _op_set_text(dev: Any, act: dict) -> None:
 
 def _op_press_key(dev: Any, act: dict) -> None:
     dev.press(act["key"])
+
+
+def _op_sleep(dev: Any, act: dict) -> None:
+    seconds = max(0.0, min(3.0, float(act.get("seconds", act.get("duration", 0.0)))))
+    if seconds > 0:
+        time.sleep(seconds)
 
 
 def _op_wait_exists(dev: Any, act: dict) -> bool:
@@ -348,6 +376,13 @@ def _op_app_wait(dev: Any, act: dict) -> int:
     return int(pid or 0)
 
 
+def _op_open_url(dev: Any, act: dict) -> None:
+    url = str(act.get("url") or "").strip()
+    if not url:
+        raise ValueError("open_url: url required")
+    dev.open_url(url)
+
+
 def _op_push_file(dev: Any, act: dict) -> None:
     local_path = str(act.get("local_path") or act.get("src") or "").strip()
     remote_path = str(act.get("remote_path") or act.get("dst") or "").strip()
@@ -379,6 +414,7 @@ _OP_TABLE: dict[str, Any] = {
     "get_text":       _op_get_text,
     "set_text":       _op_set_text,
     "press_key":      _op_press_key,
+    "sleep":          _op_sleep,
     "wait_exists":    _op_wait_exists,
     "wait_exists_spec": _op_wait_exists_spec,
     "wait_gone":      _op_wait_gone,
@@ -388,6 +424,7 @@ _OP_TABLE: dict[str, Any] = {
     "app_stop":       _op_app_stop,
     "app_clear":      _op_app_clear,
     "app_wait":       _op_app_wait,
+    "open_url":       _op_open_url,
     "push_file":      _op_push_file,
     "pull_file":      _op_pull_file,
 }
@@ -500,10 +537,12 @@ class U2Executor:
         loop: asyncio.AbstractEventLoop,
         *,
         http_dump: Optional[Callable[[str, float, bool], str]] = None,
+        http_rpc: Optional[U2HttpRpc] = None,
     ) -> None:
         self._pool = pool
         self._loop = loop
         self._http_dump = http_dump
+        self._http_rpc = http_rpc
 
     async def with_session(self, serial: str, coro: Callable[[], Awaitable[T]]) -> T:
         """Keep one warm u2 session for expand + dump (no reconnect between batches)."""
@@ -511,6 +550,34 @@ class U2Executor:
             async with self._pool.session_scope(serial):
                 return await coro()
         return await coro()
+
+    def _run_u2_swipe_batch(self, serial: str, act: dict) -> int:
+        if self._http_rpc is None:
+            raise RuntimeError("u2_swipe_batch: u2 HTTP RPC not configured")
+        count = max(0, min(MAX_BATCH_ACTIONS, int(act.get("count", 1))))
+        if count <= 0:
+            return 0
+        fx = int(act["fx"])
+        fy = int(act["fy"])
+        tx = int(act["tx"])
+        ty = int(act["ty"])
+        duration = max(0.0, min(0.8, float(act.get("duration", DEFAULT_SWIPE_DURATION))))
+        steps = max(1, int(duration * 40))
+        pause_s = max(0.0, min(1.0, float(act.get("pause_s", 0.0))))
+        timeout = max(1.5, duration + 0.8)
+        for idx in range(count):
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "swipe",
+                "id": idx + 1,
+                "params": [fx, fy, tx, ty, steps],
+            }
+            ok, error = self._http_rpc(serial, payload, timeout)
+            if not ok:
+                raise RuntimeError(error or "u2_swipe_batch failed")
+            if pause_s > 0 and idx + 1 < count:
+                time.sleep(pause_s)
+        return count
 
     async def run_batch(
         self,
@@ -538,8 +605,8 @@ class U2Executor:
                         "cancelled": True,
                     }
                 op = act.get("op", "")
-                fn = _OP_TABLE.get(op)
-                if fn is None:
+                fn = None if op == "u2_swipe_batch" else _OP_TABLE.get(op)
+                if op != "u2_swipe_batch" and fn is None:
                     results.append({"op": op, "ok": False, "error": f"unknown op: {op}"})
                     if early_exit:
                         return {
@@ -550,7 +617,9 @@ class U2Executor:
                         }
                     continue
                 try:
-                    if op == "dump_hierarchy" and self._http_dump is not None:
+                    if op == "u2_swipe_batch":
+                        value = self._run_u2_swipe_batch(serial, act)
+                    elif op == "dump_hierarchy" and self._http_dump is not None:
                         timeout = float(act.get("timeout") or act.get("timeout_s") or 5.0)
                         compressed = bool(act.get("compressed", False))
                         value = self._http_dump(serial, timeout, compressed)

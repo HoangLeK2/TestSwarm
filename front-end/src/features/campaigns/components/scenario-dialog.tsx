@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
+import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 import {
-  extractVariablesFromScenarioJson,
-  normalizeScenarioVariables
-} from '@/lib/scenario-variables';
+  detectSingleVariableRename,
+  replaceScenarioVariableReferences,
+  stripUndeclaredVariableReferencesFromTags
+} from '@/lib/scenario-variable-references';
 import {
   useCampaignDevices,
   useCompileCampaignScenario,
@@ -73,6 +75,7 @@ import { VariableEditor } from '@/components/variable-editor';
 import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { FlowEditor } from './flow-editor/flow-editor';
+import { deriveNestedInlineRunStates } from './flow-editor/inline-run-key';
 import { sanitizeScenarioStepsForApi } from '@/features/devices/lib/sanitize-scenario-steps-for-api';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
 import { stepsToGraph } from '../utils/steps-to-graph';
@@ -502,6 +505,8 @@ export function ScenarioDialog({
   const [graphNodes, setGraphNodes] = useState<FlowNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<FlowEdge[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const variablesRef = useRef<Record<string, any>>({});
+  const initialVariablesRef = useRef<Record<string, any>>({});
   const [accountGroupId, setAccountGroupId] = useState<string>('');
   const [rawJson, setRawJson] = useState('');
   const tScenarioForm = useTranslations('components.scenariosForm');
@@ -642,6 +647,9 @@ export function ScenarioDialog({
     stepsRef.current = steps;
   }, [steps]);
   useEffect(() => {
+    variablesRef.current = variables;
+  }, [variables]);
+  useEffect(() => {
     flowSelectedFgIdRef.current = flowSelectedFgId;
   }, [flowSelectedFgId]);
 
@@ -688,6 +696,33 @@ export function ScenarioDialog({
     [scheduleGraphSync]
   );
 
+  const handleVariablesChange = useCallback(
+    (next: Record<string, any>) => {
+      const normalizedNext = normalizeScenarioVariables(next) as Record<
+        string,
+        any
+      >;
+      const rename = detectSingleVariableRename(
+        variablesRef.current,
+        normalizedNext
+      );
+      variablesRef.current = normalizedNext;
+      setVariables(normalizedNext);
+      if (!rename) return;
+
+      const nextSteps = replaceScenarioVariableReferences(
+        stepsRef.current,
+        rename
+      ) as Step[];
+      stepsRef.current = nextSteps;
+      replaceStepsAndGraph(nextSteps);
+      setFlowDetailStep((current) =>
+        current ? replaceScenarioVariableReferences(current, rename) : current
+      );
+    },
+    [replaceStepsAndGraph]
+  );
+
   const appendStepsWithGraphSync = useCallback(
     (append: (prev: Step[]) => Step[]) => {
       // Compute next outside updater so we can schedule graph sync without
@@ -721,7 +756,8 @@ export function ScenarioDialog({
       if (ev.event === 'step_done') {
         setStates((s) => ({
           ...s,
-          [runKey]: ev.ok ? 'ok' : 'error'
+          [runKey]: ev.ok ? 'ok' : 'error',
+          ...deriveNestedInlineRunStates(runKey, ev)
         }));
         if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
         return;
@@ -759,7 +795,14 @@ export function ScenarioDialog({
       setTimeout(() => {
         setStates((s) => {
           const n = { ...s };
-          if (n[runKey] !== 'running') delete n[runKey];
+          for (const key of Object.keys(n)) {
+            if (
+              (key === runKey || key.startsWith(`${runKey}/`)) &&
+              n[key] !== 'running'
+            ) {
+              delete n[key];
+            }
+          }
           return n;
         });
       }, 2800);
@@ -1286,6 +1329,8 @@ export function ScenarioDialog({
     setInstructions(currentInstructions);
     setSteps(currentSteps);
     setVariables(currentVariables);
+    variablesRef.current = currentVariables;
+    initialVariablesRef.current = currentVariables;
     // Load graph model if available and valid, else derive from steps.
     // Validate that each node has required `id` and `order` fields before trusting
     // the stored data (guards against old records saved before the graph refactor).
@@ -1371,13 +1416,6 @@ export function ScenarioDialog({
   }, [xmlSerial]);
 
   const resolveVariablesForSave = (): Record<string, any> => {
-    const text = rawJson.trim();
-    if (text) {
-      return extractVariablesFromScenarioJson(JSON.parse(text)) as Record<
-        string,
-        any
-      >;
-    }
     return normalizeScenarioVariables(variables) as Record<string, any>;
   };
 
@@ -1389,7 +1427,23 @@ export function ScenarioDialog({
       toast.error(tScenarioForm('saveInvalidJsonVariables'));
       return;
     }
-    const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
+    let sanitizedSteps = sanitizeScenarioStepsForApi(steps);
+    const pendingRename = detectSingleVariableRename(
+      initialVariablesRef.current,
+      variablesToSave
+    );
+    if (pendingRename) {
+      sanitizedSteps = replaceScenarioVariableReferences(
+        sanitizedSteps,
+        pendingRename
+      ) as Step[];
+      stepsRef.current = sanitizedSteps;
+      replaceStepsAndGraph(sanitizedSteps);
+    }
+    sanitizedSteps = stripUndeclaredVariableReferencesFromTags(
+      sanitizedSteps,
+      variablesToSave
+    ) as Step[];
     const check = validateScenarioStepsForApi(sanitizedSteps, (key, values) =>
       tScenarioValidation(key, values)
     );
@@ -2028,7 +2082,7 @@ export function ScenarioDialog({
                 <div className='space-y-2 pt-2'>
                   <VariableEditor
                     variables={variables}
-                    onChange={setVariables}
+                    onChange={handleVariablesChange}
                   />
                   <p className='text-[10px] leading-relaxed text-muted-foreground'>
                     {tScenarioForm('variablesExampleIntro')}{' '}

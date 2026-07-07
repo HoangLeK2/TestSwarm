@@ -1,17 +1,24 @@
+'use client';
+
+import { useTranslations } from 'next-intl';
+
 import { cn } from '@/lib/utils';
 
 /** Static phone silhouette — paints immediately as early LCP on control-record. */
 export function MirrorPhonePlaceholder({
   className,
-  label = 'Mirror thiết bị'
+  label
 }: {
   className?: string;
   label?: string;
 }) {
+  const t = useTranslations('devicesControlRecord.view');
+  const ariaLabel = label ?? t('mirrorPlaceholder');
+
   return (
     <div
       role='img'
-      aria-label={label}
+      aria-label={ariaLabel}
       className={cn(
         'mx-auto aspect-[9/19.5] min-h-[480px] w-[min(100%,262px)]',
         'rounded-[2rem] border-[3px] border-zinc-400/30',

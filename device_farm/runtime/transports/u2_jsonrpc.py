@@ -30,6 +30,8 @@ _MASK_TEXT_MATCHES    = 0x04
 _MASK_TEXT_STARTSWITH = 0x08
 _MASK_CLASS_NAME      = 0x10
 _MASK_DESCRIPTION     = 0x40
+_MASK_DESCRIPTION_CONTAINS   = 0x80
+_MASK_DESCRIPTION_STARTSWITH = 0x200
 _MASK_CHECKABLE       = 0x400
 _MASK_CHECKED         = 0x800
 _MASK_CLICKABLE       = 0x1000
@@ -1881,6 +1883,10 @@ class U2JsonRpcClient:
             return {"mask": _MASK_CLASS_NAME, "className": value}
         if by in ("content-desc", "accessibility id", "description"):
             return {"mask": _MASK_DESCRIPTION, "description": value}
+        if by == "descriptionContains":
+            return {"mask": _MASK_DESCRIPTION_CONTAINS, "descriptionContains": value}
+        if by in ("descriptionStartsWith", "descriptionStartswith"):
+            return {"mask": _MASK_DESCRIPTION_STARTSWITH, "descriptionStartsWith": value}
         if by == "package":
             return {"mask": _MASK_PACKAGE_NAME, "packageName": value}
         return {"mask": _MASK_TEXT, "text": value}
@@ -1904,6 +1910,9 @@ class U2JsonRpcClient:
             "description":      ("description", _MASK_DESCRIPTION),
             "content-desc":     ("description", _MASK_DESCRIPTION),
             "accessibility id": ("description", _MASK_DESCRIPTION),
+            "descriptionContains": ("descriptionContains", _MASK_DESCRIPTION_CONTAINS),
+            "descriptionStartsWith": ("descriptionStartsWith", _MASK_DESCRIPTION_STARTSWITH),
+            "descriptionStartswith": ("descriptionStartsWith", _MASK_DESCRIPTION_STARTSWITH),
             "package":          ("packageName", _MASK_PACKAGE_NAME),
         }
         _BOOL_MAP = {

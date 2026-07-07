@@ -15,6 +15,7 @@ import {
   deviceSelectFullTitle,
   formatDeviceSelectLabel
 } from '@/features/devices/lib/device-select-label';
+import { isManualControlBlockedByAutomation } from '@/features/devices/lib/control-record-device-state';
 
 export type MultiDevicePickerOption = {
   brand: string;
@@ -22,6 +23,7 @@ export type MultiDevicePickerOption = {
   serial: string;
   state?: string | null;
   scenario_active?: number | null;
+  manual_takeover_active?: boolean | null;
 };
 
 type MultiDevicePickerProps = {
@@ -35,8 +37,7 @@ type MultiDevicePickerProps = {
 };
 
 function isDeviceBusy(d: MultiDevicePickerOption) {
-  const state = (d.state || '').replace('DeviceState.', '');
-  return state === 'BUSY' || (d.scenario_active ?? 0) > 0;
+  return isManualControlBlockedByAutomation(d);
 }
 
 export function MultiDevicePicker({

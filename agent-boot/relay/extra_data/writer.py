@@ -83,16 +83,23 @@ def _safe_int(val: Any) -> int | None:
         return val
     if isinstance(val, float):
         return int(val)
-    s = str(val).strip().replace(",", "")
+    s = str(val).strip()
     if not s:
         return None
     multiplier = 1
     if s[-1].upper() == "K":
         multiplier = 1000
-        s = s[:-1]
+        s = s[:-1].strip()
     elif s[-1].upper() == "M":
         multiplier = 1_000_000
-        s = s[:-1]
+        s = s[:-1].strip()
+    elif s[-1].upper() == "B":
+        multiplier = 1_000_000_000
+        s = s[:-1].strip()
+    if multiplier > 1 and "," in s and "." not in s:
+        s = s.replace(",", ".")
+    else:
+        s = s.replace(",", "")
     try:
         return int(float(s) * multiplier)
     except (ValueError, TypeError):
@@ -534,6 +541,44 @@ class ContentItemWriter:
             if row and row.get("content_hash"):
                 return str(row["content_hash"])
         return None
+
+    async def update_content_stats(
+        self,
+        *,
+        content_hash: str | None,
+        likes_count: Any = None,
+        comments_count: Any = None,
+        shares_count: Any = None,
+    ) -> bool:
+        """Update counters for an already-persisted root post."""
+        target_hash = str(content_hash or "").strip()
+        if not target_hash:
+            return False
+        likes = _safe_int(likes_count)
+        comments = _safe_int(comments_count)
+        shares = _safe_int(shares_count)
+        if likes is None and comments is None and shares is None:
+            return False
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE content_items
+                SET
+                  likes_count = COALESCE($2::integer, likes_count),
+                  comments_count = COALESCE($3::integer, comments_count),
+                  shares_count = COALESCE($4::integer, shares_count),
+                  updated_at = now()
+                WHERE content_hash = $1
+                  AND item_level = 0
+                RETURNING content_hash
+                """,
+                target_hash,
+                likes,
+                comments,
+                shares,
+            )
+            return bool(row and row.get("content_hash"))
 
     async def _insert_rows_once(self, conn, rows: list[dict[str, Any]]) -> dict[str, Any]:
         payload = json.dumps(rows, ensure_ascii=False, default=str)

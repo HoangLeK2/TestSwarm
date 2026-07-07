@@ -403,8 +403,10 @@ export function useH264Video(
           now - lastRecoveryAtRef.current > 3000
         ) {
           lastRecoveryAtRef.current = now;
-          onStallRef.current?.('no_packets');
           requestIdr(s, 0);
+          if (!lastRenderedAt || notifyStallWithVisibleFrameRef.current) {
+            onStallRef.current?.('no_packets');
+          }
         }
         return;
       }

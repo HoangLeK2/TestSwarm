@@ -48,6 +48,10 @@ STREAM_WS_SEND_TIMEOUT_MS = max(
     50.0,
     float(os.environ.get("STREAM_WS_SEND_TIMEOUT_MS", "250.0")),
 )
+STREAM_WS_UNWATCH_GRACE_MS = max(
+    0.0,
+    float(os.environ.get("STREAM_WS_UNWATCH_GRACE_MS", "3000.0")),
+)
 
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -221,6 +225,7 @@ class WebSocketManager:
         self._user_ids: Dict[str, Optional[str]] = {}
         self._allowed_serials: Dict[str, Optional[set[str]]] = {}
         self._conn_sender_groups: Dict[str, list[asyncio.Task]] = {}
+        self._pending_unwatch_tasks: Dict[tuple[str, str], asyncio.Task] = {}
         self._session_to_conn: Dict[str, str] = {}
         self._conn_sessions: Dict[str, Optional[str]] = {}
         self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
@@ -414,9 +419,24 @@ class WebSocketManager:
     ) -> None:
         async with self._lock:
             sender_tasks = list(self._conn_sender_groups.get(conn_id, []))
-        for task in sender_tasks:
+            pending_unwatch_tasks = [
+                task
+                for (pending_conn_id, _serial), task in list(
+                    self._pending_unwatch_tasks.items()
+                )
+                if pending_conn_id == conn_id
+            ]
+            for key in [
+                key
+                for key in list(self._pending_unwatch_tasks)
+                if key[0] == conn_id
+            ]:
+                self._pending_unwatch_tasks.pop(key, None)
+        for task in pending_unwatch_tasks:
             task.cancel()
         for task in sender_tasks:
+            task.cancel()
+        for task in [*pending_unwatch_tasks, *sender_tasks]:
             try:
                 await task
             except asyncio.CancelledError:
@@ -439,6 +459,60 @@ class WebSocketManager:
             self._conn_sessions.pop(conn_id, None)
             if session_id and self._session_to_conn.get(session_id) == conn_id:
                 self._session_to_conn.pop(session_id, None)
+
+    def _cancel_pending_unwatch_locked(self, conn_id: str, serial: str) -> None:
+        task = self._pending_unwatch_tasks.pop((conn_id, serial), None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _cancel_device_sender_tasks(self, conn_id: str, serial: str) -> int:
+        cancelled_tasks: list[asyncio.Task] = []
+        async with self._lock:
+            group = self._conn_sender_groups.get(conn_id, [])
+            kept: list[asyncio.Task] = []
+            for task in list(group):
+                if getattr(task, "_device_serial", None) == serial and not task.done():
+                    task.cancel()
+                    cancelled_tasks.append(task)
+                else:
+                    kept.append(task)
+            self._conn_sender_groups[conn_id] = kept
+        for task in cancelled_tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        return len(cancelled_tasks)
+
+    async def _delayed_unwatch_serial(
+        self,
+        conn_id: str,
+        serial: str,
+    ) -> None:
+        try:
+            await asyncio.sleep(STREAM_WS_UNWATCH_GRACE_MS / 1000.0)
+        except asyncio.CancelledError:
+            return
+        async with self._lock:
+            if (
+                self._pending_unwatch_tasks.get((conn_id, serial))
+                is not asyncio.current_task()
+            ):
+                return
+            self._pending_unwatch_tasks.pop((conn_id, serial), None)
+        cancelled = await self._cancel_device_sender_tasks(conn_id, serial)
+        log.info(
+            "unwatch_serial: serial=%s cancelled_senders=%d",
+            serial,
+            cancelled,
+        )
+
+    async def _schedule_unwatch_serial(self, conn_id: str, serial: str) -> None:
+        async with self._lock:
+            self._cancel_pending_unwatch_locked(conn_id, serial)
+            task = asyncio.create_task(
+                self._delayed_unwatch_serial(conn_id, serial),
+                name=f"ws-unwatch-{conn_id}-{serial}",
+            )
+            self._pending_unwatch_tasks[(conn_id, serial)] = task
 
     def subscribe_device(self, device) -> None:
         """Subscribe all active frontend connections to a newly-connected agent."""
@@ -731,6 +805,7 @@ class WebSocketManager:
                         log.debug("watch_serial ignored: unknown device %s", serial)
                         continue
                     async with self._lock:
+                        self._cancel_pending_unwatch_locked(conn_id, serial)
                         ws_send_lock = self._conn_send_locks.get(conn_id)
                         if ws_send_lock is None:
                             continue
@@ -741,7 +816,11 @@ class WebSocketManager:
                         ):
                             continue
                         task = asyncio.create_task(
-                            self._device_sender(ws=ws, device=device, ws_send_lock=ws_send_lock),
+                            self._device_sender(
+                                ws=ws,
+                                device=device,
+                                ws_send_lock=ws_send_lock,
+                            ),
                             name=f"ws-device-sender-{conn_id}-{serial}",
                         )
                         setattr(task, "_device_serial", serial)
@@ -749,24 +828,7 @@ class WebSocketManager:
                         self._conn_sender_groups[conn_id] = group
                         log.info("watch_serial: started video sender for %s", serial)
                 else:
-                    cancelled_tasks: list[asyncio.Task] = []
-                    async with self._lock:
-                        group = self._conn_sender_groups.get(conn_id, [])
-                        cancelled = 0
-                        for t in list(group):
-                            if getattr(t, "_device_serial", None) == serial and not t.done():
-                                t.cancel()
-                                cancelled_tasks.append(t)
-                                cancelled += 1
-                        self._conn_sender_groups[conn_id] = group
-                    for t in cancelled_tasks:
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await t
-                    log.info(
-                        "unwatch_serial: serial=%s cancelled_senders=%d",
-                        serial,
-                        cancelled,
-                    )
+                    await self._schedule_unwatch_serial(conn_id, serial)
                 continue
             device = self.manager.get_device(serial) if serial else None
             if not device:
@@ -804,7 +866,15 @@ class WebSocketManager:
                                 scenario_active = int(v or "0") > 0
                     except Exception:
                         pass
+                manual_takeover_active = False
                 if is_busy_state or scenario_active:
+                    try:
+                        from services.manual_takeover import is_manual_takeover_active
+
+                        manual_takeover_active = await is_manual_takeover_active(serial)
+                    except Exception:
+                        manual_takeover_active = False
+                if (is_busy_state or scenario_active) and not manual_takeover_active:
                     log.info(
                         "ws drop write frame type=%s serial=%s (busy_state=%s scenario_active=%s)",
                         msg_type, serial, is_busy_state, scenario_active,

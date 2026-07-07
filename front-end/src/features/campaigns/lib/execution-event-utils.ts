@@ -5,6 +5,7 @@ import type {
   StepLogEntry,
   WorkflowProgress
 } from '../types';
+import { mergeAppAutomationDetails } from './app-automation-monitor';
 
 /** Epic 04 Temporal workflows use `exec_{execution_id}`. */
 export function executionIdFromWorkflowId(
@@ -118,6 +119,7 @@ export function foldEventsToStepLog(
         exit_code: typeof p.exit_code === 'number' ? p.exit_code : null,
         save_as: typeof p.save_as === 'string' ? p.save_as : null,
         output_truncated: Boolean(p.output_truncated),
+        details: mergeAppAutomationDetails(undefined, p),
         incidents: existing?.incidents
       });
     }

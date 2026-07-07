@@ -5,6 +5,7 @@ import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
 import { DeviceControls } from './device-controls';
+import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
 import {
   DeviceStepMonitorButton,
   DeviceStepsSheet
@@ -104,9 +105,7 @@ export function DeviceTile({
     device.serial !== title
       ? device.serial
       : `${device.brand} ${device.model}`.trim();
-  const isActive =
-    device.state &&
-    !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+  const isActive = isControlRecordConnectedDevice(device);
 
   const [gestureMode, setGestureMode] = useState<
     'tap' | 'swipe' | 'double_tap' | 'drag'

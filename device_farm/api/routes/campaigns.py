@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -850,7 +849,10 @@ async def delete_campaign(campaign_id: str, db: DB, user: CurrentUser):
     await db.commit()
     return _entity_out(view)
 
-
+# api endpoint for archive campaign
+# used to archive campaign
+# this is used to archive campaign
+# this is used to archive campaigns
 @router.post(
     "/{campaign_id}/archive",
     response_model=CampaignEntityOut,
@@ -872,7 +874,10 @@ async def archive_campaign_route(campaign_id: str, db: DB, user: CurrentUser):
     await db.commit()
     return _entity_out(view)
 
-
+# api endpoint for force transition campaign
+# used to force transition campaign to a specific status
+# this is used to force transition campaign to a specific status
+# this is used to force transition campaign to a specific status
 @router.post(
     "/{campaign_id}/force-transition",
     response_model=CampaignForceTransitionOut,

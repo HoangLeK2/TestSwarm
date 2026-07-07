@@ -70,11 +70,11 @@ _FB_COMMENTS_BALANCED: Final[dict[str, Any]] = {
     "comment_scroll_settle_s": 0.02,
     "comment_scroll_wall_s": 16,
     "comment_recover_chrome": True,
-    "comment_no_growth_break": 2,
+    "comment_no_growth_break": 0,
     "min_comment_scan_passes": 1,
     "comment_max_snapshots": 10,
-    "comment_stop_if_no_new": True,
-    "stop_if_no_new": True,
+    "comment_stop_if_no_new": False,
+    "stop_if_no_new": False,
     "no_new_threshold": 2,
 }
 _FB_COMMENTS_AGGRESSIVE: Final[dict[str, Any]] = {
@@ -88,7 +88,7 @@ _FB_COMMENTS_AGGRESSIVE: Final[dict[str, Any]] = {
     "comment_scroll_duration_ms": 100,
     "comment_scroll_pause_s": 0.02,
     "comment_scroll_wall_s": 45,
-    "comment_no_growth_break": 3,
+    "comment_no_growth_break": 0,
     "min_comment_scan_passes": 2,
     "comment_max_snapshots": 32,
     "comment_stop_if_no_new": False,
@@ -105,11 +105,11 @@ _FB_COMMENTS_SAFE: Final[dict[str, Any]] = {
     "comment_scroll_duration_ms": 360,
     "comment_scroll_pause_s": 0.26,
     "comment_scroll_wall_s": 20,
-    "comment_no_growth_break": 3,
+    "comment_no_growth_break": 0,
     "min_comment_scan_passes": 2,
     "comment_max_snapshots": 8,
-    "comment_stop_if_no_new": True,
-    "stop_if_no_new": True,
+    "comment_stop_if_no_new": False,
+    "stop_if_no_new": False,
     "no_new_threshold": 3,
 }
 

@@ -102,6 +102,9 @@ const TONE_CLASSES: Record<NotificationTone, { icon: string; bg: string }> = {
   }
 };
 
+const LOCAL_FRONTEND_ORIGIN_RE =
+  /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?=\/)/gi;
+
 export function getNotificationVisual(event: string): NotificationVisual {
   if (event === 'task.failed') {
     return EVENT_VISUALS['task.failed'];
@@ -123,7 +126,7 @@ export function sanitizeNotificationBody(body?: string | null) {
   const text = body?.trim();
   if (!text) return null;
   if (text.toLowerCase() === 'unknown') return null;
-  return text;
+  return text.replace(LOCAL_FRONTEND_ORIGIN_RE, '');
 }
 
 export function resolveDeviceLabel(

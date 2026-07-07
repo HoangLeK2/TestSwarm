@@ -95,6 +95,11 @@ def build_sequence_steps(
 ) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     campaign_defaults = dict(campaign_vars or {})
+    campaign_override_vars = {
+        key: value
+        for key, value in campaign_defaults.items()
+        if not str(key).startswith("__")
+    }
     device_override_vars = (
         {
             key: value
@@ -108,6 +113,7 @@ def build_sequence_steps(
         scenario_id = str(ref["scenario_id"])
         scoped_vars = dict((scenario_device_vars or {}).get(scenario_id) or {})
         merged_vars = {
+            **campaign_override_vars,
             **device_override_vars,
             **scoped_vars,
             **account_vars,

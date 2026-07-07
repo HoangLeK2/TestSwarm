@@ -19,6 +19,8 @@ _MASK_TEXT_MATCHES = 0x04
 _MASK_TEXT_STARTSWITH = 0x08
 _MASK_CLASS_NAME = 0x10
 _MASK_DESCRIPTION = 0x40
+_MASK_DESCRIPTION_CONTAINS = 0x80
+_MASK_DESCRIPTION_STARTSWITH = 0x200
 _MASK_CHECKABLE = 0x400
 _MASK_CHECKED = 0x800
 _MASK_CLICKABLE = 0x1000
@@ -44,6 +46,9 @@ _BY_TO_RPC_FIELD: Dict[str, Tuple[str, int]] = {
     "description": ("description", _MASK_DESCRIPTION),
     "content-desc": ("description", _MASK_DESCRIPTION),
     "accessibility id": ("description", _MASK_DESCRIPTION),
+    "descriptionContains": ("descriptionContains", _MASK_DESCRIPTION_CONTAINS),
+    "descriptionStartsWith": ("descriptionStartsWith", _MASK_DESCRIPTION_STARTSWITH),
+    "descriptionStartswith": ("descriptionStartsWith", _MASK_DESCRIPTION_STARTSWITH),
     "package": ("packageName", _MASK_PACKAGE_NAME),
     "packageName": ("packageName", _MASK_PACKAGE_NAME),
 }

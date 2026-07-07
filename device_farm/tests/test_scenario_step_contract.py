@@ -39,8 +39,9 @@ def test_normalize_extract_step_applies_profile_defaults_and_version() -> None:
     assert step["comment_scroll_wall_s"] == 16
     assert step["comment_scroll_pause_s"] == 0.0
     assert step["comment_scroll_settle_s"] == 0.02
-    assert step["comment_stop_if_no_new"] is True
-    assert step["comment_no_growth_break"] == 2
+    assert step["comment_stop_if_no_new"] is False
+    assert step["stop_if_no_new"] is False
+    assert step["comment_no_growth_break"] == 0
     assert step["min_comment_scan_passes"] == 1
 
 
@@ -130,6 +131,28 @@ def test_scenario_model_accepts_extract_profile_variable() -> None:
         ],
         "variables": {"EXTRACT_PROFILE": "balanced"},
     }
+    assert ScenarioModel.validate_dict(scenario) == []
+
+
+def test_scenario_model_accepts_split_fb_comment_steps() -> None:
+    scenario = {
+        "steps": [
+            {
+                "type": "loop",
+                "count": 1,
+                "steps": [
+                    {"type": "fb_find_comment_button", "timeout": 6},
+                    {"type": "fb_tap_comment_target", "post_tap_wait_s": 0.35},
+                    {
+                        "type": "fb_apply_comment_filter",
+                        "comment_filter": "all_comments",
+                    },
+                    {"type": "extract", "strategy": "fb_comments"},
+                ],
+            }
+        ],
+    }
+
     assert ScenarioModel.validate_dict(scenario) == []
 
 

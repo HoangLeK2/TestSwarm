@@ -229,6 +229,20 @@ def _action_bar_count_from_node(node) -> Optional[str]:
     return None
 
 
+def _is_comment_action_bar_label(label: str) -> bool:
+    if label in ("bình luận", "comment", "comments"):
+        return True
+    return label.startswith("nút bình luận") or label.startswith("comment button")
+
+
+def _is_post_action_bar_label(label: str) -> bool:
+    if _is_comment_action_bar_label(label):
+        return True
+    if label.startswith("nút thích") or label.startswith("like"):
+        return True
+    return "chia sẻ bài viết" in label or ("nút chia sẻ" in label and "bài viết" in label)
+
+
 def _extract_post_action_bar_stats(element) -> Dict[str, Optional[str]]:
     """Parse post-level Thích / Bình luận / Chia sẻ counts from the action bar row.
 
@@ -243,23 +257,24 @@ def _extract_post_action_bar_stats(element) -> Dict[str, Optional[str]]:
     for node in element.iter("node"):
         cls = node.get("class") or ""
         clickable = (node.get("clickable") or "").lower() == "true"
-        if "Button" not in cls and not clickable:
-            continue
-        count = _action_bar_count_from_node(node)
-        if not count:
-            continue
         desc = (node.get("content-desc") or "").strip().lower()
         text = (node.get("text") or "").strip().lower()
         label = desc or text
         if not label:
             continue
-        if label in ("bình luận", "comment", "comments"):
-            stats["comments"] = count
+        if "Button" not in cls and not clickable and not _is_post_action_bar_label(label):
+            continue
+        if "bình luận của" in label:
+            continue
+        count = _action_bar_count_from_node(node)
+        if _is_comment_action_bar_label(label):
+            if count is not None:
+                stats["comments"] = count
+            continue
+        if not count:
             continue
         if "chia sẻ bài viết" in label or ("nút chia sẻ" in label and "bài viết" in label):
             stats["shares"] = count
-            continue
-        if "bình luận của" in label:
             continue
         if label.startswith("nút thích") or label.startswith("like"):
             stats["reactions"] = count
@@ -821,4 +836,3 @@ __all__ = [
     "_compute_post_id_from_nodes",
     "_extract_header_stats",
 ]
-

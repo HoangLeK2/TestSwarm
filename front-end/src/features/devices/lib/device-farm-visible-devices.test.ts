@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { filterVisibleDeviceFarmDevices } from './device-farm-visible-devices.ts';
+import {
+  filterVisibleDeviceFarmDevices,
+  isVisibleDeviceFarmActiveDevice
+} from './device-farm-visible-devices.ts';
 import type { Device } from '../types.ts';
 import type { DeviceOut } from '../services/manage-api.ts';
 
@@ -76,5 +79,46 @@ test('device farm filter keeps relay-managed devices visible while live route ow
   assert.deepEqual(
     result.map((device) => device.serial),
     ['relay-1']
+  );
+});
+
+test('device farm filter trusts live route while registered devices are hydrating', () => {
+  const result = filterVisibleDeviceFarmDevices([live('relay-1')], []);
+
+  assert.deepEqual(
+    result.map((device) => device.serial),
+    ['relay-1']
+  );
+});
+
+test('dashboard active check keeps transport-live devices visible despite stale offline state', () => {
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('relay-1'),
+      state: 'DISCONNECTED',
+      stf_connected: true
+    } as Device),
+    true
+  );
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('u2-1'),
+      state: 'DeviceState.DEAD',
+      u2_ready: true
+    }),
+    true
+  );
+});
+
+test('dashboard active check drops explicit offline devices without live transport evidence', () => {
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('offline-1'),
+      state: 'DeviceState.DISCONNECTED',
+      touch_method: 'none',
+      u2_ready: false,
+      minitouch_ready: false
+    }),
+    false
   );
 });

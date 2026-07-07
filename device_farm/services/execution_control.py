@@ -527,6 +527,16 @@ async def resume_execution(
         from services.execution_pause_flags import clear_execution_paused
 
         await clear_execution_paused(execution_id)
+        try:
+            from db.crud.execution import list_execution_devices
+            from services.manual_takeover import clear_manual_takeover
+
+            devices = await list_execution_devices(db, execution_id)
+            await asyncio.gather(
+                *(clear_manual_takeover(d.serial) for d in devices if d.serial)
+            )
+        except Exception as exc:
+            log.debug("clear manual takeover on resume failed: %s", exc)
 
     wf_count = 0
     if signal_temporal and prev_paused:

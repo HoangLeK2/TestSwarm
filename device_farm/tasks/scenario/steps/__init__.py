@@ -40,6 +40,7 @@ from tasks.scenario.steps import (  # noqa: E402, F401
     navigation,
     interaction,
     input,
+    app_automation,
     wait,
     extraction,
     persistence,

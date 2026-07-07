@@ -33,6 +33,7 @@ const DESCRIPTION_SELECTOR_BYS = new Set([
   'description',
   'descriptionContains',
   'descriptionStartsWith',
+  'descriptionStartswith',
   'content-desc'
 ]);
 
@@ -40,6 +41,7 @@ function normalizeSelectorByForUi(
   by: string
 ): (typeof SELECTOR_BY_OPTIONS)[number] {
   if (by === 'content-desc') return 'description';
+  if (by === 'descriptionStartswith') return 'descriptionStartsWith';
   if ((SELECTOR_BY_OPTIONS as readonly string[]).includes(by)) {
     return by as (typeof SELECTOR_BY_OPTIONS)[number];
   }

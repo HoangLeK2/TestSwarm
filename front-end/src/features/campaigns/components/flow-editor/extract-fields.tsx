@@ -360,11 +360,13 @@ function CollapsibleBlock({
 export function ExtractStepFields({
   step,
   update,
-  onChange
+  onChange,
+  view = 'all'
 }: {
   step: ExtractStep;
   update: (fields: Partial<FlowStep>) => void;
   onChange: (step: FlowStep) => void;
+  view?: 'all' | 'screen' | 'data-save';
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.extract');
   const strategy = step.strategy ?? 'fb_posts';
@@ -413,290 +415,368 @@ export function ExtractStepFields({
       : strategy === 'fb_posts'
         ? (['post_key', 'text'] as const)
         : (['text'] as const);
+  const showScreen = view === 'all' || view === 'screen';
+  const showDataSave = view === 'all' || view === 'data-save';
 
   return (
     <div className='space-y-3'>
-      <StepPanelHint>{t('intro')}</StepPanelHint>
+      {showScreen ? <StepPanelHint>{t('intro')}</StepPanelHint> : null}
 
-      <StepPanelSection title={t('sourceSectionTitle')}>
-        <div className='flex gap-2'>
-          {STRATEGIES.map((s) => (
-            <StrategyCard
-              key={s.value}
-              title={t(s.titleKey)}
-              description={t(s.descKey)}
-              selected={strategy === s.value}
-              selectedLabel={t('strategySelected')}
-              onSelect={() =>
-                onChange(applyExtractStrategySwitch(step, s.value, saveEnabled))
+      {showScreen ? (
+        <div className='space-y-3'>
+          <StepPanelSection title={t('sourceSectionTitle')}>
+            <div className='flex gap-2'>
+              {STRATEGIES.map((s) => (
+                <StrategyCard
+                  key={s.value}
+                  title={t(s.titleKey)}
+                  description={t(s.descKey)}
+                  selected={strategy === s.value}
+                  selectedLabel={t('strategySelected')}
+                  onSelect={() =>
+                    onChange(
+                      applyExtractStrategySwitch(step, s.value, saveEnabled)
+                    )
+                  }
+                />
+              ))}
+            </div>
+            <FlowStrip labels={flowLabels} />
+          </StepPanelSection>
+
+          <StepPanelSection title={t('behaviorSectionTitle')}>
+            {strategy === 'fb_posts' || strategy === 'fb_comments' ? (
+              <StepPanelField label={t('extractProfileLabel')}>
+                <select
+                  className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                  value={step.extract_profile ?? 'balanced'}
+                  onChange={(e) => update({ extract_profile: e.target.value })}
+                >
+                  {EXTRACT_PROFILES.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {t(`extractProfile_${profile}`)}
+                    </option>
+                  ))}
+                </select>
+                <p className='mt-1 text-[10px] text-muted-foreground'>
+                  {t('extractProfileHint')}
+                </p>
+              </StepPanelField>
+            ) : null}
+            {strategy === 'fb_posts' ? (
+              <>
+                <StepPanelToggle
+                  label={t('openPostBeforeExtractLabel')}
+                  description={t('openPostBeforeExtractDescription')}
+                  checked={openPost}
+                  onCheckedChange={(checked) => {
+                    const patch: Partial<FlowStep> = {
+                      open_post_before_extract: checked
+                    };
+                    if (
+                      checked &&
+                      step.open_post_press_back_after_extract === undefined
+                    ) {
+                      patch.open_post_press_back_after_extract = false;
+                    }
+                    update(patch);
+                  }}
+                />
+                {openPost ? (
+                  <StepPanelToggle
+                    label={t('openPostPressBackLabel')}
+                    description={t('openPostPressBackDescription')}
+                    checked={autoBackAfterOpenPost}
+                    onCheckedChange={(checked) =>
+                      update({ open_post_press_back_after_extract: checked })
+                    }
+                  />
+                ) : null}
+                {openPost && !autoBackAfterOpenPost ? (
+                  <StepPanelHint>{t('openPostManualBackHint')}</StepPanelHint>
+                ) : null}
+              </>
+            ) : null}
+            <StepPanelToggle
+              label={t('expandSeeMoreLabel')}
+              description={t('expandSeeMoreDescription')}
+              checked={expand}
+              onCheckedChange={(checked) =>
+                update({ expand_see_more: checked })
               }
             />
-          ))}
-        </div>
-        <FlowStrip labels={flowLabels} />
-      </StepPanelSection>
-
-      <StepPanelSection title={t('behaviorSectionTitle')}>
-        {strategy === 'fb_posts' || strategy === 'fb_comments' ? (
-          <StepPanelField label={t('extractProfileLabel')}>
-            <select
-              className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
-              value={step.extract_profile ?? 'balanced'}
-              onChange={(e) => update({ extract_profile: e.target.value })}
-            >
-              {EXTRACT_PROFILES.map((profile) => (
-                <option key={profile} value={profile}>
-                  {t(`extractProfile_${profile}`)}
-                </option>
-              ))}
-            </select>
-            <p className='mt-1 text-[10px] text-muted-foreground'>
-              {t('extractProfileHint')}
-            </p>
-          </StepPanelField>
-        ) : null}
-        {strategy === 'fb_posts' ? (
-          <>
-            <StepPanelToggle
-              label={t('openPostBeforeExtractLabel')}
-              description={t('openPostBeforeExtractDescription')}
-              checked={openPost}
-              onCheckedChange={(checked) => {
-                const patch: Partial<FlowStep> = {
-                  open_post_before_extract: checked
-                };
-                if (
-                  checked &&
-                  step.open_post_press_back_after_extract === undefined
-                ) {
-                  patch.open_post_press_back_after_extract = false;
-                }
-                update(patch);
-              }}
-            />
-            {openPost ? (
+            {strategy !== 'fb_comments' ? (
               <StepPanelToggle
-                label={t('openPostPressBackLabel')}
-                description={t('openPostPressBackDescription')}
-                checked={autoBackAfterOpenPost}
+                label={t('stopIfNoNewLabel')}
+                description={t('stopIfNoNewDescription')}
+                checked={step.stop_if_no_new ?? false}
                 onCheckedChange={(checked) =>
-                  update({ open_post_press_back_after_extract: checked })
+                  update({ stop_if_no_new: checked })
                 }
               />
             ) : null}
-            {openPost && !autoBackAfterOpenPost ? (
-              <StepPanelHint>{t('openPostManualBackHint')}</StepPanelHint>
-            ) : null}
-          </>
-        ) : null}
-        <StepPanelToggle
-          label={t('expandSeeMoreLabel')}
-          description={t('expandSeeMoreDescription')}
-          checked={expand}
-          onCheckedChange={(checked) => update({ expand_see_more: checked })}
-        />
-        <StepPanelToggle
-          label={t('stopIfNoNewLabel')}
-          description={t('stopIfNoNewDescription')}
-          checked={step.stop_if_no_new ?? true}
-          onCheckedChange={(checked) => update({ stop_if_no_new: checked })}
-        />
-      </StepPanelSection>
+          </StepPanelSection>
 
-      {strategy === 'fb_posts' ||
-      strategy === 'fb_comments' ||
-      strategy === 'text_nodes' ? (
-        <StepPanelSection
-          title={t('facebookExtraTitle')}
-          badge={
-            <Badge variant='outline' className='text-[10px] font-normal'>
-              {t('facebookExtraBadge')}
-            </Badge>
-          }
-        >
-          <StepPanelToggle
-            label={t('edgeExtraDataLabel')}
-            description={t('edgeExtraDataDescription')}
-            checked={step.edge_extra_data !== false}
-            onCheckedChange={(checked) => update({ edge_extra_data: checked })}
-          />
-          <CompactField
-            label={t('strategyVersionLabel')}
-            hint={t('strategyVersionHint')}
-          >
-            <Input
-              className='h-8 font-mono text-xs'
-              value={
-                step.strategy_version ??
-                (strategy === 'fb_comments'
-                  ? 'fb_comments:v1'
-                  : strategy === 'text_nodes'
-                    ? 'text_nodes:v1'
-                    : 'fb_posts:v1')
+          {strategy === 'fb_posts' ||
+          strategy === 'fb_comments' ||
+          strategy === 'text_nodes' ? (
+            <StepPanelSection
+              title={t('facebookExtraTitle')}
+              badge={
+                <Badge variant='outline' className='text-[10px] font-normal'>
+                  {t('facebookExtraBadge')}
+                </Badge>
               }
-              onChange={(e) =>
-                update({ strategy_version: e.target.value || undefined })
-              }
-            />
-          </CompactField>
+            >
+              <StepPanelToggle
+                label={t('edgeExtraDataLabel')}
+                description={t('edgeExtraDataDescription')}
+                checked={step.edge_extra_data !== false}
+                onCheckedChange={(checked) =>
+                  update({ edge_extra_data: checked })
+                }
+              />
+              <CompactField
+                label={t('strategyVersionLabel')}
+                hint={t('strategyVersionHint')}
+              >
+                <Input
+                  className='h-8 font-mono text-xs'
+                  disabled
+                  value={
+                    step.strategy_version ??
+                    (strategy === 'fb_comments'
+                      ? 'fb_comments:v1'
+                      : strategy === 'text_nodes'
+                        ? 'text_nodes:v1'
+                        : 'fb_posts:v1')
+                  }
+                />
+              </CompactField>
 
-          {strategy === 'fb_comments' ? (
-            <div className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3'>
-              <div className='grid grid-cols-2 gap-3'>
+              {strategy === 'fb_comments' ? (
+                <div className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3'>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <CompactField
+                      label={t('maxItemsLabel')}
+                      hint={t('maxItemsHint')}
+                    >
+                      <Input
+                        className='h-8 w-full font-mono text-xs'
+                        value={String(step.max_items ?? 220)}
+                        onChange={(e) =>
+                          update({
+                            max_items: parseNumOrVar(e.target.value, 220)
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('parentPostIdVarLabel')}
+                      hint={t('parentPostIdVarHint')}
+                    >
+                      <select
+                        className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                        value={extractParentMode}
+                        onChange={(e) => {
+                          if (e.target.value === 'auto') {
+                            update({ parent_post_id_var: undefined });
+                          } else {
+                            update({
+                              parent_post_id_var: step.parent_post_id_var || ''
+                            });
+                          }
+                        }}
+                      >
+                        <option value='auto'>{t('parentPostModeAuto')}</option>
+                        <option value='custom'>
+                          {t('parentPostModeCustom')}
+                        </option>
+                      </select>
+                      {extractParentMode === 'custom' ? (
+                        <Input
+                          className='mt-1.5 h-8 font-mono text-xs'
+                          placeholder='_fb_comment_parent_pid'
+                          value={step.parent_post_id_var ?? ''}
+                          onChange={(e) =>
+                            update({
+                              parent_post_id_var: e.target.value || undefined
+                            })
+                          }
+                        />
+                      ) : null}
+                    </CompactField>
+                    <CompactField
+                      label={t('commentScrollPassesLabel')}
+                      hint={t('commentScrollPassesHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.comment_scroll_passes ?? 16)}
+                        onChange={(e) =>
+                          update({
+                            comment_scroll_passes: parseNumOrVar(
+                              e.target.value,
+                              16
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('commentSwipesPerDumpLabel')}
+                      hint={t('commentSwipesPerDumpHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.comment_swipes_per_dump ?? 4)}
+                        onChange={(e) =>
+                          update({
+                            comment_swipes_per_dump: parseNumOrVar(
+                              e.target.value,
+                              4
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('commentScrollDistanceLabel')}
+                      hint={t('commentScrollDistanceHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.comment_scroll_distance ?? 0.52)}
+                        onChange={(e) =>
+                          update({
+                            comment_scroll_distance: parseNumOrVar(
+                              e.target.value,
+                              0.52
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('commentScrollDurationLabel')}
+                      hint={t('commentScrollDurationHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.comment_scroll_duration_ms ?? 120)}
+                        onChange={(e) =>
+                          update({
+                            comment_scroll_duration_ms: parseNumOrVar(
+                              e.target.value,
+                              120
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('commentScrollPauseLabel')}
+                      hint={t('commentScrollPauseHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.comment_scroll_pause_s ?? 0.03)}
+                        onChange={(e) =>
+                          update({
+                            comment_scroll_pause_s: parseNumOrVar(
+                              e.target.value,
+                              0.03
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('commentEarlyStopLabel')}
+                      hint={t('commentEarlyStopHint')}
+                    >
+                      <select
+                        className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                        value={
+                          (step.comment_stop_if_no_new ?? step.stop_if_no_new)
+                            ? 'no_new'
+                            : 'off'
+                        }
+                        onChange={(e) => {
+                          const enabled = e.target.value === 'no_new';
+                          update({
+                            comment_stop_if_no_new: enabled,
+                            stop_if_no_new: enabled
+                          });
+                        }}
+                      >
+                        <option value='off'>{t('commentEarlyStopOff')}</option>
+                        <option value='no_new'>
+                          {t('commentEarlyStopNoNew')}
+                        </option>
+                      </select>
+                    </CompactField>
+                    <CompactField
+                      label={t('commentNoGrowthBreakLabel')}
+                      hint={t('commentNoGrowthBreakHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.comment_no_growth_break ?? 0)}
+                        onChange={(e) =>
+                          update({
+                            comment_no_growth_break: parseNumOrVar(
+                              e.target.value,
+                              0
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('minCommentScanPassesLabel')}
+                      hint={t('minCommentScanPassesHint')}
+                    >
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={String(step.min_comment_scan_passes ?? 2)}
+                        onChange={(e) =>
+                          update({
+                            min_comment_scan_passes: parseNumOrVar(
+                              e.target.value,
+                              2
+                            )
+                          })
+                        }
+                      />
+                    </CompactField>
+                  </div>
+                </div>
+              ) : null}
+            </StepPanelSection>
+          ) : null}
+
+          {expand ? (
+            <CollapsibleBlock
+              title={t('advancedExpandTitle')}
+              badge={
+                <span className='text-[10px] text-muted-foreground'>
+                  {t('advancedDefaultOk')}
+                </span>
+              }
+            >
+              <StepPanelHint>{t('advancedExpandHint')}</StepPanelHint>
+              <div className='grid grid-cols-2 gap-2'>
                 <CompactField
-                  label={t('maxItemsLabel')}
-                  hint={t('maxItemsHint')}
-                >
-                  <Input
-                    className='h-8 w-full font-mono text-xs'
-                    value={String(step.max_items ?? 220)}
-                    onChange={(e) =>
-                      update({ max_items: parseNumOrVar(e.target.value, 220) })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('parentPostIdVarLabel')}
-                  hint={t('parentPostIdVarHint')}
-                >
-                  <select
-                    className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
-                    value={extractParentMode}
-                    onChange={(e) => {
-                      if (e.target.value === 'auto') {
-                        update({ parent_post_id_var: undefined });
-                      } else {
-                        update({
-                          parent_post_id_var: step.parent_post_id_var || ''
-                        });
-                      }
-                    }}
-                  >
-                    <option value='auto'>{t('parentPostModeAuto')}</option>
-                    <option value='custom'>{t('parentPostModeCustom')}</option>
-                  </select>
-                  {extractParentMode === 'custom' ? (
-                    <Input
-                      className='mt-1.5 h-8 font-mono text-xs'
-                      placeholder='_fb_comment_parent_pid'
-                      value={step.parent_post_id_var ?? ''}
-                      onChange={(e) =>
-                        update({
-                          parent_post_id_var: e.target.value || undefined
-                        })
-                      }
-                    />
-                  ) : null}
-                </CompactField>
-                <CompactField
-                  label={t('commentScrollPassesLabel')}
-                  hint={t('commentScrollPassesHint')}
+                  label={t('maxPassesLabel')}
+                  hint={t('maxPassesHint')}
                 >
                   <Input
                     className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_passes ?? 16)}
+                    value={String(step.expand_see_more_max_passes ?? 2)}
                     onChange={(e) =>
                       update({
-                        comment_scroll_passes: parseNumOrVar(e.target.value, 16)
-                      })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('commentSwipesPerDumpLabel')}
-                  hint={t('commentSwipesPerDumpHint')}
-                >
-                  <Input
-                    className='h-8 font-mono text-xs'
-                    value={String(step.comment_swipes_per_dump ?? 4)}
-                    onChange={(e) =>
-                      update({
-                        comment_swipes_per_dump: parseNumOrVar(
-                          e.target.value,
-                          4
-                        )
-                      })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('commentScrollDistanceLabel')}
-                  hint={t('commentScrollDistanceHint')}
-                >
-                  <Input
-                    className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_distance ?? 0.52)}
-                    onChange={(e) =>
-                      update({
-                        comment_scroll_distance: parseNumOrVar(
-                          e.target.value,
-                          0.52
-                        )
-                      })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('commentScrollDurationLabel')}
-                  hint={t('commentScrollDurationHint')}
-                >
-                  <Input
-                    className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_duration_ms ?? 120)}
-                    onChange={(e) =>
-                      update({
-                        comment_scroll_duration_ms: parseNumOrVar(
-                          e.target.value,
-                          120
-                        )
-                      })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('commentScrollPauseLabel')}
-                  hint={t('commentScrollPauseHint')}
-                >
-                  <Input
-                    className='h-8 font-mono text-xs'
-                    value={String(step.comment_scroll_pause_s ?? 0.03)}
-                    onChange={(e) =>
-                      update({
-                        comment_scroll_pause_s: parseNumOrVar(
-                          e.target.value,
-                          0.03
-                        )
-                      })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('commentNoGrowthBreakLabel')}
-                  hint={t('commentNoGrowthBreakHint')}
-                >
-                  <Input
-                    className='h-8 font-mono text-xs'
-                    value={String(step.comment_no_growth_break ?? 3)}
-                    onChange={(e) =>
-                      update({
-                        comment_no_growth_break: parseNumOrVar(
-                          e.target.value,
-                          3
-                        )
-                      })
-                    }
-                  />
-                </CompactField>
-                <CompactField
-                  label={t('minCommentScanPassesLabel')}
-                  hint={t('minCommentScanPassesHint')}
-                >
-                  <Input
-                    className='h-8 font-mono text-xs'
-                    value={String(step.min_comment_scan_passes ?? 2)}
-                    onChange={(e) =>
-                      update({
-                        min_comment_scan_passes: parseNumOrVar(
+                        expand_see_more_max_passes: parseNumOrVar(
                           e.target.value,
                           2
                         )
@@ -704,382 +784,366 @@ export function ExtractStepFields({
                     }
                   />
                 </CompactField>
-              </div>
-            </div>
-          ) : null}
-        </StepPanelSection>
-      ) : null}
-
-      {expand ? (
-        <CollapsibleBlock
-          title={t('advancedExpandTitle')}
-          badge={
-            <span className='text-[10px] text-muted-foreground'>
-              {t('advancedDefaultOk')}
-            </span>
-          }
-        >
-          <StepPanelHint>{t('advancedExpandHint')}</StepPanelHint>
-          <div className='grid grid-cols-2 gap-2'>
-            <CompactField label={t('maxPassesLabel')} hint={t('maxPassesHint')}>
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_see_more_max_passes ?? 2)}
-                onChange={(e) =>
-                  update({
-                    expand_see_more_max_passes: parseNumOrVar(e.target.value, 2)
-                  })
-                }
-              />
-            </CompactField>
-            <CompactField
-              label={t('scrollBetweenLabel')}
-              hint={t('scrollBetweenHint')}
-            >
-              <select
-                className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
-                value={String(step.expand_see_more_scroll ?? false)}
-                onChange={(e) =>
-                  update({
-                    expand_see_more_scroll: e.target.value === 'true'
-                  })
-                }
-              >
-                <option value='false'>{t('booleanFalse')}</option>
-                <option value='true'>{t('booleanTrue')}</option>
-              </select>
-            </CompactField>
-            <CompactField
-              label={t('scrollDistanceLabel')}
-              hint={t('scrollDistanceHint')}
-            >
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_see_more_scroll_distance ?? 0.3)}
-                onChange={(e) =>
-                  update({
-                    expand_see_more_scroll_distance: parseNumOrVar(
-                      e.target.value,
-                      0.3
-                    )
-                  })
-                }
-              />
-            </CompactField>
-            <CompactField
-              label={t('lazyHydrationRoundsLabel')}
-              hint={t('lazyHydrationRoundsHint')}
-            >
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_lazy_hydration_rounds ?? 6)}
-                onChange={(e) =>
-                  update({
-                    expand_lazy_hydration_rounds: parseNumOrVar(
-                      e.target.value,
-                      6
-                    )
-                  })
-                }
-              />
-            </CompactField>
-            <CompactField
-              label={t('lazyHydrationScrollDistanceLabel')}
-              hint={t('lazyHydrationScrollDistanceHint')}
-            >
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_lazy_scroll_distance ?? 0.3)}
-                onChange={(e) =>
-                  update({
-                    expand_lazy_scroll_distance: parseNumOrVar(
-                      e.target.value,
-                      0.3
-                    )
-                  })
-                }
-              />
-            </CompactField>
-            <CompactField
-              label={t('prefetchScrollPassesLabel')}
-              hint={t('prefetchScrollPassesHint')}
-            >
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_prefetch_scroll_passes ?? 0)}
-                onChange={(e) =>
-                  update({
-                    expand_prefetch_scroll_passes: parseNumOrVar(
-                      e.target.value,
-                      0
-                    )
-                  })
-                }
-              />
-            </CompactField>
-            <CompactField
-              label={t('prefetchScrollPauseLabel')}
-              hint={t('prefetchScrollPauseHint')}
-            >
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_prefetch_scroll_pause ?? 0.7)}
-                onChange={(e) =>
-                  update({
-                    expand_prefetch_scroll_pause: parseNumOrVar(
-                      e.target.value,
-                      0.7
-                    )
-                  })
-                }
-              />
-            </CompactField>
-            <CompactField
-              label={t('completionRetriesLabel')}
-              hint={t('completionRetriesHint')}
-            >
-              <Input
-                className='h-8 font-mono text-xs'
-                value={String(step.expand_completion_retries ?? 1)}
-                onChange={(e) =>
-                  update({
-                    expand_completion_retries: parseNumOrVar(e.target.value, 1)
-                  })
-                }
-              />
-            </CompactField>
-          </div>
-        </CollapsibleBlock>
-      ) : null}
-
-      {step.stop_if_no_new ? (
-        <StepPanelField label={t('noNewThresholdLabel')}>
-          <div className='flex items-center gap-2'>
-            <Input
-              type='number'
-              min={1}
-              className='h-9 w-24 text-xs'
-              value={step.no_new_threshold ?? 30}
-              onChange={(e) =>
-                update({ no_new_threshold: Number(e.target.value) || 30 })
-              }
-            />
-            <span className='text-[11px] text-muted-foreground'>
-              {t('noNewThresholdUnit')}
-            </span>
-          </div>
-          <p className='mt-1 text-[10px] text-muted-foreground'>
-            {t('noNewThresholdHint')}
-          </p>
-        </StepPanelField>
-      ) : null}
-
-      <StepPanelSection
-        title={t('resultSectionTitle')}
-        badge={
-          <Badge variant='outline' className='text-[10px] font-normal'>
-            {t('resultSectionBadge')}
-          </Badge>
-        }
-      >
-        <StepPanelField label={t('resultVarLabel')}>
-          <Input
-            className='h-9 font-mono text-xs'
-            placeholder={t('resultVarPlaceholder')}
-            value={step.result_var ?? ''}
-            onChange={(e) =>
-              update({ result_var: e.target.value || undefined })
-            }
-          />
-          <p className='mt-1 text-[10px] text-muted-foreground'>
-            {t('resultVarHint')}
-          </p>
-        </StepPanelField>
-      </StepPanelSection>
-
-      <StepPanelSection title={t('saveTitle')}>
-        <StepPanelToggle
-          label={t('saveEnableLabel')}
-          description={saveEnabled ? undefined : t('saveEnableDescription')}
-          checked={saveEnabled}
-          onCheckedChange={(checked) => {
-            if (checked) {
-              update({
-                collection: '${SAVE_COLLECTION}',
-                platform: strategy === 'text_nodes' ? 'ui' : 'facebook',
-                ...saveDefaultsForStrategy(strategy)
-              });
-            } else {
-              const {
-                collection: _c,
-                platform: _p,
-                content_type: _ct,
-                dedupe_field: _d,
-                tags: _t,
-                save_parent_id_var: _sp,
-                item_level: _il,
-                ...rest
-              } = step;
-              onChange(rest as FlowStep);
-            }
-          }}
-        />
-
-        {saveEnabled ? (
-          <div className='space-y-3'>
-            <SaveSummaryCard
-              title={t('saveSummaryTitle')}
-              rows={saveSummaryRows}
-            />
-
-            <F label={t('saveCollectionLabel')}>
-              <Input
-                className='h-9 text-xs'
-                placeholder={t('saveCollectionPlaceholder', {
-                  varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
-                })}
-                value={step.collection ?? ''}
-                onChange={(e) => update({ collection: e.target.value })}
-              />
-              <p className='mt-1 text-[10px] text-muted-foreground'>
-                {t('saveCollectionHint', {
-                  varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
-                })}
-              </p>
-            </F>
-
-            <F label={t('saveDedupeLabel')}>
-              <select
-                className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
-                value={
-                  step.dedupe_field ??
-                  saveDefaultsForStrategy(strategy).dedupe_field
-                }
-                onChange={(e) => update({ dedupe_field: e.target.value })}
-              >
-                {dedupeOptions.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {labelDedupe(opt, strategy, t)}
-                  </option>
-                ))}
-              </select>
-              <p className='mt-1 text-[10px] text-muted-foreground'>
-                {t('saveDedupeHint')}
-              </p>
-            </F>
-
-            <CollapsibleBlock
-              title={t('saveAdvancedTitle')}
-              badge={
-                <Badge variant='outline' className='text-[9px] font-normal'>
-                  {t('saveAdvancedBadge')}
-                </Badge>
-              }
-            >
-              <StepPanelHint>{t('saveAdvancedHint')}</StepPanelHint>
-              <div className='grid grid-cols-2 gap-3'>
-                <F label={t('saveSummaryPlatform')}>
-                  <Input
-                    className='h-9 text-xs'
-                    placeholder='facebook'
-                    value={step.platform ?? 'facebook'}
+                <CompactField
+                  label={t('scrollBetweenLabel')}
+                  hint={t('scrollBetweenHint')}
+                >
+                  <select
+                    className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                    value={String(step.expand_see_more_scroll ?? false)}
                     onChange={(e) =>
-                      update({ platform: e.target.value || undefined })
+                      update({
+                        expand_see_more_scroll: e.target.value === 'true'
+                      })
+                    }
+                  >
+                    <option value='false'>{t('booleanFalse')}</option>
+                    <option value='true'>{t('booleanTrue')}</option>
+                  </select>
+                </CompactField>
+                <CompactField
+                  label={t('scrollDistanceLabel')}
+                  hint={t('scrollDistanceHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.expand_see_more_scroll_distance ?? 0.3)}
+                    onChange={(e) =>
+                      update({
+                        expand_see_more_scroll_distance: parseNumOrVar(
+                          e.target.value,
+                          0.3
+                        )
+                      })
                     }
                   />
+                </CompactField>
+                <CompactField
+                  label={t('lazyHydrationRoundsLabel')}
+                  hint={t('lazyHydrationRoundsHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.expand_lazy_hydration_rounds ?? 6)}
+                    onChange={(e) =>
+                      update({
+                        expand_lazy_hydration_rounds: parseNumOrVar(
+                          e.target.value,
+                          6
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('lazyHydrationScrollDistanceLabel')}
+                  hint={t('lazyHydrationScrollDistanceHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.expand_lazy_scroll_distance ?? 0.3)}
+                    onChange={(e) =>
+                      update({
+                        expand_lazy_scroll_distance: parseNumOrVar(
+                          e.target.value,
+                          0.3
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('prefetchScrollPassesLabel')}
+                  hint={t('prefetchScrollPassesHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.expand_prefetch_scroll_passes ?? 0)}
+                    onChange={(e) =>
+                      update({
+                        expand_prefetch_scroll_passes: parseNumOrVar(
+                          e.target.value,
+                          0
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('prefetchScrollPauseLabel')}
+                  hint={t('prefetchScrollPauseHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.expand_prefetch_scroll_pause ?? 0.7)}
+                    onChange={(e) =>
+                      update({
+                        expand_prefetch_scroll_pause: parseNumOrVar(
+                          e.target.value,
+                          0.7
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('completionRetriesLabel')}
+                  hint={t('completionRetriesHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.expand_completion_retries ?? 1)}
+                    onChange={(e) =>
+                      update({
+                        expand_completion_retries: parseNumOrVar(
+                          e.target.value,
+                          1
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+              </div>
+            </CollapsibleBlock>
+          ) : null}
+
+          {step.stop_if_no_new ? (
+            <StepPanelField label={t('noNewThresholdLabel')}>
+              <div className='flex items-center gap-2'>
+                <Input
+                  type='number'
+                  min={1}
+                  className='h-9 w-24 text-xs'
+                  value={step.no_new_threshold ?? 30}
+                  onChange={(e) =>
+                    update({ no_new_threshold: Number(e.target.value) || 30 })
+                  }
+                />
+                <span className='text-[11px] text-muted-foreground'>
+                  {t('noNewThresholdUnit')}
+                </span>
+              </div>
+              <p className='mt-1 text-[10px] text-muted-foreground'>
+                {t('noNewThresholdHint')}
+              </p>
+            </StepPanelField>
+          ) : null}
+        </div>
+      ) : null}
+
+      {showDataSave ? (
+        <div className='space-y-3'>
+          <StepPanelSection
+            title={t('resultSectionTitle')}
+            badge={
+              <Badge variant='outline' className='text-[10px] font-normal'>
+                {t('resultSectionBadge')}
+              </Badge>
+            }
+          >
+            <StepPanelField label={t('resultVarLabel')}>
+              <Input
+                className='h-9 font-mono text-xs'
+                placeholder={t('resultVarPlaceholder')}
+                value={step.result_var ?? ''}
+                onChange={(e) =>
+                  update({ result_var: e.target.value || undefined })
+                }
+              />
+              <p className='mt-1 text-[10px] text-muted-foreground'>
+                {t('resultVarHint')}
+              </p>
+            </StepPanelField>
+          </StepPanelSection>
+
+          <StepPanelSection title={t('saveTitle')}>
+            <StepPanelToggle
+              label={t('saveEnableLabel')}
+              description={saveEnabled ? undefined : t('saveEnableDescription')}
+              checked={saveEnabled}
+              onCheckedChange={(checked) => {
+                if (checked) {
+                  update({
+                    collection: '${SAVE_COLLECTION}',
+                    platform: strategy === 'text_nodes' ? 'ui' : 'facebook',
+                    ...saveDefaultsForStrategy(strategy)
+                  });
+                } else {
+                  const {
+                    collection: _c,
+                    platform: _p,
+                    content_type: _ct,
+                    dedupe_field: _d,
+                    tags: _t,
+                    save_parent_id_var: _sp,
+                    item_level: _il,
+                    ...rest
+                  } = step;
+                  onChange(rest as FlowStep);
+                }
+              }}
+            />
+
+            {saveEnabled ? (
+              <div className='space-y-3'>
+                <SaveSummaryCard
+                  title={t('saveSummaryTitle')}
+                  rows={saveSummaryRows}
+                />
+
+                <F label={t('saveCollectionLabel')}>
+                  <Input
+                    className='h-9 text-xs'
+                    placeholder={t('saveCollectionPlaceholder', {
+                      varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
+                    })}
+                    value={step.collection ?? ''}
+                    onChange={(e) => update({ collection: e.target.value })}
+                  />
+                  <p className='mt-1 text-[10px] text-muted-foreground'>
+                    {t('saveCollectionHint', {
+                      varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
+                    })}
+                  </p>
                 </F>
-                <F label={t('saveSummaryContentType')}>
+
+                <F label={t('saveDedupeLabel')}>
                   <select
                     className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
                     value={
-                      step.content_type ??
-                      saveDefaultsForStrategy(strategy).content_type
+                      step.dedupe_field ??
+                      saveDefaultsForStrategy(strategy).dedupe_field
                     }
-                    onChange={(e) =>
-                      update({ content_type: e.target.value || undefined })
-                    }
+                    onChange={(e) => update({ dedupe_field: e.target.value })}
                   >
-                    <option value='fb_post'>
-                      {t('saveContentTypeGroupPost')}
-                    </option>
-                    <option value='fb_comment'>
-                      {t('saveContentTypeComment')}
-                    </option>
-                    <option value='text'>{t('saveContentTypeText')}</option>
+                    {dedupeOptions.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {labelDedupe(opt, strategy, t)}
+                      </option>
+                    ))}
                   </select>
-                </F>
-              </div>
-              <F label={t('saveTagsLabel')}>
-                <Input
-                  className='h-9 text-xs'
-                  placeholder={t('saveTagsPlaceholder')}
-                  value={step.tags ?? ''}
-                  onChange={(e) =>
-                    update({ tags: e.target.value || undefined })
-                  }
-                />
-                <p className='mt-1 text-[10px] text-muted-foreground'>
-                  {t('saveTagsHint', {
-                    varToken: SCENARIO_VAR_TOKENS.GROUP_NAME
-                  })}
-                </p>
-              </F>
-              {strategy === 'fb_comments' ? (
-                <F label={t('saveParentLinkLabel')}>
-                  <select
-                    className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
-                    value={saveParentMode}
-                    onChange={(e) => {
-                      if (e.target.value === 'auto') {
-                        update({ save_parent_id_var: undefined });
-                      } else {
-                        update({
-                          save_parent_id_var:
-                            step.save_parent_id_var &&
-                            step.save_parent_id_var !== ACTIVE_SAVE_PARENT_VAR
-                              ? step.save_parent_id_var
-                              : ''
-                        });
-                      }
-                    }}
-                  >
-                    <option value='auto'>{t('saveParentLinkAuto')}</option>
-                    <option value='custom'>{t('saveParentLinkCustom')}</option>
-                  </select>
-                  {saveParentMode === 'custom' ? (
-                    <Input
-                      className='mt-1.5 h-9 font-mono text-xs'
-                      placeholder={ACTIVE_SAVE_PARENT_VAR}
-                      value={step.save_parent_id_var ?? ''}
-                      onChange={(e) =>
-                        update({
-                          save_parent_id_var: e.target.value || undefined
-                        })
-                      }
-                    />
-                  ) : null}
                   <p className='mt-1 text-[10px] text-muted-foreground'>
-                    {t('saveParentLinkHint')}
+                    {t('saveDedupeHint')}
                   </p>
                 </F>
-              ) : null}
-              <F label={t('saveItemLevelLabel')}>
-                <select
-                  className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
-                  value={String(step.item_level ?? 0)}
-                  onChange={(e) =>
-                    update({ item_level: Number(e.target.value) || 0 })
+
+                <CollapsibleBlock
+                  title={t('saveAdvancedTitle')}
+                  badge={
+                    <Badge variant='outline' className='text-[9px] font-normal'>
+                      {t('saveAdvancedBadge')}
+                    </Badge>
                   }
                 >
-                  <option value='0'>{t('saveItemLevelPost')}</option>
-                  <option value='1'>{t('saveItemLevelComment')}</option>
-                  <option value='2'>{t('saveItemLevelReply')}</option>
-                </select>
-              </F>
-            </CollapsibleBlock>
-          </div>
-        ) : null}
-      </StepPanelSection>
+                  <StepPanelHint>{t('saveAdvancedHint')}</StepPanelHint>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <F label={t('saveSummaryPlatform')}>
+                      <Input
+                        className='h-9 text-xs'
+                        placeholder='facebook'
+                        value={step.platform ?? 'facebook'}
+                        onChange={(e) =>
+                          update({ platform: e.target.value || undefined })
+                        }
+                      />
+                    </F>
+                    <F label={t('saveSummaryContentType')}>
+                      <select
+                        className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                        value={
+                          step.content_type ??
+                          saveDefaultsForStrategy(strategy).content_type
+                        }
+                        onChange={(e) =>
+                          update({ content_type: e.target.value || undefined })
+                        }
+                      >
+                        <option value='fb_post'>
+                          {t('saveContentTypeGroupPost')}
+                        </option>
+                        <option value='fb_comment'>
+                          {t('saveContentTypeComment')}
+                        </option>
+                        <option value='text'>{t('saveContentTypeText')}</option>
+                      </select>
+                    </F>
+                  </div>
+                  <F label={t('saveTagsLabel')}>
+                    <Input
+                      className='h-9 text-xs'
+                      placeholder={t('saveTagsPlaceholder')}
+                      value={step.tags ?? ''}
+                      onChange={(e) =>
+                        update({ tags: e.target.value || undefined })
+                      }
+                    />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>
+                      {t('saveTagsHint', {
+                        varToken: SCENARIO_VAR_TOKENS.GROUP_NAME
+                      })}
+                    </p>
+                  </F>
+                  {strategy === 'fb_comments' ? (
+                    <F label={t('saveParentLinkLabel')}>
+                      <select
+                        className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                        value={saveParentMode}
+                        onChange={(e) => {
+                          if (e.target.value === 'auto') {
+                            update({ save_parent_id_var: undefined });
+                          } else {
+                            update({
+                              save_parent_id_var:
+                                step.save_parent_id_var &&
+                                step.save_parent_id_var !==
+                                  ACTIVE_SAVE_PARENT_VAR
+                                  ? step.save_parent_id_var
+                                  : ''
+                            });
+                          }
+                        }}
+                      >
+                        <option value='auto'>{t('saveParentLinkAuto')}</option>
+                        <option value='custom'>
+                          {t('saveParentLinkCustom')}
+                        </option>
+                      </select>
+                      {saveParentMode === 'custom' ? (
+                        <Input
+                          className='mt-1.5 h-9 font-mono text-xs'
+                          placeholder={ACTIVE_SAVE_PARENT_VAR}
+                          value={step.save_parent_id_var ?? ''}
+                          onChange={(e) =>
+                            update({
+                              save_parent_id_var: e.target.value || undefined
+                            })
+                          }
+                        />
+                      ) : null}
+                      <p className='mt-1 text-[10px] text-muted-foreground'>
+                        {t('saveParentLinkHint')}
+                      </p>
+                    </F>
+                  ) : null}
+                  <F label={t('saveItemLevelLabel')}>
+                    <select
+                      className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                      value={String(step.item_level ?? 0)}
+                      onChange={(e) =>
+                        update({ item_level: Number(e.target.value) || 0 })
+                      }
+                    >
+                      <option value='0'>{t('saveItemLevelPost')}</option>
+                      <option value='1'>{t('saveItemLevelComment')}</option>
+                      <option value='2'>{t('saveItemLevelReply')}</option>
+                    </select>
+                  </F>
+                </CollapsibleBlock>
+              </div>
+            ) : null}
+          </StepPanelSection>
+        </div>
+      ) : null}
     </div>
   );
 }

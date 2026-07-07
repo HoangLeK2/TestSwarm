@@ -192,141 +192,143 @@ function DeviceControlsRail({
       )}
       data-device-controls-rail={id}
     >
-      <div className='flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-y-contain px-1.5'>
-        <RailIconButton
-          label={mode === 'tap' ? t('tapMode') : t('swipeMode')}
-          hint={t('tapModeToggleHint')}
-          active={!gestureActive}
-          onClick={onToggleMode}
-        >
-          <ModeIcon className={iconClass} aria-hidden />
-        </RailIconButton>
+      <div className='flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-y-contain'>
+        <div className={railSectionClass}>
+          <RailIconButton
+            label={mode === 'tap' ? t('tapMode') : t('swipeMode')}
+            hint={t('tapModeToggleHint')}
+            active={!gestureActive}
+            onClick={onToggleMode}
+          >
+            <ModeIcon className={iconClass} aria-hidden />
+          </RailIconButton>
 
-        {onGestureMode ? (
-          <>
+          {onGestureMode ? (
+            <>
+              <RailIconButton
+                label={t('doubleTap')}
+                hint={t('doubleTapHint')}
+                active={gestureMode === 'double_tap'}
+                onClick={() =>
+                  onGestureMode(
+                    gestureMode === 'double_tap' ? 'tap' : 'double_tap'
+                  )
+                }
+              >
+                <MousePointer2 className={iconClass} aria-hidden />
+              </RailIconButton>
+              <RailIconButton
+                label={t('drag')}
+                hint={t('dragHint')}
+                active={gestureMode === 'drag'}
+                onClick={() =>
+                  onGestureMode(gestureMode === 'drag' ? 'tap' : 'drag')
+                }
+              >
+                <Hand className={iconClass} aria-hidden />
+              </RailIconButton>
+            </>
+          ) : null}
+
+          {onPinch && !hidePinch ? (
+            <>
+              <RailIconButton
+                label={t('zoomIn')}
+                hint={t('zoomInHint')}
+                onClick={() => onPinch(2.0)}
+              >
+                <ZoomIn className={iconClass} aria-hidden />
+              </RailIconButton>
+              <RailIconButton
+                label={t('zoomOut')}
+                hint={t('zoomOutHint')}
+                onClick={() => onPinch(0.5)}
+              >
+                <ZoomOut className={iconClass} aria-hidden />
+              </RailIconButton>
+            </>
+          ) : null}
+
+          {!hideRestart ? (
             <RailIconButton
-              label={t('doubleTap')}
-              hint={t('doubleTapHint')}
-              active={gestureMode === 'double_tap'}
-              onClick={() =>
-                onGestureMode(
-                  gestureMode === 'double_tap' ? 'tap' : 'double_tap'
-                )
-              }
+              label={t('restart')}
+              hint={t('restartTitle')}
+              onClick={onRestart}
             >
-              <MousePointer2 className={iconClass} aria-hidden />
+              <RotateCw className={iconClass} aria-hidden />
             </RailIconButton>
-            <RailIconButton
-              label={t('drag')}
-              hint={t('dragHint')}
-              active={gestureMode === 'drag'}
-              onClick={() =>
-                onGestureMode(gestureMode === 'drag' ? 'tap' : 'drag')
-              }
-            >
-              <Hand className={iconClass} aria-hidden />
-            </RailIconButton>
-          </>
-        ) : null}
-
-        {onPinch && !hidePinch ? (
-          <>
-            <RailIconButton
-              label={t('zoomIn')}
-              hint={t('zoomInHint')}
-              onClick={() => onPinch(2.0)}
-            >
-              <ZoomIn className={iconClass} aria-hidden />
-            </RailIconButton>
-            <RailIconButton
-              label={t('zoomOut')}
-              hint={t('zoomOutHint')}
-              onClick={() => onPinch(0.5)}
-            >
-              <ZoomOut className={iconClass} aria-hidden />
-            </RailIconButton>
-          </>
-        ) : null}
-
-        {!hideRestart ? (
-          <RailIconButton
-            label={t('restart')}
-            hint={t('restartTitle')}
-            onClick={onRestart}
-          >
-            <RotateCw className={iconClass} aria-hidden />
-          </RailIconButton>
-        ) : null}
-      </div>
-
-      <div className={cn(railSectionClass, 'pt-1')}>
-        <div className='mb-0.5 h-px w-7 shrink-0 bg-white/10' aria-hidden />
-        <RailIconButton label={t('home')} onClick={() => onKey('home')}>
-          <Home className={iconClass} aria-hidden />
-        </RailIconButton>
-        <RailIconButton label={t('back')} onClick={() => onKey('back')}>
-          <ArrowLeft className={iconClass} aria-hidden />
-        </RailIconButton>
-        {onScreenOn ? (
-          <RailIconButton
-            label={t('screenOn')}
-            hint={t('screenOnHint')}
-            onClick={onScreenOn}
-          >
-            <Sun className={iconClass} aria-hidden />
-          </RailIconButton>
-        ) : null}
-        {onScreenOff ? (
-          <RailIconButton
-            label={t('screenOff')}
-            hint={t('screenOffHint')}
-            onClick={onScreenOff}
-          >
-            <Moon className={iconClass} aria-hidden />
-          </RailIconButton>
-        ) : null}
-        {onUnlock ? (
-          <RailIconButton
-            label={t('unlock')}
-            hint={t('unlockHint')}
-            onClick={onUnlock}
-          >
-            <LockOpen className={iconClass} aria-hidden />
-          </RailIconButton>
-        ) : null}
-        <RailIconButton label={t('power')} onClick={() => onKey('power')}>
-          <Power className={iconClass} aria-hidden />
-        </RailIconButton>
-      </div>
-
-      {liveInput ? (
-        <div className={cn(railSectionClass, 'py-1')}>
-          <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
-          <RailIconButton
-            label={tLive('label')}
-            hint={tLive('railHint')}
-            active={liveInput.open}
-            disabled={liveInput.disabled}
-            onClick={() => liveInput.onOpenChange(!liveInput.open)}
-          >
-            <Keyboard className={iconClass} aria-hidden />
-          </RailIconButton>
+          ) : null}
         </div>
-      ) : null}
 
-      {deviceOps ? (
-        <div className={cn(railSectionClass, 'py-1')}>
-          <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
-          <DeviceOpsRailSection config={deviceOps} iconClass={iconClass} />
-        </div>
-      ) : null}
-
-      {onSwipeExt ? (
-        <div className={cn(railSectionClass, 'pb-2 pt-0.5')}>
+        <div className={cn(railSectionClass, 'pt-1')}>
           <div className='mb-0.5 h-px w-7 shrink-0 bg-white/10' aria-hidden />
-          <DeviceControlsSwipePad onSwipe={onSwipeExt} t={t} />
+          <RailIconButton label={t('home')} onClick={() => onKey('home')}>
+            <Home className={iconClass} aria-hidden />
+          </RailIconButton>
+          <RailIconButton label={t('back')} onClick={() => onKey('back')}>
+            <ArrowLeft className={iconClass} aria-hidden />
+          </RailIconButton>
+          {onScreenOn ? (
+            <RailIconButton
+              label={t('screenOn')}
+              hint={t('screenOnHint')}
+              onClick={onScreenOn}
+            >
+              <Sun className={iconClass} aria-hidden />
+            </RailIconButton>
+          ) : null}
+          {onScreenOff ? (
+            <RailIconButton
+              label={t('screenOff')}
+              hint={t('screenOffHint')}
+              onClick={onScreenOff}
+            >
+              <Moon className={iconClass} aria-hidden />
+            </RailIconButton>
+          ) : null}
+          {onUnlock ? (
+            <RailIconButton
+              label={t('unlock')}
+              hint={t('unlockHint')}
+              onClick={onUnlock}
+            >
+              <LockOpen className={iconClass} aria-hidden />
+            </RailIconButton>
+          ) : null}
+          <RailIconButton label={t('power')} onClick={() => onKey('power')}>
+            <Power className={iconClass} aria-hidden />
+          </RailIconButton>
         </div>
-      ) : null}
+
+        {liveInput ? (
+          <div className={cn(railSectionClass, 'py-1')}>
+            <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
+            <RailIconButton
+              label={tLive('label')}
+              hint={tLive('railHint')}
+              active={liveInput.open}
+              disabled={liveInput.disabled}
+              onClick={() => liveInput.onOpenChange(!liveInput.open)}
+            >
+              <Keyboard className={iconClass} aria-hidden />
+            </RailIconButton>
+          </div>
+        ) : null}
+
+        {deviceOps ? (
+          <div className={cn(railSectionClass, 'py-1')}>
+            <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
+            <DeviceOpsRailSection config={deviceOps} iconClass={iconClass} />
+          </div>
+        ) : null}
+
+        {onSwipeExt ? (
+          <div className={cn(railSectionClass, 'pb-2 pt-0.5')}>
+            <div className='mb-0.5 h-px w-7 shrink-0 bg-white/10' aria-hidden />
+            <DeviceControlsSwipePad onSwipe={onSwipeExt} t={t} />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

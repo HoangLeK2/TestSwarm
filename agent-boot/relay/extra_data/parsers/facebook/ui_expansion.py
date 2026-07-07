@@ -18,6 +18,15 @@ _SEE_MORE_EXPAND_PHRASES: Tuple[str, ...] = (
 
 _SEE_MORE_TAP_CENTER_DEDUP_PX: int = 52
 
+_PROFILE_TAB_CHIP_MARKERS: Tuple[str, ...] = (
+    "tất cả",
+    "ảnh",
+    "reels",
+    "all",
+    "photos",
+    "videos",
+)
+
 
 def _parse_bounds(node) -> Optional[Tuple[int, int, int, int]]:
     b = node.get("bounds")
@@ -81,6 +90,46 @@ def _bounds_contains_outer_inner(
         and inner[2] <= outer[2]
         and inner[3] <= outer[3]
     )
+
+
+def _is_profile_tab_chip_label(merged: str) -> bool:
+    txt = _normalize_fb_ui_spacing(merged).lower()
+    if not txt:
+        return False
+    has_index = "trong số" in txt or " of " in txt
+    if not has_index:
+        return False
+    return any(marker in txt for marker in _PROFILE_TAB_CHIP_MARKERS)
+
+
+def detect_profile_tab_strip_bottom(root) -> Optional[int]:
+    """Bottom Y of FB profile/page sticky tab chips (e.g. Tất cả / Ảnh / Reels)."""
+    if root is None:
+        return None
+    chip_bottoms: list[int] = []
+    for node in root.iter("node"):
+        merged = _normalize_fb_ui_spacing(
+            f"{node.get('text') or ''} {node.get('content-desc') or ''}"
+        )
+        if not _is_profile_tab_chip_label(merged):
+            continue
+        bounds = _parse_bounds(node)
+        if bounds:
+            chip_bottoms.append(bounds[3])
+    if len(chip_bottoms) < 2:
+        return None
+    return max(chip_bottoms)
+
+
+def profile_tab_strip_min_tap_y(root, *, margin: int = 12) -> Optional[int]:
+    bottom = detect_profile_tab_strip_bottom(root)
+    if bottom is None:
+        return None
+    return bottom + margin
+
+
+def hierarchy_has_profile_tab_strip(root) -> bool:
+    return detect_profile_tab_strip_bottom(root) is not None
 
 
 def _collect_see_more_tap_plan(root) -> List[Tuple[int, int, int, int]]:
@@ -154,5 +203,8 @@ __all__ = [
     "_SEE_MORE_TAP_CENTER_DEDUP_PX",
     "_bounds_center",
     "_collect_see_more_tap_plan",
+    "detect_profile_tab_strip_bottom",
+    "hierarchy_has_profile_tab_strip",
+    "profile_tab_strip_min_tap_y",
 ]
 

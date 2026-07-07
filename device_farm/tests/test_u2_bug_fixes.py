@@ -307,7 +307,7 @@ class TestDeviceClientHierarchyRecoveryPolicy:
             def __init__(self):
                 self.actions: list[list[dict]] = []
 
-            def batch(self, actions, timeout=30.0):
+            def batch(self, actions, timeout=30.0, cancel_event=None):
                 self.actions.append(actions)
                 return [{
                     "op": "dump_hierarchy",
@@ -665,6 +665,63 @@ class TestDeviceClientU2Recovery:
         assert ok is False
         assert d._u2 is None
         d._recover_u2_ws_mode.assert_called_once()
+
+
+class TestDeviceClientOpenUrl:
+    def test_open_url_prefers_u2_batch_when_available(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._loop = object()
+        d._agent_send = Mock()
+        d._u2_batch = Mock()
+        d._u2_batch.batch.return_value = [{"op": "open_url", "ok": True}]
+        d._open_url_via_adb_relay = Mock(return_value=True)
+
+        d.open_url("https://example.com/path?q=1", package="com.android.chrome")
+
+        d._agent_send.assert_not_called()
+        d._open_url_via_adb_relay.assert_not_called()
+        d._u2_batch.batch.assert_called_once_with(
+            [{"op": "open_url", "url": "https://example.com/path?q=1"}],
+            timeout=10.0,
+            cancel_event=None,
+        )
+
+    def test_open_url_falls_back_to_adb_relay_when_u2_batch_unavailable(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._loop = object()
+        d._agent_send = Mock()
+        relay = _FakeRelay(["logical-serial"])
+        relay.adb_shell = Mock()
+        future = Mock()
+        future.result.return_value = "Starting: Intent"
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", return_value=future):
+            d.open_url("https://example.com/path?q=1", package="com.android.chrome")
+
+        d._agent_send.assert_not_called()
+        relay.adb_shell.assert_called_once()
+        _, args, kwargs = relay.adb_shell.mock_calls[0]
+        assert args[0] == "logical-serial"
+        assert "android.intent.action.VIEW" in args[1]
+        assert "https://example.com/path?q=1" in args[1]
+        assert "-p com.android.chrome" in args[1]
+        assert kwargs["timeout"] == 10.0
+
+    def test_open_url_agent_timeout_retries_u2_batch_before_adb(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._agent_send = Mock()
+        d._open_url_result_event = Mock()
+        d._open_url_result_event.wait.return_value = False
+        d._open_url_via_u2_batch = Mock(side_effect=[False, True])
+        d._open_url_via_adb_relay = Mock(return_value=False)
+
+        d.open_url("https://example.com")
+
+        d._agent_send.assert_called_once()
+        assert d._agent_send.call_args.args[0]["type"] == "open_url"
+        assert d._open_url_via_u2_batch.call_count == 2
+        d._open_url_via_adb_relay.assert_called_once()
 
 
 class TestWatchdogAtxProbe:

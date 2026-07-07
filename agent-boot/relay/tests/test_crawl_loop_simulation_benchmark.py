@@ -32,6 +32,10 @@ _SIM_SWIPE_MS = 0.8
 _SIM_CLICK_MS = 1.5
 _SIM_KEY_MS = 0.4
 
+CRAWL_WINDOW_HOURS = 18
+SECONDS_PER_CRAWL_WINDOW = CRAWL_WINDOW_HOURS * 60 * 60
+TARGET_CRAWL_WINDOW_CONTENT_ITEMS = 50_000
+
 # Production crawl profile (balanced) — pause zeroed for deterministic bench.
 CRAWL_FB_COMMENTS_CONTEXT: dict[str, Any] = {
     "comment_scroll_passes": 48,
@@ -331,6 +335,50 @@ def _estimate_comment_device_ms(stats: OpStats, context: dict[str, Any], snapsho
     return stats.total_device_ms + snapshots * parse_ms_per_snapshot
 
 
+def _crawl_window_content_items(total_items: int, seconds_per_detail: float) -> float:
+    if seconds_per_detail <= 0:
+        return 0.0
+    return total_items * SECONDS_PER_CRAWL_WINDOW / seconds_per_detail
+
+
+def _required_items_per_detail(seconds_per_detail: float) -> float:
+    return TARGET_CRAWL_WINDOW_CONTENT_ITEMS * seconds_per_detail / SECONDS_PER_CRAWL_WINDOW
+
+
+def _crawl_window_content_items_for_mixed_distribution(
+    *,
+    commented_post_ratio: float,
+    avg_comments_per_commented_post: float,
+    seconds_per_post_scan: float,
+    seconds_per_commented_detail: float,
+) -> dict[str, float]:
+    ratio = max(0.0, min(1.0, commented_post_ratio))
+    seconds_per_seen_post = seconds_per_post_scan + ratio * seconds_per_commented_detail
+    items_per_seen_post = 1.0 + ratio * avg_comments_per_commented_post
+    window_posts_seen = (
+        SECONDS_PER_CRAWL_WINDOW / seconds_per_seen_post
+        if seconds_per_seen_post > 0
+        else 0.0
+    )
+    window_items = window_posts_seen * items_per_seen_post
+    target_items_per_second = TARGET_CRAWL_WINDOW_CONTENT_ITEMS / SECONDS_PER_CRAWL_WINDOW
+    if ratio <= 0:
+        required_comments = float("inf")
+    else:
+        required_comments = (
+            target_items_per_second * seconds_per_seen_post - 1.0
+        ) / ratio
+    return {
+        "avg_comments_per_commented_post": avg_comments_per_commented_post,
+        "commented_post_ratio": ratio,
+        "estimated_window_items": window_items,
+        "items_per_seen_post": items_per_seen_post,
+        "required_comments_per_commented_post": max(0.0, required_comments),
+        "seconds_per_seen_post": seconds_per_seen_post,
+        "window_posts_seen": window_posts_seen,
+    }
+
+
 async def _simulate_long_comment_thread(context: dict[str, Any]) -> dict[str, Any]:
     stats = OpStats()
     exec_ = _GrowingCommentExecutor(stats=stats)
@@ -533,6 +581,116 @@ async def test_crawl_comments_default_fast_timing_keeps_requested_budget() -> No
     assert current["swipe"] <= 16
     assert current["dump"] < legacy["dump"]
     assert reduction["estimated_device_pct"] >= 40
+
+
+@pytest.mark.asyncio
+async def test_crawl_18h_content_throughput_reaches_50k_with_comment_yield() -> None:
+    current = await _simulate_long_comment_thread(_current_balanced_comment_context())
+    current_seconds = float(current["estimated_device_s"])
+    current_items_per_detail = 51  # 1 post + 50 comments.
+    current_window_items = _crawl_window_content_items(current_items_per_detail, current_seconds)
+
+    # Calibration row from an older live observation: fb_posts ~= 5.9s,
+    # fb_comments ~= 41.8s. This keeps the benchmark honest when synthetic
+    # op timings are much faster than a real phone/app session.
+    live_like_seconds = 47.7
+    live_like_items_per_detail = 51
+    live_like_window_items = _crawl_window_content_items(
+        live_like_items_per_detail,
+        live_like_seconds,
+    )
+    live_like_required_items = _required_items_per_detail(live_like_seconds)
+
+    report = {
+        "crawl_window_hours": CRAWL_WINDOW_HOURS,
+        "target_window_items": TARGET_CRAWL_WINDOW_CONTENT_ITEMS,
+        "target_items_per_second": round(
+            TARGET_CRAWL_WINDOW_CONTENT_ITEMS / SECONDS_PER_CRAWL_WINDOW,
+            3,
+        ),
+        "current_synthetic": {
+            "seconds_per_detail": current_seconds,
+            "items_per_detail": current_items_per_detail,
+            "estimated_window_items": round(current_window_items),
+            "required_items_per_detail": round(_required_items_per_detail(current_seconds), 2),
+            "profile": current,
+        },
+        "live_like_older_observation": {
+            "seconds_per_detail": live_like_seconds,
+            "items_per_detail": live_like_items_per_detail,
+            "estimated_window_items": round(live_like_window_items),
+            "required_items_per_detail": round(live_like_required_items, 2),
+        },
+    }
+    print(f"\n[crawl-bench-50k-18h] {json.dumps(report, ensure_ascii=False, sort_keys=True)}")
+
+    assert current_window_items >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    assert live_like_window_items >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    assert live_like_required_items <= live_like_items_per_detail
+
+
+def test_crawl_18h_mixed_comment_distribution_identifies_sparse_risk() -> None:
+    # Older live-like split: scanning/parsing a post ~= 5.9s; opening and
+    # crawling comments adds ~= 41.8s. Posts with zero comments should be
+    # counted as post items but should not pay the detail crawl cost.
+    seconds_per_post_scan = 5.9
+    seconds_per_commented_detail = 41.8
+    profiles = {
+        "dense_40pct_50_comments": _crawl_window_content_items_for_mixed_distribution(
+            commented_post_ratio=0.40,
+            avg_comments_per_commented_post=50,
+            seconds_per_post_scan=seconds_per_post_scan,
+            seconds_per_commented_detail=seconds_per_commented_detail,
+        ),
+        "sparse_10pct_50_comments": _crawl_window_content_items_for_mixed_distribution(
+            commented_post_ratio=0.10,
+            avg_comments_per_commented_post=50,
+            seconds_per_post_scan=seconds_per_post_scan,
+            seconds_per_commented_detail=seconds_per_commented_detail,
+        ),
+        "sparse_10pct_110_comments": _crawl_window_content_items_for_mixed_distribution(
+            commented_post_ratio=0.10,
+            avg_comments_per_commented_post=110,
+            seconds_per_post_scan=seconds_per_post_scan,
+            seconds_per_commented_detail=seconds_per_commented_detail,
+        ),
+    }
+    report = {
+        "crawl_window_hours": CRAWL_WINDOW_HOURS,
+        "target_window_items": TARGET_CRAWL_WINDOW_CONTENT_ITEMS,
+        "target_items_per_second": round(
+            TARGET_CRAWL_WINDOW_CONTENT_ITEMS / SECONDS_PER_CRAWL_WINDOW,
+            3,
+        ),
+        "assumptions": {
+            "seconds_per_post_scan": seconds_per_post_scan,
+            "seconds_per_commented_detail": seconds_per_commented_detail,
+        },
+        "profiles": {
+            name: {
+                key: round(value, 2)
+                for key, value in profile.items()
+            }
+            for name, profile in profiles.items()
+        },
+    }
+    print(
+        "\n[crawl-bench-50k-18h-mixed] "
+        f"{json.dumps(report, ensure_ascii=False, sort_keys=True)}"
+    )
+
+    assert (
+        profiles["dense_40pct_50_comments"]["estimated_window_items"]
+        >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    )
+    assert (
+        profiles["sparse_10pct_50_comments"]["estimated_window_items"]
+        < TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    )
+    assert (
+        profiles["sparse_10pct_110_comments"]["estimated_window_items"]
+        >= TARGET_CRAWL_WINDOW_CONTENT_ITEMS
+    )
 
 
 @pytest.mark.asyncio

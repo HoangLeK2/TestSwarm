@@ -9,8 +9,10 @@ import android.util.Log;
 
 import androidx.core.content.FileProvider;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
@@ -68,7 +70,7 @@ public class UiAutomatorInstaller {
         try {
             Process p = Runtime.getRuntime().exec(
                 new String[]{"pm", "install", "-r", "-t", apk.getAbsolutePath()});
-            byte[] out = p.getInputStream().readAllBytes();
+            byte[] out = readFully(p.getInputStream());
             int code = p.waitFor();
             String result = new String(out).trim();
             Log.i(TAG, "pm install " + assetName + " → code=" + code + " " + result);
@@ -77,6 +79,16 @@ public class UiAutomatorInstaller {
             Log.w(TAG, "pm install failed: " + e.getMessage());
             return false;
         }
+    }
+
+    private static byte[] readFully(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
     }
 
     /** Extract APK from assets and open system install dialog. */

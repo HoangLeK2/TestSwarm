@@ -77,6 +77,10 @@ import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import {
+  detectSingleVariableRename,
+  replaceScenarioVariableReferences
+} from '@/lib/scenario-variable-references';
 import { useRouter } from '@/i18n/navigation';
 import {
   syncSavedScenarioCaches,
@@ -369,10 +373,16 @@ export function ControlRecordView({
   const selectedDeviceForControl = useMemo(
     () =>
       rawSelectedDeviceForControl ??
-      connectedDevicesForControl.find((d) => d.serial === device.selectedSerial) ??
+      connectedDevicesForControl.find(
+        (d) => d.serial === device.selectedSerial
+      ) ??
       connectedDevicesForControl[0] ??
       null,
-    [connectedDevicesForControl, device.selectedSerial, rawSelectedDeviceForControl]
+    [
+      connectedDevicesForControl,
+      device.selectedSerial,
+      rawSelectedDeviceForControl
+    ]
   );
   const selectedPrimarySerial = selectedDeviceForControl?.serial ?? null;
   const {
@@ -626,7 +636,11 @@ export function ControlRecordView({
     return connectedDevicesForControl.some((d) => d.serial === serial)
       ? serial
       : '';
-  }, [connectedDevicesForControl, device.selectedSerial, selectedDeviceForControl]);
+  }, [
+    connectedDevicesForControl,
+    device.selectedSerial,
+    selectedDeviceForControl
+  ]);
 
   const handleFlowStepsChange = useCallback(
     (newSteps: FlowStep[]) => {
@@ -729,6 +743,7 @@ export function ControlRecordView({
   const [scenarioVariables, setScenarioVariables] = useState<
     Record<string, any>
   >(() => flattenVarDefs(save.editingContext?.variables ?? {}));
+  const scenarioVariablesRef = useRef<Record<string, any>>(scenarioVariables);
   const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<
     Record<string, string>
   >({});
@@ -847,6 +862,32 @@ export function ControlRecordView({
   const scenarioVariablesWithDeviceKeys = useMemo(
     () => mergeDeclaredDeviceVarKeys(scenarioVariables, declaredDeviceVarKeys),
     [scenarioVariables, declaredDeviceVarKeys]
+  );
+  useEffect(() => {
+    scenarioVariablesRef.current = scenarioVariables;
+  }, [scenarioVariables]);
+  const handleScenarioVariablesChange = useCallback(
+    (next: Record<string, any>) => {
+      const rename = detectSingleVariableRename(
+        scenarioVariablesRef.current,
+        next
+      );
+      scenarioVariablesRef.current = next;
+      setScenarioVariables(next);
+      if (!rename) return;
+
+      const nextSteps = replaceScenarioVariableReferences(
+        stepsItemsRef.current,
+        rename
+      ) as typeof steps.items;
+      stepsItemsRef.current = nextSteps;
+      flowStepsRef.current = nextSteps;
+      steps.setItems(nextSteps);
+      setFlowDetailStep((current) =>
+        current ? replaceScenarioVariableReferences(current, rename) : current
+      );
+    },
+    [steps]
   );
   const syncDeviceVarKeysIntoScenarioVariables = useCallback(() => {
     const next = mergeDeclaredDeviceVarKeys(
@@ -1381,14 +1422,18 @@ export function ControlRecordView({
 
   useEffect(() => {
     if (save.editingContext?.variables) {
-      setScenarioVariables(flattenVarDefs(save.editingContext.variables));
+      const next = flattenVarDefs(save.editingContext.variables);
+      scenarioVariablesRef.current = next;
+      setScenarioVariables(next);
     }
   }, [save.editingContext]);
 
   useEffect(() => {
     if (save.editingContext?.variables) return;
     if (save.orgScenarioContext?.variables) {
-      setScenarioVariables(flattenVarDefs(save.orgScenarioContext.variables));
+      const next = flattenVarDefs(save.orgScenarioContext.variables);
+      scenarioVariablesRef.current = next;
+      setScenarioVariables(next);
     }
   }, [save.editingContext, save.orgScenarioContext]);
 
@@ -1432,7 +1477,7 @@ export function ControlRecordView({
 
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
-      const serial = device.selectedDevice?.serial?.trim();
+      const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
@@ -1483,7 +1528,7 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice,
+      selectedDeviceForControl?.serial,
       scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
       previewSession
@@ -1561,18 +1606,24 @@ export function ControlRecordView({
 
   const flowWorkbench = useMemo(
     () => ({
-      deviceSerial: device.selectedDevice?.serial ?? null,
+      deviceSerial: selectedDeviceForControl?.serial ?? null,
       selectedFgId: flowSelectedFgId,
       setSelectedFgId: setFlowSelectedFgId,
       runStates: flowRunStates,
       onRunLeafStep: handleFlowRunLeaf
     }),
-    [device.selectedDevice, flowSelectedFgId, flowRunStates, handleFlowRunLeaf]
+    [
+      selectedDeviceForControl?.serial,
+      flowSelectedFgId,
+      flowRunStates,
+      handleFlowRunLeaf
+    ]
   );
 
   const handleRunStep = useCallback(
     async (step: FlowStep, runKey: string) => {
-      if (!device.selectedDevice) {
+      const serial = selectedDeviceForControl?.serial?.trim();
+      if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
       }
@@ -1585,7 +1636,6 @@ export function ControlRecordView({
         ? `Bước ${Number(runKey) + 1}`
         : 'Bước';
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
-      const serial = device.selectedDevice.serial;
       // Ref synced every render — always read tree after mirror pick, not stale StepCard closure.
       const payload = prepareInlinePreviewStep(
         stepsItemsRef.current as FlowStep[],
@@ -1647,7 +1697,7 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice,
+      selectedDeviceForControl?.serial,
       stepRunStates,
       scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
@@ -1657,7 +1707,7 @@ export function ControlRecordView({
 
   const runDeviceOpStep = useCallback(
     async (step: FlowStep) => {
-      const serial = device.selectedDevice?.serial?.trim();
+      const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
         toast.warning('Chưa chọn thiết bị');
         return;
@@ -1691,7 +1741,7 @@ export function ControlRecordView({
     },
     [
       activeScenarioId,
-      device.selectedDevice?.serial,
+      selectedDeviceForControl?.serial,
       inlineScenarioDeviceVars,
       previewSession,
       scenarioVariablesWithDeviceKeys
@@ -2874,7 +2924,7 @@ export function ControlRecordView({
         open={varDialogOpen}
         onOpenChange={setVarDialogOpen}
         variables={scenarioVariablesWithDeviceKeys}
-        onVariablesChange={setScenarioVariables}
+        onVariablesChange={handleScenarioVariablesChange}
         labels={{
           title: tVar('title'),
           variableCount:

@@ -1,5 +1,6 @@
 import { sanitizeScenarioStepsForApi } from '@/features/devices/lib/sanitize-scenario-steps-for-api';
 import { normalizeScenarioVariables } from '@/lib/scenario-variables';
+import { stripUndeclaredVariableReferencesFromTags } from '@/lib/scenario-variable-references';
 import type { OrgScenarioBodyIn } from '../services/api';
 
 function slugifyStepId(raw: string): string {
@@ -64,8 +65,12 @@ export function buildOrgScenarioBodyPayload(
   const withIds = sanitized.map((step, index) =>
     ensureOrgStepIds(step, `step-${index + 1}`)
   );
+  const normalizedVariables = normalizeScenarioVariables(variables ?? {});
   return {
-    steps: withIds,
-    variables: normalizeScenarioVariables(variables ?? {})
+    steps: stripUndeclaredVariableReferencesFromTags(
+      withIds,
+      normalizedVariables
+    ),
+    variables: normalizedVariables
   };
 }

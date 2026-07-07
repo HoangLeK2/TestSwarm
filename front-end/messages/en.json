@@ -2259,6 +2259,10 @@
         "fbFindCommentButton": "Find Comment button · {timeout}s",
         "fbTapCommentTarget": "Tap cached target · {wait}s",
         "fbApplyCommentFilter": "Filter comments · {filter}",
+        "commentFilterMostRelevant": "Most relevant",
+        "commentFilterNewest": "Newest",
+        "commentFilterAllComments": "All comments",
+        "commentFilterNone": "No change",
         "fbCommentElse": " / not found {elseCount}"
       }
     },

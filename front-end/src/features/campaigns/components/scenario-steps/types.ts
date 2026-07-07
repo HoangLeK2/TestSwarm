@@ -332,8 +332,16 @@ export function getStepLabel(step: FlowStep): string {
       return `Tìm nút Bình luận · chờ ${step.timeout ?? 6}s`;
     case 'fb_tap_comment_target':
       return `Bấm target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
-    case 'fb_apply_comment_filter':
-      return `Lọc bình luận → ${step.comment_filter ?? 'all_comments'}`;
+    case 'fb_apply_comment_filter': {
+      const filterLabels: Record<string, string> = {
+        most_relevant: 'Phù hợp nhất',
+        newest: 'Mới nhất',
+        all_comments: 'Tất cả bình luận',
+        none: 'Không đổi'
+      };
+      const filter = step.comment_filter ?? 'all_comments';
+      return `Lọc bình luận → ${filterLabels[filter] ?? filter}`;
+    }
     default:
       return step.type;
   }

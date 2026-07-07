@@ -157,6 +157,46 @@ function localizeCollection(collection?: string): string {
   return trimmed;
 }
 
+const COMMENT_FILTER_I18N_KEYS: Record<string, string> = {
+  most_relevant: 'commentFilterMostRelevant',
+  newest: 'commentFilterNewest',
+  all_comments: 'commentFilterAllComments',
+  none: 'commentFilterNone'
+};
+
+const COMMENT_FILTER_LABELS_VI: Record<string, string> = {
+  most_relevant: 'Phù hợp nhất',
+  newest: 'Mới nhất',
+  all_comments: 'Tất cả bình luận',
+  none: 'Không đổi'
+};
+
+const COMMENT_FILTER_LABELS_EN: Record<string, string> = {
+  most_relevant: 'Most relevant',
+  newest: 'Newest',
+  all_comments: 'All comments',
+  none: 'No change'
+};
+
+function localizeCommentFilter(
+  filter: string | undefined,
+  t?: FlowStepTranslator
+): string {
+  const key = filter ?? 'all_comments';
+  if (t) {
+    const i18nKey = COMMENT_FILTER_I18N_KEYS[key];
+    if (i18nKey) {
+      return t(`display.${i18nKey}`);
+    }
+  }
+  return COMMENT_FILTER_LABELS_EN[key] ?? key;
+}
+
+function localizeCommentFilterVi(filter: string | undefined): string {
+  const key = filter ?? 'all_comments';
+  return COMMENT_FILTER_LABELS_VI[key] ?? key;
+}
+
 function hasFbCommentExtract(steps: unknown): boolean {
   if (!Array.isArray(steps)) return false;
   return steps.some((raw) => {
@@ -493,7 +533,7 @@ export function getStepSummary(step: FlowStep): string {
     case 'fb_tap_comment_target':
       return `tap target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
     case 'fb_apply_comment_filter':
-      return `filter: ${step.comment_filter ?? 'all_comments'}`;
+      return `Lọc bình luận → ${localizeCommentFilterVi(step.comment_filter)}`;
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return step.collection
@@ -727,14 +767,14 @@ export function getStepDisplay(
             })
           : `Tap cached target · ${step.post_tap_wait_s ?? 0.35}s`
       };
-    case 'fb_apply_comment_filter':
+    case 'fb_apply_comment_filter': {
+      const filterLabel = localizeCommentFilter(step.comment_filter, t);
       return {
         target: t
-          ? td('fbApplyCommentFilter', {
-              filter: step.comment_filter ?? 'all_comments'
-            })
-          : `Filter · ${step.comment_filter ?? 'all_comments'}`
+          ? td('fbApplyCommentFilter', { filter: filterLabel })
+          : `Filter · ${filterLabel}`
       };
+    }
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return {

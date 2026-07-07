@@ -25,6 +25,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import shlex
 import socket
 import subprocess
 import struct
@@ -2072,17 +2073,108 @@ class DeviceClient:
         """
         if not url:
             return
+        pkg = (package or "").strip() or "com.android.chrome"
+        if self._open_url_via_u2_batch(url):
+            return
+        if self._open_url_via_adb_relay(url, pkg):
+            return
+        if self._agent_send is None:
+            raise RuntimeError(
+                f"open_url: no control channel available for serial={self.serial} "
+                "(adb relay unavailable, agent disconnected)"
+            )
         # WS agent mode: send command and wait for agent to confirm success/failure
         payload: Dict[str, Any] = {"type": "open_url", "url": url}
-        payload["package"] = (package or "").strip() or "com.android.chrome"
+        payload["package"] = pkg
         self._open_url_result = None
         self._open_url_result_event.clear()
         self._send_to_agent(payload)
         if not self._open_url_result_event.wait(timeout=15.0):
+            if self._open_url_via_u2_batch(url):
+                return
+            if self._open_url_via_adb_relay(url, pkg):
+                return
             raise RuntimeError("open_url: no response from agent (timeout 15s)")
         ok, err = self._open_url_result or (False, "unknown")
         if not ok:
+            if self._open_url_via_u2_batch(url):
+                return
+            if self._open_url_via_adb_relay(url, pkg):
+                return
             raise RuntimeError(f"open_url failed: {err or 'agent reported failure'}")
+
+    def _open_url_via_u2_batch(self, url: str) -> bool:
+        """Open URL through the agent-boot u2 batch lane before falling back to ADB."""
+        if not self._batch_enabled():
+            return False
+        try:
+            results = self.u2_batch([{"op": "open_url", "url": url}], timeout=10.0)
+            if results and results[0].get("ok"):
+                self._log(f"open_url route=agent_boot_u2_batch url={url[:120]}")
+                return True
+            err = (results[0].get("error") if results else None) or "open_url u2_batch failed"
+            self._log(f"open_url via u2_batch failed: {err}", level=logging.WARNING)
+        except Exception as exc:
+            self._log(f"open_url via u2_batch failed: {exc}", level=logging.WARNING)
+        return False
+
+    def _open_url_via_adb_relay(self, url: str, package: str) -> bool:
+        """Open URL through agent-boot relay ADB, independent of the Android WS APK handler."""
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial()
+            if relay is None or relay.relay_for_serial(serial) is None:
+                return False
+
+            packages: list[str | None] = []
+            pkg = (package or "").strip()
+            if pkg:
+                packages.append(pkg)
+                if pkg == "com.android.chrome":
+                    packages.append("com.android.browser")
+            packages.append(None)
+
+            for candidate in packages:
+                cmd = self._open_url_shell_command(url, candidate)
+                fut = asyncio.run_coroutine_threadsafe(
+                    relay.adb_shell(serial, cmd, timeout=10.0),
+                    self._loop,
+                )
+                output = str(fut.result(timeout=15.0) or "")
+                lowered = output.lower()
+                if "error:" in lowered or "exception" in lowered or "unable to resolve" in lowered:
+                    self._log(
+                        f"open_url via adb relay failed package={candidate or '-'}: {output[:200]}",
+                        level=logging.WARNING,
+                    )
+                    continue
+                self._log(
+                    f"open_url via adb relay success package={candidate or '-'} url={url[:120]}"
+                )
+                return True
+        except Exception as exc:
+            self._log(f"open_url via adb relay failed: {exc}", level=logging.WARNING)
+        return False
+
+    @staticmethod
+    def _open_url_shell_command(url: str, package: str | None = None) -> str:
+        parts = [
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.VIEW",
+            "-c",
+            "android.intent.category.BROWSABLE",
+            "-d",
+            url,
+        ]
+        pkg = (package or "").strip()
+        if pkg:
+            parts.extend(["-p", pkg])
+        return " ".join(shlex.quote(part) for part in parts)
 
 
     _U2_START_SERVICES_THROTTLE_S = 12.0

@@ -1443,29 +1443,17 @@ def test_try_edge_extra_data_forwards_require_verified_parent(monkeypatch) -> No
     assert request["context"]["require_verified_parent"] is True
 
 
-def test_fb_comments_applies_filter_before_direct_extract(monkeypatch) -> None:
+def test_fb_comments_direct_extract_does_not_auto_filter(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    device = _SequenceFakeDevice([
-        {
-            "ok": True,
-            "ingest": {
-                "diagnostic": {
-                    "reason_code": "ok",
-                    "switched": True,
-                    "steps": [{"phase": "select_all", "reason_code": "ok"}],
-                }
-            },
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 2,
+            "inserted_count": 2,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
         },
-        {
-            "ok": True,
-            "ingest": {
-                "parsed_count": 2,
-                "inserted_count": 2,
-                "duplicate_count": 0,
-                "diagnostic": {"reason_code": "ok"},
-            },
-        },
-    ])
+    })
     sc = _ctx(device)
     result = {}
 
@@ -1477,86 +1465,71 @@ def test_fb_comments_applies_filter_before_direct_extract(monkeypatch) -> None:
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == [
-        "fb_comment_filter_apply",
-        "fb_comments",
-    ]
-    assert device.calls[0]["context"]["comment_filter"] == "all_comments"
-    assert sc.ctx["_fb_comment_filter_applied"] == "all_comments"
+    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert "comment_filter_on_extract" not in result
+    assert "_fb_comment_filter_applied" not in sc.ctx
     assert result["extracted"] == 2
 
 
-def test_fb_comments_filter_not_verified_stops_extract(monkeypatch) -> None:
+def test_fb_comments_explicit_filter_verify_state_does_not_block_extract(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    device = _SequenceFakeDevice([
-        {
-            "ok": True,
-            "ingest": {
-                "diagnostic": {
-                    "reason_code": "filter_not_verified",
-                    "switched": False,
-                    "steps": [{"phase": "select_all", "reason_code": "ok"}],
-                }
-            },
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 2,
+            "inserted_count": 2,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
         },
-        {
-            "ok": True,
-            "ingest": {
-                "parsed_count": 2,
-                "inserted_count": 2,
-                "duplicate_count": 0,
-                "diagnostic": {"reason_code": "ok"},
-            },
-        },
-    ])
+    })
     sc = _ctx(device)
+    sc.ctx["_fb_comment_filter_applied"] = "newest"
     result = {}
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
-        {"collection": "fb", "edge_extra_data": True},
+        {"collection": "fb", "edge_extra_data": True, "comment_filter": "newest"},
         "fb_comments",
         result,
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comment_filter_apply"]
-    assert result["ok"] is False
-    assert result["reason_code"] == "comment_filter:filter_not_verified"
-    assert "not verified" in result["message"]
+    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert result["extracted"] == 2
+    assert sc.ctx["_fb_comment_filter_applied"] == "newest"
 
 
-def test_fb_comments_filter_request_failed_stops_extract(monkeypatch) -> None:
+def test_fb_comments_does_not_request_filter_before_extract(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    device = _SequenceFakeDevice([
-        {"ok": False, "error": "relay timeout"},
-        {
-            "ok": True,
-            "ingest": {
-                "parsed_count": 2,
-                "inserted_count": 2,
-                "duplicate_count": 0,
-                "diagnostic": {"reason_code": "ok"},
-            },
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 2,
+            "inserted_count": 2,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
         },
-    ])
+    })
     result = {}
 
     handled = extraction_mod._try_edge_extra_data(
         _ctx(device),
-        {"collection": "fb", "edge_extra_data": True},
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "comment_filter_on_extract": True,
+            "comment_filter": "all_comments",
+        },
         "fb_comments",
         result,
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comment_filter_apply"]
-    assert result["ok"] is False
-    assert result["reason_code"] == "comment_filter:ingest_failed"
-    assert "not verified" in result["message"]
+    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert result["extracted"] == 2
 
 
-def test_fb_comments_nested_extract_inherits_tap_comment_filter(monkeypatch) -> None:
+def test_fb_comments_nested_extract_does_not_auto_filter(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
         "ok": True,
@@ -1582,47 +1555,35 @@ def test_fb_comments_nested_extract_inherits_tap_comment_filter(monkeypatch) -> 
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "fb_comment_filter_apply"
-    assert device.calls[0]["context"]["comment_filter"] == "newest"
+    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert sc.ctx["_fb_comment_filter_applied"] == "all_comments"
 
 
-def test_fb_comments_always_runs_filter_on_extract_even_when_already_applied(monkeypatch) -> None:
+def test_fb_comments_does_not_reapply_already_applied_filter(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    device = _SequenceFakeDevice([
-        {
-            "ok": True,
-            "ingest": {
-                "diagnostic": {
-                    "reason_code": "already_all_comments",
-                    "switched": True,
-                }
-            },
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
         },
-        {
-            "ok": True,
-            "ingest": {
-                "parsed_count": 1,
-                "inserted_count": 1,
-                "duplicate_count": 0,
-                "diagnostic": {"reason_code": "ok"},
-            },
-        },
-    ])
+    })
     sc = _ctx(device)
-    sc.ctx["_fb_comment_filter_applied"] = "all_comments"
+    sc.ctx["_fb_comment_filter_applied"] = "newest"
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
-        {"collection": "fb", "edge_extra_data": True},
+        {"collection": "fb", "edge_extra_data": True, "comment_filter": "newest"},
         "fb_comments",
-        {},
+        result := {},
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == [
-        "fb_comment_filter_apply",
-        "fb_comments",
-    ]
+    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert "comment_filter_on_extract" not in result
+    assert sc.ctx["_fb_comment_filter_applied"] == "newest"
 
 
 def test_tap_fb_comment_button_ignore_error_keeps_step_ok(monkeypatch) -> None:

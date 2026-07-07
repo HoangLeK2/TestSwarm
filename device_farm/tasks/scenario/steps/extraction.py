@@ -750,49 +750,6 @@ def request_edge_extra_data(
             context.setdefault("expand_see_more_fast", True)
             context.setdefault("expand_completion_retries", 1)
             context.setdefault("expand_see_more_wall_s", 18)
-    if (
-        strategy == "fb_comments"
-        and _coerce_bool(step.get("comment_filter_on_extract"), default=True)
-    ):
-        filter_step = comment_filter_effective_step(step, ctx)
-        target_filter = resolve_step_comment_filter(filter_step, ctx)
-        if target_filter:
-            filter_report = run_edge_comment_filter_switch(
-                device=device,
-                serial=serial,
-                scenario=scenario,
-                step=filter_step,
-                result=result,
-                cancel_event=cancel_event,
-            )
-            result["comment_filter_on_extract"] = filter_report
-            reason = str(filter_report.get("reason_code") or "")
-            if filter_report.get("switched") or reason in _COMMENT_FILTER_APPLIED_REASONS:
-                ctx["_fb_comment_filter_applied"] = target_filter
-            elif reason == "cancelled" or (cancel_event is not None and cancel_event.is_set()):
-                result["ok"] = False
-                result["message"] = f"edge extra_data {strategy}: cancelled"
-                result["cancelled"] = True
-                return True
-            elif _comment_filter_apply_failed(filter_report):
-                log.info(
-                    "[%s] fb_comments extract filter apply reason=%s switched=%s",
-                    serial,
-                    reason,
-                    filter_report.get("switched"),
-                )
-                result["ok"] = False
-                result["message"] = (
-                    f"edge extra_data fb_comments: comment filter {target_filter} "
-                    f"not verified ({reason or 'unknown'})"
-                )
-                result["reason_code"] = f"comment_filter:{reason or 'unknown'}"
-                return True
-            if cancel_event is not None and cancel_event.is_set():
-                result["ok"] = False
-                result["message"] = f"edge extra_data {strategy}: cancelled"
-                result["cancelled"] = True
-                return True
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(

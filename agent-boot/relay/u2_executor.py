@@ -376,6 +376,13 @@ def _op_app_wait(dev: Any, act: dict) -> int:
     return int(pid or 0)
 
 
+def _op_open_url(dev: Any, act: dict) -> None:
+    url = str(act.get("url") or "").strip()
+    if not url:
+        raise ValueError("open_url: url required")
+    dev.open_url(url)
+
+
 def _op_push_file(dev: Any, act: dict) -> None:
     local_path = str(act.get("local_path") or act.get("src") or "").strip()
     remote_path = str(act.get("remote_path") or act.get("dst") or "").strip()
@@ -417,6 +424,7 @@ _OP_TABLE: dict[str, Any] = {
     "app_stop":       _op_app_stop,
     "app_clear":      _op_app_clear,
     "app_wait":       _op_app_wait,
+    "open_url":       _op_open_url,
     "push_file":      _op_push_file,
     "pull_file":      _op_pull_file,
 }

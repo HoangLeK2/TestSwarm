@@ -2261,6 +2261,10 @@
         "fbFindCommentButton": "Tìm nút Bình luận · chờ {timeout}s",
         "fbTapCommentTarget": "Bấm target đã tìm · chờ {wait}s",
         "fbApplyCommentFilter": "Lọc bình luận · {filter}",
+        "commentFilterMostRelevant": "Phù hợp nhất",
+        "commentFilterNewest": "Mới nhất",
+        "commentFilterAllComments": "Tất cả bình luận",
+        "commentFilterNone": "Không đổi",
         "fbCommentElse": " / Không thấy {elseCount}"
       }
     },

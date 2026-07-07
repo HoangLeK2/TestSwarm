@@ -770,7 +770,7 @@ export function StepDetailPanel({
                       />
                     </div>
                   </F>
-                  <F label='Cách nhập'>
+                 {/* <F label='Cách nhập'>
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={step.via ?? 'u2'}
@@ -779,7 +779,7 @@ export function StepDetailPanel({
                       <option value='u2'>u2</option>
                       <option value='a11y_key'>a11y_key</option>
                     </select>
-                  </F>
+                  </F> */}
                 </>
               )}
 

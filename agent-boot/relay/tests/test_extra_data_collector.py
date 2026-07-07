@@ -517,6 +517,94 @@ async def test_comment_scroll_stops_when_post_comment_target_reached(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_comment_scroll_auto_anchored_coverage_when_requested_exceeds_small_post_count(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    action_bar = (
+        ACTION_BAR_SNIPPET.replace('text="23"', 'text="5"')
+        .replace('content-desc="23"', 'content-desc="5"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node class="android.widget.Button" text="Đóng"',
+        f"{action_bar}<node class=\"android.widget.Button\" text=\"Đóng\"",
+    )
+
+    parse_calls = 0
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        nonlocal parse_calls
+        parse_calls += 1
+        visible = min(parse_calls + 1, 5)
+        start = max(1, visible - 2)
+        comments = [
+            {
+                "author": f"user-{i}",
+                "text": f"comment body {i}",
+                "comment_key": f"ck-{i}",
+            }
+            for i in range(start, visible + 1)
+        ]
+        return comments, {"reason_code": "ok"}
+
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.parse_fb_comments_from_xml_with_diagnostic",
+        fake_parse,
+    )
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 500,
+        "comment_scroll_passes": 20,
+        "comment_swipes_per_dump": 4,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_no_growth_break": 0,
+        "min_comment_scan_passes": 0,
+        "comment_press_back_on_target": True,
+    }
+    exec_ = _RotatingSheetExecutor()
+
+    snapshots, err = await collect_xml_snapshots(exec_, "dev1", "fb_comments", context)
+
+    assert err is None
+    assert snapshots
+    assert context["post_comment_count"] == 5
+    assert context["comment_target_effective"] == 5
+    assert context["comment_crawl_mode_effective"] == "anchored_coverage"
+    assert context["comment_scroll_stopped_reason"] == "target_reached"
+    assert context["comment_coverage_collected"] == 5
+    assert context["comment_target_back_pressed"] is True
+    assert exec_.press_back_calls == 1
+
+    coverage_batches = [
+        batch
+        for batch in exec_.batches
+        if any(action.get("op") == "swipe" for action in batch)
+    ]
+    assert coverage_batches
+    assert all(
+        [action.get("op") for action in batch] == ["swipe", "dump_hierarchy"]
+        for batch in coverage_batches
+    )
+    ledger = context["comment_coverage_ledger"]
+    assert ledger[0]["phase"] == "initial"
+    assert ledger[-1]["total"] == 5
+    assert all(entry["overlap"] for entry in ledger if entry["phase"] == "coverage")
+
+
+@pytest.mark.asyncio
 async def test_comment_scroll_skips_when_post_comment_count_is_zero() -> None:
     from relay.tests.test_comment_filter import _sheet_xml
     from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET

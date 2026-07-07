@@ -1228,7 +1228,12 @@ async def _collect_comment_snapshots(
     context: dict[str, Any],
     initial_xml: str,
 ) -> list[str]:
-    """Swipe through the comment list, dumping hierarchy every N swipes (not every swipe)."""
+    """Swipe through the comment list, dumping hierarchy every N swipes.
+
+    The default path favors throughput. The anchored coverage mode favors
+    completeness for bounded comment targets by verifying overlap between
+    adjacent visible windows.
+    """
     _raise_if_cancelled(context)
     explicit_scroll_budget = "comment_scroll_passes" in context
     explicit_item_target = "max_items" in context
@@ -1282,16 +1287,21 @@ async def _collect_comment_snapshots(
         0,
         _COMMENT_DEEP_NO_GROWTH_BREAK if explicit_no_growth else _COMMENT_NO_GROWTH_BREAK,
     )
-    explicit_stop_if_no_new = (
+    explicit_stop_if_no_new_flag = (
         "comment_stop_if_no_new" in context
         or "stop_if_no_new" in context
     )
+    explicit_no_new_threshold = (
+        "comment_no_new_threshold" in context
+        or "no_new_threshold" in context
+    )
+    explicit_stop_if_no_new = explicit_stop_if_no_new_flag or explicit_no_new_threshold
     stop_if_no_new_default = _bool_context(context, "stop_if_no_new", False)
     stop_if_no_new_comments = (
         _bool_context(
             context,
             "comment_stop_if_no_new",
-            stop_if_no_new_default,
+            stop_if_no_new_default if explicit_stop_if_no_new_flag else True,
         )
         if explicit_stop_if_no_new
         else False
@@ -1407,6 +1417,11 @@ async def _collect_comment_snapshots(
             )
         context["post_comment_count"] = post_comment_count
         context["comment_target_effective"] = effective_comment_target
+    requested_capped_by_post_count = (
+        post_comment_count is not None
+        and post_comment_count > 0
+        and effective_comment_target < max_items
+    )
     large_comment_target = explicit_target_budget and effective_comment_target >= 100
     if large_comment_target:
         context["comment_target_source"] = (
@@ -1542,7 +1557,7 @@ async def _collect_comment_snapshots(
     )
     from relay.extra_data.parsers.facebook.parser import _parse_xml
 
-    def _visible_comment_keys(xml: str) -> set[str]:
+    def _visible_comment_frame(xml: str) -> dict[str, Any]:
         try:
             items, _diag = parse_fb_comments_from_xml_with_diagnostic(
                 xml,
@@ -1551,15 +1566,26 @@ async def _collect_comment_snapshots(
             )
         except Exception as exc:
             logger.debug("[%s] comment no-new probe parse failed: %s", serial, exc)
-            return set()
-        keys: set[str] = set()
+            return {"keys": [], "key_set": set(), "count": 0}
+        keys: list[str] = []
+        seen: set[str] = set()
         for item in items:
             if not isinstance(item, dict) or item.get("_type") == "post_stats":
                 continue
             key = _comment_item_dedupe_key(item)
-            if key:
-                keys.add(key)
-        return keys
+            if key and key not in seen:
+                seen.add(key)
+                keys.append(key)
+        return {
+            "keys": keys,
+            "key_set": seen,
+            "count": len(keys),
+            "top_anchor": keys[0] if keys else None,
+            "bottom_anchors": keys[-3:] if keys else [],
+        }
+
+    def _visible_comment_keys(xml: str) -> set[str]:
+        return set(_visible_comment_frame(xml)["key_set"])
 
     async def _wait_sort_sheet_closed(xml: str) -> str:
         _raise_if_cancelled(context)
@@ -1612,14 +1638,28 @@ async def _collect_comment_snapshots(
         return [initial_xml]
     snapshots: list[str] = [initial_xml]
     seen_xml: set[str] = {_sha256_hex(initial_xml)}
+    coverage_ledger: list[dict[str, Any]] = []
     target_from_max_items = large_comment_target and post_comment_count is None
     track_comment_keys = stop_if_no_new_comments or target_from_max_items or (
         post_comment_count is not None and post_comment_count > 0
     )
-    seen_comment_keys: set[str] = (
-        _visible_comment_keys(initial_xml) if track_comment_keys else set()
+    initial_frame = (
+        _visible_comment_frame(initial_xml)
+        if track_comment_keys
+        else {"key_set": set(), "bottom_anchors": [], "count": 0}
     )
+    seen_comment_keys: set[str] = set(initial_frame["key_set"]) if track_comment_keys else set()
     no_new_probe_ready = bool(seen_comment_keys)
+    if track_comment_keys:
+        coverage_ledger.append({
+            "cycle": 0,
+            "phase": "initial",
+            "visible": int(initial_frame.get("count") or 0),
+            "new": len(seen_comment_keys),
+            "total": len(seen_comment_keys),
+            "overlap": True,
+            "distance": round(float(distance), 3),
+        })
 
     def _comment_target_reached() -> bool:
         if not track_comment_keys:
@@ -1640,6 +1680,7 @@ async def _collect_comment_snapshots(
             post_comment_count,
             max_items,
         )
+        context["comment_coverage_ledger"] = coverage_ledger
         return snapshots
 
     total_xml_bytes = initial_xml_bytes
@@ -1686,6 +1727,33 @@ async def _collect_comment_snapshots(
     context["comment_scroll_driver"] = "u2_http_batch" if use_u2_swipe_batch else "u2_batch"
     swipes_done = 0
     stall_detected = False
+
+    requested_crawl_mode = str(
+        context.get("comment_crawl_mode")
+        or context.get("comment_scroll_mode")
+        or "auto"
+    ).strip().lower()
+    auto_coverage_target_max = _int_context(
+        context,
+        "comment_auto_coverage_target_max",
+        120,
+        1,
+        10_000,
+    )
+    anchored_coverage_enabled = (
+        requested_crawl_mode in {"anchored_coverage", "coverage", "lossless"}
+        or (
+            requested_crawl_mode == "auto"
+            and requested_capped_by_post_count
+            and not large_target_fast_scroll
+            and effective_comment_target <= auto_coverage_target_max
+            and _bool_context(context, "comment_auto_coverage_when_capped", True)
+        )
+    )
+    if anchored_coverage_enabled:
+        context["comment_crawl_mode_effective"] = "anchored_coverage"
+    else:
+        context["comment_crawl_mode_effective"] = "batched_tail_probe"
 
     async def _screen_swipe_coords() -> tuple[int, int, int, int]:
         _raise_if_cancelled(context)
@@ -1802,10 +1870,255 @@ async def _collect_comment_snapshots(
         )
         return xml, completed_swipes, True
 
+    async def _coverage_swipe_and_dump(
+        coords: tuple[int, int, int, int],
+        *,
+        effective_distance: float,
+    ) -> tuple[str | None, int, bool]:
+        _raise_if_cancelled(context)
+        fx, fy, tx, ty = coords
+        actions: list[dict[str, Any]] = [{
+            "op": "swipe",
+            "fx": fx,
+            "fy": fy,
+            "tx": tx,
+            "ty": ty,
+            "duration": duration_s,
+        }]
+        if settle_after_batch_s > 0:
+            actions.append({"op": "sleep", "seconds": settle_after_batch_s})
+        compressed = _bool_context(context, "hierarchy_compressed", False)
+        dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
+        actions.append({
+            "op": "dump_hierarchy",
+            "compressed": compressed,
+            "timeout": dump_timeout,
+        })
+
+        started = time.monotonic()
+        result = await executor.run_batch(serial, actions, early_exit=True)
+        _raise_if_cancelled(context)
+        results = result.get("results") or []
+        completed_swipes = sum(1 for entry in results if entry.get("op") == "swipe" and entry.get("ok"))
+        if not result.get("ok"):
+            return None, completed_swipes, False
+        dump_entry = next((entry for entry in reversed(results) if entry.get("op") == "dump_hierarchy"), None)
+        elapsed = time.monotonic() - started
+        if not dump_entry or not dump_entry.get("ok"):
+            return None, completed_swipes, True
+        xml = dump_entry.get("value")
+        if not isinstance(xml, str) or not _looks_like_hierarchy_xml(xml):
+            return None, completed_swipes, True
+        logger.info(
+            "[%s] dump_hierarchy ok anchored-coverage after 1 swipe in %.2fs bytes=%d distance=%.3f",
+            serial,
+            elapsed,
+            len(xml.encode("utf-8")),
+            effective_distance,
+        )
+        return xml, completed_swipes, True
+
+    def _scaled_swipe_coords(
+        coords: tuple[int, int, int, int],
+        effective_distance: float,
+    ) -> tuple[int, int, int, int]:
+        fx, fy, tx, ty = coords
+        base = max(0.08, min(0.85, float(distance)))
+        scale = max(0.2, min(1.0, float(effective_distance) / base))
+        return fx, fy, tx, int(round(fy + (ty - fy) * scale))
+
+    async def _run_anchored_coverage_loop() -> bool:
+        nonlocal scroll_xml, total_xml_bytes, swipes_done, cycle
+        nonlocal no_new_probe_ready, no_new_comment_dumps
+        nonlocal unchanged_dumps, stall_detected, use_screen_swipe
+
+        if not track_comment_keys:
+            return False
+
+        anchor_probe_count = _int_context(context, "comment_anchor_probe_count", 3, 1, 8)
+        min_overlap = _int_context(context, "comment_anchor_min_overlap", 1, 1, anchor_probe_count)
+        coverage_distance = _float_context(
+            context,
+            "comment_coverage_scroll_distance",
+            min(float(distance), 0.48),
+            0.12,
+            0.72,
+        )
+        min_distance = _float_context(context, "comment_coverage_min_distance", 0.18, 0.08, coverage_distance)
+        gap_backoff = _float_context(context, "comment_coverage_gap_backoff", 0.65, 0.3, 0.9)
+        tail_no_new_threshold = _int_context(context, "comment_coverage_tail_no_new_threshold", 2, 1, 6)
+        last_bottom_anchors = list(initial_frame.get("bottom_anchors") or [])[-anchor_probe_count:]
+
+        logger.info(
+            "[%s] extra_data comment anchored coverage start target=%d collected=%d post=%s "
+            "distance=%.3f min_distance=%.3f",
+            serial,
+            effective_comment_target,
+            len(seen_comment_keys),
+            post_comment_count,
+            coverage_distance,
+            min_distance,
+        )
+
+        while swipes_done < swipe_budget:
+            _raise_if_cancelled(context)
+            if len(snapshots) >= max_snapshots:
+                context["comment_scroll_stopped_reason"] = "snapshot_cap_reached"
+                break
+            if wall_deadline is not None and time.monotonic() >= wall_deadline:
+                context["comment_scroll_stopped_reason"] = "wall_timeout"
+                break
+
+            base_coords = await _swipe_coords()
+            coords = _scaled_swipe_coords(base_coords, coverage_distance)
+            next_xml, completed_swipes, batch_ok = await _coverage_swipe_and_dump(
+                coords,
+                effective_distance=coverage_distance,
+            )
+            swipes_done += completed_swipes
+            if completed_swipes < 1 or not batch_ok:
+                context["comment_scroll_stopped_reason"] = "coverage_swipe_failed"
+                return True
+            if not next_xml:
+                context["comment_scroll_stopped_reason"] = "coverage_empty_dump"
+                break
+            next_xml, abort_scroll = await _recover_comment_chrome(next_xml)
+            if abort_scroll:
+                context["comment_scroll_stopped_reason"] = "left_comment_sheet"
+                break
+
+            next_bytes = len(next_xml.encode("utf-8"))
+            if total_xml_bytes + next_bytes > max_xml_bytes:
+                context["comment_scroll_stopped_reason"] = "xml_byte_cap_reached"
+                context["comment_xml_bytes_total"] = total_xml_bytes
+                context["comment_xml_bytes_next"] = next_bytes
+                context["comment_xml_max_bytes_effective"] = max_xml_bytes
+                break
+
+            digest = _sha256_hex(next_xml)
+            duplicate_xml = digest in seen_xml
+            frame = _visible_comment_frame(next_xml)
+            key_set = set(frame["key_set"])
+            overlap_count = len(set(last_bottom_anchors) & key_set) if last_bottom_anchors else 1
+            overlap_ok = overlap_count >= min_overlap
+            new_keys = key_set - seen_comment_keys
+
+            coverage_ledger.append({
+                "cycle": cycle + 1,
+                "phase": "coverage",
+                "visible": int(frame.get("count") or 0),
+                "new": len(new_keys),
+                "total": len(seen_comment_keys) + len(new_keys),
+                "overlap": bool(overlap_ok),
+                "overlap_count": overlap_count,
+                "distance": round(float(coverage_distance), 3),
+                "duplicate_xml": duplicate_xml,
+            })
+
+            if not overlap_ok and coverage_distance > min_distance:
+                old_distance = coverage_distance
+                coverage_distance = max(min_distance, coverage_distance * gap_backoff)
+                stall_detected = True
+                logger.info(
+                    "[%s] extra_data comment coverage gap detected overlap=%d/%d "
+                    "distance %.3f -> %.3f",
+                    serial,
+                    overlap_count,
+                    min_overlap,
+                    old_distance,
+                    coverage_distance,
+                )
+                continue
+
+            if new_keys:
+                seen_comment_keys.update(new_keys)
+                no_new_probe_ready = True
+                no_new_comment_dumps = 0
+                unchanged_dumps = 0
+                stall_detected = False
+            elif no_new_probe_ready:
+                no_new_comment_dumps += 1
+                stall_detected = True
+
+            if not duplicate_xml:
+                seen_xml.add(digest)
+                snapshots.append(next_xml)
+                total_xml_bytes += next_bytes
+                scroll_xml = next_xml
+                use_screen_swipe = False
+            else:
+                unchanged_dumps += 1
+
+            if frame.get("bottom_anchors"):
+                last_bottom_anchors = list(frame["bottom_anchors"])[-anchor_probe_count:]
+
+            if _comment_target_reached():
+                context["comment_scroll_stopped_reason"] = "target_reached"
+                logger.info(
+                    "[%s] extra_data comment anchored target reached after %d cycles "
+                    "(%d swipes, collected=%d target=%d post=%s)",
+                    serial,
+                    cycle + 1,
+                    swipes_done,
+                    len(seen_comment_keys),
+                    effective_comment_target,
+                    post_comment_count,
+                )
+                break
+
+            if (
+                no_new_probe_ready
+                and no_new_comment_dumps >= tail_no_new_threshold
+                and (cycle + 1) >= min_dumps
+            ):
+                context["comment_scroll_stopped_reason"] = "coverage_tail_no_new"
+                break
+
+            if (
+                no_growth_break > 0
+                and (cycle + 1) >= min_dumps
+                and unchanged_dumps >= no_growth_break
+            ):
+                context["comment_scroll_stopped_reason"] = "coverage_no_growth"
+                break
+
+            cycle += 1
+
+        context["comment_coverage_ledger"] = coverage_ledger
+        context["comment_coverage_collected"] = len(seen_comment_keys)
+        context["comment_coverage_target"] = effective_comment_target
+        return True
+
     wall_deadline = (
         time.monotonic() + comment_scroll_wall_s if comment_scroll_wall_s > 0 else None
     )
     cycle = 0
+    if anchored_coverage_enabled:
+        handled = await _run_anchored_coverage_loop()
+        if handled:
+            logger.info(
+                "[%s] extra_data comment scroll done mode=anchored_coverage swipes=%d "
+                "snapshots=%d collected=%s target=%s reason=%s",
+                serial,
+                swipes_done,
+                len(snapshots),
+                context.get("comment_coverage_collected"),
+                context.get("comment_coverage_target"),
+                context.get("comment_scroll_stopped_reason") or "",
+            )
+            if (
+                context.get("comment_scroll_stopped_reason") == "target_reached"
+                and _bool_context(context, "comment_press_back_on_target", False)
+            ):
+                await _press_back_unless_group_locked(
+                    executor,
+                    serial,
+                    context,
+                    xml=snapshots[-1] if snapshots else initial_xml,
+                    reason="comment_target_reached",
+                )
+                context["comment_target_back_pressed"] = True
+            return snapshots
     while swipes_done < swipe_budget:
         _raise_if_cancelled(context)
         if len(snapshots) >= max_snapshots or swipes_done >= swipe_budget:

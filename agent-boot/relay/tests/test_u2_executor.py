@@ -171,6 +171,19 @@ async def test_screenshot_returns_base64(executor):
     assert base64.b64decode(b64_val) == b"\x89PNG\r\n"
 
 
+@pytest.mark.asyncio
+async def test_open_url_uses_uiautomator_device_open_url(executor):
+    exc, dev, pool = executor
+
+    result = await exc.run_batch("serial", [
+        {"op": "open_url", "url": "https://example.com/path?q=1"},
+    ])
+
+    assert result["ok"] is True
+    assert result["results"][0]["op"] == "open_url"
+    dev.open_url.assert_called_once_with("https://example.com/path?q=1")
+
+
 def test_selector_normalizes_description_startswith_alias(mock_device):
     _resolve(mock_device, {"descriptionStartswith": "Nút Thích"})
 

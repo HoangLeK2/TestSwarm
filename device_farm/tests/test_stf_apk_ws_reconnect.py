@@ -26,3 +26,13 @@ def test_ws_agent_same_url_start_is_idempotent() -> None:
     assert "isConnectedTo(wsUrl)" in service_src
     assert "boolean isConnectedTo(String url)" in manager_src
     assert "currentUrl" in manager_src
+
+
+def test_stf_apk_avoids_java9_inputstream_api_for_android9() -> None:
+    service_src = _read_stf_source("WsAgentService.java")
+    installer_src = _read_stf_source("UiAutomatorInstaller.java")
+
+    assert "readAllBytes(" not in service_src
+    assert "readAllBytes(" not in installer_src
+    assert "byte[] buffer = new byte[4096]" in service_src
+    assert "byte[] buffer = new byte[4096]" in installer_src

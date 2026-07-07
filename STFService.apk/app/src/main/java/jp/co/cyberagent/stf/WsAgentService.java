@@ -608,7 +608,7 @@ public class WsAgentService extends android.app.Service {
     private String getAdbSerialHint() {
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", "getprop ro.serialno"});
-            byte[] out = p.getInputStream().readAllBytes();
+            byte[] out = readFully(p.getInputStream());
             p.waitFor();
             String v = new String(out).trim();
             if (!v.isEmpty() && !"unknown".equalsIgnoreCase(v)) {
@@ -1927,8 +1927,8 @@ public class WsAgentService extends android.app.Service {
         if (cmd.isEmpty()) return false;
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
-            byte[] out = p.getInputStream().readAllBytes();
-            byte[] err = p.getErrorStream().readAllBytes();
+            byte[] out = readFully(p.getInputStream());
+            byte[] err = readFully(p.getErrorStream());
             int code = p.waitFor();
             String stdout = new String(out).trim();
             String stderr = new String(err).trim();
@@ -1941,6 +1941,16 @@ public class WsAgentService extends android.app.Service {
             sendLog("shell error: " + e.getMessage());
             return false;
         }
+    }
+
+    private byte[] readFully(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
     }
 
     /** Open the system Accessibility Settings screen so user can enable manually. */

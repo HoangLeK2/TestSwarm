@@ -9,7 +9,9 @@ import {
   type ServerStatus
 } from './server-status';
 
-export function useServerStatus(options: { poll?: boolean } = {}): ServerStatus {
+export function useServerStatus(
+  options: { poll?: boolean } = {}
+): ServerStatus {
   const poll = options.poll ?? true;
   const [status, setStatus] = useState<ServerStatus>(() =>
     getServerStatusSync()
@@ -17,9 +19,7 @@ export function useServerStatus(options: { poll?: boolean } = {}): ServerStatus 
 
   useEffect(() => {
     const unsub = subscribeServerStatus(setStatus);
-    const stopPoll = poll
-      ? startServerStatusPolling(30_000)
-      : () => undefined;
+    const stopPoll = poll ? startServerStatusPolling(30_000) : () => undefined;
     fetchServerStatus().catch(() => undefined);
     return () => {
       unsub();

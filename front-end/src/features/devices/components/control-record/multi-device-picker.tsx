@@ -15,9 +15,7 @@ import {
   deviceSelectFullTitle,
   formatDeviceSelectLabel
 } from '@/features/devices/lib/device-select-label';
-import {
-  isManualControlBlockedByAutomation
-} from '@/features/devices/lib/control-record-device-state';
+import { isManualControlBlockedByAutomation } from '@/features/devices/lib/control-record-device-state';
 
 export type MultiDevicePickerOption = {
   brand: string;

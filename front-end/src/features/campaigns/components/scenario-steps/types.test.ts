@@ -8,7 +8,9 @@ import {
 } from './types.ts';
 
 test('step dropdown hides legacy compound fb comment node', () => {
-  const exposedTypes = new Set(ALL_STEP_TYPES.map((stepType) => stepType.value));
+  const exposedTypes = new Set(
+    ALL_STEP_TYPES.map((stepType) => stepType.value)
+  );
 
   assert.equal(exposedTypes.has('fb_find_comment_button'), true);
   assert.equal(exposedTypes.has('fb_tap_comment_target'), true);

@@ -22,7 +22,9 @@ export function isControlRecordConnectedDevice(
   if (CONTROL_RECORD_CONNECTED_STATES.has(state)) return true;
   if (state === 'DISCONNECTED' || state === 'DEAD') return false;
 
-  const touchMethod = String(device.touch_method || '').trim().toLowerCase();
+  const touchMethod = String(device.touch_method || '')
+    .trim()
+    .toLowerCase();
   return Boolean(
     device.u2_ready ||
       device.minitouch_ready ||

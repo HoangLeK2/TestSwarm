@@ -5,9 +5,7 @@ import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
 import type { DeviceOpsConfig } from '../device-ops-rail';
 import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
-import {
-  isManualControlBlockedByAutomation
-} from '../../lib/control-record-device-state';
+import { isManualControlBlockedByAutomation } from '../../lib/control-record-device-state';
 
 type Props = {
   device: Device;
@@ -123,12 +121,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
         onTakeControl={onTakeControl ?? (() => {})}
       />
     );
-  }, [
-    canTakeControl,
-    compactOverlay,
-    manualControlBlocked,
-    onTakeControl
-  ]);
+  }, [canTakeControl, compactOverlay, manualControlBlocked, onTakeControl]);
 
   return (
     <div className='flex min-h-0 w-full flex-1 flex-col'>

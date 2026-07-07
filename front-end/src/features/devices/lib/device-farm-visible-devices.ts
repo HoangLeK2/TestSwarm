@@ -16,7 +16,9 @@ function normalizeDeviceFarmState(state: string | null | undefined): string {
 }
 
 function hasLiveTransportEvidence(device: DeviceWithLiveTransport): boolean {
-  const touchMethod = String(device.touch_method || '').trim().toLowerCase();
+  const touchMethod = String(device.touch_method || '')
+    .trim()
+    .toLowerCase();
   return Boolean(
     device.agent_connected ||
       device.u2_ready ||

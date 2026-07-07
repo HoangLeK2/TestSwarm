@@ -83,7 +83,11 @@ type PreviewStepResult = {
   sub_results?: Array<{ result?: { step_results?: PreviewStepResult[] } }>;
 };
 
-function appendInlineRunKey(runKey: string, listKey: string, childIndex: number) {
+function appendInlineRunKey(
+  runKey: string,
+  listKey: string,
+  childIndex: number
+) {
   return `${runKey}/${listKey}:${childIndex}`;
 }
 

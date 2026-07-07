@@ -389,11 +389,10 @@ export function DeviceScreen({
 
   useEffect(() => {
     let cancelled = false;
-    loadStreamingFlags()
-      .then((res) => {
-        if (cancelled) return;
-        setStreamingFlags(res);
-      });
+    loadStreamingFlags().then((res) => {
+      if (cancelled) return;
+      setStreamingFlags(res);
+    });
     return () => {
       cancelled = true;
     };
@@ -628,7 +627,9 @@ export function DeviceScreen({
               )
             ).map((serial) =>
               detachScrcpyStream(serial, scrcpyViewerIdRef.current)
-                .then(() => forgetScrcpyAttach(serial, scrcpyViewerIdRef.current))
+                .then(() =>
+                  forgetScrcpyAttach(serial, scrcpyViewerIdRef.current)
+                )
                 .catch(() => {})
             )
           );

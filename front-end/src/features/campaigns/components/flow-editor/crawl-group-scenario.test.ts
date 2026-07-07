@@ -68,10 +68,23 @@ test('crawl fixtures have well-formed step types', () => {
 test('crawl fixtures contain comment crawl node chain', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const types = countStepTypes(steps);
-    assert.ok(types.get('fb_find_comment_button')! >= 1, 'missing fb_find_comment_button');
-    assert.ok(types.get('fb_tap_comment_target')! >= 1, 'missing fb_tap_comment_target');
-    assert.ok(types.get('fb_apply_comment_filter')! >= 1, 'missing fb_apply_comment_filter');
-    assert.equal(types.get('fb_tap_comment_button') ?? 0, 0, 'template should not use legacy comment node');
+    assert.ok(
+      types.get('fb_find_comment_button')! >= 1,
+      'missing fb_find_comment_button'
+    );
+    assert.ok(
+      types.get('fb_tap_comment_target')! >= 1,
+      'missing fb_tap_comment_target'
+    );
+    assert.ok(
+      types.get('fb_apply_comment_filter')! >= 1,
+      'missing fb_apply_comment_filter'
+    );
+    assert.equal(
+      types.get('fb_tap_comment_button') ?? 0,
+      0,
+      'template should not use legacy comment node'
+    );
     const commentExtracts = walkFlowStepsWithPaths(steps).filter(
       (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
     );
@@ -148,7 +161,9 @@ test('patchStepByFlowgramId updates nested extract when _fgId is present', () =>
     s.type === 'loop'
       ? ({
           ...s,
-          steps: body.map((c, i) => (i === extractIdx ? { ...c, _fgId: fgId } : c))
+          steps: body.map((c, i) =>
+            i === extractIdx ? { ...c, _fgId: fgId } : c
+          )
         } as FlowStep)
       : s
   );
@@ -189,12 +204,25 @@ test('post extract stays before split comment sequence inside loop (no back befo
     );
     const findIdx = body.findIndex((s) => s.type === 'fb_find_comment_button');
     const tapIdx = body.findIndex((s) => s.type === 'fb_tap_comment_target');
-    const filterIdx = body.findIndex((s) => s.type === 'fb_apply_comment_filter');
+    const filterIdx = body.findIndex(
+      (s) => s.type === 'fb_apply_comment_filter'
+    );
     const commentIdx = body.findIndex(
       (s) => s.type === 'extract' && s.strategy === 'fb_comments'
     );
-    assert.ok(postIdx >= 0 && findIdx >= 0 && tapIdx >= 0 && filterIdx >= 0 && commentIdx >= 0);
-    assert.ok(postIdx < findIdx && findIdx < tapIdx && tapIdx < filterIdx && filterIdx < commentIdx);
+    assert.ok(
+      postIdx >= 0 &&
+        findIdx >= 0 &&
+        tapIdx >= 0 &&
+        filterIdx >= 0 &&
+        commentIdx >= 0
+    );
+    assert.ok(
+      postIdx < findIdx &&
+        findIdx < tapIdx &&
+        tapIdx < filterIdx &&
+        filterIdx < commentIdx
+    );
     const between = body.slice(postIdx + 1, commentIdx);
     assert.ok(
       !between.some((s) => s.type === 'key' && s.key === 'back'),

@@ -1213,7 +1213,9 @@ export function useControlRecord(
     selectedSerial,
     selectedDevice?.serial
   );
-  const previousHierarchySerialRef = useRef<string | null>(selectedHierarchySerial);
+  const previousHierarchySerialRef = useRef<string | null>(
+    selectedHierarchySerial
+  );
   const selectedHierarchyApp = selectedDevice?.current_app ?? '';
   const hierarchyQueryKey = useMemo(
     () => ['device-hierarchy', selectedHierarchySerial ?? 'none'] as const,
@@ -1289,34 +1291,31 @@ export function useControlRecord(
     lastHierarchyBootstrapSerialRef.current = null;
   }, [queryClient, selectedHierarchySerial]);
 
-  const refreshHierarchy = useCallback((serialOverride?: string | null) => {
-    const serial = (serialOverride ?? selectedHierarchySerial ?? '').trim();
-    if (!serial) return;
-    setManualHierarchyLoading(true);
-    fetchAndSetHierarchy(serial, true, {
-      allowSerialMismatch: Boolean(serialOverride),
-      bypassBackoff: true,
-      bypassInFlight: true
-    })
-      .catch((e) => {
-        queryClient.setQueryData(
-          ['device-hierarchy', serial],
-          `${errorPrefix} ${String(e)}`
-        );
+  const refreshHierarchy = useCallback(
+    (serialOverride?: string | null) => {
+      const serial = (serialOverride ?? selectedHierarchySerial ?? '').trim();
+      if (!serial) return;
+      setManualHierarchyLoading(true);
+      fetchAndSetHierarchy(serial, true, {
+        allowSerialMismatch: Boolean(serialOverride),
+        bypassBackoff: true,
+        bypassInFlight: true
       })
-      .finally(() => setManualHierarchyLoading(false));
-  }, [
-    selectedHierarchySerial,
-    fetchAndSetHierarchy,
-    queryClient,
-    errorPrefix
-  ]);
+        .catch((e) => {
+          queryClient.setQueryData(
+            ['device-hierarchy', serial],
+            `${errorPrefix} ${String(e)}`
+          );
+        })
+        .finally(() => setManualHierarchyLoading(false));
+    },
+    [selectedHierarchySerial, fetchAndSetHierarchy, queryClient, errorPrefix]
+  );
 
   // Bootstrap hierarchy once on screen entry so the tree has initial data.
   // The Auto toggle only controls follow-up refreshes from app changes/actions.
   useEffect(() => {
-    if (!tabActive || !selectedHierarchySerial || hierarchyPaused)
-      return;
+    if (!tabActive || !selectedHierarchySerial || hierarchyPaused) return;
     if (hierarchyXml?.trim()) return;
     const now = Date.now();
     if (

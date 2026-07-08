@@ -408,7 +408,7 @@ class AdbRelayManager:
             if not serial:
                 continue
             if isinstance(cap, dict):
-                self._capabilities[serial] = {
+                next_caps = {
                     "android_version": cap.get("android_version", ""),
                     "sdk":             cap.get("sdk", ""),
                     "brand":           cap.get("brand", ""),
@@ -428,7 +428,7 @@ class AdbRelayManager:
                     "tags":            list(cap.get("tags", [])),
                 }
             else:
-                self._capabilities[serial] = {
+                next_caps = {
                     "android_version": cap.android_version,
                     "sdk":             cap.sdk,
                     "brand":           cap.brand,
@@ -447,10 +447,13 @@ class AdbRelayManager:
                     "tags":            list(cap.tags),
                 }
             self._pool_state.setdefault(serial, "available")
-            asyncio.ensure_future(self._sync_caps_to_redis(serial, self._capabilities[serial]))
+            if self._capabilities.get(serial) == next_caps:
+                continue
+            self._capabilities[serial] = next_caps
+            asyncio.ensure_future(self._sync_caps_to_redis(serial, next_caps))
             if self._on_capabilities_update:
                 try:
-                    self._on_capabilities_update(serial, self._capabilities[serial])
+                    self._on_capabilities_update(serial, next_caps)
                 except Exception as exc:
                     logger.debug("on_capabilities_update error serial=%s: %s", serial, exc)
 

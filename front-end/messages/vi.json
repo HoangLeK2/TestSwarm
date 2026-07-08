@@ -2479,6 +2479,8 @@
       "addStepInputSelector": "Thêm bước input_selector",
       "mirrorPlaceholder": "Mirror thiết bị",
       "followerOffline": "Offline",
+      "streamWaitingFirstFrame": "Đang ổn định màn hình...",
+      "streamUnavailable": "Chưa có frame",
       "flowSwitchToList": "Chuyển về danh sách bước",
       "flowSwitchToFlow": "Chuyển sang Flow Editor trực quan",
       "flowListLabel": "Danh sách",

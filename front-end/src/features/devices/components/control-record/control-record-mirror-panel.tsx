@@ -167,8 +167,6 @@ export const ControlRecordMirrorPanel = forwardRef<
               />
             }
             devices={selectedMultiFollowerDevices}
-            wsMode={wsMode}
-            wsSend={wsSend}
             onPromote={onPromoteFollower}
           />
         ) : (

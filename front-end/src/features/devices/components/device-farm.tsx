@@ -11,8 +11,6 @@ import { TablePaginationControls } from '@/components/ui/table/data-table-pagina
 import { CoreEmptyState } from '@/components/core-empty-state';
 import { Smartphone } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { farmApi } from '@/lib/farm-api';
-import type { DeviceFarmStreamingConfig } from '../types';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
 
 const DEFAULT_GRID_PAGE_SIZE = (() => {
@@ -27,39 +25,6 @@ export function DeviceFarm() {
   const tHeader = useTranslations('devicesFarm.header');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [stepsSerial, setStepsSerial] = useState<string | null>(null);
-  const [serverAllowPreviewMjpeg, setServerAllowPreviewMjpeg] = useState(false);
-  const [streamingConfig, setStreamingConfig] =
-    useState<DeviceFarmStreamingConfig | null>(null);
-
-  useEffect(() => {
-    farmApi
-      .get<{
-        streaming_dashboard_preview_mjpeg?: boolean;
-        streaming_mode?: string;
-        streaming_auto_attach_scrcpy?: boolean;
-        streaming_auto_attach_scrcpy_on_relay_online?: boolean;
-      }>('/config')
-      .then((res) => {
-        const v = res.data?.streaming_dashboard_preview_mjpeg;
-        if (typeof v === 'boolean') setServerAllowPreviewMjpeg(v);
-        setStreamingConfig({
-          mode: String(res.data?.streaming_mode ?? 'periodic'),
-          autoAttachScrcpy: Boolean(
-            res.data?.streaming_auto_attach_scrcpy ?? true
-          ),
-          autoAttachScrcpyOnRelayOnline: Boolean(
-            res.data?.streaming_auto_attach_scrcpy_on_relay_online ?? true
-          )
-        });
-      })
-      .catch(() => {
-        setStreamingConfig({
-          mode: 'periodic',
-          autoAttachScrcpy: true,
-          autoAttachScrcpyOnRelayOnline: true
-        });
-      });
-  }, []);
 
   const { devices, tasks, wsConnected, error } = useDeviceFarm();
 
@@ -177,8 +142,6 @@ export function DeviceFarm() {
               <DeviceTilePreview
                 key={device.serial}
                 device={device}
-                serverAllowPreviewMjpeg={serverAllowPreviewMjpeg}
-                streamingConfig={streamingConfig}
                 onOpenSteps={openStepsMonitor}
               />
             ))}

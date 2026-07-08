@@ -35,7 +35,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
     router = APIRouter()
     low_bw_mode = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
 
-    @router.get("/stream/{serial}")
+    @router.get("/api/stream/{serial}")
     async def mjpeg_stream(serial: str, fps: float = 0, fresh: bool = False):
         device = manager.get_device(serial)
         if not device:
@@ -84,7 +84,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
             media_type="multipart/x-mixed-replace; boundary=frame",
         )
 
-    @router.get("/screenshot/{serial}")
+    @router.get("/api/screenshot/{serial}")
     async def screenshot(
         serial: str,
         fresh: bool = False,
@@ -127,7 +127,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
             headers={"Cache-Control": "no-store"},
         )
 
-    @router.get("/screenshot-b64/{serial}")
+    @router.get("/api/screenshot-b64/{serial}")
     async def screenshot_b64(serial: str):
         """Screenshot as base64 JPEG. Cropping is done client-side."""
         device = manager.get_device(serial)

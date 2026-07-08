@@ -694,7 +694,7 @@ def _df_get_ui_elements(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _df_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
     serial = _resolve_device(args)
-    raw = _http_get(f"/screenshot/{serial}", timeout=_TIMEOUT_CONTROL)
+    raw = _http_get(f"/api/screenshot/{serial}", timeout=_TIMEOUT_CONTROL)
     b64 = base64.b64encode(raw).decode("ascii")
     return {"image": {"data": b64, "mimeType": "image/jpeg"}}
 
@@ -2020,7 +2020,7 @@ _TOOL_METADATA_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "df_input_text": {"route": "/api/devices/{serial}/input_text", "token_scope": "device"},
     "df_key": {"route": "/api/key/{serial}", "token_scope": "device"},
     "df_shell": {"route": "/api/agent/{serial}/shell", "token_scope": "device"},
-    "df_screenshot": {"route": "/screenshot/{serial}", "token_scope": "device"},
+    "df_screenshot": {"route": "/api/screenshot/{serial}", "token_scope": "device"},
     "df_hierarchy": {"route": "/api/devices/{serial}/hierarchy", "token_scope": "device"},
     "df_get_ui_elements": {"route": "/api/devices/{serial}/ui_elements", "token_scope": "device"},
     "df_tap_selector": {"route": "/api/tap_selector/{serial}", "token_scope": "device"},

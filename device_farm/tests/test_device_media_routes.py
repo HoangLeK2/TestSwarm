@@ -49,10 +49,22 @@ class _SnapshotDevice:
         return b"fresh-frame"
 
 
+def test_media_router_exposes_only_api_media_paths():
+    router = build_device_media_router(_Manager(_SnapshotDevice()))
+    paths = {getattr(route, "path", "") for route in router.routes}
+
+    assert "/api/stream/{serial}" in paths
+    assert "/api/screenshot/{serial}" in paths
+    assert "/api/screenshot-b64/{serial}" in paths
+    assert "/stream/{serial}" not in paths
+    assert "/screenshot/{serial}" not in paths
+    assert "/screenshot-b64/{serial}" not in paths
+
+
 @pytest.mark.anyio
 async def test_mjpeg_stream_survives_transient_frame_source_error():
     router = build_device_media_router(_Manager(_FlakyStreamDevice()))
-    route = next(r for r in router.routes if getattr(r, "path", "") == "/stream/{serial}")
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/api/stream/{serial}")
 
     response = await route.endpoint("serial-1", fps=5, fresh=False)
     chunk = await anext(response.body_iterator)
@@ -66,7 +78,21 @@ async def test_mjpeg_stream_survives_transient_frame_source_error():
 async def test_screenshot_uses_cached_frame_when_fresh_enough():
     device = _SnapshotDevice()
     router = build_device_media_router(_Manager(device))
-    route = next(r for r in router.routes if getattr(r, "path", "") == "/screenshot/{serial}")
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}")
+
+    response = await route.endpoint("serial-1", fresh=False, max_age_ms=5_000)
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    assert response.status_code == 200
+    assert body == b"old-frame"
+    assert device.captures == 0
+
+
+@pytest.mark.anyio
+async def test_api_screenshot_path_uses_media_endpoint():
+    device = _SnapshotDevice()
+    router = build_device_media_router(_Manager(device))
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}")
 
     response = await route.endpoint("serial-1", fresh=False, max_age_ms=5_000)
     body = b"".join([chunk async for chunk in response.body_iterator])
@@ -81,7 +107,7 @@ async def test_screenshot_refreshes_stale_cache_once():
     device = _SnapshotDevice()
     device._last_frame_time = time.monotonic() - 10
     router = build_device_media_router(_Manager(device))
-    route = next(r for r in router.routes if getattr(r, "path", "") == "/screenshot/{serial}")
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}")
 
     response = await route.endpoint("serial-1", fresh=False, max_age_ms=500)
     body = b"".join([chunk async for chunk in response.body_iterator])

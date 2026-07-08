@@ -222,9 +222,9 @@ def _token_from_request(request: Request) -> str:
     allow_media_query_token = (
         request.method == "GET"
         and (
-            path.startswith("/stream/")
-            or path.startswith("/screenshot/")
-            or path.startswith("/screenshot-b64/")
+            path.startswith("/api/stream/")
+            or path.startswith("/api/screenshot/")
+            or path.startswith("/api/screenshot-b64/")
         )
     )
     if allow_media_query_token:
@@ -362,7 +362,7 @@ def make_device_auth_dependency(db_enabled: bool):
         request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> None:
-        # Prefer Authorization header. For image-tag media routes (/stream, /screenshot),
+        # Prefer Authorization header. For image-tag media routes (/api/stream, /api/screenshot),
         # browsers cannot set custom headers, so we allow `?token=` as fallback.
         # Keep this fallback tightly scoped to media GET endpoints only.
         _raw_token = credentials.credentials if credentials else ""
@@ -371,9 +371,9 @@ def make_device_auth_dependency(db_enabled: bool):
             _allow_query_token = (
                 request.method == "GET"
                 and (
-                    _path.startswith("/stream/")
-                    or _path.startswith("/screenshot/")
-                    or _path.startswith("/screenshot-b64/")
+                    _path.startswith("/api/stream/")
+                    or _path.startswith("/api/screenshot/")
+                    or _path.startswith("/api/screenshot-b64/")
                 )
             )
             if _allow_query_token:

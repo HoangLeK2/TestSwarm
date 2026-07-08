@@ -3070,6 +3070,50 @@
         }
       }
     },
+    "/api/campaigns/{campaign_id}/run-stats": {
+      "get": {
+        "tags": ["campaigns"],
+        "summary": "Campaign Run Stats Endpoint",
+        "description": "Return cumulative device-run counts (passed/failed/…) across all executions.",
+        "operationId": "campaign_run_stats_endpoint_api_campaigns__campaign_id__run_stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/campaigns/{campaign_id}/content/stats": {
       "get": {
         "tags": ["campaigns"],
@@ -5055,6 +5099,73 @@
         },
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgScenarioImportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenarios/{scenario_id}/import-body": {
+      "post": {
+        "tags": ["scenarios"],
+        "summary": "Import Scenario Body Into Existing Route",
+        "description": "Replace steps on an existing scenario from a portable export file.",
+        "operationId": "import_scenario_body_into_existing_route_api_scenarios__scenario_id__import_body_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "resolve",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(reject|create_stub)$",
+              "default": "reject",
+              "title": "Resolve"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_scenario_body_into_existing_route_api_scenarios__scenario_id__import_body_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -7347,11 +7458,6 @@
         "summary": "Stream Export",
         "description": "Stream content export directly to the client — no temp file, no job queue.\n\nCSV streams row-by-row via chunked transfer encoding.\nXLSX is built in-memory with openpyxl write-only mode then sent as a single response.",
         "operationId": "stream_export_api_content_export_stream_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "parameters": [
           {
             "name": "format",
@@ -9828,11 +9934,6 @@
         "summary": "Stream Execution Events",
         "description": "SSE live stream with ``Last-Event-ID`` resume support (DF-T-04-013).",
         "operationId": "stream_execution_events_api_executions__execution_id__events_stream_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "parameters": [
           {
             "name": "execution_id",
@@ -11272,6 +11373,24 @@
               "title": "Device Id"
             },
             "description": "Logical device id when DB serial is pending-* but ADB path serial is physical"
+          },
+          {
+            "name": "ws_base_url",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.",
+              "title": "Ws Base Url"
+            },
+            "description": "Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS."
           }
         ],
         "responses": {
@@ -11841,6 +11960,50 @@
             }
           }
         }
+      }
+    },
+    "/api/notification-channels/test-draft": {
+      "post": {
+        "tags": ["notifications"],
+        "summary": "Test Channel Draft",
+        "operationId": "test_channel_draft_api_notification_channels_test_draft_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationChannelTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestNotificationOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/notification-channels/{channel_id}/test": {
@@ -13421,6 +13584,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ScrcpyDetachRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -15333,6 +15513,50 @@
         }
       }
     },
+    "/api/devices/{serial}/takeover": {
+      "post": {
+        "tags": ["device-control"],
+        "summary": "Api Device Takeover",
+        "description": "Pause running scenarios on a device and allow manual input takeover.",
+        "operationId": "api_device_takeover_api_devices__serial__takeover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{serial}/interrupt": {
       "post": {
         "tags": ["device-control"],
@@ -15962,10 +16186,10 @@
         }
       }
     },
-    "/stream/{serial}": {
+    "/api/stream/{serial}": {
       "get": {
         "summary": "Mjpeg Stream",
-        "operationId": "mjpeg_stream_stream__serial__get",
+        "operationId": "mjpeg_stream_api_stream__serial__get",
         "security": [
           {
             "HTTPBearer": []
@@ -16024,10 +16248,10 @@
         }
       }
     },
-    "/screenshot/{serial}": {
+    "/api/screenshot/{serial}": {
       "get": {
         "summary": "Screenshot",
-        "operationId": "screenshot_screenshot__serial__get",
+        "operationId": "screenshot_api_screenshot__serial__get",
         "security": [
           {
             "HTTPBearer": []
@@ -16051,6 +16275,22 @@
               "type": "boolean",
               "default": false,
               "title": "Fresh"
+            }
+          },
+          {
+            "name": "max_age_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Age Ms"
             }
           }
         ],
@@ -16076,11 +16316,11 @@
         }
       }
     },
-    "/screenshot-b64/{serial}": {
+    "/api/screenshot-b64/{serial}": {
       "get": {
         "summary": "Screenshot B64",
         "description": "Screenshot as base64 JPEG. Cropping is done client-side.",
-        "operationId": "screenshot_b64_screenshot_b64__serial__get",
+        "operationId": "screenshot_b64_api_screenshot_b64__serial__get",
         "security": [
           {
             "HTTPBearer": []
@@ -17863,6 +18103,18 @@
         "required": ["file"],
         "title": "Body_bulk_import_csv_api_accounts_import_csv_post"
       },
+      "Body_import_scenario_body_into_existing_route_api_scenarios__scenario_id__import_body_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": ["file"],
+        "title": "Body_import_scenario_body_into_existing_route_api_scenarios__scenario_id__import_body_post"
+      },
       "Body_import_scenario_route_api_scenarios_import_post": {
         "properties": {
           "file": {
@@ -18188,6 +18440,11 @@
             ],
             "title": "Per Device Overrides"
           },
+          "recovery_policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Recovery Policy"
+          },
           "account_group_id": {
             "anyOf": [
               {
@@ -18483,6 +18740,11 @@
             "type": "object",
             "title": "Per Device Overrides"
           },
+          "recovery_policy": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Recovery Policy"
+          },
           "account_group_id": {
             "anyOf": [
               {
@@ -18633,6 +18895,18 @@
               }
             ],
             "title": "Vars"
+          },
+          "recovery_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Policy"
           },
           "tags": {
             "anyOf": [
@@ -19946,6 +20220,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Artifact Refs"
+          },
+          "display_message": {
+            "type": "string",
+            "title": "Display Message",
+            "default": ""
           }
         },
         "type": "object",
@@ -22152,6 +22431,23 @@
         "type": "object",
         "title": "NotificationChannelPatch"
       },
+      "NotificationChannelTestRequest": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^(in_app|telegram|webhook|email|slack)$",
+            "title": "Type"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          }
+        },
+        "type": "object",
+        "required": ["type"],
+        "title": "NotificationChannelTestRequest"
+      },
       "NotificationListOut": {
         "properties": {
           "total": {
@@ -22626,6 +22922,16 @@
             "title": "Is Runnable",
             "default": false
           },
+          "is_recovery_scenario": {
+            "type": "boolean",
+            "title": "Is Recovery Scenario",
+            "default": false
+          },
+          "recovery_usage_count": {
+            "type": "integer",
+            "title": "Recovery Usage Count",
+            "default": 0
+          },
           "last_validation_summary": {
             "anyOf": [
               {
@@ -22744,6 +23050,16 @@
             "type": "boolean",
             "title": "Is Runnable",
             "default": false
+          },
+          "is_recovery_scenario": {
+            "type": "boolean",
+            "title": "Is Recovery Scenario",
+            "default": false
+          },
+          "recovery_usage_count": {
+            "type": "integer",
+            "title": "Recovery Usage Count",
+            "default": 0
           },
           "last_validation_summary": {
             "anyOf": [
@@ -26134,10 +26450,38 @@
             "type": "boolean",
             "title": "Enable Control",
             "default": true
+          },
+          "viewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewer Id"
           }
         },
         "type": "object",
         "title": "ScrcpyAttachRequest"
+      },
+      "ScrcpyDetachRequest": {
+        "properties": {
+          "viewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewer Id"
+          }
+        },
+        "type": "object",
+        "title": "ScrcpyDetachRequest"
       },
       "ScrollRequest": {
         "properties": {
@@ -26831,6 +27175,17 @@
               }
             ],
             "title": "Orgrole"
+          },
+          "defaultOrgId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defaultorgid"
           }
         },
         "type": "object",

@@ -29,6 +29,12 @@ export const deviceFarmBackendBase = resolveDeviceFarmBackendBase();
 const backendBase = deviceFarmBackendBase;
 const API_BASE_URL = `${backendBase}/api`;
 
+function withApiSuffix(base: string): string {
+  const trimmed = base.replace(/\/+$/, '');
+  if (!trimmed) return '';
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+}
+
 /**
  * Base URL the *phone* must reach for `/device-agent` WS (QR pairing).
  *
@@ -79,19 +85,29 @@ function getDeviceBackendBase(): string {
   return backendBase.replace(/\/+$/, '');
 }
 
-function resolveDeviceFarmMediaBase(): string {
-  const apiBase = deviceFarmBackendBase.replace(/\/+$/, '');
-  if (!apiBase) return '';
+export function resolveDeviceFarmMediaBaseForOrigin(
+  apiBase: string,
+  browserOrigin?: string
+): string {
+  const trimmed = apiBase.replace(/\/+$/, '');
+  if (!trimmed) return browserOrigin ? '/api' : '';
 
   try {
-    const api = new URL(apiBase);
+    const api = new URL(trimmed);
     if (api.port === '3000') {
       api.port = '8081';
     }
-    return api.toString().replace(/\/+$/, '');
+    return withApiSuffix(api.toString());
   } catch {
-    return apiBase;
+    return withApiSuffix(trimmed);
   }
+}
+
+function resolveDeviceFarmMediaBase(): string {
+  const apiBase = deviceFarmBackendBase.replace(/\/+$/, '');
+  const browserOrigin =
+    typeof window !== 'undefined' ? window.location?.origin : undefined;
+  return resolveDeviceFarmMediaBaseForOrigin(apiBase, browserOrigin);
 }
 
 export const deviceFarmMediaBase = resolveDeviceFarmMediaBase();

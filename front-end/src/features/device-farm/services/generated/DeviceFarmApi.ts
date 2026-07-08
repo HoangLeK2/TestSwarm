@@ -648,6 +648,12 @@ export interface BodyBulkImportCsvApiAccountsImportCsvPost {
   file: string;
 }
 
+/** Body_import_scenario_body_into_existing_route_api_scenarios__scenario_id__import_body_post */
+export interface BodyImportScenarioBodyIntoExistingRouteApiScenariosScenarioIdImportBodyPost {
+  /** File */
+  file: string;
+}
+
 /** Body_import_scenario_route_api_scenarios_import_post */
 export interface BodyImportScenarioRouteApiScenariosImportPost {
   /** File */
@@ -798,6 +804,8 @@ export interface CampaignCreate {
   vars?: Record<string, any> | null;
   /** Per Device Overrides */
   per_device_overrides?: Record<string, Record<string, any>> | null;
+  /** Recovery Policy */
+  recovery_policy?: Record<string, any>;
   /** Account Group Id */
   account_group_id?: string | null;
   /** Scenario Account Id */
@@ -948,14 +956,14 @@ export interface CampaignEntityUpdate {
   description?: string | null;
   /** Vars */
   vars?: Record<string, any> | null;
+  /** Recovery Policy */
+  recovery_policy?: Record<string, any> | null;
   /** Tags */
   tags?: string[] | null;
   /** Scenario Refs */
   scenario_refs?: CampaignScenarioRefIn[] | null;
   /** Per Device Overrides */
   per_device_overrides?: Record<string, Record<string, any>> | null;
-  /** Recovery Policy */
-  recovery_policy?: Record<string, any> | null;
 }
 
 /** CampaignForceTransitionIn */
@@ -1304,6 +1312,16 @@ export interface ContentDetailOut {
   content_hash?: string | null;
   /** Parent Id */
   parent_id?: string | null;
+  /** Parent Item Id */
+  parent_item_id?: string | null;
+  /** Parent Item Hash */
+  parent_item_hash?: string | null;
+  /** Parent Item Author */
+  parent_item_author?: string | null;
+  /** Parent Item Body */
+  parent_item_body?: string | null;
+  /** Parent Item Content Type */
+  parent_item_content_type?: string | null;
   /**
    * Item Level
    * @default 0
@@ -1426,6 +1444,11 @@ export interface DLQEntryOut {
   replayed_to_execution_id?: string | null;
   /** Artifact Refs */
   artifact_refs?: Record<string, any>;
+  /**
+   * Display Message
+   * @default ""
+   */
+  display_message?: string;
 }
 
 /** DLQRetryBody */
@@ -2359,6 +2382,17 @@ export interface NotificationChannelPatch {
   events?: string[] | null;
   /** Is Enabled */
   is_enabled?: boolean | null;
+}
+
+/** NotificationChannelTestRequest */
+export interface NotificationChannelTestRequest {
+  /**
+   * Type
+   * @pattern ^(in_app|telegram|webhook|email|slack)$
+   */
+  type: string;
+  /** Config */
+  config?: Record<string, any>;
 }
 
 /** NotificationListOut */
@@ -3927,6 +3961,14 @@ export interface ScrcpyAttachRequest {
    * @default true
    */
   enable_control?: boolean;
+  /** Viewer Id */
+  viewer_id?: string | null;
+}
+
+/** ScrcpyDetachRequest */
+export interface ScrcpyDetachRequest {
+  /** Viewer Id */
+  viewer_id?: string | null;
 }
 
 /** ScrollRequest */
@@ -4287,6 +4329,8 @@ export interface ApiSchemasAuthUserOut {
   api_key: string;
   /** Orgrole */
   orgRole?: string | null;
+  /** Defaultorgid */
+  defaultOrgId?: string | null;
 }
 
 /** SessionOut */
@@ -5593,7 +5637,7 @@ export class DeviceFarmHttpClient<
       },
       params: RequestParams = {},
     ) =>
-      this.request<CampaignOut[], HTTPValidationError>({
+      this.request<(CampaignEntityOut | CampaignOut)[], HTTPValidationError>({
         path: `/api/campaigns`,
         method: "GET",
         query: query,
@@ -5615,7 +5659,7 @@ export class DeviceFarmHttpClient<
       data: CampaignCreate,
       params: RequestParams = {},
     ) =>
-      this.request<any, HTTPValidationError>({
+      this.request<CampaignEntityOut | CampaignOut, HTTPValidationError>({
         path: `/api/campaigns`,
         method: "POST",
         body: data,
@@ -5638,7 +5682,7 @@ export class DeviceFarmHttpClient<
       campaignId: string,
       params: RequestParams = {},
     ) =>
-      this.request<CampaignOut, HTTPValidationError>({
+      this.request<CampaignOut | CampaignEntityOut, HTTPValidationError>({
         path: `/api/campaigns/${campaignId}`,
         method: "GET",
         secure: true,
@@ -5990,6 +6034,27 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/campaigns/${campaignId}/devices/${deviceId}`,
         method: "DELETE",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Return cumulative device-run counts (passed/failed/…) across all executions.
+     *
+     * @tags campaigns
+     * @name CampaignRunStatsEndpointApiCampaignsCampaignIdRunStatsGet
+     * @summary Campaign Run Stats Endpoint
+     * @request GET:/api/campaigns/{campaign_id}/run-stats
+     * @secure
+     */
+    campaignRunStatsEndpointApiCampaignsCampaignIdRunStatsGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/run-stats`,
+        method: "GET",
         secure: true,
         format: "json",
         ...params,
@@ -6901,6 +6966,39 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<OrgScenarioImportOut, HTTPValidationError>({
         path: `/api/scenarios/import`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.FormData,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Replace steps on an existing scenario from a portable export file.
+     *
+     * @tags scenarios
+     * @name ImportScenarioBodyIntoExistingRouteApiScenariosScenarioIdImportBodyPost
+     * @summary Import Scenario Body Into Existing Route
+     * @request POST:/api/scenarios/{scenario_id}/import-body
+     * @secure
+     */
+    importScenarioBodyIntoExistingRouteApiScenariosScenarioIdImportBodyPost: (
+      scenarioId: string,
+      data: BodyImportScenarioBodyIntoExistingRouteApiScenariosScenarioIdImportBodyPost,
+      query?: {
+        /**
+         * Resolve
+         * @default "reject"
+         * @pattern ^(reject|create_stub)$
+         */
+        resolve?: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioImportOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/import-body`,
         method: "POST",
         query: query,
         body: data,
@@ -7939,7 +8037,6 @@ export class DeviceFarmHttpClient<
      * @name StreamExportApiContentExportStreamGet
      * @summary Stream Export
      * @request GET:/api/content/export/stream
-     * @secure
      */
     streamExportApiContentExportStreamGet: (
       query?: {
@@ -7970,7 +8067,6 @@ export class DeviceFarmHttpClient<
         path: `/api/content/export/stream`,
         method: "GET",
         query: query,
-        secure: true,
         format: "json",
         ...params,
       }),
@@ -8233,6 +8329,43 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/content/${itemId}`,
         method: "DELETE",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Comments for a post — matches parent_id hash variants and parser post ids.
+     *
+     * @tags content
+     * @name ListContentChildrenApiContentItemIdChildrenGet
+     * @summary List Content Children
+     * @request GET:/api/content/{item_id}/children
+     * @secure
+     */
+    listContentChildrenApiContentItemIdChildrenGet: (
+      itemId: string,
+      query?: {
+        /**
+         * Limit
+         * @min 1
+         * @max 500
+         * @default 100
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/${itemId}/children`,
+        method: "GET",
+        query: query,
         secure: true,
         format: "json",
         ...params,
@@ -9049,7 +9182,6 @@ export class DeviceFarmHttpClient<
      * @name StreamExecutionEventsApiExecutionsExecutionIdEventsStreamGet
      * @summary Stream Execution Events
      * @request GET:/api/executions/{execution_id}/events/stream
-     * @secure
      */
     streamExecutionEventsApiExecutionsExecutionIdEventsStreamGet: (
       executionId: string,
@@ -9058,7 +9190,6 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/executions/${executionId}/events/stream`,
         method: "GET",
-        secure: true,
         format: "json",
         ...params,
       }),
@@ -9701,6 +9832,11 @@ export class DeviceFarmHttpClient<
            * Logical device id when DB serial is pending-* but ADB path serial is physical
            */
           device_id?: string | null;
+          /**
+           * Ws Base Url
+           * Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.
+           */
+          ws_base_url?: string | null;
         },
         params: RequestParams = {},
       ) =>
@@ -9972,6 +10108,29 @@ export class DeviceFarmHttpClient<
         path: `/api/notification-channels/${channelId}`,
         method: "DELETE",
         secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags notifications
+     * @name TestChannelDraftApiNotificationChannelsTestDraftPost
+     * @summary Test Channel Draft
+     * @request POST:/api/notification-channels/test-draft
+     * @secure
+     */
+    testChannelDraftApiNotificationChannelsTestDraftPost: (
+      data: NotificationChannelTestRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<TestNotificationOut, HTTPValidationError>({
+        path: `/api/notification-channels/test-draft`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
         ...params,
       }),
 
@@ -10718,12 +10877,15 @@ export class DeviceFarmHttpClient<
      */
     apiScrcpyDetachApiDevicesSerialScrcpyDetachPost: (
       serial: string,
+      data: ScrcpyDetachRequest | null,
       params: RequestParams = {},
     ) =>
       this.request<any, HTTPValidationError>({
         path: `/api/devices/${serial}/scrcpy/detach`,
         method: "POST",
+        body: data,
         secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),
@@ -11622,6 +11784,27 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description Pause running scenarios on a device and allow manual input takeover.
+     *
+     * @tags device-control
+     * @name ApiDeviceTakeoverApiDevicesSerialTakeoverPost
+     * @summary Api Device Takeover
+     * @request POST:/api/devices/{serial}/takeover
+     * @secure
+     */
+    apiDeviceTakeoverApiDevicesSerialTakeoverPost: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/takeover`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description Cancel all running scenarios on a device to allow manual takeover. Cancels every matching Temporal workflow, then force-resets the in-process _scenario_active counter so the WebSocket input gate opens immediately without waiting for the activity to acknowledge cancellation.
      *
      * @tags device-control
@@ -11914,6 +12097,89 @@ export class DeviceFarmHttpClient<
         format: "json",
         ...params,
       }),
+
+    /**
+     * No description
+     *
+     * @name MjpegStreamApiStreamSerialGet
+     * @summary Mjpeg Stream
+     * @request GET:/api/stream/{serial}
+     * @secure
+     */
+    mjpegStreamApiStreamSerialGet: (
+      serial: string,
+      query?: {
+        /**
+         * Fps
+         * @default 0
+         */
+        fps?: number;
+        /**
+         * Fresh
+         * @default false
+         */
+        fresh?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stream/${serial}`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name ScreenshotApiScreenshotSerialGet
+     * @summary Screenshot
+     * @request GET:/api/screenshot/{serial}
+     * @secure
+     */
+    screenshotApiScreenshotSerialGet: (
+      serial: string,
+      query?: {
+        /**
+         * Fresh
+         * @default false
+         */
+        fresh?: boolean;
+        /** Max Age Ms */
+        max_age_ms?: number | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/screenshot/${serial}`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Screenshot as base64 JPEG. Cropping is done client-side.
+     *
+     * @name ScreenshotB64ApiScreenshotB64SerialGet
+     * @summary Screenshot B64
+     * @request GET:/api/screenshot-b64/{serial}
+     * @secure
+     */
+    screenshotB64ApiScreenshotB64SerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/screenshot-b64/${serial}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
   };
   health = {
     /**
@@ -11958,90 +12224,6 @@ export class DeviceFarmHttpClient<
       this.request<any, any>({
         path: `/ping`,
         method: "GET",
-        format: "json",
-        ...params,
-      }),
-  };
-  stream = {
-    /**
-     * No description
-     *
-     * @name MjpegStreamStreamSerialGet
-     * @summary Mjpeg Stream
-     * @request GET:/stream/{serial}
-     * @secure
-     */
-    mjpegStreamStreamSerialGet: (
-      serial: string,
-      query?: {
-        /**
-         * Fps
-         * @default 0
-         */
-        fps?: number;
-        /**
-         * Fresh
-         * @default false
-         */
-        fresh?: boolean;
-      },
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/stream/${serial}`,
-        method: "GET",
-        query: query,
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-  };
-  screenshot = {
-    /**
-     * No description
-     *
-     * @name ScreenshotScreenshotSerialGet
-     * @summary Screenshot
-     * @request GET:/screenshot/{serial}
-     * @secure
-     */
-    screenshotScreenshotSerialGet: (
-      serial: string,
-      query?: {
-        /**
-         * Fresh
-         * @default false
-         */
-        fresh?: boolean;
-      },
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/screenshot/${serial}`,
-        method: "GET",
-        query: query,
-        secure: true,
-        format: "json",
-        ...params,
-      }),
-  };
-  screenshotB64 = {
-    /**
-     * @description Screenshot as base64 JPEG. Cropping is done client-side.
-     *
-     * @name ScreenshotB64ScreenshotB64SerialGet
-     * @summary Screenshot B64
-     * @request GET:/screenshot-b64/{serial}
-     * @secure
-     */
-    screenshotB64ScreenshotB64SerialGet: (
-      serial: string,
-      params: RequestParams = {},
-    ) =>
-      this.request<any, HTTPValidationError>({
-        path: `/screenshot-b64/${serial}`,
-        method: "GET",
-        secure: true,
         format: "json",
         ...params,
       }),

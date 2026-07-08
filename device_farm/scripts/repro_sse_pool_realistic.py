@@ -127,7 +127,7 @@ async def _hold_mjpeg(
     hold_seconds: float,
     stop: asyncio.Event,
 ) -> None:
-    url = f"{base}/stream/{serial}?fps={fps}"
+    url = f"{base}/api/stream/{serial}?fps={fps}"
     headers = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient() as client:
@@ -186,7 +186,7 @@ async def _poll_dashboard(
                 "/api/campaigns?limit=20",
             ]
             for serial in serials[:5]:
-                paths.append(f"/screenshot-b64/{serial}")
+                paths.append(f"/api/screenshot-b64/{serial}")
             tasks = []
             for path in paths:
                 tasks.append(_probe_one(client, f"{base}{path}", headers, stats))

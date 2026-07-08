@@ -149,6 +149,12 @@ _H264_BASELINE_DEFAULT = os.environ.get("SCRCPY_H264_BASELINE", "true").strip().
     "no",
     "off",
 }
+_SCRCPY_CLEANUP_DEFAULT = os.environ.get("SCRCPY_CLEANUP", "false").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 # Empty by default: the web dashboard decodes H.264 (avc1) only. Auto HEVC leaves the
 # canvas black on Vivo/Oppo while scrcpy logs show "handshake OK" + capture resets.
 # Opt in per deploy: SCRCPY_HEVC_OEM_ALLOWLIST=vivo,oppo,realme,oneplus
@@ -756,7 +762,7 @@ class ScrcpyRelaySession:
             f"video_codec={codec}{encoder_arg} max_fps={self._max_fps} max_size={self._max_width} "
             f"video_bit_rate={self._bitrate} "
             f"video_codec_options={','.join(codec_options)} "
-            f"stay_awake=true turn_screen_on=true "
+            f"stay_awake=true turn_screen_on=true cleanup={str(_SCRCPY_CLEANUP_DEFAULT).lower()} "
             f"send_device_meta=true send_frame_meta=true"
         )
 

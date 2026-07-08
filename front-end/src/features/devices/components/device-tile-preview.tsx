@@ -2,6 +2,7 @@
 
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,8 +12,6 @@ import {
 import Link from 'next/link';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
-import { deviceFarmMediaBase } from '@/lib/farm-api';
-import { tokenStorage } from '@/lib/token-storage';
 import { ROUTES } from '@/config/routes';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,10 +29,17 @@ import {
   acquireSnapshotPreviewWarmup,
   type SnapshotPreviewWarmupHandle
 } from '../services/snapshot-preview-warmup';
+import { useH264Video } from '../hooks/use-h264-canvas';
+import { requestIdr } from '../services/ws';
+import { deviceFarmMediaBase } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
   (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '0').trim() !==
+  '0';
+const GRID_PREVIEW_H264 =
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264 ?? '1').trim() !==
   '0';
 const DASHBOARD_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
@@ -65,6 +71,8 @@ function DeviceTilePreviewInner({
   const isActive = isVisibleDeviceFarmActiveDevice(device);
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previewWarmupRef = useRef<SnapshotPreviewWarmupHandle | null>(null);
   const [inView, setInView] = useState(false);
   const [lazyLoadStream, setLazyLoadStream] = useState(false);
 
@@ -79,13 +87,28 @@ function DeviceTilePreviewInner({
       setInView(r.bottom > -margin && r.top < vh + margin);
     };
     sync();
-    if (typeof IntersectionObserver === 'undefined') return;
-    const io = new IntersectionObserver(
-      (entries) => setInView(Boolean(entries[0]?.isIntersecting)),
-      { root: null, rootMargin: `${margin}px`, threshold: 0.04 }
-    );
-    io.observe(el);
-    return () => io.disconnect();
+    window.addEventListener('scroll', sync, { passive: true, capture: true });
+    window.addEventListener('resize', sync);
+    window.addEventListener('focus', sync);
+    window.addEventListener('pageshow', sync);
+    document.addEventListener('visibilitychange', sync);
+    const io =
+      typeof IntersectionObserver === 'undefined'
+        ? null
+        : new IntersectionObserver(() => sync(), {
+            root: null,
+            rootMargin: `${margin}px`,
+            threshold: 0.04
+          });
+    io?.observe(el);
+    return () => {
+      io?.disconnect();
+      window.removeEventListener('scroll', sync, { capture: true });
+      window.removeEventListener('resize', sync);
+      window.removeEventListener('focus', sync);
+      window.removeEventListener('pageshow', sync);
+      document.removeEventListener('visibilitychange', sync);
+    };
   }, []);
 
   const tabActive = useTabNetworkActive();
@@ -95,7 +118,6 @@ function DeviceTilePreviewInner({
     null
   );
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
-  const warmupHandleRef = useRef<SnapshotPreviewWarmupHandle | null>(null);
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -110,15 +132,8 @@ function DeviceTilePreviewInner({
   const loadStream =
     tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
 
-  /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
-  const previewMockupScreenWidth = 198;
-  const previewMockupHeightPx = useMemo(
-    () => mockupOuterHeightPx(previewMockupScreenWidth),
-    [previewMockupScreenWidth]
-  );
-  const tileWidthPx = previewMockupScreenWidth + 90;
-
   const previewUrl = useMemo(() => {
+    if (GRID_PREVIEW_H264) return null;
     if (!tabActive) return null;
     if (!isActive || !loadStream) return null;
     const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}`;
@@ -128,6 +143,14 @@ function DeviceTilePreviewInner({
 
   const showPreviewImg = Boolean(displayedPreviewUrl);
 
+  /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
+  const previewMockupScreenWidth = 198;
+  const previewMockupHeightPx = useMemo(
+    () => mockupOuterHeightPx(previewMockupScreenWidth),
+    [previewMockupScreenWidth]
+  );
+  const tileWidthPx = previewMockupScreenWidth + 90;
+
   const isUnresponsive =
     isActive && loadStream && !hasFrame && loadingElapsedSec >= 12;
 
@@ -136,6 +159,44 @@ function DeviceTilePreviewInner({
     setDisplayedPreviewUrl(null);
     setPreviewAttempt(0);
   }, [device.serial]);
+
+  useH264Video(
+    GRID_PREVIEW_H264 && tabActive && isActive && loadStream
+      ? device.serial
+      : '',
+    previewCanvasRef,
+    {
+      notifyStallWithVisibleFrame: true,
+      onFrame: useCallback(() => {
+        setHasFrame(true);
+      }, [])
+    }
+  );
+
+  useEffect(() => {
+    if (!GRID_PREVIEW_H264) return;
+    if (!isActive || !loadStream || !tabActive) {
+      previewWarmupRef.current?.release();
+      previewWarmupRef.current = null;
+      return;
+    }
+
+    const handle = acquireSnapshotPreviewWarmup(device.serial);
+    previewWarmupRef.current = handle;
+    let cancelled = false;
+    handle?.attached.then((attached) => {
+      if (!cancelled && attached) {
+        requestIdr(device.serial, 0);
+      }
+    });
+    return () => {
+      cancelled = true;
+      handle?.release();
+      if (previewWarmupRef.current === handle) {
+        previewWarmupRef.current = null;
+      }
+    };
+  }, [device.serial, isActive, loadStream, tabActive]);
 
   useEffect(() => {
     if (!previewUrl) return;
@@ -154,12 +215,37 @@ function DeviceTilePreviewInner({
   }, [previewUrl]);
 
   useEffect(() => {
+    if (GRID_PREVIEW_H264) return;
     if (!isActive || !loadStream) return;
     const timer = window.setInterval(() => {
       setPreviewAttempt((n) => n + 1);
     }, DASHBOARD_PREVIEW_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [isActive, loadStream]);
+
+  useEffect(() => {
+    if (GRID_PREVIEW_H264) return;
+    if (!isActive || !loadStream) {
+      previewWarmupRef.current?.release();
+      previewWarmupRef.current = null;
+      return;
+    }
+    if (loadingElapsedSec < 2 || previewWarmupRef.current) return;
+    const handle = acquireSnapshotPreviewWarmup(device.serial);
+    previewWarmupRef.current = handle;
+    handle?.attached.then((ok) => {
+      if (!ok && previewWarmupRef.current === handle) {
+        previewWarmupRef.current = null;
+      }
+    });
+  }, [device.serial, isActive, loadingElapsedSec, loadStream]);
+
+  useEffect(() => {
+    return () => {
+      previewWarmupRef.current?.release();
+      previewWarmupRef.current = null;
+    };
+  }, [device.serial]);
 
   useEffect(() => {
     if (!isActive || !loadStream || hasFrame) {
@@ -172,29 +258,6 @@ function DeviceTilePreviewInner({
     }, 500);
     return () => window.clearInterval(timer);
   }, [device.serial, hasFrame, isActive, loadStream]);
-
-  useEffect(() => {
-    if (!isActive || !loadStream) {
-      warmupHandleRef.current?.release();
-      warmupHandleRef.current = null;
-      return;
-    }
-    if (loadingElapsedSec < 2 || warmupHandleRef.current) return;
-    const handle = acquireSnapshotPreviewWarmup(device.serial);
-    warmupHandleRef.current = handle;
-    handle?.attached.then((ok) => {
-      if (!ok && warmupHandleRef.current === handle) {
-        warmupHandleRef.current = null;
-      }
-    });
-  }, [device.serial, isActive, loadingElapsedSec, loadStream]);
-
-  useEffect(() => {
-    return () => {
-      warmupHandleRef.current?.release();
-      warmupHandleRef.current = null;
-    };
-  }, [device.serial]);
 
   return (
     <Card
@@ -293,9 +356,21 @@ function DeviceTilePreviewInner({
                     decoding='async'
                     className={cn(
                       'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
-                      hasFrame ? 'opacity-100' : 'opacity-0'
+                      hasFrame && !GRID_PREVIEW_H264
+                        ? 'opacity-100'
+                        : 'opacity-0'
                     )}
                     draggable={false}
+                  />
+                )}
+                {GRID_PREVIEW_H264 && (
+                  <canvas
+                    ref={previewCanvasRef}
+                    aria-hidden='true'
+                    className={cn(
+                      'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
+                      hasFrame ? 'opacity-100' : 'opacity-0'
+                    )}
                   />
                 )}
                 {!isActive ? (

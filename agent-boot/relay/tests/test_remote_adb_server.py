@@ -129,3 +129,57 @@ def test_scrcpy_server_launch_uses_remote_server_flags(monkeypatch) -> None:
         "SERIAL1",
     ]
     assert popen_calls[0][7] == "shell"
+
+
+def test_scrcpy_server_launch_disables_cleanup_by_default(monkeypatch) -> None:
+    session = _make_session()
+    popen_calls: list[list[str]] = []
+
+    def fake_adb(*args, **_kwargs):
+        if args and args[0] == "forward":
+            return "", 0
+        return "", 1
+
+    def fake_popen(cmd, **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(stdout=[])
+
+    monkeypatch.setattr(session, "_kill_server", lambda: None)
+    monkeypatch.setattr(session, "_ensure_server_jar_on_device", lambda: None)
+    monkeypatch.setattr(session, "_load_device_oem_hints", lambda: ("", ""))
+    monkeypatch.setattr(scrcpy_mod, "_adb", fake_adb)
+    monkeypatch.setattr(scrcpy_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(scrcpy_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(scrcpy_mod, "_SCRCPY_CLEANUP_DEFAULT", False)
+
+    session._start_scrcpy_server()
+
+    assert popen_calls
+    assert "cleanup=false" in popen_calls[0][-1]
+
+
+def test_scrcpy_server_launch_allows_cleanup_override(monkeypatch) -> None:
+    session = _make_session()
+    popen_calls: list[list[str]] = []
+
+    def fake_adb(*args, **_kwargs):
+        if args and args[0] == "forward":
+            return "", 0
+        return "", 1
+
+    def fake_popen(cmd, **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(stdout=[])
+
+    monkeypatch.setattr(session, "_kill_server", lambda: None)
+    monkeypatch.setattr(session, "_ensure_server_jar_on_device", lambda: None)
+    monkeypatch.setattr(session, "_load_device_oem_hints", lambda: ("", ""))
+    monkeypatch.setattr(scrcpy_mod, "_adb", fake_adb)
+    monkeypatch.setattr(scrcpy_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(scrcpy_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(scrcpy_mod, "_SCRCPY_CLEANUP_DEFAULT", True)
+
+    session._start_scrcpy_server()
+
+    assert popen_calls
+    assert "cleanup=true" in popen_calls[0][-1]

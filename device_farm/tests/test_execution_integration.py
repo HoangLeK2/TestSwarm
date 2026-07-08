@@ -68,6 +68,33 @@ def _make_scenario(scen_id="scen-1", steps=None):
     return s
 
 
+@pytest.mark.asyncio
+async def test_add_devices_to_execution_uses_one_flush_for_many_devices():
+    from db.crud.execution import add_devices_to_execution
+
+    db = SimpleNamespace(add_all=MagicMock(), flush=AsyncMock())
+
+    links = await add_devices_to_execution(db, "exec-1", ["dev-1", "dev-2", "dev-3"])
+
+    assert [link.execution_id for link in links] == ["exec-1", "exec-1", "exec-1"]
+    assert [link.device_id for link in links] == ["dev-1", "dev-2", "dev-3"]
+    db.add_all.assert_called_once()
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_add_devices_to_execution_empty_list_skips_flush():
+    from db.crud.execution import add_devices_to_execution
+
+    db = SimpleNamespace(add_all=MagicMock(), flush=AsyncMock())
+
+    links = await add_devices_to_execution(db, "exec-1", [])
+
+    assert links == []
+    db.add_all.assert_not_called()
+    db.flush.assert_not_awaited()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Part 1: Shared dataclasses carry execution_id
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -139,7 +166,7 @@ class TestCampaignDispatchExecution:
         mock_temporal.start_workflow = AsyncMock()
 
         create_execution_mock = AsyncMock(return_value=self.mock_execution)
-        add_device_mock = AsyncMock()
+        add_devices_mock = AsyncMock()
         create_run_mock = AsyncMock(return_value=self.mock_run)
 
         with ExitStack() as stack:
@@ -172,8 +199,8 @@ class TestCampaignDispatchExecution:
                 create_execution_mock,
             ))
             stack.enter_context(patch(
-                "db.crud.execution.add_device_to_execution",
-                add_device_mock,
+                "db.crud.execution.add_devices_to_execution",
+                add_devices_mock,
             ))
             stack.enter_context(patch(
                 "db.crud.execution.update_execution",
@@ -195,14 +222,14 @@ class TestCampaignDispatchExecution:
         assert call_kwargs["status"] == "running"
 
     @pytest.mark.asyncio
-    async def test_add_device_to_execution_called_for_each_device(self):
-        """add_device_to_execution called once per device."""
+    async def test_add_devices_to_execution_called_with_device_ids(self):
+        """add_devices_to_execution links all devices in one bulk call."""
         db_mock = _make_db_mock()
         mock_temporal = AsyncMock()
         mock_temporal.start_workflow = AsyncMock()
 
         create_execution_mock = AsyncMock(return_value=self.mock_execution)
-        add_device_mock = AsyncMock()
+        add_devices_mock = AsyncMock()
 
         with ExitStack() as stack:
             stack.enter_context(patch(
@@ -233,8 +260,8 @@ class TestCampaignDispatchExecution:
                 create_execution_mock,
             ))
             stack.enter_context(patch(
-                "db.crud.execution.add_device_to_execution",
-                add_device_mock,
+                "db.crud.execution.add_devices_to_execution",
+                add_devices_mock,
             ))
             stack.enter_context(patch(
                 "db.crud.execution.update_execution",
@@ -249,7 +276,7 @@ class TestCampaignDispatchExecution:
             result, status = await enqueue_campaign_run_temporal("camp-1", mock_temporal)
 
         assert status == 200
-        add_device_mock.assert_awaited_once()
+        add_devices_mock.assert_awaited_once_with(db_mock, "exec-001", [self.device.id])
 
     @pytest.mark.asyncio
     async def test_execution_id_in_response(self):
@@ -287,7 +314,7 @@ class TestCampaignDispatchExecution:
                 AsyncMock(return_value=self.mock_execution),
             ))
             stack.enter_context(patch(
-                "db.crud.execution.add_device_to_execution",
+                "db.crud.execution.add_devices_to_execution",
                 AsyncMock(),
             ))
             stack.enter_context(patch(
@@ -346,7 +373,7 @@ class TestCampaignDispatchExecution:
                 AsyncMock(return_value=self.mock_execution),
             ))
             stack.enter_context(patch(
-                "db.crud.execution.add_device_to_execution",
+                "db.crud.execution.add_devices_to_execution",
                 AsyncMock(),
             ))
             stack.enter_context(patch(

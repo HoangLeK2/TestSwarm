@@ -24,11 +24,12 @@ import {
 import { cn } from '@/lib/utils';
 
 function useIsLgUp() {
-  const [isLgUp, setIsLgUp] = useState(false);
+  const [isLgUp, setIsLgUp] = useState<boolean | null>(null);
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 1024px)');
-    setIsLgUp(mq.matches);
-    const onChange = () => setIsLgUp(mq.matches);
+    const update = () => setIsLgUp(mq.matches);
+    update();
+    const onChange = () => update();
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
@@ -55,7 +56,7 @@ export function CampaignList({
   const isLgUp = useIsLgUp();
   const highlightCampaignId = useCampaignListFocus(
     focusCampaignId,
-    campaigns,
+    isLgUp === null ? undefined : campaigns,
     onFocusCampaignHandled
   );
 
@@ -63,7 +64,7 @@ export function CampaignList({
 
   const getRowProps = useCallback(
     (row: { original: CampaignOut }) => ({
-      ...(isLgUp ? { id: campaignRowAnchorId(row.original.id) } : {}),
+      ...(isLgUp === true ? { id: campaignRowAnchorId(row.original.id) } : {}),
       className: cn(
         highlightCampaignId === row.original.id && campaignRowHighlightClass
       )
@@ -148,19 +149,21 @@ export function CampaignList({
 
           {campaigns?.length ? (
             <>
-              <CampaignMobileList
-                campaigns={campaigns}
-                statusLabel={statusLabel}
-                highlightCampaignId={highlightCampaignId}
-                withRowAnchor={!isLgUp}
-              />
-              <div className='hidden lg:block'>
+              {isLgUp === false ? (
+                <CampaignMobileList
+                  campaigns={campaigns}
+                  statusLabel={statusLabel}
+                  highlightCampaignId={highlightCampaignId}
+                  withRowAnchor
+                />
+              ) : null}
+              {isLgUp === true ? (
                 <DataTable
                   table={table}
                   total={campaigns.length}
                   getRowProps={getRowProps}
                 />
-              </div>
+              ) : null}
             </>
           ) : null}
         </>

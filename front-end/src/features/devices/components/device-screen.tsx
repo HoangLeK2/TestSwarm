@@ -457,6 +457,20 @@ export function DeviceScreen({
   }, [clearScrcpyAttachRetryTimer, detachScrcpyViewer]);
 
   useEffect(() => {
+    return () => {
+      const attachedSerial = attachedScrcpySerialRef.current;
+      const pendingSerial = pendingScrcpyAttachSerialRef.current;
+      if (!attachedSerial && !pendingSerial) return;
+      scrcpyAttachGenerationRef.current += 1;
+      attachedScrcpySerialRef.current = null;
+      pendingScrcpyAttachSerialRef.current = null;
+      attachedScrcpyWsGenerationRef.current = null;
+      clearScrcpyAttachRetryTimer();
+      detachScrcpyViewer(attachedSerial, pendingSerial);
+    };
+  }, [clearScrcpyAttachRetryTimer, detachScrcpyViewer, device.serial]);
+
+  useEffect(() => {
     const shouldAttach =
       tabActive &&
       (streamingFlags === null || isContinuous) &&
@@ -1161,10 +1175,11 @@ export function DeviceScreen({
 
   const requestStreamRefreshAfterInput = useCallback(() => {
     if (!isActive || !h264DecodeAllowed) return;
+    if (hasFrameRef.current) return;
     const now = Date.now();
-    if (now - lastInputIdrRef.current < 900) return;
+    if (now - lastInputIdrRef.current < 3000) return;
     lastInputIdrRef.current = now;
-    requestIdr(device.serial, 0);
+    requestIdr(device.serial, 3000);
   }, [device.serial, h264DecodeAllowed, isActive]);
 
   const bind = useGesture(

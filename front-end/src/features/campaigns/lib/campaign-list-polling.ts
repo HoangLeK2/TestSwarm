@@ -8,6 +8,10 @@ export function shouldPollCampaignRow(status: string): boolean {
   return ACTIVE_CAMPAIGN_STATUSES.has(status);
 }
 
+export function shouldFetchCampaignRowDetailsOnMount(status: string): boolean {
+  return shouldPollCampaignRow(status);
+}
+
 export function campaignRowPollInterval(status: string): number | false {
   return shouldPollCampaignRow(status) ? CAMPAIGN_ROW_ACTIVE_POLL_MS : false;
 }

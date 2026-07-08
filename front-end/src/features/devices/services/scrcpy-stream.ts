@@ -3,6 +3,36 @@ import { createSingleFlight } from '../lib/single-flight';
 
 const SCRCPY_STREAM_TIMEOUT_MS = 10_000;
 
+export type ScrcpyAttachOptions = {
+  enableControl?: boolean;
+  maxFps?: number;
+  maxWidth?: number;
+  bitrate?: number;
+};
+
+function scrcpyAttachPayload(viewerId?: string, options?: ScrcpyAttachOptions) {
+  const payload: Record<string, unknown> = {};
+  if (viewerId) payload.viewer_id = viewerId;
+  if (options?.enableControl !== undefined) {
+    payload.enable_control = options.enableControl;
+  }
+  if (options?.maxFps !== undefined) payload.max_fps = options.maxFps;
+  if (options?.maxWidth !== undefined) payload.max_width = options.maxWidth;
+  if (options?.bitrate !== undefined) payload.bitrate = options.bitrate;
+  return payload;
+}
+
+function scrcpyAttachKey(serial: string, viewerId?: string, options?: ScrcpyAttachOptions) {
+  return [
+    serial,
+    viewerId ?? 'legacy',
+    options?.enableControl ?? 'default',
+    options?.maxFps ?? 'default',
+    options?.maxWidth ?? 'default',
+    options?.bitrate ?? 'default'
+  ].join(':');
+}
+
 function scrcpyAttachErrorStatus(error: unknown): number | null {
   if (!error || typeof error !== 'object' || !('response' in error))
     return null;
@@ -43,15 +73,15 @@ export function createScrcpyViewerId(prefix: string): string {
 }
 
 export const attachScrcpyStream = createSingleFlight(
-  async (serial: string, viewerId?: string) => {
+  async (serial: string, viewerId?: string, options?: ScrcpyAttachOptions) => {
     const { data } = await farmApi.post(
       `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
-      viewerId ? { viewer_id: viewerId } : {},
+      scrcpyAttachPayload(viewerId, options),
       { timeout: SCRCPY_STREAM_TIMEOUT_MS }
     );
     return data;
   },
-  (serial, viewerId) => `${serial}:${viewerId ?? 'legacy'}`
+  scrcpyAttachKey
 );
 
 export const detachScrcpyStream = createSingleFlight(

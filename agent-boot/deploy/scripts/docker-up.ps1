@@ -5,6 +5,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Avoid interactive Confirm spam from NetTCPIP / CIM cmdlets on some Windows setups.
+$ConfirmPreference = 'None'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
@@ -18,13 +20,13 @@ function Test-Command($Name) {
 
 function Test-AdbPortListening {
     param([int]$Port)
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue -Confirm:$false
     return [bool]$conn
 }
 
 function Test-AdbServerGlobal {
     param([int]$Port)
-    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue -Confirm:$false
     foreach ($l in $listeners) {
         if ($l.LocalAddress -in @('0.0.0.0', '::', '[::]')) {
             return $true

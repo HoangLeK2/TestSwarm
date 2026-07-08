@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Sequence
 
@@ -115,13 +116,48 @@ async def filter_live_devices_for_dispatch(
 ) -> tuple[list, list]:
     live: list = []
     skipped: list = []
+    open_session_device_ids: set[str] = set()
+    db_check_device_ids = [
+        str(getattr(device, "id", "") or "")
+        for device in devices
+        if getattr(device, "id", None)
+        and hasattr(device, "last_seen")
+        and (
+            getattr(device, "last_seen", None) is None
+            or isinstance(getattr(device, "last_seen", None), datetime)
+        )
+    ]
+    if db_check_device_ids:
+        result = await db.execute(
+            select(DeviceSession.device_id).where(
+                DeviceSession.device_id.in_(db_check_device_ids),
+                DeviceSession.disconnected_at.is_(None),
+            )
+        )
+        scalars = result.scalars()
+        if inspect.isawaitable(scalars):
+            scalars = await scalars
+        rows = scalars.all()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        open_session_device_ids = {str(device_id) for device_id in rows}
+
     for device in devices:
-        if await is_device_dispatchable(
-            db,
-            device,
-            offline_after_minutes=offline_after_minutes,
-            manager=manager,
-        ):
+        device_id = str(getattr(device, "id", "") or "")
+        if relay_has_device(device) or manager_has_live_device(manager, device):
+            live.append(device)
+            continue
+        if not hasattr(device, "last_seen"):
+            live.append(device)
+            continue
+        last_seen = getattr(device, "last_seen", None)
+        if last_seen is not None and not isinstance(last_seen, datetime):
+            live.append(device)
+            continue
+        if device_id in open_session_device_ids:
+            live.append(device)
+            continue
+        if db_last_seen_recent(device, offline_after_minutes=offline_after_minutes):
             live.append(device)
         else:
             skipped.append(device)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -19,6 +20,8 @@ _SCRCPY_VIEWERS: dict[str, set[str]] = {}
 _SCRCPY_STOP_TASKS: dict[str, asyncio.Task[None]] = {}
 _LEGACY_VIEWER_ID = "legacy"
 _DEFAULT_DETACH_GRACE_S = 6.0
+_CONTROL_VIEWER_SURFACES = {"device-screen"}
+_PROFILE_KEYS = ("max_fps", "max_width", "bitrate")
 
 
 def _scrcpy_op_lock(serial: str) -> asyncio.Lock:
@@ -41,6 +44,60 @@ def _scrcpy_viewer_surface(viewer_id: str) -> str | None:
         return None
     surface = viewer_id.split(":", 1)[0].strip()
     return surface or None
+
+
+def _is_control_viewer(viewer_id: str) -> bool:
+    surface = _scrcpy_viewer_surface(viewer_id)
+    return surface in _CONTROL_VIEWER_SURFACES
+
+
+def _positive_profile_value(value: int | None) -> int | None:
+    try:
+        parsed = int(value or 0)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _requested_scrcpy_profile(
+    body: ScrcpyAttachRequest,
+) -> tuple[int | None, int | None, int | None]:
+    return (
+        _positive_profile_value(body.max_fps),
+        _positive_profile_value(body.max_width),
+        _positive_profile_value(body.bitrate),
+    )
+
+
+def _current_scrcpy_profile(device: object) -> tuple[int | None, int | None, int | None]:
+    params = getattr(device, "_scrcpy_params", None)
+    if isinstance(params, dict):
+        return tuple(
+            _positive_profile_value(params.get(key))
+            for key in _PROFILE_KEYS
+        )  # type: ignore[return-value]
+    if isinstance(params, tuple):
+        values = list(params[3:6])
+        while len(values) < 3:
+            values.append(None)
+        return tuple(_positive_profile_value(value) for value in values)  # type: ignore[return-value]
+    return (None, None, None)
+
+
+def _has_limited_profile_request(body: ScrcpyAttachRequest) -> bool:
+    return any(value is not None for value in _requested_scrcpy_profile(body))
+
+
+def _has_limited_scrcpy_profile(device: object) -> bool:
+    return any(value is not None for value in _current_scrcpy_profile(device))
+
+
+def _scrcpy_profile_matches_request(device: object, body: ScrcpyAttachRequest) -> bool:
+    return _current_scrcpy_profile(device) == _requested_scrcpy_profile(body)
+
+
+def _has_control_scrcpy_viewer(viewers: set[str]) -> bool:
+    return any(_is_control_viewer(viewer_id) for viewer_id in viewers)
 
 
 def _replace_stale_surface_viewers(viewers: set[str], viewer_id: str) -> int:
@@ -140,17 +197,43 @@ def build_scrcpy_router(
             scrcpy_active = bool(getattr(device, "_scrcpy_active", False))
             scrcpy_pending = bool(getattr(device, "_scrcpy_pending_registered_ip", None))
             should_start = not scrcpy_active and not scrcpy_pending
+            has_control_viewer = _has_control_scrcpy_viewer(viewers)
+            should_reapply_profile = (
+                scrcpy_active
+                and _is_control_viewer(viewer_id)
+                and _has_limited_scrcpy_profile(device)
+            ) or (
+                scrcpy_active
+                and not _is_control_viewer(viewer_id)
+                and not has_control_viewer
+                and _has_limited_profile_request(body)
+                and not _scrcpy_profile_matches_request(device, body)
+            )
             viewers.add(viewer_id)
             attach_status = "active"
-            if should_start:
+            if should_start or should_reapply_profile:
                 loop = asyncio.get_running_loop()
-                try:
-                    raw_status = await loop.run_in_executor(
-                        None,
+                if body.max_fps is None and body.max_width is None and body.bitrate is None:
+                    attach_call = partial(
                         device.attach_scrcpy_stream,
                         device_ip,
                         adb_port,
                         body.enable_control,
+                    )
+                else:
+                    attach_call = partial(
+                        device.attach_scrcpy_stream,
+                        device_ip,
+                        adb_port,
+                        body.enable_control,
+                        max_fps=body.max_fps,
+                        max_width=body.max_width,
+                        bitrate=body.bitrate,
+                    )
+                try:
+                    raw_status = await loop.run_in_executor(
+                        None,
+                        attach_call,
                     )
                     if raw_status in {"active", "pending", "unavailable"}:
                         attach_status = raw_status

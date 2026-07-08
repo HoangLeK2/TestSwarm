@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -30,6 +31,14 @@ def _offline_dismiss_minutes() -> int:
         return max(1, min(10_080, int(raw)))
     except ValueError:
         return 5
+
+
+def _dispatch_fanout_concurrency_limit() -> int:
+    raw = os.environ.get("CAMPAIGN_DISPATCH_FANOUT_CONCURRENCY", "50")
+    try:
+        return max(1, min(500, int(raw)))
+    except ValueError:
+        return 50
 
 
 def _account_to_vars(account) -> Dict[str, Any]:
@@ -78,15 +87,17 @@ async def _build_per_scenario_device_vars(
     """
     from db.crud.account_group import pick_next_batch
 
-    # Cache primary-account lookups per device — used for unbound scenarios.
-    primary_cache: Dict[str, Dict[str, Any]] = {}
+    from db.crud.account import get_primary_accounts_for_devices
 
-    async def _primary_for(device_id: str) -> Dict[str, Any]:
-        if device_id in primary_cache:
-            return primary_cache[device_id]
-        vars_ = await _get_device_account_vars(device_id, platform, db)
-        primary_cache[device_id] = vars_
-        return vars_
+    primary_accounts = await get_primary_accounts_for_devices(
+        db,
+        [device.id for device in devices],
+        platform,
+    )
+    primary_cache: Dict[str, Dict[str, Any]] = {
+        device_id: _account_to_vars(account)
+        for device_id, account in primary_accounts.items()
+    }
 
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for scen in scenarios:
@@ -121,7 +132,7 @@ async def _build_per_scenario_device_vars(
                     per_device[device.id] = {}
         else:
             for device in devices:
-                per_device[device.id] = await _primary_for(device.id)
+                per_device[device.id] = primary_cache.get(device.id, {})
         out[scen.id] = per_device
     return out
 
@@ -134,17 +145,6 @@ async def _build_per_scenario_device_runtime_vars(
     scenario_ids = [s.id for s in scenarios]
     device_ids = [d.id for d in devices]
     bulk = await get_scenario_device_variables_bulk(db, scenario_ids, device_ids)
-
-    # Backward-compatible path: older tests and call sites patch
-    # `services.campaign_dispatch.get_scenario_device_variables`. Also, when
-    # there are no DB rows at all, bulk will be empty; in that case it is safe
-    # to do a minimal per-(scenario,device) lookup to preserve override semantics.
-    if not bulk and scenario_ids and device_ids:
-        for scen in scenarios:
-            for device in devices:
-                bulk[(scen.id, device.id)] = await get_scenario_device_variables(
-                    db, scen.id, device.id
-                )
 
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for scen in scenarios:
@@ -348,12 +348,26 @@ async def enqueue_campaign_run_temporal(
 
         if device_serials_override is not None:
             # Live-filter mode: look up device rows by serial so we have .id for account vars
-            from db.crud.device import get_device_by_serial
+            from db.crud.device import list_devices_by_serial_aliases
+
+            devices_by_alias: dict[str, Any] = {}
+            for device in await list_devices_by_serial_aliases(db, device_serials_override):
+                for alias in (
+                    getattr(device, "serial", None),
+                    getattr(device, "adb_serial", None),
+                    getattr(device, "adb_ip", None),
+                ):
+                    key = str(alias or "").strip()
+                    if key:
+                        devices_by_alias.setdefault(key, device)
             devices = []
+            seen_device_ids: set[str] = set()
             for serial in device_serials_override:
-                d = await get_device_by_serial(db, serial)
-                if d:
-                    devices.append(d)
+                device = devices_by_alias.get(str(serial or "").strip())
+                if device is None or device.id in seen_device_ids:
+                    continue
+                devices.append(device)
+                seen_device_ids.add(device.id)
             if not devices:
                 return {"error": "None of the filtered device serials exist in the database"}, 400
         else:
@@ -419,7 +433,7 @@ async def enqueue_campaign_run_temporal(
         await repo.update_campaign_status(db, campaign_id, "running")
 
         # Create Execution record (single source of truth for all run types)
-        from db.crud.execution import create_execution, add_device_to_execution
+        from db.crud.execution import create_execution, add_devices_to_execution
         execution_record = await create_execution(
             db,
             run_type="campaign_run",
@@ -432,8 +446,7 @@ async def enqueue_campaign_run_temporal(
             },
         )
         execution_id = execution_record.id
-        for d in devices:
-            await add_device_to_execution(db, execution_id, d.id)
+        await add_devices_to_execution(db, execution_id, [d.id for d in devices])
 
         await db.commit()
 
@@ -462,6 +475,7 @@ async def enqueue_campaign_run_temporal(
 
     account_usage_meta: Dict[str, Dict[str, Any]] = {}
     started_accounts: set[str] = set()
+    account_usage_starts: list[tuple[str, str | None, str, str | None]] = []
     for device in devices:
         acct_id: str | None = None
         platform: str | None = None
@@ -482,14 +496,45 @@ async def enqueue_campaign_run_temporal(
         }
         if acct_id not in started_accounts:
             started_accounts.add(acct_id)
-            await start_account_usage(
-                acct_id,
-                user_id=str(campaign.user_id) if getattr(campaign, "user_id", None) else None,
-                device_serial=device.serial,
-                platform=platform,
-                entity_type="execution",
-                entity_id=execution_id,
+            account_usage_starts.append(
+                (
+                    acct_id,
+                    str(campaign.user_id) if getattr(campaign, "user_id", None) else None,
+                    device.serial,
+                    platform,
+                )
             )
+
+    if account_usage_starts:
+        account_sem = asyncio.Semaphore(_dispatch_fanout_concurrency_limit())
+
+        async def _start_account_usage(
+            acct_id: str,
+            user_id: str | None,
+            device_serial: str,
+            platform: str | None,
+        ) -> None:
+            async with account_sem:
+                await start_account_usage(
+                    acct_id,
+                    user_id=user_id,
+                    device_serial=device_serial,
+                    platform=platform,
+                    entity_type="execution",
+                    entity_id=execution_id,
+                )
+
+        await asyncio.gather(
+            *(
+                _start_account_usage(
+                    acct_id,
+                    user_id,
+                    device_serial,
+                    platform,
+                )
+                for acct_id, user_id, device_serial, platform in account_usage_starts
+            )
+        )
 
     await get_account_event_recorder().flush_all()
 
@@ -538,6 +583,7 @@ async def enqueue_campaign_run_temporal(
     if campaign.user_id:
         _campaign_vars["__USER_ID__"] = str(campaign.user_id)
 
+    workflow_start_requests: list[tuple[str, ScenarioInput]] = []
     for slot_idx, d in enumerate(devices):
         sequence_steps = _build_device_sequence_steps(
             scenarios=scenarios,
@@ -552,10 +598,9 @@ async def enqueue_campaign_run_temporal(
             continue
 
         wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:__sequence__"
-        try:
-            from temporalio.common import WorkflowIDReusePolicy
-            await temporal_client.start_workflow(
-                ScenarioWorkflow.run,
+        workflow_start_requests.append(
+            (
+                wf_id,
                 ScenarioInput(
                     campaign_id=campaign_id,
                     device_serial=d.serial,
@@ -566,12 +611,35 @@ async def enqueue_campaign_run_temporal(
                     run_id=execution_id,
                     execution_id=execution_id,
                 ),
-                id=wf_id,
-                task_queue=task_queue,
-                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
             )
-            workflow_ids.append(wf_id)
-        except Exception as exc:
+        )
+
+    if workflow_start_requests:
+        from temporalio.common import WorkflowIDReusePolicy
+
+        workflow_sem = asyncio.Semaphore(_dispatch_fanout_concurrency_limit())
+
+        async def _start_workflow(wf_id: str, scenario_input: ScenarioInput) -> tuple[str, Exception | None]:
+            async with workflow_sem:
+                try:
+                    await temporal_client.start_workflow(
+                        ScenarioWorkflow.run,
+                        scenario_input,
+                        id=wf_id,
+                        task_queue=task_queue,
+                        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+                    )
+                    return wf_id, None
+                except Exception as exc:
+                    return wf_id, exc
+
+        start_results = await asyncio.gather(
+            *(_start_workflow(wf_id, scenario_input) for wf_id, scenario_input in workflow_start_requests)
+        )
+        for wf_id, exc in start_results:
+            if exc is None:
+                workflow_ids.append(wf_id)
+                continue
             log.error("Failed to start workflow %s: %s", wf_id, exc)
 
     scen_with_steps = sum(1 for s in scenarios if s.steps)

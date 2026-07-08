@@ -226,7 +226,7 @@ class DeviceClient:
         # Debounce relay scrcpy restarts on gRPC flaps / false negatives.
         self._scrcpy_last_restart_at: float = 0.0
         # Stored args so scrcpy can be restarted on demand after auto-stop
-        self._scrcpy_params:    Optional[tuple] = None  # (device_ip, adb_port, enable_control)
+        self._scrcpy_params:    Optional[tuple] = None  # (device_ip, adb_port, enable_control, max_fps?, max_width?, bitrate?)
         self._scrcpy_stop_task: Optional[asyncio.Task] = None  # debounced auto-stop task
         self._scrcpy_attached_at: float = 0.0
         # Pending relay attach: cancel on detach so 30s retry does not override user "stream off".
@@ -3018,6 +3018,10 @@ class DeviceClient:
         device_ip: str,
         adb_port: int = 5555,
         enable_control: bool = True,
+        *,
+        max_fps: int | None = None,
+        max_width: int | None = None,
+        bitrate: int | None = None,
     ) -> str:
         """
         Attach scrcpy screen streaming to a WS-Agent device (Mode A hybrid).
@@ -3031,8 +3035,27 @@ class DeviceClient:
         stream recovery/keyframe requests. Touch/key input still uses the
         DeviceClient priority order and does not route through scrcpy_control.
         """
-        # Store params so subscribe_frames can restart scrcpy after an auto-stop
-        self._scrcpy_params = (device_ip, adb_port, enable_control)
+        def _positive_int(value: Any) -> int | None:
+            try:
+                parsed = int(value or 0)
+            except Exception:
+                return None
+            return parsed if parsed > 0 else None
+
+        requested_max_fps = _positive_int(max_fps)
+        requested_max_width = _positive_int(max_width)
+        requested_bitrate = _positive_int(bitrate)
+        effective_max_fps = requested_max_fps or int(self.config.device.scrcpy_max_fps or 0)
+        effective_max_width = requested_max_width or int(self.config.device.scrcpy_max_width or 0)
+        effective_bitrate = requested_bitrate or int(self.config.device.scrcpy_relay_bitrate or 0)
+        attach_params = (
+            device_ip,
+            adb_port,
+            enable_control,
+            requested_max_fps,
+            requested_max_width,
+            requested_bitrate,
+        )
 
         # If relay scrcpy is already streaming for the same device IP, don't tear it down.
         # APK WS reconnects frequently (WiFi instability, atx-agent restarts) and each
@@ -3046,6 +3069,29 @@ class DeviceClient:
             existing_ip = existing_serial.rsplit(":", 1)[0] if ":" in existing_serial else existing_serial
             device_ip_norm = device_ip.rsplit(":", 1)[0] if ":" in device_ip else device_ip
             if existing_ip == device_ip_norm:
+                current_params = self._scrcpy_params or ()
+                current_enable_control = bool(current_params[2]) if len(current_params) >= 3 else True
+                current_max_fps = (
+                    _positive_int(current_params[3])
+                    if len(current_params) >= 4
+                    else None
+                ) or int(self.config.device.scrcpy_max_fps or 0)
+                current_max_width = (
+                    _positive_int(current_params[4])
+                    if len(current_params) >= 5
+                    else None
+                ) or int(self.config.device.scrcpy_max_width or 0)
+                current_bitrate = (
+                    _positive_int(current_params[5])
+                    if len(current_params) >= 6
+                    else None
+                ) or int(self.config.device.scrcpy_relay_bitrate or 0)
+                needs_reconfigure = (
+                    enable_control != current_enable_control
+                    or effective_max_fps != current_max_fps
+                    or effective_max_width != current_max_width
+                    or effective_bitrate != current_bitrate
+                )
                 # Also check if the relay session is still alive.  When gRPC reconnects,
                 # stop_all_sessions() kills scrcpy on agent-boot and clears _scrcpy_running.
                 # Detect this by asking the relay manager — if the session is gone,
@@ -3060,7 +3106,7 @@ class DeviceClient:
                         _session_alive = False
                 except Exception:
                     pass
-                if _session_alive:
+                if _session_alive and not needs_reconfigure:
                     self._log(
                         f"scrcpy already streaming for {device_ip} — skipping reattach",
                         level=logging.DEBUG,
@@ -3077,50 +3123,114 @@ class DeviceClient:
                         except Exception:
                             pass
                     return "active"
-                # If we are still receiving frames recently, treat this as a transient
-                # relay flap / false negative and do not restart immediately.
-                now = _time.monotonic()
-                if self._last_frame_time > 0 and (now - self._last_frame_time) < 1.5:
+                if _session_alive and needs_reconfigure:
                     self._log(
-                        f"relay session check says dead but frames are fresh "
-                        f"({now - self._last_frame_time:.2f}s) — skipping restart",
+                        f"scrcpy profile reconfigure for {device_ip}: "
+                        f"fps {current_max_fps}->{effective_max_fps}, "
+                        f"width {current_max_width}->{effective_max_width}, "
+                        f"bitrate {current_bitrate}->{effective_bitrate}, "
+                        f"control {current_enable_control}->{enable_control}",
                         level=logging.INFO,
                     )
-                    return "active"
-                # Restart cooldown: avoid repeated stop/restart loops on unstable gRPC.
-                if self._scrcpy_last_restart_at > 0 and (now - self._scrcpy_last_restart_at) < 5.0:
+                    self._scrcpy_params = attach_params
+                    _force_scrcpy_restart = True
+                    _reconfigure_old_receiver = self._scrcpy_receiver
+                    _reconfigure_old_serial = existing_serial
+                    _skip_detach = True
+                # If we are still receiving frames recently, treat this as a transient
+                # relay flap / false negative and do not restart immediately.
+                # This guard is only for suspected relay-loss false negatives.
+                # A real profile change must continue to the detach/restart path.
+                if not (_session_alive and needs_reconfigure):
+                    now = _time.monotonic()
+                    if self._last_frame_time > 0 and (now - self._last_frame_time) < 1.5:
+                        self._log(
+                            f"relay session check says dead but frames are fresh "
+                            f"({now - self._last_frame_time:.2f}s) — skipping restart",
+                            level=logging.INFO,
+                        )
+                        return "active"
+                    # Restart cooldown: avoid repeated stop/restart loops on unstable gRPC.
+                    if self._scrcpy_last_restart_at > 0 and (now - self._scrcpy_last_restart_at) < 5.0:
+                        self._log(
+                            f"relay session lost for {existing_ip} but restart cooldown active "
+                            f"({now - self._scrcpy_last_restart_at:.1f}s) — skipping restart",
+                            level=logging.WARNING,
+                        )
+                        return "pending"
+                    # Relay session lost — stop the dead receiver (no scrcpy_stop sent,
+                    # agent already stopped it) and fall through to restart.
+                    # _scrcpy_active stays True so on_agent_disconnect won't clear
+                    # _last_config_frame (existing browser subscribers keep their bootstrap).
                     self._log(
-                        f"relay session lost for {existing_ip} but restart cooldown active "
-                        f"({now - self._scrcpy_last_restart_at:.1f}s) — skipping restart",
+                        f"relay session lost for {existing_ip} — restarting scrcpy",
+                        level=logging.INFO,
+                    )
+                    self._scrcpy_last_restart_at = _time.monotonic()
+                    try:
+                        self._scrcpy_receiver.stop_receiver()
+                    except Exception:
+                        pass
+                    self._scrcpy_receiver = None
+                    # fall through to re-create receiver and re-issue scrcpy_start
+                    # NOTE: do NOT call detach_scrcpy_stream() here — it sets _scrcpy_active=False
+                    # which would allow on_agent_disconnected() to clear _last_config_frame.
+                    # We only need the normal detach path for the case where we start fresh.
+                    self._scrcpy_active = True  # explicitly keep True for on_agent_disconnect guard
+                    _skip_detach = True
+
+        if locals().get("_force_scrcpy_restart"):
+            self._cancel_scrcpy_pending_attach()
+            old_receiver = locals().get("_reconfigure_old_receiver")
+            old_serial = str(locals().get("_reconfigure_old_serial") or "").strip()
+            try:
+                if old_receiver is not None:
+                    old_receiver.stop_receiver()
+            except Exception:
+                pass
+            if old_serial and self._loop:
+                try:
+                    import asyncio
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+
+                    if isinstance(old_receiver, RelayScrcpyReceiver):
+                        relay = get_relay_manager()
+                        if relay:
+                            reg = relay.get_scrcpy_receiver(old_serial)
+                            if reg is old_receiver:
+                                stop_future = asyncio.run_coroutine_threadsafe(
+                                    relay.stop_scrcpy(
+                                        old_serial,
+                                        reason="attach_scrcpy_stream:profile_reconfigure",
+                                    ),
+                                    self._loop,
+                                )
+                                try:
+                                    stop_future.result(timeout=5.0)
+                                except Exception as exc:
+                                    stop_future.cancel()
+                                    self._log(
+                                        f"scrcpy profile reconfigure stop timed out for {old_serial}: {exc}",
+                                        level=logging.WARNING,
+                                    )
+                                    return "pending"
+                except Exception as exc:
+                    self._log(
+                        f"scrcpy profile reconfigure cleanup failed for {old_serial}: {exc}",
                         level=logging.WARNING,
                     )
                     return "pending"
-                # Relay session lost — stop the dead receiver (no scrcpy_stop sent,
-                # agent already stopped it) and fall through to restart.
-                # _scrcpy_active stays True so on_agent_disconnect won't clear
-                # _last_config_frame (existing browser subscribers keep their bootstrap).
-                self._log(
-                    f"relay session lost for {existing_ip} — restarting scrcpy",
-                    level=logging.INFO,
-                )
-                self._scrcpy_last_restart_at = _time.monotonic()
-                try:
-                    self._scrcpy_receiver.stop_receiver()
-                except Exception:
-                    pass
-                self._scrcpy_receiver = None
-                # fall through to re-create receiver and re-issue scrcpy_start
-                # NOTE: do NOT call detach_scrcpy_stream() here — it sets _scrcpy_active=False
-                # which would allow on_agent_disconnected() to clear _last_config_frame.
-                # We only need the normal detach path for the case where we start fresh.
-                self._scrcpy_active = True  # explicitly keep True for on_agent_disconnect guard
-                _skip_detach = True
-
-        if not locals().get("_skip_detach"):
+            self._scrcpy_receiver = None
+            self._scrcpy_active = False
+            self._scrcpy_attached_at = 0.0
+        elif not locals().get("_skip_detach"):
             self.detach_scrcpy_stream(reason="attach_scrcpy_stream:replace_previous_receiver")
         else:
             # Restart path: still cancel stale pending/retry from a prior failed attach.
             self._cancel_scrcpy_pending_attach()
+        # Store params so subscribe_frames can restart scrcpy after an auto-stop.
+        self._scrcpy_params = attach_params
 
         # Use IP-only as the lookup key for relay mode — mDNS port is OS-assigned
         # and not known here.  resolve_serial() finds the device by IP in the relay
@@ -3233,7 +3343,7 @@ class DeviceClient:
                 # the 3-5s scrcpy restart gap and prevents two scrcpy processes
                 # competing for localabstract:scrcpy on the same device.
                 import asyncio
-                if relay.is_scrcpy_running(actual_serial):
+                if relay.is_scrcpy_running(actual_serial) and not locals().get("_force_scrcpy_restart"):
                     self._log(
                         f"scrcpy already running for {actual_serial} — inheriting session",
                         level=logging.DEBUG,
@@ -3252,20 +3362,14 @@ class DeviceClient:
                     # but crashes MediaCodec on Android 14+ (API 34+). Safe on API ≤ 33.
                     _sdk = int(self.sdk_version or 0)
                     _low_latency = 0 < _sdk < 34
-                    # In control mode, prioritize real device width to avoid tiny
-                    # 216x480 stream on high-res phones when stale config lingers.
-                    _cfg_max_width = int(self.config.device.scrcpy_max_width or 0)
-                    # Respect configured cap so operators can lower stream cost.
-                    # Do not auto-upscale to native width in control mode.
-                    _start_max_width = _cfg_max_width
                     start_future = asyncio.run_coroutine_threadsafe(
                         relay.start_scrcpy(
                             serial=actual_serial,
-                            max_fps=self.config.device.scrcpy_max_fps,
-                            max_width=_start_max_width,
+                            max_fps=effective_max_fps,
+                            max_width=effective_max_width,
                             enable_control=enable_control,
                             port=scrcpy_port,
-                            bitrate=self.config.device.scrcpy_relay_bitrate,
+                            bitrate=effective_bitrate,
                             low_latency=_low_latency,
                         ),
                         self._loop,
@@ -3350,6 +3454,9 @@ class DeviceClient:
                 connected_relays = _relay.registered_relays()
                 device_ip = device_ip  # captured in closure below
                 _enable_control = enable_control
+                _max_fps = requested_max_fps
+                _max_width = requested_max_width
+                _bitrate = requested_bitrate
                 _loop = self._loop
                 with self._lock:
                     self._scrcpy_pending_generation += 1
@@ -3376,9 +3483,20 @@ class DeviceClient:
                         level=logging.INFO,
                     )
                     import concurrent.futures as _cf
-                    _cf.ThreadPoolExecutor(max_workers=1).submit(
-                        self.attach_scrcpy_stream, actual_serial, 5555, _enable_control
-                    )
+                    executor = _cf.ThreadPoolExecutor(max_workers=1)
+                    if _max_fps is None and _max_width is None and _bitrate is None:
+                        executor.submit(self.attach_scrcpy_stream, actual_serial, 5555, _enable_control)
+                    else:
+                        executor.submit(
+                            lambda: self.attach_scrcpy_stream(
+                                actual_serial,
+                                5555,
+                                _enable_control,
+                                max_fps=_max_fps,
+                                max_width=_max_width,
+                                bitrate=_bitrate,
+                            )
+                        )
 
                 pending_keys: list[str] = []
                 for hint in (self._adb_serial, self.serial, device_ip):
@@ -3448,9 +3566,20 @@ class DeviceClient:
                                     return
                                 self._scrcpy_pending_claimed = True
                             import concurrent.futures as _cf2
-                            _cf2.ThreadPoolExecutor(max_workers=1).submit(
-                                self.attach_scrcpy_stream, retry_target, 5555, _enable_control
-                            )
+                            executor = _cf2.ThreadPoolExecutor(max_workers=1)
+                            if _max_fps is None and _max_width is None and _bitrate is None:
+                                executor.submit(self.attach_scrcpy_stream, retry_target, 5555, _enable_control)
+                            else:
+                                executor.submit(
+                                    lambda: self.attach_scrcpy_stream(
+                                        retry_target,
+                                        5555,
+                                        _enable_control,
+                                        max_fps=_max_fps,
+                                        max_width=_max_width,
+                                        bitrate=_bitrate,
+                                    )
+                                )
 
                     def _arm_retry() -> None:
                         old = self._scrcpy_attach_retry_task
@@ -4616,7 +4745,17 @@ class DeviceClient:
 
                 def _start() -> None:
                     try:
-                        self.attach_scrcpy_stream(*params)
+                        if len(params) >= 6:
+                            self.attach_scrcpy_stream(
+                                params[0],
+                                params[1],
+                                params[2],
+                                max_fps=params[3],
+                                max_width=params[4],
+                                bitrate=params[5],
+                            )
+                        else:
+                            self.attach_scrcpy_stream(*params)
                     except Exception as exc:
                         self._log(
                             f"subscribe demand-start scrcpy failed: {exc}",

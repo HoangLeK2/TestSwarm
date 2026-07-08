@@ -296,9 +296,13 @@ class RelayAgent:
 
     def _ensure_default_scrcpy_desired(self) -> None:
         """
-        Ensure every currently online device has a desired scrcpy state.
-        This enables "auto open screen" even on fresh startup before any
-        explicit scrcpy_start command has ever been received.
+        Normalize desired scrcpy sessions for currently online devices.
+
+        Do not seed new desired sessions here. Scrcpy is viewer-gated:
+        only an explicit scrcpy_start from the farm/backend should set
+        desired=True. Connection and device-online recovery paths may then
+        resume those explicit sessions, but must not start scrcpy for every
+        online phone in the background.
         """
         base_port = 27183
         used_ports: set[int] = set()
@@ -326,31 +330,6 @@ class RelayAgent:
             else:
                 used_ports.add(port)
             state["cfg"] = cfg
-
-        for serial in self._registry.online_serials:
-            if serial in self._tcp_suppressed_for_usb:
-                continue
-            state = self._scrcpy_desired.get(serial)
-            if state:
-                continue
-            self._scrcpy_desired[serial] = {
-                "desired": True,
-                "manual_stop": False,
-                "last_stop_reason": "",
-                "cfg": {
-                    "max_fps": 30,
-                    "max_width": 800,
-                    "enable_control": True,
-                    "port": _next_free_port(),
-                    "bitrate": 2_000_000,
-                    "low_latency": False,
-                },
-                "adb_serial": serial,
-                "retry_count": 0,
-                "retry_window_start": 0.0,
-                "restart_task": None,
-                "last_started_at": 0.0,
-            }
 
     async def run(self) -> None:
         zc = start_mdns_discovery()
@@ -601,27 +580,33 @@ class RelayAgent:
 
         logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
 
-        # Shared channel — HTTP/2 multiplexes video stream + control stream
-        # over a single TCP connection; the two streams are fully independent.
+        # Keep the high-volume video stream and the control stream on separate
+        # channels. In practice, reconnect/cancel churn on one grpc.aio stream
+        # can poison pending sends on another stream when both share a channel,
+        # surfacing as INTERNAL "Failed execute_batch" on the agent.
         async with create_grpc_channel(
             self._grpc_addr,
             tls_enabled=self._grpc_tls_enabled,
             root_cert_file=self._grpc_root_cert_file,
-        ) as channel:
+        ) as stream_channel, create_grpc_channel(
+            self._grpc_addr,
+            tls_enabled=self._grpc_tls_enabled,
+            root_cert_file=self._grpc_root_cert_file,
+        ) as control_channel:
             client = GrpcRelayClient(
                 server_addr=self._grpc_addr,
                 api_key=self._api_key,
                 agent_id=self._relay_id,
                 send_queue=send_queue,
                 loop=loop,
-                channel=channel,
+                channel=stream_channel,
                 tls_enabled=self._grpc_tls_enabled,
                 root_cert_file=self._grpc_root_cert_file,
             )
 
             # Channel 2: control plane (register/heartbeat/commands) — runs
             # independently; a 180s bootstrap never blocks video frames.
-            ctrl_client = AgentControlClient(channel, self._api_key, self)
+            ctrl_client = AgentControlClient(control_channel, self._api_key, self)
             ctrl_task = asyncio.create_task(ctrl_client.run(), name="grpc-ctrl-client")
 
             # ── Register on Channel 1 (video stream) for backward compat ──────
@@ -670,7 +655,7 @@ class RelayAgent:
             consume_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
 
             try:
-                await client._stream_once(channel)
+                await client._stream_once(stream_channel)
             finally:
                 client.stop()
                 ctrl_client.stop()

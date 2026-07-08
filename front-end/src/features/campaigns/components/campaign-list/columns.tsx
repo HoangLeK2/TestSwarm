@@ -17,7 +17,8 @@ import type { CampaignStatus } from '../../types';
 import { cn } from '@/lib/utils';
 import {
   campaignRowPollInterval,
-  campaignRowStaleTime
+  campaignRowStaleTime,
+  shouldFetchCampaignRowDetailsOnMount
 } from '../../lib/campaign-list-polling';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
@@ -45,6 +46,7 @@ function CampaignLastRunCell({
   const { data, isLoading } = useQuery({
     queryKey: ['campaign-latest-execution', campaignId],
     queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
+    enabled: shouldFetchCampaignRowDetailsOnMount(status),
     staleTime: campaignRowStaleTime(status),
     refetchInterval: campaignRowPollInterval(status),
     refetchOnWindowFocus: false

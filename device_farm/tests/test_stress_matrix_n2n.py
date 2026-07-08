@@ -64,7 +64,7 @@ async def test_matrix_single_device_two_campaign_allow_policy_distinct_workflows
         stack.enter_context(patch("db.crud.scenario_template.list_templates", new_callable=AsyncMock, return_value=[]))
         stack.enter_context(patch("services.campaign_dispatch._get_device_account_vars", new_callable=AsyncMock, return_value={}))
         stack.enter_context(patch("db.crud.execution.create_execution", new_callable=AsyncMock, side_effect=executions))
-        stack.enter_context(patch("db.crud.execution.add_device_to_execution", new_callable=AsyncMock))
+        stack.enter_context(patch("db.crud.execution.add_devices_to_execution", new_callable=AsyncMock))
         stack.enter_context(patch("db.crud.execution.update_execution", new_callable=AsyncMock))
 
         r1, s1 = await enqueue_campaign_run_temporal("camp-1", temporal)
@@ -104,13 +104,13 @@ async def test_matrix_n_device_m_campaign_partial_overlap_device_sets():
         stack.enter_context(patch("db.crud.scenario_template.list_templates", new_callable=AsyncMock, return_value=[]))
         stack.enter_context(patch("services.campaign_dispatch._get_device_account_vars", new_callable=AsyncMock, return_value={}))
         stack.enter_context(patch("db.crud.execution.create_execution", new_callable=AsyncMock, side_effect=executions))
-        stack.enter_context(patch("db.crud.execution.add_device_to_execution", new_callable=AsyncMock))
+        stack.enter_context(patch("db.crud.execution.add_devices_to_execution", new_callable=AsyncMock))
         stack.enter_context(patch("db.crud.execution.update_execution", new_callable=AsyncMock))
         stack.enter_context(
             patch(
-                "db.crud.device.get_device_by_serial",
+                "db.crud.device.list_devices_by_serial_aliases",
                 new_callable=AsyncMock,
-                side_effect=[_device("d2", "SN002"), _device("d3", "SN003")],
+                return_value=[_device("d2", "SN002"), _device("d3", "SN003")],
             )
         )
 

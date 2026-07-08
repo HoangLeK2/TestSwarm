@@ -1,5 +1,6 @@
 ﻿# Load the agent-boot image tar matching this machine's CPU (amd64 or arm64).
 $ErrorActionPreference = 'Stop'
+$ConfirmPreference = 'None'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 

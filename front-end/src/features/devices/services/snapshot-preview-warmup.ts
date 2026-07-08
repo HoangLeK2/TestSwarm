@@ -1,7 +1,8 @@
 import {
   attachScrcpyStream,
   createScrcpyViewerId,
-  detachScrcpyStream
+  detachScrcpyStream,
+  type ScrcpyAttachOptions
 } from './scrcpy-stream';
 
 const SNAPSHOT_WARMUP_LIMIT = (() => {
@@ -9,8 +10,33 @@ const SNAPSHOT_WARMUP_LIMIT = (() => {
     process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_LIMIT ?? 4
   );
   if (!Number.isFinite(raw)) return 4;
-  return Math.max(1, Math.min(12, Math.round(raw)));
+  return Math.max(1, Math.min(8, Math.round(raw)));
 })();
+
+const PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: true,
+  maxFps: (() => {
+    const raw = Number(
+      process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_SCRCPY_FPS ?? 1
+    );
+    if (!Number.isFinite(raw)) return 1;
+    return Math.max(1, Math.min(8, Math.round(raw)));
+  })(),
+  maxWidth: (() => {
+    const raw = Number(
+      process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_SCRCPY_WIDTH ?? 360
+    );
+    if (!Number.isFinite(raw)) return 360;
+    return Math.max(240, Math.min(540, Math.round(raw)));
+  })(),
+  bitrate: (() => {
+    const raw = Number(
+      process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_SCRCPY_BITRATE ?? 100_000
+    );
+    if (!Number.isFinite(raw)) return 100_000;
+    return Math.max(80_000, Math.min(600_000, Math.round(raw)));
+  })()
+};
 
 type WarmupEntry = {
   viewerId: string;
@@ -37,7 +63,7 @@ export function acquireSnapshotPreviewWarmup(
     entry = {
       viewerId,
       refs: 0,
-      attached: attachScrcpyStream(serial, viewerId)
+      attached: attachScrcpyStream(serial, viewerId, PREVIEW_SCRCPY_OPTIONS)
         .then(() => true)
         .catch(() => {
           const current = activeWarmups.get(serial);

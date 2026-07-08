@@ -19,7 +19,8 @@ import { cn } from '@/lib/utils';
 import { campaignsApi } from '../../services/api';
 import {
   campaignRowPollInterval,
-  campaignRowStaleTime
+  campaignRowStaleTime,
+  shouldFetchCampaignRowDetailsOnMount
 } from '../../lib/campaign-list-polling';
 
 type ExecutionSummary = {
@@ -238,6 +239,7 @@ export function CampaignRunStats({
   const summary = useQuery({
     queryKey: ['campaign-run-stats', campaignId],
     queryFn: () => campaignsApi.runStats(campaignId),
+    enabled: shouldFetchCampaignRowDetailsOnMount(status),
     staleTime: campaignRowStaleTime(status),
     refetchInterval: campaignRowPollInterval(status),
     refetchOnWindowFocus: false

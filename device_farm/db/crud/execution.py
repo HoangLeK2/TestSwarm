@@ -274,6 +274,20 @@ async def add_device_to_execution(
     return link
 
 
+async def add_devices_to_execution(
+    db: AsyncSession, execution_id: str, device_ids: list[str]
+) -> list[ExecutionDevice]:
+    links = [
+        ExecutionDevice(execution_id=execution_id, device_id=device_id)
+        for device_id in device_ids
+    ]
+    if not links:
+        return []
+    db.add_all(links)
+    await db.flush()
+    return links
+
+
 async def remove_device_from_execution(
     db: AsyncSession, execution_id: str, device_id: str
 ) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -467,6 +468,33 @@ async def get_primary_account_for_device(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_primary_accounts_for_devices(
+    db: AsyncSession,
+    device_ids: list[str],
+    platform: str,
+) -> dict[str, Account]:
+    """Return primary active accounts keyed by device id in one round-trip."""
+    if not device_ids:
+        return {}
+    result = await db.execute(
+        select(DeviceAccount.device_id, Account)
+        .join(Account, DeviceAccount.account_id == Account.id)
+        .where(
+            DeviceAccount.device_id.in_(device_ids),
+            DeviceAccount.is_primary.is_(True),
+            Account.platform == platform,
+            Account.state == AccountState.ACTIVE.value,
+        )
+    )
+    out: dict[str, Account] = {}
+    rows = result.all()
+    if inspect.isawaitable(rows):
+        rows = await rows
+    for device_id, account in rows:
+        out[str(device_id)] = account
+    return out
 
 
 async def list_active_account_ids(

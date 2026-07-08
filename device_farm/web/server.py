@@ -22,6 +22,48 @@ _RELAY_ATTACH_POOL = ThreadPoolExecutor(
 )
 atexit.register(lambda: _RELAY_ATTACH_POOL.shutdown(wait=False))
 
+
+class _RelayBootstrapGate:
+    def __init__(
+        self,
+        *,
+        cooldown_s: float | None = None,
+        clock=time.monotonic,
+    ) -> None:
+        self._cooldown_s = (
+            float(os.getenv("DEVICE_FARM_RELAY_BOOTSTRAP_COOLDOWN_S", "60"))
+            if cooldown_s is None
+            else float(cooldown_s)
+        )
+        self._clock = clock
+        self._inflight: set[str] = set()
+        self._last_attempt_at: dict[str, float] = {}
+
+    def acquire(
+        self,
+        serial: str,
+        *,
+        has_runtime_u2: bool = False,
+        caps: dict | None = None,
+    ) -> tuple[bool, str]:
+        serial = str(serial or "").strip()
+        if not serial:
+            return False, "empty-serial"
+        if has_runtime_u2 or bool((caps or {}).get("has_u2")):
+            return False, "u2-ready"
+        if serial in self._inflight:
+            return False, "in-flight"
+        now = self._clock()
+        last = self._last_attempt_at.get(serial)
+        if last is not None and (now - last) < self._cooldown_s:
+            return False, "cooldown"
+        self._inflight.add(serial)
+        self._last_attempt_at[serial] = now
+        return True, "queued"
+
+    def release(self, serial: str) -> None:
+        self._inflight.discard(str(serial or "").strip())
+
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -743,6 +785,7 @@ def create_app(
                 _relay_mgr_ref = relay_manager
                 _manager_ref   = manager
                 _config_ref    = config
+                _relay_bootstrap_gate = _RelayBootstrapGate()
 
                 def _relay_db_allows_scrcpy(serial_check: str) -> bool:
                     if not _config_ref.database.enabled:
@@ -922,7 +965,6 @@ def create_app(
                     """Bootstrap atx+u2 on agent-boot, then (re)bind cloud u2 session."""
                     if _relay_mgr_ref is None or device is None:
                         return
-                    ok = False
                     try:
                         ok = await _relay_mgr_ref.bootstrap(serial)
                         log.info(
@@ -930,13 +972,28 @@ def create_app(
                             "ok" if ok else "failed",
                             serial,
                         )
+                        caps = _relay_mgr_ref.get_capabilities(serial) or {}
+                        _bind_relay_u2(device, serial, caps=caps)
                     except Exception as exc:
                         log.warning("relay bootstrap error serial=%s: %s", serial, exc)
-                    caps = _relay_mgr_ref.get_capabilities(serial) or {}
-                    _bind_relay_u2(device, serial, caps=caps)
+                    finally:
+                        _relay_bootstrap_gate.release(serial)
 
                 def _schedule_relay_bootstrap(serial: str, device, *, is_new: bool) -> None:
                     if _relay_mgr_ref is None or device is None:
+                        return
+                    caps = _relay_mgr_ref.get_capabilities(serial) or {}
+                    queued, reason = _relay_bootstrap_gate.acquire(
+                        serial,
+                        has_runtime_u2=getattr(device, "u2", None) is not None,
+                        caps=caps,
+                    )
+                    if not queued:
+                        log.info(
+                            "relay bootstrap skipped serial=%s reason=%s",
+                            serial,
+                            reason,
+                        )
                         return
                     if is_new:
                         log.info("relay device online → queued bootstrap: %s", serial)

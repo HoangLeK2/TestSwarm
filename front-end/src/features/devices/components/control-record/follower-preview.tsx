@@ -1,11 +1,21 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { Device } from '../../types';
 import { DeviceAndroidFrame } from '../device-android-frame';
-import { DeviceScreen } from '../device-screen';
 import { cn } from '@/lib/utils';
+import { deviceFarmMediaBase } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
+import { useTabNetworkActive } from '../../hooks/use-tab-network-active';
+
+const FOLLOWER_PREVIEW_REFRESH_MS = (() => {
+  const raw = Number(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MS ?? 500
+  );
+  if (!Number.isFinite(raw)) return 500;
+  return Math.max(500, Math.min(5_000, Math.round(raw)));
+})();
 
 export function formatFollowerLabel(
   d: Pick<Device, 'brand' | 'model' | 'serial'>
@@ -27,24 +37,124 @@ export function followerMockupWidth(deviceCount: number): number {
 type Props = {
   device: Device;
   mockupScreenWidth: number;
-  mode: 'tap' | 'swipe';
-  wsSend: (obj: object) => void;
   onPromote: (serial: string) => void;
+  previewIndex?: number;
+  previewCount?: number;
 };
 
 export const FollowerPreview = memo(function FollowerPreview({
   device,
   mockupScreenWidth,
-  mode,
-  wsSend,
-  onPromote
+  onPromote,
+  previewIndex = 0,
+  previewCount = 1
 }: Props) {
   const t = useTranslations('devicesControlRecord.view');
   const label = formatFollowerLabel(device);
+  const previewZoneRef = useRef<HTMLDivElement>(null);
+  const tabActive = useTabNetworkActive();
+  const [inView, setInView] = useState(false);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [displayedPreviewUrl, setDisplayedPreviewUrl] = useState<string | null>(
+    null
+  );
+  const [hasFrame, setHasFrame] = useState(false);
+  const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+  const [previewCadenceReady, setPreviewCadenceReady] = useState(false);
   const state = String(device.state || '')
     .replace('DeviceState.', '')
     .toUpperCase();
   const isActive = state && !['DISCONNECTED', 'DEAD'].includes(state);
+  const shouldSchedulePreview = Boolean(isActive && tabActive && inView);
+  const loadPreview = shouldSchedulePreview && previewCadenceReady;
+  const refreshOffsetMs = useMemo(() => {
+    const count = Math.max(1, Math.round(previewCount));
+    const index = Math.max(0, previewIndex) % count;
+    return Math.floor((FOLLOWER_PREVIEW_REFRESH_MS / count) * index);
+  }, [previewCount, previewIndex]);
+
+  useEffect(() => {
+    const el = previewZoneRef.current;
+    if (!el) return;
+    const margin = 120;
+    const sync = () => {
+      const rect = el.getBoundingClientRect();
+      setInView(
+        rect.bottom > -margin && rect.top < window.innerHeight + margin
+      );
+    };
+    sync();
+    if (typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => setInView(Boolean(entries[0]?.isIntersecting)),
+      { root: null, rootMargin: `${margin}px`, threshold: 0.05 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  const previewUrl = useMemo(() => {
+    if (!loadPreview) return null;
+    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}`;
+    const token = tokenStorage.getAuthToken();
+    return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+  }, [device.serial, loadPreview, previewAttempt]);
+
+  useEffect(() => {
+    setDisplayedPreviewUrl(null);
+    setHasFrame(false);
+    setLoadingElapsedSec(0);
+    setPreviewCadenceReady(false);
+    setPreviewAttempt(0);
+  }, [device.serial]);
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      setDisplayedPreviewUrl(previewUrl);
+      setHasFrame(true);
+    };
+    image.src = previewUrl;
+    return () => {
+      cancelled = true;
+      image.onload = null;
+    };
+  }, [previewUrl]);
+
+  useEffect(() => {
+    if (!shouldSchedulePreview) {
+      setPreviewCadenceReady(false);
+      return;
+    }
+    setPreviewCadenceReady(false);
+    let interval: number | undefined;
+    const tick = () => {
+      setPreviewAttempt((n) => n + 1);
+    };
+    const timeout = window.setTimeout(() => {
+      setPreviewCadenceReady(true);
+      interval = window.setInterval(tick, FOLLOWER_PREVIEW_REFRESH_MS);
+    }, refreshOffsetMs);
+    return () => {
+      window.clearTimeout(timeout);
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [refreshOffsetMs, shouldSchedulePreview]);
+
+  useEffect(() => {
+    if (!loadPreview || hasFrame) {
+      setLoadingElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setLoadingElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [device.serial, hasFrame, loadPreview]);
 
   return (
     <button
@@ -57,7 +167,10 @@ export const FollowerPreview = memo(function FollowerPreview({
       title={device.serial}
     >
       <div className='overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm transition hover:border-primary/45 hover:shadow-md'>
-        <div className='flex justify-center bg-muted/20 px-1.5 pb-1 pt-2'>
+        <div
+          ref={previewZoneRef}
+          className='flex justify-center bg-muted/20 px-1.5 pb-1 pt-2'
+        >
           <DeviceAndroidFrame
             screenWidth={mockupScreenWidth}
             deviceWidth={device.screen_width}
@@ -65,14 +178,25 @@ export const FollowerPreview = memo(function FollowerPreview({
             className='shrink-0'
           >
             {isActive ? (
-              <DeviceScreen
-                device={device}
-                wsSend={wsSend}
-                mode={mode}
-                interactive={false}
-                streamFetchPriority='low'
-                streamTransport='h264-only'
-              />
+              displayedPreviewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element -- follower preview intentionally uses lightweight cached screenshots.
+                <img
+                  src={displayedPreviewUrl}
+                  alt=''
+                  role='presentation'
+                  decoding='async'
+                  className='h-full w-full object-contain object-center'
+                  draggable={false}
+                />
+              ) : loadingElapsedSec >= 12 ? (
+                <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-amber-300'>
+                  {t('streamUnavailable')}
+                </div>
+              ) : (
+                <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[10px] text-zinc-500'>
+                  {t('streamWaitingFirstFrame')}
+                </div>
+              )
             ) : (
               <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[10px] text-zinc-500'>
                 {t('followerOffline')}

@@ -15,8 +15,6 @@ type Props = {
   primaryMirror: ReactNode;
   toolbar?: ReactNode;
   devices: Device[];
-  wsMode: 'tap' | 'swipe';
-  wsSend: (obj: object) => void;
   onPromote: (serial: string) => void;
 };
 
@@ -25,8 +23,6 @@ export function MultiDeviceStage({
   primaryMirror,
   toolbar,
   devices,
-  wsMode,
-  wsSend,
   onPromote
 }: Props) {
   const t = useTranslations('devicesControlRecord.view.multiControl');
@@ -51,14 +47,14 @@ export function MultiDeviceStage({
             {devices.length > 0 ? (
               <div className='flex min-h-0 flex-1 justify-start overflow-y-auto px-3 py-3'>
                 <div className={followerGridClass(devices.length)}>
-                  {devices.map((d) => (
+                  {devices.map((d, index) => (
                     <FollowerPreview
                       key={d.serial}
                       device={d}
                       mockupScreenWidth={followerMockupW}
-                      mode={wsMode}
-                      wsSend={wsSend}
                       onPromote={onPromote}
+                      previewIndex={index}
+                      previewCount={devices.length}
                     />
                   ))}
                 </div>

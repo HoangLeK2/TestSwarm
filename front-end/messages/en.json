@@ -2475,6 +2475,8 @@
       "addStepInputSelector": "Add input_selector step",
       "mirrorPlaceholder": "Device mirror",
       "followerOffline": "Offline",
+      "streamWaitingFirstFrame": "Waiting for first frame...",
+      "streamUnavailable": "No frame available",
       "flowSwitchToList": "Switch to step list",
       "flowSwitchToFlow": "Switch to visual Flow Editor",
       "flowListLabel": "List",

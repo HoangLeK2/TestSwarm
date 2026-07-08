@@ -132,10 +132,10 @@ export function DeviceFarm() {
       ) : (
         <>
           <section
-            className='grid justify-start gap-3'
+            className='grid justify-start gap-4'
             style={{
               gridTemplateColumns:
-                'repeat(auto-fill, minmax(min(100%, 260px), 320px))'
+                'repeat(auto-fill, minmax(min(100%, 280px), 320px))'
             }}
           >
             {pageDevices.map((device) => (

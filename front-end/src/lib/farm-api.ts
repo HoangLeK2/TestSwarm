@@ -80,29 +80,18 @@ function getDeviceBackendBase(): string {
 }
 
 function resolveDeviceFarmMediaBase(): string {
-  const explicit = (process.env.NEXT_PUBLIC_DEVICE_FARM_MEDIA_URL || '').trim();
-  if (explicit) return explicit.replace(/\/+$/, '');
+  const apiBase = deviceFarmBackendBase.replace(/\/+$/, '');
+  if (!apiBase) return '';
 
-  const deviceBase = getDeviceBackendBase();
   try {
-    const u = new URL(deviceBase);
-    if (u.port && u.port !== '3000') return deviceBase;
-  } catch {
-    // fall through
-  }
-
-  if (typeof window !== 'undefined') {
-    try {
-      const page = new URL(window.location.origin);
-      if (page.port === '3000') {
-        page.port = '8081';
-        return page.toString().replace(/\/+$/, '');
-      }
-    } catch {
-      // fall through
+    const api = new URL(apiBase);
+    if (api.port === '3000') {
+      api.port = '8081';
     }
+    return api.toString().replace(/\/+$/, '');
+  } catch {
+    return apiBase;
   }
-  return deviceBase;
 }
 
 export const deviceFarmMediaBase = resolveDeviceFarmMediaBase();

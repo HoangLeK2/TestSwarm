@@ -14,7 +14,7 @@ import { serialToId } from '../helpers';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import { ROUTES } from '@/config/routes';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   DeviceAndroidFrame,
@@ -26,6 +26,10 @@ import { DeviceStepMonitorButton } from './device-step-monitor';
 import { Badge } from '@/components/ui/badge';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
+import {
+  acquireSnapshotPreviewWarmup,
+  type SnapshotPreviewWarmupHandle
+} from '../services/snapshot-preview-warmup';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
@@ -37,6 +41,14 @@ const DASHBOARD_PREVIEW_REFRESH_MS = (() => {
   );
   if (!Number.isFinite(raw)) return 1_000;
   return Math.max(500, Math.min(5_000, Math.round(raw)));
+})();
+const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
+  const raw = Number(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MAX_AGE_MS ??
+      DASHBOARD_PREVIEW_REFRESH_MS
+  );
+  if (!Number.isFinite(raw)) return DASHBOARD_PREVIEW_REFRESH_MS;
+  return Math.max(500, Math.min(10_000, Math.round(raw)));
 })();
 
 interface DeviceTilePreviewProps {
@@ -83,6 +95,7 @@ function DeviceTilePreviewInner({
     null
   );
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+  const warmupHandleRef = useRef<SnapshotPreviewWarmupHandle | null>(null);
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -98,16 +111,17 @@ function DeviceTilePreviewInner({
     tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
 
   /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
-  const previewMockupScreenWidth = 216;
+  const previewMockupScreenWidth = 198;
   const previewMockupHeightPx = useMemo(
     () => mockupOuterHeightPx(previewMockupScreenWidth),
     [previewMockupScreenWidth]
   );
+  const tileWidthPx = previewMockupScreenWidth + 90;
 
   const previewUrl = useMemo(() => {
     if (!tabActive) return null;
     if (!isActive || !loadStream) return null;
-    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}`;
+    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
   }, [device.serial, isActive, loadStream, previewAttempt, tabActive]);
@@ -159,38 +173,67 @@ function DeviceTilePreviewInner({
     return () => window.clearInterval(timer);
   }, [device.serial, hasFrame, isActive, loadStream]);
 
+  useEffect(() => {
+    if (!isActive || !loadStream) {
+      warmupHandleRef.current?.release();
+      warmupHandleRef.current = null;
+      return;
+    }
+    if (loadingElapsedSec < 2 || warmupHandleRef.current) return;
+    const handle = acquireSnapshotPreviewWarmup(device.serial);
+    warmupHandleRef.current = handle;
+    handle?.attached.then((ok) => {
+      if (!ok && warmupHandleRef.current === handle) {
+        warmupHandleRef.current = null;
+      }
+    });
+  }, [device.serial, isActive, loadingElapsedSec, loadStream]);
+
+  useEffect(() => {
+    return () => {
+      warmupHandleRef.current?.release();
+      warmupHandleRef.current = null;
+    };
+  }, [device.serial]);
+
   return (
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
-      className='flex h-full flex-col overflow-hidden border-border bg-card shadow-sm'
+      className='flex h-full max-w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-card/70 shadow-sm backdrop-blur-sm transition-colors hover:border-primary/35'
+      style={{ width: tileWidthPx }}
     >
-      <CardHeader className='relative z-10 border-b border-border/60 px-3 py-2.5'>
-        <div className='flex items-center justify-between gap-2'>
-          <div className='flex min-w-0 flex-col gap-0.5'>
-            <CardTitle className='truncate text-xs font-medium text-foreground'>
-              {device.brand} {device.model}
-            </CardTitle>
-            <span className='font-mono text-[10px] text-muted-foreground'>
-              {device.serial}
-            </span>
+      <CardContent className='flex flex-1 flex-col p-0'>
+        <div className='border-b border-border/60 px-3 py-3'>
+          <div className='flex min-w-0 items-start justify-between gap-2'>
+            <div className='min-w-0'>
+              <div className='flex min-w-0 items-center gap-1.5'>
+                <p className='truncate text-sm font-semibold leading-5 text-foreground'>
+                  {device.brand} {device.model}
+                </p>
+                {!isActive ? (
+                  <Badge
+                    variant='outline'
+                    className='shrink-0 border-red-500/30 bg-red-500/10 text-[10px] text-red-700 dark:text-red-300'
+                  >
+                    {t('badgeOffline')}
+                  </Badge>
+                ) : isUnresponsive ? (
+                  <Badge
+                    variant='outline'
+                    className='shrink-0 border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-200'
+                  >
+                    {t('badgeUnresponsive')}
+                  </Badge>
+                ) : null}
+              </div>
+              <p className='mt-0.5 truncate font-mono text-[11px] leading-4 text-muted-foreground'>
+                {device.serial}
+              </p>
+            </div>
           </div>
-          <div className='relative z-10 flex shrink-0 items-center gap-1.5'>
-            {!isActive ? (
-              <Badge
-                variant='outline'
-                className='border-red-500/30 bg-red-500/10 text-[10px] text-red-700 dark:text-red-300'
-              >
-                {t('badgeOffline')}
-              </Badge>
-            ) : isUnresponsive ? (
-              <Badge
-                variant='outline'
-                className='border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-200'
-              >
-                {t('badgeUnresponsive')}
-              </Badge>
-            ) : null}
+
+          <div className='mt-2 flex min-w-0 items-center gap-1.5'>
             {onOpenSteps ? (
               <DeviceStepMonitorButton
                 serial={device.serial}
@@ -202,7 +245,7 @@ function DeviceTilePreviewInner({
               <Button
                 asChild
                 size='sm'
-                className='h-7 shrink-0 px-2.5 text-[11px]'
+                className='h-8 min-w-0 flex-1 px-3 text-xs font-semibold'
               >
                 <Link
                   href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(
@@ -215,7 +258,7 @@ function DeviceTilePreviewInner({
             ) : (
               <Button
                 size='sm'
-                className='h-7 shrink-0 px-2.5 text-[11px]'
+                className='h-8 min-w-0 flex-1 px-3 text-xs font-semibold'
                 disabled
               >
                 {t('controlDevice')}
@@ -223,14 +266,12 @@ function DeviceTilePreviewInner({
             )}
           </div>
         </div>
-      </CardHeader>
-      <CardContent className='flex flex-1 flex-col gap-2 px-2.5 pb-2.5 pt-2.5'>
-        <div className='flex flex-col items-center gap-2'>
+
+        <div className='flex flex-1 flex-col items-center bg-background/25'>
           <div
-            className='flex w-full shrink-0 justify-center'
+            className='flex w-full shrink-0 justify-center px-3 py-4'
             style={{
-              height: previewMockupHeightPx,
-              minHeight: previewMockupHeightPx
+              minHeight: previewMockupHeightPx + 32
             }}
           >
             <DeviceAndroidFrame

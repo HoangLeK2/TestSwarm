@@ -8,6 +8,10 @@ import { cn } from '@/lib/utils';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import { useTabNetworkActive } from '../../hooks/use-tab-network-active';
+import {
+  acquireSnapshotPreviewWarmup,
+  type SnapshotPreviewWarmupHandle
+} from '../../services/snapshot-preview-warmup';
 
 const FOLLOWER_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
@@ -15,6 +19,14 @@ const FOLLOWER_PREVIEW_REFRESH_MS = (() => {
   );
   if (!Number.isFinite(raw)) return 500;
   return Math.max(500, Math.min(5_000, Math.round(raw)));
+})();
+const FOLLOWER_PREVIEW_MAX_AGE_MS = (() => {
+  const raw = Number(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MAX_AGE_MS ??
+      FOLLOWER_PREVIEW_REFRESH_MS
+  );
+  if (!Number.isFinite(raw)) return FOLLOWER_PREVIEW_REFRESH_MS;
+  return Math.max(500, Math.min(10_000, Math.round(raw)));
 })();
 
 export function formatFollowerLabel(
@@ -61,6 +73,7 @@ export const FollowerPreview = memo(function FollowerPreview({
   const [hasFrame, setHasFrame] = useState(false);
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
   const [previewCadenceReady, setPreviewCadenceReady] = useState(false);
+  const warmupHandleRef = useRef<SnapshotPreviewWarmupHandle | null>(null);
   const state = String(device.state || '')
     .replace('DeviceState.', '')
     .toUpperCase();
@@ -95,7 +108,7 @@ export const FollowerPreview = memo(function FollowerPreview({
 
   const previewUrl = useMemo(() => {
     if (!loadPreview) return null;
-    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}`;
+    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${FOLLOWER_PREVIEW_MAX_AGE_MS}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
   }, [device.serial, loadPreview, previewAttempt]);
@@ -155,6 +168,29 @@ export const FollowerPreview = memo(function FollowerPreview({
     }, 500);
     return () => window.clearInterval(timer);
   }, [device.serial, hasFrame, loadPreview]);
+
+  useEffect(() => {
+    if (!loadPreview) {
+      warmupHandleRef.current?.release();
+      warmupHandleRef.current = null;
+      return;
+    }
+    if (loadingElapsedSec < 2 || warmupHandleRef.current) return;
+    const handle = acquireSnapshotPreviewWarmup(device.serial);
+    warmupHandleRef.current = handle;
+    handle?.attached.then((ok) => {
+      if (!ok && warmupHandleRef.current === handle) {
+        warmupHandleRef.current = null;
+      }
+    });
+  }, [device.serial, loadingElapsedSec, loadPreview]);
+
+  useEffect(() => {
+    return () => {
+      warmupHandleRef.current?.release();
+      warmupHandleRef.current = null;
+    };
+  }, [device.serial]);
 
   return (
     <button

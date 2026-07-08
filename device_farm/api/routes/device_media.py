@@ -5,6 +5,7 @@ import base64
 import functools
 import logging
 import os
+import time
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -12,6 +13,22 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
+
+
+def _frame_age_ms(device) -> float:
+    last_frame_time = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+    if last_frame_time <= 0.0:
+        return float("inf")
+    return max(0.0, (time.monotonic() - last_frame_time) * 1000.0)
+
+
+def _store_snapshot_frame(device, frame: bytes) -> None:
+    lock = getattr(device, "_latest_jpeg_lock", None)
+    if lock is None:
+        return
+    with lock:
+        device._latest_jpeg = frame
+        device._last_frame_time = time.monotonic()
 
 
 def build_device_media_router(manager: DeviceManager) -> APIRouter:
@@ -68,14 +85,40 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         )
 
     @router.get("/screenshot/{serial}")
-    async def screenshot(serial: str, fresh: bool = False):
+    async def screenshot(
+        serial: str,
+        fresh: bool = False,
+        max_age_ms: int | None = None,
+    ):
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": "Not found"}, status_code=404)
-        if fresh:
-            frame = device.capture_screenshot(skip_cache=True)
-        else:
-            frame = device.take_screenshot()
+        frame = None
+        try:
+            frame = None if fresh else device.take_screenshot()
+        except Exception as exc:
+            log.debug("screenshot cache read failed for %s: %s", serial, exc)
+
+        stale = fresh or frame is None
+        if max_age_ms is not None:
+            max_age = max(250, min(int(max_age_ms), 10_000))
+            stale = stale or _frame_age_ms(device) >= max_age
+
+        if stale:
+            loop = asyncio.get_running_loop()
+            fresh_frame = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    device.capture_screenshot,
+                    quality=70,
+                    max_width=800,
+                    allow_ws_u2_fallback=False,
+                    skip_cache=True,
+                ),
+            )
+            if fresh_frame:
+                frame = fresh_frame
+                _store_snapshot_frame(device, fresh_frame)
         if not frame:
             return JSONResponse({"error": "No frame available"}, status_code=503)
         return StreamingResponse(

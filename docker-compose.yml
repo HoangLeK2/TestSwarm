@@ -78,34 +78,34 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    env_file:
-      - ./.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./.env
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
 
-  redis-ui:
-    image: rediscommander/redis-commander:latest
-    platform: linux/amd64
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      REDIS_HOSTS: local:redis:6379
-    ports:
-      - "${REDIS_UI_PORT:-5540}:8081"
+  # redis-ui:
+  #   image: rediscommander/redis-commander:latest
+  #   platform: linux/amd64
+  #   restart: unless-stopped
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     REDIS_HOSTS: local:redis:6379
+  #   ports:
+  #     - "${REDIS_UI_PORT:-5540}:8081"
 
   farm:
     build:
@@ -203,33 +203,33 @@ services:
   #   #   network ADB (adb connect) or run agent-boot on the host.
   #   command: ["--relay-only"]
 
-  # frontend:
-  #   build:
-  #     context: ./front-end
-  #     dockerfile: Dockerfile
-  #     args:
-  #       NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
-  #       NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
-  #       NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
-  #       NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
-  #       NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
-  #   env_file:
-  #     - ./.env
-  #   restart: unless-stopped
-  #   depends_on:
-  #     farm:
-  #       condition: service_healthy
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
-  #     NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
-  #     NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
-  #     DEVICE_FARM_BACKEND_URL: ${DEVICE_FARM_BACKEND_URL:-http://farm:8081}
-  #     LOW_BW_MODE: ${LOW_BW_MODE:-true}
-  #     LOW_BW_FRAME_SKIP: ${LOW_BW_FRAME_SKIP:-2}
-  #     NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
-  #     NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+  frontend:
+    build:
+      context: ./front-end
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
+        NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
+        NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+    env_file:
+      - ./.env
+    restart: unless-stopped
+    depends_on:
+      farm:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
+      NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
+      NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
+      DEVICE_FARM_BACKEND_URL: ${DEVICE_FARM_BACKEND_URL:-http://farm:8081}
+      LOW_BW_MODE: ${LOW_BW_MODE:-true}
+      LOW_BW_FRAME_SKIP: ${LOW_BW_FRAME_SKIP:-2}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+      NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
 
   # minio:
   #   profiles: [minio]

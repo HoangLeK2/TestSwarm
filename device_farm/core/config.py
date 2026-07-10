@@ -286,6 +286,25 @@ def _build_temporal_config(raw: dict) -> TemporalConfig:
     cfg = TemporalConfig(
         **{k: v for k, v in raw.items() if k in TemporalConfig.__dataclass_fields__}
     )
+
+    def _apply_int_env(env_name: str, attr_name: str, *, minimum: int = 1) -> None:
+        raw_value = os.environ.get(env_name)
+        if raw_value is None or str(raw_value).strip() == "":
+            return
+        try:
+            setattr(cfg, attr_name, max(minimum, int(raw_value)))
+        except ValueError:
+            pass
+
+    def _apply_float_env(env_name: str, attr_name: str, *, minimum: float = 0.0) -> None:
+        raw_value = os.environ.get(env_name)
+        if raw_value is None or str(raw_value).strip() == "":
+            return
+        try:
+            setattr(cfg, attr_name, max(minimum, float(raw_value)))
+        except ValueError:
+            pass
+
     # Allow env override for Docker: TEMPORAL_SERVER_URL=temporal:7233
     env_url = os.environ.get("TEMPORAL_SERVER_URL")
     if env_url:
@@ -302,6 +321,39 @@ def _build_temporal_config(raw: dict) -> TemporalConfig:
             cfg.worker_count = max(1, int(env_wc))
         except ValueError:
             pass
+    _apply_int_env(
+        "TEMPORAL_WORKER_MAX_CONCURRENT_ACTIVITIES",
+        "worker_max_concurrent_activities",
+    )
+    _apply_int_env(
+        "TEMPORAL_WORKER_MAX_CONCURRENT_WORKFLOWS",
+        "worker_max_concurrent_workflows",
+    )
+    _apply_int_env(
+        "TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT",
+        "workflow_execution_timeout",
+        minimum=0,
+    )
+    _apply_int_env(
+        "TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT",
+        "activity_start_to_close_timeout",
+    )
+    _apply_int_env("TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS", "activity_retry_max_attempts")
+    _apply_float_env(
+        "TEMPORAL_ACTIVITY_RETRY_INITIAL_INTERVAL",
+        "activity_retry_initial_interval",
+        minimum=0.0,
+    )
+    _apply_float_env(
+        "TEMPORAL_ACTIVITY_RETRY_MAX_INTERVAL",
+        "activity_retry_max_interval",
+        minimum=0.0,
+    )
+    _apply_float_env(
+        "TEMPORAL_ACTIVITY_RETRY_BACKOFF",
+        "activity_retry_backoff",
+        minimum=1.0,
+    )
     return cfg
 
 

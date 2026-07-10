@@ -96,8 +96,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4.0'
-          memory: 4G
+          cpus: '6.0'
+          memory: 6G
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-device_farm}}
       DB_HOST: ${DB_HOST:-host.docker.internal}
@@ -106,6 +106,9 @@ services:
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       TEMPORAL_SERVER_URL: temporal:7233
+      # Parallel Temporal worker threads (each has own event loop + activity DB pool).
+      # Override via .env; default 6 → 6×20 = 120 activity slots (target ~120 devices).
+      TEMPORAL_WORKER_COUNT: ${TEMPORAL_WORKER_COUNT:-6}
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -125,6 +128,15 @@ services:
       RELAY_PORT: ${RELAY_PORT:-50051}
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-15}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-5}
+      # Per-worker-loop pool for Temporal activities (finalize_campaign, device actions).
+      # Was 2+2=4 → QueuePool timeout under parallel finalize. Sized for ~20 activities/worker.
+      DB_ACTIVITY_POOL_SIZE: ${DB_ACTIVITY_POOL_SIZE:-12}
+      DB_ACTIVITY_MAX_OVERFLOW: ${DB_ACTIVITY_MAX_OVERFLOW:-12}
+      DB_ACTIVITY_POOL_TIMEOUT: ${DB_ACTIVITY_POOL_TIMEOUT:-30}
+      DB_IDLE_TRANSACTION_TIMEOUT_MS: ${DB_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
     volumes:
       - ./device_farm/config.yaml:/app/config.yaml:ro
       - farm_captures:/app/captures

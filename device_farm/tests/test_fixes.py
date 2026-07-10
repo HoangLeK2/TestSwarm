@@ -810,3 +810,39 @@ class TestTemporalConfig:
         from core.config import _build_temporal_config
         cfg = _build_temporal_config({})
         assert cfg.enabled is False
+
+    def test_temporal_worker_concurrency_env_overrides(self, monkeypatch):
+        from core.config import _build_temporal_config
+
+        monkeypatch.setenv("TEMPORAL_WORKER_COUNT", "7")
+        monkeypatch.setenv("TEMPORAL_WORKER_MAX_CONCURRENT_ACTIVITIES", "31")
+        monkeypatch.setenv("TEMPORAL_WORKER_MAX_CONCURRENT_WORKFLOWS", "91")
+
+        cfg = _build_temporal_config({
+            "worker_count": 1,
+            "worker_max_concurrent_activities": 10,
+            "worker_max_concurrent_workflows": 50,
+        })
+
+        assert cfg.worker_count == 7
+        assert cfg.worker_max_concurrent_activities == 31
+        assert cfg.worker_max_concurrent_workflows == 91
+
+    def test_temporal_timeout_and_retry_env_overrides(self, monkeypatch):
+        from core.config import _build_temporal_config
+
+        monkeypatch.setenv("TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT", "0")
+        monkeypatch.setenv("TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT", "180")
+        monkeypatch.setenv("TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS", "5")
+        monkeypatch.setenv("TEMPORAL_ACTIVITY_RETRY_INITIAL_INTERVAL", "1.5")
+        monkeypatch.setenv("TEMPORAL_ACTIVITY_RETRY_MAX_INTERVAL", "45.5")
+        monkeypatch.setenv("TEMPORAL_ACTIVITY_RETRY_BACKOFF", "2.5")
+
+        cfg = _build_temporal_config({})
+
+        assert cfg.workflow_execution_timeout == 0
+        assert cfg.activity_start_to_close_timeout == 180
+        assert cfg.activity_retry_max_attempts == 5
+        assert cfg.activity_retry_initial_interval == 1.5
+        assert cfg.activity_retry_max_interval == 45.5
+        assert cfg.activity_retry_backoff == 2.5

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from sqlalchemy import select
@@ -12,8 +13,12 @@ from db.crud.execution import get_execution, list_execution_devices
 from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.enums import ExecutionStatus
-from db.models.execution import Execution
-from services.campaign.dispatcher import FanOutResult, finish_fan_out_execution
+from db.models.execution import Execution, ExecutionDevice
+from services.campaign.dispatcher import (
+    FanOutExecutionView,
+    FanOutResult,
+    finish_fan_out_execution,
+)
 from services.campaign.scenario_sources import (
     build_campaign_scenario_registry,
     resolve_campaign_scenario_refs,
@@ -25,6 +30,7 @@ log = logging.getLogger(__name__)
 
 DISPATCH_SOURCE_TEMPORAL = "temporal"
 DISPATCH_SOURCE_FALLBACK = "fallback"
+DEFAULT_RUNTIME_START_CONCURRENCY = 50
 
 
 def workflow_id_for_execution(execution_id: str) -> str:
@@ -50,6 +56,17 @@ def _scenario_refs_with_recovery_refs(
         merged.append({"scenario_id": scenario_id})
         seen.add(scenario_id)
     return merged
+
+
+def _runtime_start_concurrency_limit() -> int:
+    raw = os.getenv("CAMPAIGN_RUNTIME_START_CONCURRENCY", "").strip()
+    if not raw:
+        return DEFAULT_RUNTIME_START_CONCURRENCY
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_RUNTIME_START_CONCURRENCY
+    return max(1, min(value, 200))
 
 
 async def build_org_scenario_registry(
@@ -156,6 +173,59 @@ async def _load_scenario_device_vars_for_execution(
     }
 
 
+def _runtime_campaign_vars(campaign: Campaign) -> dict[str, Any]:
+    campaign_vars = dict(campaign.variables or {})
+    owner = campaign.created_by or campaign.user_id
+    if owner:
+        campaign_vars.setdefault("__USER_ID__", str(owner))
+    return campaign_vars
+
+
+def _build_prepared_scenario_input(
+    *,
+    execution: Execution,
+    campaign: Campaign,
+    org_id: str,
+    device_serial: str,
+    effective_vars: dict[str, Any],
+    account_vars: dict[str, Any],
+    scenario_refs: list[dict[str, Any]],
+    scenario_registry: dict[str, Any],
+    campaign_vars: dict[str, Any],
+    recovery_policy: dict[str, Any],
+    scenario_device_vars: dict[str, dict[str, Any]] | None = None,
+    device_index: int = 0,
+) -> ScenarioInput | None:
+    sequence_steps = build_sequence_steps(
+        scenario_refs,
+        device_index=device_index,
+        effective_vars=effective_vars,
+        account_vars=account_vars,
+        campaign_vars=campaign_vars,
+        scenario_device_vars=scenario_device_vars,
+    )
+    if not sequence_steps:
+        return None
+
+    start_step = int((execution.meta or {}).get("start_step") or execution.checkpoint_step or 0)
+    scenario_config: dict[str, Any] = {"capture_mode": "error_only"}
+    if recovery_policy:
+        scenario_config["recovery_policy"] = recovery_policy
+
+    return ScenarioInput(
+        campaign_id=campaign.id,
+        device_serial=device_serial,
+        steps=sequence_steps,
+        variables=dict(effective_vars),
+        campaign_vars=campaign_vars,
+        scenario_registry=scenario_registry,
+        execution_id=execution.id,
+        run_id=execution.id,
+        start_step=max(0, start_step),
+        scenario_config=scenario_config,
+    )
+
+
 async def prepare_scenario_input(
     db: AsyncSession,
     *,
@@ -182,42 +252,24 @@ async def prepare_scenario_input(
         org_id=org_id,
         scenario_refs=registry_refs,
     )
-    campaign_vars = dict(campaign.variables or {})
-    owner = campaign.created_by or campaign.user_id
-    if owner:
-        campaign_vars.setdefault("__USER_ID__", str(owner))
-    sequence_steps = build_sequence_steps(
-        refs,
-        device_index=device_index,
+    return _build_prepared_scenario_input(
+        execution=execution,
+        campaign=campaign,
+        org_id=org_id,
+        device_serial=device_serial,
         effective_vars=effective_vars,
         account_vars=account_vars,
-        campaign_vars=campaign_vars,
+        scenario_refs=refs,
+        scenario_registry=registry,
+        campaign_vars=_runtime_campaign_vars(campaign),
+        recovery_policy=recovery_policy,
         scenario_device_vars=await _load_scenario_device_vars_for_execution(
             db,
             campaign_id=campaign.id,
             scenario_refs=registry_refs,
             device_id=device_id,
         ),
-    )
-    if not sequence_steps:
-        return None
-
-    start_step = int((execution.meta or {}).get("start_step") or execution.checkpoint_step or 0)
-    scenario_config: dict[str, Any] = {"capture_mode": "error_only"}
-    if recovery_policy:
-        scenario_config["recovery_policy"] = recovery_policy
-
-    return ScenarioInput(
-        campaign_id=campaign.id,
-        device_serial=device_serial,
-        steps=sequence_steps,
-        variables=dict(effective_vars),
-        campaign_vars=campaign_vars,
-        scenario_registry=registry,
-        execution_id=execution.id,
-        run_id=execution.id,
-        start_step=max(0, start_step),
-        scenario_config=scenario_config,
+        device_index=device_index,
     )
 
 
@@ -262,6 +314,7 @@ async def _mark_runtime_meta(
     *,
     dispatch_source: str,
     workflow_id: str | None = None,
+    flush: bool = True,
 ) -> None:
     meta = dict(execution.meta or {})
     meta["dispatch_source"] = dispatch_source
@@ -269,7 +322,8 @@ async def _mark_runtime_meta(
         meta["workflow_id"] = workflow_id
         meta["workflow_ids"] = [workflow_id]
     execution.meta = meta
-    await db.flush()
+    if flush:
+        await db.flush()
 
 
 def _temporal_available(temporal_client: Any, temporal_config: Any) -> bool:
@@ -467,6 +521,47 @@ async def _load_campaign(
     return campaign
 
 
+async def _load_runtime_executions_by_id(
+    db: AsyncSession,
+    execution_ids: list[str],
+) -> dict[str, Execution]:
+    ids = [execution_id for execution_id in dict.fromkeys(execution_ids) if execution_id]
+    if not ids:
+        return {}
+    result = await db.execute(select(Execution).where(Execution.id.in_(ids)))
+    return {execution.id: execution for execution in result.scalars().all()}
+
+
+async def _load_runtime_device_serials_by_execution(
+    db: AsyncSession,
+    execution_ids: list[str],
+) -> dict[str, str]:
+    ids = [execution_id for execution_id in dict.fromkeys(execution_ids) if execution_id]
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(ExecutionDevice.execution_id, Device.serial)
+        .join(Device, Device.id == ExecutionDevice.device_id)
+        .where(ExecutionDevice.execution_id.in_(ids))
+    )
+    serials: dict[str, str] = {}
+    for execution_id, serial in result.all():
+        if execution_id not in serials and serial:
+            serials[str(execution_id)] = str(serial)
+    return serials
+
+
+def _runtime_device_serial(
+    execution: Execution,
+    linked_serials: dict[str, str],
+) -> str:
+    cfg = execution.device_config or {}
+    serial = str(cfg.get("device_serial") or "").strip()
+    if serial:
+        return serial
+    return linked_serials.get(execution.id, "")
+
+
 async def start_execution_runtime(
     db: AsyncSession,
     *,
@@ -491,28 +586,69 @@ async def start_execution_runtime(
         return stats
 
     use_temporal = _temporal_available(temporal_client, temporal_config)
+
+    running_views = [
+        view
+        for view in fan_out.executions
+        if view.status == ExecutionStatus.RUNNING.value
+    ]
+    stats["skipped"] += len(fan_out.executions) - len(running_views)
+    if not running_views:
+        return stats
+
+    execution_ids = [view.execution_id for view in running_views]
+    executions_by_id = await _load_runtime_executions_by_id(db, execution_ids)
+    linked_serials = await _load_runtime_device_serials_by_execution(db, execution_ids)
+    recovery_policy = dict(getattr(campaign, "recovery_policy", None) or {})
+    registry_refs = _scenario_refs_with_recovery_refs(scenario_refs, recovery_policy)
+    scenario_registry = await build_campaign_scenario_registry(
+        db,
+        campaign=campaign,
+        org_id=org_id,
+        scenario_refs=registry_refs,
+    )
+    campaign_vars = _runtime_campaign_vars(campaign)
+    scenario_ids = [
+        str(ref["scenario_id"])
+        for ref in registry_refs
+        if ref.get("scenario_id")
+    ]
+    device_ids = [str(view.device_id) for view in running_views if view.device_id]
+    scenario_device_vars_bulk: dict[tuple[str, str], dict[str, Any]] = {}
+    if scenario_ids and device_ids:
+        from db.crud.scenario_device_variable import (
+            get_campaign_org_scenario_device_variables_bulk,
+        )
+
+        scenario_device_vars_bulk = await get_campaign_org_scenario_device_variables_bulk(
+            db,
+            campaign.id,
+            scenario_ids,
+            device_ids,
+        )
+
     device_index = 0
-
-    for view in fan_out.executions:
-        if view.status != ExecutionStatus.RUNNING.value:
-            stats["skipped"] += 1
-            continue
-
-        execution = await get_execution(db, view.execution_id)
+    prepared: list[tuple[FanOutExecutionView, Execution, ScenarioInput]] = []
+    for view in running_views:
+        execution = executions_by_id.get(view.execution_id)
         if execution is None:
             stats["failed"] += 1
             continue
 
-        device_serial = await _resolve_device_serial(db, execution)
+        device_serial = _runtime_device_serial(execution, linked_serials)
         if not device_serial:
             stats["failed"] += 1
             continue
 
         effective_vars = view.effective_vars or dict((execution.device_config or {}).get("effective_vars") or {})
         account_vars = dict((execution.device_config or {}).get("account_vars") or {})
-
-        scenario_input = await prepare_scenario_input(
-            db,
+        scenario_device_vars = {
+            scenario_id: normalize_device_vars(
+                scenario_device_vars_bulk.get((scenario_id, view.device_id), {})
+            )
+            for scenario_id in scenario_ids
+        }
+        scenario_input = _build_prepared_scenario_input(
             execution=execution,
             campaign=campaign,
             org_id=org_id,
@@ -520,15 +656,28 @@ async def start_execution_runtime(
             effective_vars=effective_vars,
             account_vars=account_vars,
             scenario_refs=scenario_refs,
-            device_id=view.device_id,
+            scenario_registry=scenario_registry,
+            campaign_vars=campaign_vars,
+            recovery_policy=recovery_policy,
+            scenario_device_vars=scenario_device_vars,
             device_index=device_index,
         )
         if scenario_input is None:
             stats["failed"] += 1
             continue
 
-        started = False
-        if use_temporal:
+        prepared.append((view, execution, scenario_input))
+        device_index += 1
+
+    if not prepared:
+        return stats
+
+    async def _start_temporal_item(
+        item: tuple[FanOutExecutionView, Execution, ScenarioInput],
+        sem: asyncio.Semaphore,
+    ) -> tuple[FanOutExecutionView, Execution, ScenarioInput, str | None, Exception | None]:
+        view, execution, scenario_input = item
+        async with sem:
             try:
                 wf_id = await _try_start_temporal(
                     temporal_client,
@@ -536,37 +685,60 @@ async def start_execution_runtime(
                     scenario_input,
                     execution.id,
                 )
-                await _mark_runtime_meta(
-                    db,
-                    execution,
-                    dispatch_source=DISPATCH_SOURCE_TEMPORAL,
-                    workflow_id=wf_id,
-                )
-                stats["temporal"] += 1
-                started = True
             except Exception as exc:
-                log.error(
-                    "Temporal workflow start failed execution=%s: %s",
-                    execution.id,
-                    exc,
-                )
+                return view, execution, scenario_input, None, exc
+            return view, execution, scenario_input, wf_id, None
 
-        if not started:
+    if use_temporal:
+        sem = asyncio.Semaphore(_runtime_start_concurrency_limit())
+        temporal_results = await asyncio.gather(
+            *(_start_temporal_item(item, sem) for item in prepared)
+        )
+    else:
+        temporal_results = [
+            (view, execution, scenario_input, None, None)
+            for view, execution, scenario_input in prepared
+        ]
+
+    meta_changed = False
+    for _view, execution, scenario_input, wf_id, exc in temporal_results:
+        if wf_id:
             await _mark_runtime_meta(
                 db,
                 execution,
-                dispatch_source=DISPATCH_SOURCE_FALLBACK,
+                dispatch_source=DISPATCH_SOURCE_TEMPORAL,
+                workflow_id=wf_id,
+                flush=False,
             )
-            schedule_fallback_runtime(
-                scenario_input=scenario_input,
-                execution_id=execution.id,
-                org_id=org_id,
-                actor_user_id=actor_user_id,
-                manager=manager,
-            )
-            stats["fallback"] += 1
+            stats["temporal"] += 1
+            meta_changed = True
+            continue
 
-        device_index += 1
+        if exc is not None:
+            log.error(
+                "Temporal workflow start failed execution=%s: %s",
+                execution.id,
+                exc,
+            )
+
+        await _mark_runtime_meta(
+            db,
+            execution,
+            dispatch_source=DISPATCH_SOURCE_FALLBACK,
+            flush=False,
+        )
+        meta_changed = True
+        schedule_fallback_runtime(
+            scenario_input=scenario_input,
+            execution_id=execution.id,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            manager=manager,
+        )
+        stats["fallback"] += 1
+
+    if meta_changed:
+        await db.flush()
 
     return stats
 

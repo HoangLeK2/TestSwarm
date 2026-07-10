@@ -52,6 +52,8 @@ async def test_run_batch_click_success(executor):
     assert len(result["results"]) == 1
     assert result["results"][0]["op"] == "click"
     assert result["results"][0]["ok"] is True
+    assert result["total_ms"] >= 0
+    assert result["results"][0]["duration_ms"] >= 0
     dev.click.assert_called_once_with(100, 200)
 
 
@@ -121,6 +123,8 @@ async def test_unknown_op_fails_cleanly(executor):
     assert result["ok"] is False
     assert result["stopped_at"] == 0
     assert "unknown op" in result["results"][0]["error"]
+    assert result["total_ms"] >= 0
+    assert result["results"][0]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio

@@ -78,6 +78,9 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+SEMAPHORE_WAIT_WARN_MS = _env_float("RELAY_SEMAPHORE_WAIT_WARN_MS", 250.0)
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -123,6 +126,9 @@ SCRCPY_RESTART_MAX_ATTEMPTS = 5
 SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
 SCRCPY_STABLE_RESET_SECONDS = 30.0
 RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
+SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 15))
+SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 540))
+SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 800_000))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _AGENT_BOOT_ROOT = os.path.dirname(_HERE)
@@ -1201,11 +1207,11 @@ class RelayAgent:
                 "manual_stop": False,
                 "last_stop_reason": "",
                 "cfg": {
-                    "max_fps": int(msg.get("max_fps") or 30),
-                    "max_width": int(msg.get("max_width") or 800),
+                    "max_fps": int(msg.get("max_fps") or SCRCPY_DEFAULT_MAX_FPS),
+                    "max_width": int(msg.get("max_width") or SCRCPY_DEFAULT_MAX_WIDTH),
                     "enable_control": bool(msg.get("control", True)),
                     "port": int(msg.get("port") or 27183),
-                    "bitrate": int(msg.get("bitrate") or 2_000_000),
+                    "bitrate": int(msg.get("bitrate") or SCRCPY_DEFAULT_BITRATE),
                     "low_latency": bool(msg.get("low_latency", False)),
                 },
                 "adb_serial": adb_s,
@@ -1249,7 +1255,11 @@ class RelayAgent:
                 msg["_cancel_event"] = cancel_event
                 self._u2_batch_cancel_events[req_id] = cancel_event
             task = self._stream_tasks.add(
-                self._guarded(u2_batch_sem(), self._handle_u2_batch(msg, send_queue)),
+                self._guarded(
+                    u2_batch_sem(),
+                    self._handle_u2_batch(msg, send_queue),
+                    label="u2_batch",
+                ),
                 name="u2-batch",
             )
             if req_id:
@@ -1266,7 +1276,11 @@ class RelayAgent:
 
         elif mtype == "u2_flow":
             self._stream_tasks.add(
-                self._guarded(u2_flow_sem(), self._handle_u2_flow(msg, send_queue)),
+                self._guarded(
+                    u2_flow_sem(),
+                    self._handle_u2_flow(msg, send_queue),
+                    label="u2_flow",
+                ),
                 name="u2-flow",
             )
 
@@ -1281,7 +1295,11 @@ class RelayAgent:
                 msg["context"] = context
                 self._extra_data_cancel_events[req_id] = cancel_event
             task = self._stream_tasks.add(
-                self._guarded(extra_data_sem(), self._handle_extra_data(msg, send_queue)),
+                self._guarded(
+                    extra_data_sem(),
+                    self._handle_extra_data(msg, send_queue),
+                    label="extra_data",
+                ),
                 name="extra-data",
             )
             if req_id:
@@ -1880,6 +1898,7 @@ class RelayAgent:
         cancel_event = msg.get("_cancel_event")
         if not isinstance(cancel_event, asyncio.Event):
             cancel_event = None
+        started = time.perf_counter()
         result = await self._try_u2_batch_touch_fast_path(
             serial=serial,
             actions=actions,
@@ -1898,6 +1917,7 @@ class RelayAgent:
                 early_exit=bool(msg.get("early_exit", True)),
                 cancel_event=cancel_event,
             )
+        result.setdefault("total_ms", round((time.perf_counter() - started) * 1000, 1))
         result["type"] = "u2_batch_result"
         result["id"] = msg.get("id", "")
         # dump_hierarchy / screenshot ops can produce MB-sized values; offload
@@ -2093,6 +2113,14 @@ class RelayAgent:
             strategy,
             expand_on,
         )
+
+        def _attach_collect_error_diagnostic() -> None:
+            diagnostic = context.get("open_post_detail_diagnostic")
+            if not isinstance(diagnostic, dict):
+                return
+            reply["diagnostic"] = diagnostic
+            reply["ingest"] = {"ok": False, "diagnostic": diagnostic}
+
         try:
             if strategy == "fb_comment_filter_apply":
                 report, collect_err = await collect_fb_comment_filter_apply(
@@ -2162,6 +2190,7 @@ class RelayAgent:
             )
             if collect_err:
                 reply["error"] = collect_err
+                _attach_collect_error_diagnostic()
                 await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
@@ -2498,16 +2527,15 @@ class RelayAgent:
         if adb_serial != logical_serial:
             self._scrcpy_logical_to_adb[logical_serial] = adb_serial
 
-        await self._scrcpy_mgr.stop_session(adb_serial, reason="manual_stop")
         await self._scrcpy_mgr.start_session(
             serial=adb_serial,
-            max_fps=int(cfg.get("max_fps", 30)),
-            max_width=int(cfg.get("max_width", 800)),
+            max_fps=int(cfg.get("max_fps") or SCRCPY_DEFAULT_MAX_FPS),
+            max_width=int(cfg.get("max_width") or SCRCPY_DEFAULT_MAX_WIDTH),
             enable_control=bool(cfg.get("enable_control", True)),
             port=int(cfg.get("port", 27183)),
             send_queue=send_queue,
             loop=loop,
-            bitrate=int(cfg.get("bitrate", 2_000_000)),
+            bitrate=int(cfg.get("bitrate") or SCRCPY_DEFAULT_BITRATE),
             low_latency=bool(cfg.get("low_latency", False)),
         )
         started = self._scrcpy_mgr.get(adb_serial) is not None
@@ -2718,7 +2746,7 @@ class RelayAgent:
             except Exception:
                 pass
 
-    async def _guarded(self, sem: asyncio.Semaphore, coro) -> Any:
+    async def _guarded(self, sem: asyncio.Semaphore, coro, *, label: str = "work") -> Any:
         """
         Run `coro` while holding a global semaphore so total concurrency for
         this class of work (extra_data / u2_batch / u2_flow) is bounded
@@ -2728,5 +2756,17 @@ class RelayAgent:
         dump tasks, each grabbing a thread from the u2 pool — the loop then
         starves heartbeats and gRPC sends, which looks like a hang.
         """
-        async with sem:
+        started = time.perf_counter()
+        await sem.acquire()
+        wait_ms = (time.perf_counter() - started) * 1000
+        if wait_ms >= SEMAPHORE_WAIT_WARN_MS:
+            logger.info(
+                "%s semaphore wait %.1fms available=%s",
+                label,
+                wait_ms,
+                getattr(sem, "_value", "?"),
+            )
+        try:
             return await coro
+        finally:
+            sem.release()

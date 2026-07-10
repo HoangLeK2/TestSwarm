@@ -169,19 +169,47 @@ class U2SessionPool:
 
     async def run_locked(self, serial: str, fn: Callable[[Any], Any]) -> Any:
         """Run sync fn(device) while holding the per-serial session lock (one connect)."""
+        started = time.perf_counter()
         ex = self._resolve_executor()
         active = _active_session.get()
         if active is not None and active[0] == serial:
             entry = active[1]
             entry.last_used = time.monotonic()
-            return await self._loop.run_in_executor(ex, fn, entry.device)
+            exec_started = time.perf_counter()
+            try:
+                return await self._loop.run_in_executor(ex, fn, entry.device)
+            finally:
+                total_ms = (time.perf_counter() - started) * 1000.0
+                if total_ms >= 1000.0:
+                    logger.info(
+                        "u2-pool: run_locked timing serial=%s active_scope=true exec_ms=%.1f total_ms=%.1f",
+                        serial,
+                        (time.perf_counter() - exec_started) * 1000.0,
+                        total_ms,
+                    )
 
+        prepare_started = time.perf_counter()
         entry = await self._prepare_entry(serial)
+        prepare_ms = (time.perf_counter() - prepare_started) * 1000.0
+        lock_wait_started = time.perf_counter()
         async with entry.lock:
-            if not await self._is_alive(entry):
-                await self._reconnect(entry)
+            lock_wait_ms = (time.perf_counter() - lock_wait_started) * 1000.0
             entry.last_used = time.monotonic()
-            return await self._loop.run_in_executor(ex, fn, entry.device)
+            exec_started = time.perf_counter()
+            try:
+                return await self._loop.run_in_executor(ex, fn, entry.device)
+            finally:
+                exec_ms = (time.perf_counter() - exec_started) * 1000.0
+                total_ms = (time.perf_counter() - started) * 1000.0
+                if total_ms >= 1000.0:
+                    logger.info(
+                        "u2-pool: run_locked timing serial=%s prepare_ms=%.1f lock_wait_ms=%.1f exec_ms=%.1f total_ms=%.1f",
+                        serial,
+                        prepare_ms,
+                        lock_wait_ms,
+                        exec_ms,
+                        total_ms,
+                    )
 
     async def evict(self, serial: str) -> None:
         async with self._global_lock:

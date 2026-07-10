@@ -23,6 +23,7 @@ from services.execution.event_types import (
     EXECUTION_COMPLETED,
     EXECUTION_CREATED,
     STEP_COMPLETED,
+    STEP_FAILED,
     STEP_RETRIED,
     STEP_STARTED,
 )
@@ -208,6 +209,15 @@ async def test_step_retried_events(session_factory):
                 depth=2,
                 step_result={
                     "ok": True,
+                    "duration_ms": 123.4,
+                    "extra_data_total_ms": 55.0,
+                    "extra_data_dump_ms": 40.0,
+                    "extra_data_parse_ms": 3.5,
+                    "extra_data_click_ms": 0.0,
+                    "extra_data_sleep_ms": 0.0,
+                    "extra_data_steps": 1,
+                    "scroll_to_flow_ms": 321.0,
+                    "scroll_to_swipes": 4,
                     "retry_attempts": [
                         {"attempt": 1, "error_reason": "stale_frame", "wait_ms_before_next": 100},
                         {"attempt": 2, "error_reason": None, "wait_ms_before_next": None},
@@ -226,6 +236,60 @@ async def test_step_retried_events(session_factory):
     assert rows[0].payload["step_id"] == "s1"
     assert rows[0].payload["depth"] == 2
     assert rows[2].payload["depth"] == 2
+    assert rows[2].payload["duration_ms"] == 123.4
+    assert rows[2].payload["extra_data_total_ms"] == 55.0
+    assert rows[2].payload["extra_data_dump_ms"] == 40.0
+    assert rows[2].payload["extra_data_parse_ms"] == 3.5
+    assert rows[2].payload["extra_data_click_ms"] == 0.0
+    assert rows[2].payload["extra_data_sleep_ms"] == 0.0
+    assert rows[2].payload["extra_data_steps"] == 1
+    assert rows[2].payload["scroll_to_flow_ms"] == 321.0
+    assert rows[2].payload["scroll_to_swipes"] == 4
+
+
+@pytest.mark.asyncio
+async def test_step_failed_event_includes_nested_extra_data_diagnostic(session_factory):
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await emit_step_finished(
+                db,
+                execution_id=exec_id,
+                org_id="org-1",
+                campaign_id="camp-1",
+                step={"type": "run_scenario", "id": "sub"},
+                step_index=3,
+                depth=0,
+                step_result={
+                    "ok": False,
+                    "message": "run_scenario failed: edge extra_data failed",
+                    "edge_extra_summary": {
+                        "diagnostic": {
+                            "reason_code": "post_open_target_not_found",
+                            "timing": {"total_ms": 42.0},
+                        }
+                    },
+                    "nested_failure": {
+                        "step_index": 0,
+                        "step_type": "extract",
+                        "message": "edge extra_data failed",
+                    },
+                    "extra_data_total_ms": 42.0,
+                },
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        from db.crud.execution_events import list_execution_events
+
+        rows = await list_execution_events(db, exec_id)
+
+    assert len(rows) == 1
+    assert rows[0].event_type == STEP_FAILED
+    assert rows[0].payload["edge_extra_summary"]["diagnostic"]["reason_code"] == "post_open_target_not_found"
+    assert rows[0].payload["edge_extra_summary"]["diagnostic"]["timing"]["total_ms"] == 42.0
+    assert rows[0].payload["nested_failure"]["step_type"] == "extract"
+    assert rows[0].payload["extra_data_total_ms"] == 42.0
 
 
 @pytest.mark.asyncio

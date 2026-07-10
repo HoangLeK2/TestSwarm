@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 import pytest
 
@@ -165,6 +166,94 @@ async def test_collect_fb_comments_default_scan_is_bounded() -> None:
     ]
     assert len(swipes) <= 6
     assert len(dumps) <= 5
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_auto_back_closes_comment_sheet(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    import relay.extra_data.parsers.facebook as facebook
+
+    def fake_parse(xml, parent_post_id=None, max_items=400):
+        return [{"comment_key": "c1", "text": "real comment"}], {"reason_code": "ok"}
+
+    monkeypatch.setattr(facebook, "parse_fb_comments_from_xml_with_diagnostic", fake_parse)
+
+    exec_ = _FakeExecutor(xml=_sheet_xml())
+    context = {
+        "comment_scroll_passes": 1,
+        "min_comment_scan_passes": 1,
+        "comment_scroll_pause_s": 0,
+        "open_post_press_back_after_extract": True,
+    }
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert exec_.press_back_calls == 1
+    assert context["comment_sheet_closed_after_extract"] is True
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_auto_back_marks_empty_rows_but_still_closes_sheet(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    import relay.extra_data.parsers.facebook as facebook
+
+    def fake_parse(xml, parent_post_id=None, max_items=400):
+        return [{"comment_key": "c-empty", "author": "Alice", "text": ""}], {
+            "reason_code": "ok",
+            "comments_returned": 1,
+        }
+
+    monkeypatch.setattr(facebook, "parse_fb_comments_from_xml_with_diagnostic", fake_parse)
+
+    exec_ = _FakeExecutor(xml=_sheet_xml())
+    context = {
+        "comment_scroll_passes": 0,
+        "open_post_press_back_after_extract": True,
+    }
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert exec_.press_back_calls == 1
+    assert context["comment_sheet_closed_after_extract"] is True
+    assert context["comment_sheet_back_without_valid_comments"] is True
+    assert context["agent_boot_preparsed_comments"] is True
+    assert context["_preparsed_fb_comment_items"] == []
+    assert context["_preparsed_fb_comment_diagnostic"]["comments_returned"] == 0
+    assert context["_preparsed_fb_comment_diagnostic"]["dropped_empty_comments"] == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_auto_back_requires_comment_sheet() -> None:
+    exec_ = _FakeExecutor(xml=_SAMPLE_XML)
+    context = {
+        "comment_scroll_passes": 0,
+        "open_post_press_back_after_extract": True,
+    }
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert exec_.press_back_calls == 0
+    assert "comment_sheet_closed_after_extract" not in context
 
 
 @pytest.mark.asyncio
@@ -1957,6 +2046,14 @@ async def test_collect_fb_comment_filter_apply_single_session() -> None:
     assert report["switched"] is True
     assert report["reason_code"] == "already_on_filter"
     assert len(report["steps"]) == 3
+    assert report["total_ms"] >= 0
+    assert report["dump_ms"] >= 0
+    assert report["parse_ms"] >= 0
+    assert report["click_ms"] >= 0
+    assert report["sleep_ms"] >= 0
+    assert report["steps"][0]["dump_ms"] >= 0
+    assert report["steps"][0]["parse_ms"] >= 0
+    assert report["steps"][0]["click_ms"] >= 0
     assert exec_.clicks == [(20, 30), (360, 1080)]
     assert exec_.session_scope_calls == 1
 
@@ -1998,8 +2095,88 @@ async def test_open_post_verify_failed_on_group_feed_no_back() -> None:
         )
     assert detail_xml is None
     assert diag.get("reason_code") == "post_open_verify_failed"
+    assert diag["timing"]["total_ms"] >= 0
+    assert diag["timing"]["resolve_ms"] >= 0
+    assert diag["attempts"][0]["tap_dump_ms"] >= 0
+    assert diag["attempts"][0]["verify_ms"] >= 0
     assert exec_.press_back_calls == 0
     assert diag.get("attempts") and diag["attempts"][0].get("back_pressed") is False
+
+
+@pytest.mark.asyncio
+async def test_open_post_target_not_found_reports_timing_diagnostic() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node text="Nhóm công khai" bounds="[0,0][1080,100]"/>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]"/>
+</hierarchy>"""
+    ctx: dict = {"open_post_before_extract": True}
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
+        return_value=(None, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        return_value=False,
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.diagnose_post_open_resolution",
+        return_value={"post_count": 0, "reason": "no_header"},
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml is None
+    assert diag["reason_code"] == "post_open_target_not_found"
+    assert diag["candidate_count"] == 0
+    assert diag["diagnostic"] == {"post_count": 0, "reason": "no_header"}
+    assert diag["timing"]["total_ms"] >= 0
+    assert diag["timing"]["resolve_ms"] >= 0
+    assert diag["timing"]["diagnose_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_open_post_failed_overlay_does_not_back_out_of_group_feed() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" text="Nhóm công khai" bounds="[40,120][400,180]" />
+  <node package="com.facebook.katana" text="Bạn viết gì đi…" bounds="[40,220][900,280]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,300][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][280,504]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    profile_overlay_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" text="Trang cá nhân" bounds="[40,200][400,260]" />
+</hierarchy>"""
+    exec_._dump_xml = profile_overlay_xml
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+    }
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        return_value=False,
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml is None
+    assert diag["reason_code"] == "post_open_verify_failed"
+    assert ctx["_fb_group_navigation"] is True
+    assert diag["attempts"][0]["back_pressed"] is False
+    assert exec_.press_back_calls == 0
 
 
 @pytest.mark.asyncio
@@ -2044,6 +2221,9 @@ async def test_open_post_success_returns_opened_post_metadata() -> None:
 
     assert detail_xml == feed_xml
     assert diag["reason_code"] == "ok"
+    assert diag["timing"]["total_ms"] >= 0
+    assert diag["attempts"][0]["tap_dump_ms"] >= 0
+    assert diag["attempts"][0]["verify_ms"] >= 0
     assert diag["opened_post"] == {
         "pid": "pid-2",
         "post_key": "post-2",
@@ -2228,8 +2408,39 @@ async def test_collect_post_open_comment_sheet_skips_post_expand() -> None:
         snapshots, err = await collect_xml_snapshots(exec_, "dev1", "fb_posts", ctx)
 
     assert err is None
-    assert snapshots == [comment_sheet_xml]
+    assert snapshots == [feed_xml, comment_sheet_xml]
     assert ctx["expand_see_more_skipped"] == "comment_sheet"
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_posts_keeps_feed_snapshot_when_opening_detail() -> None:
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView">
+    <node text="feed-post-1" />
+    <node text="feed-post-2" />
+  </node>
+</hierarchy>"""
+    detail_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node text="opened-detail-post" />
+</hierarchy>"""
+    exec_ = _FakeExecutor(xml=feed_xml)
+    exec_._dump_xml = feed_xml
+    ctx: dict = {"open_post_before_extract": True, "expand_see_more": False}
+
+    async def _opened_detail(*args, **kwargs):
+        ctx["open_post_detail"] = True
+        return detail_xml, {"reason_code": "ok"}
+
+    with patch(
+        "relay.extra_data.collector._maybe_open_fb_post_detail",
+        new=_opened_detail,
+    ):
+        snapshots, err = await collect_xml_snapshots(exec_, "dev1", "fb_posts", ctx)
+
+    assert err is None
+    assert snapshots == [feed_xml, detail_xml]
 
 
 @pytest.mark.asyncio
@@ -2316,6 +2527,9 @@ async def test_collect_xml_snapshots_attaches_preparsed_fb_comments(monkeypatch)
         snapshots=snapshots,
     )
     assert payload["preparsed"]["items"] == [{"comment_key": "c1", "text": "first"}]
+    assert payload["preparsed"]["snapshot_hashes"] == [
+        hashlib.sha256(_SAMPLE_XML.encode("utf-8")).hexdigest()
+    ]
     assert "xml_snapshots" not in payload
 
 
@@ -2378,6 +2592,10 @@ async def test_collect_xml_snapshots_preparsed_comments_merge_multiple_frames(mo
     )
     assert [item["comment_key"] for item in payload["preparsed"]["items"]] == ["c1", "c2"]
     assert payload["preparsed"]["snapshot_count"] == 2
+    assert payload["preparsed"]["snapshot_hashes"] == [
+        hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+        for snapshot in snapshots
+    ]
     assert "xml_snapshots" not in payload
 
 
@@ -2417,6 +2635,10 @@ def test_build_ingest_payload_uses_preparsed_comments_without_raw_snapshots() ->
     assert payload["preparsed"]["items"] == [{"comment_key": "c1", "text": "first"}]
     assert payload["preparsed"]["snapshot_count"] == 2
     assert payload["preparsed"]["xml_bytes"] == 1234
+    assert payload["preparsed"]["snapshot_hashes"] == [
+        hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+        for snapshot in [_SAMPLE_XML, _SAMPLE_XML + " "]
+    ]
     assert "xml_snapshots" not in payload
     assert "_preparsed_fb_comment_items" not in payload["context"]
     assert context["_preparsed_fb_comment_items"] == [{"comment_key": "c1", "text": "first"}]

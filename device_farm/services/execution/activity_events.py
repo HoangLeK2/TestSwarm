@@ -89,7 +89,30 @@ async def emit_step_finished(
         "message": step_result.get("message"),
         "reason_code": step_result.get("reason_code"),
     }
-    for key in ("output", "exit_code", "save_as", "output_truncated"):
+    for key in (
+        "output",
+        "exit_code",
+        "save_as",
+        "output_truncated",
+        "duration_ms",
+        "activity_duration_ms",
+        "u2_batch_duration_ms",
+        "u2_batch_action_duration_ms",
+        "relay_total_ms",
+        "relay_queue_wait_ms",
+        "extra_data_total_ms",
+        "extra_data_dump_ms",
+        "extra_data_parse_ms",
+        "extra_data_click_ms",
+        "extra_data_sleep_ms",
+        "extra_data_steps",
+        "edge_extra_summary",
+        "edge_filter_summary",
+        "nested_failure",
+        "nested_failure_context",
+        "scroll_to_flow_ms",
+        "scroll_to_swipes",
+    ):
         if key in step_result:
             payload[key] = step_result.get(key)
     if ok:

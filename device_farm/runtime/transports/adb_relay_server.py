@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import struct
 import uuid
 from typing import Any, Callable, Dict, Optional, Set
@@ -37,6 +38,18 @@ CMD_BOOTSTRAP    = 4  # push binaries + install APKs + start atx-agent + u2
 CMD_SCREENCAP    = 5  # screencap → base64 PNG in result["output"]
 CMD_PROBE_CAPS       = 6  # probe_capabilities() → JSON dict in result["output"]
 CMD_RESTART_SCRCPY   = 7  # stop + resume scrcpy session (must match agent-boot)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 15))
+SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 540))
+SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 800_000))
 
 
 def _match_tags(caps: dict, filters: list) -> bool:
@@ -708,11 +721,11 @@ class AdbRelayManager:
         msg = json.dumps({
             "type":        "scrcpy_start",
             "serial":      serial,
-            "max_fps":     max_fps or 30,
-            "max_width":   max_width or 800,
+            "max_fps":     max_fps or SCRCPY_DEFAULT_MAX_FPS,
+            "max_width":   max_width or SCRCPY_DEFAULT_MAX_WIDTH,
             "control":     enable_control,
             "port":        port,
-            "bitrate":     bitrate,
+            "bitrate":     bitrate or SCRCPY_DEFAULT_BITRATE,
             "low_latency": low_latency,
         })
         await conn._write_queue.put(msg)

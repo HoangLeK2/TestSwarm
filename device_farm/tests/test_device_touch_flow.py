@@ -30,6 +30,39 @@ def _make_device_with_u2() -> DeviceClient:
     return d, mock_u2
 
 
+class TestU2FlowWrapper:
+    def test_u2_flow_prefers_batch_flow(self):
+        d = _make_device()
+        d._u2_batch = MagicMock()
+        d._u2_batch.flow.return_value = {"found": True, "swipes": 2}
+        d._u2 = MagicMock()
+
+        result = d.u2_flow("swipe_until_found", {"selector": {"text": "OK"}}, timeout=7.0)
+
+        assert result == {"found": True, "swipes": 2}
+        d._u2_batch.flow.assert_called_once_with(
+            "swipe_until_found",
+            {"selector": {"text": "OK"}},
+            timeout=7.0,
+        )
+        d._u2.flow.assert_not_called()
+
+    def test_u2_flow_falls_back_to_u2_flow_when_batch_missing(self):
+        d = _make_device()
+        d._u2_batch = None
+        d._u2 = MagicMock()
+        d._u2.flow.return_value = {"found": True, "swipes": 1}
+
+        result = d.u2_flow("swipe_until_found", {"selector": {"text": "OK"}}, timeout=5.0)
+
+        assert result == {"found": True, "swipes": 1}
+        d._u2.flow.assert_called_once_with(
+            "swipe_until_found",
+            {"selector": {"text": "OK"}},
+            timeout=5.0,
+        )
+
+
 class TestTapFallbackFlow:
     def test_tap_uses_u2_first(self):
         d, mock_u2 = _make_device_with_u2()

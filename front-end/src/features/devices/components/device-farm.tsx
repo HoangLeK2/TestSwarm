@@ -1,6 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ROUTES } from '@/config/routes';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
@@ -12,12 +20,29 @@ import { CoreEmptyState } from '@/components/core-empty-state';
 import { Smartphone } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
+import {
+  DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX,
+  DEVICE_GRID_GAP_PX,
+  getDeviceGridColumnCount,
+  getDeviceGridRowBounds,
+  getDeviceGridRowCount
+} from '../lib/device-farm-virtual-grid';
 
 const DEFAULT_GRID_PAGE_SIZE = (() => {
   const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PAGE_SIZE ?? 10);
   if (!Number.isFinite(raw)) return 10;
   return Math.max(1, Math.min(50, Math.round(raw)));
 })();
+
+function findScrollableParent(element: HTMLElement): HTMLElement {
+  let current = element.parentElement;
+  while (current) {
+    const overflowY = window.getComputedStyle(current).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') return current;
+    current = current.parentElement;
+  }
+  return document.documentElement;
+}
 
 export function DeviceFarm() {
   const t = useTranslations('devicesFarm');
@@ -45,6 +70,71 @@ export function DeviceFarm() {
     const start = pageIndex * pageSize;
     return activeDevices.slice(start, start + pageSize);
   }, [activeDevices, pageIndex, pageSize]);
+
+  const virtualGridRef = useRef<HTMLElement>(null);
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+  const [gridWidth, setGridWidth] = useState(0);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useLayoutEffect(() => {
+    const grid = virtualGridRef.current;
+    if (!grid) return;
+
+    const scroller = findScrollableParent(grid);
+    setScrollElement(scroller);
+
+    const syncGeometry = () => {
+      const gridRect = grid.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const nextWidth = Math.max(0, gridRect.width);
+      const nextScrollMargin = Math.max(
+        0,
+        gridRect.top - scrollerRect.top + scroller.scrollTop
+      );
+      setGridWidth((current) =>
+        Math.abs(current - nextWidth) < 0.5 ? current : nextWidth
+      );
+      setScrollMargin((current) =>
+        Math.abs(current - nextScrollMargin) < 0.5 ? current : nextScrollMargin
+      );
+    };
+
+    syncGeometry();
+    const resizeObserver = new ResizeObserver(syncGeometry);
+    resizeObserver.observe(grid);
+    resizeObserver.observe(scroller);
+    window.addEventListener('resize', syncGeometry);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', syncGeometry);
+    };
+  }, [error, pageDevices.length]);
+
+  const columnCount = useMemo(
+    () => getDeviceGridColumnCount(gridWidth, pageDevices.length),
+    [gridWidth, pageDevices.length]
+  );
+  const rowCount = getDeviceGridRowCount(pageDevices.length, columnCount);
+  const getScrollElement = useCallback(() => scrollElement, [scrollElement]);
+  const getVirtualRowKey = useCallback(
+    (rowIndex: number) => {
+      const firstDevice = pageDevices[rowIndex * columnCount];
+      return `${columnCount}:${firstDevice?.serial ?? rowIndex}`;
+    },
+    [columnCount, pageDevices]
+  );
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement,
+    estimateSize: () => DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX,
+    getItemKey: getVirtualRowKey,
+    gap: DEVICE_GRID_GAP_PX,
+    overscan: 1,
+    scrollMargin,
+    enabled: scrollElement !== null && rowCount > 0,
+    useFlushSync: false,
+    directDomUpdates: true
+  });
 
   const activeTaskCount = (Array.isArray(tasks) ? tasks : []).filter((task) =>
     ['PENDING', 'RUNNING', 'REQUEUED'].includes(task.status)
@@ -131,20 +221,37 @@ export function DeviceFarm() {
         />
       ) : (
         <>
-          <section
-            className='grid justify-start gap-4'
-            style={{
-              gridTemplateColumns:
-                'repeat(auto-fill, minmax(min(100%, 280px), 320px))'
-            }}
-          >
-            {pageDevices.map((device) => (
-              <DeviceTilePreview
-                key={device.serial}
-                device={device}
-                onOpenSteps={openStepsMonitor}
-              />
-            ))}
+          <section ref={virtualGridRef} className='w-full'>
+            <div ref={rowVirtualizer.containerRef} className='relative w-full'>
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const { start, end } = getDeviceGridRowBounds(
+                  virtualRow.index,
+                  columnCount,
+                  pageDevices.length
+                );
+                return (
+                  <div
+                    key={virtualRow.key}
+                    ref={rowVirtualizer.measureElement}
+                    data-index={virtualRow.index}
+                    className='absolute left-0 top-0 grid w-full justify-start gap-4'
+                    style={{
+                      gridTemplateColumns:
+                        'repeat(auto-fill, minmax(min(100%, 280px), 320px))',
+                      contain: 'layout paint'
+                    }}
+                  >
+                    {pageDevices.slice(start, end).map((device) => (
+                      <DeviceTilePreview
+                        key={device.serial}
+                        device={device}
+                        onOpenSteps={openStepsMonitor}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
           </section>
           <footer className='border-t border-border/40 pt-4'>
             <TablePaginationControls

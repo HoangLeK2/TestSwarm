@@ -230,10 +230,34 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
     if strategy == "fb_comments":
         from relay.extra_data.parsers.facebook import parse_fb_comments_from_xml_with_diagnostic
 
+        kwargs: dict[str, Any] = {
+            "parent_post_id": context.get("parent_post_id") or context.get("parent_id"),
+            "max_items": int(context.get("max_items") or 400),
+        }
+        parent_post_anchor = (
+            context.get("_active_comment_parent_anchor")
+            if isinstance(context.get("_active_comment_parent_anchor"), dict)
+            else context.get("parent_post_anchor")
+        )
+        if isinstance(parent_post_anchor, dict) and parent_post_anchor:
+            try:
+                import inspect
+
+                sig = inspect.signature(parse_fb_comments_from_xml_with_diagnostic)
+                supports_anchor = (
+                    "parent_post_anchor" in sig.parameters
+                    or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in sig.parameters.values()
+                    )
+                )
+            except (TypeError, ValueError):
+                supports_anchor = True
+            if supports_anchor:
+                kwargs["parent_post_anchor"] = parent_post_anchor
         return parse_fb_comments_from_xml_with_diagnostic(
             xml,
-            parent_post_id=context.get("parent_post_id") or context.get("parent_id"),
-            max_items=int(context.get("max_items") or 400),
+            **kwargs,
         )
     if strategy == "text_nodes":
         return _text_node_items(xml)
@@ -273,6 +297,13 @@ def _comment_dedupe_key(item: dict[str, Any]) -> str:
     )
 
 
+def _fb_comment_item_has_body(item: dict[str, Any]) -> bool:
+    for key in ("text", "body", "content", "message", "caption", "description", "image_desc"):
+        if str(item.get(key) or "").strip():
+            return True
+    return False
+
+
 def merge_fb_comment_frames(
     frame_results: list[tuple[list[dict[str, Any]], dict[str, Any]]],
     *,
@@ -283,6 +314,7 @@ def merge_fb_comment_frames(
     latest_stats: dict[str, Any] | None = None
     frame_codes: list[str] = []
     last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
+    dropped_empty_comments = 0
 
     for items, diagnostic in frame_results:
         last_diagnostic = diagnostic
@@ -292,6 +324,9 @@ def merge_fb_comment_frames(
                 continue
             if item.get("_type") == "post_stats":
                 latest_stats = item
+                continue
+            if not _fb_comment_item_has_body(item):
+                dropped_empty_comments += 1
                 continue
             key = _comment_dedupe_key(item)
             if not key or key in seen:
@@ -315,6 +350,8 @@ def merge_fb_comment_frames(
         "comments_returned": len(merged_comments[:max_items]),
         "has_header_stats": latest_stats is not None,
     }
+    if dropped_empty_comments:
+        diagnostic["dropped_empty_comments"] = dropped_empty_comments
     return merged, diagnostic
 
 
@@ -332,10 +369,42 @@ def _parse_fb_comment_snapshots(
     return merge_fb_comment_frames(frame_results, max_items=max_items)
 
 
+def _parse_fb_post_snapshots(
+    snapshots: list[str],
+    context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from relay.extra_data.parsers.facebook.dedup import _dedup
+
+    merged_items: list[dict[str, Any]] = []
+    frame_codes: list[str] = []
+    frame_posts_returned: list[int] = []
+    last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
+
+    for idx, snapshot in enumerate(snapshots):
+        frame_context = {**context, "source_index": idx}
+        items, diagnostic = _parse_items("fb_posts", snapshot, frame_context)
+        last_diagnostic = diagnostic
+        frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
+        frame_posts_returned.append(int(diagnostic.get("posts_returned") or len(items)))
+        merged_items.extend(item for item in items if isinstance(item, dict))
+
+    deduped = _dedup(merged_items)
+    diagnostic = {
+        **last_diagnostic,
+        "reason_code": "ok" if deduped else last_diagnostic.get("reason_code", "no_posts"),
+        "snapshot_count": len(snapshots),
+        "frame_reason_codes": frame_codes,
+        "frame_posts_returned": frame_posts_returned,
+        "posts_returned": len(deduped),
+    }
+    return deduped, diagnostic
+
+
 def _trusted_preparsed_fb_comments(
     strategy: str,
     context: dict[str, Any],
     payload: dict[str, Any],
+    xml: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
     if strategy != "fb_comments" or context.get("agent_boot_preparsed_comments") is not True:
         return None
@@ -345,12 +414,48 @@ def _trusted_preparsed_fb_comments(
     raw_items = preparsed.get("items")
     if not isinstance(raw_items, list):
         return None
+    payload_hashes = payload.get("snapshot_hashes")
+    if not isinstance(payload_hashes, list) or not payload_hashes:
+        return None
+    expected_hashes = [str(value).strip() for value in payload_hashes]
+    if any(not value for value in expected_hashes):
+        return None
+    try:
+        payload_snapshot_count = int(payload.get("snapshot_count"))
+        preparsed_snapshot_count = int(preparsed.get("snapshot_count"))
+    except (TypeError, ValueError):
+        return None
+    if (
+        payload_snapshot_count != len(expected_hashes)
+        or preparsed_snapshot_count != payload_snapshot_count
+    ):
+        return None
+    xml_sha256 = str(payload.get("xml_sha256") or "").strip()
+    actual_xml_sha256 = hashlib.sha256(xml.encode("utf-8")).hexdigest()
+    if xml_sha256 != actual_xml_sha256 or expected_hashes[0] != xml_sha256:
+        return None
+    raw_hashes = preparsed.get("snapshot_hashes")
+    if not isinstance(raw_hashes, list) or [
+        str(value).strip() for value in raw_hashes
+    ] != expected_hashes:
+        return None
     raw_diagnostic = preparsed.get("diagnostic")
     diagnostic = dict(raw_diagnostic) if isinstance(raw_diagnostic, dict) else {}
-    items = [item for item in raw_items if isinstance(item, dict)]
+    dropped_empty_comments = 0
+    items: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("_type") == "post_stats" or _fb_comment_item_has_body(item):
+            items.append(item)
+        else:
+            dropped_empty_comments += 1
     comment_count = len([item for item in items if item.get("_type") != "post_stats"])
     diagnostic.setdefault("reason_code", "ok" if items else "no_comments")
     diagnostic.setdefault("comments_returned", comment_count)
+    diagnostic["comments_returned"] = comment_count
+    if dropped_empty_comments:
+        diagnostic["dropped_empty_comments"] = dropped_empty_comments
     for key in ("snapshot_count", "xml_bytes"):
         value = preparsed.get(key)
         if value is None:
@@ -371,13 +476,16 @@ def _parse_payload_items(
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
     snapshots = _xml_snapshots_from_payload(payload, xml)
     if strategy == "fb_comments":
-        preparsed = _trusted_preparsed_fb_comments(strategy, context, payload)
+        preparsed = _trusted_preparsed_fb_comments(strategy, context, payload, xml)
         if preparsed is not None:
             items, diagnostic = preparsed
             return items, diagnostic, snapshots
         if len(snapshots) > 1:
             items, diagnostic = _parse_fb_comment_snapshots(snapshots, context)
             return items, diagnostic, snapshots
+    if strategy == "fb_posts" and len(snapshots) > 1:
+        items, diagnostic = _parse_fb_post_snapshots(snapshots, context)
+        return items, diagnostic, snapshots
     items, diagnostic = _parse_items(strategy, xml, context)
     return items, diagnostic, snapshots
 
@@ -415,9 +523,25 @@ def _comment_parent_source(context: dict[str, Any]) -> str:
 
 def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
     source = _comment_parent_source(context)
+    session = context.get("_fb_comment_session")
+    has_session = isinstance(session, dict) and bool(session.get("session_id"))
+    if has_session:
+        context_parent = str(context.get("parent_id") or "").strip()
+        session_parent = str(session.get("parent_id") or "").strip()
+        if context_parent != session_parent:
+            return False
+        context_pid = str(
+            context.get("parent_post_id")
+            or context.get("_fb_comment_parent_pid")
+            or ""
+        ).strip()
+        session_pid = str(session.get("parent_post_id") or "").strip()
+        if context_pid != session_pid:
+            return False
     return bool(
         context.get("parent_id")
-        and source in {"post_detail", "tap_fb_comment_button", "latest_post_in_execution"}
+        and source in {"post_detail", "tap_fb_comment_button"}
+        and (source == "tap_fb_comment_button" or has_session)
     )
 
 
@@ -908,6 +1032,7 @@ class ExtraDataIngestServer:
                 is_comment_strategy
                 and require_verified_parent
                 and not has_verified_parent_context
+                and bool(context.get("allow_latest_post_parent_fallback"))
                 and not parent_id
                 and hasattr(self._writer, "lookup_latest_parent_hash_for_context")
             ):

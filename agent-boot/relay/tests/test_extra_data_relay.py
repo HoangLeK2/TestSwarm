@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -110,6 +111,46 @@ async def test_handle_extra_data_probe_skips_ingest() -> None:
     msg = json.loads(await asyncio.wait_for(queue.get(), timeout=2.0))
     assert msg["ok"] is True
     assert "diagnostic" in msg["ingest"]
+    assert ingest.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_handle_extra_data_collect_error_includes_open_post_diagnostic() -> None:
+    ingest = _FakeIngest({"ok": True, "parsed_count": 99})
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key=None,
+        relay_id="test-relay",
+        relay_mode="grpc",
+        extra_ingest=ingest,
+    )
+    agent._u2_executor = _FakeExecutor()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def fake_collect_xml_snapshots(executor, serial, strategy, context):
+        context["open_post_detail_diagnostic"] = {
+            "reason_code": "post_open_target_not_found",
+            "timing": {"total_ms": 42.0, "resolve_ms": 3.0},
+        }
+        return [], "post_open_required:post_open_target_not_found"
+
+    with patch(
+        "relay.extra_data.collector.collect_xml_snapshots",
+        new=fake_collect_xml_snapshots,
+    ):
+        await agent._handle_extra_data({
+            "id": "extra-open-post-fail",
+            "serial": "dev1",
+            "strategy": "fb_posts",
+            "context": {"open_post_before_extract": True},
+        }, queue)
+
+    msg = json.loads(await asyncio.wait_for(queue.get(), timeout=2.0))
+    assert msg["ok"] is False
+    assert msg["error"] == "post_open_required:post_open_target_not_found"
+    assert msg["diagnostic"]["reason_code"] == "post_open_target_not_found"
+    assert msg["diagnostic"]["timing"]["total_ms"] == 42.0
+    assert msg["ingest"]["diagnostic"] == msg["diagnostic"]
     assert ingest.payloads == []
 
 

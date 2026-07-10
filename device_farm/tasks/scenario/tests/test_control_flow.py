@@ -50,6 +50,42 @@ def test_loop_step_propagates_nested_failure():
     assert result["iterations"] == 2
 
 
+def test_loop_step_bubbles_nested_edge_extra_summary():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 1, "steps": [{"type": "extract"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+    nested_failure = {
+        "success": False,
+        "failed_message": "edge extra_data failed: post_open_required:post_open_target_not_found",
+        "step_results": [
+            {
+                "index": 0,
+                "type": "extract",
+                "ok": False,
+                "message": "edge extra_data failed: post_open_required:post_open_target_not_found",
+                "edge_extra_summary": {
+                    "diagnostic": {
+                        "reason_code": "post_open_target_not_found",
+                        "timing": {"total_ms": 42.0},
+                    }
+                },
+                "extra_data_total_ms": 42.0,
+            }
+        ],
+    }
+
+    with patch("tasks.scenario.steps.control_flow._run_nested", return_value=nested_failure):
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False
+    assert result["edge_extra_summary"]["diagnostic"]["reason_code"] == "post_open_target_not_found"
+    assert result["edge_extra_summary"]["diagnostic"]["timing"]["total_ms"] == 42.0
+    assert result["extra_data_total_ms"] == 42.0
+    assert result["nested_failure"]["step_type"] == "extract"
+
+
 def test_loop_does_not_persist_failed_iteration_as_complete():
     from tasks.scenario.steps.control_flow import handle_loop
 

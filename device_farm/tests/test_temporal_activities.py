@@ -107,6 +107,33 @@ class MockDevice:
         return None
 
 
+@pytest.mark.asyncio
+async def test_check_element_repairs_dead_state_when_u2_ready() -> None:
+    from runtime.core.device_client import DeviceState
+
+    device = MockDevice(u2=MockU2({("text", "OK")}))
+    device.state = DeviceState.DEAD
+    device._scenario_active = 1
+
+    with (
+        patch("temporal.activities._get_device", return_value=device),
+        patch("temporal.activities._validate_serial"),
+        patch("temporal.activities.activity.heartbeat", MagicMock()),
+        patch("tasks.scenario_task._wait_for_element", return_value="eid:text:OK"),
+    ):
+        result = await DeviceActivities().check_element_exists(
+            ElementCheckInput(
+                device_serial="test_serial",
+                by="text",
+                value="OK",
+                execution_id="exec-1",
+            )
+        )
+
+    assert result.found is True
+    assert device.state == DeviceState.BUSY
+
+
 # ── Serial validation tests ─────────────────────────────────────────────────
 
 

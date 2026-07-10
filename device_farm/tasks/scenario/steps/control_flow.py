@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
+from tasks.scenario.failure_details import attach_nested_failure_details
 from tasks.scenario.utils import _evaluate_condition, _eval_ru_condition, _wait_for_element
 
 log = logging.getLogger(__name__)
@@ -143,6 +144,7 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
             break
         if not nested_result.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, nested_result)
             result["message"] = (
                 f"loop: iteration {i} failed — {nested_result.get('failed_message', '')}"
             )
@@ -239,6 +241,7 @@ def handle_if(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[
         result["sub_result"] = branch_result
         if not branch_result.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, branch_result)
             result["message"] = f"if: {branch_name} branch failed"
         else:
             result["message"] = f"if: took {branch_name} branch"
@@ -301,6 +304,7 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
             break
         if not iter_res.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, iter_res)
             result["message"] = f"repeat: iteration {i} failed — {iter_res.get('failed_message', '')}"
             break
         if delay > 0 and i < n - 1:
@@ -350,6 +354,7 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
             break
         if not iter_res.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, iter_res)
             result["message"] = f"repeat_until: iteration {i} failed — {iter_res.get('failed_message', '')}"
             break
     else:
@@ -398,6 +403,7 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         result["sub_result"] = sub
         if not sub.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, sub)
             result["message"] = f"if_element: {branch_name} branch failed"
         else:
             result["message"] = f"if_element(element_found={element_found}): took {branch_name}"
@@ -583,6 +589,13 @@ def handle_fb_apply_comment_filter(
     )
 
     step = normalize_fb_tap_comment_step(step)
+    missing_target = sc.ctx.get("_fb_comment_target_missing")
+    if isinstance(missing_target, dict):
+        result["filter_applied"] = False
+        result["comment_target_missing"] = True
+        result["comment_target_missing_detail"] = missing_target
+        result["message"] = "fb_apply_comment_filter: skipped — comment target missing"
+        return
     target_filter = resolve_step_comment_filter(step, sc.ctx)
     if not target_filter:
         result["filter_applied"] = False
@@ -610,7 +623,16 @@ def handle_fb_apply_comment_filter(
         or sc.ctx.get("_fb_comment_filter_settle_s")
         or 0.45
     )
-    if settle_s > 0:
+    settle_needed = applied and reason not in {
+        "already_on_filter",
+        "already_all_comments",
+        "not_comment_sheet",
+        "indicator_not_found",
+        "disabled",
+        "no_relay",
+        "ingest_failed",
+    }
+    if settle_s > 0 and settle_needed:
         if sc.cancel_event is not None:
             sc.cancel_event.wait(settle_s)
         else:
@@ -888,6 +910,7 @@ def handle_tap_fb_comment_button(
         result["sub_result"] = sub
         if not sub.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, sub)
             result["message"] = f"tap_fb_comment_button: {branch_name} branch failed"
             return
         result["ok"] = True
@@ -947,6 +970,7 @@ def handle_if_variable(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
         result["sub_result"] = sub
         if not sub.get("success"):
             result["ok"] = False
+            attach_nested_failure_details(result, sub)
             result["message"] = f"if_variable: {branch_name} branch failed"
         else:
             result["message"] = f"if_variable({name}={str_val!r}): took {branch_name}"
@@ -976,6 +1000,7 @@ def handle_random_pick(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     result["sub_result"] = sub
     if not sub.get("success"):
         result["ok"] = False
+        attach_nested_failure_details(result, sub)
         result["message"] = f"random_pick: branch {chosen_idx} failed"
     else:
         result["message"] = f"random_pick: executed branch {chosen_idx}"

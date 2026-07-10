@@ -1,6 +1,9 @@
 """Epic 04 DF-T-04-010: execution runtime (Temporal + fallback)."""
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 pytest_plugins = ["tests.test_epic04_scenario_entity"]
@@ -22,6 +25,7 @@ from services.campaign.execution_runtime import (
     start_execution_runtime,
     workflow_id_for_execution,
 )
+from tests.perf_assertions import perf_budget
 
 
 def test_workflow_id_for_execution():
@@ -298,37 +302,161 @@ async def test_start_runtime_uses_temporal_when_available(session_factory):
     temporal_client = SimpleNamespace(start_workflow=AsyncMock())
     temporal_config = SimpleNamespace(enabled=True, task_queue="device-scenario")
 
-    with patch(
-        "services.campaign.execution_runtime.prepare_scenario_input",
-        new=AsyncMock(
-            return_value=SimpleNamespace(
-                device_serial="SN1",
-                steps=[{"type": "run_scenario", "scenario_id": "sc1"}],
-            )
-        ),
-    ):
-        from tenancy.context import set_current_org_id
+    from tenancy.context import set_current_org_id
 
-        set_current_org_id("org-runtime")
-        async with session_factory() as db:
-            campaign = await _load_campaign(db, campaign_id)
-            stats = await start_execution_runtime(
-                db,
-                fan_out=fan_out,
-                campaign=campaign,
-                org_id=campaign.org_id,
-                actor_user_id="user-owner",
-                temporal_client=temporal_client,
-                temporal_config=temporal_config,
-                manager=None,
-            )
-            execution = await _load_execution(db, execution_id)
+    set_current_org_id("org-runtime")
+    async with session_factory() as db:
+        campaign = await _load_campaign(db, campaign_id)
+        stats = await start_execution_runtime(
+            db,
+            fan_out=fan_out,
+            campaign=campaign,
+            org_id=campaign.org_id,
+            actor_user_id="user-owner",
+            temporal_client=temporal_client,
+            temporal_config=temporal_config,
+            manager=None,
+        )
+        execution = await _load_execution(db, execution_id)
 
     assert stats["temporal"] == 1
     assert stats["fallback"] == 0
     temporal_client.start_workflow.assert_awaited_once()
     assert execution.meta.get("dispatch_source") == DISPATCH_SOURCE_TEMPORAL
     assert execution.meta.get("workflow_id") == workflow_id_for_execution(execution.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("device_count", "budget_ms"),
+    [
+        (20, 120.0),
+        (100, 250.0),
+        (500, 800.0),
+    ],
+)
+async def test_start_runtime_large_fanout_starts_temporal_with_bounded_concurrency(
+    device_count: int,
+    budget_ms: float,
+):
+    bulk_execution_load_delay_s = 0.010
+    bulk_device_serial_load_delay_s = 0.005
+    registry_load_delay_s = 0.015
+    scenario_device_vars_load_delay_s = 0.005
+    start_workflow_delay_s = 0.005
+    flush_meta_delay_s = 0.001
+    fan_out = FanOutResult(
+        dispatch_id=f"dispatch-scale-{device_count}",
+        campaign_id="camp-runtime-scale",
+        dispatch_strategy="parallel",
+        executions=[
+            FanOutExecutionView(
+                execution_id=f"exec-{idx:04d}",
+                device_id=f"dev-{idx:04d}",
+                status="running",
+                effective_vars={"kw": f"value-{idx}"},
+            )
+            for idx in range(device_count)
+        ],
+    )
+    executions_by_id = {
+        view.execution_id: SimpleNamespace(
+            id=view.execution_id,
+            meta={},
+            checkpoint_step=0,
+            device_config={
+                "effective_vars": view.effective_vars,
+                "account_vars": {},
+                "device_serial": f"SN{idx:04d}",
+            },
+        )
+        for idx, view in enumerate(fan_out.executions, start=1)
+    }
+
+    active_workflows = 0
+    max_active_workflows = 0
+
+    async def _load_runtime_executions(_db, execution_ids: list[str]):
+        await asyncio.sleep(bulk_execution_load_delay_s)
+        return {
+            execution_id: executions_by_id[execution_id]
+            for execution_id in execution_ids
+        }
+
+    async def _load_runtime_device_serials(_db, _execution_ids: list[str]):
+        await asyncio.sleep(bulk_device_serial_load_delay_s)
+        return {}
+
+    async def _build_registry(*_args, **_kwargs):
+        await asyncio.sleep(registry_load_delay_s)
+        return {}
+
+    async def _load_scenario_device_vars(*_args, **_kwargs):
+        await asyncio.sleep(scenario_device_vars_load_delay_s)
+        return {}
+
+    async def _start_workflow(*_args, **_kwargs):
+        nonlocal active_workflows, max_active_workflows
+        active_workflows += 1
+        max_active_workflows = max(max_active_workflows, active_workflows)
+        try:
+            await asyncio.sleep(start_workflow_delay_s)
+        finally:
+            active_workflows -= 1
+
+    async def _flush_meta():
+        await asyncio.sleep(flush_meta_delay_s)
+
+    db = SimpleNamespace(flush=AsyncMock(side_effect=_flush_meta))
+    campaign = SimpleNamespace(
+        id="camp-runtime-scale",
+        org_id="org-runtime",
+        user_id="user-owner",
+        created_by="user-owner",
+        variables={},
+        recovery_policy={},
+    )
+    temporal_client = SimpleNamespace(start_workflow=AsyncMock(side_effect=_start_workflow))
+    temporal_config = SimpleNamespace(enabled=True, task_queue="device-scenario")
+
+    with patch(
+        "services.campaign.execution_runtime.resolve_campaign_scenario_refs",
+        new=AsyncMock(return_value=[{"scenario_id": "sc-1"}]),
+    ), patch(
+        "services.campaign.execution_runtime._load_runtime_executions_by_id",
+        new=AsyncMock(side_effect=_load_runtime_executions),
+    ), patch(
+        "services.campaign.execution_runtime._load_runtime_device_serials_by_execution",
+        new=AsyncMock(side_effect=_load_runtime_device_serials),
+    ), patch(
+        "services.campaign.execution_runtime.build_campaign_scenario_registry",
+        new=AsyncMock(side_effect=_build_registry),
+    ), patch(
+        "db.crud.scenario_device_variable.get_campaign_org_scenario_device_variables_bulk",
+        new=AsyncMock(side_effect=_load_scenario_device_vars),
+    ):
+        started_at = time.perf_counter()
+        stats = await start_execution_runtime(
+            db,
+            fan_out=fan_out,
+            campaign=campaign,
+            org_id=campaign.org_id,
+            actor_user_id="user-owner",
+            temporal_client=temporal_client,
+            temporal_config=temporal_config,
+            manager=None,
+        )
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+
+    budget_ms = perf_budget(
+        f"EPIC04_RUNTIME_START_{device_count}_DEVICE_BUDGET_MS",
+        budget_ms,
+    )
+    assert stats["temporal"] == device_count
+    assert temporal_client.start_workflow.await_count == device_count
+    assert db.flush.await_count == 1
+    assert 1 < max_active_workflows <= 50
+    assert elapsed_ms < budget_ms
 
 
 @pytest.mark.asyncio
@@ -350,12 +478,7 @@ async def test_start_runtime_fallback_when_temporal_disabled(session_factory):
         ],
     )
 
-    scenario_input = SimpleNamespace(device_serial="SN1", steps=[])
-
     with patch(
-        "services.campaign.execution_runtime.prepare_scenario_input",
-        new=AsyncMock(return_value=scenario_input),
-    ), patch(
         "services.campaign.execution_runtime.schedule_fallback_runtime",
     ) as schedule_mock:
         from tenancy.context import set_current_org_id

@@ -4,29 +4,62 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { Device } from '../../types';
 import { DeviceAndroidFrame } from '../device-android-frame';
+import { DeviceScreen } from '../device-screen';
 import { cn } from '@/lib/utils';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import { useTabNetworkActive } from '../../hooks/use-tab-network-active';
 import {
-  acquireSnapshotPreviewWarmup,
-  type SnapshotPreviewWarmupHandle
-} from '../../services/snapshot-preview-warmup';
+  acquireFollowerH264Slot,
+  subscribeFollowerH264SlotChanges
+} from '../../services/follower-h264-slots';
+import type { ScrcpyAttachOptions } from '../../services/scrcpy-stream';
+
+function followerH264Int(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number
+) {
+  const raw = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(raw)));
+}
+
+const FOLLOWER_H264_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: false,
+  maxFps: followerH264Int('NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_FPS', 4, 1, 8),
+  maxWidth: followerH264Int(
+    'NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_WIDTH',
+    360,
+    240,
+    540
+  ),
+  bitrate: followerH264Int(
+    'NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_BITRATE',
+    120_000,
+    80_000,
+    600_000
+  )
+};
+const FOLLOWER_WS_SEND = () => undefined;
 
 const FOLLOWER_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MS ?? 500
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MS ?? 1_000
   );
-  if (!Number.isFinite(raw)) return 500;
-  return Math.max(500, Math.min(5_000, Math.round(raw)));
+  if (!Number.isFinite(raw)) return 1_000;
+  return Math.max(1_000, Math.min(5_000, Math.round(raw)));
 })();
 const FOLLOWER_PREVIEW_MAX_AGE_MS = (() => {
   const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MAX_AGE_MS ??
-      FOLLOWER_PREVIEW_REFRESH_MS
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MAX_AGE_MS ?? 10_000
   );
-  if (!Number.isFinite(raw)) return FOLLOWER_PREVIEW_REFRESH_MS;
-  return Math.max(500, Math.min(10_000, Math.round(raw)));
+  if (!Number.isFinite(raw)) return 10_000;
+  return Math.max(
+    FOLLOWER_PREVIEW_REFRESH_MS,
+    Math.min(10_000, Math.round(raw))
+  );
 })();
 
 export function formatFollowerLabel(
@@ -73,12 +106,14 @@ export const FollowerPreview = memo(function FollowerPreview({
   const [hasFrame, setHasFrame] = useState(false);
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
   const [previewCadenceReady, setPreviewCadenceReady] = useState(false);
-  const warmupHandleRef = useRef<SnapshotPreviewWarmupHandle | null>(null);
+  const [h264SlotSerial, setH264SlotSerial] = useState<string | null>(null);
   const state = String(device.state || '')
     .replace('DeviceState.', '')
     .toUpperCase();
   const isActive = state && !['DISCONNECTED', 'DEAD'].includes(state);
-  const shouldSchedulePreview = Boolean(isActive && tabActive && inView);
+  const wantsH264Preview = Boolean(isActive && tabActive && inView);
+  const useH264Preview = wantsH264Preview && h264SlotSerial === device.serial;
+  const shouldSchedulePreview = wantsH264Preview && !useH264Preview;
   const loadPreview = shouldSchedulePreview && previewCadenceReady;
   const refreshOffsetMs = useMemo(() => {
     const count = Math.max(1, Math.round(previewCount));
@@ -105,6 +140,33 @@ export const FollowerPreview = memo(function FollowerPreview({
     io.observe(el);
     return () => io.disconnect();
   }, []);
+
+  useEffect(() => {
+    setH264SlotSerial(null);
+    if (!wantsH264Preview) return;
+
+    let cancelled = false;
+    let releaseSlot: (() => void) | null = null;
+    const tryAcquire = () => {
+      if (cancelled || releaseSlot) return;
+      const release = acquireFollowerH264Slot();
+      if (!release) return;
+      if (cancelled) {
+        release();
+        return;
+      }
+      releaseSlot = release;
+      setH264SlotSerial(device.serial);
+    };
+    const unsubscribe = subscribeFollowerH264SlotChanges(tryAcquire);
+    tryAcquire();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      releaseSlot?.();
+    };
+  }, [device.serial, wantsH264Preview]);
 
   const previewUrl = useMemo(() => {
     if (!loadPreview) return null;
@@ -169,29 +231,6 @@ export const FollowerPreview = memo(function FollowerPreview({
     return () => window.clearInterval(timer);
   }, [device.serial, hasFrame, loadPreview]);
 
-  useEffect(() => {
-    if (!loadPreview) {
-      warmupHandleRef.current?.release();
-      warmupHandleRef.current = null;
-      return;
-    }
-    if (loadingElapsedSec < 2 || warmupHandleRef.current) return;
-    const handle = acquireSnapshotPreviewWarmup(device.serial);
-    warmupHandleRef.current = handle;
-    handle?.attached.then((ok) => {
-      if (!ok && warmupHandleRef.current === handle) {
-        warmupHandleRef.current = null;
-      }
-    });
-  }, [device.serial, loadingElapsedSec, loadPreview]);
-
-  useEffect(() => {
-    return () => {
-      warmupHandleRef.current?.release();
-      warmupHandleRef.current = null;
-    };
-  }, [device.serial]);
-
   return (
     <button
       type='button'
@@ -214,7 +253,20 @@ export const FollowerPreview = memo(function FollowerPreview({
             className='shrink-0'
           >
             {isActive ? (
-              displayedPreviewUrl ? (
+              useH264Preview ? (
+                <DeviceScreen
+                  device={device}
+                  wsSend={FOLLOWER_WS_SEND}
+                  mode='tap'
+                  captionBelowFrame
+                  interactive={false}
+                  streamFetchPriority='low'
+                  streamTransport='auto'
+                  streamFit='contain'
+                  streamCoverAlign='center'
+                  scrcpyAttachOptions={FOLLOWER_H264_OPTIONS}
+                />
+              ) : displayedPreviewUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- follower preview intentionally uses lightweight cached screenshots.
                 <img
                   src={displayedPreviewUrl}

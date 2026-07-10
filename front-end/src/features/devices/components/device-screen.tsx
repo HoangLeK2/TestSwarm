@@ -21,6 +21,7 @@ import {
   subscribeDeviceFarm
 } from '../services/ws';
 import { useTranslations } from 'next-intl';
+import { usePathname } from 'next/navigation';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 import { Badge } from '@/components/ui/badge';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
@@ -29,7 +30,8 @@ import {
   createScrcpyViewerId,
   detachScrcpyStream,
   isRecoverableScrcpyAttachError,
-  scrcpyAttachErrorMessage
+  scrcpyAttachErrorMessage,
+  type ScrcpyAttachOptions
 } from '../services/scrcpy-stream';
 
 type Size = { width: number; height: number };
@@ -39,8 +41,14 @@ type StreamingFlags = {
 };
 const SCRCPY_ATTACH_RETRY_MS = 3_000;
 const SCRCPY_ATTACH_DEDUPE_MS = 90_000;
+const SCRCPY_TRANSIENT_UNMOUNT_DETACH_DELAY_MS = 5_000;
+const H264_PRIMARY_VISIBLE_RECOVERY_MIN_MS = 5_000;
 const stableScrcpyViewerIds = new Map<string, string>();
 const recentScrcpyAttachByViewer = new Map<string, number>();
+const pendingScrcpyDetachByViewer = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
 let cachedStreamingFlags: StreamingFlags | null = null;
 let pendingStreamingFlags: Promise<StreamingFlags> | null = null;
 
@@ -88,13 +96,43 @@ function loadStreamingFlags(): Promise<StreamingFlags> {
   return pendingStreamingFlags;
 }
 
-function scrcpyAttachKey(serial: string, viewerId: string): string {
+function scrcpyAttachProfileKey(options?: ScrcpyAttachOptions): string {
+  if (!options) return 'default';
+  return [
+    options.enableControl ?? 'default',
+    options.maxFps ?? 'default',
+    options.maxWidth ?? 'default',
+    options.bitrate ?? 'default'
+  ].join(':');
+}
+
+function scrcpyAttachKey(
+  serial: string,
+  viewerId: string,
+  options?: ScrcpyAttachOptions
+): string {
+  return `${serial}:${viewerId}:${scrcpyAttachProfileKey(options)}`;
+}
+
+function scrcpyDetachKey(serial: string, viewerId: string): string {
   return `${serial}:${viewerId}`;
 }
 
-function hasRecentScrcpyAttach(serial: string, viewerId: string): boolean {
+function cancelPendingScrcpyDetach(serial: string, viewerId: string): void {
+  const key = scrcpyDetachKey(serial, viewerId);
+  const timer = pendingScrcpyDetachByViewer.get(key);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingScrcpyDetachByViewer.delete(key);
+}
+
+function hasRecentScrcpyAttach(
+  serial: string,
+  viewerId: string,
+  options?: ScrcpyAttachOptions
+): boolean {
   const attachedAt = recentScrcpyAttachByViewer.get(
-    scrcpyAttachKey(serial, viewerId)
+    scrcpyAttachKey(serial, viewerId, options)
   );
   return (
     attachedAt !== undefined &&
@@ -102,12 +140,24 @@ function hasRecentScrcpyAttach(serial: string, viewerId: string): boolean {
   );
 }
 
-function rememberScrcpyAttach(serial: string, viewerId: string): void {
-  recentScrcpyAttachByViewer.set(scrcpyAttachKey(serial, viewerId), Date.now());
+function rememberScrcpyAttach(
+  serial: string,
+  viewerId: string,
+  options?: ScrcpyAttachOptions
+): void {
+  recentScrcpyAttachByViewer.set(
+    scrcpyAttachKey(serial, viewerId, options),
+    Date.now()
+  );
 }
 
 function forgetScrcpyAttach(serial: string, viewerId: string): void {
-  recentScrcpyAttachByViewer.delete(scrcpyAttachKey(serial, viewerId));
+  const prefix = `${serial}:${viewerId}:`;
+  recentScrcpyAttachByViewer.forEach((_attachedAt, key) => {
+    if (key.startsWith(prefix)) {
+      recentScrcpyAttachByViewer.delete(key);
+    }
+  });
 }
 
 function getObjectCoverRect(
@@ -192,6 +242,8 @@ interface DeviceScreenProps {
   streamFetchPriority?: 'high' | 'low' | 'auto';
   /** Stream policy. Control/record uses H264-only to avoid MJPEG screenshot latency. */
   streamTransport?: DeviceScreenTransport;
+  /** Optional scrcpy profile for high-priority control surfaces. */
+  scrcpyAttachOptions?: ScrcpyAttachOptions;
 }
 
 export function DeviceScreen({
@@ -208,9 +260,13 @@ export function DeviceScreen({
   streamFit,
   interactive = true,
   streamFetchPriority = 'auto',
-  streamTransport = 'auto'
+  streamTransport = 'auto',
+  scrcpyAttachOptions
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
+  const pathname = usePathname();
+  const ownerPathnameRef = useRef(pathname);
+  const routeActive = pathname === ownerPathnameRef.current;
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -348,11 +404,35 @@ export function DeviceScreen({
   const detachScrcpyViewer = useCallback((...serials: Array<string | null>) => {
     Array.from(new Set(serials.filter(Boolean) as string[])).forEach(
       (serial) => {
+        cancelPendingScrcpyDetach(serial, scrcpyViewerIdRef.current);
         forgetScrcpyAttach(serial, scrcpyViewerIdRef.current);
         detachScrcpyStream(serial, scrcpyViewerIdRef.current).catch(() => {});
       }
     );
   }, []);
+
+  const scheduleScrcpyViewerDetach = useCallback(
+    (...serials: Array<string | null>) => {
+      Array.from(new Set(serials.filter(Boolean) as string[])).forEach(
+        (serial) => {
+          const viewerId = scrcpyViewerIdRef.current;
+          cancelPendingScrcpyDetach(serial, viewerId);
+          const timer = setTimeout(() => {
+            pendingScrcpyDetachByViewer.delete(
+              scrcpyDetachKey(serial, viewerId)
+            );
+            forgetScrcpyAttach(serial, viewerId);
+            detachScrcpyStream(serial, viewerId).catch(() => {});
+          }, SCRCPY_TRANSIENT_UNMOUNT_DETACH_DELAY_MS);
+          pendingScrcpyDetachByViewer.set(
+            scrcpyDetachKey(serial, viewerId),
+            timer
+          );
+        }
+      );
+    },
+    []
+  );
 
   const updateStreamSize = useCallback((width: number, height: number) => {
     if (
@@ -466,12 +546,13 @@ export function DeviceScreen({
       pendingScrcpyAttachSerialRef.current = null;
       attachedScrcpyWsGenerationRef.current = null;
       clearScrcpyAttachRetryTimer();
-      detachScrcpyViewer(attachedSerial, pendingSerial);
+      scheduleScrcpyViewerDetach(attachedSerial, pendingSerial);
     };
-  }, [clearScrcpyAttachRetryTimer, detachScrcpyViewer, device.serial]);
+  }, [clearScrcpyAttachRetryTimer, scheduleScrcpyViewerDetach]);
 
   useEffect(() => {
     const shouldAttach =
+      routeActive &&
       tabActive &&
       (streamingFlags === null || isContinuous) &&
       isActive &&
@@ -490,6 +571,7 @@ export function DeviceScreen({
     }
 
     const serial = device.serial;
+    cancelPendingScrcpyDetach(serial, scrcpyViewerIdRef.current);
     if (
       attachedScrcpySerialRef.current === serial &&
       pendingScrcpyAttachSerialRef.current !== serial
@@ -515,14 +597,20 @@ export function DeviceScreen({
 
     ensureWatchSerial(serial);
     requestIdr(serial, 0);
-    if (hasRecentScrcpyAttach(serial, scrcpyViewerIdRef.current)) {
+    if (
+      hasRecentScrcpyAttach(
+        serial,
+        scrcpyViewerIdRef.current,
+        scrcpyAttachOptions
+      )
+    ) {
       pendingScrcpyAttachSerialRef.current = null;
       ensureWatchSerial(serial);
       requestInitialFrameRefresh(serial);
       requestIdr(serial);
       return;
     }
-    attachScrcpyStream(serial, scrcpyViewerIdRef.current)
+    attachScrcpyStream(serial, scrcpyViewerIdRef.current, scrcpyAttachOptions)
       .then(() => {
         clearScrcpyAttachRetryTimer();
         pendingScrcpyAttachSerialRef.current =
@@ -539,7 +627,11 @@ export function DeviceScreen({
           return;
         }
         ensureWatchSerial(serial);
-        rememberScrcpyAttach(serial, scrcpyViewerIdRef.current);
+        rememberScrcpyAttach(
+          serial,
+          scrcpyViewerIdRef.current,
+          scrcpyAttachOptions
+        );
         setMjpegFailed(false);
         setMjpegAttempt((n) => n + 1);
         setH264Suppressed(false);
@@ -579,9 +671,11 @@ export function DeviceScreen({
     isActive,
     isContinuous,
     requestInitialFrameRefresh,
+    routeActive,
     scheduleScrcpyAttachRetry,
     scrcpyAttachRetryTick,
     screenStreamOn,
+    scrcpyAttachOptions,
     streamingFlags,
     t,
     tabActive,
@@ -603,11 +697,31 @@ export function DeviceScreen({
           pendingScrcpyAttachSerialRef.current = toggleSerial;
           attachedScrcpySerialRef.current = toggleSerial;
           attachedScrcpyWsGenerationRef.current = wsConnectedGeneration;
-          if (!hasRecentScrcpyAttach(toggleSerial, scrcpyViewerIdRef.current)) {
-            await attachScrcpyStream(toggleSerial, scrcpyViewerIdRef.current);
-            rememberScrcpyAttach(toggleSerial, scrcpyViewerIdRef.current);
+          if (
+            !hasRecentScrcpyAttach(
+              toggleSerial,
+              scrcpyViewerIdRef.current,
+              scrcpyAttachOptions
+            )
+          ) {
+            await attachScrcpyStream(
+              toggleSerial,
+              scrcpyViewerIdRef.current,
+              scrcpyAttachOptions
+            );
+            rememberScrcpyAttach(
+              toggleSerial,
+              scrcpyViewerIdRef.current,
+              scrcpyAttachOptions
+            );
           }
-          if (hasRecentScrcpyAttach(toggleSerial, scrcpyViewerIdRef.current)) {
+          if (
+            hasRecentScrcpyAttach(
+              toggleSerial,
+              scrcpyViewerIdRef.current,
+              scrcpyAttachOptions
+            )
+          ) {
             pendingScrcpyAttachSerialRef.current = null;
             attachedScrcpySerialRef.current = toggleSerial;
             attachedScrcpyWsGenerationRef.current = wsConnectedGeneration;
@@ -688,6 +802,7 @@ export function DeviceScreen({
       isActive,
       isContinuous,
       mjpegAllowed,
+      scrcpyAttachOptions,
       t,
       wsConnectedGeneration
     ]
@@ -696,6 +811,7 @@ export function DeviceScreen({
   // In auto transport, keep MJPEG visible until H264 is actually rendering.
   // Otherwise the canvas can be black during decoder warm-up or IDR recovery.
   const mjpegUrl = React.useMemo(() => {
+    if (!routeActive) return null;
     if (!mjpegAllowed) return null;
     if (!tabActive) return null;
     if (!isActive || !mjpegEnabled) return null;
@@ -716,7 +832,8 @@ export function DeviceScreen({
     h264PrimaryMode,
     h264Active,
     h264Stalled,
-    mjpegAllowed
+    mjpegAllowed,
+    routeActive
   ]);
 
   useEffect(() => {
@@ -742,10 +859,16 @@ export function DeviceScreen({
   // Always pass real serial so binary frames are subscribed immediately on mount.
   // H264-only surfaces intentionally skip the MJPEG screenshot fallback.
   useH264Video(
-    tabActive && isActive && h264SubscriptionAllowed ? device.serial : '',
+    routeActive && tabActive && isActive && h264SubscriptionAllowed
+      ? device.serial
+      : '',
     canvasRef,
     {
       restartKey: h264RestartKey,
+      visibleFrameRecoveryMinIntervalMs: h264PrimaryMode
+        ? H264_PRIMARY_VISIBLE_RECOVERY_MIN_MS
+        : 3000,
+      renderedFrameStaleMs: h264PrimaryMode ? 2000 : 5000,
       onFrame: useCallback(
         (frame?: { mostlyBlack: boolean }) => {
           const canvas = canvasRef.current;
@@ -839,13 +962,6 @@ export function DeviceScreen({
                 setH264Active(false);
                 setHasFrame(false);
               }, 3000);
-            }
-            if (burst.count >= 3) {
-              burst.firstAt = now;
-              burst.count = 0;
-              setH264Suppressed(false);
-              setH264RestartKey((key) => key + 1);
-              requestIdr(device.serial, 0);
             }
             return;
           }

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -174,6 +174,25 @@ async def test_swipe_until_found_on_third(executor_with_device):
     assert result["value"]["found"] is True
     assert result["value"]["swipes"] == 2
     assert dev.swipe.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_uses_non_blocking_exists(executor_with_device):
+    exc, dev = executor_with_device
+    sel = MagicMock()
+    sel.exists = MagicMock(side_effect=[False, True])
+    dev.return_value = sel
+    dev.window_size.return_value = (1080, 1920)
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"text": "Target"},
+        "max_swipes": 5,
+    })
+
+    assert result["value"]["found"] is True
+    assert result["value"]["swipes"] == 1
+    assert sel.exists.call_args_list == [call(timeout=0), call(timeout=0)]
+    assert dev.swipe.call_count == 1
 
 
 @pytest.mark.asyncio

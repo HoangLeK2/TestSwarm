@@ -1,14 +1,31 @@
 'use client';
 
-import { type ReactNode } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslations } from 'next-intl';
 import type { Device } from '../../types';
 import {
   FollowerPreview,
-  followerGridClass,
   followerMockupWidth,
   formatFollowerLabel
 } from './follower-preview';
+import { mockupOuterHeightPx } from '../device-android-frame';
+import {
+  FOLLOWER_GRID_GAP_PX,
+  getFollowerGridColumnCount,
+  getFollowerGridRowBounds,
+  getFollowerGridRowCount
+} from '../../lib/follower-virtual-grid';
+
+const FOLLOWER_GRID_HORIZONTAL_PADDING_PX = 24;
+const FOLLOWER_CARD_EXTRA_WIDTH_PX = 16;
+const FOLLOWER_CARD_EXTRA_HEIGHT_PX = 44;
 
 type Props = {
   mode: 'focus' | 'edit';
@@ -28,6 +45,55 @@ export function MultiDeviceStage({
   const t = useTranslations('devicesControlRecord.view.multiControl');
   const focus = mode === 'focus';
   const followerMockupW = followerMockupWidth(devices.length);
+  const followerScrollRef = useRef<HTMLDivElement>(null);
+  const [gridWidth, setGridWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const scroller = followerScrollRef.current;
+    if (!focus || !scroller) return;
+
+    const syncWidth = () => {
+      const nextWidth = Math.max(
+        0,
+        scroller.clientWidth - FOLLOWER_GRID_HORIZONTAL_PADDING_PX
+      );
+      setGridWidth((current) =>
+        Math.abs(current - nextWidth) < 0.5 ? current : nextWidth
+      );
+    };
+
+    syncWidth();
+    const resizeObserver = new ResizeObserver(syncWidth);
+    resizeObserver.observe(scroller);
+    return () => resizeObserver.disconnect();
+  }, [devices.length, focus]);
+
+  const columnCount = getFollowerGridColumnCount(
+    gridWidth,
+    devices.length,
+    followerMockupW + FOLLOWER_CARD_EXTRA_WIDTH_PX
+  );
+  const rowCount = getFollowerGridRowCount(devices.length, columnCount);
+  const getScrollElement = useCallback(() => followerScrollRef.current, []);
+  const getVirtualRowKey = useCallback(
+    (rowIndex: number) => {
+      const firstDevice = devices[rowIndex * columnCount];
+      return `${columnCount}:${firstDevice?.serial ?? rowIndex}`;
+    },
+    [columnCount, devices]
+  );
+  const rowVirtualizer = useVirtualizer({
+    count: focus ? rowCount : 0,
+    getScrollElement,
+    estimateSize: () =>
+      mockupOuterHeightPx(followerMockupW) + FOLLOWER_CARD_EXTRA_HEIGHT_PX,
+    getItemKey: getVirtualRowKey,
+    gap: FOLLOWER_GRID_GAP_PX,
+    overscan: 1,
+    enabled: focus && devices.length > 0,
+    useFlushSync: false,
+    directDomUpdates: true
+  });
 
   if (focus) {
     return (
@@ -45,18 +111,44 @@ export function MultiDeviceStage({
               {t('gridHint')}
             </div>
             {devices.length > 0 ? (
-              <div className='flex min-h-0 flex-1 justify-start overflow-y-auto px-3 py-3'>
-                <div className={followerGridClass(devices.length)}>
-                  {devices.map((d, index) => (
-                    <FollowerPreview
-                      key={d.serial}
-                      device={d}
-                      mockupScreenWidth={followerMockupW}
-                      onPromote={onPromote}
-                      previewIndex={index}
-                      previewCount={devices.length}
-                    />
-                  ))}
+              <div
+                ref={followerScrollRef}
+                className='min-h-0 flex-1 overflow-y-auto px-3 py-3'
+              >
+                <div
+                  ref={rowVirtualizer.containerRef}
+                  className='relative w-full'
+                >
+                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const { start, end } = getFollowerGridRowBounds(
+                      virtualRow.index,
+                      columnCount,
+                      devices.length
+                    );
+                    return (
+                      <div
+                        key={virtualRow.key}
+                        ref={rowVirtualizer.measureElement}
+                        data-index={virtualRow.index}
+                        className='absolute left-0 top-0 grid justify-start gap-2'
+                        style={{
+                          gridTemplateColumns: `repeat(${columnCount}, max-content)`,
+                          contain: 'layout paint'
+                        }}
+                      >
+                        {devices.slice(start, end).map((d, index) => (
+                          <FollowerPreview
+                            key={d.serial}
+                            device={d}
+                            mockupScreenWidth={followerMockupW}
+                            onPromote={onPromote}
+                            previewIndex={start + index}
+                            previewCount={devices.length}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : (

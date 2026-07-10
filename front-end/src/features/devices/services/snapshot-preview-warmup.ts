@@ -7,10 +7,10 @@ import {
 
 const SNAPSHOT_WARMUP_LIMIT = (() => {
   const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_LIMIT ?? 4
+    process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_LIMIT ?? 8
   );
-  if (!Number.isFinite(raw)) return 4;
-  return Math.max(1, Math.min(8, Math.round(raw)));
+  if (!Number.isFinite(raw)) return 8;
+  return Math.max(1, Math.min(64, Math.round(raw)));
 })();
 
 const PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
@@ -50,6 +50,36 @@ export type SnapshotPreviewWarmupHandle = {
 };
 
 const activeWarmups = new Map<string, WarmupEntry>();
+const warmupListeners = new Set<() => void>();
+
+function emitWarmupChange() {
+  queueMicrotask(() => {
+    warmupListeners.forEach((listener) => {
+      try {
+        listener();
+      } catch {
+        // isolate subscribers
+      }
+    });
+  });
+}
+
+export function subscribeSnapshotPreviewWarmupChanges(
+  listener: () => void
+): () => void {
+  warmupListeners.add(listener);
+  return () => {
+    warmupListeners.delete(listener);
+  };
+}
+
+export function getSnapshotPreviewWarmupLimit(): number {
+  return SNAPSHOT_WARMUP_LIMIT;
+}
+
+export function getSnapshotPreviewWarmupActiveCount(): number {
+  return activeWarmups.size;
+}
 
 export function acquireSnapshotPreviewWarmup(
   serial: string
@@ -69,11 +99,13 @@ export function acquireSnapshotPreviewWarmup(
           const current = activeWarmups.get(serial);
           if (current?.viewerId === viewerId) {
             activeWarmups.delete(serial);
+            emitWarmupChange();
           }
           return false;
         })
     };
     activeWarmups.set(serial, entry);
+    emitWarmupChange();
   }
 
   entry.refs += 1;
@@ -89,6 +121,7 @@ export function acquireSnapshotPreviewWarmup(
       current.refs -= 1;
       if (current.refs > 0) return;
       activeWarmups.delete(serial);
+      emitWarmupChange();
       detachScrcpyStream(serial, current.viewerId).catch(() => {});
     }
   };

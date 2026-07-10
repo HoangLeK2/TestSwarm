@@ -380,6 +380,14 @@ async def test_execute_device_action_batch_maps_u2_batch_failure_to_step_index()
     assert result.results[1]["ok"] is False
     assert result.results[1]["message"] == "tap failed"
     assert [call.kwargs["step_index"] for call in emit_events.await_args_list] == [10, 10, 11, 11]
+    finished_results = [
+        call.kwargs["step_result"]
+        for call in emit_events.await_args_list
+        if call.kwargs.get("phase") == "finished"
+    ]
+    assert all(item["duration_ms"] >= 0 for item in finished_results)
+    assert all(item["u2_batch_duration_ms"] >= item["duration_ms"] for item in finished_results)
+    assert result.results[0]["details"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -615,6 +623,68 @@ async def test_execute_device_action_batch_returns_partial_successes_when_cancel
     assert result.first_failure_index == -1
     assert [item["index"] for item in result.results] == [10]
     assert [call.kwargs["step_index"] for call in emit_events.await_args_list] == [10, 10]
+
+
+@pytest.mark.asyncio
+async def test_execute_device_action_batch_emits_finished_event_when_cancelled_after_step():
+    import temporal.activities as activities
+
+    class FakeDevice:
+        serial = "SN001"
+        model = "test"
+
+        def ensure_u2_healthy(self, ping_timeout=2.0):
+            return None
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    def fake_run_scenario_task(_device, _scenario, **_kwargs):
+        return {
+            "success": False,
+            "step_results": [
+                {
+                    "index": 0,
+                    "type": "scroll_down",
+                    "ok": False,
+                    "message": "scroll_down: cancelled by user",
+                }
+            ],
+        }
+
+    inp = DeviceActionBatchInput(
+        device_serial="SN001",
+        steps=[{"type": "scroll_down"}],
+        step_indices=[7],
+        execution_id="exec-1",
+    )
+    emit_events = AsyncMock()
+
+    with (
+        patch.object(activities, "_get_device", return_value=FakeDevice()),
+        patch.object(activities, "_validate_serial"),
+        patch.object(activities, "_prepare_activity_step", side_effect=lambda s: s),
+        patch.object(activities, "_build_activity_mini_scenario", return_value={"steps": inp.steps}),
+        patch.object(activities, "_emit_step_events_for_activity", emit_events),
+        patch.object(activities, "_to_thread_with_heartbeat", side_effect=fake_to_thread),
+        patch("tasks.scenario_task.run_scenario_task", side_effect=fake_run_scenario_task),
+        patch.object(activities, "activity") as mock_activity,
+        patch.object(activities, "_ExecutionFlagProbe") as probe_cls,
+    ):
+        mock_activity.heartbeat = MagicMock()
+        mock_activity.is_cancelled = MagicMock(return_value=False)
+        probe_cls.return_value.cancelled = AsyncMock(side_effect=[False, True])
+        probe_cls.return_value.paused = AsyncMock(return_value=False)
+        result = await activities.DeviceActivities().execute_device_action_batch(inp)
+
+    assert result.cancelled_mid_batch is True
+    assert [item["index"] for item in result.results] == [7]
+    assert result.results[0]["ok"] is False
+    assert result.results[0]["message"] == "scroll_down: cancelled by user"
+    assert [call.kwargs["phase"] for call in emit_events.await_args_list] == ["started", "finished"]
+    finished_result = emit_events.await_args_list[1].kwargs["step_result"]
+    assert finished_result["ok"] is False
+    assert finished_result["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio

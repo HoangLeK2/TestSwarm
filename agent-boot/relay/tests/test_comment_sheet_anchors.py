@@ -96,3 +96,35 @@ def test_parse_comments_on_sheet_excludes_header_stats() -> None:
     bodies = [r for r in rows if r.get("_type") != "post_stats"]
     assert any(r.get("text") == "Đúng bài này" for r in bodies)
     assert not any(r.get("text") == "23 bình luận" for r in bodies)
+
+
+def test_parse_comments_on_sheet_excludes_parent_post_body_anchor() -> None:
+    xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Quay lại" bounds="[0,80][120,160]" />
+  <node package="com.facebook.katana" text="Phù hợp nhất" bounds="[40,450][400,500]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,400][1080,2200]">
+    <node bounds="[0,520][1080,720]">
+      <node text="Vũ Nguyễn Thiên Ân" bounds="[78,540][560,585]" />
+      <node text="Mình đang dùng gói 20x và sau ... xem thêm Ảnh" bounds="[78,600][1000,660]" />
+    </node>
+    <node bounds="[0,780][1080,960]">
+      <node text="Nguyễn A" bounds="[78,800][300,840]" />
+      <node text="Comment thật trong bài" bounds="[78,850][1000,910]" />
+    </node>
+  </node>
+  <node package="com.facebook.katana" text="Viết bình luận…" bounds="[40,2280][1040,2340]" />
+</hierarchy>"""
+    rows, diag = parse_fb_comments_from_xml_with_diagnostic(
+        xml,
+        parent_post_id="p1",
+        parent_post_anchor={
+            "author": "Vũ Nguyễn Thiên Ân",
+            "text_prefix": "Mình đang dùng gói 20x và sau",
+        },
+    )
+    assert diag["reason_code"] == "ok"
+    bodies = [r for r in rows if r.get("_type") != "post_stats"]
+    assert [r.get("text") for r in bodies] == ["Comment thật trong bài"]

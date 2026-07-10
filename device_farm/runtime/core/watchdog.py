@@ -113,11 +113,11 @@ class WatchdogThread(threading.Thread):
             except Exception:
                 pass
 
-            last_frame = getattr(device, "_last_frame_time", 0.0)
-            frame_age = time.monotonic() - last_frame if last_frame > 0 else float("inf")
-            # Allow 30s grace on startup (last_frame==0), then require frames within 30s
-            frame_ok = last_frame == 0.0 or frame_age < 30.0
-            if device.state in (DeviceState.READY, DeviceState.BUSY) and frame_ok:
+            # Do not use H264 frame age as a relay health signal after the first
+            # frame. scrcpy's display source is event-driven, so a static Android
+            # screen may legitimately emit no packets for a long time. Encoder
+            # stalls are handled in agent-boot via IDR + hard timeout.
+            if device.state in (DeviceState.READY, DeviceState.BUSY):
                 self._bad_since.pop(serial, None)
                 device.reconnect_attempts = 0
             else:

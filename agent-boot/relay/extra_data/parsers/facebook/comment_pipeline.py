@@ -389,6 +389,37 @@ def _extract_comment(
     return out
 
 
+def _norm_comment_anchor_text(value: Any) -> str:
+    text = unicodedata.normalize("NFC", str(value or "").strip()).casefold()
+    text = re.sub(r"\b(xem thêm|see more)\b", " ", text)
+    text = re.sub(r"\b(ảnh|photo|image)\b", " ", text)
+    text = text.replace("…", " ").replace("...", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _comment_matches_parent_post_anchor(
+    comment: Dict[str, Any],
+    parent_post_anchor: Optional[Dict[str, Any]],
+) -> bool:
+    if not isinstance(parent_post_anchor, dict) or not parent_post_anchor:
+        return False
+    anchor_author = _norm_comment_anchor_text(parent_post_anchor.get("author"))
+    comment_author = _norm_comment_anchor_text(comment.get("author"))
+    if anchor_author and comment_author and anchor_author != comment_author:
+        return False
+    anchor_text = _norm_comment_anchor_text(
+        parent_post_anchor.get("text_prefix")
+        or parent_post_anchor.get("text")
+        or parent_post_anchor.get("body")
+    )
+    comment_text = _norm_comment_anchor_text(comment.get("text") or comment.get("body"))
+    if not anchor_text or not comment_text:
+        return False
+    if len(anchor_text) < 16 or len(comment_text) < 16:
+        return False
+    return anchor_text.startswith(comment_text) or comment_text.startswith(anchor_text)
+
+
 def _find_binh_luan_button_in_element(element) -> Optional[Tuple[int, int, int]]:
     from .parser import _parse_bounds
 
@@ -680,6 +711,16 @@ def context_implies_fb_group_navigation(context: dict[str, Any] | None) -> bool:
             return True
         if "group" in blob and ("fb" in blob or "facebook" in blob):
             return True
+    tags = str(context.get("tags") or "").lower()
+    strategy = str(context.get("strategy") or context.get("content_strategy") or "").lower()
+    platform = str(context.get("platform") or "").lower()
+    content_type = str(context.get("content_type") or "").lower()
+    if "group" in tags and (
+        strategy.startswith("fb_")
+        or content_type.startswith("fb_")
+        or platform in {"facebook", "fb"}
+    ):
+        return True
     return False
 
 
@@ -1665,6 +1706,7 @@ def parse_fb_comments_from_xml_with_diagnostic(
     xml: str,
     parent_post_id: Optional[str] = None,
     max_items: int = 50,
+    parent_post_anchor: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     from .clustering import _cluster_into_comments, _coalesce_comment_clusters
     from .filters import (
@@ -1828,6 +1870,8 @@ def parse_fb_comments_from_xml_with_diagnostic(
         comment = _extract_comment(cluster, parent_post_id, cluster_min_x=cluster_min_x)
         if not comment or _is_comment_row_parse_noise(comment) or _is_junk_parsed_comment_row(comment):
             continue
+        if _comment_matches_parent_post_anchor(comment, parent_post_anchor):
+            continue
         if _is_duplicate_short_author_footer_row(comment, last_kept_body):
             continue
         result.append(comment)
@@ -1877,8 +1921,14 @@ def parse_fb_comments_from_xml(
     xml: str,
     parent_post_id: Optional[str] = None,
     max_items: int = 50,
+    parent_post_anchor: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    rows, _ = parse_fb_comments_from_xml_with_diagnostic(xml, parent_post_id, max_items)
+    rows, _ = parse_fb_comments_from_xml_with_diagnostic(
+        xml,
+        parent_post_id,
+        max_items,
+        parent_post_anchor=parent_post_anchor,
+    )
     return rows
 
 

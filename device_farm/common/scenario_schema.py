@@ -467,7 +467,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
             "open_post_before_extract (fb_posts): mở màn chi tiết bài trước extract. "
-            "open_post_press_back_after_extract: tự Back sau extract; mặc định False — template có bước Back riêng. "
+            "open_post_press_back_after_extract: tự Back sau extract; với fb_comments chỉ back khi còn ở comment sheet. "
             "fb_comments supports bounded crawl tuning: max_items, comment_scroll_passes, "
             "comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. "
             "Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp "

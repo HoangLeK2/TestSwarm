@@ -163,8 +163,21 @@ _HEVC_OEM_ALLOWLIST = {
     for s in os.environ.get("SCRCPY_HEVC_OEM_ALLOWLIST", "").split(",")
     if s.strip()
 }
-# Qualcomm Vivo builds: prefer HW H.264 when codec stays h264 and encoder is unset.
+# Optional fleet-wide H.264 encoder pin for Vivo devices. Empty by default:
+# stability policy should stay generic unless ops explicitly opts in.
 _VIVO_H264_ENCODER_DEFAULT = os.environ.get("SCRCPY_VIVO_H264_ENCODER", "").strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
+SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 15))
+SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 540))
+SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 800_000))
 
 
 def _per_serial_env(base: str, serial: str, fallback: str) -> str:
@@ -189,10 +202,11 @@ def _codec_explicit_for_serial(serial: str) -> bool:
     key = f"SCRCPY_VIDEO_CODEC__{safe}"
     return bool(os.environ.get(key, "").strip())
 
+
 # Soft IDR threshold: if we go this many seconds without a frame, request an
 # IDR keyframe from scrcpy-server before hitting the hard frame timeout. This
 # recovers from decoder-freeze-on-dropped-NAL ~200ms vs full restart ~2-3s.
-_IDR_REQUEST_AFTER = float(os.environ.get("SCRCPY_IDR_REQUEST_AFTER_S", "1.5"))
+_IDR_REQUEST_AFTER = float(os.environ.get("SCRCPY_IDR_REQUEST_AFTER_S", "4.0"))
 # Guardrail: if we keep requesting IDR too many times in a short window, the
 # encoder is not recovering and the stream stays black/frozen. Force a hard
 # session restart instead of spinning forever in capture-reset loops.
@@ -205,7 +219,7 @@ _IDR_REQUEST_WINDOW = max(
 # default of 1.0s — multi-day runs with several OEM devices in a soft stall
 # would otherwise spam ~120 IDR requests/min total, burning CPU + ADB for
 # zero recovery. Per-OEM env override below for stubborn codecs.
-_IDR_REQUEST_MIN_GAP = max(0.2, float(os.environ.get("SCRCPY_IDR_REQUEST_MIN_GAP_S", "1.0")))
+_IDR_REQUEST_MIN_GAP = max(0.2, float(os.environ.get("SCRCPY_IDR_REQUEST_MIN_GAP_S", "4.0")))
 
 # scrcpy 3.3.x control message type. Hardcoded to the bundled server version
 # (see _BUNDLED_JAR_VERSION); re-check if you bump the jar.
@@ -340,14 +354,14 @@ class ScrcpyRelaySession:
     ) -> None:
         self._serial         = serial
         self._jar_version    = _BUNDLED_JAR_VERSION
-        self._max_fps        = max_fps or 30
-        self._max_width      = max_width or 800
+        self._max_fps        = max_fps or SCRCPY_DEFAULT_MAX_FPS
+        self._max_width      = max_width or SCRCPY_DEFAULT_MAX_WIDTH
         # Touch/key control originates from the farm's `scrcpy_control` config.
         # Even in video-only mode, we still need scrcpy's control socket for
         # IDR requests to recover from encoder stalls.
         self._enable_touch_control = bool(enable_control)
         self._enable_control_channel = True
-        self._bitrate        = bitrate or 2_000_000
+        self._bitrate        = bitrate or SCRCPY_DEFAULT_BITRATE
         # KEY_LATENCY=0: encoder outputs every frame immediately (no internal buffer).
         # Saves 66-133 ms on Android ≤ 13 (API ≤ 33). Crashes MediaCodec on some
         # API 34+ OEM builds — farm only enables this when SDK < 34.
@@ -416,6 +430,19 @@ class ScrcpyRelaySession:
         self._kill_server()
         _adb("forward", "--remove", f"tcp:{self._port}",
              serial=self._serial, timeout=5)
+        relay_thread = self._relay_thread
+        if (
+            relay_thread is not None
+            and relay_thread is not threading.current_thread()
+            and relay_thread.is_alive()
+        ):
+            relay_thread.join(timeout=5.0)
+        # The relay thread may have been inside _start_scrcpy_server() when
+        # stop() was requested. Kill once more after join so a late-started
+        # localabstract:scrcpy server cannot race the next session.
+        self._kill_server()
+        _adb("forward", "--remove", f"tcp:{self._port}",
+             serial=self._serial, timeout=5)
 
     def send_control(self, data: bytes) -> None:
         """Forward raw scrcpy control bytes to device (thread-safe).
@@ -474,11 +501,11 @@ class ScrcpyRelaySession:
     ) -> bool:
         """Return True when a duplicate start request can reuse this live session."""
         return (
-            self._max_fps == (max_fps or 30)
-            and self._max_width == (max_width or 800)
+            self._max_fps == (max_fps or SCRCPY_DEFAULT_MAX_FPS)
+            and self._max_width == (max_width or SCRCPY_DEFAULT_MAX_WIDTH)
             and self._enable_touch_control == bool(enable_control)
             and self._port == port
-            and self._bitrate == (bitrate or 2_000_000)
+            and self._bitrate == (bitrate or SCRCPY_DEFAULT_BITRATE)
             and self._low_latency == bool(low_latency)
         )
 
@@ -511,6 +538,9 @@ class ScrcpyRelaySession:
                     if not server_alive or not self._is_server_running():
                         self._start_scrcpy_server()
                         server_alive = True
+
+                    if not self._running:
+                        break
 
                     # Connect sockets and stream until error or stop.
                     stream_started = time.monotonic()
@@ -786,10 +816,26 @@ class ScrcpyRelaySession:
         proc   = self._server_proc
 
         def _log_server_output() -> None:
+            noisy_last_logged: dict[str, float] = {}
+            noisy_patterns = (
+                "INFO: Video capture reset",
+                "DEBUG: Display: using ",
+            )
             try:
                 for raw in proc.stdout:  # type: ignore[union-attr]
                     line = raw.decode("utf-8", errors="replace").rstrip()
                     if line:
+                        noisy_key = next(
+                            (pattern for pattern in noisy_patterns if pattern in line),
+                            "",
+                        )
+                        if noisy_key:
+                            now = time.monotonic()
+                            last = noisy_last_logged.get(noisy_key, 0.0)
+                            if now - last < 30.0:
+                                logger.debug("[%s] scrcpy-server: %s", serial, line)
+                                continue
+                            noisy_last_logged[noisy_key] = now
                         logger.info("[%s] scrcpy-server: %s", serial, line)
             except Exception:
                 pass
@@ -865,7 +911,7 @@ class ScrcpyRelaySession:
         w, h = self._device_width, self._device_height
 
         # Two-stage frame recovery:
-        #  1. socket timeout at _IDR_REQUEST_AFTER (~1.5s) — if hit, ask
+        #  1. socket timeout at _IDR_REQUEST_AFTER — if hit before first frame, ask
         #     scrcpy-server for an IDR keyframe and retry. Fixes the "frozen
         #     screen" case where the decoder is stuck on a corrupt NAL after
         #     WiFi packet loss; recovery ~200ms.
@@ -873,17 +919,58 @@ class ScrcpyRelaySession:
         #     good frame → encoder genuinely stalled → raise, outer loop
         #     reconnects the session.
         video_sock.settimeout(_IDR_REQUEST_AFTER)
+        saw_video_frame = False
         last_good_frame = time.monotonic()
+        idr_wait_started = 0.0
         idr_window_start = 0.0
         idr_request_count = 0
 
         def _read_header_or_idr() -> bytes:
-            nonlocal last_good_frame, idr_window_start, idr_request_count
+            nonlocal last_good_frame, idr_wait_started, idr_window_start, idr_request_count
             while True:
                 try:
                     return _recvall(video_sock, 12)
                 except socket.timeout:
-                    elapsed = time.monotonic() - last_good_frame
+                    now = time.monotonic()
+                    if saw_video_frame:
+                        if self._need_idr:
+                            self._need_idr = False
+                            if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
+                                self._last_idr_request_t = now
+                                if idr_wait_started <= 0.0:
+                                    idr_wait_started = now
+                                    idr_window_start = now
+                                    idr_request_count = 0
+                                idr_request_count += 1
+                                self._request_idr()
+                                logger.debug("[%s] IDR requested after downstream recovery signal", self._serial)
+                        if idr_wait_started > 0.0:
+                            elapsed = now - idr_wait_started
+                            if elapsed >= _FRAME_TIMEOUT:
+                                raise RuntimeError(
+                                    f"scrcpy frame timeout after IDR ({_FRAME_TIMEOUT:.1f}s) — encoder stalled"
+                                )
+                            if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
+                                self._last_idr_request_t = now
+                                if (now - idr_window_start) > _IDR_REQUEST_WINDOW:
+                                    idr_window_start = now
+                                    idr_request_count = 0
+                                idr_request_count += 1
+                                self._request_idr()
+                                logger.debug(
+                                    "[%s] scrcpy: %.1fs without frame after IDR — retry %d",
+                                    self._serial,
+                                    elapsed,
+                                    idr_request_count,
+                                )
+                                if idr_request_count >= _IDR_MAX_REQUESTS:
+                                    raise RuntimeError(
+                                        "scrcpy repeated no-frame stalls after IDR "
+                                        f"({idr_request_count} IDR requests/{_IDR_REQUEST_WINDOW:.1f}s) "
+                                        "— forcing session restart"
+                                    )
+                        continue
+                    elapsed = now - last_good_frame
                     if elapsed >= _FRAME_TIMEOUT:
                         raise RuntimeError(
                             f"scrcpy frame timeout ({_FRAME_TIMEOUT:.1f}s) — encoder stalled"
@@ -933,6 +1020,11 @@ class ScrcpyRelaySession:
                 now = time.monotonic()
                 if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
                     self._last_idr_request_t = now
+                    if idr_wait_started <= 0.0:
+                        idr_wait_started = now
+                        idr_window_start = now
+                        idr_request_count = 0
+                    idr_request_count += 1
                     self._request_idr()
                     logger.debug("[%s] IDR requested after P-frame queue drop", self._serial)
 
@@ -947,7 +1039,9 @@ class ScrcpyRelaySession:
             is_key = (not is_cfg) and _is_idr(data)
 
             if not is_cfg:
+                saw_video_frame = True
                 last_good_frame = time.monotonic()
+                idr_wait_started = 0.0
                 # We got a real video frame again — clear the stall window so
                 # future bursts are measured independently. Config/SPS packets
                 # after a capture reset do not prove the encoder recovered.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Dict
 
@@ -68,6 +69,58 @@ def _bounded_int(raw: Any, default: int, *, min_value: int, max_value: int) -> i
     except (TypeError, ValueError):
         value = default
     return min(max_value, max(min_value, value))
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 1000) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return _bounded_int(raw, default, min_value=min_value, max_value=max_value)
+
+
+def _is_fb_comment_scroll_target(step: Dict[str, Any], by: str, value: str) -> bool:
+    raw_value = str(step.get("value") or value or "").strip().lower()
+    raw_by = str(step.get("by") or by or "").strip().lower()
+    if not raw_value or raw_by not in {"description", "descriptionstartswith", "text"}:
+        return False
+    if "bình luận" not in raw_value and "comment" not in raw_value:
+        return False
+    selector = step.get("selector") if isinstance(step.get("selector"), dict) else {}
+    conditions = selector.get("conditions") if isinstance(selector.get("conditions"), dict) else {}
+    package_name = str(conditions.get("packageName") or step.get("package_name") or "").strip()
+    return not package_name or package_name == "com.facebook.katana"
+
+
+def _mark_fb_comment_target_found(sc: ScenarioContext, result: Dict[str, Any]) -> None:
+    sc.ctx.pop("_fb_comment_target_missing", None)
+    result["comment_target_missing"] = False
+
+
+def _mark_fb_comment_target_missing(
+    sc: ScenarioContext,
+    result: Dict[str, Any],
+    *,
+    selector: str,
+    requested_max_swipes: int,
+    effective_max_swipes: int,
+    swipes_done: int,
+) -> None:
+    marker = {
+        "selector": selector,
+        "max_swipes_requested": requested_max_swipes,
+        "max_swipes_effective": effective_max_swipes,
+        "swipes_done": swipes_done,
+    }
+    sc.ctx["_fb_comment_target_missing"] = marker
+    result["comment_target_missing"] = True
+    result["comment_target_missing_detail"] = marker
 
 
 def _truncate_output(output: str, limit: int) -> tuple[str, bool]:
@@ -431,16 +484,79 @@ def handle_scroll_down(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
 @register_step("scroll_to")
 def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     from tasks.scenario.utils import resolve_step_selector_fields
-    from services.scenario_selector import selector_summary
+    from services.scenario_selector import selector_summary, spec_to_agent_payload
 
     spec, by, value, _ = resolve_step_selector_fields(step)
     direction = str(step.get("direction", "down") or "down")
     max_swipes = int(step.get("max_swipes", 5) or 5)
+    requested_max_swipes = max_swipes
     if spec is None or spec.is_empty():
         result["ok"] = False
         result["message"] = "scroll_to: empty selector"
         return
     lbl = selector_summary(spec)
+    is_fb_comment_target = _is_fb_comment_scroll_target(step, by, value)
+    if is_fb_comment_target:
+        comment_cap = _env_int(
+            "FB_COMMENT_SCROLL_TO_MAX_SWIPES",
+            8,
+            min_value=1,
+            max_value=max(1, requested_max_swipes),
+        )
+        max_swipes = min(max_swipes, comment_cap)
+        if max_swipes != requested_max_swipes:
+            result["scroll_to_max_swipes_requested"] = requested_max_swipes
+            result["scroll_to_max_swipes_effective"] = max_swipes
+
+    flow = getattr(sc.device, "u2_flow", None)
+    if (
+        callable(flow)
+        and _env_bool("SCROLL_TO_U2_FLOW_ENABLED", True)
+        and not _cancelled(sc)
+    ):
+        flow_direction = {
+            "down": "up",
+            "up": "down",
+            "left": "left",
+            "right": "right",
+        }.get(direction, "up")
+        try:
+            flow_started = time.monotonic()
+            flow_result = flow(
+                "swipe_until_found",
+                {
+                    "selector": {"spec": spec_to_agent_payload(spec)},
+                    "direction": flow_direction,
+                    "max_swipes": max_swipes,
+                    "step_ratio": float(step.get("scroll_step_ratio", 0.4) or 0.4),
+                    "duration": float(step.get("scroll_duration_s", 0.12) or 0.12),
+                },
+                timeout=float(step.get("scroll_to_timeout_s", max(5.0, max_swipes * 0.35)) or 5.0),
+            )
+            found = bool(flow_result.get("found"))
+            swipes_done = int(flow_result.get("swipes") or 0)
+            result["scroll_to_driver"] = "u2_flow"
+            result["scroll_to_flow_ms"] = round((time.monotonic() - flow_started) * 1000.0, 1)
+            result["scroll_to_swipes"] = swipes_done
+            if found:
+                if is_fb_comment_target:
+                    _mark_fb_comment_target_found(sc, result)
+                result["message"] = f"scroll_to found {lbl} after {swipes_done} swipe(s)"
+            else:
+                result["ok"] = False
+                if is_fb_comment_target:
+                    _mark_fb_comment_target_missing(
+                        sc,
+                        result,
+                        selector=lbl,
+                        requested_max_swipes=requested_max_swipes,
+                        effective_max_swipes=max_swipes,
+                        swipes_done=swipes_done,
+                    )
+                result["message"] = f"scroll_to {lbl} not found after {max_swipes} swipes"
+            return
+        except Exception as exc:
+            result["scroll_to_flow_error"] = str(exc)[:200]
 
     sx = sc.w // 2
     if direction == "up":
@@ -481,6 +597,17 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         return
     if not found:
         result["ok"] = False
+        if is_fb_comment_target:
+            _mark_fb_comment_target_missing(
+                sc,
+                result,
+                selector=lbl,
+                requested_max_swipes=requested_max_swipes,
+                effective_max_swipes=max_swipes,
+                swipes_done=swipes_done,
+            )
         result["message"] = f"scroll_to {lbl} not found after {max_swipes} swipes"
     else:
+        if is_fb_comment_target:
+            _mark_fb_comment_target_found(sc, result)
         result["message"] = f"scroll_to found {lbl} after {swipes_done} swipe(s)"

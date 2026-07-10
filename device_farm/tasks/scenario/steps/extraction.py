@@ -1,6 +1,7 @@
 """Step handlers: extract, extract_text_hierarchy, extract_text_ocr, extract_text_ai, extract_screen_data."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -105,7 +106,10 @@ _ACTIVE_COMMENT_PARENT_CTX_KEYS = (
     "_active_comment_parent_anchor",
     "_active_comment_anchor_verified",
     "_active_comment_parent_source",
+    "_fb_comment_session",
 )
+_CONSUMED_POST_ANCHORS_CTX_KEY = "_fb_consumed_post_anchors"
+_MAX_CONSUMED_POST_ANCHORS = 100
 
 
 def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -120,6 +124,73 @@ def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
 def _clear_active_comment_parent(ctx: Dict[str, Any]) -> None:
     for key in _ACTIVE_COMMENT_PARENT_CTX_KEYS:
         ctx.pop(key, None)
+
+
+def _anchor_identity(anchor: Dict[str, Any]) -> tuple[str, ...]:
+    values: list[str] = []
+    for key in (*_COMMENT_PARENT_ANCHOR_KEYS, "parent_id"):
+        value = str(anchor.get(key) or "").strip().casefold()
+        if value:
+            values.append(f"{key}:{value}")
+    return tuple(values)
+
+
+def _remember_consumed_comment_parent(ctx: Dict[str, Any]) -> None:
+    anchor = ctx.get("_active_comment_parent_anchor")
+    if not isinstance(anchor, dict):
+        anchor = {}
+    cleaned = _clean_comment_parent_anchor(anchor)
+    parent_hash = str(ctx.get("_active_comment_parent_hash") or "").strip()
+    parent_pid = str(ctx.get("_fb_comment_parent_pid") or "").strip()
+    if parent_pid and "pid" not in cleaned:
+        cleaned["pid"] = parent_pid
+    if parent_hash and "parent_id" not in cleaned:
+        cleaned["parent_id"] = parent_hash
+    if not cleaned:
+        return
+    bucket = ctx.setdefault(_CONSUMED_POST_ANCHORS_CTX_KEY, [])
+    if not isinstance(bucket, list):
+        bucket = []
+        ctx[_CONSUMED_POST_ANCHORS_CTX_KEY] = bucket
+    identity = _anchor_identity(cleaned)
+    for existing in bucket:
+        if isinstance(existing, dict) and _anchor_identity(existing) == identity:
+            return
+    bucket.append(cleaned)
+    if len(bucket) > _MAX_CONSUMED_POST_ANCHORS:
+        del bucket[:-_MAX_CONSUMED_POST_ANCHORS]
+
+
+def _build_fb_comment_session(
+    *,
+    parent_id: Any,
+    pid: Any,
+    source: str,
+    anchor: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    parent_hash = str(parent_id or "").strip()
+    parent_pid = str(pid or "").strip()
+    if not parent_hash and not parent_pid and not anchor:
+        return None
+    identity_parts = [
+        parent_hash,
+        parent_pid,
+        str(anchor.get("post_key") or "").strip(),
+        str(anchor.get("stable_post_id") or "").strip(),
+        str(anchor.get("fb_post_id") or "").strip(),
+        str(anchor.get("author") or "").strip(),
+        str(anchor.get("text_prefix") or "").strip()[:96],
+    ]
+    identity = "|".join(part for part in identity_parts if part)
+    session_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return {
+        "schema_version": 1,
+        "session_id": session_id,
+        "parent_id": parent_hash or None,
+        "parent_post_id": parent_pid or None,
+        "source": source or "post_detail",
+        "anchor": anchor,
+    }
 
 
 def _opened_post_from_ingest_diagnostic(ingest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -166,21 +237,37 @@ def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any])
         or active_parent.get("parent_content_hash")
     )
     pid = active_parent.get("pid") or active_parent.get("parent_post_id")
+    anchor = _clean_comment_parent_anchor(active_parent)
+    if not parent_id and not pid and not anchor:
+        _clear_active_comment_parent(ctx)
+        return
+
+    replacement: Dict[str, Any] = {
+        "_active_comment_anchor_verified": True,
+    }
     if parent_id:
-        ctx["_active_comment_parent_hash"] = parent_id
-        ctx["_first_new_post_hash"] = parent_id
+        replacement["_active_comment_parent_hash"] = parent_id
+        replacement["_first_new_post_hash"] = parent_id
     if pid:
-        ctx["_fb_comment_parent_pid"] = pid
+        replacement["_fb_comment_parent_pid"] = pid
     source = str(active_parent.get("source") or "").strip()
     if not source and (parent_id or pid):
         source = "post_detail"
     if source:
-        ctx["_active_comment_parent_source"] = source
-    anchor = _clean_comment_parent_anchor(active_parent)
+        replacement["_active_comment_parent_source"] = source
     if anchor:
-        ctx["_active_comment_parent_anchor"] = anchor
-    if parent_id or pid or anchor:
-        ctx["_active_comment_anchor_verified"] = True
+        replacement["_active_comment_parent_anchor"] = anchor
+    session = _build_fb_comment_session(
+        parent_id=parent_id,
+        pid=pid,
+        source=source,
+        anchor=anchor,
+    )
+    if session:
+        replacement["_fb_comment_session"] = session
+
+    _clear_active_comment_parent(ctx)
+    ctx.update(replacement)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -603,6 +690,15 @@ def request_edge_extra_data(
         return False
     if strategy not in EDGE_CONTENT_STRATEGIES:
         return False
+    if strategy == "fb_comments" and isinstance(ctx.get("_fb_comment_target_missing"), dict):
+        result["ok"] = True
+        result["skipped"] = True
+        result["comment_target_missing"] = True
+        result["comment_target_missing_detail"] = ctx.get("_fb_comment_target_missing")
+        result["extracted"] = 0
+        result["duplicate_count"] = 0
+        result["message"] = "edge extra_data fb_comments: skipped — comment target missing"
+        return True
     if cancel_event is not None and cancel_event.is_set():
         result["ok"] = False
         result["message"] = f"edge extra_data {strategy}: cancelled"
@@ -659,7 +755,11 @@ def request_edge_extra_data(
         "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
         "dedupe_field": step.get("dedupe_field"),
         "tags": step.get("tags", ""),
-        "item_level": int(step.get("item_level") or (1 if strategy in COMMENT_STRATEGIES else 0)),
+        "item_level": (
+            0
+            if strategy.endswith("_posts")
+            else int(step.get("item_level") or (1 if strategy in COMMENT_STRATEGIES else 0))
+        ),
         "parent_id": parent_id,
         "parent_id_already_scoped": parent_id_already_scoped,
         "parent_post_id": parent_post_id,
@@ -671,6 +771,7 @@ def request_edge_extra_data(
         or step.get("posts_dedupe_field"),
         "posts": ctx.get("posts"),
         "_active_comment_parent_anchor": ctx.get("_active_comment_parent_anchor"),
+        "_fb_comment_session": ctx.get("_fb_comment_session"),
         "max_items": int(
             step.get("max_items")
             or comment_defaults.get("max_items")
@@ -681,6 +782,12 @@ def request_edge_extra_data(
         "return_items": return_items,
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
+    if strategy == "fb_posts":
+        consumed_anchors = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
+        if isinstance(consumed_anchors, list) and consumed_anchors:
+            context["open_post_exclude_anchors"] = [
+                anchor for anchor in consumed_anchors if isinstance(anchor, dict)
+            ]
     if _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False):
         context["capture_screenshot"] = True
     for key, val in comment_defaults.items():
@@ -808,7 +915,14 @@ def request_edge_extra_data(
         }
     result["edge_extra_summary"] = edge_extra_summary
     result["reason_code"] = ((ingest.get("diagnostic") or {}) if isinstance(ingest.get("diagnostic"), dict) else {}).get("reason_code", "ok")
+    if strategy == "fb_comments" and _coerce_bool(
+        step.get("open_post_press_back_after_extract"),
+        False,
+    ):
+        _remember_consumed_comment_parent(ctx)
+        _clear_active_comment_parent(ctx)
     if strategy == "fb_posts":
+        ctx.pop("_fb_comment_target_missing", None)
         pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
         if pid_map:
             merged = ctx.setdefault("_post_id_map", {})
@@ -965,6 +1079,9 @@ def request_edge_comment_target(
     anchor = ctx.get("_active_comment_parent_anchor")
     if isinstance(anchor, dict) and anchor:
         context["_active_comment_parent_anchor"] = anchor
+    comment_session = ctx.get("_fb_comment_session")
+    if isinstance(comment_session, dict) and comment_session:
+        context["_fb_comment_session"] = comment_session
     parent_source = ctx.get("_active_comment_parent_source")
     if parent_source:
         context["parent_context_source"] = parent_source
@@ -1022,6 +1139,21 @@ def run_edge_comment_filter_switch(
     cancel_event: Any = None,
 ) -> Dict[str, Any]:
     """Drive FB comment sort sheet via agent-boot (open sheet, tap chosen option)."""
+
+    def _copy_filter_timing(source: Dict[str, Any]) -> None:
+        for src_key, dst_key in (
+            ("total_ms", "extra_data_total_ms"),
+            ("dump_ms", "extra_data_dump_ms"),
+            ("parse_ms", "extra_data_parse_ms"),
+            ("click_ms", "extra_data_click_ms"),
+            ("sleep_ms", "extra_data_sleep_ms"),
+            ("step_count", "extra_data_steps"),
+        ):
+            if src_key in source:
+                result[dst_key] = source.get(src_key)
+        if "extra_data_steps" not in result and isinstance(source.get("steps"), list):
+            result["extra_data_steps"] = len(source["steps"])
+
     target_filter = resolve_step_comment_filter(step)
     report: Dict[str, Any] = {
         "enabled": target_filter is not None,
@@ -1086,6 +1218,10 @@ def run_edge_comment_filter_switch(
         report["steps"] = list(diagnostic.get("steps") or [])
         report["switched"] = bool(diagnostic.get("switched"))
         report["reason_code"] = str(diagnostic.get("reason_code") or "ok")
+        for key in ("total_ms", "dump_ms", "parse_ms", "click_ms", "sleep_ms", "step_count"):
+            if key in diagnostic:
+                report[key] = diagnostic.get(key)
+        _copy_filter_timing(report)
         result["edge_filter_summary"] = report
         return report
 

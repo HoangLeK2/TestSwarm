@@ -144,12 +144,12 @@ temporal:
   server_url: "localhost:7233"          # Temporal gRPC endpoint
   namespace: "default"
   task_queue: "device-scenario"
-  worker_count: 1                      # Worker threads per process (each has own event loop + thread pool)
+  worker_count: 6                      # Worker threads per process (each has own event loop + thread pool)
                                          # Total capacity = worker_count × worker_max_concurrent_activities
                                          # Override via TEMPORAL_WORKER_COUNT env var
-                                         # For cloud scale: run more farm pods, each with worker_count=2-4
+                                         # Target ~120 concurrent devices: 6 × 20 = 120 slots
   worker_max_concurrent_activities: 20  # Max parallel device actions per worker thread
-  worker_max_concurrent_workflows: 50   # Max parallel workflow tasks per worker thread
+  worker_max_concurrent_workflows: 60   # Max parallel workflow tasks per worker thread
   workflow_execution_timeout: 0         # 0 = unlimited (no timeout). Was 3600s.
   activity_start_to_close_timeout: 60   # Max seconds per device action
   activity_retry_max_attempts: 3        # Retry failed device actions

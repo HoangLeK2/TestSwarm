@@ -19,10 +19,17 @@ from temporal.schedule_workflow import ScheduleRunWorkflow
 from temporal.shared import TASK_QUEUE_NAME
 from temporal.account_state_activities import AccountStateActivities
 from temporal.account_state_workflows import AccountCooldownTickWorkflow
+from temporal.capacity_probe import capacity_probe, db_hold_probe
+from temporal.capacity_probe_workflows import CapacityProbeWorkflow, DbHoldProbeWorkflow
 from temporal.trace import TemporalTraceInterceptor
 from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
 log = logging.getLogger(__name__)
+
+# Temporal workflow sandbox validation imports modules under a process-wide
+# import lock. Creating multiple Workers concurrently (worker_count>1) can
+# deadlock on first import of temporal.workflows / schedule_workflow.
+_worker_init_lock = threading.Lock()
 
 
 async def _create_client(cfg: TemporalConfig) -> Client:
@@ -53,11 +60,21 @@ async def create_temporal_worker(
     _activities = DeviceActivities()
     _relay_onboarding_activities = RelayOnboardingActivities()
 
+    _account_state_activities = AccountStateActivities()
+    # Shared on every worker so cooldown/probe fan-out is not pinned to worker 0.
+    _shared_tail = [
+        capacity_probe,
+        db_hold_probe,
+        _account_state_activities.process_expired_account_cooldowns,
+        _relay_onboarding_activities.prepare_relay_onboarding_job,
+        _relay_onboarding_activities.run_relay_onboarding_item,
+        _relay_onboarding_activities.finish_relay_onboarding_job,
+    ]
+
     if worker_index == 0:
         # Primary worker: full activity set including schedule dispatch.
         set_scheduler_deps(queue=queue, manager=manager, temporal_client=client, temporal_config=cfg)
         _schedule_activities = ScheduleActivities()
-        _account_state_activities = AccountStateActivities()
         activity_list = [
             _activities.execute_device_action,
             _activities.execute_device_action_batch,
@@ -71,13 +88,10 @@ async def create_temporal_worker(
             _schedule_activities.create_run_record,
             _schedule_activities.dispatch_schedule,
             _schedule_activities.finalize_schedule_run,
-            _account_state_activities.process_expired_account_cooldowns,
-            _relay_onboarding_activities.prepare_relay_onboarding_job,
-            _relay_onboarding_activities.run_relay_onboarding_item,
-            _relay_onboarding_activities.finish_relay_onboarding_job,
+            *_shared_tail,
         ]
     else:
-        # Secondary workers: device activities only.
+        # Secondary workers: device + shared activities (no schedule dispatch deps).
         activity_list = [
             _activities.execute_device_action,
             _activities.execute_device_action_batch,
@@ -87,26 +101,27 @@ async def create_temporal_worker(
             _activities.execute_extract,
             _activities.execute_save_extraction,
             _activities.finalize_campaign,
-            _relay_onboarding_activities.prepare_relay_onboarding_job,
-            _relay_onboarding_activities.run_relay_onboarding_item,
-            _relay_onboarding_activities.finish_relay_onboarding_job,
+            *_shared_tail,
         ]
 
-    return Worker(
-        client,
-        task_queue=task_queue,
-        workflows=[
-            ScenarioWorkflow,
-            ScenarioStepsWorkflow,
-            ScheduleRunWorkflow,
-            RelayOnboardingWorkflow,
-            AccountCooldownTickWorkflow,
-        ],
-        activities=activity_list,
-        interceptors=[TemporalTraceInterceptor()],
-        max_concurrent_activities=cfg.worker_max_concurrent_activities,
-        max_concurrent_workflow_tasks=cfg.worker_max_concurrent_workflows,
-    )
+    with _worker_init_lock:
+        return Worker(
+            client,
+            task_queue=task_queue,
+            workflows=[
+                ScenarioWorkflow,
+                ScenarioStepsWorkflow,
+                ScheduleRunWorkflow,
+                RelayOnboardingWorkflow,
+                AccountCooldownTickWorkflow,
+                CapacityProbeWorkflow,
+                DbHoldProbeWorkflow,
+            ],
+            activities=activity_list,
+            interceptors=[TemporalTraceInterceptor()],
+            max_concurrent_activities=cfg.worker_max_concurrent_activities,
+            max_concurrent_workflow_tasks=cfg.worker_max_concurrent_workflows,
+        )
 
 
 async def _run_worker(
@@ -167,6 +182,10 @@ def start_temporal_worker(
     threads start — avoids write-write races when multiple threads call
     create_temporal_worker concurrently.
 
+    Workers are started sequentially: thread N only begins after worker N-1
+    has finished sandbox validation. Concurrent Worker() construction deadlocks
+    on CPython's import locks inside Temporal's workflow sandbox.
+
     Total activity concurrency = worker_count × max_concurrent_activities.
     """
     # Inject shared globals once, before any thread starts (Issue 2 fix).
@@ -177,18 +196,58 @@ def start_temporal_worker(
     threads: list[threading.Thread] = []
 
     for i in range(worker_count):
-        def _worker_thread(idx: int = i) -> None:
+        ready = threading.Event()
+        failed = threading.Event()
+
+        def _worker_thread(
+            idx: int = i,
+            ready_evt: threading.Event = ready,
+            failed_evt: threading.Event = failed,
+        ) -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+
+            async def _run_and_signal() -> None:
+                try:
+                    max_threads = max(cfg.worker_max_concurrent_activities * 2, 20)
+                    loop_ref = asyncio.get_running_loop()
+                    loop_ref.set_default_executor(
+                        ThreadPoolExecutor(
+                            max_workers=max_threads,
+                            thread_name_prefix=f"device-activity-{idx}",
+                        )
+                    )
+                    client = await _create_client(cfg)
+                    worker = await create_temporal_worker(
+                        manager, cfg, client, queue=queue, worker_index=idx,
+                    )
+                    ready_evt.set()
+                    from temporal.trace import trace_log
+                    trace_log.info(
+                        "temporal_worker_started",
+                        worker_index=idx,
+                        server_url=cfg.server_url,
+                        task_queue=cfg.task_queue,
+                        max_concurrent_activities=cfg.worker_max_concurrent_activities,
+                        max_concurrent_workflows=cfg.worker_max_concurrent_workflows,
+                        thread_pool_size=max_threads,
+                    )
+                    log.info(
+                        "[worker-%d] started: server=%s queue=%s activities=%d threads=%d",
+                        idx, cfg.server_url, cfg.task_queue,
+                        cfg.worker_max_concurrent_activities, max_threads,
+                    )
+                    await worker.run()
+                except Exception:
+                    failed_evt.set()
+                    ready_evt.set()
+                    raise
+
             try:
-                loop.run_until_complete(_run_worker(manager, cfg, queue=queue, worker_index=idx))
+                loop.run_until_complete(_run_and_signal())
             except Exception:
                 log.exception("temporal-worker-%d error", idx)
             finally:
-                # Dispose the per-loop SQLAlchemy engine before closing the
-                # loop so its connection pool releases cleanly. Skipping this
-                # leaves asyncpg connections waiting on a dead loop and emits
-                # "Task was destroyed" warnings on shutdown.
                 try:
                     from db.database import dispose_loop_engine
                     loop.run_until_complete(dispose_loop_engine())
@@ -202,6 +261,10 @@ def start_temporal_worker(
             name=f"temporal-worker-{i}",
         )
         thread.start()
+        if not ready.wait(timeout=120):
+            raise RuntimeError(f"temporal-worker-{i} did not become ready within 120s")
+        if failed.is_set():
+            raise RuntimeError(f"temporal-worker-{i} failed during startup")
         threads.append(thread)
 
     log.info(

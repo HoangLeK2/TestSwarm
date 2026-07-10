@@ -72,6 +72,18 @@ def test_context_implies_fb_group_from_collection() -> None:
     assert ctx["_fb_group_navigation"] is True
 
 
+def test_context_implies_fb_group_from_tags_and_strategy() -> None:
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        context_implies_fb_group_navigation,
+        note_fb_group_navigation,
+    )
+
+    ctx = {"tags": "group,comment", "strategy": "fb_posts", "platform": "facebook"}
+    assert context_implies_fb_group_navigation(ctx) is True
+    note_fb_group_navigation(ctx)
+    assert ctx["_fb_group_navigation"] is True
+
+
 def test_should_not_back_from_group_feed_after_failed_tap() -> None:
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         is_group_feed_from_xml,

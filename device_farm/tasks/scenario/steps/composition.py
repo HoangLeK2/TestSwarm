@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
+from tasks.scenario.failure_details import attach_nested_failure_details
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ def handle_run_scenario(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     result["sub_result"] = sub
     if not sub.get("success") or _has_failed_step(sub):
         result["ok"] = False
+        attach_nested_failure_details(result, sub)
         result["message"] = (
             f"run_scenario: sub-scenario {scenario_ref!r} failed — "
             f"{_first_failed_message(sub)}"

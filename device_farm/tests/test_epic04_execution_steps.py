@@ -326,6 +326,38 @@ def test_build_execution_step_payload_maps_fields():
     assert payload["effective_config_json"]["step_id"] == "s1"
 
 
+def test_failed_execution_step_payload_keeps_nested_extra_data_diagnostic():
+    step = {"id": "run-child", "type": "run_scenario", "scenario_id": "child-1"}
+    result = {
+        "index": 1,
+        "type": "run_scenario",
+        "ok": False,
+        "message": "run_scenario failed: edge extra_data failed",
+        "edge_extra_summary": {
+            "diagnostic": {
+                "reason_code": "post_open_target_not_found",
+                "timing": {"total_ms": 42.0},
+            }
+        },
+        "nested_failure": {
+            "step_index": 0,
+            "step_type": "extract",
+            "message": "edge extra_data failed",
+        },
+        "extra_data_total_ms": 42.0,
+    }
+
+    payload = build_execution_step_payload("exec-1", step, result)
+
+    assert payload["status"] == "failed"
+    assert payload["error_json"]["edge_extra_summary"]["diagnostic"]["reason_code"] == (
+        "post_open_target_not_found"
+    )
+    assert payload["error_json"]["edge_extra_summary"]["diagnostic"]["timing"]["total_ms"] == 42.0
+    assert payload["error_json"]["nested_failure"]["step_type"] == "extract"
+    assert payload["error_json"]["extra_data_total_ms"] == 42.0
+
+
 def test_ignored_run_scenario_failure_persists_as_passed_step():
     step = {"id": "run-child", "type": "run_scenario", "scenario_id": "child-1"}
     result = {

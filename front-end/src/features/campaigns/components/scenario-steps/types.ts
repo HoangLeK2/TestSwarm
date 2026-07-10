@@ -431,14 +431,12 @@ export const ALL_STEP_TYPES: {
 /** Create a default step for a given type (with auto-generated id + order). */
 export function createDefaultFbCommentThenSteps(): FlowStep[] {
   const waitForSheet = createDefaultStep('wait');
-  const backFromSheet = createDefaultStep('key');
-  const waitAfterBack = createDefaultStep('wait');
+  const waitAfterExtract = createDefaultStep('wait');
   const dismissPopup = createDefaultStep('dismiss_popup');
   return [
     { ...waitForSheet, seconds: 0.6 },
     createDefaultStep('extract_fb_comments'),
-    { ...backFromSheet, key: 'back' },
-    { ...waitAfterBack, seconds: 1 },
+    { ...waitAfterExtract, seconds: 1 },
     { ...dismissPopup, retries: 1 }
   ];
 }
@@ -822,6 +820,7 @@ export function createDefaultStep(
         comment_stop_if_no_new: false,
         stop_if_no_new: false,
         no_new_threshold: 3,
+        open_post_press_back_after_extract: true,
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',
         content_type: 'fb_comment',

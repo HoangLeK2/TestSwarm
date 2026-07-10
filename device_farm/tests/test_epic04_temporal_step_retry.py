@@ -373,10 +373,17 @@ async def test_execute_device_action_materializes_dsl_before_executor():
 
     with patch("tasks.scenario_task.run_scenario_task", side_effect=fake_run), patch(
         "temporal.activities._emit_step_events_for_activity", new_callable=AsyncMock
-    ):
+    ) as emit_step_events:
         result = await env.run(activities.execute_device_action, inp)
 
     assert result.ok is True
+    finished_call = next(
+        call
+        for call in emit_step_events.await_args_list
+        if call.kwargs.get("phase") == "finished"
+    )
+    assert finished_call.kwargs["step_result"]["duration_ms"] >= 0
+    assert finished_call.kwargs["step_result"]["activity_duration_ms"] >= 0
     assert captured["steps"][0]["type"] == "wait"
     assert captured["steps"][0]["seconds"] == 1
     assert "retry" not in captured["steps"][0]

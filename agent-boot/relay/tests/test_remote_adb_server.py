@@ -26,6 +26,35 @@ def _make_session() -> ScrcpyRelaySession:
     )
 
 
+def test_scrcpy_session_missing_profile_uses_fleet_defaults() -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        session = ScrcpyRelaySession(
+            serial="SERIAL1",
+            max_fps=0,
+            max_width=0,
+            enable_control=True,
+            port=27186,
+            send_queue=asyncio.Queue(),
+            loop=loop,
+            bitrate=0,
+        )
+
+        assert session._max_fps == 15
+        assert session._max_width == 540
+        assert session._bitrate == 800_000
+        assert session.matches_config(
+            max_fps=0,
+            max_width=0,
+            enable_control=True,
+            port=27186,
+            bitrate=0,
+            low_latency=False,
+        )
+    finally:
+        loop.close()
+
+
 def test_adb_command_uses_remote_server_flags_from_socket(monkeypatch) -> None:
     _set_remote_adb_env(monkeypatch)
 

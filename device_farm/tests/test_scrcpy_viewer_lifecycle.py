@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+import api.routes.device_control.scrcpy as scrcpy_routes
 from api.routes.device_control.scrcpy import build_scrcpy_router
 from core.config import Config
 from runtime.core import device_client as device_client_module
@@ -79,6 +80,14 @@ class _FakeManager:
         return self.device if serial == self.serial else None
 
 
+class _MultiFakeManager:
+    def __init__(self, devices: dict[str, _FakeScrcpyDevice]) -> None:
+        self.devices = devices
+
+    def get_device(self, serial: str) -> _FakeScrcpyDevice | None:
+        return self.devices.get(serial)
+
+
 def _build_app(
     device: _FakeScrcpyDevice,
     serial: str = "serial-1",
@@ -91,6 +100,19 @@ def _build_app(
             _FakeManager(device, serial=serial),
             db_enabled=False,
             scrcpy_detach_grace_s=detach_grace_s,
+        ),
+        prefix="/api",
+    )
+    return app
+
+
+def _build_multi_app(devices: dict[str, _FakeScrcpyDevice]) -> FastAPI:
+    app = FastAPI()
+    app.include_router(
+        build_scrcpy_router(
+            _MultiFakeManager(devices),
+            db_enabled=False,
+            scrcpy_detach_grace_s=0,
         ),
         prefix="/api",
     )
@@ -131,6 +153,47 @@ async def test_scrcpy_detach_keeps_stream_until_last_viewer_detaches() -> None:
     assert detach_b.json()["active_viewers"] == 0
     assert device.attach_calls == 1
     assert device.detach_calls == 1
+
+
+@pytest.mark.anyio
+async def test_scrcpy_preview_attach_respects_global_preview_budget(monkeypatch) -> None:
+    scrcpy_routes._SCRCPY_VIEWERS.clear()
+    monkeypatch.setattr(scrcpy_routes, "_SCRCPY_PREVIEW_VIEWER_LIMIT", 2)
+    devices = {
+        "serial-a": _FakeScrcpyDevice(),
+        "serial-b": _FakeScrcpyDevice(),
+        "serial-c": _FakeScrcpyDevice(),
+    }
+    app = _build_multi_app(devices)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await client.post(
+            "/api/devices/serial-a/scrcpy/attach",
+            json={"device_ip": "10.0.0.10", "viewer_id": "snapshot-preview:a"},
+        )
+        second = await client.post(
+            "/api/devices/serial-b/scrcpy/attach",
+            json={"device_ip": "10.0.0.11", "viewer_id": "snapshot-preview:b"},
+        )
+        over_budget = await client.post(
+            "/api/devices/serial-c/scrcpy/attach",
+            json={"device_ip": "10.0.0.12", "viewer_id": "snapshot-preview:c"},
+        )
+        assert "serial-c" not in scrcpy_routes._SCRCPY_VIEWERS
+        control = await client.post(
+            "/api/devices/serial-c/scrcpy/attach",
+            json={"device_ip": "10.0.0.12", "viewer_id": "device-screen:c"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert over_budget.status_code == 429
+    assert over_budget.json()["status"] == "preview_budget_exhausted"
+    assert over_budget.json()["active_preview_viewers"] == 2
+    assert control.status_code == 200
+    assert devices["serial-c"].attach_calls == 1
 
 
 @pytest.mark.anyio
@@ -432,7 +495,44 @@ async def test_control_attach_reapplies_profile_after_low_fps_preview() -> None:
 
 
 @pytest.mark.anyio
-async def test_low_fps_preview_reapplies_after_control_viewer_detaches() -> None:
+async def test_control_attach_reapplies_requested_profile_after_default_stream() -> None:
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial="serial-control-upgrade")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        default = await client.post(
+            "/api/devices/serial-control-upgrade/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "device-screen:old",
+            },
+        )
+        upgraded = await client.post(
+            "/api/devices/serial-control-upgrade/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "device-screen:new",
+                "max_fps": 8,
+                "max_width": 540,
+                "bitrate": 900000,
+            },
+        )
+
+    assert default.status_code == 200
+    assert upgraded.status_code == 200
+    assert upgraded.json()["status"] == "active"
+    assert device.attach_calls == 2
+    assert device.last_attach_options == {
+        "max_fps": 8,
+        "max_width": 540,
+        "bitrate": 900000,
+    }
+
+
+@pytest.mark.anyio
+async def test_low_fps_preview_does_not_downgrade_during_control_detach_grace() -> None:
     device = _FakeScrcpyDevice()
     app = _build_app(device, serial="serial-downgrade", detach_grace_s=60)
 
@@ -467,8 +567,52 @@ async def test_low_fps_preview_reapplies_after_control_viewer_detaches() -> None
     assert preview.status_code == 200
     assert preview.json()["status"] == "active"
     assert preview.json()["active_viewers"] == 1
-    assert device.attach_calls == 2
+    assert device.attach_calls == 1
     assert device.detach_calls == 0
+    assert device.last_attach_options == {
+        "max_fps": None,
+        "max_width": None,
+        "bitrate": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_low_fps_preview_starts_light_profile_after_control_fully_stops() -> None:
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial="serial-preview-after-stop", detach_grace_s=0)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        control = await client.post(
+            "/api/devices/serial-preview-after-stop/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "device-screen:test",
+            },
+        )
+        detach_control = await client.post(
+            "/api/devices/serial-preview-after-stop/scrcpy/detach",
+            json={"viewer_id": "device-screen:test"},
+        )
+        preview = await client.post(
+            "/api/devices/serial-preview-after-stop/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "snapshot-preview:test",
+                "max_fps": 1,
+                "max_width": 480,
+                "bitrate": 180000,
+            },
+        )
+
+    assert control.status_code == 200
+    assert detach_control.status_code == 200
+    assert preview.status_code == 200
+    assert preview.json()["status"] == "active"
+    assert preview.json()["active_viewers"] == 1
+    assert device.attach_calls == 2
+    assert device.detach_calls == 1
     assert device.last_attach_options == {
         "max_fps": 1,
         "max_width": 480,
@@ -510,6 +654,51 @@ async def test_low_fps_preview_does_not_downgrade_active_control_viewer() -> Non
         "max_fps": None,
         "max_width": None,
         "bitrate": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_control_detach_reapplies_remaining_preview_profile() -> None:
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial="serial-control-to-preview")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        control = await client.post(
+            "/api/devices/serial-control-to-preview/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "device-screen:test",
+                "max_fps": 8,
+                "max_width": 540,
+                "bitrate": 900000,
+            },
+        )
+        preview = await client.post(
+            "/api/devices/serial-control-to-preview/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "snapshot-preview:test",
+                "max_fps": 1,
+                "max_width": 360,
+                "bitrate": 100000,
+            },
+        )
+        detach_control = await client.post(
+            "/api/devices/serial-control-to-preview/scrcpy/detach",
+            json={"viewer_id": "device-screen:test"},
+        )
+
+    assert control.status_code == 200
+    assert preview.status_code == 200
+    assert detach_control.status_code == 200
+    assert detach_control.json()["active_viewers"] == 1
+    assert device.attach_calls == 2
+    assert device.last_attach_options == {
+        "max_fps": 1,
+        "max_width": 360,
+        "bitrate": 100000,
     }
 
 
@@ -600,6 +789,86 @@ def test_device_client_reconfigures_when_preview_downgrades_existing_stream(monk
     assert relay.calls == ["stop", "register", "start"]
     assert device._scrcpy_active is True
     assert relay.is_scrcpy_running("10.0.0.10") is True
+
+
+def test_device_client_reconfigures_stale_preview_even_when_frames_are_fresh(monkeypatch) -> None:
+    import runtime.transports.adb_relay_server as relay_server
+    from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+
+    class _RelayManager:
+        def __init__(self, old_receiver: RelayScrcpyReceiver) -> None:
+            self.calls: list[str] = []
+            self.receivers: dict[str, RelayScrcpyReceiver] = {
+                "10.0.0.10": old_receiver,
+            }
+
+        def resolve_serial(self, serial: str) -> str:
+            if serial == "serial-profile-fresh":
+                return "10.0.0.10"
+            return serial
+
+        def relay_for_serial(self, serial: str) -> object | None:
+            return object() if self.resolve_serial(serial) == "10.0.0.10" else None
+
+        def get_capabilities(self, serial: str) -> dict[str, object]:
+            return {}
+
+        def get_scrcpy_receiver(self, serial: str) -> RelayScrcpyReceiver | None:
+            return self.receivers.get(serial)
+
+        def register_scrcpy_receiver(self, serial: str, receiver: RelayScrcpyReceiver) -> None:
+            self.calls.append("register")
+            self.receivers[serial] = receiver
+
+        def unregister_scrcpy_receiver(self, serial: str) -> None:
+            self.receivers.pop(serial, None)
+
+        def is_scrcpy_running(self, serial: str) -> bool:
+            return False
+
+        async def stop_scrcpy(self, serial: str, reason: str = "unspecified") -> None:
+            self.calls.append("stop")
+            self.unregister_scrcpy_receiver(serial)
+
+        async def start_scrcpy(
+            self,
+            *,
+            serial: str,
+            max_fps: int,
+            max_width: int,
+            enable_control: bool,
+            port: int,
+            bitrate: int = 2_000_000,
+            low_latency: bool = False,
+        ) -> bool:
+            self.calls.append(f"start:{max_fps}:{max_width}:{bitrate}")
+            return True
+
+    device = DeviceClient(serial="serial-profile-fresh", index=0, config=Config())
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    device._scrcpy_active = True
+    device._loop = loop
+    device._last_frame_time = time.monotonic()
+    old_receiver = RelayScrcpyReceiver(serial="10.0.0.10")
+    relay = _RelayManager(old_receiver)
+    device._scrcpy_receiver = old_receiver
+    device._scrcpy_params = ("10.0.0.10", 5555, True, 1, 360, 100000)
+
+    monkeypatch.setattr(relay_server, "get_relay_manager", lambda: relay)
+
+    try:
+        status = device.attach_scrcpy_stream("10.0.0.10", 5555, True)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2)
+        loop.close()
+
+    assert status == "active"
+    assert "register" in relay.calls
+    assert "start:30:800:2000000" in relay.calls
+    assert device._scrcpy_active is True
 
 
 @pytest.mark.anyio

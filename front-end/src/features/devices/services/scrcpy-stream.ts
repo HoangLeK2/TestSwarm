@@ -1,5 +1,6 @@
 import { farmApi } from '@/lib/farm-api';
 import { createSingleFlight } from '../lib/single-flight';
+import { clearH264Cache } from './ws';
 
 const SCRCPY_STREAM_TIMEOUT_MS = 10_000;
 
@@ -22,7 +23,11 @@ function scrcpyAttachPayload(viewerId?: string, options?: ScrcpyAttachOptions) {
   return payload;
 }
 
-function scrcpyAttachKey(serial: string, viewerId?: string, options?: ScrcpyAttachOptions) {
+function scrcpyAttachKey(
+  serial: string,
+  viewerId?: string,
+  options?: ScrcpyAttachOptions
+) {
   return [
     serial,
     viewerId ?? 'legacy',
@@ -38,6 +43,12 @@ function scrcpyAttachErrorStatus(error: unknown): number | null {
     return null;
   const response = (error as { response?: { status?: unknown } }).response;
   return typeof response?.status === 'number' ? response.status : null;
+}
+
+export function shouldClearH264CacheBeforeScrcpyAttach(
+  viewerId?: string
+): boolean {
+  return viewerId?.startsWith('device-screen:') === true;
 }
 
 export function scrcpyAttachErrorMessage(error: unknown): string {
@@ -74,10 +85,14 @@ export function createScrcpyViewerId(prefix: string): string {
 
 export const attachScrcpyStream = createSingleFlight(
   async (serial: string, viewerId?: string, options?: ScrcpyAttachOptions) => {
+    const skip429Retry = viewerId?.startsWith('snapshot-preview:') === true;
+    if (shouldClearH264CacheBeforeScrcpyAttach(viewerId)) {
+      clearH264Cache(serial);
+    }
     const { data } = await farmApi.post(
       `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
       scrcpyAttachPayload(viewerId, options),
-      { timeout: SCRCPY_STREAM_TIMEOUT_MS }
+      { timeout: SCRCPY_STREAM_TIMEOUT_MS, _skip429Retry: skip429Retry }
     );
     return data;
   },

@@ -434,7 +434,7 @@ def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
         return True
     if author.startswith("giảm bậc cho bình luận của") or author.startswith("reduce ranking for comment"):
         return True
-    if author in ("xem thêm", "see more"):
+    if author in ("xem thêm", "see more") or text in ("xem thêm", "see more"):
         return True
     if _is_feed_comment_preview_chrome(author_raw) or _is_feed_comment_preview_chrome(text_raw):
         return True

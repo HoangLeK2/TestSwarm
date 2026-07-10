@@ -3141,7 +3141,7 @@ class DeviceClient:
                 # relay flap / false negative and do not restart immediately.
                 # This guard is only for suspected relay-loss false negatives.
                 # A real profile change must continue to the detach/restart path.
-                if not (_session_alive and needs_reconfigure):
+                if not needs_reconfigure:
                     now = _time.monotonic()
                     if self._last_frame_time > 0 and (now - self._last_frame_time) < 1.5:
                         self._log(
@@ -3757,6 +3757,17 @@ class DeviceClient:
         if not self._batch_enabled():
             raise RuntimeError("u2 batch not available for this device")
         return self._u2_batch.batch(actions, timeout=timeout, cancel_event=cancel_event)
+
+    def u2_flow(self, name: str, params: dict, timeout: float = 30.0) -> dict:
+        """Run a high-level u2 flow, preferring agent-boot batch/flow relay."""
+        if self._batch_enabled() and callable(getattr(self._u2_batch, "flow", None)):
+            return self._u2_batch.flow(name, params, timeout=timeout)
+        with self._u2_lock:
+            u2 = self._u2
+        flow = getattr(u2, "flow", None)
+        if callable(flow):
+            return flow(name, params, timeout=timeout)
+        raise RuntimeError("u2 flow not available for this device")
 
     def tap_selector(self, by: str, value: str) -> None:
         """

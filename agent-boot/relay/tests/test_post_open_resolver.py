@@ -91,6 +91,23 @@ def test_discover_cards_inside_single_recycler_wrapper() -> None:
     assert top["tap_kind"] not in {"post_body", "post_media"}
 
 
+def test_resolve_excludes_consumed_post_anchor_on_same_feed_xml() -> None:
+    xml = _feed_multi_post_xml()
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(
+        xml,
+        exclude_post_anchors=[
+            {
+                "author": "Huan Nguyen",
+                "timestamp": "22 thg 5",
+                "text_prefix": "Post one body text",
+            }
+        ],
+    )
+    assert top is not None
+    assert (top.get("post") or {}).get("author") == "Anh Nguyen"
+    assert top["feed_item_index"] == 1
+
+
 def test_resolve_skips_partial_media_card_above_visible_author_post() -> None:
     """Regression: do not open/comment the previous image post when its header is gone."""
     xml = """<?xml version="1.0" encoding="UTF-8"?>

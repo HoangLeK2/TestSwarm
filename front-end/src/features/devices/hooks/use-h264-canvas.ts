@@ -31,6 +31,8 @@ export function useH264Video(
     onFrame?: (frame?: { mostlyBlack: boolean }) => void;
     onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
     notifyStallWithVisibleFrame?: boolean;
+    visibleFrameRecoveryMinIntervalMs?: number;
+    renderedFrameStaleMs?: number;
     onStats?: (stats: {
       decodeQueueSize: number;
       droppedDelta: number;
@@ -59,6 +61,10 @@ export function useH264Video(
   const notifyStallWithVisibleFrameRef = useRef(
     opts?.notifyStallWithVisibleFrame
   );
+  const visibleFrameRecoveryMinIntervalMsRef = useRef(
+    opts?.visibleFrameRecoveryMinIntervalMs ?? 3000
+  );
+  const renderedFrameStaleMsRef = useRef(opts?.renderedFrameStaleMs ?? 5000);
   const serialRef = useRef(serial);
   const wsConnectedRef = useRef(false);
   // Reset+replay on ws_status=true is only needed for true reconnects (close→open).
@@ -71,6 +77,9 @@ export function useH264Video(
   onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
   notifyStallWithVisibleFrameRef.current = opts?.notifyStallWithVisibleFrame;
+  visibleFrameRecoveryMinIntervalMsRef.current =
+    opts?.visibleFrameRecoveryMinIntervalMs ?? 3000;
+  renderedFrameStaleMsRef.current = opts?.renderedFrameStaleMs ?? 5000;
   serialRef.current = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
@@ -88,7 +97,7 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=28');
+    const worker = new Worker('/h264-worker.js?v=32');
     workerRef.current = worker;
     mountedAtRef.current = Date.now();
 
@@ -145,7 +154,11 @@ export function useH264Video(
         const now = Date.now();
         const s = serialRef.current;
         const w = workerRef.current;
-        if (s && w && now - lastRecoveryAtRef.current > 700) {
+        const hasVisibleFrame = lastRenderedFrameAtRef.current > 0;
+        const recoveryMinInterval = hasVisibleFrame
+          ? visibleFrameRecoveryMinIntervalMsRef.current
+          : 700;
+        if (s && w && now - lastRecoveryAtRef.current > recoveryMinInterval) {
           lastRecoveryAtRef.current = now;
           onStallRef.current?.('decoder_stalled');
           w.postMessage({ type: 'reset' });
@@ -414,14 +427,19 @@ export function useH264Video(
       const packetAgeMs = now - lastPacketAt;
       const renderedAgeMs = lastRenderedAt ? now - lastRenderedAt : Infinity;
 
-      // If no video packets are arriving, this is likely a transport/agent stall;
-      // an IDR request is cheap and avoids waiting for the next user interaction.
-      // Do not mark the stream stalled when a valid frame is already visible:
-      // scrcpy may emit very few frames on a static screen.
+      // If no video packets are arriving before the first rendered frame, this is
+      // likely a startup/transport stall. After a valid frame is visible, however,
+      // scrcpy may legitimately emit no packets on a static screen; keep the last
+      // canvas frame instead of resetting the decoder and creating recovery churn.
       if (packetAgeMs > 3000 && now - lastRecoveryAtRef.current > 3000) {
+        if (lastRenderedAt && !notifyStallWithVisibleFrameRef.current) {
+          return;
+        }
         lastRecoveryAtRef.current = now;
-        w.postMessage({ type: 'reset' });
-        clearLatestFrame();
+        if (!lastRenderedAt) {
+          w.postMessage({ type: 'reset' });
+          clearLatestFrame();
+        }
         requestIdr(s, 0);
         if (!lastRenderedAt || notifyStallWithVisibleFrameRef.current) {
           onStallRef.current?.('no_packets');
@@ -434,11 +452,17 @@ export function useH264Video(
       // The detail screen must recover faster than the user's perception of a
       // frozen mirror. Packets flowing without rendered frames means the browser
       // decoder/canvas path is stale even if the backend stream is healthy.
-      const renderedStaleMs = lastRenderedAt ? 5_000 : 1800;
+      const renderedStaleMs = lastRenderedAt
+        ? renderedFrameStaleMsRef.current
+        : 1800;
+      const visibleRecoveryMinInterval =
+        lastRenderedAt > 0
+          ? visibleFrameRecoveryMinIntervalMsRef.current
+          : 3000;
       if (
         packetAgeMs < 2000 &&
         renderedAgeMs > renderedStaleMs &&
-        now - lastRecoveryAtRef.current > 3000
+        now - lastRecoveryAtRef.current > visibleRecoveryMinInterval
       ) {
         lastRecoveryAtRef.current = now;
         onStallRef.current?.('decoder_stalled');

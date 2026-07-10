@@ -24,10 +24,10 @@ device:
   stf_apk_path: ""       
 
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  scrcpy_max_fps: 15
-  scrcpy_max_width: 540
+  scrcpy_max_fps: 8
+  scrcpy_max_width: 360
   scrcpy_bitrate: 1500000        # H.264 bitrate bps for local ADB path (1.5Mbps)
-  scrcpy_relay_bitrate: 800000   # relay bitrate — keep control responsive with multiple phones
+  scrcpy_relay_bitrate: 400000   # relay bitrate — conservative H264 profile for stable cloud control
   scrcpy_control: true      # Keep scrcpy control socket for H264 IDR/keyframes; input still prioritizes u2
   u2_always_tunnel: false  # Local/LAN: prefer direct atx-agent on device_ip:7912 (no WS u2 tunnel)
 
@@ -148,7 +148,7 @@ temporal:
                                          # Total capacity = worker_count × worker_max_concurrent_activities
                                          # Override via TEMPORAL_WORKER_COUNT env var
                                          # For cloud scale: run more farm pods, each with worker_count=2-4
-  worker_max_concurrent_activities: 10  # Max parallel device actions per worker thread
+  worker_max_concurrent_activities: 20  # Max parallel device actions per worker thread
   worker_max_concurrent_workflows: 50   # Max parallel workflow tasks per worker thread
   workflow_execution_timeout: 0         # 0 = unlimited (no timeout). Was 3600s.
   activity_start_to_close_timeout: 60   # Max seconds per device action

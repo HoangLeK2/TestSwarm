@@ -15,6 +15,7 @@ import {
   StepPanelSection,
   StepPanelToggle
 } from './step-panel-primitives';
+import { parentPostIdVarForMode } from './extract-parent-mode';
 
 type ExtractStep = FlowStep & {
   strategy?: string;
@@ -217,8 +218,9 @@ function applyExtractStrategySwitch(
     next.edge_extra_data = step.edge_extra_data ?? true;
     next.strategy_version = 'fb_comments:v1';
     next.extract_profile = step.extract_profile ?? 'balanced';
+    next.open_post_press_back_after_extract =
+      step.open_post_press_back_after_extract ?? true;
     delete next.open_post_before_extract;
-    delete next.open_post_press_back_after_extract;
   } else if (strategy === 'text_nodes') {
     next.edge_extra_data = step.edge_extra_data ?? true;
     next.strategy_version = 'text_nodes:v1';
@@ -497,6 +499,16 @@ export function ExtractStepFields({
                 ) : null}
               </>
             ) : null}
+            {strategy === 'fb_comments' ? (
+              <StepPanelToggle
+                label={t('openPostPressBackLabel')}
+                description={t('openPostPressBackDescription')}
+                checked={autoBackAfterOpenPost}
+                onCheckedChange={(checked) =>
+                  update({ open_post_press_back_after_extract: checked })
+                }
+              />
+            ) : null}
             <StepPanelToggle
               label={t('expandSeeMoreLabel')}
               description={t('expandSeeMoreDescription')}
@@ -578,15 +590,14 @@ export function ExtractStepFields({
                       <select
                         className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
                         value={extractParentMode}
-                        onChange={(e) => {
-                          if (e.target.value === 'auto') {
-                            update({ parent_post_id_var: undefined });
-                          } else {
-                            update({
-                              parent_post_id_var: step.parent_post_id_var || ''
-                            });
-                          }
-                        }}
+                        onChange={(e) =>
+                          update({
+                            parent_post_id_var: parentPostIdVarForMode(
+                              e.target.value,
+                              step.parent_post_id_var
+                            )
+                          })
+                        }
                       >
                         <option value='auto'>{t('parentPostModeAuto')}</option>
                         <option value='custom'>

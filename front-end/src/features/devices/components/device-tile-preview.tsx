@@ -27,6 +27,7 @@ import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
 import {
   acquireSnapshotPreviewWarmup,
+  subscribeSnapshotPreviewWarmupChanges,
   type SnapshotPreviewWarmupHandle
 } from '../services/snapshot-preview-warmup';
 import { useH264Video } from '../hooks/use-h264-canvas';
@@ -39,8 +40,7 @@ const GRID_PREVIEW_EAGER =
   (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '0').trim() !==
   '0';
 const GRID_PREVIEW_H264 =
-  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264 ?? '1').trim() !==
-  '0';
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264 ?? '1').trim() !== '0';
 const DASHBOARD_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
     process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MS ?? 1_000
@@ -61,6 +61,8 @@ interface DeviceTilePreviewProps {
   device: Device;
   onOpenSteps?: (serial: string) => void;
 }
+
+type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
 
 function DeviceTilePreviewInner({
   device,
@@ -118,6 +120,8 @@ function DeviceTilePreviewInner({
     null
   );
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+  const [previewWarmupState, setPreviewWarmupState] =
+    useState<PreviewWarmupState>('idle');
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -131,15 +135,26 @@ function DeviceTilePreviewInner({
 
   const loadStream =
     tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
+  const shouldUseH264Preview = GRID_PREVIEW_H264 && isActive && loadStream;
+  const h264PreviewActive =
+    shouldUseH264Preview &&
+    (previewWarmupState === 'attaching' || previewWarmupState === 'live');
 
   const previewUrl = useMemo(() => {
-    if (GRID_PREVIEW_H264) return null;
+    if (shouldUseH264Preview) return null;
     if (!tabActive) return null;
     if (!isActive || !loadStream) return null;
     const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [device.serial, isActive, loadStream, previewAttempt, tabActive]);
+  }, [
+    device.serial,
+    isActive,
+    loadStream,
+    previewAttempt,
+    tabActive,
+    shouldUseH264Preview
+  ]);
 
   const showPreviewImg = Boolean(displayedPreviewUrl);
 
@@ -151,52 +166,90 @@ function DeviceTilePreviewInner({
   );
   const tileWidthPx = previewMockupScreenWidth + 90;
 
+  const isPreviewQueued =
+    shouldUseH264Preview && previewWarmupState === 'queued';
   const isUnresponsive =
-    isActive && loadStream && !hasFrame && loadingElapsedSec >= 12;
+    isActive &&
+    loadStream &&
+    !isPreviewQueued &&
+    !hasFrame &&
+    loadingElapsedSec >= 12;
 
   useEffect(() => {
     setHasFrame(false);
     setDisplayedPreviewUrl(null);
     setPreviewAttempt(0);
+    setPreviewWarmupState('idle');
   }, [device.serial]);
 
-  useH264Video(
-    GRID_PREVIEW_H264 && tabActive && isActive && loadStream
-      ? device.serial
-      : '',
-    previewCanvasRef,
-    {
-      notifyStallWithVisibleFrame: true,
-      onFrame: useCallback(() => {
-        setHasFrame(true);
-      }, [])
-    }
-  );
+  useH264Video(h264PreviewActive ? device.serial : '', previewCanvasRef, {
+    onFrame: useCallback(() => {
+      setHasFrame(true);
+    }, [])
+  });
 
   useEffect(() => {
-    if (!GRID_PREVIEW_H264) return;
-    if (!isActive || !loadStream || !tabActive) {
+    if (!shouldUseH264Preview) {
       previewWarmupRef.current?.release();
       previewWarmupRef.current = null;
+      setPreviewWarmupState('idle');
       return;
     }
 
-    const handle = acquireSnapshotPreviewWarmup(device.serial);
-    previewWarmupRef.current = handle;
     let cancelled = false;
-    handle?.attached.then((attached) => {
-      if (!cancelled && attached) {
-        requestIdr(device.serial, 0);
+    let retryTimer: number | undefined;
+
+    const clearRetry = () => {
+      if (retryTimer === undefined) return;
+      window.clearTimeout(retryTimer);
+      retryTimer = undefined;
+    };
+
+    const scheduleRetry = (delayMs: number) => {
+      clearRetry();
+      retryTimer = window.setTimeout(tryAcquire, delayMs);
+    };
+
+    const tryAcquire = () => {
+      if (cancelled || previewWarmupRef.current) return;
+      const handle = acquireSnapshotPreviewWarmup(device.serial);
+      if (!handle) {
+        setPreviewWarmupState('queued');
+        return;
       }
+
+      previewWarmupRef.current = handle;
+      setPreviewWarmupState('attaching');
+      handle.attached.then((attached) => {
+        if (cancelled || previewWarmupRef.current !== handle) return;
+        if (attached) {
+          setPreviewWarmupState('live');
+          requestIdr(device.serial, 1500);
+          return;
+        }
+        handle.release();
+        if (previewWarmupRef.current === handle) {
+          previewWarmupRef.current = null;
+        }
+        setPreviewWarmupState('error');
+        scheduleRetry(1500);
+      });
+    };
+
+    const unsubscribe = subscribeSnapshotPreviewWarmupChanges(() => {
+      if (cancelled || previewWarmupRef.current) return;
+      scheduleRetry(120 + Math.floor(Math.random() * 260));
     });
+
+    tryAcquire();
     return () => {
       cancelled = true;
-      handle?.release();
-      if (previewWarmupRef.current === handle) {
-        previewWarmupRef.current = null;
-      }
+      unsubscribe();
+      clearRetry();
+      previewWarmupRef.current?.release();
+      previewWarmupRef.current = null;
     };
-  }, [device.serial, isActive, loadStream, tabActive]);
+  }, [device.serial, shouldUseH264Preview]);
 
   useEffect(() => {
     if (!previewUrl) return;
@@ -215,30 +268,13 @@ function DeviceTilePreviewInner({
   }, [previewUrl]);
 
   useEffect(() => {
-    if (GRID_PREVIEW_H264) return;
+    if (shouldUseH264Preview) return;
     if (!isActive || !loadStream) return;
     const timer = window.setInterval(() => {
       setPreviewAttempt((n) => n + 1);
     }, DASHBOARD_PREVIEW_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [isActive, loadStream]);
-
-  useEffect(() => {
-    if (GRID_PREVIEW_H264) return;
-    if (!isActive || !loadStream) {
-      previewWarmupRef.current?.release();
-      previewWarmupRef.current = null;
-      return;
-    }
-    if (loadingElapsedSec < 2 || previewWarmupRef.current) return;
-    const handle = acquireSnapshotPreviewWarmup(device.serial);
-    previewWarmupRef.current = handle;
-    handle?.attached.then((ok) => {
-      if (!ok && previewWarmupRef.current === handle) {
-        previewWarmupRef.current = null;
-      }
-    });
-  }, [device.serial, isActive, loadingElapsedSec, loadStream]);
+  }, [isActive, loadStream, shouldUseH264Preview]);
 
   useEffect(() => {
     return () => {
@@ -356,14 +392,14 @@ function DeviceTilePreviewInner({
                     decoding='async'
                     className={cn(
                       'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
-                      hasFrame && !GRID_PREVIEW_H264
+                      hasFrame && !shouldUseH264Preview
                         ? 'opacity-100'
                         : 'opacity-0'
                     )}
                     draggable={false}
                   />
                 )}
-                {GRID_PREVIEW_H264 && (
+                {h264PreviewActive && (
                   <canvas
                     ref={previewCanvasRef}
                     aria-hidden='true'

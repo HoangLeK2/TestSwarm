@@ -6,6 +6,7 @@ import { DeviceTile } from '../device-tile';
 import type { DeviceOpsConfig } from '../device-ops-rail';
 import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
 import { isManualControlBlockedByAutomation } from '../../lib/control-record-device-state';
+import type { ScrcpyAttachOptions } from '../../services/scrcpy-stream';
 
 type Props = {
   device: Device;
@@ -31,6 +32,39 @@ type Props = {
   /** Mirror scale in multi-phone layouts. */
   mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
   deviceOps?: DeviceOpsConfig;
+};
+
+function controlScrcpyInt(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number
+) {
+  const raw = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(raw)));
+}
+
+const CONTROL_RECORD_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: true,
+  maxFps: controlScrcpyInt(
+    'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_FPS',
+    12,
+    4,
+    15
+  ),
+  maxWidth: controlScrcpyInt(
+    'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_WIDTH',
+    540,
+    360,
+    720
+  ),
+  bitrate: controlScrcpyInt(
+    'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_BITRATE',
+    1_200_000,
+    300_000,
+    2_000_000
+  )
 };
 
 function isManualControlBlocked(device: Device): boolean {
@@ -152,6 +186,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
             mockupScreenWidth={mockupScreenWidth}
             streamFetchPriority='high'
             streamTransport='h264-only'
+            scrcpyAttachOptions={CONTROL_RECORD_SCRCPY_OPTIONS}
             hideAppCaption={compactPadding}
             deviceOps={deviceOps}
             screenOverlay={screenOverlay}

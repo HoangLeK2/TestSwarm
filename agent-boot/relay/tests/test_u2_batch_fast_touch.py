@@ -111,7 +111,11 @@ async def test_u2_executor_u2_swipe_batch_uses_http_rpc():
     )
 
     assert result["ok"] is True
-    assert result["results"] == [{"op": "u2_swipe_batch", "ok": True, "value": 3}]
+    assert result["results"][0]["op"] == "u2_swipe_batch"
+    assert result["results"][0]["ok"] is True
+    assert result["results"][0]["value"] == 3
+    assert result["results"][0]["duration_ms"] >= 0
+    assert result["total_ms"] >= 0
     assert len(calls) == 3
     assert all(call[0] == "10AE7S00HD002JK" for call in calls)
     assert [call[1]["method"] for call in calls] == ["swipe", "swipe", "swipe"]
@@ -197,4 +201,7 @@ async def test_u2_executor_run_batch_stops_before_next_action_when_cancelled():
     assert result["ok"] is False
     assert result["cancelled"] is True
     assert result["stopped_at"] == 1
-    assert result["results"] == [{"op": "click", "ok": True}]
+    assert result["results"][0]["op"] == "click"
+    assert result["results"][0]["ok"] is True
+    assert result["results"][0]["duration_ms"] >= 0
+    assert result["total_ms"] >= 0

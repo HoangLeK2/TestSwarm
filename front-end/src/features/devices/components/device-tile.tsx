@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
+import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import { DeviceControls } from './device-controls';
 import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
 import {
@@ -61,6 +62,7 @@ interface DeviceTileProps {
   minimalRailControls?: boolean;
   streamFetchPriority?: 'high' | 'low' | 'auto';
   streamTransport?: DeviceScreenTransport;
+  scrcpyAttachOptions?: ScrcpyAttachOptions;
   /** Hide current-app label under the mockup (filmstrip tiles). */
   hideAppCaption?: boolean;
   /** ADB / APK / file ops on the control rail (control-record). */
@@ -90,6 +92,7 @@ export function DeviceTile({
   minimalRailControls = false,
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
+  scrcpyAttachOptions,
   hideAppCaption = false,
   deviceOps,
   screenOverlay
@@ -265,6 +268,7 @@ export function DeviceTile({
                         interactive={!readOnlyPreview}
                         streamFetchPriority={streamFetchPriority}
                         streamTransport={streamTransport}
+                        scrcpyAttachOptions={scrcpyAttachOptions}
                       />
                     ) : (
                       <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>

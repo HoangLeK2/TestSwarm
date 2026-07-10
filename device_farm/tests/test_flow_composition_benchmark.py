@@ -106,6 +106,54 @@ def _scenario(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _campaign_flow_scenario(
+    scenario_names: list[str],
+    *,
+    child_step_count: int = 5,
+) -> dict[str, Any]:
+    registry = _registry(
+        by_campaign_name={
+            name: _sub_def(_set_var_steps(child_step_count, name))
+            for name in scenario_names
+        }
+    )
+    return _scenario(
+        {
+            "steps": [
+                {"type": "run_scenario", "scenario_name": name}
+                for name in scenario_names
+            ],
+            "_scenario_registry": registry,
+        }
+    )
+
+
+def _assert_campaign_flow_result(
+    result: dict[str, Any],
+    scenario_names: list[str],
+    *,
+    child_step_count: int,
+) -> None:
+    assert result.get("success") is True, result.get("failed_message")
+    parent_steps = result["step_results"]
+    assert [step["type"] for step in parent_steps] == ["run_scenario"] * len(scenario_names)
+
+    for step, scenario_name in zip(parent_steps, scenario_names, strict=True):
+        assert step["ok"] is True
+        assert scenario_name in step["message"]
+        sub_steps = step["sub_result"]["step_results"]
+        assert len(sub_steps) == child_step_count
+        assert [sub_step["type"] for sub_step in sub_steps] == [
+            "set_variable"
+        ] * child_step_count
+        assert all(
+            str(sub_step.get("message") or "").startswith(
+                f"set_variable: {scenario_name}_"
+            )
+            for sub_step in sub_steps
+        )
+
+
 def _bench(label: str, scenario: dict[str, Any], *, iterations: int) -> list[float]:
     samples_ms: list[float] = []
     for _ in range(iterations):
@@ -182,6 +230,57 @@ def test_many_sub_scenarios_benchmark() -> None:
     )
 
 
+def test_campaign_flow_scenario_executes_script_order_for_many_devices_benchmark() -> None:
+    scenario_names = ["login", "open_group", "crawl_posts", "crawl_comments"]
+    child_step_count = 5
+    device_counts = [20, 100, 500]
+    scenario = _campaign_flow_scenario(
+        scenario_names,
+        child_step_count=child_step_count,
+    )
+
+    totals_ms: dict[int, float] = {}
+    p95s_ms: dict[int, float] = {}
+    for device_count in device_counts:
+        samples_ms: list[float] = []
+        started_all = time.perf_counter()
+        for _ in range(device_count):
+            started = time.perf_counter()
+            with _quiet_runtime_output():
+                result = run_scenario_task(_MockDevice(), scenario)
+            samples_ms.append((time.perf_counter() - started) * 1000.0)
+            _assert_campaign_flow_result(
+                result,
+                scenario_names,
+                child_step_count=child_step_count,
+            )
+
+        elapsed_ms = (time.perf_counter() - started_all) * 1000.0
+        totals_ms[device_count] = elapsed_ms
+        p95s_ms[device_count] = percentile(samples_ms, 0.95)
+        print(
+            "\n[flow-composition-bench] campaign-flow "
+            f"devices={device_count} scenarios={len(scenario_names)} "
+            f"child_steps={child_step_count} total={elapsed_ms:.2f}ms "
+            f"avg={statistics.mean(samples_ms):.2f}ms "
+            f"p95={p95s_ms[device_count]:.2f}ms"
+        )
+
+    for device_count, default_total_budget_ms in [
+        (20, 500.0),
+        (100, 1600.0),
+        (500, 6500.0),
+    ]:
+        assert totals_ms[device_count] <= perf_budget(
+            f"CAMPAIGN_FLOW_SCENARIO_{device_count}_DEVICES_TOTAL_MS_BUDGET",
+            default_total_budget_ms,
+        )
+        assert p95s_ms[device_count] <= perf_budget(
+            f"CAMPAIGN_FLOW_SCENARIO_{device_count}_DEVICES_P95_MS_BUDGET",
+            50.0,
+        )
+
+
 def test_sub_scenario_failure_order_and_benchmark() -> None:
     registry = _registry(
         by_campaign_name={
@@ -197,7 +296,11 @@ def test_sub_scenario_failure_order_and_benchmark() -> None:
         {
             "steps": [
                 {"type": "set_variable", "name": "PARENT_BEFORE", "value": "1"},
-                {"type": "run_scenario", "scenario_name": "bad_child"},
+                {
+                    "type": "run_scenario",
+                    "scenario_name": "bad_child",
+                    "on_error": "continue",
+                },
                 {"type": "set_variable", "name": "PARENT_AFTER", "value": "1"},
             ],
             "_scenario_registry": registry,
@@ -220,9 +323,11 @@ def test_sub_scenario_failure_order_and_benchmark() -> None:
         "run_scenario",
         "set_variable",
     ]
-    assert parent_steps[1]["ok"] is False
+    assert parent_steps[1]["ok"] is True
     assert "bad_child" in parent_steps[1]["message"]
     assert parent_steps[1]["error_policy"] == "continue"
+    assert parent_steps[1]["error_ignored"] is True
+    assert parent_steps[1]["ignored_failure"] is True
     assert any(
         not step.get("ok", True)
         for step in parent_steps[1]["sub_result"]["step_results"]

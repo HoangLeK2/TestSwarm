@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   ALL_STEP_TYPES,
+  createDefaultFbCommentThenSteps,
   createDefaultStep
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './types.ts';
@@ -30,6 +31,21 @@ test('default fb comment extract uses balanced fast crawl budget', () => {
   assert.equal(step.comment_no_growth_break, 0);
   assert.equal(step.comment_stop_if_no_new, false);
   assert.equal(step.stop_if_no_new, false);
+  assert.equal(step.open_post_press_back_after_extract, true);
+});
+
+test('default fb comment sequence keeps back inside extract step', () => {
+  const steps = createDefaultFbCommentThenSteps();
+  const extract = steps.find(
+    (step) => step.type === 'extract' && step.strategy === 'fb_comments'
+  );
+
+  assert.ok(extract);
+  assert.equal(extract.open_post_press_back_after_extract, true);
+  assert.equal(
+    steps.some((step) => step.type === 'key' && step.key === 'back'),
+    false
+  );
 });
 
 test('custom fb comment crawl budget survives frontend JSON payload', () => {

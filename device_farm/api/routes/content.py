@@ -6,6 +6,8 @@ import csv
 import io
 import json
 import logging
+import re
+import unicodedata
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -436,10 +438,16 @@ async def list_content_children(
         limit=limit,
         offset=offset,
     )
-    parent_items = await _resolve_parent_items_for_list(db, children)
+    visible_children = [
+        child for child in children if not _is_parent_post_body_child(item, child)
+    ]
+    hidden_parent_body_rows = len(children) - len(visible_children)
+    if hidden_parent_body_rows:
+        total = max(0, int(total or 0) - hidden_parent_body_rows)
+    parent_items = await _resolve_parent_items_for_list(db, visible_children)
     out_items = [
         _item_to_out_with_parent(child, parent_item=parent_items.get(child.id))
-        for child in children
+        for child in visible_children
     ]
     return {
         "items": out_items,
@@ -625,6 +633,43 @@ def _raw_dict(item) -> dict:
         except Exception:
             return {}
     return {}
+
+
+def _norm_parent_comment_text(value) -> str:
+    text = unicodedata.normalize("NFC", str(value or "").strip()).casefold()
+    text = re.sub(r"\b(xem thêm|see more)\b", " ", text)
+    text = re.sub(r"\b(ảnh|photo|image)\b", " ", text)
+    text = text.replace("…", " ").replace("...", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_parent_post_body_child(parent_item, child_item) -> bool:
+    if not _is_comment_content_item(child_item):
+        return False
+    parent_author = _norm_parent_comment_text(getattr(parent_item, "author", None))
+    child_author = _norm_parent_comment_text(getattr(child_item, "author", None))
+    if parent_author and child_author and parent_author != child_author:
+        return False
+    child_body = _norm_parent_comment_text(getattr(child_item, "body", None))
+    if len(child_body) < 16:
+        return False
+    parent_raw = _raw_dict(parent_item)
+    parent_candidates = [
+        getattr(parent_item, "body", None),
+        getattr(parent_item, "title", None),
+        parent_raw.get("text"),
+        parent_raw.get("body"),
+        parent_raw.get("text_prefix"),
+        parent_raw.get("caption"),
+        parent_raw.get("description"),
+    ]
+    for candidate in parent_candidates:
+        parent_text = _norm_parent_comment_text(candidate)
+        if len(parent_text) < 16:
+            continue
+        if parent_text.startswith(child_body) or child_body.startswith(parent_text):
+            return True
+    return False
 
 
 def _parent_post_identifiers(item) -> list[tuple[str, str]]:

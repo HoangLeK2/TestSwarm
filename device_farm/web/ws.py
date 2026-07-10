@@ -52,6 +52,14 @@ STREAM_WS_UNWATCH_GRACE_MS = max(
     0.0,
     float(os.environ.get("STREAM_WS_UNWATCH_GRACE_MS", "3000.0")),
 )
+STREAM_FIRST_KEY_IDR_RETRY_S = max(
+    0.5,
+    float(os.environ.get("STREAM_FIRST_KEY_IDR_RETRY_S", "3.0")),
+)
+STREAM_FIRST_KEY_IDR_MAX_RETRIES = max(
+    1,
+    int(os.environ.get("STREAM_FIRST_KEY_IDR_MAX_RETRIES", "3")),
+)
 
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -647,6 +655,7 @@ class WebSocketManager:
         last_stats_ts = time.monotonic()
         saw_key_sent = False
         last_force_idr_ts = time.monotonic()
+        first_key_idr_retries = 0
 
         try:
             # Viewer refcount: drives DeviceClient auto-start/auto-stop.
@@ -674,10 +683,16 @@ class WebSocketManager:
 
             # Ensure first-frame latency: force at least one IDR.
             _request_idr_recover(force=True)
+            first_key_idr_retries += 1
 
             while True:
-                if not saw_key_sent and (time.monotonic() - last_force_idr_ts) >= 0.5:
+                if (
+                    not saw_key_sent
+                    and first_key_idr_retries < STREAM_FIRST_KEY_IDR_MAX_RETRIES
+                    and (time.monotonic() - last_force_idr_ts) >= STREAM_FIRST_KEY_IDR_RETRY_S
+                ):
                     _request_idr_recover(force=True)
+                    first_key_idr_retries += 1
                     last_force_idr_ts = time.monotonic()
 
                 try:

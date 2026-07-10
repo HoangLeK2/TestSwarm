@@ -22,6 +22,22 @@ _ARTIFACT_HEAVY_KEYS = frozenset({
     "capture_warnings",
 })
 
+_ERROR_DETAIL_KEYS = (
+    "message",
+    "reason_code",
+    "retryable",
+    "edge_extra_summary",
+    "edge_filter_summary",
+    "nested_failure",
+    "nested_failure_context",
+    "extra_data_total_ms",
+    "extra_data_dump_ms",
+    "extra_data_parse_ms",
+    "extra_data_click_ms",
+    "extra_data_sleep_ms",
+    "extra_data_steps",
+)
+
 
 def normalize_workflow_step_result(step_result: dict[str, Any]) -> dict[str, Any]:
     """Flatten Temporal workflow envelope (top-level + nested ``details``)."""
@@ -90,7 +106,7 @@ def build_execution_step_payload(
     if not ok:
         error_json = {
             k: flat.get(k)
-            for k in ("message", "reason_code", "retryable")
+            for k in _ERROR_DETAIL_KEYS
             if flat.get(k) is not None
         }
     merged_step = {**step, **{k: v for k, v in flat.items() if k in ("type", "id", "_id")}}

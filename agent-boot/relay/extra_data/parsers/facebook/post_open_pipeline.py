@@ -7,7 +7,7 @@ privacy affordance, geometric fallback) — not tied to specific badge labels
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .comment_pipeline import (
     _is_tappable_fb_node,
@@ -1657,6 +1657,57 @@ def _score_post_open_candidate(
     return scored
 
 
+_POST_ANCHOR_ID_KEYS = (
+    "pid",
+    "_pid",
+    "parent_post_id",
+    "post_key",
+    "stable_post_id",
+    "fb_post_id",
+)
+
+
+def _norm_anchor_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _anchor_ids(anchor: Dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for key in _POST_ANCHOR_ID_KEYS:
+        value = _norm_anchor_text(anchor.get(key))
+        if value:
+            ids.add(value)
+    return ids
+
+
+def _candidate_matches_excluded_anchor(
+    post: Dict[str, Any],
+    excluded_anchors: Iterable[Dict[str, Any]],
+) -> bool:
+    post_ids = _anchor_ids(post)
+    post_author = _norm_anchor_text(post.get("author"))
+    post_timestamp = _norm_anchor_text(post.get("timestamp"))
+    post_text = _norm_anchor_text(post.get("text") or post.get("text_prefix"))
+    for anchor in excluded_anchors:
+        if not isinstance(anchor, dict):
+            continue
+        anchor_ids = _anchor_ids(anchor)
+        if post_ids and anchor_ids and post_ids.intersection(anchor_ids):
+            return True
+        anchor_author = _norm_anchor_text(anchor.get("author"))
+        anchor_timestamp = _norm_anchor_text(anchor.get("timestamp"))
+        anchor_text = _norm_anchor_text(anchor.get("text_prefix") or anchor.get("text"))
+        if not (post_author and post_timestamp and post_text):
+            continue
+        if not (anchor_author and anchor_timestamp and anchor_text):
+            continue
+        if post_author != anchor_author or post_timestamp != anchor_timestamp:
+            continue
+        if post_text.startswith(anchor_text) or anchor_text.startswith(post_text):
+            return True
+    return False
+
+
 def _first_author_text(nodes: List[Dict[str, Any]]) -> str:
     for n in nodes:
         if n.get("is_author_hint") and (n.get("text") or "").strip():
@@ -1892,6 +1943,7 @@ def resolve_post_open_targets_from_xml(
     center_y_ratio: float = 0.5,
     max_candidates: int = 5,
     locked_post_key: str | None = None,
+    exclude_post_anchors: Iterable[Dict[str, Any]] | None = None,
     band_low: float = 0.05,
     band_high: float = 0.97,
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -1917,6 +1969,9 @@ def resolve_post_open_targets_from_xml(
     scan = _discover_post_open_scan_elements(root)
 
     scored: List[Dict[str, Any]] = []
+    excluded_anchors = [
+        anchor for anchor in (exclude_post_anchors or []) if isinstance(anchor, dict)
+    ]
     for feed_item_index, element in scan:
         cand = _build_post_open_candidate(
             element,
@@ -1925,6 +1980,11 @@ def resolve_post_open_targets_from_xml(
             screen_w=screen_w,
         )
         if cand is None:
+            continue
+        if excluded_anchors and _candidate_matches_excluded_anchor(
+            cand.get("post") or {},
+            excluded_anchors,
+        ):
             continue
         if not _post_open_candidate_passes_filter(cand, screen_h=screen_h, band_low=band_low, band_high=band_high):
             continue

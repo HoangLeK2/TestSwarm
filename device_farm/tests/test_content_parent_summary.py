@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from api.routes.content import (
+    _is_parent_post_body_child,
     _item_to_out_with_parent,
     _parent_post_identifiers,
     _resolve_parent_item,
@@ -77,6 +78,33 @@ def test_item_to_out_includes_resolved_parent_summary() -> None:
     assert out["parent_item_hash"] == "real-post-hash"
     assert out["parent_item_author"] == "Alice"
     assert out["parent_item_body"] == "parent post body"
+
+
+def test_parent_post_body_child_detects_post_content_saved_as_comment() -> None:
+    parent = SimpleNamespace(
+        content_type="fb_group_posts",
+        author="Vũ Nguyễn Thiên Ân",
+        body="Mình đang dùng gói 20x và sau",
+        title=None,
+        raw_data={},
+    )
+    bad_child = SimpleNamespace(
+        content_type="fb_comment",
+        item_level=1,
+        author="Vũ Nguyễn Thiên Ân",
+        body="Mình đang dùng gói 20x và sau ... xem thêm Ảnh",
+        raw_data={},
+    )
+    real_child = SimpleNamespace(
+        content_type="fb_comment",
+        item_level=1,
+        author="Nguyễn A",
+        body="Comment thật trong bài",
+        raw_data={},
+    )
+
+    assert _is_parent_post_body_child(parent, bad_child) is True
+    assert _is_parent_post_body_child(parent, real_child) is False
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from typing import Any
 
 import pytest
 
 from relay.extra_data import ingest as extra_data_ingest
+from relay.extra_data.collector import build_ingest_payload
 from relay.extra_data.ingest import ExtraDataIngestServer, _parse_items
 
 
@@ -62,6 +64,8 @@ def test_fb_comment_noise_filter_drops_empty_composer_placeholders() -> None:
             "text": "Thêm biểu tượng cảm xúc",
         }
     )
+    assert _is_comment_row_parse_noise({"author": "", "text": "xem thêm"})
+    assert _is_comment_row_parse_noise({"author": "", "text": "see more"})
 
 
 def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
@@ -405,6 +409,98 @@ async def test_process_payload_does_not_return_active_parent_for_multiple_fb_pos
         "pid-1": inserted[0]["content_hash"],
         "pid-2": inserted[1]["content_hash"],
     }
+
+
+@pytest.mark.asyncio
+async def test_process_payload_merges_multiple_fb_post_snapshots(monkeypatch) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    def fake_parse_items(strategy, xml_in, context):
+        assert strategy == "fb_posts"
+        if "detail" in xml_in:
+            return (
+                [
+                    {
+                        "_pid": "pid-2",
+                        "post_key": "post-2-detail",
+                        "stable_post_id": "stable-2",
+                        "author": "Bob",
+                        "text": "second post full body from detail",
+                    }
+                ],
+                {"reason_code": "ok", "posts_returned": 1},
+            )
+        return (
+            [
+                    {
+                        "_pid": "pid-1",
+                        "post_key": "post-1",
+                        "stable_post_id": "stable-1",
+                        "author": "Alice",
+                        "text": "first post body",
+                    },
+                    {
+                        "_pid": "pid-2",
+                        "post_key": "post-2-feed",
+                        "stable_post_id": "stable-2",
+                        "author": "Bob",
+                        "text": "second post",
+                    },
+            ],
+            {"reason_code": "ok", "posts_returned": 2},
+        )
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse_items)
+
+    feed_xml = '<hierarchy><node text="feed" /></hierarchy>'
+    detail_xml = '<hierarchy><node text="detail" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": feed_xml,
+            "xml_snapshots": [feed_xml, detail_xml],
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "ok",
+                    "opened_post": {
+                        "pid": "pid-2",
+                        "author": "Bob",
+                        "text_prefix": "second post",
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 2
+    assert len(inserted) == 2
+    assert [row["body"] for row in inserted] == [
+        "first post body",
+        "second post full body from detail",
+    ]
+    assert result["diagnostic"]["snapshot_count"] == 2
+    assert result["diagnostic"]["frame_posts_returned"] == [2, 1]
+    assert result["active_parent_post"]["pid"] == "pid-2"
+    assert result["active_parent_post"]["parent_id"] == inserted[1]["content_hash"]
 
 
 @pytest.mark.asyncio
@@ -789,6 +885,25 @@ def test_merge_fb_comment_frames_dedupes_and_keeps_latest_stats() -> None:
     assert diagnostic["has_header_stats"] is True
 
 
+def test_merge_fb_comment_frames_drops_empty_comment_rows() -> None:
+    items, diagnostic = extra_data_ingest.merge_fb_comment_frames(
+        [
+            (
+                [
+                    {"comment_key": "c-empty", "author": "Alice", "text": ""},
+                    {"comment_key": "c-body", "author": "Bob", "text": "real body"},
+                ],
+                {"reason_code": "ok"},
+            ),
+        ],
+        max_items=10,
+    )
+
+    assert items == [{"comment_key": "c-body", "author": "Bob", "text": "real body"}]
+    assert diagnostic["comments_returned"] == 1
+    assert diagnostic["dropped_empty_comments"] == 1
+
+
 @pytest.mark.asyncio
 async def test_process_payload_merges_fb_comment_snapshots(monkeypatch) -> None:
     class Module:
@@ -890,6 +1005,9 @@ async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -
         "serial": "serial-1",
         "strategy": "fb_comments",
         "xml": xml,
+        "xml_sha256": hashlib.sha256(xml.encode("utf-8")).hexdigest(),
+        "snapshot_count": 1,
+        "snapshot_hashes": [hashlib.sha256(xml.encode("utf-8")).hexdigest()],
         "context": {
             "persist": False,
             "return_items": True,
@@ -900,19 +1018,154 @@ async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -
         "preparsed": {
             "items": [{"comment_key": "c1", "text": "first"}],
             "diagnostic": {"reason_code": "ok", "comments_returned": 1},
-            "snapshot_count": 3,
+            "snapshot_count": 1,
             "xml_bytes": 12345,
+            "snapshot_hashes": [hashlib.sha256(xml.encode("utf-8")).hexdigest()],
         },
     })
 
     assert result["ok"] is True
-    assert result["snapshot_count"] == 3
-    assert result["payload_snapshot_count"] == 1
+    assert result["snapshot_count"] == 1
+    assert "payload_snapshot_count" not in result
     assert result["xml_bytes"] == 12345
     assert result["payload_xml_bytes"] == len(xml.encode("utf-8"))
     assert result["diagnostic"]["preparsed"] is True
     assert result["items"][0]["comment_key"] == "c1"
     assert result["items"][0]["parent_content_hash"] == "parent-1"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_trusts_preparsed_multi_snapshot_hash_manifest(
+    monkeypatch,
+) -> None:
+    def fail_parse(*args, **kwargs):
+        raise AssertionError("multi-snapshot preparsed path should not parse XML")
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fail_parse)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    first_xml = '<hierarchy><node text="frame-1" /></hierarchy>'
+    second_xml = '<hierarchy><node text="frame-2" /></hierarchy>'
+    payload = build_ingest_payload(
+        serial="serial-1",
+        strategy="fb_comments",
+        snapshots=[first_xml, second_xml],
+        context={
+            "persist": False,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+            "_preparsed_fb_comment_items": [
+                {"comment_key": "c2", "text": "only visible in frame 2"}
+            ],
+        },
+    )
+
+    assert "xml_snapshots" not in payload
+
+    result = await server.process_payload(payload)
+
+    assert result["ok"] is True
+    assert result["diagnostic"]["preparsed"] is True
+    assert result["snapshot_count"] == 2
+    assert result["items"] == [
+        {"comment_key": "c2", "text": "only visible in frame 2"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_rejects_preparsed_when_manifest_primary_hash_mismatches_xml(
+    monkeypatch,
+) -> None:
+    called = {"count": 0}
+
+    def fake_parse(*args, **kwargs):
+        called["count"] += 1
+        return [{"comment_key": "fresh", "text": "parsed-from-xml"}], {
+            "reason_code": "ok"
+        }
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    xml = '<hierarchy><node text="current" /></hierarchy>'
+    payload = build_ingest_payload(
+        serial="serial-1",
+        strategy="fb_comments",
+        snapshots=[xml],
+        context={
+            "persist": False,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+            "_preparsed_fb_comment_items": [
+                {"comment_key": "stale", "text": "stale-preparsed"}
+            ],
+        },
+    )
+    wrong_hash = hashlib.sha256(b"different-xml").hexdigest()
+    payload["snapshot_hashes"] = [wrong_hash]
+    payload["preparsed"]["snapshot_hashes"] = [wrong_hash]
+
+    result = await server.process_payload(payload)
+
+    assert result["ok"] is True
+    assert called["count"] == 1
+    assert result["diagnostic"].get("preparsed") is None
+    assert result["items"][0]["text"] == "parsed-from-xml"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_rejects_preparsed_when_snapshot_count_exceeds_manifest(
+    monkeypatch,
+) -> None:
+    called = {"count": 0}
+
+    def fake_parse(*args, **kwargs):
+        called["count"] += 1
+        return [{"comment_key": "fresh", "text": "parsed-from-xml"}], {
+            "reason_code": "ok"
+        }
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    xml = '<hierarchy><node text="current" /></hierarchy>'
+    payload = build_ingest_payload(
+        serial="serial-1",
+        strategy="fb_comments",
+        snapshots=[xml],
+        context={
+            "persist": False,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+            "_preparsed_fb_comment_items": [
+                {"comment_key": "stale", "text": "stale-preparsed"}
+            ],
+        },
+    )
+    payload["snapshot_count"] = 2
+    payload["preparsed"]["snapshot_count"] = 2
+
+    result = await server.process_payload(payload)
+
+    assert result["ok"] is True
+    assert called["count"] == 1
+    assert result["diagnostic"].get("preparsed") is None
+    assert result["items"][0]["text"] == "parsed-from-xml"
 
 
 @pytest.mark.asyncio
@@ -952,6 +1205,9 @@ async def test_process_payload_persists_fb_comment_post_stats_to_parent(monkeypa
         "serial": "serial-1",
         "strategy": "fb_comments",
         "xml": xml,
+        "xml_sha256": hashlib.sha256(xml.encode("utf-8")).hexdigest(),
+        "snapshot_count": 1,
+        "snapshot_hashes": [hashlib.sha256(xml.encode("utf-8")).hexdigest()],
         "context": {
             "collection": "fb",
             "persist": True,
@@ -967,6 +1223,8 @@ async def test_process_payload_persists_fb_comment_post_stats_to_parent(monkeypa
                 {"comment_key": "c1", "text": "first"},
             ],
             "diagnostic": {"reason_code": "ok", "comments_returned": 1},
+            "snapshot_count": 1,
+            "snapshot_hashes": [hashlib.sha256(xml.encode("utf-8")).hexdigest()],
         },
     })
 
@@ -1031,6 +1289,60 @@ async def test_process_payload_invalid_preparsed_fb_comments_falls_back(monkeypa
     assert called["count"] == 1
     assert result["diagnostic"].get("preparsed") is None
     assert result["items"][0]["text"] == "from-xml"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_rejects_preparsed_fb_comments_when_snapshot_hashes_mismatch(
+    monkeypatch,
+) -> None:
+    class Module:
+        pass
+
+    module = Module()
+    called = {"count": 0}
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        called["count"] += 1
+        return [{"comment_key": "fresh", "text": "fresh-from-current-xml"}], {
+            "reason_code": "ok"
+        }
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    current_xml = '<hierarchy><node text="current" /></hierarchy>'
+    stale_xml = '<hierarchy><node text="stale" /></hierarchy>'
+
+    result = await server.process_payload({
+        "serial": "serial-1",
+        "strategy": "fb_comments",
+        "xml": current_xml,
+        "xml_sha256": hashlib.sha256(current_xml.encode("utf-8")).hexdigest(),
+        "snapshot_count": 1,
+        "snapshot_hashes": [hashlib.sha256(current_xml.encode("utf-8")).hexdigest()],
+        "context": {
+            "persist": False,
+            "return_items": True,
+            "agent_boot_preparsed_comments": True,
+        },
+        "preparsed": {
+            "items": [{"comment_key": "stale", "text": "stale-preparsed"}],
+            "diagnostic": {"reason_code": "ok"},
+            "snapshot_count": 1,
+            "snapshot_hashes": [hashlib.sha256(stale_xml.encode("utf-8")).hexdigest()],
+        },
+    })
+
+    assert result["ok"] is True
+    assert called["count"] == 1
+    assert result["diagnostic"].get("preparsed") is None
+    assert result["items"][0]["text"] == "fresh-from-current-xml"
 
 
 @pytest.mark.asyncio
@@ -1220,6 +1532,17 @@ async def test_process_payload_keeps_post_detail_parent_when_comment_parser_pid_
                 "_active_comment_parent_anchor": {
                     "pid": "detail-pid",
                     "text_prefix": "opened detail post",
+                },
+                "_fb_comment_session": {
+                    "schema_version": 1,
+                    "session_id": "session-detail",
+                    "parent_id": "detail-parent-hash",
+                    "parent_post_id": "detail-pid",
+                    "source": "post_detail",
+                    "anchor": {
+                        "pid": "detail-pid",
+                        "text_prefix": "opened detail post",
+                    },
                 },
             },
         }
@@ -1465,7 +1788,7 @@ async def test_process_payload_requires_verified_parent_by_default_for_fb_group_
 
 
 @pytest.mark.asyncio
-async def test_process_payload_uses_latest_post_parent_when_step_context_was_lost(
+async def test_process_payload_rejects_latest_post_parent_when_step_context_was_lost(
     monkeypatch,
 ) -> None:
     class Module:
@@ -1524,17 +1847,139 @@ async def test_process_payload_uses_latest_post_parent_when_step_context_was_los
     )
 
     assert result["ok"] is True
-    assert result["inserted_count"] == 1
-    assert result["diagnostic"]["parent_context_latest_post_fallback"] is True
-    assert result["diagnostic"]["latest_parent_hash"] == "latest-post-hash"
-    assert latest_lookup == {
-        "collection": "fb_group_posts",
-        "execution_id": "exec-1",
-        "device_serial": "serial-1",
-    }
-    assert inserted[0]["parent_id"] == "latest-post-hash"
-    assert inserted[0]["raw_data"]["parent_content_hash"] == "latest-post-hash"
-    assert inserted[0]["raw_data"]["parent_context_source"] == "latest_post_in_execution"
+    assert result["inserted_attempted"] == 0
+    assert result["inserted_count"] == 0
+    assert result["diagnostic"]["parent_context_required"] is True
+    assert result["diagnostic"]["parent_context_missing"] is True
+    assert "parent_context_latest_post_fallback" not in result["diagnostic"]
+    assert latest_lookup == {}
+    assert inserted == []
+
+
+@pytest.mark.asyncio
+async def test_process_payload_rejects_comment_session_parent_mismatch(
+    monkeypatch,
+) -> None:
+    class Module:
+        pass
+
+    module = Module()
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        return [{"comment_key": "c1", "text": "comment body"}], {"reason_code": "ok"}
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    inserted: list[dict[str, Any]] = []
+
+    class FakeWriter:
+        async def prepare_context_for_persist(self, context):
+            return context
+
+        async def insert_rows(self, rows):
+            inserted.extend(rows)
+            return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": '<hierarchy><node text="comments" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_group_posts",
+                "content_type": "fb_comment",
+                "dedupe_field": "comment_key",
+                "hash_scope": "exec-1",
+                "parent_id": "post-a-hash",
+                "parent_id_already_scoped": True,
+                "parent_post_id": "post-a-pid",
+                "parent_context_source": "post_detail",
+                "_fb_comment_session": {
+                    "schema_version": 1,
+                    "session_id": "session-post-b",
+                    "parent_id": "post-b-hash",
+                    "parent_post_id": "post-b-pid",
+                    "source": "post_detail",
+                    "anchor": {"pid": "post-b-pid", "text_prefix": "post b"},
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["inserted_attempted"] == 0
+    assert result["diagnostic"]["parent_context_required"] is True
+    assert result["diagnostic"]["parent_context_missing"] is True
+    assert inserted == []
+
+
+@pytest.mark.asyncio
+async def test_process_payload_rejects_comment_session_missing_context_pid(
+    monkeypatch,
+) -> None:
+    class Module:
+        pass
+
+    module = Module()
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        return [{"comment_key": "c1", "text": "comment body"}], {
+            "reason_code": "ok"
+        }
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    inserted: list[dict[str, Any]] = []
+
+    class FakeWriter:
+        async def prepare_context_for_persist(self, context):
+            return context
+
+        async def insert_rows(self, rows):
+            inserted.extend(rows)
+            return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": '<hierarchy><node text="comments" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_group_posts",
+                "content_type": "fb_comment",
+                "dedupe_field": "comment_key",
+                "hash_scope": "exec-1",
+                "parent_id": "post-b-hash",
+                "parent_id_already_scoped": True,
+                "parent_post_id": "stale-post-a-pid",
+                "parent_context_source": "post_detail",
+                "_fb_comment_session": {
+                    "schema_version": 1,
+                    "session_id": "session-post-b",
+                    "parent_id": "post-b-hash",
+                    "parent_post_id": None,
+                    "source": "post_detail",
+                    "anchor": {},
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["inserted_attempted"] == 0
+    assert result["diagnostic"]["parent_context_required"] is True
+    assert result["diagnostic"]["parent_context_missing"] is True
+    assert inserted == []
 
 
 @pytest.mark.asyncio
@@ -1665,6 +2110,17 @@ async def test_process_payload_persists_comments_when_pid_lookup_misses_scoped_p
                 "parent_post_id": "pid-from-posts",
                 "parent_context_source": "post_detail",
                 "require_verified_parent": True,
+                "_fb_comment_session": {
+                    "schema_version": 1,
+                    "session_id": "session-from-posts",
+                    "parent_id": "scoped-parent-from-posts",
+                    "parent_post_id": "pid-from-posts",
+                    "source": "post_detail",
+                    "anchor": {
+                        "pid": "pid-from-posts",
+                        "text_prefix": "opened post body",
+                    },
+                },
             },
         }
     )

@@ -742,6 +742,7 @@ class DeviceActivities:
                 inp, step=step, step_index=idx, phase="started",
             )
 
+            activity_step_started = time.monotonic()
             result = await _to_thread_with_heartbeat(
                 run_scenario_task,
                 device,
@@ -752,11 +753,17 @@ class DeviceActivities:
                 cooperative_cancel_event=cancel_event,
                 execution_id=inp.execution_id,
             )
+            activity_step_duration_ms = round(
+                (time.monotonic() - activity_step_started) * 1000.0,
+                1,
+            )
 
             # Extract the single step result
             step_results = result.get("step_results", [])
             if step_results:
-                sr = step_results[0]
+                sr = dict(step_results[0])
+                sr.setdefault("duration_ms", activity_step_duration_ms)
+                sr.setdefault("activity_duration_ms", activity_step_duration_ms)
 
                 await _emit_step_events_for_activity(
                     inp, step=step, step_index=idx, step_result=sr, phase="finished",
@@ -784,6 +791,10 @@ class DeviceActivities:
                 step_type=step_type,
                 ok=result.get("success", False),
                 message=result.get("failed_message") or "",
+                details={
+                    "duration_ms": activity_step_duration_ms,
+                    "activity_duration_ms": activity_step_duration_ms,
+                },
             )
 
         except BaseException as exc:
@@ -887,6 +898,7 @@ class DeviceActivities:
             )
             if touch_actions:
                 try:
+                    u2_batch_started = time.monotonic()
                     batch_u2_results = await _to_thread_with_heartbeat(
                         device.u2_batch,
                         touch_actions,
@@ -895,6 +907,14 @@ class DeviceActivities:
                         cooperative_cancel_event=cancel_event,
                         execution_id=inp.execution_id,
                         stop_on_pause=True,
+                    )
+                    u2_batch_duration_ms = round(
+                        (time.monotonic() - u2_batch_started) * 1000.0,
+                        1,
+                    )
+                    u2_batch_action_duration_ms = round(
+                        u2_batch_duration_ms / max(1, len(touch_actions)),
+                        1,
                     )
 
                     consumed = 0
@@ -915,13 +935,20 @@ class DeviceActivities:
                             "type": touch_step.get("type", ""),
                             "ok": ok,
                             "message": message,
+                            "duration_ms": u2_batch_action_duration_ms,
+                            "u2_batch_duration_ms": u2_batch_duration_ms,
+                            "u2_batch_action_duration_ms": u2_batch_action_duration_ms,
                         }
                         entry = {
                             "index": touch_idx,
                             "type": touch_step.get("type", ""),
                             "ok": ok,
                             "message": message,
-                            "details": {},
+                            "details": {
+                                "duration_ms": u2_batch_action_duration_ms,
+                                "u2_batch_duration_ms": u2_batch_duration_ms,
+                                "u2_batch_action_duration_ms": u2_batch_action_duration_ms,
+                            },
                         }
                         _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
                         await _emit_step_events_for_activity(
@@ -1132,6 +1159,7 @@ class DeviceActivities:
                     phase="started",
                     event_context_cache=event_context_cache,
                 )
+                activity_step_started = time.monotonic()
                 result = await _to_thread_with_heartbeat(
                     run_scenario_task,
                     device,
@@ -1142,6 +1170,10 @@ class DeviceActivities:
                     cooperative_cancel_event=cancel_event,
                     execution_id=inp.execution_id,
                 )
+                activity_step_duration_ms = round(
+                    (time.monotonic() - activity_step_started) * 1000.0,
+                    1,
+                )
                 batch_context = _merge_runtime_context(
                     batch_context,
                     result.get("context") if isinstance(result.get("context"), dict) else None,
@@ -1151,6 +1183,38 @@ class DeviceActivities:
                         "[%s] batch cooperatively cancelled at step#%d (%s) pos=%d/%d",
                         inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
                     )
+                    step_results = result.get("step_results", [])
+                    sr = dict(step_results[0]) if step_results else {
+                        "index": step_idx,
+                        "type": step_type,
+                        "ok": False,
+                        "message": "cancelled by user",
+                    }
+                    sr.setdefault("index", step_idx)
+                    sr.setdefault("type", step_type)
+                    sr.setdefault("ok", False)
+                    sr.setdefault("duration_ms", activity_step_duration_ms)
+                    sr.setdefault("activity_duration_ms", activity_step_duration_ms)
+                    entry = {
+                        "index": step_idx,
+                        "type": step_type,
+                        "ok": sr.get("ok", False),
+                        "message": sr.get("message") or "",
+                        "details": {
+                            k: v for k, v in sr.items()
+                            if k not in ("index", "type", "ok", "message")
+                        },
+                    }
+                    results.append(entry)
+                    _safe_activity_heartbeat(f"batch:{batch_pos}:emit_finished")
+                    await _emit_step_events_for_activity(
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=sr,
+                        phase="finished",
+                        event_context_cache=event_context_cache,
+                    )
                     return DeviceActionBatchResult(
                         results=results,
                         first_failure_index=-1,
@@ -1159,7 +1223,9 @@ class DeviceActivities:
                     )
                 step_results = result.get("step_results", [])
                 if step_results:
-                    sr = step_results[0]
+                    sr = dict(step_results[0])
+                    sr.setdefault("duration_ms", activity_step_duration_ms)
+                    sr.setdefault("activity_duration_ms", activity_step_duration_ms)
                     entry = {
                         "index": step_idx, "type": step_type,
                         "ok": sr.get("ok", False),
@@ -1181,6 +1247,10 @@ class DeviceActivities:
                         "index": step_idx, "type": step_type,
                         "ok": result.get("success", False),
                         "message": result.get("failed_message") or "",
+                        "details": {
+                            "duration_ms": activity_step_duration_ms,
+                            "activity_duration_ms": activity_step_duration_ms,
+                        },
                     }
             except BaseException as exc:
                 if _is_cancellation_exc(exc):
@@ -1219,6 +1289,22 @@ class DeviceActivities:
         """
         _validate_serial(inp.device_serial)
         device = _get_device(inp.device_serial)
+        try:
+            from runtime.core.device_client import DeviceState
+
+            if getattr(device, "u2", None) is not None and getattr(device, "state", None) == DeviceState.DEAD:
+                active = int(getattr(device, "_scenario_active", 0) or 0)
+                device.state = DeviceState.BUSY if active > 0 else DeviceState.READY
+                trace_log.warning(
+                    "check_element_state_repaired",
+                    device_serial=inp.device_serial,
+                    execution_id=inp.execution_id,
+                    from_state=DeviceState.DEAD.value,
+                    to_state=device.state.value,
+                    scenario_active=active,
+                )
+        except Exception as exc:
+            log.debug("[%s] check_element state repair skipped: %s", inp.device_serial, exc)
         activity.heartbeat(f"check_element:{inp.by}={inp.value}")
         trace_log.info(
             "check_element_start",

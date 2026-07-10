@@ -110,6 +110,105 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
     assert "posts" not in sc.ctx
 
 
+def test_fb_posts_forces_root_item_level_for_malformed_step(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    })
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb_group_posts",
+            "content_type": "fb_post",
+            "edge_extra_data": True,
+            "item_level": 1,
+        },
+        "fb_posts",
+        {},
+    )
+
+    assert handled is True
+    assert device.calls[-1]["context"]["item_level"] == 0
+
+
+def test_fb_comment_session_created_and_forwarded_to_comment_extract(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _SequenceFakeDevice([
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+                "active_parent_post": {
+                    "pid": "pid-1",
+                    "parent_id": "parent-hash-1",
+                    "post_key": "post-1",
+                    "stable_post_id": "stable-1",
+                    "author": "Alice",
+                    "text_prefix": "parent post body",
+                    "source": "post_detail",
+                },
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+    ])
+    sc = _ctx(device)
+
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb_group_posts",
+            "dedupe_field": "post_key",
+            "edge_extra_data": True,
+            "open_post_before_extract": True,
+        },
+        "fb_posts",
+        {},
+    )
+
+    session = sc.ctx.get("_fb_comment_session")
+    assert isinstance(session, dict)
+    assert session["parent_id"] == "parent-hash-1"
+    assert session["parent_post_id"] == "pid-1"
+    assert session["anchor"]["post_key"] == "post-1"
+    assert session["source"] == "post_detail"
+
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb_group_posts",
+            "dedupe_field": "comment_key",
+            "edge_extra_data": True,
+            "open_post_press_back_after_extract": True,
+        },
+        "fb_comments",
+        {},
+    )
+
+    comment_context = device.calls[1]["context"]
+    assert comment_context["_fb_comment_session"] == session
+    assert comment_context["parent_id"] == "parent-hash-1"
+    assert comment_context["parent_post_id"] == "pid-1"
+
+
 def test_try_edge_extra_data_propagates_cancel_event(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     event = threading.Event()
@@ -185,6 +284,124 @@ def test_try_edge_extra_data_can_return_items_when_requested(monkeypatch) -> Non
     assert sc.ctx["posts"] == [{"post_key": "p1", "text": "hello"}]
 
 
+def test_fb_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "switched": True,
+                "reason_code": "already_on_filter",
+                "steps": [{"phase": "done", "reason_code": "already_on_filter"}],
+                "total_ms": 123.4,
+                "dump_ms": 80.0,
+                "parse_ms": 7.0,
+                "click_ms": 0.0,
+                "sleep_ms": 0.0,
+            },
+        },
+        "route": "relay_u2",
+        "request_id": "req-1",
+    })
+    sc = _ctx(device)
+    result = {}
+
+    control_flow.handle_fb_apply_comment_filter(
+        sc,
+        {"comment_filter": "newest", "comment_filter_settle_s": 0},
+        0,
+        result,
+    )
+
+    assert result["filter_applied"] is True
+    assert result["extra_data_total_ms"] == 123.4
+    assert result["extra_data_dump_ms"] == 80.0
+    assert result["extra_data_parse_ms"] == 7.0
+    assert result["extra_data_click_ms"] == 0.0
+    assert result["extra_data_sleep_ms"] == 0.0
+    assert result["extra_data_steps"] == 1
+
+
+def test_fb_apply_comment_filter_skips_settle_on_noop(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
+    slept: list[float] = []
+    monkeypatch.setattr(control_flow.time, "sleep", lambda seconds: slept.append(seconds))
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "switched": False,
+                "reason_code": "not_comment_sheet",
+                "steps": [{"phase": "done", "reason_code": "not_comment_sheet"}],
+            },
+        },
+    })
+    sc = _ctx(device)
+    result = {}
+
+    control_flow.handle_fb_apply_comment_filter(
+        sc,
+        {"comment_filter": "newest", "comment_filter_settle_s": 0.45},
+        0,
+        result,
+    )
+
+    assert result["filter_applied"] is False
+    assert result["message"] == "fb_apply_comment_filter: not_comment_sheet"
+    assert slept == []
+
+
+def test_fb_apply_comment_filter_skips_after_comment_target_missing(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
+    device = _FakeDevice({"ok": True, "ingest": {"diagnostic": {"reason_code": "ok"}}})
+    sc = _ctx(device)
+    sc.ctx["_fb_comment_target_missing"] = {
+        "selector": "description='Bình luận'",
+        "max_swipes_effective": 8,
+    }
+    result = {}
+
+    control_flow.handle_fb_apply_comment_filter(
+        sc,
+        {"comment_filter": "newest", "comment_filter_settle_s": 0.45},
+        0,
+        result,
+    )
+
+    assert result["filter_applied"] is False
+    assert result["comment_target_missing"] is True
+    assert result["message"] == "fb_apply_comment_filter: skipped — comment target missing"
+    assert device.calls == []
+
+
+def test_fb_comments_extract_skips_after_comment_target_missing(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 99}})
+    sc = _ctx(device)
+    sc.ctx["_fb_comment_target_missing"] = {
+        "selector": "description='Bình luận'",
+        "max_swipes_effective": 8,
+    }
+    result = {"ok": True}
+
+    handled = extraction_mod.request_edge_extra_data(
+        device=device,
+        serial=sc.serial,
+        ctx=sc.ctx,
+        scenario=sc.scenario,
+        step={"collection": "fb", "edge_extra_data": True},
+        strategy="fb_comments",
+        result=result,
+    )
+
+    assert handled is True
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["comment_target_missing"] is True
+    assert result["message"] == "edge extra_data fb_comments: skipped — comment target missing"
+    assert device.calls == []
+
+
 def test_fb_posts_batch_sets_active_parent_for_later_comments(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
@@ -251,6 +468,156 @@ def test_fb_posts_batch_sets_active_parent_for_later_comments(monkeypatch) -> No
     assert comment_context["parent_id_already_scoped"] is True
     assert comment_context["parent_post_id"] == "pid-1"
     assert comment_context["_active_comment_parent_anchor"]["text_prefix"] == "parent post body"
+
+
+def test_fb_posts_partial_parent_replaces_previous_parent_state(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _SequenceFakeDevice([
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+                "active_parent_post": {
+                    "pid": "pid-a",
+                    "parent_id": "parent-a",
+                    "post_key": "post-a",
+                    "author": "Alice",
+                    "text_prefix": "post A body",
+                    "source": "post_detail",
+                },
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+                "active_parent_post": {
+                    "parent_id": "parent-b",
+                    "source": "post_detail",
+                },
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+    ])
+    sc = _ctx(device)
+    post_step = {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"}
+
+    extraction_mod._try_edge_extra_data(sc, post_step, "fb_posts", {})
+    extraction_mod._try_edge_extra_data(sc, post_step, "fb_posts", {})
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_comments",
+        {},
+    )
+
+    assert sc.ctx["_active_comment_parent_hash"] == "parent-b"
+    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_active_comment_parent_anchor" not in sc.ctx
+    assert sc.ctx["_fb_comment_session"]["parent_id"] == "parent-b"
+    assert sc.ctx["_fb_comment_session"]["parent_post_id"] is None
+    comment_context = device.calls[-1]["context"]
+    assert comment_context["parent_id"] == "parent-b"
+    assert comment_context["parent_post_id"] is None
+    assert comment_context["_active_comment_parent_anchor"] is None
+
+
+def test_fb_comments_back_marks_parent_consumed_for_next_post_open(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _SequenceFakeDevice([
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+                "active_parent_post": {
+                    "pid": "pid-1",
+                    "parent_id": "scoped-parent-hash",
+                    "post_key": "post-1",
+                    "stable_post_id": "stable-1",
+                    "fb_post_id": "fb-1",
+                    "author": "Alice",
+                    "timestamp": "1 giờ",
+                    "text_prefix": "parent post body",
+                },
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 0,
+                "inserted_count": 0,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+    ])
+    sc = _ctx(device)
+
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "open_post_press_back_after_extract": True,
+        },
+        "fb_comments",
+        {},
+    )
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+
+    assert "_active_comment_parent_anchor" not in sc.ctx
+    consumed = sc.ctx["_fb_consumed_post_anchors"]
+    assert consumed == [
+        {
+            "pid": "pid-1",
+            "post_key": "post-1",
+            "stable_post_id": "stable-1",
+            "fb_post_id": "fb-1",
+            "author": "Alice",
+            "timestamp": "1 giờ",
+            "text_prefix": "parent post body",
+            "parent_id": "scoped-parent-hash",
+        }
+    ]
+    assert device.calls[2]["strategy"] == "fb_posts"
+    assert device.calls[2]["context"]["open_post_exclude_anchors"] == consumed
 
 
 def test_fb_post_detail_parent_source_is_forwarded_to_comment_extract(monkeypatch) -> None:

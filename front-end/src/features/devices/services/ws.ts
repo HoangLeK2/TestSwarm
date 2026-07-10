@@ -8,6 +8,10 @@ import {
   nextReconnectDelayMs,
   shouldReconnectStaleSocketOnFocus
 } from './ws-keepalive';
+import {
+  BinaryListenerRegistry,
+  type BinaryListener
+} from './binary-listener-registry';
 
 function normalizeWsUrl(raw: string, fallbackScheme: 'ws' | 'wss') {
   const trimmed = raw.trim().replace(/^['"]|['"]$/g, '');
@@ -72,8 +76,7 @@ function buildDeviceFarmWsUrl(): string {
 }
 
 const listeners = new Set<(msg: WsMessage) => void>();
-type BinaryListener = { fn: (buf: ArrayBuffer) => void; serial?: string };
-const binaryListeners = new Set<BinaryListener>();
+const binaryListeners = new BinaryListenerRegistry();
 const textDecoder =
   typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
@@ -407,6 +410,7 @@ function connectShared() {
       handleTextMessage(evt.data);
     } else if (evt.data instanceof ArrayBuffer) {
       const buf = evt.data as ArrayBuffer;
+      let parsedSerial: string | null = null;
       // Always cache H264 config frames (0x10) for late-arriving binary listeners.
       // The WS text listener connects first (for device status); the H264 hook
       // mounts later. Without caching, the bootstrap config frame arrives when
@@ -416,42 +420,34 @@ function connectShared() {
         const ft = view.getUint8(0);
         const slen = view.getUint8(1);
         if (slen > 0 && buf.byteLength >= 2 + slen) {
-          const serial = decodeSerial(buf, slen);
+          parsedSerial = decodeSerial(buf, slen);
           if (ft === 0x10) {
             // Keep cache ownership stable: listeners may transfer incoming buffers
             // to workers, which detaches them.
-            lastConfigBySerial.set(serial, buf.slice(0));
+            lastConfigBySerial.set(parsedSerial, buf.slice(0));
           } else if (ft === 0x11) {
             // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
             // instead of waiting up to 14 s for the next one.
             if (isH264KeyFrame(view, buf, slen)) {
               // Same ownership rule as config cache above.
-              lastKeyBySerial.set(serial, buf.slice(0));
-              lastKeyTsBySerial.set(serial, Date.now());
-              waitForKeyBySerial.delete(serial);
-            } else if (waitForKeyBySerial.has(serial)) {
+              lastKeyBySerial.set(parsedSerial, buf.slice(0));
+              lastKeyTsBySerial.set(parsedSerial, Date.now());
+              waitForKeyBySerial.delete(parsedSerial);
+            } else if (waitForKeyBySerial.has(parsedSerial)) {
               return;
             }
           }
         }
       }
       if (binaryListeners.size > 0) {
-        let parsedSerial: string | null = null;
-        if (buf.byteLength >= 3) {
+        if (parsedSerial === null && buf.byteLength >= 3) {
           const view = new DataView(buf);
           const slen = view.getUint8(1);
           if (slen > 0 && buf.byteLength >= 2 + slen) {
             parsedSerial = decodeSerial(buf, slen);
           }
         }
-        binaryListeners.forEach(({ fn, serial }) => {
-          try {
-            if (serial && parsedSerial && serial !== parsedSerial) return;
-            fn(buf);
-          } catch {
-            // isolate subscriber errors
-          }
-        });
+        binaryListeners.dispatch(buf, parsedSerial);
       }
     }
   };
@@ -568,6 +564,13 @@ export function getLastConfigFrame(serial: string): ArrayBuffer | undefined {
 
 export function getLastKeyFrame(serial: string): ArrayBuffer | undefined {
   return lastKeyBySerial.get(serial) ?? undefined;
+}
+
+export function clearH264Cache(serial: string): void {
+  lastConfigBySerial.delete(serial);
+  lastKeyBySerial.delete(serial);
+  lastKeyTsBySerial.delete(serial);
+  waitForKeyBySerial.add(serial);
 }
 
 /**

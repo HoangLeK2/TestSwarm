@@ -288,6 +288,27 @@ def _op_wait_gone(dev: Any, act: dict) -> bool:
     return bool(_resolve(dev, act["selector"]).wait_gone(timeout=float(act.get("timeout", 5))))
 
 
+def _selector_exists_now(sel: Any) -> bool:
+    """Check selector presence without inheriting uiautomator2 implicit wait."""
+    exists = getattr(sel, "exists", None)
+    if callable(exists):
+        try:
+            return bool(exists(timeout=0))
+        except TypeError:
+            return bool(exists(0))
+    if exists is not None:
+        return bool(exists)
+
+    wait = getattr(sel, "wait", None)
+    if callable(wait):
+        try:
+            return bool(wait(timeout=0))
+        except TypeError:
+            return bool(wait(0))
+
+    return bool(exists)
+
+
 def _op_click_selector(dev: Any, act: dict) -> bool:
     """Tap when selector exists; returns False if not found (no exception)."""
     sel = _resolve(dev, act.get("selector", {}))
@@ -498,10 +519,10 @@ def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
     fx, fy, tx, ty = vectors.get(direction, vectors["up"])
     sel = _resolve(dev, p["selector"])
     for i in range(max_swipes):
-        if sel.exists:
+        if _selector_exists_now(sel):
             return {"found": True, "swipes": i}
         dev.swipe(fx, fy, tx, ty, duration=float(p.get("duration", DEFAULT_SWIPE_DURATION)))
-    return {"found": bool(sel.exists), "swipes": max_swipes}
+    return {"found": _selector_exists_now(sel), "swipes": max_swipes}
 
 
 def _flow_input_and_confirm(dev: Any, p: dict) -> dict:
@@ -586,8 +607,14 @@ class U2Executor:
         early_exit: bool = True,
         cancel_event: Any = None,
     ) -> dict:
+        batch_started = time.perf_counter()
+
+        def _finish(payload: dict) -> dict:
+            payload["total_ms"] = round((time.perf_counter() - batch_started) * 1000, 1)
+            return payload
+
         if not actions:
-            return {"ok": True, "stopped_at": None, "results": [], "error": None}
+            return _finish({"ok": True, "stopped_at": None, "results": [], "error": None})
 
         if len(actions) > MAX_BATCH_ACTIONS:
             logger.warning("u2_batch: %d actions exceeds cap %d, truncating", len(actions), MAX_BATCH_ACTIONS)
@@ -597,25 +624,31 @@ class U2Executor:
             results: list[dict] = []
             for idx, act in enumerate(actions):
                 if cancel_event is not None and cancel_event.is_set():
-                    return {
+                    return _finish({
                         "ok": False,
                         "stopped_at": idx,
                         "results": results,
                         "error": "cancelled",
                         "cancelled": True,
-                    }
+                    })
                 op = act.get("op", "")
                 fn = None if op == "u2_swipe_batch" else _OP_TABLE.get(op)
                 if op != "u2_swipe_batch" and fn is None:
-                    results.append({"op": op, "ok": False, "error": f"unknown op: {op}"})
+                    results.append({
+                        "op": op,
+                        "ok": False,
+                        "error": f"unknown op: {op}",
+                        "duration_ms": 0.0,
+                    })
                     if early_exit:
-                        return {
+                        return _finish({
                             "ok": False,
                             "stopped_at": idx,
                             "results": results,
                             "error": f"action[{idx}] unknown op: {op}",
-                        }
+                        })
                     continue
+                action_started = time.perf_counter()
                 try:
                     if op == "u2_swipe_batch":
                         value = self._run_u2_swipe_batch(serial, act)
@@ -636,25 +669,31 @@ class U2Executor:
                     entry: dict = {"op": op, "ok": True}
                     if value is not None:
                         entry["value"] = value
+                    entry["duration_ms"] = round((time.perf_counter() - action_started) * 1000, 1)
                     results.append(entry)
                     if cancel_event is not None and cancel_event.is_set() and idx + 1 < len(actions):
-                        return {
+                        return _finish({
                             "ok": False,
                             "stopped_at": idx + 1,
                             "results": results,
                             "error": "cancelled",
                             "cancelled": True,
-                        }
+                        })
                 except Exception as exc:
-                    results.append({"op": op, "ok": False, "error": str(exc)})
+                    results.append({
+                        "op": op,
+                        "ok": False,
+                        "error": str(exc),
+                        "duration_ms": round((time.perf_counter() - action_started) * 1000, 1),
+                    })
                     if early_exit:
-                        return {
+                        return _finish({
                             "ok": False,
                             "stopped_at": idx,
                             "results": results,
                             "error": f"action[{idx}] {op}: {exc}",
-                        }
-            return {"ok": True, "stopped_at": None, "results": results, "error": None}
+                        })
+            return _finish({"ok": True, "stopped_at": None, "results": results, "error": None})
 
         try:
             return await _run_with_retry(
@@ -664,7 +703,7 @@ class U2Executor:
                 _run_actions,
             )
         except Exception as exc:
-            return {"ok": False, "stopped_at": 0, "results": [], "error": str(exc)}
+            return _finish({"ok": False, "stopped_at": 0, "results": [], "error": str(exc)})
 
     async def execute_flow(self, serial: str, flow: str, params: dict) -> dict:
         fn = _FLOW_TABLE.get(flow)

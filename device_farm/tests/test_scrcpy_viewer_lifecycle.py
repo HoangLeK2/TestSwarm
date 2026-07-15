@@ -244,7 +244,7 @@ async def test_scrcpy_attach_reports_pending_without_detaching_viewer() -> None:
 
 
 @pytest.mark.anyio
-async def test_scrcpy_attach_replaces_stale_viewer_from_same_surface() -> None:
+async def test_scrcpy_attach_preserves_distinct_viewers_from_same_surface() -> None:
     device = _FakeScrcpyDevice()
     app = _build_app(device, serial="serial-surface")
 
@@ -271,7 +271,7 @@ async def test_scrcpy_attach_replaces_stale_viewer_from_same_surface() -> None:
     assert first.status_code == 200
     assert first.json()["active_viewers"] == 1
     assert second.status_code == 200
-    assert second.json()["active_viewers"] == 1
+    assert second.json()["active_viewers"] == 2
     assert stale_detach.status_code == 200
     assert stale_detach.json()["active_viewers"] == 1
     assert active_detach.status_code == 200
@@ -532,7 +532,7 @@ async def test_control_attach_reapplies_requested_profile_after_default_stream()
 
 
 @pytest.mark.anyio
-async def test_low_fps_preview_does_not_downgrade_during_control_detach_grace() -> None:
+async def test_low_fps_preview_reapplies_profile_during_control_detach_grace() -> None:
     device = _FakeScrcpyDevice()
     app = _build_app(device, serial="serial-downgrade", detach_grace_s=60)
 
@@ -567,12 +567,12 @@ async def test_low_fps_preview_does_not_downgrade_during_control_detach_grace() 
     assert preview.status_code == 200
     assert preview.json()["status"] == "active"
     assert preview.json()["active_viewers"] == 1
-    assert device.attach_calls == 1
+    assert device.attach_calls == 2
     assert device.detach_calls == 0
     assert device.last_attach_options == {
-        "max_fps": None,
-        "max_width": None,
-        "bitrate": None,
+        "max_fps": 1,
+        "max_width": 480,
+        "bitrate": 180000,
     }
 
 
@@ -618,6 +618,36 @@ async def test_low_fps_preview_starts_light_profile_after_control_fully_stops() 
         "max_width": 480,
         "bitrate": 180000,
     }
+
+
+@pytest.mark.anyio
+async def test_last_preview_viewer_detaches_without_encoder_grace() -> None:
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial="serial-preview-stop", detach_grace_s=60)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        attach = await client.post(
+            "/api/devices/serial-preview-stop/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "snapshot-preview:test",
+                "max_fps": 1,
+                "max_width": 360,
+                "bitrate": 100000,
+            },
+        )
+        detach = await client.post(
+            "/api/devices/serial-preview-stop/scrcpy/detach",
+            json={"viewer_id": "snapshot-preview:test"},
+        )
+
+    assert attach.status_code == 200
+    assert detach.status_code == 200
+    assert detach.json()["active_viewers"] == 0
+    assert detach.json().get("stop_scheduled") is not True
+    assert device.detach_calls == 1
 
 
 @pytest.mark.anyio
@@ -902,7 +932,7 @@ async def test_second_low_fps_preview_does_not_reapply_scrcpy_profile() -> None:
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["active_viewers"] == 1
+    assert second.json()["active_viewers"] == 2
     assert device.attach_calls == 1
 
 

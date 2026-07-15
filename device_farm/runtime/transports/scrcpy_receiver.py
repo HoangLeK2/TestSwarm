@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import av
 
 from runtime.transports.h264_utils import (
-    annexb_to_avcc_maybe,
+    annexb_to_avcc,
     annexb_to_avcc_record_maybe,
     _is_annexb,
 )
@@ -36,26 +36,9 @@ log = logging.getLogger(__name__)
 
 
 def _is_idr(avcc_data: bytes) -> bool:
+    """Return whether an AVCC access unit contains an IDR NAL."""
     if not avcc_data:
         return False
-    if avcc_data[:4] == b"\x00\x00\x00\x01" or avcc_data[:3] == b"\x00\x00\x01":
-        i = 0
-        n = len(avcc_data)
-        while i < n - 2:
-            if i + 3 < n and avcc_data[i:i+4] == b"\x00\x00\x00\x01":
-                nal_start = i + 4
-                if nal_start < n and (avcc_data[nal_start] & 0x1F) == _IDR_NAL_TYPE:
-                    return True
-                i = nal_start
-            elif avcc_data[i:i+3] == b"\x00\x00\x01":
-                nal_start = i + 3
-                if nal_start < n and (avcc_data[nal_start] & 0x1F) == _IDR_NAL_TYPE:
-                    return True
-                i = nal_start
-            else:
-                i += 1
-        return False
-    # AVCC format: iterate length-prefixed NAL units
     i = 0
     n = len(avcc_data)
     while i + 4 <= n:
@@ -519,9 +502,10 @@ class ScrcpyReceiver(threading.Thread):
                         pass
                     continue
 
-                # Video packet: convert Annex-B → AVCC if needed, detect keyframe
+                # The local scrcpy socket protocol emits Annex-B access units.
+                # Convert at this known boundary instead of sniffing ambiguous bytes.
                 try:
-                    avcc_data = annexb_to_avcc_maybe(data)
+                    avcc_data = annexb_to_avcc(data)
                 except Exception:
                     avcc_data = data
 
@@ -779,11 +763,8 @@ class RelayScrcpyReceiver:
             )
 
     def _handle_video(self, data: bytes, pts_us: int, hint_is_key: bool = False) -> None:
-        # Relay agents convert Annex-B → AVCC in their relay thread before sending,
-        # so annexb_to_avcc_maybe is a fast O(1) no-op for relay-sourced frames
-        # (data doesn't start with Annex-B start code → returns unchanged immediately).
-        # For local ADB path (ScrcpyReceiver), the data is still Annex-B → converted here.
-        avcc_data = annexb_to_avcc_maybe(data)
+        # Relay agents convert Annex-B to AVCC before sending this binary packet.
+        avcc_data = data
         # Trust agent's pre-computed keyframe flag — avoids redundant IDR scan.
         is_key = hint_is_key
 

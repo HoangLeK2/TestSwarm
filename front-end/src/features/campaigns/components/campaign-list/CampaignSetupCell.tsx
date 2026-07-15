@@ -14,6 +14,7 @@ export function CampaignSetupCell({ campaign }: { campaign: CampaignOut }) {
         campaignId={campaign.id}
         campaignName={campaign.name}
         targetGroupId={campaign.target_group_id}
+        initialDevices={campaign.devices}
         triggerClassName={TRIGGER}
       />
       <CampaignScenarioSummary campaign={campaign} triggerClassName={TRIGGER} />

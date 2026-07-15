@@ -10,8 +10,9 @@ import {
 test('derives responsive columns from the existing tile width and gap', () => {
   assert.equal(getDeviceGridColumnCount(279, 10), 1);
   assert.equal(getDeviceGridColumnCount(575, 10), 1);
-  assert.equal(getDeviceGridColumnCount(576, 10), 2);
-  assert.equal(getDeviceGridColumnCount(1_168, 10), 4);
+  assert.equal(getDeviceGridColumnCount(592, 10), 2);
+  assert.equal(getDeviceGridColumnCount(1_168, 10), 3);
+  assert.equal(getDeviceGridColumnCount(1_200, 10), 4);
 });
 
 test('never creates more columns than devices', () => {

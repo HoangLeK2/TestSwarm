@@ -25,6 +25,7 @@ import { DeviceStepMonitorButton } from './device-step-monitor';
 import { Badge } from '@/components/ui/badge';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
+import { DEVICE_GRID_TILE_WIDTH_PX } from '../lib/device-farm-virtual-grid';
 import {
   acquireSnapshotPreviewWarmup,
   subscribeSnapshotPreviewWarmupChanges,
@@ -40,12 +41,12 @@ const GRID_PREVIEW_EAGER =
   (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '0').trim() !==
   '0';
 const GRID_PREVIEW_H264 =
-  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264 ?? '1').trim() !== '0';
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264 ?? '0').trim() !== '0';
 const DASHBOARD_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MS ?? 1_000
+    process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MS ?? 2_000
   );
-  if (!Number.isFinite(raw)) return 1_000;
+  if (!Number.isFinite(raw)) return 2_000;
   return Math.max(500, Math.min(5_000, Math.round(raw)));
 })();
 const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
@@ -136,6 +137,7 @@ function DeviceTilePreviewInner({
   const loadStream =
     tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
   const shouldUseH264Preview = GRID_PREVIEW_H264 && isActive && loadStream;
+  const shouldWarmupPreview = isActive && loadStream;
   const h264PreviewActive =
     shouldUseH264Preview &&
     (previewWarmupState === 'attaching' || previewWarmupState === 'live');
@@ -144,7 +146,7 @@ function DeviceTilePreviewInner({
     if (shouldUseH264Preview) return null;
     if (!tabActive) return null;
     if (!isActive || !loadStream) return null;
-    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}`;
+    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}&max_width=360`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
   }, [
@@ -164,7 +166,7 @@ function DeviceTilePreviewInner({
     () => mockupOuterHeightPx(previewMockupScreenWidth),
     [previewMockupScreenWidth]
   );
-  const tileWidthPx = previewMockupScreenWidth + 90;
+  const tileWidthPx = DEVICE_GRID_TILE_WIDTH_PX;
 
   const isPreviewQueued =
     shouldUseH264Preview && previewWarmupState === 'queued';
@@ -189,7 +191,7 @@ function DeviceTilePreviewInner({
   });
 
   useEffect(() => {
-    if (!shouldUseH264Preview) {
+    if (!shouldWarmupPreview) {
       previewWarmupRef.current?.release();
       previewWarmupRef.current = null;
       setPreviewWarmupState('idle');
@@ -249,7 +251,7 @@ function DeviceTilePreviewInner({
       previewWarmupRef.current?.release();
       previewWarmupRef.current = null;
     };
-  }, [device.serial, shouldUseH264Preview]);
+  }, [device.serial, shouldWarmupPreview]);
 
   useEffect(() => {
     if (!previewUrl) return;

@@ -158,6 +158,7 @@ import {
 import {
   deviceSerialMatches,
   isManualControlBlockedByAutomation,
+  resolveControlRecordSelectedDevice,
   shouldShowControlRecordNoDeviceBanner
 } from '../lib/control-record-device-state';
 import { needsFreshMirrorSelectorXml } from '../lib/control-record-hierarchy';
@@ -373,11 +374,10 @@ export function ControlRecordView({
   const selectedDeviceForControl = useMemo(
     () =>
       rawSelectedDeviceForControl ??
-      connectedDevicesForControl.find(
-        (d) => d.serial === device.selectedSerial
-      ) ??
-      connectedDevicesForControl[0] ??
-      null,
+      resolveControlRecordSelectedDevice(
+        connectedDevicesForControl,
+        device.selectedSerial
+      ),
     [
       connectedDevicesForControl,
       device.selectedSerial,

@@ -1849,9 +1849,16 @@ class DeviceAgentSession:
                             raw_data = base64.b64decode(data_b64)
                             is_key = bool(msg.get("key", False) or msg.get("is_key", False))
                             pts_us = int(msg.get("pts", 0) or msg.get("pts_us", 0) or 0)
-                            # Convert Annex B → AVCC if needed
-                            from runtime.transports.h264_utils import annexb_to_avcc_maybe
-                            avcc_data = annexb_to_avcc_maybe(raw_data)
+                            # Legacy JSON agents historically send Annex-B. New agents
+                            # can declare AVCC explicitly; never infer framing from bytes.
+                            framing = str(
+                                msg.get("framing", msg.get("format", "annexb"))
+                            ).strip().lower()
+                            if framing == "avcc":
+                                avcc_data = raw_data
+                            else:
+                                from runtime.transports.h264_utils import annexb_to_avcc
+                                avcc_data = annexb_to_avcc(raw_data)
                             device.on_agent_h264_video(avcc_data, is_key, pts_us)
 
                     elif msg_type == "tunnel_data":

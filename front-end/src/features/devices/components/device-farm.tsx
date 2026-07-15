@@ -23,6 +23,7 @@ import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devi
 import {
   DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX,
   DEVICE_GRID_GAP_PX,
+  DEVICE_GRID_TILE_WIDTH_PX,
   getDeviceGridColumnCount,
   getDeviceGridRowBounds,
   getDeviceGridRowCount
@@ -236,8 +237,7 @@ export function DeviceFarm() {
                     data-index={virtualRow.index}
                     className='absolute left-0 top-0 grid w-full justify-start gap-4'
                     style={{
-                      gridTemplateColumns:
-                        'repeat(auto-fill, minmax(min(100%, 280px), 320px))',
+                      gridTemplateColumns: `repeat(${end - start}, minmax(0, min(100%, ${DEVICE_GRID_TILE_WIDTH_PX}px)))`,
                       contain: 'layout paint'
                     }}
                   >

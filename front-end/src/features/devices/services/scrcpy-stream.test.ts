@@ -63,12 +63,16 @@ test('snapshot preview attach keeps lightweight no-retry policy', async () => {
   const stream = await loadScrcpyStream();
   postCalls.length = 0;
 
-  await stream.attachScrcpyStream('serial-preview', 'snapshot-preview:viewer-1', {
-    enableControl: true,
-    maxFps: 1,
-    maxWidth: 360,
-    bitrate: 100_000
-  });
+  await stream.attachScrcpyStream(
+    'serial-preview',
+    'snapshot-preview:viewer-1',
+    {
+      enableControl: true,
+      maxFps: 1,
+      maxWidth: 360,
+      bitrate: 100_000
+    }
+  );
 
   assert.equal(postCalls.length, 1);
   assert.deepEqual(postCalls[0]?.payload, {

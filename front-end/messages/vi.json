@@ -1428,6 +1428,8 @@
       "monitorWfLoopRound": "vòng {n}",
       "monitorWfErrorPrefix": "Lỗi:",
       "monitorWfPausedPrompt": "Luồng công việc đang chờ — chọn hành động:",
+      "monitorLiveMirrorHint": "Chỉ mở 1 màn hình live mỗi lần để tránh lag khi chạy nhiều máy.",
+      "monitorHideLiveMirror": "Ẩn live",
       "monitorStepsHeading": "Các bước",
       "monitorStepListLoading": "Đang tải…",
       "monitorStepListEmpty": "Chưa có dữ liệu bước.",

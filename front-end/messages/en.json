@@ -1414,6 +1414,8 @@
       "monitorWfLoopRound": "Round {n}",
       "monitorWfErrorPrefix": "Error:",
       "monitorWfPausedPrompt": "Workflow is waiting — choose an action:",
+      "monitorLiveMirrorHint": "Open only one live screen at a time to avoid lag on multi-device runs.",
+      "monitorHideLiveMirror": "Hide live",
       "monitorStepsHeading": "Steps",
       "monitorStepListLoading": "Loading…",
       "monitorStepListEmpty": "No step data yet.",

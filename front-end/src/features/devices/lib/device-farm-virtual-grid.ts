@@ -1,4 +1,4 @@
-export const DEVICE_GRID_MIN_COLUMN_WIDTH_PX = 280;
+export const DEVICE_GRID_TILE_WIDTH_PX = 288;
 export const DEVICE_GRID_GAP_PX = 16;
 export const DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX = 570;
 
@@ -11,7 +11,7 @@ export function getDeviceGridColumnCount(
     1,
     Math.floor(
       (availableWidth + DEVICE_GRID_GAP_PX) /
-        (DEVICE_GRID_MIN_COLUMN_WIDTH_PX + DEVICE_GRID_GAP_PX)
+        (DEVICE_GRID_TILE_WIDTH_PX + DEVICE_GRID_GAP_PX)
     )
   );
   const boundedItemCount = Math.max(1, Math.floor(itemCount));

@@ -92,14 +92,14 @@ CPU_POOL_SIZE       = _env_int("RELAY_CPU_POOL_SIZE", 4)
 # wasting executor round-trips on GIL-bound work.
 JSON_OFFLOAD_BYTES  = _env_int("RELAY_JSON_OFFLOAD_BYTES", 8 * 1024, hi=16 * 1024 * 1024)
 
-EXTRA_DATA_CONCURRENCY = _env_int("RELAY_EXTRA_DATA_CONCURRENCY", 8)
-U2_BATCH_CONCURRENCY   = _env_int("RELAY_U2_BATCH_CONCURRENCY", 20)
-U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 20)
+EXTRA_DATA_CONCURRENCY = _env_int("RELAY_EXTRA_DATA_CONCURRENCY", 4)
+U2_BATCH_CONCURRENCY   = _env_int("RELAY_U2_BATCH_CONCURRENCY", 8)
+U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 8)
 
 # FairSendQueue lane sizes. `per_device` is intentionally small — backpressure
 # kicks in per phone so one chatty device cannot drown the others. `control`
 # is generous because heartbeat/register messages must never drop.
-SEND_PER_DEVICE_MAX = _env_int("RELAY_SEND_PER_DEVICE_MAX", 16)
+SEND_PER_DEVICE_MAX = _env_int("RELAY_SEND_PER_DEVICE_MAX", 10)
 SEND_CONTROL_MAX    = _env_int("RELAY_SEND_CONTROL_MAX", 128)
 
 # How long bounded_put waits before declaring the send_queue dead. Long

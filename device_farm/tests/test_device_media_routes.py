@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import threading
 import time
 
@@ -85,6 +86,27 @@ async def test_screenshot_uses_cached_frame_when_fresh_enough():
 
     assert response.status_code == 200
     assert body == b"old-frame"
+    assert device.captures == 0
+
+
+@pytest.mark.anyio
+async def test_screenshot_resizes_cached_frame_for_grid_preview():
+    from PIL import Image
+
+    source = io.BytesIO()
+    Image.new("RGB", (1080, 1920), color="red").save(source, format="JPEG")
+    device = _SnapshotDevice(cached=source.getvalue())
+    router = build_device_media_router(_Manager(device))
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}")
+
+    response = await route.endpoint(
+        "serial-1", fresh=False, max_age_ms=5_000, max_width=360
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    with Image.open(io.BytesIO(body)) as resized:
+        assert resized.width == 360
+        assert resized.height == 640
     assert device.captures == 0
 
 

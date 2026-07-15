@@ -213,32 +213,32 @@ services:
   #   #   network ADB (adb connect) or run agent-boot on the host.
   #   command: ["--relay-only"]
 
-  frontend:
-    build:
-      context: ./front-end
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
-        NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
-        NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
-        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
-        NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
-    env_file:
-      - ./.env
-    restart: unless-stopped
-    depends_on:
-      farm:
-        condition: service_healthy
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
-      NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
-      NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
-      LOW_BW_MODE: ${LOW_BW_MODE:-true}
-      LOW_BW_FRAME_SKIP: ${LOW_BW_FRAME_SKIP:-2}
-      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
-      NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+  # frontend:
+  #   build:
+  #     context: ./front-end
+  #     dockerfile: Dockerfile
+  #     args:
+  #       NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
+  #       NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
+  #       NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
+  #       NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+  #       NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
+  #   env_file:
+  #     - ./.env
+  #   restart: unless-stopped
+  #   depends_on:
+  #     farm:
+  #       condition: service_healthy
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     NEXT_PUBLIC_PRODUCT_API_URL: ${NEXT_PUBLIC_PRODUCT_API_URL:-http://host.docker.internal:8081}
+  #     NEXT_PUBLIC_DEVICE_FARM_WS_URL: ${NEXT_PUBLIC_DEVICE_FARM_WS_URL:-ws://host.docker.internal:8081/ws}
+  #     NEXT_PUBLIC_ENVIRONMENT: ${NEXT_PUBLIC_ENVIRONMENT:-dev}
+  #     LOW_BW_MODE: ${LOW_BW_MODE:-true}
+  #     LOW_BW_FRAME_SKIP: ${LOW_BW_FRAME_SKIP:-2}
+  #     NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+  #     NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
 
   # minio:
   #   profiles: [minio]

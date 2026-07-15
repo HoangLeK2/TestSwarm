@@ -1,6 +1,7 @@
 'use client';
 
 import { FileText, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { useCampaign, useScenarios } from '../../hooks/use-campaigns';
@@ -20,10 +21,12 @@ export function CampaignScenarioSummary({
 }) {
   const t = useTranslations('campaignsFeature.scenarioList');
   const { canUpdate } = useResourcePermissions('campaigns');
-  const { data: scenarios = [] } = useScenarios(campaign.id);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const { data: fetchedScenarios } = useScenarios(campaign.id, dialogOpen);
+  const scenarios = fetchedScenarios ?? campaign.scenarios ?? [];
   const { data: detail } = useCampaign(
     campaign.id,
-    !campaign.scenario_refs?.length
+    dialogOpen && !campaign.scenario_refs?.length
   );
   const { data: orgScenarios = [] } = useOrgScenarios();
   const entityRefs =
@@ -70,7 +73,11 @@ export function CampaignScenarioSummary({
   }
 
   return (
-    <ScenarioListDialog campaign={campaign}>
+    <ScenarioListDialog
+      campaign={campaign}
+      open={dialogOpen}
+      onOpenChange={setDialogOpen}
+    >
       <Button
         type='button'
         variant='outline'

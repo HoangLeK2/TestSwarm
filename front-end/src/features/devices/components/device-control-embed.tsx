@@ -2,6 +2,8 @@
 
 import { useMemo } from 'react';
 import { useDeviceFarm } from '../hooks/use-device-farm';
+import { resolveControlRecordSelectedDevice } from '../lib/control-record-device-state';
+import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import { DeviceTile } from './device-tile';
 
 type Props = {
@@ -29,6 +31,14 @@ type Props = {
   ) => void;
 };
 
+/** Lightweight scrcpy profile for campaign-monitor embeds — avoids fighting control streams. */
+const MONITOR_PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: false,
+  maxFps: 4,
+  maxWidth: 360,
+  bitrate: 120_000
+};
+
 export function DeviceControlEmbed({
   initialSerial,
   compact = true,
@@ -46,17 +56,18 @@ export function DeviceControlEmbed({
     handleToggleMode,
     handleRestart,
     error
-  } = useDeviceFarm();
+  } = useDeviceFarm({
+    liveRefreshMs: readOnlyPreview ? 15_000 : undefined,
+    loadTasks: false,
+    refreshRegisteredOnFocus: !readOnlyPreview
+  });
 
   const activeDevices = devices.filter(
     (d) => d.state && !['DISCONNECTED', 'DEAD'].includes(d.state.toUpperCase())
   );
 
   const selectedDevice = useMemo(
-    () =>
-      activeDevices.find((d) => d.serial === initialSerial) ??
-      activeDevices[0] ??
-      null,
+    () => resolveControlRecordSelectedDevice(activeDevices, initialSerial),
     [activeDevices, initialSerial]
   );
 
@@ -91,12 +102,6 @@ export function DeviceControlEmbed({
 
   return (
     <div className={compact ? 'w-full min-w-0 max-w-full' : ''}>
-      {selectedDevice.serial !== initialSerial && (
-        <p className='mb-1 text-[10px] text-muted-foreground'>
-          Thiết bị {initialSerial} chưa online — đang hiển thị:{' '}
-          {selectedDevice.serial}
-        </p>
-      )}
       <DeviceTile
         device={selectedDevice}
         logLines={compact ? [] : (logs[selectedDevice.serial] ?? [])}
@@ -124,6 +129,11 @@ export function DeviceControlEmbed({
         hideControls={readOnlyPreview}
         hideDeviceFunctions={readOnlyPreview}
         readOnlyPreview={readOnlyPreview}
+        streamFetchPriority={readOnlyPreview ? 'low' : 'auto'}
+        streamTransport={readOnlyPreview ? 'h264-only' : 'auto'}
+        scrcpyAttachOptions={
+          readOnlyPreview ? MONITOR_PREVIEW_SCRCPY_OPTIONS : undefined
+        }
       />
     </div>
   );

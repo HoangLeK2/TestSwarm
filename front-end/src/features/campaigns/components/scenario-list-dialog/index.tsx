@@ -74,7 +74,10 @@ export function ScenarioListDialog({
   const onOpenChange = isControlled ? controlledOnOpenChange : setOpen;
   const qc = useQueryClient();
   const { canUpdate } = useResourcePermissions('campaigns');
-  const { data: scenarios = [], refetch } = useScenarios(campaign.id);
+  const { data: scenarios = [], refetch } = useScenarios(
+    campaign.id,
+    finalOpen
+  );
   const { data: campaignDetail } = useCampaign(campaign.id, finalOpen);
   const entityDetail: CampaignEntityOut | null = (() => {
     const row = campaignDetail ?? campaign;

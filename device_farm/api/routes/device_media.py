@@ -31,6 +31,20 @@ def _store_snapshot_frame(device, frame: bytes) -> None:
         device._last_frame_time = time.monotonic()
 
 
+def _resize_snapshot_frame(frame: bytes, max_width: int) -> bytes:
+    from PIL import Image
+    import io
+
+    with Image.open(io.BytesIO(frame)) as image:
+        if image.width <= max_width:
+            return frame
+        height = max(1, round(image.height * max_width / image.width))
+        resized = image.resize((max_width, height), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        resized.save(output, format="JPEG", quality=65)
+        return output.getvalue()
+
+
 def build_device_media_router(manager: DeviceManager) -> APIRouter:
     router = APIRouter()
     low_bw_mode = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
@@ -89,6 +103,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         serial: str,
         fresh: bool = False,
         max_age_ms: int | None = None,
+        max_width: int | None = None,
     ):
         device = manager.get_device(serial)
         if not device:
@@ -121,6 +136,12 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 _store_snapshot_frame(device, fresh_frame)
         if not frame:
             return JSONResponse({"error": "No frame available"}, status_code=503)
+        if max_width is not None:
+            preview_width = max(160, min(int(max_width), 800))
+            loop = asyncio.get_running_loop()
+            frame = await loop.run_in_executor(
+                None, _resize_snapshot_frame, frame, preview_width
+            )
         return StreamingResponse(
             iter([frame]),
             media_type="image/jpeg",

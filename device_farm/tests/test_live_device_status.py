@@ -6,6 +6,7 @@ from api.routes.public import (
     _live_device_realtime_aliases,
     _live_device_aliases,
     _match_live_device,
+    _relay_online_for_live_device,
     _synthesize_live_device_from_relay,
 )
 
@@ -89,6 +90,24 @@ def test_live_device_status_revives_dead_device_when_device_transport_is_ready()
     _apply_realtime_connectivity(device, relay_online=False)
 
     assert device["state"] == "READY"
+
+
+def test_live_device_status_marks_relay_required_offline_before_stale_transport_revives_it():
+    for state in ("DEAD", "DISCONNECTED", "CONNECTING"):
+        device = {
+            "serial": "serial-1",
+            "state": state,
+            "agent_connected": True,
+            "u2_ready": True,
+            "touch_method": "u2",
+            "stf_connected": True,
+        }
+
+        _apply_realtime_connectivity(device, relay_online=False, requires_relay=True)
+
+        assert device["state"] == "DISCONNECTED"
+        assert device["touch_method"] == "none"
+        assert device["stf_connected"] is False
 
 
 def test_live_device_status_marks_relay_managed_device_offline_without_agent_boot():
@@ -186,6 +205,14 @@ class _FakeRelayCaps:
         return self._caps_by_serial.get(serial)
 
 
+class _FakeCtrlOnline:
+    def __init__(self, online: set[str]) -> None:
+        self._online = online
+
+    def conn_for_serial(self, serial: str) -> object | None:
+        return object() if serial in self._online else None
+
+
 class _FakeRelayOnline(_FakeRelayCaps):
     def __init__(
         self, online: set[str], caps_by_serial: dict[str, dict[str, object]]
@@ -208,6 +235,29 @@ class _FakeRelayOnline(_FakeRelayCaps):
             for serial in self._online
         ]
 
+
+def test_relay_required_live_status_ignores_control_channel_without_video_relay():
+    relay = _FakeRelayOnline(set(), {})
+    ctrl = _FakeCtrlOnline({"serial-1"})
+
+    assert (
+        _relay_online_for_live_device(
+            "serial-1",
+            relay=relay,
+            ctrl=ctrl,
+            requires_relay=True,
+        )
+        is False
+    )
+    assert (
+        _relay_online_for_live_device(
+            "serial-1",
+            relay=relay,
+            ctrl=ctrl,
+            requires_relay=False,
+        )
+        is True
+    )
 
 def test_live_device_match_uses_hardware_serial_when_wifi_ip_changes():
     allowed_devices = {

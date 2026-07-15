@@ -1,7 +1,7 @@
 import type { Device } from '../types';
 
 const CONTROL_RECORD_CONNECTED_STATES = new Set(['READY', 'ONLINE', 'BUSY']);
-const CONTROL_RECORD_OFFLINE_STATES = new Set(['DISCONNECTED', 'DEAD']);
+const CONTROL_RECORD_TERMINAL_STATES = new Set(['DEAD']);
 
 export function normalizeControlRecordDeviceState(
   state: string | null | undefined
@@ -34,27 +34,52 @@ export function isControlRecordConnectedDevice(
 
 export function resolveControlRecordConnectedDevices(
   devices: Device[],
-  previousConnectedDevices: Device[] = []
+  previousConnectedDevices: Device[] = [],
+  options?: {
+    preserveTerminalSerials?: ReadonlySet<string>;
+  }
 ): Device[] {
   const connected = devices.filter(isControlRecordConnectedDevice);
-  if (connected.length > 0) return connected;
-  if (devices.length === 0) return previousConnectedDevices;
-  if (previousConnectedDevices.length > 0) {
-    const terminalOfflineSerials = new Set(
-      devices
-        .filter((device) =>
-          CONTROL_RECORD_OFFLINE_STATES.has(
-            normalizeControlRecordDeviceState(device.state)
-          )
+  if (previousConnectedDevices.length === 0) return connected;
+
+  const connectedBySerial = new Map(
+    connected.map((device) => [device.serial, device])
+  );
+  const terminalSerials = new Set(
+    devices
+      .filter((device) =>
+        CONTROL_RECORD_TERMINAL_STATES.has(
+          normalizeControlRecordDeviceState(device.state)
         )
-        .map((device) => device.serial)
+      )
+      .map((device) => device.serial)
+  );
+  const resolved = previousConnectedDevices.flatMap((previous) => {
+    const current = connectedBySerial.get(previous.serial);
+    if (current) {
+      connectedBySerial.delete(previous.serial);
+      return [current];
+    }
+    return terminalSerials.has(previous.serial) &&
+      !options?.preserveTerminalSerials?.has(previous.serial)
+      ? []
+      : [previous];
+  });
+
+  return [...resolved, ...Array.from(connectedBySerial.values())];
+}
+
+export function resolveControlRecordSelectedDevice(
+  connectedDevices: Device[],
+  selectedSerial: string | null | undefined
+): Device | null {
+  const explicitSerial = (selectedSerial ?? '').trim();
+  if (explicitSerial) {
+    return (
+      connectedDevices.find((device) => device.serial === explicitSerial) ?? null
     );
-    const stillPlausiblyLive = previousConnectedDevices.filter(
-      (device) => !terminalOfflineSerials.has(device.serial)
-    );
-    if (stillPlausiblyLive.length > 0) return stillPlausiblyLive;
   }
-  return [];
+  return connectedDevices[0] ?? null;
 }
 
 export function shouldShowControlRecordNoDeviceBanner(options: {

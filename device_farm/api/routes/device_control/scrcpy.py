@@ -138,19 +138,6 @@ def _has_control_scrcpy_viewer(viewers: set[str]) -> bool:
     return any(_is_control_viewer(viewer_id) for viewer_id in viewers)
 
 
-def _replace_stale_surface_viewers(viewers: set[str], viewer_id: str) -> int:
-    surface = _scrcpy_viewer_surface(viewer_id)
-    if not surface:
-        return 0
-    before = len(viewers)
-    viewers.difference_update(
-        existing
-        for existing in list(viewers)
-        if existing != viewer_id and _scrcpy_viewer_surface(existing) == surface
-    )
-    return before - len(viewers)
-
-
 def _sync_viewer_requests(serial: str, viewers: set[str]) -> None:
     requests = _SCRCPY_VIEWER_REQUESTS.get(serial)
     if not requests:
@@ -255,14 +242,6 @@ def build_scrcpy_router(
         async with lock:
             viewers = _SCRCPY_VIEWERS.get(serial)
             if viewers is not None:
-                pruned_viewers = _replace_stale_surface_viewers(viewers, viewer_id)
-                if pruned_viewers:
-                    log.info(
-                        "api_scrcpy_attach serial=%s viewer=%s pruned_stale_surface_viewers=%d",
-                        serial,
-                        viewer_id,
-                        pruned_viewers,
-                    )
                 if not viewers:
                     _SCRCPY_VIEWERS.pop(serial, None)
                 _sync_viewer_requests(serial, viewers)
@@ -279,13 +258,7 @@ def build_scrcpy_router(
                     status_code=429,
                 )
             stop_task = _SCRCPY_STOP_TASKS.pop(serial, None)
-            stop_viewer_id = _SCRCPY_STOP_VIEWERS.pop(serial, None)
-            control_detach_grace_active = bool(
-                stop_task
-                and not stop_task.done()
-                and stop_viewer_id
-                and _is_control_viewer(stop_viewer_id)
-            )
+            _SCRCPY_STOP_VIEWERS.pop(serial, None)
             if stop_task and not stop_task.done():
                 stop_task.cancel()
             viewers = _SCRCPY_VIEWERS.setdefault(serial, set())
@@ -311,9 +284,6 @@ def build_scrcpy_router(
             ) or (
                 scrcpy_active
                 and not is_control_viewer
-                and not (
-                    control_detach_grace_active and _is_preview_viewer(viewer_id)
-                )
                 and not has_control_viewer
                 and _has_limited_profile_request(body)
                 and not _scrcpy_profile_matches_request(device, body)
@@ -451,7 +421,7 @@ def build_scrcpy_router(
             _SCRCPY_STOP_VIEWERS.pop(serial, None)
             if existing_stop and not existing_stop.done():
                 existing_stop.cancel()
-            if scrcpy_detach_grace_s <= 0:
+            if scrcpy_detach_grace_s <= 0 or _is_preview_viewer(viewer_id):
                 device.detach_scrcpy_stream(reason=f"api_scrcpy_detach:{viewer_id}")
                 await _persist_scrcpy_enabled(serial, False)
             else:

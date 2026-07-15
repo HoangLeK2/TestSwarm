@@ -67,6 +67,8 @@ class FleetDeviceRow:
     device_serial: str
     adb_serial: str | None
     relay_serial: str | None
+    adb_ip: str | None
+    adb_port: int
     name: str
     state: str
     group_ids: list[str]
@@ -364,6 +366,8 @@ async def query_fleet_devices(
             device_serial=str(device.device_serial or device.serial),
             adb_serial=device.adb_serial,
             relay_serial=device.relay_serial,
+            adb_ip=device.adb_ip,
+            adb_port=int(device.adb_port or 5555),
             name=device.name or "",
             state=state,
             group_ids=groups.get(str(device.id), []),

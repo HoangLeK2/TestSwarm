@@ -53,6 +53,11 @@ from db.crud.device_state import get_device_state, get_device_states_map
 from db.models.enums import DeviceFsmState
 from services.device_state.exceptions import IllegalDeviceTransitionError
 from services.device_state.service import ApplyOutcome, DeviceStateService
+from services.agent_boot_presence import (
+    AgentBootPresence,
+    agent_boot_presence_for_device,
+    device_requires_agent_boot,
+)
 from services import pairing as _pairing_mod
 from web.metrics import fleet_stats_duration_seconds, fleet_stats_requests_total
 
@@ -273,6 +278,30 @@ async def list_devices(
     relay_serial: str | None = Query(default=None),
 ):
     org_id = getattr(user, "org_id", None)
+    ctrl = _get_ctrl_servicer_optional()
+    agent_boot_presence_cache: dict[str, AgentBootPresence] = {}
+
+    def _presence_for(device):
+        key = str(
+            getattr(device, "id", None)
+            or getattr(device, "db_id", None)
+            or getattr(device, "serial", None)
+            or getattr(device, "device_serial", None)
+            or ""
+        )
+        if not key:
+            return agent_boot_presence_for_device(ctrl, device)
+        if key not in agent_boot_presence_cache:
+            agent_boot_presence_cache[key] = agent_boot_presence_for_device(ctrl, device)
+        return agent_boot_presence_cache[key]
+
+    def _agent_boot_authoritative_state(device, current_state: str) -> str:
+        if ctrl is None or not device_requires_agent_boot(device):
+            return current_state
+        if not _presence_for(device).reported:
+            return DeviceFsmState.DEAD.value
+        return current_state
+
     fleet_mode = any(
         value is not None
         for value in (
@@ -332,15 +361,19 @@ async def list_devices(
             group_id,
             q,
         )
-        return FleetDeviceListOut(
-            items=[
+        items: list[FleetDeviceItemOut] = []
+        for row in page.items:
+            effective_state = row.state if state else _agent_boot_authoritative_state(row, row.state)
+            items.append(
                 FleetDeviceItemOut(
                     db_id=row.db_id,
                     device_serial=row.device_serial,
                     adb_serial=row.adb_serial,
                     relay_serial=row.relay_serial,
+                    adb_ip=row.adb_ip,
+                    adb_port=row.adb_port,
                     name=row.name,
-                    state=row.state,
+                    state=effective_state,
                     group_ids=row.group_ids,
                     current_session_id=row.current_session_id,
                     owner_type=row.owner_type,
@@ -349,8 +382,9 @@ async def list_devices(
                     model=row.model,
                     android_version=row.android_version,
                 )
-                for row in page.items
-            ],
+            )
+        return FleetDeviceListOut(
+            items=items,
             next_cursor=page.next_cursor,
             total=page.total,
         )
@@ -359,29 +393,18 @@ async def list_devices(
         db, org_id=org_id, user_id=data_owner_user_id(user)
     )
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
-    ctrl = _get_ctrl_servicer_optional()
 
     def _resolve_relay_id(device) -> str | None:
-        # Source of truth: control channel registered by agent-boot.
-        # Do not rely on local ADB availability inside API container.
+        # Source of truth for relay-managed devices: agent-boot control channel.
         if ctrl is not None and not str(getattr(device, "serial", "")).startswith("pending-"):
-            if ctrl.conn_for_serial(device.serial):
-                conn = ctrl.conn_for_serial(device.serial)
-                if conn is not None:
-                    return conn.relay_id
-            if getattr(device, "adb_ip", None):
-                tcp_serial = f"{device.adb_ip}:{getattr(device, 'adb_port', 5555)}"
-                conn = ctrl.conn_for_serial(tcp_serial)
-                if conn is not None:
-                    return conn.relay_id
-                matched = ctrl.find_serial_by_ip(device.adb_ip)
-                if matched:
-                    conn = ctrl.conn_for_serial(matched)
-                    if conn is not None:
-                        return conn.relay_id
+            presence = _presence_for(device)
+            if presence.relay_id:
+                return presence.relay_id
+            if device_requires_agent_boot(device):
+                return None
 
-        # Fallback for WS logical device view when ctrl serial is not yet indexed.
-        if manager is None:
+        # Fallback for non relay-managed WS logical device view.
+        if device_requires_agent_boot(device) or manager is None:
             return None
         runtime_device = manager.get_device(getattr(device, "serial", ""))
         if runtime_device is None:
@@ -398,14 +421,6 @@ async def list_devices(
                 conn = relay.relay_for_serial(adb_serial)
                 if conn is not None:
                     return conn.relay_id
-
-            # Fallback for WS devices that are online but have not copied _adb_serial yet.
-            # If there is exactly one active relay, pin to that relay so dashboard
-            # does not show a false blank state.
-            if getattr(runtime_device, "_agent_send", None) is not None:
-                relay_ids = list((relay.registered_relays() or {}).keys())
-                if len(relay_ids) == 1:
-                    return relay_ids[0]
             return None
         except Exception:
             return None
@@ -424,16 +439,17 @@ async def list_devices(
 
     states_map = await get_device_states_map(db, [d.id for d in devices])
 
-    def _state_for(device_id: str, smap: dict) -> str:
-        row = smap.get(device_id)
-        return row.state if row else DeviceFsmState.UNKNOWN.value
+    def _state_for(device, smap: dict) -> str:
+        row = smap.get(device.id)
+        state = row.state if row else DeviceFsmState.UNKNOWN.value
+        return _agent_boot_authoritative_state(device, state)
 
     return [
         _to_out(
             d,
             relay_id=_resolve_relay_id(d),
             adb_serial=_resolve_runtime_adb_serial(d),
-            state=_state_for(d.id, states_map),
+            state=_state_for(d, states_map),
         )
         for d in devices
     ]

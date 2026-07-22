@@ -564,32 +564,55 @@ async def _maybe_open_fb_post_detail(
     note_fb_group_navigation(context, feed_xml)
 
     if hierarchy_is_fb_post_detail_from_xml(feed_xml):
-        probe_posts: list[dict[str, Any]] = []
-        probe_started = time.monotonic()
-        try:
-            from relay.extra_data.parsers.facebook.feed_pipeline import (
-                parse_fb_posts_from_xml_with_diagnostic,
-            )
-
-            probe_posts, _ = parse_fb_posts_from_xml_with_diagnostic(feed_xml)
-        except Exception:
-            probe_posts = []
-        _add_timing("already_detail_probe_ms", _elapsed_ms(probe_started))
-        if len(probe_posts) >= 2:
-            logger.info(
-                "[%s] open_post_before_extract: post-detail heuristic false positive (%d feed posts)",
+        if not _bool_context(context, "open_post_reuse_current_detail", False):
+            backed = await _press_back_unless_group_locked(
+                executor,
                 serial,
-                len(probe_posts),
+                context,
+                xml=feed_xml,
+                reason="stale_post_detail_before_open",
             )
+            if not backed:
+                return None, _finish_diagnostic({
+                    "reason_code": "stale_post_detail_requires_feed",
+                    "message": "current detail screen was not reused; could not return to feed",
+                })
+            refreshed_feed_xml = await _dump_hierarchy(executor, serial, context)
+            if not refreshed_feed_xml or hierarchy_is_fb_post_detail_from_xml(refreshed_feed_xml):
+                return None, _finish_diagnostic({
+                    "reason_code": "stale_post_detail_requires_feed",
+                    "message": "current detail screen was not replaced by a fresh feed hierarchy",
+                })
+            feed_xml = refreshed_feed_xml
+            context["post_open_feed_refreshed"] = True
+            note_fb_group_navigation(context, feed_xml)
         else:
-            logger.info("[%s] open_post_before_extract: already on post detail", serial)
-            context["open_post_detail"] = True
-            diagnostic: dict[str, Any] = {"reason_code": "already_on_post_detail"}
-            if len(probe_posts) == 1:
-                opened_post = _opened_post_payload_from_post(probe_posts[0])
-                if opened_post:
-                    diagnostic["opened_post"] = opened_post
-            return feed_xml, _finish_diagnostic(diagnostic)
+            probe_posts: list[dict[str, Any]] = []
+            probe_started = time.monotonic()
+            try:
+                from relay.extra_data.parsers.facebook.feed_pipeline import (
+                    parse_fb_posts_from_xml_with_diagnostic,
+                )
+
+                probe_posts, _ = parse_fb_posts_from_xml_with_diagnostic(feed_xml)
+            except Exception:
+                probe_posts = []
+            _add_timing("already_detail_probe_ms", _elapsed_ms(probe_started))
+            if len(probe_posts) >= 2:
+                logger.info(
+                    "[%s] open_post_before_extract: post-detail heuristic false positive (%d feed posts)",
+                    serial,
+                    len(probe_posts),
+                )
+            else:
+                logger.info("[%s] open_post_before_extract: reusing explicitly allowed post detail", serial)
+                context["open_post_detail"] = True
+                diagnostic = {"reason_code": "already_on_post_detail"}
+                if len(probe_posts) == 1:
+                    opened_post = _opened_post_payload_from_post(probe_posts[0])
+                    if opened_post:
+                        diagnostic["opened_post"] = opened_post
+                return feed_xml, _finish_diagnostic(diagnostic)
 
     locked_post_key = str(context.get("post_key") or "").strip() or None
     exclude_post_anchors = context.get("open_post_exclude_anchors")
@@ -774,30 +797,11 @@ async def _maybe_open_fb_post_detail(
             )
             return (detail_xml or feed_xml), _finish_diagnostic(diagnostic)
         overlay_reason = detect_transient_overlay_from_xml(detail_xml) if detail_xml else None
-        # Verify heuristic missed detail chrome but tap may still have navigated — keep post-tap XML.
-        # Do not treat profile/photo overlays as post detail; in group flows a system BACK can
-        # leave the group, so let the attempt fail or try the next target without changing state.
+        # A changed hierarchy alone is not proof that the requested post opened.
+        # Parsing it would save stale/feed data under the active parent.
         wallpaper_body_miss = bool(
             target.get("gradient_wallpaper") and target.get("tap_kind") == "post_body"
         )
-        if detail_xml and detail_xml != feed_xml and not wallpaper_body_miss and not overlay_reason:
-            logger.info(
-                "[%s] open_post_before_extract: verify miss but hierarchy changed — using post-tap xml",
-                serial,
-            )
-            context["open_post_detail"] = True
-            context["open_post_detail_tap_kind"] = target.get("tap_kind")
-            diagnostic = {
-                "reason_code": "unverified_hierarchy_changed",
-                "attempts": attempts,
-                "tap_kind": target.get("tap_kind"),
-                "candidate_count": len(candidates),
-                "attempt_target_count": len(attempt_targets),
-            }
-            opened_post = _opened_post_payload_from_target(target)
-            if opened_post:
-                diagnostic["opened_post"] = opened_post
-            return detail_xml, _finish_diagnostic(diagnostic)
         if wallpaper_body_miss:
             attempts[-1]["verified"] = False
             attempts[-1]["reason"] = "wallpaper_body_no_detail"
@@ -3008,6 +3012,17 @@ async def collect_xml_snapshots(
                 xml = await _dump_hierarchy(executor, serial, context)
             if not xml:
                 return [], "u2_hierarchy_unavailable"
+
+            if (
+                strategy in _COMMENT_STRATEGIES
+                and _bool_context(context, "require_verified_parent", False)
+                and not _diag_sheet_opened(xml)
+            ):
+                logger.warning(
+                    "[%s] extra_data comment extract blocked: verified comment sheet is not open",
+                    serial,
+                )
+                return [], "comment_sheet_not_open"
 
             from relay.extra_data.parsers.facebook.comment_pipeline import (
                 note_fb_group_navigation,

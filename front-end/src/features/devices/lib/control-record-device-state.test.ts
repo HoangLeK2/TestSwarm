@@ -259,10 +259,7 @@ test('resolveControlRecordSelectedDevice never falls through to another device f
     screen_height: 1920
   };
 
-  assert.equal(
-    resolveControlRecordSelectedDevice([fallback], 'target'),
-    null
-  );
+  assert.equal(resolveControlRecordSelectedDevice([fallback], 'target'), null);
   assert.equal(
     resolveControlRecordSelectedDevice([fallback], null)?.serial,
     'fallback'

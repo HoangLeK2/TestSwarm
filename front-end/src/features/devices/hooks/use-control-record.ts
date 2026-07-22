@@ -237,9 +237,7 @@ export function useControlRecord(
     (selectedSerial ?? initialSerial ?? '').trim() || null;
   const preserveTerminalSerials = useMemo(() => {
     if (!requestedSerial) return undefined;
-    const current = devices.find(
-      (device) => device.serial === requestedSerial
-    );
+    const current = devices.find((device) => device.serial === requestedSerial);
     if (current && isControlRecordConnectedDevice(current)) return undefined;
     const lastConnectedAt =
       lastConnectedAtBySerialRef.current.get(requestedSerial);

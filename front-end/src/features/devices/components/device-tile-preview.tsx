@@ -61,13 +61,15 @@ const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
 interface DeviceTilePreviewProps {
   device: Device;
   onOpenSteps?: (serial: string) => void;
+  previewEnabled?: boolean;
 }
 
 type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
 
 function DeviceTilePreviewInner({
   device,
-  onOpenSteps
+  onOpenSteps,
+  previewEnabled = true
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -135,7 +137,9 @@ function DeviceTilePreviewInner({
   }, [inView]);
 
   const loadStream =
-    tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
+    previewEnabled &&
+    tabActive &&
+    (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
   const shouldUseH264Preview = GRID_PREVIEW_H264 && isActive && loadStream;
   const shouldWarmupPreview = isActive && loadStream;
   const h264PreviewActive =
@@ -417,9 +421,13 @@ function DeviceTilePreviewInner({
                   </div>
                 ) : !loadStream ? (
                   <div className='absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-zinc-800 to-zinc-950 px-2 text-center'>
-                    <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400/70 border-t-transparent' />
+                    {previewEnabled ? (
+                      <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400/70 border-t-transparent' />
+                    ) : null}
                     <p className='text-[10px] text-muted-foreground'>
-                      {t('previewScrollToLoad')}
+                      {previewEnabled
+                        ? t('previewScrollToLoad')
+                        : t('previewDeferred')}
                     </p>
                   </div>
                 ) : (
@@ -465,6 +473,7 @@ function tilePreviewPropsEqual(
 ) {
   if (prev.device.serial !== next.device.serial) return false;
   if (prev.onOpenSteps !== next.onOpenSteps) return false;
+  if (prev.previewEnabled !== next.previewEnabled) return false;
   const pd = prev.device;
   const nd = next.device;
   return (

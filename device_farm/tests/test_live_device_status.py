@@ -136,6 +136,22 @@ def test_live_device_status_keeps_relay_managed_device_online_when_agent_boot_co
     assert device["state"] == "READY"
 
 
+def test_live_device_status_keeps_relay_managed_device_online_from_control_authority():
+    device = {
+        "serial": "serial-1",
+        "state": "DISCONNECTED",
+        "agent_connected": False,
+        "u2_ready": False,
+        "touch_method": "none",
+        "stf_connected": False,
+    }
+
+    _apply_realtime_connectivity(device, relay_online=True, requires_relay=True)
+
+    assert device["state"] == "READY"
+    assert device["agent_connected"] is True
+
+
 def test_live_device_status_promotes_connecting_relay_device_when_agent_boot_connected():
     device = {
         "serial": "serial-1",
@@ -236,7 +252,7 @@ class _FakeRelayOnline(_FakeRelayCaps):
         ]
 
 
-def test_relay_required_live_status_ignores_control_channel_without_video_relay():
+def test_relay_required_live_status_uses_agent_boot_control_channel():
     relay = _FakeRelayOnline(set(), {})
     ctrl = _FakeCtrlOnline({"serial-1"})
 
@@ -247,7 +263,7 @@ def test_relay_required_live_status_ignores_control_channel_without_video_relay(
             ctrl=ctrl,
             requires_relay=True,
         )
-        is False
+        is True
     )
     assert (
         _relay_online_for_live_device(

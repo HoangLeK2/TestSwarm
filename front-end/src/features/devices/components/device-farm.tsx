@@ -26,7 +26,8 @@ import {
   DEVICE_GRID_TILE_WIDTH_PX,
   getDeviceGridColumnCount,
   getDeviceGridRowBounds,
-  getDeviceGridRowCount
+  getDeviceGridRowCount,
+  shouldLoadDeviceGridPreview
 } from '../lib/device-farm-virtual-grid';
 
 const DEFAULT_GRID_PAGE_SIZE = (() => {
@@ -52,7 +53,9 @@ export function DeviceFarm() {
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [stepsSerial, setStepsSerial] = useState<string | null>(null);
 
-  const { devices, tasks, wsConnected, error } = useDeviceFarm();
+  const { devices, tasks, wsConnected, error } = useDeviceFarm({
+    liveSnapshotAuthoritative: true
+  });
 
   const activeDevices = useMemo(
     () => devices.filter(isVisibleDeviceFarmActiveDevice),
@@ -241,13 +244,19 @@ export function DeviceFarm() {
                       contain: 'layout paint'
                     }}
                   >
-                    {pageDevices.slice(start, end).map((device) => (
-                      <DeviceTilePreview
-                        key={device.serial}
-                        device={device}
-                        onOpenSteps={openStepsMonitor}
-                      />
-                    ))}
+                    {pageDevices.slice(start, end).map((device, offset) => {
+                      const pageDeviceIndex = start + offset;
+                      return (
+                        <DeviceTilePreview
+                          key={device.serial}
+                          device={device}
+                          onOpenSteps={openStepsMonitor}
+                          previewEnabled={shouldLoadDeviceGridPreview(
+                            pageDeviceIndex
+                          )}
+                        />
+                      );
+                    })}
                   </div>
                 );
               })}

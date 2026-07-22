@@ -49,10 +49,6 @@ export function mergeLiveDeviceSnapshot(
       live
     )
   );
-  const missingStillLive = previousDevices.filter((previous) => {
-    if (isExplicitlyOffline(previous)) return false;
-    return !liveDevices.some((live) => hasSharedDeviceKey(previous, live));
-  });
 
-  return [...merged, ...missingStillLive];
+  return merged;
 }

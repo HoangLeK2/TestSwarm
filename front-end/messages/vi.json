@@ -2974,6 +2974,7 @@
     "previewDisabledByServer": "Tắt preview lưới (cấu hình server)",
     "previewSaveBandwidth": "Đang tắt preview — tắt “Tiết kiệm băng thông” phía trên để tải",
     "previewScrollToLoad": "Cuộn tới đây để tải preview",
+    "previewDeferred": "Preview tạm hoãn để giảm tải",
     "noConnectedDevices": "Chưa có thiết bị nào kết nối",
     "noConnectedDevicesHint": "Server trên cloud: thiết bị chủ động kết nối lên server. Mở app Chức năng thiết bị → dán link (hoặc quét QR). Nhiều thiết bị có thể kết nối cùng lúc.",
     "allDevicesOffline": "Tất cả thiết bị đang ngoại tuyến",

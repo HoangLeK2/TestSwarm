@@ -2104,6 +2104,40 @@ async def test_open_post_verify_failed_on_group_feed_no_back() -> None:
 
 
 @pytest.mark.asyncio
+async def test_open_post_rejects_changed_but_unverified_hierarchy() -> None:
+    """A different XML tree is not enough evidence that the requested post opened."""
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy><node text="feed-post" bounds="[0,200][1080,2200]"/></hierarchy>"""
+    changed_feed_xml = """<?xml version="1.0"?>
+<hierarchy><node text="different-feed-post" bounds="[0,200][1080,2200]"/></hierarchy>"""
+    exec_._dump_xml = changed_feed_xml
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+    }
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        return_value=False,
+    ), patch(
+        "relay.extra_data.parsers.facebook.comment_pipeline.should_press_back_after_failed_tap",
+        return_value=False,
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml is None
+    assert diag["reason_code"] == "post_open_verify_failed"
+    assert ctx.get("open_post_detail") is not True
+
+
+@pytest.mark.asyncio
 async def test_open_post_target_not_found_reports_timing_diagnostic() -> None:
     exec_ = _SessionFakeExecutor()
     feed_xml = """<?xml version="1.0"?>
@@ -2111,7 +2145,7 @@ async def test_open_post_target_not_found_reports_timing_diagnostic() -> None:
   <node text="Nhóm công khai" bounds="[0,0][1080,100]"/>
   <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]"/>
 </hierarchy>"""
-    ctx: dict = {"open_post_before_extract": True}
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
     with patch(
         "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
         return_value=(None, []),
@@ -2444,10 +2478,29 @@ async def test_collect_fb_posts_keeps_feed_snapshot_when_opening_detail() -> Non
 
 
 @pytest.mark.asyncio
+async def test_collect_comments_requires_verified_comment_sheet() -> None:
+    exec_ = _FakeExecutor(
+        xml='<hierarchy><node text="old post detail"/></hierarchy>'
+    )
+    ctx: dict = {
+        "require_verified_parent": True,
+        "comment_scroll_passes": 0,
+    }
+
+    snapshots, err = await collect_xml_snapshots(exec_, "dev1", "fb_comments", ctx)
+
+    assert snapshots == []
+    assert err == "comment_sheet_not_open"
+
+
+@pytest.mark.asyncio
 async def test_open_post_already_on_detail_avoids_extra_post_parse() -> None:
     exec_ = _SessionFakeExecutor()
     detail_xml = '<hierarchy><node text="detail"/></hierarchy>'
-    ctx: dict = {"open_post_before_extract": True}
+    ctx: dict = {
+        "open_post_before_extract": True,
+        "open_post_reuse_current_detail": True,
+    }
 
     with patch(
         "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
@@ -2464,6 +2517,26 @@ async def test_open_post_already_on_detail_avoids_extra_post_parse() -> None:
     assert diag["reason_code"] == "already_on_post_detail"
     assert "opened_post" not in diag
     parser_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_open_post_does_not_reuse_stale_detail_by_default() -> None:
+    exec_ = _SessionFakeExecutor()
+    detail_xml = '<hierarchy><node text="old-detail"/></hierarchy>'
+    ctx: dict = {"open_post_before_extract": True}
+
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        return_value=True,
+    ):
+        opened_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, detail_xml
+        )
+
+    assert opened_xml is None
+    assert diag["reason_code"] == "stale_post_detail_requires_feed"
+    assert exec_.press_back_calls == 1
+    assert ctx.get("open_post_detail") is not True
 
 
 @pytest.mark.asyncio

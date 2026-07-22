@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
+  filterRelayAgentsWithVisibleDevices,
   getRelayConnectionState,
   getVisibleRelaySerials,
   isRelayOperational,
@@ -122,5 +123,30 @@ test('getVisibleRelaySerials returns serials only when connected', () => {
       disconnected_at: new Date(now).toISOString()
     }),
     []
+  );
+});
+
+test('filterRelayAgentsWithVisibleDevices hides connected hosts with no devices', () => {
+  const now = Date.now();
+  const base = {
+    hostname: 'host',
+    ip: '127.0.0.1',
+    version: '1',
+    status: 'online' as const,
+    live_connected: true,
+    connected_at: new Date(now - 120_000).toISOString(),
+    last_heartbeat_at: new Date(now - 5_000).toISOString(),
+    disconnected_at: null
+  };
+
+  const result = filterRelayAgentsWithVisibleDevices([
+    { ...base, relay_id: 'empty-host', serials: [] },
+    { ...base, relay_id: 'pending-host', serials: ['pending-1'] },
+    { ...base, relay_id: 'phone-host', serials: ['10AE7S00HD002JK'] }
+  ]);
+
+  assert.deepEqual(
+    result.map((agent) => agent.relay_id),
+    ['phone-host']
   );
 });

@@ -28,9 +28,18 @@ function hasLiveTransportEvidence(device: DeviceWithLiveTransport): boolean {
   );
 }
 
+function hasStrongLiveTransportEvidence(
+  device: DeviceWithLiveTransport
+): boolean {
+  return Boolean(device.agent_connected || device.stf_connected);
+}
+
 export function isVisibleDeviceFarmActiveDevice(device: Device): boolean {
-  if (hasLiveTransportEvidence(device)) return true;
   const state = normalizeDeviceFarmState(device.state);
+  if (OFFLINE_DEVICE_STATES.has(state)) {
+    return hasStrongLiveTransportEvidence(device);
+  }
+  if (hasLiveTransportEvidence(device)) return true;
   return Boolean(state) && !OFFLINE_DEVICE_STATES.has(state);
 }
 

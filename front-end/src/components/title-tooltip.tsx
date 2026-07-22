@@ -51,16 +51,27 @@ export function TitleTooltip({
       <div className={cn(titleClassName)}>{title}</div>
       <TooltipProvider delayDuration={delayDuration}>
         <UITooltip>
-          <TooltipTrigger
-            type='button'
-            className={cn('inline-flex items-center', className)}
-          >
-            {children ||
-              (showIcon && (
-                <Info
-                  className={cn('h-4 w-4 text-muted-foreground', iconClassName)}
-                />
-              ))}
+          <TooltipTrigger asChild>
+            {children ?? (
+              <span
+                className={cn(
+                  'inline-flex cursor-help items-center',
+                  className
+                )}
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                {showIcon ? (
+                  <Info
+                    className={cn(
+                      'h-4 w-4 text-muted-foreground',
+                      iconClassName
+                    )}
+                    aria-hidden
+                  />
+                ) : null}
+              </span>
+            )}
           </TooltipTrigger>
           <TooltipContent
             side={side}

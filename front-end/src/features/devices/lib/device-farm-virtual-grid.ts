@@ -1,6 +1,13 @@
 export const DEVICE_GRID_TILE_WIDTH_PX = 288;
 export const DEVICE_GRID_GAP_PX = 16;
 export const DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX = 570;
+export const DEVICE_GRID_ACTIVE_PREVIEW_LIMIT = (() => {
+  const raw = Number(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_ACTIVE_PREVIEW_LIMIT ?? 4
+  );
+  if (!Number.isFinite(raw)) return 4;
+  return Math.max(0, Math.min(12, Math.round(raw)));
+})();
 
 export function getDeviceGridColumnCount(
   containerWidth: number,
@@ -42,4 +49,13 @@ export function getDeviceGridRowBounds(
     start,
     end: Math.min(safeItemCount, start + safeColumnCount)
   };
+}
+
+export function shouldLoadDeviceGridPreview(
+  pageDeviceIndex: number,
+  limit = DEVICE_GRID_ACTIVE_PREVIEW_LIMIT
+): boolean {
+  const safeIndex = Math.max(0, Math.floor(pageDeviceIndex));
+  const safeLimit = Math.max(0, Math.floor(limit));
+  return safeIndex < safeLimit;
 }

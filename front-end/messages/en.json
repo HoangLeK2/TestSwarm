@@ -2970,6 +2970,7 @@
     "previewDisabledByServer": "Grid preview off (server config)",
     "previewSaveBandwidth": "Preview off — disable “Save bandwidth” above to load",
     "previewScrollToLoad": "Scroll here to load preview",
+    "previewDeferred": "Preview paused to reduce load",
     "noConnectedDevices": "No connected devices",
     "noConnectedDevicesHint": "Cloud server mode: devices actively connect to server. Open STFService app → paste link (or scan QR). Multiple devices can connect at once.",
     "allDevicesOffline": "All devices are offline",

@@ -76,7 +76,8 @@ export function resolveControlRecordSelectedDevice(
   const explicitSerial = (selectedSerial ?? '').trim();
   if (explicitSerial) {
     return (
-      connectedDevices.find((device) => device.serial === explicitSerial) ?? null
+      connectedDevices.find((device) => device.serial === explicitSerial) ??
+      null
     );
   }
   return connectedDevices[0] ?? null;

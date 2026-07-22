@@ -58,6 +58,12 @@ export function getVisibleRelaySerials(
   return agent.serials.filter((s) => s && !s.startsWith('pending-'));
 }
 
+export function filterRelayAgentsWithVisibleDevices(
+  agents: RelayAgentOut[]
+): RelayAgentOut[] {
+  return agents.filter((agent) => getVisibleRelaySerials(agent).length > 0);
+}
+
 export function hasOperationalRelayAgent(agents: RelayAgentOut[]): boolean {
   return agents.some((agent) => relayLiveConnected(agent));
 }

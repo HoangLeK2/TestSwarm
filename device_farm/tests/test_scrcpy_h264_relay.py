@@ -20,7 +20,12 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from runtime.transports.scrcpy_receiver import ScrcpyReceiver, _is_idr, PTS_CONFIG_MASK
+from runtime.transports.scrcpy_receiver import (
+    PTS_CONFIG_MASK,
+    RelayScrcpyReceiver,
+    ScrcpyReceiver,
+    _is_idr,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -168,6 +173,28 @@ class TestScrcpyReceiverCallbacks:
         r = _make_receiver(on_h264_packet=MagicMock(), on_h264_config=MagicMock())
         assert r.on_h264_packet is not None
         assert r.on_h264_config is not None
+
+
+class TestRelayJpegDemand:
+    def test_relay_decodes_jpeg_only_during_an_active_request_window(self):
+        receiver = RelayScrcpyReceiver(
+            serial="relay-demand",
+            on_frame=MagicMock(),
+            on_h264_packet=MagicMock(),
+        )
+        receiver._last_config = b"avcc-config"
+        receiver._event_loop = MagicMock()
+
+        try:
+            receiver._handle_video(b"p-frame", pts_us=1, hint_is_key=False)
+            receiver._event_loop.run_in_executor.assert_not_called()
+
+            receiver.request_jpeg_frames(duration_s=1.0)
+            receiver._handle_video(b"idr-frame", pts_us=2, hint_is_key=True)
+
+            receiver._event_loop.run_in_executor.assert_called_once()
+        finally:
+            receiver.stop_receiver()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

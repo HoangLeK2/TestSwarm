@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import web.ws as ws_module
 from web.ws import WebSocketManager
+from runtime.core.device_client import LatestFrameStore
 
 
 def _h264_cfg(serial: str) -> bytes:
@@ -59,16 +60,11 @@ class _FakeDevice:
         return []
 
     def get_stream_bootstrap(self, *_args, **_kwargs):
-        return None, None
+        return _h264_cfg(self.serial), _h264_key(self.serial)
 
-    def subscribe_frames(self, q: asyncio.Queue) -> None:
+    def subscribe_frames(self, q: asyncio.Queue, **_kwargs):
         self._q = q
-        # Provide a config + key immediately so the sender has bytes to forward.
-        try:
-            q.put_nowait(_h264_cfg(self.serial))
-            q.put_nowait(_h264_key(self.serial))
-        except Exception:
-            pass
+        return self.get_stream_bootstrap()
 
     def unsubscribe_frames(self, q: asyncio.Queue) -> None:
         if self._q is q:
@@ -107,6 +103,18 @@ class _PingThenDisconnectWebSocket:
         self.sent.append(msg)
 
 
+class _MessagesThenDisconnectWebSocket:
+    def __init__(self, messages: list[dict]) -> None:
+        self.state = SimpleNamespace()
+        self._messages = iter(messages)
+
+    async def receive_json(self) -> dict:
+        try:
+            return next(self._messages)
+        except StopIteration:
+            raise WebSocketDisconnect() from None
+
+
 class _BootstrapFailOnceWebSocket:
     def __init__(self) -> None:
         self.sent: list[bytes] = []
@@ -117,6 +125,23 @@ class _BootstrapFailOnceWebSocket:
             self._failed = True
             raise RuntimeError("bootstrap send failed")
         self.sent.append(data)
+
+
+class _CollectingWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent.append(data)
+
+
+class _CountingScrcpyControl:
+    def __init__(self) -> None:
+        self.idr_requests = 0
+
+    def request_idr(self) -> bool:
+        self.idr_requests += 1
+        return True
 
 
 def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
@@ -183,6 +208,10 @@ async def test_device_sender_keeps_live_subscription_when_bootstrap_send_fails()
         def get_stream_bootstrap(self, *_args, **_kwargs):
             return _h264_cfg(self.serial), None
 
+        def subscribe_frames(self, q: asyncio.Queue) -> None:
+            super().subscribe_frames(q)
+            q.put_nowait(_h264_key(self.serial))
+
     dev = BootstrapDevice(serial="SN_BOOT")
     ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
     ws = _BootstrapFailOnceWebSocket()
@@ -201,6 +230,82 @@ async def test_device_sender_keeps_live_subscription_when_bootstrap_send_fails()
             await task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_device_sender_sends_cached_bootstrap_once_without_forcing_idr():
+    class BootstrapDevice(_FakeDevice):
+        def get_stream_bootstrap(self, *_args, **_kwargs):
+            return _h264_cfg(self.serial), _h264_key(self.serial)
+
+    control = _CountingScrcpyControl()
+    dev = BootstrapDevice(serial="SN_BOOT_ONCE")
+    dev._scrcpy_receiver = SimpleNamespace(control=control)
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
+    ws = _CollectingWebSocket()
+    task = asyncio.create_task(ws_manager._device_sender(ws, dev, asyncio.Lock()))
+
+    try:
+        for _ in range(20):
+            if len(ws.sent) >= 4:
+                break
+            await asyncio.sleep(0.01)
+
+        assert ws.sent == [
+            _h264_cfg(dev.serial),
+            _h264_key(dev.serial),
+        ]
+        assert control.idr_requests == 0
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+def test_stream_bootstrap_invalidates_key_when_config_generation_changes():
+    store = LatestFrameStore()
+    store.set_config(b"config-a")
+    store.set_frame(b"key-a", is_key=True)
+    assert store.get_bootstrap() == (b"config-a", b"key-a")
+
+    store.set_config(b"config-b")
+
+    assert store.get_bootstrap() == (b"config-b", None)
+
+
+def test_stream_bootstrap_does_not_reuse_key_across_same_config_generation():
+    store = LatestFrameStore()
+    store.set_config(b"same-config")
+    store.set_frame(b"old-session-key", is_key=True)
+
+    store.reset_bootstrap()
+    store.set_config(b"same-config")
+
+    assert store.get_bootstrap() == (b"same-config", None)
+
+
+@pytest.mark.asyncio
+async def test_ws_receiver_coalesces_burst_idr_requests_per_device():
+    control = _CountingScrcpyControl()
+    dev = _FakeDevice(serial="SN_IDR")
+    dev._scrcpy_receiver = SimpleNamespace(control=control)
+    ws_manager = WebSocketManager(
+        _FakeManager([dev]), db_enabled=False, read_only=False
+    )
+    ws = _MessagesThenDisconnectWebSocket(
+        [
+            {"type": "request_idr", "serial": dev.serial},
+            {"type": "request_idr", "serial": dev.serial},
+        ]
+    )
+
+    await ws_manager._receiver(ws, asyncio.Lock())
+    for _ in range(20):
+        if control.idr_requests:
+            break
+        await asyncio.sleep(0.01)
+
+    assert control.idr_requests == 1
 
 
 @pytest.mark.asyncio

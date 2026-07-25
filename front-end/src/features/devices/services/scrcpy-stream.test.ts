@@ -32,6 +32,10 @@ test('control screen attach invalidates cached H264 bootstrap frames', async () 
     stream.shouldClearH264CacheBeforeScrcpyAttach('device-screen:viewer-1'),
     true
   );
+  assert.equal(
+    stream.shouldClearH264CacheBeforeScrcpyAttach('control-screen:viewer-2'),
+    true
+  );
 });
 
 test('snapshot preview attach keeps cached H264 bootstrap frames', async () => {

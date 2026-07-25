@@ -27,14 +27,18 @@ import { Badge } from '@/components/ui/badge';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   attachScrcpyStream,
-  createScrcpyViewerId,
   detachScrcpyStream,
   isRecoverableScrcpyAttachError,
   scrcpyAttachErrorMessage,
   type ScrcpyAttachOptions
 } from '../services/scrcpy-stream';
 import {
+  createScrcpyViewerSession,
+  type ScrcpyViewerRole
+} from '../services/scrcpy-viewer-session';
+import {
   H264_INPUT_REFRESH_MIN_INTERVAL_MS,
+  H264_INPUT_REFRESH_WAIT_MS,
   shouldRequestH264RefreshAfterInput
 } from '../lib/h264-input-refresh';
 
@@ -47,7 +51,6 @@ const SCRCPY_ATTACH_RETRY_MS = 3_000;
 const SCRCPY_ATTACH_DEDUPE_MS = 90_000;
 const SCRCPY_TRANSIENT_UNMOUNT_DETACH_DELAY_MS = 5_000;
 const H264_PRIMARY_VISIBLE_RECOVERY_MIN_MS = 5_000;
-const stableScrcpyViewerIds = new Map<string, string>();
 const recentScrcpyAttachByViewer = new Map<string, number>();
 const pendingScrcpyDetachByViewer = new Map<
   string,
@@ -68,15 +71,6 @@ export type DeviceScreenTransport = 'auto' | 'h264-only';
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
-}
-
-function stableScrcpyViewerId(prefix: string, serial: string): string {
-  const key = `${prefix}:${serial}`;
-  const existing = stableScrcpyViewerIds.get(key);
-  if (existing) return existing;
-  const next = createScrcpyViewerId(prefix);
-  stableScrcpyViewerIds.set(key, next);
-  return next;
 }
 
 function loadStreamingFlags(): Promise<StreamingFlags> {
@@ -248,6 +242,8 @@ interface DeviceScreenProps {
   streamTransport?: DeviceScreenTransport;
   /** Optional scrcpy profile for high-priority control surfaces. */
   scrcpyAttachOptions?: ScrcpyAttachOptions;
+  /** Stable for this mounted screen; controls backend profile arbitration. */
+  scrcpyViewerRole?: ScrcpyViewerRole;
 }
 
 export function DeviceScreen({
@@ -265,7 +261,8 @@ export function DeviceScreen({
   interactive = true,
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
-  scrcpyAttachOptions
+  scrcpyAttachOptions,
+  scrcpyViewerRole = 'control-screen'
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const pathname = usePathname();
@@ -326,6 +323,10 @@ export function DeviceScreen({
   const [h264Suppressed, setH264Suppressed] = useState(false);
   const [h264RestartKey, setH264RestartKey] = useState(0);
   const lastInputIdrRef = useRef(0);
+  const h264RenderedFrameVersionRef = useRef(0);
+  const inputRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const initialFrameRefreshTimersRef = useRef<ReturnType<typeof setTimeout>[]>(
     []
   );
@@ -340,7 +341,7 @@ export function DeviceScreen({
   const requestInitialFrameRefresh = useCallback(
     (serial: string) => {
       clearInitialFrameRefreshTimers();
-      const delays = [0, 250, 900, 1800, 3200];
+      const delays = [350, 1000, 2200, 3500];
       initialFrameRefreshTimersRef.current = delays.map((delay) =>
         setTimeout(() => {
           if (hasFrameRef.current) return;
@@ -359,7 +360,13 @@ export function DeviceScreen({
   }, [clearInitialFrameRefreshTimers, hasFrame]);
 
   useEffect(
-    () => clearInitialFrameRefreshTimers,
+    () => () => {
+      clearInitialFrameRefreshTimers();
+      if (inputRefreshTimerRef.current) {
+        clearTimeout(inputRefreshTimerRef.current);
+        inputRefreshTimerRef.current = null;
+      }
+    },
     [clearInitialFrameRefreshTimers]
   );
 
@@ -379,8 +386,15 @@ export function DeviceScreen({
   const tabActive = useTabNetworkActive();
   const streamingMode = streamingFlags?.mode;
   const streamingAutoAttach = streamingFlags?.autoAttach;
+  const scrcpyViewerSessionRef = useRef<ReturnType<
+    typeof createScrcpyViewerSession
+  > | null>(null);
+  if (scrcpyViewerSessionRef.current === null) {
+    scrcpyViewerSessionRef.current =
+      createScrcpyViewerSession(scrcpyViewerRole);
+  }
   const scrcpyViewerIdForSerial = useCallback(
-    (serial: string) => stableScrcpyViewerId('device-screen', serial),
+    (serial: string) => scrcpyViewerSessionRef.current!.idFor(serial),
     []
   );
 
@@ -406,22 +420,25 @@ export function DeviceScreen({
     [clearScrcpyAttachRetryTimer, device.serial]
   );
 
-  const detachScrcpyViewer = useCallback((...serials: Array<string | null>) => {
-    Array.from(new Set(serials.filter(Boolean) as string[])).forEach(
-      (serial) => {
-        const viewerId = stableScrcpyViewerId('device-screen', serial);
-        cancelPendingScrcpyDetach(serial, viewerId);
-        forgetScrcpyAttach(serial, viewerId);
-        detachScrcpyStream(serial, viewerId).catch(() => {});
-      }
-    );
-  }, []);
+  const detachScrcpyViewer = useCallback(
+    (...serials: Array<string | null>) => {
+      Array.from(new Set(serials.filter(Boolean) as string[])).forEach(
+        (serial) => {
+          const viewerId = scrcpyViewerIdForSerial(serial);
+          cancelPendingScrcpyDetach(serial, viewerId);
+          forgetScrcpyAttach(serial, viewerId);
+          detachScrcpyStream(serial, viewerId).catch(() => {});
+        }
+      );
+    },
+    [scrcpyViewerIdForSerial]
+  );
 
   const scheduleScrcpyViewerDetach = useCallback(
     (...serials: Array<string | null>) => {
       Array.from(new Set(serials.filter(Boolean) as string[])).forEach(
         (serial) => {
-          const viewerId = stableScrcpyViewerId('device-screen', serial);
+          const viewerId = scrcpyViewerIdForSerial(serial);
           cancelPendingScrcpyDetach(serial, viewerId);
           const timer = setTimeout(() => {
             pendingScrcpyDetachByViewer.delete(
@@ -437,7 +454,7 @@ export function DeviceScreen({
         }
       );
     },
-    []
+    [scrcpyViewerIdForSerial]
   );
 
   const updateStreamSize = useCallback((width: number, height: number) => {
@@ -876,6 +893,7 @@ export function DeviceScreen({
       renderedFrameStaleMs: h264PrimaryMode ? 2000 : 5000,
       onFrame: useCallback(
         (frame?: { mostlyBlack: boolean }) => {
+          h264RenderedFrameVersionRef.current += 1;
           const canvas = canvasRef.current;
           if (canvas?.width && canvas?.height) {
             updateStreamSize(canvas.width, canvas.height);
@@ -1026,6 +1044,10 @@ export function DeviceScreen({
     setMjpegEnabled(mjpegAllowed);
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     clearInitialFrameRefreshTimers();
+    if (inputRefreshTimerRef.current) {
+      clearTimeout(inputRefreshTimerRef.current);
+      inputRefreshTimerRef.current = null;
+    }
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     if (h264StallFallbackTimerRef.current)
@@ -1117,7 +1139,6 @@ export function DeviceScreen({
       return;
     ensureWatchSerial(device.serial);
     requestInitialFrameRefresh(device.serial);
-    const idr = setTimeout(() => requestIdr(device.serial), 100);
     const armMjpeg =
       h264PrimaryMode && mjpegAllowed
         ? setTimeout(() => {
@@ -1126,7 +1147,6 @@ export function DeviceScreen({
           }, 2500)
         : undefined;
     return () => {
-      clearTimeout(idr);
       if (armMjpeg) clearTimeout(armMjpeg);
     };
   }, [
@@ -1299,21 +1319,36 @@ export function DeviceScreen({
   const showH264Canvas = h264Active || (h264Only && hasFrame);
 
   const requestStreamRefreshAfterInput = useCallback(() => {
-    const now = Date.now();
-    if (
-      !shouldRequestH264RefreshAfterInput({
-        isActive: Boolean(isActive),
-        h264DecodeAllowed,
-        h264Only,
-        hasFrame: hasFrameRef.current,
-        now,
-        lastRequestAt: lastInputIdrRef.current
-      })
-    ) {
-      return;
+    const requestIfStillNeeded = (frameVersionAtInput: number) => {
+      const now = Date.now();
+      if (
+        !shouldRequestH264RefreshAfterInput({
+          isActive: Boolean(isActive),
+          h264DecodeAllowed,
+          h264Only,
+          hasFrame: hasFrameRef.current,
+          frameAdvancedSinceInput:
+            h264RenderedFrameVersionRef.current !== frameVersionAtInput,
+          now,
+          lastRequestAt: lastInputIdrRef.current
+        })
+      ) {
+        return;
+      }
+      lastInputIdrRef.current = now;
+      requestIdr(device.serial, H264_INPUT_REFRESH_MIN_INTERVAL_MS);
+    };
+
+    const frameVersionAtInput = h264RenderedFrameVersionRef.current;
+    if (hasFrameRef.current && !h264Only) return;
+
+    if (inputRefreshTimerRef.current) {
+      clearTimeout(inputRefreshTimerRef.current);
     }
-    lastInputIdrRef.current = now;
-    requestIdr(device.serial, H264_INPUT_REFRESH_MIN_INTERVAL_MS);
+    inputRefreshTimerRef.current = setTimeout(() => {
+      inputRefreshTimerRef.current = null;
+      requestIfStillNeeded(frameVersionAtInput);
+    }, H264_INPUT_REFRESH_WAIT_MS);
   }, [device.serial, h264DecodeAllowed, h264Only, isActive]);
 
   const bind = useGesture(

@@ -46,3 +46,13 @@ test('throttles repeated input IDR requests', () => {
     false
   );
 });
+
+test('skips an input IDR when a newer frame rendered during the wait window', () => {
+  assert.equal(
+    shouldRequestH264RefreshAfterInput({
+      ...baseOptions,
+      frameAdvancedSinceInput: true
+    }),
+    false
+  );
+});

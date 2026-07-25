@@ -23,9 +23,21 @@ _SCRCPY_STOP_TASKS: dict[str, asyncio.Task[None]] = {}
 _SCRCPY_STOP_VIEWERS: dict[str, str] = {}
 _LEGACY_VIEWER_ID = "legacy"
 _DEFAULT_DETACH_GRACE_S = 6.0
-_CONTROL_VIEWER_SURFACES = {"device-screen"}
-_PREVIEW_VIEWER_SURFACES = {"snapshot-preview"}
+_CONTROL_VIEWER_SURFACES = {"device-screen", "control-screen"}
+_PREVIEW_VIEWER_SURFACES = {
+    "campaign-monitor",
+    "follower-preview",
+    "snapshot-preview",
+}
+_BUDGETED_PREVIEW_VIEWER_SURFACES = {"snapshot-preview"}
 _PROFILE_KEYS = ("max_fps", "max_width", "bitrate")
+_VIEWER_SURFACE_PRIORITY = {
+    "snapshot-preview": 10,
+    "follower-preview": 20,
+    "campaign-monitor": 30,
+    "device-screen": 100,
+    "control-screen": 100,
+}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -75,12 +87,12 @@ def _active_preview_viewer_count() -> int:
         1
         for viewers in _SCRCPY_VIEWERS.values()
         for viewer_id in viewers
-        if _is_preview_viewer(viewer_id)
+        if _scrcpy_viewer_surface(viewer_id) in _BUDGETED_PREVIEW_VIEWER_SURFACES
     )
 
 
 def _preview_viewer_budget_exhausted(serial: str, viewer_id: str) -> bool:
-    if not _is_preview_viewer(viewer_id):
+    if _scrcpy_viewer_surface(viewer_id) not in _BUDGETED_PREVIEW_VIEWER_SURFACES:
         return False
     if _SCRCPY_PREVIEW_VIEWER_LIMIT <= 0:
         return False
@@ -134,6 +146,17 @@ def _scrcpy_profile_matches_request(device: object, body: ScrcpyAttachRequest) -
     return _current_scrcpy_profile(device) == _requested_scrcpy_profile(body)
 
 
+def _scrcpy_request_matches_device(
+    device: object, body: ScrcpyAttachRequest
+) -> bool:
+    params = getattr(device, "_scrcpy_params", None)
+    current_control = bool(params[2]) if isinstance(params, tuple) and len(params) >= 3 else True
+    return (
+        current_control == bool(body.enable_control)
+        and _scrcpy_profile_matches_request(device, body)
+    )
+
+
 def _has_control_scrcpy_viewer(viewers: set[str]) -> bool:
     return any(_is_control_viewer(viewer_id) for viewer_id in viewers)
 
@@ -158,16 +181,55 @@ def _forget_viewer_request(serial: str, viewer_id: str) -> None:
         _SCRCPY_VIEWER_REQUESTS.pop(serial, None)
 
 
-def _remaining_preview_request(
-    serial: str, viewers: set[str]
+def _effective_viewer_request(
+    serial: str,
+    viewers: set[str],
+    *,
+    preview_only: bool = False,
 ) -> ScrcpyAttachRequest | None:
     requests = _SCRCPY_VIEWER_REQUESTS.get(serial, {})
-    for remaining_viewer_id in viewers:
-        if _is_preview_viewer(remaining_viewer_id):
-            request = requests.get(remaining_viewer_id)
-            if request is not None:
-                return request
-    return None
+    ranked: list[tuple[int, str, ScrcpyAttachRequest]] = []
+    for viewer_id in viewers:
+        if preview_only and not _is_preview_viewer(viewer_id):
+            continue
+        request = requests.get(viewer_id)
+        if request is None:
+            continue
+        surface = _scrcpy_viewer_surface(viewer_id)
+        # Unknown/legacy viewers retain control-level precedence for compatibility.
+        priority = _VIEWER_SURFACE_PRIORITY.get(surface or "", 100)
+        ranked.append((priority, viewer_id, request))
+    if not ranked:
+        return None
+
+    highest_priority = max(item[0] for item in ranked)
+    selected = [item for item in ranked if item[0] == highest_priority]
+    _, _, base = max(
+        selected,
+        key=lambda item: (
+            _positive_profile_value(item[2].max_fps) or 0,
+            _positive_profile_value(item[2].max_width) or 0,
+            _positive_profile_value(item[2].bitrate) or 0,
+            item[1],
+        ),
+    )
+
+    def _max_requested(key: str) -> int | None:
+        values = [
+            _positive_profile_value(getattr(item[2], key))
+            for item in selected
+        ]
+        present = [value for value in values if value is not None]
+        return max(present) if present else None
+
+    return base.model_copy(
+        update={
+            "enable_control": any(item[2].enable_control for item in selected),
+            "max_fps": _max_requested("max_fps"),
+            "max_width": _max_requested("max_width"),
+            "bitrate": _max_requested("bitrate"),
+        }
+    )
 
 
 def has_active_scrcpy_viewers(serial: str) -> bool:
@@ -265,32 +327,14 @@ def build_scrcpy_router(
             scrcpy_active = bool(getattr(device, "_scrcpy_active", False))
             scrcpy_pending = bool(getattr(device, "_scrcpy_pending_registered_ip", None))
             should_start = not scrcpy_active and not scrcpy_pending
-            has_control_viewer = _has_control_scrcpy_viewer(viewers)
-            is_control_viewer = _is_control_viewer(viewer_id)
-            control_requested_limited_profile = _has_limited_profile_request(body)
-            should_reapply_profile = (
-                scrcpy_active
-                and is_control_viewer
-                and (
-                    (
-                        control_requested_limited_profile
-                        and not _scrcpy_profile_matches_request(device, body)
-                    )
-                    or (
-                        not control_requested_limited_profile
-                        and _has_limited_scrcpy_profile(device)
-                    )
-                )
-            ) or (
-                scrcpy_active
-                and not is_control_viewer
-                and not has_control_viewer
-                and _has_limited_profile_request(body)
-                and not _scrcpy_profile_matches_request(device, body)
-            )
             viewers.add(viewer_id)
-            attach_request = body.model_copy(update={"device_ip": device_ip})
-            _SCRCPY_VIEWER_REQUESTS.setdefault(serial, {})[viewer_id] = attach_request
+            viewer_request = body.model_copy(update={"device_ip": device_ip})
+            _SCRCPY_VIEWER_REQUESTS.setdefault(serial, {})[viewer_id] = viewer_request
+            attach_request = _effective_viewer_request(serial, viewers) or viewer_request
+            should_reapply_profile = (
+                (scrcpy_active or scrcpy_pending)
+                and not _scrcpy_request_matches_device(device, attach_request)
+            )
             attach_status = "active"
             if should_start or should_reapply_profile:
                 loop = asyncio.get_running_loop()
@@ -379,27 +423,25 @@ def build_scrcpy_router(
                 _forget_viewer_request(serial, viewer_id)
                 if viewers:
                     profile_reapplied = False
-                    if _is_control_viewer(viewer_id) and not _has_control_scrcpy_viewer(
-                        viewers
+                    effective_request = _effective_viewer_request(serial, viewers)
+                    if (
+                        effective_request
+                        and not _scrcpy_request_matches_device(device, effective_request)
                     ):
-                        preview_request = _remaining_preview_request(serial, viewers)
-                        if preview_request and not _scrcpy_profile_matches_request(
-                            device, preview_request
-                        ):
-                            loop = asyncio.get_running_loop()
-                            raw_status = await loop.run_in_executor(
-                                None,
-                                partial(
-                                    device.attach_scrcpy_stream,
-                                    preview_request.device_ip,
-                                    preview_request.adb_port,
-                                    preview_request.enable_control,
-                                    max_fps=preview_request.max_fps,
-                                    max_width=preview_request.max_width,
-                                    bitrate=preview_request.bitrate,
-                                ),
-                            )
-                            profile_reapplied = raw_status != "unavailable"
+                        loop = asyncio.get_running_loop()
+                        raw_status = await loop.run_in_executor(
+                            None,
+                            partial(
+                                device.attach_scrcpy_stream,
+                                effective_request.device_ip,
+                                effective_request.adb_port,
+                                effective_request.enable_control,
+                                max_fps=effective_request.max_fps,
+                                max_width=effective_request.max_width,
+                                bitrate=effective_request.bitrate,
+                            ),
+                        )
+                        profile_reapplied = raw_status != "unavailable"
                     log.info(
                         "api_scrcpy_detach serial=%s viewer=%s active_viewers=%d "
                         "stop=False profile_reapplied=%s",

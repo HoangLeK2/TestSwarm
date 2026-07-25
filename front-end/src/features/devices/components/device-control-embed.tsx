@@ -131,6 +131,9 @@ export function DeviceControlEmbed({
         readOnlyPreview={readOnlyPreview}
         streamFetchPriority={readOnlyPreview ? 'low' : 'auto'}
         streamTransport={readOnlyPreview ? 'h264-only' : 'auto'}
+        scrcpyViewerRole={
+          readOnlyPreview ? 'campaign-monitor' : 'control-screen'
+        }
         scrcpyAttachOptions={
           readOnlyPreview ? MONITOR_PREVIEW_SCRCPY_OPTIONS : undefined
         }

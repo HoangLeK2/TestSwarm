@@ -48,7 +48,10 @@ function scrcpyAttachErrorStatus(error: unknown): number | null {
 export function shouldClearH264CacheBeforeScrcpyAttach(
   viewerId?: string
 ): boolean {
-  return viewerId?.startsWith('device-screen:') === true;
+  return (
+    viewerId?.startsWith('device-screen:') === true ||
+    viewerId?.startsWith('control-screen:') === true
+  );
 }
 
 export function scrcpyAttachErrorMessage(error: unknown): string {

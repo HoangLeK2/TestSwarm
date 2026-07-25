@@ -16,7 +16,9 @@ log = logging.getLogger(__name__)
 
 
 def _frame_age_ms(device) -> float:
-    last_frame_time = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+    last_frame_time = float(
+        getattr(device, "_last_jpeg_frame_time", 0.0) or 0.0
+    )
     if last_frame_time <= 0.0:
         return float("inf")
     return max(0.0, (time.monotonic() - last_frame_time) * 1000.0)
@@ -28,7 +30,9 @@ def _store_snapshot_frame(device, frame: bytes) -> None:
         return
     with lock:
         device._latest_jpeg = frame
-        device._last_frame_time = time.monotonic()
+        now = time.monotonic()
+        device._last_frame_time = now
+        device._last_jpeg_frame_time = now
 
 
 def _resize_snapshot_frame(frame: bytes, max_width: int) -> bytes:
@@ -43,6 +47,34 @@ def _resize_snapshot_frame(frame: bytes, max_width: int) -> bytes:
         output = io.BytesIO()
         resized.save(output, format="JPEG", quality=65)
         return output.getvalue()
+
+
+def _request_stream_jpeg_frames(device, duration_s: float = 3.0) -> bool:
+    request = getattr(device, "request_stream_jpeg_frames", None)
+    if request is not None:
+        return bool(request(duration_s=duration_s))
+    return False
+
+
+async def _wait_for_new_jpeg(
+    device,
+    previous_jpeg_time: float,
+    *,
+    timeout_s: float = 0.45,
+) -> bytes | None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+        jpeg_time = float(
+            getattr(device, "_last_jpeg_frame_time", 0.0) or 0.0
+        )
+        if jpeg_time <= previous_jpeg_time:
+            continue
+        try:
+            return device.take_screenshot()
+        except Exception:
+            return None
+    return None
 
 
 def build_device_media_router(manager: DeviceManager) -> APIRouter:
@@ -62,6 +94,10 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 interval = 1.0 if low_bw_mode else 0.033
             loop = asyncio.get_running_loop()
             while True:
+                _request_stream_jpeg_frames(
+                    device,
+                    duration_s=max(3.0, interval * 2),
+                )
                 # Normal mode uses cached scrcpy frame (fast path). Stall fallback
                 # can opt into fresh screencap at low FPS so the UI has a way out
                 # when the H264/cache path is frozen.
@@ -108,6 +144,10 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": "Not found"}, status_code=404)
+        previous_jpeg_time = float(
+            getattr(device, "_last_jpeg_frame_time", 0.0) or 0.0
+        )
+        jpeg_demand_active = _request_stream_jpeg_frames(device)
         frame = None
         try:
             frame = None if fresh else device.take_screenshot()
@@ -115,10 +155,19 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
             log.debug("screenshot cache read failed for %s: %s", serial, exc)
 
         stale = fresh or frame is None
-        if max_age_ms is not None:
-            max_age = max(250, min(int(max_age_ms), 10_000))
+        effective_max_age_ms = (
+            max_age_ms
+            if max_age_ms is not None
+            else (3_000 if jpeg_demand_active else None)
+        )
+        if effective_max_age_ms is not None:
+            max_age = max(250, min(int(effective_max_age_ms), 10_000))
             stale = stale or _frame_age_ms(device) >= max_age
 
+        if stale:
+            if jpeg_demand_active:
+                frame = await _wait_for_new_jpeg(device, previous_jpeg_time)
+                stale = frame is None
         if stale:
             loop = asyncio.get_running_loop()
             fresh_frame = await loop.run_in_executor(
@@ -155,9 +204,25 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         if not device:
             return JSONResponse({"error": "Not found"}, status_code=404)
 
+        previous_jpeg_time = float(
+            getattr(device, "_last_jpeg_frame_time", 0.0) or 0.0
+        )
+        jpeg_demand_active = _request_stream_jpeg_frames(device)
         frame = device.take_screenshot()
+        if jpeg_demand_active and _frame_age_ms(device) >= 3_000:
+            frame = await _wait_for_new_jpeg(device, previous_jpeg_time)
         if not frame:
-            frame = device.capture_screenshot(allow_ws_u2_fallback=False)
+            loop = asyncio.get_running_loop()
+            frame = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    device.capture_screenshot,
+                    allow_ws_u2_fallback=False,
+                    skip_cache=jpeg_demand_active,
+                ),
+            )
+            if frame:
+                _store_snapshot_frame(device, frame)
         if not frame:
             return JSONResponse({"error": "No frame available"}, status_code=503)
 

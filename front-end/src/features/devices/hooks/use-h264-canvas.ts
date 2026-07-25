@@ -55,7 +55,6 @@ export function useH264Video(
 ) {
   const restartKey = opts?.restartKey ?? 0;
   const workerRef = useRef<Worker | null>(null);
-  const rafRef = useRef<number | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const blackProbeRef = useRef<BlackFrameProbe | null>(null);
@@ -173,13 +172,6 @@ export function useH264Video(
       }
     };
 
-    // RAF sends pull-frame as fallback for missed pushes (decoder reset, tab restore).
-    const keepalive = () => {
-      workerRef.current?.postMessage({ type: 'pull-frame' });
-      rafRef.current = requestAnimationFrame(keepalive);
-    };
-    rafRef.current = requestAnimationFrame(keepalive);
-
     worker.onmessage = ({ data }) => {
       if (workerRef.current !== worker || serialRef.current !== serial) {
         if (data.type === 'frame' && data.frame) {
@@ -290,10 +282,6 @@ export function useH264Video(
       if (workerRef.current === worker) workerRef.current = null;
       renderCanvasRef.current = null;
       renderCtxRef.current = null;
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
       // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
   }, [canvasRef, serial, restartKey]);
@@ -301,8 +289,8 @@ export function useH264Video(
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
   // (3-14 s depending on device). With replay, it decodes within ~50 ms.
-  const replayCachedBootstrap = (w: Worker, serialValue: string) => {
-    if (!serialValue) return;
+  const replayCachedBootstrap = (w: Worker, serialValue: string): boolean => {
+    if (!serialValue) return false;
     // Replay config (SPS/PPS)
     const cfgBuf = getLastConfigFrame(serialValue);
     if (cfgBuf) {
@@ -310,7 +298,7 @@ export function useH264Video(
       try {
         view = new DataView(cfgBuf);
       } catch {
-        return;
+        return false;
       }
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
@@ -327,8 +315,7 @@ export function useH264Video(
     // IDR that arrived while the tab was hidden, so replaying it drifts the
     // decoder. The server-side forced IDR (requested below) fills the gap.
     if (isCachedKeyFrameStale(serialValue)) {
-      requestIdr(serialValue, 0);
-      return;
+      return false;
     }
     const keyBuf = getLastKeyFrame(serialValue);
     if (keyBuf) {
@@ -336,7 +323,7 @@ export function useH264Video(
       try {
         view = new DataView(keyBuf);
       } catch {
-        return;
+        return false;
       }
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
@@ -353,9 +340,11 @@ export function useH264Video(
             { type: 'frame', isKey: true, ptsUs, frameData: frameData.buffer },
             [frameData.buffer]
           );
+          return true;
         }
       }
     }
+    return false;
   };
 
   useEffect(() => {
@@ -369,12 +358,12 @@ export function useH264Video(
     postWorkerReset(w, serial);
     clearLatestFrame();
     if (!serial) return;
-    replayCachedBootstrap(w, serial);
-    // Always ask server for a fresh IDR on mount / serial change.
-    // The bootstrap cache covers fast path (~50ms replay), but the cache may
-    // be stale or missing; the server-forced IDR lands within ~100ms and
-    // guarantees decoder sync even if no prior viewer primed the cache.
-    requestIdr(serial, 0);
+    const replayedFreshKey = replayCachedBootstrap(w, serial);
+    if (replayedFreshKey) return;
+    const recoveryTimer = setTimeout(() => {
+      if (lastRenderedFrameAtRef.current === 0) requestIdr(serial, 0);
+    }, 350);
+    return () => clearTimeout(recoveryTimer);
   }, [serial, restartKey]);
 
   // Reconnect warm-up: WS reconnect often leaves decoder on stale refs.
@@ -396,7 +385,14 @@ export function useH264Video(
         // opening socket (common on client-side navigation). Prime the stream now.
         const s = serialRef.current;
         if (s) {
-          setTimeout(() => requestIdr(s, 0), 50);
+          setTimeout(() => {
+            if (
+              serialRef.current === s &&
+              lastRenderedFrameAtRef.current === 0
+            ) {
+              requestIdr(s, 0);
+            }
+          }, 350);
         }
         return;
       }

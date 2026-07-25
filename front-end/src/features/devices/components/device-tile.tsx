@@ -5,6 +5,7 @@ import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
 import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
+import type { ScrcpyViewerRole } from '../services/scrcpy-viewer-session';
 import { DeviceControls } from './device-controls';
 import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
 import {
@@ -63,6 +64,7 @@ interface DeviceTileProps {
   streamFetchPriority?: 'high' | 'low' | 'auto';
   streamTransport?: DeviceScreenTransport;
   scrcpyAttachOptions?: ScrcpyAttachOptions;
+  scrcpyViewerRole?: ScrcpyViewerRole;
   /** Hide current-app label under the mockup (filmstrip tiles). */
   hideAppCaption?: boolean;
   /** ADB / APK / file ops on the control rail (control-record). */
@@ -93,6 +95,7 @@ export function DeviceTile({
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
   scrcpyAttachOptions,
+  scrcpyViewerRole,
   hideAppCaption = false,
   deviceOps,
   screenOverlay
@@ -269,6 +272,7 @@ export function DeviceTile({
                         streamFetchPriority={streamFetchPriority}
                         streamTransport={streamTransport}
                         scrcpyAttachOptions={scrcpyAttachOptions}
+                        scrcpyViewerRole={scrcpyViewerRole}
                       />
                     ) : (
                       <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>

@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDeviceFarm } from '../hooks/use-device-farm';
 import { resolveControlRecordSelectedDevice } from '../lib/control-record-device-state';
+import { shouldRunEmbedStream } from '../lib/embed-stream-visibility';
 import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import { DeviceTile } from './device-tile';
 
@@ -48,6 +49,63 @@ export function DeviceControlEmbed({
   onSwipe,
   onDragGesture
 }: Props) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [nearViewport, setNearViewport] = useState(!readOnlyPreview);
+  const [previewStreamEnabled, setPreviewStreamEnabled] =
+    useState(!readOnlyPreview);
+
+  useLayoutEffect(() => {
+    if (!readOnlyPreview) {
+      setNearViewport(true);
+      return;
+    }
+    const element = viewportRef.current;
+    if (!element) return;
+    const margin = 160;
+    const sync = () => {
+      const rect = element.getBoundingClientRect();
+      setNearViewport(
+        document.visibilityState !== 'hidden' &&
+          rect.bottom > -margin &&
+          rect.top < window.innerHeight + margin
+      );
+    };
+
+    sync();
+    window.addEventListener('scroll', sync, { passive: true, capture: true });
+    window.addEventListener('resize', sync);
+    window.addEventListener('focus', sync);
+    window.addEventListener('pageshow', sync);
+    document.addEventListener('visibilitychange', sync);
+    const observer =
+      typeof IntersectionObserver === 'undefined'
+        ? null
+        : new IntersectionObserver(sync, {
+            root: null,
+            rootMargin: `${margin}px`,
+            threshold: 0.04
+          });
+    observer?.observe(element);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('scroll', sync, { capture: true });
+      window.removeEventListener('resize', sync);
+      window.removeEventListener('focus', sync);
+      window.removeEventListener('pageshow', sync);
+      document.removeEventListener('visibilitychange', sync);
+    };
+  }, [readOnlyPreview]);
+
+  useEffect(() => {
+    if (!readOnlyPreview || nearViewport) {
+      setPreviewStreamEnabled(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setPreviewStreamEnabled(false), 700);
+    return () => window.clearTimeout(timer);
+  }, [nearViewport, readOnlyPreview]);
+
   const {
     devices,
     logs,
@@ -101,7 +159,10 @@ export function DeviceControlEmbed({
   }
 
   return (
-    <div className={compact ? 'w-full min-w-0 max-w-full' : ''}>
+    <div
+      ref={viewportRef}
+      className={compact ? 'w-full min-w-0 max-w-full' : ''}
+    >
       <DeviceTile
         device={selectedDevice}
         logLines={compact ? [] : (logs[selectedDevice.serial] ?? [])}
@@ -137,6 +198,10 @@ export function DeviceControlEmbed({
         scrcpyAttachOptions={
           readOnlyPreview ? MONITOR_PREVIEW_SCRCPY_OPTIONS : undefined
         }
+        streamEnabled={shouldRunEmbedStream({
+          readOnlyPreview,
+          nearViewport: previewStreamEnabled
+        })}
       />
     </div>
   );

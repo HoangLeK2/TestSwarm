@@ -6,6 +6,10 @@ import { serialToId } from '../helpers';
 import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
 import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import type { ScrcpyViewerRole } from '../services/scrcpy-viewer-session';
+import {
+  resolveDeviceScreenState,
+  shouldMountDeviceScreen
+} from '../lib/device-tile-stream-policy';
 import { DeviceControls } from './device-controls';
 import { isControlRecordConnectedDevice } from '../lib/control-record-device-state';
 import {
@@ -65,6 +69,8 @@ interface DeviceTileProps {
   streamTransport?: DeviceScreenTransport;
   scrcpyAttachOptions?: ScrcpyAttachOptions;
   scrcpyViewerRole?: ScrcpyViewerRole;
+  /** Opt-in pause for preview callers; defaults to preserving the live screen. */
+  streamEnabled?: boolean;
   /** Hide current-app label under the mockup (filmstrip tiles). */
   hideAppCaption?: boolean;
   /** ADB / APK / file ops on the control rail (control-record). */
@@ -96,6 +102,7 @@ export function DeviceTile({
   streamTransport = 'auto',
   scrcpyAttachOptions,
   scrcpyViewerRole,
+  streamEnabled,
   hideAppCaption = false,
   deviceOps,
   screenOverlay
@@ -112,6 +119,8 @@ export function DeviceTile({
       ? device.serial
       : `${device.brand} ${device.model}`.trim();
   const isActive = isControlRecordConnectedDevice(device);
+  const deviceScreenState = resolveDeviceScreenState(isActive, streamEnabled);
+  const mountDeviceScreen = shouldMountDeviceScreen(isActive, streamEnabled);
 
   const [gestureMode, setGestureMode] = useState<
     'tap' | 'swipe' | 'double_tap' | 'drag'
@@ -257,7 +266,7 @@ export function DeviceTile({
                   className='h-full shrink-0'
                 >
                   <div className='relative flex h-full min-h-0 w-full flex-col'>
-                    {isActive ? (
+                    {mountDeviceScreen ? (
                       <DeviceScreen
                         device={device}
                         wsSend={wsSend}
@@ -276,10 +285,14 @@ export function DeviceTile({
                       />
                     ) : (
                       <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
-                        {t('deviceInactive')}
+                        {t(
+                          deviceScreenState === 'paused'
+                            ? 'previewDeferred'
+                            : 'deviceInactive'
+                        )}
                       </div>
                     )}
-                    {isActive ? screenOverlay : null}
+                    {mountDeviceScreen ? screenOverlay : null}
                   </div>
                 </DeviceAndroidFrame>
                 {!hideControls && !compact ? (

@@ -21,6 +21,8 @@ const LEASED_VIEWER_PREFIXES = [
 type ScrcpyViewerHeartbeat = {
   timer: ReturnType<typeof setTimeout> | null;
   inFlight: Promise<unknown> | null;
+  recoveryInFlight: Promise<void> | null;
+  options: ScrcpyAttachOptions | undefined;
 };
 
 const scrcpyViewerHeartbeats = new Map<string, ScrcpyViewerHeartbeat>();
@@ -70,45 +72,97 @@ function viewerUsesLease(viewerId?: string): viewerId is string {
   );
 }
 
-function scheduleScrcpyViewerHeartbeat(serial: string, viewerId: string) {
+function scheduleScrcpyViewerHeartbeat(
+  serial: string,
+  viewerId: string,
+  options?: ScrcpyAttachOptions
+) {
   const key = scrcpyViewerHeartbeatKey(serial, viewerId);
-  if (scrcpyViewerHeartbeats.has(key)) return;
+  const existing = scrcpyViewerHeartbeats.get(key);
+  if (existing) {
+    existing.options = options;
+    return;
+  }
 
   const heartbeat: ScrcpyViewerHeartbeat = {
     timer: null,
-    inFlight: null
+    inFlight: null,
+    recoveryInFlight: null,
+    options
   };
   scrcpyViewerHeartbeats.set(key, heartbeat);
+
+  const recoverViewer = async () => {
+    try {
+      await farmApi.post(
+        `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
+        scrcpyAttachPayload(viewerId, heartbeat.options),
+        {
+          timeout: SCRCPY_STREAM_TIMEOUT_MS,
+          _skip429Retry: viewerId.startsWith('snapshot-preview:')
+        }
+      );
+    } catch {
+      return;
+    }
+    if (scrcpyViewerHeartbeats.has(key)) return;
+    try {
+      await farmApi.post(
+        `/devices/${encodeURIComponent(serial)}/scrcpy/detach`,
+        { viewer_id: viewerId },
+        { timeout: SCRCPY_STREAM_TIMEOUT_MS }
+      );
+    } catch {
+      // The backend lease still expires if cleanup cannot be delivered.
+    }
+  };
 
   const tick = () => {
     const current = scrcpyViewerHeartbeats.get(key);
     if (current !== heartbeat) return;
     current.timer = null;
-    current.inFlight = farmApi
-      .post(
-        `/devices/${encodeURIComponent(serial)}/scrcpy/heartbeat`,
-        { viewer_id: viewerId },
-        { timeout: SCRCPY_STREAM_TIMEOUT_MS }
-      )
-      .catch(() => undefined)
-      .finally(() => {
+    const operationPromise = (async () => {
+      try {
+        await farmApi.post(
+          `/devices/${encodeURIComponent(serial)}/scrcpy/heartbeat`,
+          { viewer_id: viewerId },
+          { timeout: SCRCPY_STREAM_TIMEOUT_MS }
+        );
+      } catch (error) {
+        if (
+          scrcpyAttachErrorStatus(error) === 404 &&
+          scrcpyViewerHeartbeats.get(key) === heartbeat
+        ) {
+          const recovery = recoverViewer();
+          heartbeat.recoveryInFlight = recovery;
+          await recovery;
+        }
+      } finally {
         const latest = scrcpyViewerHeartbeats.get(key);
-        if (latest !== heartbeat) return;
-        latest.inFlight = null;
-        latest.timer = setTimeout(tick, SCRCPY_VIEWER_HEARTBEAT_MS);
-      });
+        if (latest === heartbeat) {
+          latest.inFlight = null;
+          latest.timer = setTimeout(tick, SCRCPY_VIEWER_HEARTBEAT_MS);
+        }
+        heartbeat.recoveryInFlight = null;
+      }
+    })();
+    current.inFlight = operationPromise;
   };
 
   heartbeat.timer = setTimeout(tick, SCRCPY_VIEWER_HEARTBEAT_MS);
 }
 
-function stopScrcpyViewerHeartbeat(serial: string, viewerId?: string): void {
-  if (!viewerId) return;
+function stopScrcpyViewerHeartbeat(
+  serial: string,
+  viewerId?: string
+): Promise<void> | null {
+  if (!viewerId) return null;
   const key = scrcpyViewerHeartbeatKey(serial, viewerId);
   const heartbeat = scrcpyViewerHeartbeats.get(key);
-  if (!heartbeat) return;
+  if (!heartbeat) return null;
   scrcpyViewerHeartbeats.delete(key);
   if (heartbeat.timer) clearTimeout(heartbeat.timer);
+  return heartbeat.recoveryInFlight;
 }
 
 function scrcpyAttachErrorStatus(error: unknown): number | null {
@@ -161,7 +215,8 @@ export function createScrcpyViewerId(prefix: string): string {
 
 export const attachScrcpyStream = createSingleFlight(
   async (serial: string, viewerId?: string, options?: ScrcpyAttachOptions) => {
-    stopScrcpyViewerHeartbeat(serial, viewerId);
+    const pendingRecovery = stopScrcpyViewerHeartbeat(serial, viewerId);
+    await pendingRecovery?.catch(() => undefined);
     const skip429Retry = viewerId?.startsWith('snapshot-preview:') === true;
     if (shouldClearH264CacheBeforeScrcpyAttach(viewerId)) {
       clearH264Cache(serial);
@@ -172,7 +227,7 @@ export const attachScrcpyStream = createSingleFlight(
       { timeout: SCRCPY_STREAM_TIMEOUT_MS, _skip429Retry: skip429Retry }
     );
     if (viewerUsesLease(viewerId)) {
-      scheduleScrcpyViewerHeartbeat(serial, viewerId);
+      scheduleScrcpyViewerHeartbeat(serial, viewerId, options);
     }
     return data;
   },
@@ -181,7 +236,7 @@ export const attachScrcpyStream = createSingleFlight(
 
 export const detachScrcpyStream = createSingleFlight(
   async (serial: string, viewerId?: string) => {
-    stopScrcpyViewerHeartbeat(serial, viewerId);
+    void stopScrcpyViewerHeartbeat(serial, viewerId);
     const { data } = await farmApi.post(
       `/devices/${encodeURIComponent(serial)}/scrcpy/detach`,
       viewerId ? { viewer_id: viewerId } : {},

@@ -93,6 +93,7 @@ def _build_app(
     serial: str = "serial-1",
     *,
     detach_grace_s: float = 0,
+    viewer_lease_ttl_s: float = 0,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(
@@ -100,6 +101,7 @@ def _build_app(
             _FakeManager(device, serial=serial),
             db_enabled=False,
             scrcpy_detach_grace_s=detach_grace_s,
+            scrcpy_viewer_lease_ttl_s=viewer_lease_ttl_s,
         ),
         prefix="/api",
     )
@@ -194,6 +196,88 @@ async def test_scrcpy_detach_keeps_stream_until_last_viewer_detaches() -> None:
     assert detach_b.json()["active_viewers"] == 0
     assert device.attach_calls == 1
     assert device.detach_calls == 1
+
+
+@pytest.mark.anyio
+async def test_scrcpy_viewer_without_heartbeat_expires_and_stops_stream() -> None:
+    device = _FakeScrcpyDevice()
+    app = _build_app(
+        device,
+        serial="serial-lease-expiry",
+        viewer_lease_ttl_s=0.1,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        attach = await client.post(
+            "/api/devices/serial-lease-expiry/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "control-screen:lease-expiry",
+            },
+        )
+        await asyncio.sleep(0.15)
+
+    assert attach.status_code == 200
+    assert "serial-lease-expiry" not in scrcpy_routes._SCRCPY_VIEWERS
+    assert device.detach_calls == 1
+
+
+@pytest.mark.anyio
+async def test_expired_control_viewer_downgrades_to_live_preview_profile() -> None:
+    serial = "serial-lease-downgrade"
+    device = _FakeScrcpyDevice()
+    app = _build_app(
+        device,
+        serial=serial,
+        viewer_lease_ttl_s=0.3,
+    )
+    preview_payload = {
+        "device_ip": "10.0.0.10",
+        "viewer_id": "snapshot-preview:live",
+        "max_fps": 1,
+        "max_width": 360,
+        "bitrate": 100_000,
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json=preview_payload,
+        )
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "control-screen:stale",
+                "max_fps": 10,
+                "max_width": 480,
+                "bitrate": 800_000,
+            },
+        )
+        await asyncio.sleep(0.15)
+        heartbeat = await client.post(
+            f"/api/devices/{serial}/scrcpy/heartbeat",
+            json={"viewer_id": "snapshot-preview:live"},
+        )
+        assert heartbeat.status_code == 200
+        assert device.attach_calls == 2
+        await asyncio.sleep(0.2)
+
+        assert scrcpy_routes._SCRCPY_VIEWERS[serial] == {"snapshot-preview:live"}
+        assert device.last_attach_options == {
+            "max_fps": 1,
+            "max_width": 360,
+            "bitrate": 100_000,
+        }
+
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/detach",
+            json={"viewer_id": "snapshot-preview:live"},
+        )
 
 
 @pytest.mark.anyio

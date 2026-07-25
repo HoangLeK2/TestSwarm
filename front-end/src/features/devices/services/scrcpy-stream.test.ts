@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+process.env.NEXT_PUBLIC_DEVICE_FARM_SCRCPY_VIEWER_HEARTBEAT_MS = '1000';
+
 type FarmApiPost = (
   url: string,
   payload?: unknown,
@@ -8,6 +10,8 @@ type FarmApiPost = (
 ) => Promise<{ data: unknown }>;
 
 const postCalls: Array<{ url: string; payload: unknown; config: unknown }> = [];
+const blockedHeartbeatSerials = new Set<string>();
+const blockedHeartbeatResolvers = new Map<string, () => void>();
 type ScrcpyStreamModule = typeof import('./scrcpy-stream');
 let streamModule: ScrcpyStreamModule | null = null;
 
@@ -20,10 +24,30 @@ async function loadScrcpyStream(): Promise<ScrcpyStreamModule> {
     config
   ) => {
     postCalls.push({ url, payload, config });
+    const heartbeatMatch = url.match(/\/devices\/([^/]+)\/scrcpy\/heartbeat/);
+    const heartbeatSerial = heartbeatMatch?.[1];
+    if (heartbeatSerial && blockedHeartbeatSerials.has(heartbeatSerial)) {
+      await new Promise<void>((resolve) => {
+        blockedHeartbeatResolvers.set(heartbeatSerial, resolve);
+      });
+    }
     return { data: { ok: true } };
   };
   streamModule = await import('./scrcpy-stream');
   return streamModule;
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 2000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('Timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }
 
 test('control screen attach invalidates cached H264 bootstrap frames', async () => {
@@ -61,6 +85,7 @@ test('control screen attach uses normal retry policy and payload', async () => {
     timeout: 10_000,
     _skip429Retry: false
   });
+  await stream.detachScrcpyStream('serial one', 'device-screen:viewer-1');
 });
 
 test('snapshot preview attach keeps lightweight no-retry policy', async () => {
@@ -90,4 +115,45 @@ test('snapshot preview attach keeps lightweight no-retry policy', async () => {
     timeout: 10_000,
     _skip429Retry: true
   });
+  await stream.detachScrcpyStream(
+    'serial-preview',
+    'snapshot-preview:viewer-1'
+  );
+});
+
+test('leased viewer heartbeat is lightweight and cannot delay detach', async () => {
+  const stream = await loadScrcpyStream();
+  postCalls.length = 0;
+  const serial = 'serial-heartbeat';
+  const viewerId = 'control-screen:heartbeat';
+
+  await stream.attachScrcpyStream(serial, viewerId);
+  blockedHeartbeatSerials.add(serial);
+  await waitFor(
+    () =>
+      postCalls.filter((call) => call.url.endsWith('/scrcpy/heartbeat'))
+        .length >= 1
+  );
+
+  const heartbeatCall = postCalls.find((call) =>
+    call.url.endsWith('/scrcpy/heartbeat')
+  );
+  assert.deepEqual(heartbeatCall?.payload, { viewer_id: viewerId });
+  assert.deepEqual(heartbeatCall?.config, { timeout: 10_000 });
+
+  await stream.detachScrcpyStream(serial, viewerId);
+  assert.ok(postCalls.some((call) => call.url.endsWith('/scrcpy/detach')));
+
+  const heartbeatCountAfterDetach = postCalls.filter((call) =>
+    call.url.endsWith('/scrcpy/heartbeat')
+  ).length;
+  blockedHeartbeatSerials.delete(serial);
+  blockedHeartbeatResolvers.get(serial)?.();
+  blockedHeartbeatResolvers.delete(serial);
+  await new Promise((resolve) => setTimeout(resolve, 1050));
+
+  assert.equal(
+    postCalls.filter((call) => call.url.endsWith('/scrcpy/heartbeat')).length,
+    heartbeatCountAfterDetach
+  );
 });

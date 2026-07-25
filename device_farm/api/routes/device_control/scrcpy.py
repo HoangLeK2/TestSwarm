@@ -23,6 +23,7 @@ _SCRCPY_STOP_TASKS: dict[str, asyncio.Task[None]] = {}
 _SCRCPY_STOP_VIEWERS: dict[str, str] = {}
 _LEGACY_VIEWER_ID = "legacy"
 _DEFAULT_DETACH_GRACE_S = 6.0
+_DEFAULT_VIEWER_LEASE_TTL_S = 45.0
 _CONTROL_VIEWER_SURFACES = {"device-screen", "control-screen"}
 _PREVIEW_VIEWER_SURFACES = {
     "campaign-monitor",
@@ -43,6 +44,13 @@ _VIEWER_SURFACE_PRIORITY = {
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
     except Exception:
         return default
 
@@ -80,6 +88,11 @@ def _is_control_viewer(viewer_id: str) -> bool:
 def _is_preview_viewer(viewer_id: str) -> bool:
     surface = _scrcpy_viewer_surface(viewer_id)
     return surface in _PREVIEW_VIEWER_SURFACES
+
+
+def _viewer_uses_lease(viewer_id: str) -> bool:
+    surface = _scrcpy_viewer_surface(viewer_id)
+    return surface in _CONTROL_VIEWER_SURFACES | _PREVIEW_VIEWER_SURFACES
 
 
 def _active_preview_viewer_count() -> int:
@@ -241,8 +254,23 @@ def build_scrcpy_router(
     *,
     db_enabled: bool,
     scrcpy_detach_grace_s: float = _DEFAULT_DETACH_GRACE_S,
+    scrcpy_viewer_lease_ttl_s: float | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    if scrcpy_viewer_lease_ttl_s is None:
+        configured_lease_ttl_s = _env_float(
+            "SCRCPY_VIEWER_LEASE_TTL_S",
+            _DEFAULT_VIEWER_LEASE_TTL_S,
+        )
+        viewer_lease_ttl_s = (
+            0.0
+            if configured_lease_ttl_s <= 0
+            else max(_DEFAULT_VIEWER_LEASE_TTL_S, configured_lease_ttl_s)
+        )
+    else:
+        viewer_lease_ttl_s = max(0.0, scrcpy_viewer_lease_ttl_s)
+    viewer_lease_deadlines: dict[tuple[str, str], float] = {}
+    viewer_lease_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
 
     async def _persist_scrcpy_enabled(serial: str, enabled: bool) -> None:
         if not db_enabled:
@@ -252,6 +280,126 @@ def build_scrcpy_router(
                 await repo.set_relay_scrcpy_enabled(db, serial, enabled)
         except Exception as exc:
             log.warning("persist relay_scrcpy_enabled=%s for %s: %s", enabled, serial, exc)
+
+    def _clear_viewer_lease(serial: str, viewer_id: str) -> None:
+        key = (serial, viewer_id)
+        viewer_lease_deadlines.pop(key, None)
+        task = viewer_lease_tasks.pop(key, None)
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    async def _reapply_effective_viewer_profile(
+        serial: str,
+        device: object,
+        viewers: set[str],
+    ) -> bool:
+        effective_request = _effective_viewer_request(serial, viewers)
+        if (
+            effective_request is None
+            or _scrcpy_request_matches_device(device, effective_request)
+        ):
+            return False
+        raw_status = await asyncio.get_running_loop().run_in_executor(
+            None,
+            partial(
+                device.attach_scrcpy_stream,
+                effective_request.device_ip,
+                effective_request.adb_port,
+                effective_request.enable_control,
+                max_fps=effective_request.max_fps,
+                max_width=effective_request.max_width,
+                bitrate=effective_request.bitrate,
+            ),
+        )
+        return raw_status != "unavailable"
+
+    async def _expire_viewer_lease(serial: str, viewer_id: str) -> None:
+        key = (serial, viewer_id)
+        try:
+            while True:
+                deadline = viewer_lease_deadlines.get(key)
+                if deadline is None:
+                    return
+                delay = deadline - asyncio.get_running_loop().time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                    continue
+
+                lock = _scrcpy_op_lock(serial)
+                async with lock:
+                    deadline = viewer_lease_deadlines.get(key)
+                    if deadline is None:
+                        return
+                    if deadline > asyncio.get_running_loop().time():
+                        continue
+
+                    viewer_lease_deadlines.pop(key, None)
+                    viewers = _SCRCPY_VIEWERS.get(serial)
+                    if not viewers or viewer_id not in viewers:
+                        return
+                    viewers.discard(viewer_id)
+                    _forget_viewer_request(serial, viewer_id)
+                    if viewers:
+                        device = manager.get_device(serial)
+                        profile_reapplied = False
+                        if device:
+                            profile_reapplied = (
+                                await _reapply_effective_viewer_profile(
+                                    serial,
+                                    device,
+                                    viewers,
+                                )
+                            )
+                        log.info(
+                            "scrcpy viewer lease expired serial=%s viewer=%s "
+                            "active_viewers=%d stop=False profile_reapplied=%s",
+                            serial,
+                            viewer_id,
+                            len(viewers),
+                            profile_reapplied,
+                        )
+                        return
+
+                    _SCRCPY_VIEWERS.pop(serial, None)
+                    _SCRCPY_VIEWER_REQUESTS.pop(serial, None)
+                    device = manager.get_device(serial)
+                    if device:
+                        device.detach_scrcpy_stream(
+                            reason=f"scrcpy_viewer_lease_expired:{viewer_id}"
+                        )
+                        await _persist_scrcpy_enabled(serial, False)
+                log.info(
+                    "scrcpy viewer lease expired serial=%s viewer=%s "
+                    "active_viewers=0 stop=True",
+                    serial,
+                    viewer_id,
+                )
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "scrcpy viewer lease expiry failed for %s viewer=%s: %s",
+                serial,
+                viewer_id,
+                exc,
+            )
+        finally:
+            if viewer_lease_tasks.get(key) is asyncio.current_task():
+                viewer_lease_tasks.pop(key, None)
+
+    def _refresh_viewer_lease(serial: str, viewer_id: str) -> None:
+        if viewer_lease_ttl_s <= 0 or not _viewer_uses_lease(viewer_id):
+            return
+        key = (serial, viewer_id)
+        viewer_lease_deadlines[key] = (
+            asyncio.get_running_loop().time() + viewer_lease_ttl_s
+        )
+        task = viewer_lease_tasks.get(key)
+        if task is None or task.done():
+            viewer_lease_tasks[key] = asyncio.create_task(
+                _expire_viewer_lease(serial, viewer_id)
+            )
 
     async def _stop_scrcpy_after_grace(serial: str, viewer_id: str) -> None:
         try:
@@ -330,6 +478,7 @@ def build_scrcpy_router(
             viewers.add(viewer_id)
             viewer_request = body.model_copy(update={"device_ip": device_ip})
             _SCRCPY_VIEWER_REQUESTS.setdefault(serial, {})[viewer_id] = viewer_request
+            _refresh_viewer_lease(serial, viewer_id)
             attach_request = _effective_viewer_request(serial, viewers) or viewer_request
             should_reapply_profile = (
                 (scrcpy_active or scrcpy_pending)
@@ -371,12 +520,14 @@ def build_scrcpy_router(
                 except Exception:
                     viewers.discard(viewer_id)
                     _forget_viewer_request(serial, viewer_id)
+                    _clear_viewer_lease(serial, viewer_id)
                     if not viewers:
                         _SCRCPY_VIEWERS.pop(serial, None)
                     raise
                 if attach_status == "unavailable":
                     viewers.discard(viewer_id)
                     _forget_viewer_request(serial, viewer_id)
+                    _clear_viewer_lease(serial, viewer_id)
                     if not viewers:
                         _SCRCPY_VIEWERS.pop(serial, None)
                     return JSONResponse(
@@ -408,6 +559,33 @@ def build_scrcpy_router(
             "active_viewers": len(_SCRCPY_VIEWERS.get(serial, set())),
         }
 
+    @router.post("/devices/{serial}/scrcpy/heartbeat")
+    async def api_scrcpy_heartbeat(serial: str, body: ScrcpyDetachRequest):
+        viewer_id = _scrcpy_viewer_id(body.viewer_id)
+        if not _viewer_uses_lease(viewer_id):
+            return JSONResponse(
+                {"error": "viewer_id must identify a leased scrcpy viewer"},
+                status_code=400,
+            )
+        if manager.get_device(serial) is None:
+            return JSONResponse({"error": "Device not found"}, status_code=404)
+
+        lock = _scrcpy_op_lock(serial)
+        async with lock:
+            viewers = _SCRCPY_VIEWERS.get(serial)
+            if not viewers or viewer_id not in viewers:
+                return JSONResponse(
+                    {"error": "scrcpy viewer not found"},
+                    status_code=404,
+                )
+            _refresh_viewer_lease(serial, viewer_id)
+            active_viewers = len(viewers)
+        return {
+            "ok": True,
+            "serial": serial,
+            "active_viewers": active_viewers,
+        }
+
     @router.post("/devices/{serial}/scrcpy/detach")
     async def api_scrcpy_detach(serial: str, body: ScrcpyDetachRequest | None = None):
         lock = _scrcpy_op_lock(serial)
@@ -421,27 +599,13 @@ def build_scrcpy_router(
             if viewers is not None:
                 viewers.discard(viewer_id)
                 _forget_viewer_request(serial, viewer_id)
+                _clear_viewer_lease(serial, viewer_id)
                 if viewers:
-                    profile_reapplied = False
-                    effective_request = _effective_viewer_request(serial, viewers)
-                    if (
-                        effective_request
-                        and not _scrcpy_request_matches_device(device, effective_request)
-                    ):
-                        loop = asyncio.get_running_loop()
-                        raw_status = await loop.run_in_executor(
-                            None,
-                            partial(
-                                device.attach_scrcpy_stream,
-                                effective_request.device_ip,
-                                effective_request.adb_port,
-                                effective_request.enable_control,
-                                max_fps=effective_request.max_fps,
-                                max_width=effective_request.max_width,
-                                bitrate=effective_request.bitrate,
-                            ),
-                        )
-                        profile_reapplied = raw_status != "unavailable"
+                    profile_reapplied = await _reapply_effective_viewer_profile(
+                        serial,
+                        device,
+                        viewers,
+                    )
                     log.info(
                         "api_scrcpy_detach serial=%s viewer=%s active_viewers=%d "
                         "stop=False profile_reapplied=%s",

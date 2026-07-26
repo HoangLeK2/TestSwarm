@@ -138,6 +138,89 @@ async def test_relay_attempts_first_connection_without_fixed_startup_sleep(
     assert events[0] == "connect"
 
 
+@pytest.mark.asyncio
+async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
+    monkeypatch,
+) -> None:
+    """A transient H264 stream failure must not take campaign control offline."""
+
+    class _ChannelContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    video_attempts = 0
+    second_video_attempt = asyncio.Event()
+    control_started = asyncio.Event()
+    control_stopped = 0
+
+    class _GrpcClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.ctrl_q: asyncio.Queue = asyncio.Queue()
+
+        async def _stream_once(self, channel) -> None:
+            nonlocal video_attempts
+            video_attempts += 1
+            if video_attempts == 1:
+                await asyncio.sleep(0)
+                raise RuntimeError("simulated execute_batch video failure")
+            second_video_attempt.set()
+            await asyncio.Event().wait()
+
+        def stop(self) -> None:
+            return None
+
+    class _ControlClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        async def run(self) -> None:
+            control_started.set()
+            await asyncio.Event().wait()
+
+        def stop(self) -> None:
+            nonlocal control_stopped
+            control_stopped += 1
+
+    class _Watcher:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+    import relay.control_client as control_client_module
+    import relay.grpc_client as grpc_client_module
+
+    monkeypatch.setattr(grpc_client_module, "create_grpc_channel", lambda *args, **kwargs: _ChannelContext())
+    monkeypatch.setattr(grpc_client_module, "GrpcRelayClient", _GrpcClient)
+    monkeypatch.setattr(control_client_module, "AgentControlClient", _ControlClient)
+    monkeypatch.setattr(relay_agent_module, "AdbDeviceWatcher", _Watcher)
+
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="grpc",
+    )
+    agent._registry = SimpleNamespace(online_serials=["phone-1"])
+    agent._scrcpy_auto_resume_enabled = False
+    agent._send_heartbeat = AsyncMock()
+    agent._periodic_heartbeat = AsyncMock(side_effect=lambda *_: asyncio.Event().wait())
+    agent._shutdown_stream_helpers = AsyncMock()
+
+    stream_task = asyncio.create_task(agent._connect_and_stream_grpc())
+    try:
+        await asyncio.wait_for(control_started.wait(), timeout=0.5)
+        await asyncio.wait_for(second_video_attempt.wait(), timeout=1.0)
+        assert control_stopped == 0
+    finally:
+        stream_task.cancel()
+        await asyncio.gather(stream_task, return_exceptions=True)
+
+
 def test_concurrent_bootstrap_requests_for_one_phone_share_one_run() -> None:
     coordinator = BootstrapCoordinator(max_concurrency=4)
     operation_started = threading.Event()

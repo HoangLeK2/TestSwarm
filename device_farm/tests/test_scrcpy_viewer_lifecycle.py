@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
@@ -199,13 +200,16 @@ async def test_scrcpy_detach_keeps_stream_until_last_viewer_detaches() -> None:
 
 
 @pytest.mark.anyio
-async def test_scrcpy_viewer_without_heartbeat_expires_and_stops_stream() -> None:
+async def test_scrcpy_viewer_without_heartbeat_expires_and_stops_stream(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     device = _FakeScrcpyDevice()
     app = _build_app(
         device,
         serial="serial-lease-expiry",
         viewer_lease_ttl_s=0.1,
     )
+    caplog.set_level(logging.INFO, logger=scrcpy_routes.__name__)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -222,6 +226,60 @@ async def test_scrcpy_viewer_without_heartbeat_expires_and_stops_stream() -> Non
     assert attach.status_code == 200
     assert "serial-lease-expiry" not in scrcpy_routes._SCRCPY_VIEWERS
     assert device.detach_calls == 1
+    stop_records = [
+        record
+        for record in caplog.records
+        if "scrcpy viewer lease expired" in record.getMessage()
+        and "active_viewers=0 stop=True" in record.getMessage()
+    ]
+    assert len(stop_records) == 1
+    assert stop_records[0].levelno == logging.INFO
+
+
+@pytest.mark.anyio
+async def test_expired_stale_viewer_with_active_viewer_logs_at_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    serial = "serial-stale-viewer-log"
+    stale_viewer = "control-screen:stale"
+    current_viewer = "control-screen:current"
+    device = _FakeScrcpyDevice()
+    app = _build_app(
+        device,
+        serial=serial,
+        viewer_lease_ttl_s=0.1,
+    )
+    caplog.set_level(logging.DEBUG, logger=scrcpy_routes.__name__)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={"device_ip": "10.0.0.10", "viewer_id": stale_viewer},
+        )
+        await asyncio.sleep(0.06)
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={"device_ip": "10.0.0.10", "viewer_id": current_viewer},
+        )
+        await asyncio.sleep(0.06)
+
+        assert scrcpy_routes._SCRCPY_VIEWERS[serial] == {current_viewer}
+        matching_records = [
+            record
+            for record in caplog.records
+            if "scrcpy viewer lease expired" in record.getMessage()
+            and stale_viewer in record.getMessage()
+        ]
+        assert len(matching_records) == 1
+        assert matching_records[0].levelno == logging.DEBUG
+        assert "active_viewers=1 stop=False" in matching_records[0].getMessage()
+
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/detach",
+            json={"viewer_id": current_viewer},
+        )
 
 
 @pytest.mark.anyio

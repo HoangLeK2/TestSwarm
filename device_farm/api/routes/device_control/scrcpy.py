@@ -433,7 +433,7 @@ def build_scrcpy_router(
                                     device,
                                     viewers,
                                 )
-                        log.info(
+                        log.debug(
                             "scrcpy viewer lease expired serial=%s viewer=%s "
                             "active_viewers=%d stop=False profile_reapplied=%s "
                             "profile_reapply_scheduled=%s",

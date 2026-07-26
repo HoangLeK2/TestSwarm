@@ -303,15 +303,23 @@ def build_scrcpy_router(
             return False
         return True
 
-    def _should_defer_profile_downgrade(
+    def _should_defer_profile_reapply(
+        serial: str,
         removed_viewer_id: str,
         viewers: set[str],
     ) -> bool:
+        previews_only = bool(viewers) and all(
+            _is_preview_viewer(viewer_id) for viewer_id in viewers
+        )
         return (
-            scrcpy_detach_grace_s > 0
-            and _is_control_viewer(removed_viewer_id)
-            and bool(viewers)
-            and all(_is_preview_viewer(viewer_id) for viewer_id in viewers)
+            previews_only
+            and (
+                _profile_reapply_pending(serial)
+                or (
+                    scrcpy_detach_grace_s > 0
+                    and _is_control_viewer(removed_viewer_id)
+                )
+            )
         )
 
     async def _reapply_effective_viewer_profile(
@@ -377,7 +385,8 @@ def build_scrcpy_router(
                 profile_reapply_tasks.pop(serial, None)
 
     def _schedule_profile_reapply(serial: str) -> None:
-        _cancel_profile_reapply(serial)
+        if _profile_reapply_pending(serial):
+            return
         profile_reapply_tasks[serial] = asyncio.create_task(
             _reapply_profile_after_grace(serial)
         )
@@ -412,7 +421,11 @@ def build_scrcpy_router(
                         device = manager.get_device(serial)
                         profile_reapplied = False
                         if device:
-                            if _should_defer_profile_downgrade(viewer_id, viewers):
+                            if _should_defer_profile_reapply(
+                                serial,
+                                viewer_id,
+                                viewers,
+                            ):
                                 _schedule_profile_reapply(serial)
                             else:
                                 profile_reapplied = await _reapply_effective_viewer_profile(
@@ -597,7 +610,7 @@ def build_scrcpy_router(
                     viewers.discard(viewer_id)
                     _forget_viewer_request(serial, viewer_id)
                     _clear_viewer_lease(serial, viewer_id)
-                    if _should_defer_profile_downgrade(viewer_id, viewers):
+                    if _should_defer_profile_reapply(serial, viewer_id, viewers):
                         _schedule_profile_reapply(serial)
                     if not viewers:
                         _SCRCPY_VIEWERS.pop(serial, None)
@@ -606,7 +619,7 @@ def build_scrcpy_router(
                     viewers.discard(viewer_id)
                     _forget_viewer_request(serial, viewer_id)
                     _clear_viewer_lease(serial, viewer_id)
-                    if _should_defer_profile_downgrade(viewer_id, viewers):
+                    if _should_defer_profile_reapply(serial, viewer_id, viewers):
                         _schedule_profile_reapply(serial)
                     if not viewers:
                         _SCRCPY_VIEWERS.pop(serial, None)
@@ -681,7 +694,8 @@ def build_scrcpy_router(
                 _forget_viewer_request(serial, viewer_id)
                 _clear_viewer_lease(serial, viewer_id)
                 if viewers:
-                    profile_reapply_scheduled = _should_defer_profile_downgrade(
+                    profile_reapply_scheduled = _should_defer_profile_reapply(
+                        serial,
                         viewer_id,
                         viewers,
                     )

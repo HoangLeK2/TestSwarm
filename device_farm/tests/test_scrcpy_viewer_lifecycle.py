@@ -287,7 +287,7 @@ async def test_expired_control_viewer_downgrades_after_grace_when_preview_remain
     app = _build_app(
         device,
         serial=serial,
-        detach_grace_s=0.05,
+        detach_grace_s=0.1,
         viewer_lease_ttl_s=0.3,
     )
     preview_payload = {
@@ -322,12 +322,15 @@ async def test_expired_control_viewer_downgrades_after_grace_when_preview_remain
         )
         assert heartbeat.status_code == 200
         assert device.attach_calls == 2
-        await asyncio.sleep(0.12)
 
+        deadline = asyncio.get_running_loop().time() + 0.4
+        while "control-screen:stale" in scrcpy_routes._SCRCPY_VIEWERS[serial]:
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.01)
         assert scrcpy_routes._SCRCPY_VIEWERS[serial] == {"snapshot-preview:live"}
         assert device.attach_calls == 2
 
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.12)
 
         assert device.attach_calls == 3
         assert device.last_attach_options == {
@@ -1223,6 +1226,56 @@ async def test_control_to_preview_downgrade_applies_after_grace() -> None:
         "max_width": 360,
         "bitrate": 100000,
     }
+
+
+@pytest.mark.anyio
+async def test_preview_detach_keeps_existing_control_downgrade_grace() -> None:
+    serial = "serial-preview-changes-during-grace"
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial=serial, detach_grace_s=0.05)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "control-screen:test",
+                "max_fps": 10,
+                "max_width": 480,
+                "bitrate": 800000,
+            },
+        )
+        for viewer_id, max_fps in (
+            ("follower-preview:temporary", 4),
+            ("snapshot-preview:live", 1),
+        ):
+            await client.post(
+                f"/api/devices/{serial}/scrcpy/attach",
+                json={
+                    "device_ip": "10.0.0.10",
+                    "viewer_id": viewer_id,
+                    "max_fps": max_fps,
+                    "max_width": 360,
+                    "bitrate": 100000,
+                },
+            )
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/detach",
+            json={"viewer_id": "control-screen:test"},
+        )
+        detach_preview = await client.post(
+            f"/api/devices/{serial}/scrcpy/detach",
+            json={"viewer_id": "follower-preview:temporary"},
+        )
+
+        assert detach_preview.json()["profile_reapply_scheduled"] is True
+        assert device.attach_calls == 1
+        await asyncio.sleep(0.08)
+
+    assert device.attach_calls == 2
+    assert device.last_attach_options["max_fps"] == 1
 
 
 def test_device_client_reconfigures_when_preview_downgrades_existing_stream(monkeypatch) -> None:

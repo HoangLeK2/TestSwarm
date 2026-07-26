@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 
 BootstrapResult = tuple[str, int]
 
@@ -29,73 +30,72 @@ class RelayRetryPolicy:
         attempt = max(1, int(attempt))
         jitter_ratio = min(max(float(jitter_ratio), 0.0), 1.0)
         if startup_elapsed < self.startup_window_s:
+            exponent = min(attempt - 1, 62)
             base = min(
-                self.startup_base_s * (2 ** (attempt - 1)),
+                self.startup_base_s * (2 ** exponent),
                 self.startup_max_s,
             )
         else:
+            exponent = min(attempt, 62)
             base = min(
-                self.steady_base_s * (2 ** attempt),
+                self.steady_base_s * (2 ** exponent),
                 self.steady_max_s,
             )
         return base * (1.0 + 0.2 * jitter_ratio)
 
 
-@dataclass(slots=True)
-class _BootstrapRun:
-    done: threading.Event = field(default_factory=threading.Event)
-    result: BootstrapResult | None = None
-    error: BaseException | None = None
-
-
 class BootstrapCoordinator:
-    """Run at most one bootstrap per phone and bound fleet-wide repair pressure."""
+    """Coalesce per-phone work on a dedicated bounded bootstrap executor."""
 
     def __init__(self, *, max_concurrency: int) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be at least 1")
-        self._slots = threading.BoundedSemaphore(max_concurrency)
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_concurrency,
+            thread_name_prefix="relay-bootstrap",
+        )
         self._lock = threading.Lock()
-        self._inflight: dict[str, _BootstrapRun] = {}
+        self._inflight: dict[str, Future[BootstrapResult]] = {}
+        self._closed = False
 
-    def run(
+    def submit(
         self,
         serial: str,
         operation: Callable[[], BootstrapResult],
-        *,
-        wait_timeout: float,
-    ) -> BootstrapResult:
+    ) -> Future[BootstrapResult]:
+        """Return the existing per-phone future or admit one new repair."""
         serial = str(serial or "").strip()
         if not serial:
-            return "bootstrap serial is required", -1
+            future: Future[BootstrapResult] = Future()
+            future.set_result(("bootstrap serial is required", -1))
+            return future
 
         with self._lock:
+            if self._closed:
+                raise RuntimeError("bootstrap coordinator is shut down")
             current = self._inflight.get(serial)
-            if current is None:
-                current = _BootstrapRun()
-                self._inflight[serial] = current
-                owner = True
-            else:
-                owner = False
+            if current is not None:
+                return current
+            current = self._executor.submit(operation)
+            self._inflight[serial] = current
 
-        if not owner:
-            if not current.done.wait(timeout=max(0.0, wait_timeout)):
-                return f"bootstrap still running for {serial}", -1
-            if current.error is not None:
-                raise RuntimeError(
-                    f"bootstrap failed for {serial}: {current.error}"
-                ) from current.error
-            return current.result or (f"bootstrap returned no result for {serial}", -1)
+        current.add_done_callback(
+            lambda completed, key=serial: self._remove_completed(key, completed)
+        )
+        return current
 
-        try:
-            with self._slots:
-                current.result = operation()
-                return current.result
-        except BaseException as exc:
-            current.error = exc
-            raise
-        finally:
-            current.done.set()
-            with self._lock:
-                if self._inflight.get(serial) is current:
-                    self._inflight.pop(serial, None)
+    def _remove_completed(
+        self,
+        serial: str,
+        completed: Future[BootstrapResult],
+    ) -> None:
+        with self._lock:
+            if self._inflight.get(serial) is completed:
+                self._inflight.pop(serial, None)
+
+    def shutdown(self, *, wait: bool = False) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._executor.shutdown(wait=wait, cancel_futures=True)

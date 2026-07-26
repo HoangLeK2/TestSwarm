@@ -2,7 +2,7 @@
 relay/agent.py — RelayAgent: WebSocket bidi stream + command dispatch.
 
 1 WebSocket connection per agent.
-Reconnect: jittered exponential backoff 0.5s → 60s.
+Reconnect: startup backoff 0.25s → 2s, then steady-state up to 8s.
 
 Protocol:
   Text frames  → JSON control messages (register, heartbeat, result, ack, command, ...)
@@ -20,6 +20,7 @@ import struct
 import threading
 import uuid
 import time
+from concurrent.futures import Future
 from typing import Any, Optional
 
 from relay.adb           import (
@@ -501,6 +502,7 @@ class RelayAgent:
                 await self._loop_watchdog.stop()
             if self._runtime_stats:
                 await self._runtime_stats.stop()
+            self._bootstrap_coordinator.shutdown(wait=False)
             shutdown_executors(wait=False)
             if zc:
                 zc.close()
@@ -776,13 +778,9 @@ class RelayAgent:
             return
         self._bootstrap_inflight.add(serial)
         try:
-            loop = asyncio.get_running_loop()
             logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
-            output, rc = await loop.run_in_executor(
-                adb_executor(),
-                self._run_bootstrap_coordinated,
-                serial,
-                180,
+            output, rc = await asyncio.wrap_future(
+                self._submit_bootstrap(serial, 180)
             )
             if rc == 0:
                 logger.info("[%s] auto-bootstrap ok: %s", serial, output[:500])
@@ -794,16 +792,15 @@ class RelayAgent:
         finally:
             self._bootstrap_inflight.discard(serial)
 
-    def _run_bootstrap_coordinated(
+    def _submit_bootstrap(
         self,
         serial: str,
         timeout: int,
-    ) -> tuple[str, int]:
-        """Coalesce duplicate requests and cap fleet-wide bootstrap pressure."""
-        return self._bootstrap_coordinator.run(
+    ) -> Future[tuple[str, int]]:
+        """Submit repair without occupying a shared ADB executor worker."""
+        return self._bootstrap_coordinator.submit(
             serial,
             lambda: _bootstrap_device(serial, timeout=timeout),
-            wait_timeout=max(float(timeout) + 5.0, 10.0),
         )
 
     def _clear_u2_warm_backoff(self, serial: str) -> None:
@@ -2413,15 +2410,22 @@ class RelayAgent:
                 return
             cmd_serial = str(msg.get("serial", "") or "")
             cmd_type = int(msg.get("cmd_type", CMD_SHELL))
-            result = await loop.run_in_executor(
-                adb_executor(),
-                self._execute_command,
-                msg.get("msg_id", ""),
-                cmd_serial,
-                msg.get("cmd", ""),
-                int(msg.get("timeout", 30)),
-                cmd_type,
-            )
+            if cmd_type == CMD_BOOTSTRAP:
+                result = await self._execute_bootstrap_command(
+                    msg.get("msg_id", ""),
+                    cmd_serial,
+                    int(msg.get("timeout", 30)),
+                )
+            else:
+                result = await loop.run_in_executor(
+                    adb_executor(),
+                    self._execute_command,
+                    msg.get("msg_id", ""),
+                    cmd_serial,
+                    msg.get("cmd", ""),
+                    int(msg.get("timeout", 30)),
+                    cmd_type,
+                )
             bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
             if cmd_type == CMD_ADB_CONNECT:
                 try:
@@ -2434,6 +2438,45 @@ class RelayAgent:
                         loop,
                         cmd_serial,
                     )
+
+    async def _execute_bootstrap_command(
+        self,
+        msg_id: str,
+        serial: str,
+        timeout: int,
+    ) -> str:
+        ctx = self._registry.get(serial)
+        if ctx is None or not ctx.is_available:
+            state_str = ctx.state.value if ctx else "unknown"
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": f"serial {serial!r} not available (state={state_str})",
+            })
+        try:
+            output, rc = await asyncio.wrap_future(
+                self._submit_bootstrap(serial, max(timeout, 180))
+            )
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": rc == 0,
+                "exit_code": rc,
+                "output": output,
+                "error": "" if rc == 0 else output,
+            })
+        except Exception as exc:
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": str(exc),
+            })
 
     def _cancel_command_workers(self, serial: str | None = None) -> None:
         if serial is not None:
@@ -2497,10 +2540,7 @@ class RelayAgent:
             elif cmd_type == CMD_RESTART_ATX:
                 output, rc = _restart_atx(serial, timeout=timeout)
             elif cmd_type == CMD_BOOTSTRAP:
-                output, rc = self._run_bootstrap_coordinated(
-                    serial,
-                    max(timeout, 180),
-                )
+                raise RuntimeError("bootstrap command must use async admission")
             elif cmd_type == CMD_SCREENCAP:
                 output, rc = _screencap(serial, timeout=timeout)
             elif cmd_type == CMD_PROBE_CAPS:

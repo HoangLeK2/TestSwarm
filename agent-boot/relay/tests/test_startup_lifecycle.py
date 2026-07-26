@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -40,6 +43,15 @@ def test_default_startup_connects_relay_without_blocking_on_bootstrap(monkeypatc
 
 def test_legacy_startup_mode_keeps_bootstrap_first_rollback(monkeypatch) -> None:
     assert _run_main(monkeypatch, "--startup-mode", "legacy") == [
+        "bootstrap",
+        "relay",
+    ]
+
+
+def test_bootstrap_cli_options_keep_their_bootstrap_before_relay_semantics(
+    monkeypatch,
+) -> None:
+    assert _run_main(monkeypatch, "--serial", "phone-1") == [
         "bootstrap",
         "relay",
     ]
@@ -127,17 +139,21 @@ def test_concurrent_bootstrap_requests_for_one_phone_share_one_run() -> None:
 
     def invoke() -> None:
         results.append(
-            coordinator.run("phone-1", operation, wait_timeout=2)
+            coordinator.submit("phone-1", operation).result(timeout=2)
         )
 
-    owner = threading.Thread(target=invoke)
-    follower = threading.Thread(target=invoke)
-    owner.start()
-    assert operation_started.wait(timeout=1)
-    follower.start()
-    release_operation.set()
-    owner.join(timeout=2)
-    follower.join(timeout=2)
+    try:
+        owner = threading.Thread(target=invoke)
+        follower = threading.Thread(target=invoke)
+        owner.start()
+        assert operation_started.wait(timeout=1)
+        follower.start()
+        release_operation.set()
+        owner.join(timeout=2)
+        follower.join(timeout=2)
+    finally:
+        release_operation.set()
+        coordinator.shutdown(wait=True)
 
     assert calls == ["run"]
     assert results == [("ready", 0), ("ready", 0)]
@@ -160,26 +176,32 @@ def test_bootstrap_repairs_are_bounded_across_many_phones() -> None:
             active -= 1
         return "ready", 0
 
+    def invoke(serial: str) -> None:
+        coordinator.submit(serial, operation).result(timeout=2)
+
     workers = [
         threading.Thread(
-            target=coordinator.run,
-            args=(f"phone-{index}", operation),
-            kwargs={"wait_timeout": 2},
+            target=invoke,
+            args=(f"phone-{index}",),
         )
         for index in range(8)
     ]
-    for worker in workers:
-        worker.start()
+    try:
+        for worker in workers:
+            worker.start()
 
-    deadline = time.monotonic() + 1
-    while time.monotonic() < deadline:
-        with counter_lock:
-            if peak_active == 2:
-                break
-        time.sleep(0.01)
-    release.set()
-    for worker in workers:
-        worker.join(timeout=2)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            with counter_lock:
+                if peak_active == 2:
+                    break
+            time.sleep(0.01)
+        release.set()
+        for worker in workers:
+            worker.join(timeout=2)
+    finally:
+        release.set()
+        coordinator.shutdown(wait=True)
 
     assert peak_active == 2
 
@@ -193,6 +215,78 @@ def test_relay_retry_policy_is_fast_while_farm_is_starting() -> None:
     ]
 
     assert delays == [0.25, 0.5, 1.0, 2.0, 2.0]
+
+
+def test_relay_retry_policy_caps_before_large_attempt_exponentiation() -> None:
+    policy = RelayRetryPolicy()
+
+    assert policy.delay(
+        attempt=10_000,
+        startup_elapsed=31,
+        jitter_ratio=0,
+    ) == 8.0
+
+
+@pytest.mark.asyncio
+async def test_auto_bootstrap_does_not_occupy_shared_adb_executor(
+    monkeypatch,
+) -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    monkeypatch.setattr(relay_agent_module, "_auto_bootstrap_enabled", lambda: True)
+    monkeypatch.setattr(
+        relay_agent_module,
+        "adb_executor",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("bootstrap must not use the shared ADB executor")
+        ),
+    )
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_bootstrap_device",
+        lambda serial, timeout: (f"ready:{serial}", 0),
+    )
+
+    try:
+        await agent._auto_bootstrap_online_device("phone-1")
+    finally:
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
+def test_relay_first_docker_entrypoint_does_not_wait_for_adb() -> None:
+    entrypoint = Path(__file__).parents[2] / "docker" / "entrypoint.sh"
+    env = os.environ.copy()
+    env.update(
+        {
+            "ADB_SERVER_SOCKET": "tcp:unreachable.invalid:5037",
+            "ADB_WAIT_SECONDS": "0",
+            "AGENT_BOOT_STARTUP_MODE": "relay-first",
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(entrypoint), "bash", "-c", "printf command-ran"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.endswith("command-ran")
+
+
+def test_docker_default_command_allows_startup_mode_to_take_effect() -> None:
+    dockerfile = Path(__file__).parents[2] / "Dockerfile"
+    source = dockerfile.read_text(encoding="utf-8")
+
+    assert 'CMD ["/app/.venv/bin/python", "main.py"]' in source
+    assert 'CMD ["/app/.venv/bin/python", "main.py", "--relay-only"]' not in source
 
 
 @pytest.mark.asyncio

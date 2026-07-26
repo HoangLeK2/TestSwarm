@@ -305,6 +305,23 @@ def _resolve_relay_id(args: argparse.Namespace) -> None:
     args.relay_id = load_or_create_relay_id()
 
 
+def _bootstrap_options_requested(args: argparse.Namespace) -> bool:
+    """Preserve the pre-relay bootstrap semantics of explicit bootstrap flags."""
+    return any(
+        (
+            bool(args.serial),
+            bool(args.apk),
+            args.tcpip_port != 5555,
+            bool(args.skip_tcpip),
+            bool(args.use_bundle),
+            bool(args.skip_u2),
+            bool(args.force_u2_install),
+            bool(args.skip_atx),
+            bool(args.skip_stf),
+        )
+    )
+
+
 def main() -> None:
     _load_dotenv()
     args = _build_parser().parse_args()
@@ -321,7 +338,15 @@ def main() -> None:
     # Default: make relay/video available first. The farm control plane performs
     # idempotent device bootstrap after registration, on its maintenance lane,
     # so slow U2/STF repair never blocks scrcpy startup.
-    if args.startup_mode == "legacy":
+    bootstrap_first = args.startup_mode == "legacy"
+    if args.startup_mode == "relay-first" and _bootstrap_options_requested(args):
+        bootstrap_first = True
+        print(
+            "[agent-boot] explicit bootstrap option detected; "
+            "preserving bootstrap-before-relay behavior",
+            file=sys.stderr,
+        )
+    if bootstrap_first:
         _run_bootstrap(args)
     _run_relay(args)
 

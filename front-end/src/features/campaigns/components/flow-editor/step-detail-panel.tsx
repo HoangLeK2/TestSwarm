@@ -1024,6 +1024,119 @@ export function StepDetailPanel({
                 </F>
               )}
 
+              {[
+                'content_interaction',
+                'connection_request',
+                'community_membership'
+              ].includes(step.type) && (
+                <>
+                  <StepPanelHint>
+                    Node chỉ thao tác trên màn hình hiện tại, không tự tìm kiếm,
+                    mở profile/group hoặc bấm Back. Kết quả được xác minh trước
+                    khi bước hoàn tất.
+                  </StepPanelHint>
+                  <F label='Nền tảng'>
+                    <select
+                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                      value={step.platform ?? 'facebook'}
+                      onChange={(e) => update({ platform: e.target.value })}
+                    >
+                      <option value='facebook'>Facebook</option>
+                    </select>
+                  </F>
+                  <F label='Hành động'>
+                    <select
+                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                      value={
+                        step.action ??
+                        (step.type === 'content_interaction'
+                          ? 'like'
+                          : step.type === 'connection_request'
+                            ? 'request'
+                            : 'join')
+                      }
+                      onChange={(e) => update({ action: e.target.value })}
+                    >
+                      {step.type === 'content_interaction' && (
+                        <option value='like'>Thích bài viết</option>
+                      )}
+                      {step.type === 'connection_request' && (
+                        <option value='request'>Gửi lời mời kết bạn</option>
+                      )}
+                      {step.type === 'community_membership' && (
+                        <option value='join'>Tham gia nhóm</option>
+                      )}
+                    </select>
+                  </F>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Tìm nút (giây)'>
+                      <Input
+                        type='number'
+                        min={0.1}
+                        max={60}
+                        step={0.1}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 6}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(
+                              0.1,
+                              Number(e.target.value) || 6
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Poll (giây)'>
+                      <Input
+                        type='number'
+                        min={0.05}
+                        max={10}
+                        step={0.05}
+                        className='h-8 text-xs'
+                        value={step.poll ?? 0.4}
+                        onChange={(e) =>
+                          update({
+                            poll: Math.max(
+                              0.05,
+                              Number(e.target.value) || 0.4
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Xác minh (giây)'>
+                      <Input
+                        type='number'
+                        min={0.1}
+                        max={60}
+                        step={0.1}
+                        className='h-8 text-xs'
+                        value={step.verify_timeout ?? 5}
+                        onChange={(e) =>
+                          update({
+                            verify_timeout: Math.max(
+                              0.1,
+                              Number(e.target.value) || 5
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <F label='Lưu kết quả vào biến (tuỳ chọn)'>
+                    <Input
+                      className='h-8 font-mono text-xs'
+                      value={step.save_as ?? ''}
+                      placeholder='SOCIAL_ACTION_RESULT'
+                      onChange={(e) =>
+                        update({ save_as: e.target.value || undefined })
+                      }
+                    />
+                  </F>
+                </>
+              )}
+
               {step.type === 'fb_find_comment_button' && (
                 <>
                   <div className='rounded-md border border-sky-400/40 bg-sky-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-sky-950 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-100'>

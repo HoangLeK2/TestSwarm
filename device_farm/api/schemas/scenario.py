@@ -683,6 +683,32 @@ class ExtractStep(StepBase):
             "extract_profile must be 'balanced', 'aggressive', 'safe', or a ${VAR} reference"
         )
 
+
+class SocialActionStepBase(StepBase):
+    platform: str = Field("facebook", min_length=1, max_length=64)
+    action: str
+    timeout: float = Field(6.0, ge=0.1, le=60.0)
+    poll: float = Field(0.4, ge=0.05, le=10.0)
+    verify_timeout: float = Field(5.0, ge=0.1, le=60.0)
+    settle_seconds: float = Field(0.35, ge=0.0, le=10.0)
+    save_as: Optional[str] = Field(None, min_length=1, max_length=128)
+
+
+class ContentInteractionStep(SocialActionStepBase):
+    type: Literal["content_interaction"]
+    action: str = Field("like", min_length=1, max_length=64)
+
+
+class ConnectionRequestStep(SocialActionStepBase):
+    type: Literal["connection_request"]
+    action: str = Field("request", min_length=1, max_length=64)
+
+
+class CommunityMembershipStep(SocialActionStepBase):
+    type: Literal["community_membership"]
+    action: str = Field("join", min_length=1, max_length=64)
+
+
 class ExtractTextHierarchyStep(StepBase):
     type: Literal["extract_text_hierarchy"]
     save_as: str = Field(min_length=1)
@@ -784,6 +810,9 @@ StepModel = Annotated[
         Annotated[FbFindCommentButtonStep, Tag("fb_find_comment_button")],
         Annotated[FbTapCommentTargetStep, Tag("fb_tap_comment_target")],
         Annotated[FbApplyCommentFilterStep, Tag("fb_apply_comment_filter")],
+        Annotated[ContentInteractionStep, Tag("content_interaction")],
+        Annotated[ConnectionRequestStep, Tag("connection_request")],
+        Annotated[CommunityMembershipStep, Tag("community_membership")],
         Annotated[RandomPickStep, Tag("random_pick")],
         Annotated[LoopStep, Tag("loop")],
         Annotated[BreakIfStep, Tag("break_if")],

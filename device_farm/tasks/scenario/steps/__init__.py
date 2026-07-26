@@ -46,4 +46,5 @@ from tasks.scenario.steps import (  # noqa: E402, F401
     persistence,
     control_flow,
     composition,
+    social_actions,
 )

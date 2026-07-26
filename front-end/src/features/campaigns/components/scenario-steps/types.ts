@@ -103,6 +103,9 @@ export type ActionType =
   | 'fb_find_comment_button'
   | 'fb_tap_comment_target'
   | 'fb_apply_comment_filter'
+  | 'content_interaction'
+  | 'connection_request'
+  | 'community_membership'
   | 'extract_text_hierarchy'
   | 'extract_text_ocr'
   | 'extract_text_ai'
@@ -181,6 +184,9 @@ export function getStepIcon(type: string): LucideIcon {
     case 'tap_selector':
     case 'double_tap':
     case 'fb_tap_comment_target':
+    case 'content_interaction':
+    case 'connection_request':
+    case 'community_membership':
       return MousePointerClick;
     case 'fb_find_comment_button':
       return Search;
@@ -342,6 +348,12 @@ export function getStepLabel(step: FlowStep): string {
       const filter = step.comment_filter ?? 'all_comments';
       return `Lọc bình luận → ${filterLabels[filter] ?? filter}`;
     }
+    case 'content_interaction':
+      return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
+    case 'connection_request':
+      return `${step.platform ?? 'facebook'} · gửi lời mời`;
+    case 'community_membership':
+      return `${step.platform ?? 'facebook'} · tham gia nhóm`;
     default:
       return step.type;
   }
@@ -367,6 +379,21 @@ export const ALL_STEP_TYPES: {
   {
     value: 'fb_find_comment_button',
     label: 'Tìm nút Bình luận (FB)',
+    group: 'action'
+  },
+  {
+    value: 'content_interaction',
+    label: 'Tương tác bài viết',
+    group: 'action'
+  },
+  {
+    value: 'connection_request',
+    label: 'Gửi lời mời kết bạn',
+    group: 'action'
+  },
+  {
+    value: 'community_membership',
+    label: 'Tham gia nhóm',
     group: 'action'
   },
   {
@@ -608,6 +635,39 @@ export function createDefaultStep(
         comment_filter_settle_s: 0.45,
         comment_filter_step_pause_s: 0.35,
         comment_filter_post_select_s: 0.85
+      };
+    case 'content_interaction':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        action: 'like',
+        timeout: 6,
+        poll: 0.4,
+        verify_timeout: 5,
+        settle_seconds: 0.35
+      };
+    case 'connection_request':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        action: 'request',
+        timeout: 6,
+        poll: 0.4,
+        verify_timeout: 5,
+        settle_seconds: 0.35
+      };
+    case 'community_membership':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        action: 'join',
+        timeout: 6,
+        poll: 0.4,
+        verify_timeout: 5,
+        settle_seconds: 0.35
       };
     case 'tap_position':
       return { ...base, type: 'tap_position', pos: 'middle_center' };

@@ -43,6 +43,9 @@ SCENARIO_STEP_TYPES = [
     "fb_find_comment_button",
     "fb_tap_comment_target",
     "fb_apply_comment_filter",
+    "content_interaction",
+    "connection_request",
+    "community_membership",
     "random_pick",
     "run_scenario",
     "extract",
@@ -145,6 +148,21 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "chain: child | sibling | relative | child_by_text | child_by_description. "
             "fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element."
         ),
+    },
+    "content_interaction": {
+        "required": [],
+        "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
+        "description": "Interact with content on the current screen through a platform adapter.",
+    },
+    "connection_request": {
+        "required": [],
+        "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
+        "description": "Send an idempotent connection request on the current profile screen.",
+    },
+    "community_membership": {
+        "required": [],
+        "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
+        "description": "Join the community on the current screen and verify member or pending state.",
     },
     "wait_element": {
         "required": [],

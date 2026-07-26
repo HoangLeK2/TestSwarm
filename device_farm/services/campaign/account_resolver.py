@@ -32,6 +32,9 @@ _ACCOUNT_BINDING_TYPE_HINTS = (
     ".send",
     ".share",
 )
+_ACCOUNT_BINDING_EXACT_TYPES = frozenset(
+    {"content_interaction", "connection_request", "community_membership"}
+)
 
 
 class AccountBindingError(Exception):
@@ -73,7 +76,9 @@ def _social_write_requires_account_binding(step_type: str) -> bool:
     t = (step_type or "").lower()
     if not t:
         return False
-    return any(hint in t for hint in _ACCOUNT_BINDING_TYPE_HINTS)
+    return t in _ACCOUNT_BINDING_EXACT_TYPES or any(
+        hint in t for hint in _ACCOUNT_BINDING_TYPE_HINTS
+    )
 
 
 def _step_requires_account(step: dict) -> bool:

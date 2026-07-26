@@ -20,6 +20,9 @@ _INTERACTION_PREFIXES = (
     "open_url",
 )
 _SOCIAL_MARKERS = ("tap_fb", "fb_", "ig_", "tiktok_", "linkedin_", "platform_specific.")
+_GENERIC_SOCIAL_TYPES = frozenset(
+    {"content_interaction", "connection_request", "community_membership"}
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,8 @@ def _is_interaction_type(step_type: str) -> bool:
 
 def _is_social_step(step: dict) -> bool:
     t = str(step.get("type") or "")
+    if t in _GENERIC_SOCIAL_TYPES:
+        return True
     if any(marker in t for marker in _SOCIAL_MARKERS):
         return True
     if StepRegistry.get(t) is not None and not t.startswith("interaction."):

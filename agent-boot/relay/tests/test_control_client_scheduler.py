@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -16,6 +17,49 @@ class _Agent:
     _enrollment_token = ""
     _relay_id = "relay-1"
     _registry = _Registry()
+
+
+@pytest.mark.asyncio
+async def test_grpc_bootstrap_uses_async_bootstrap_admission(monkeypatch):
+    calls = []
+
+    class _BootstrapAgent(_Agent):
+        async def _execute_bootstrap_command(self, msg_id, serial, timeout):
+            calls.append((msg_id, serial, timeout))
+            return json.dumps(
+                {
+                    "ok": True,
+                    "exit_code": 0,
+                    "output": "ready",
+                    "error": "",
+                }
+            )
+
+        def _execute_command(self, *_args):
+            raise AssertionError("gRPC bootstrap must not use generic command execution")
+
+    monkeypatch.setattr(
+        "relay.runtime.adb_executor",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("gRPC bootstrap must not use the shared ADB executor")
+        ),
+    )
+    client = AgentControlClient(object(), "relay-key", _BootstrapAgent())
+    q = asyncio.Queue()
+    msg = relay_pb2.ServerControlMsg(
+        bootstrap=relay_pb2.BootstrapCmd(
+            msg_id="bootstrap-1",
+            serial="dev-001",
+            timeout=180,
+        )
+    )
+
+    await client._handle(msg, q)
+    result = await asyncio.wait_for(q.get(), timeout=1.0)
+
+    assert calls == [("bootstrap-1", "dev-001", 180)]
+    assert result.result.ok is True
+    assert result.result.output == "ready"
 
 
 @pytest.mark.asyncio

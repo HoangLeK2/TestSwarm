@@ -779,9 +779,7 @@ class RelayAgent:
         self._bootstrap_inflight.add(serial)
         try:
             logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
-            output, rc = await asyncio.wrap_future(
-                self._submit_bootstrap(serial, 180)
-            )
+            output, rc = await self._await_bootstrap(serial, 180)
             if rc == 0:
                 logger.info("[%s] auto-bootstrap ok: %s", serial, output[:500])
                 self._schedule_u2_warm(serial, reason="auto-bootstrap")
@@ -802,6 +800,21 @@ class RelayAgent:
             serial,
             lambda: _bootstrap_device(serial, timeout=timeout),
         )
+
+    async def _await_bootstrap(
+        self,
+        serial: str,
+        timeout: int,
+    ) -> tuple[str, int]:
+        """Await shared repair without letting one waiter cancel fleet work."""
+        wrapped = asyncio.wrap_future(self._submit_bootstrap(serial, timeout))
+        try:
+            return await asyncio.shield(wrapped)
+        except asyncio.CancelledError:
+            wrapped.add_done_callback(
+                lambda done: None if done.cancelled() else done.exception()
+            )
+            raise
 
     def _clear_u2_warm_backoff(self, serial: str) -> None:
         self._u2_warm_fail_count.pop(serial, None)
@@ -2457,9 +2470,7 @@ class RelayAgent:
                 "error": f"serial {serial!r} not available (state={state_str})",
             })
         try:
-            output, rc = await asyncio.wrap_future(
-                self._submit_bootstrap(serial, max(timeout, 180))
-            )
+            output, rc = await self._await_bootstrap(serial, max(timeout, 180))
             return dumps({
                 "type": "result",
                 "msg_id": msg_id,

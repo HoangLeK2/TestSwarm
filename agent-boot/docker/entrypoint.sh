@@ -15,6 +15,45 @@ ADB_HOST="${ADB_HOST:-host.docker.internal}"
 ADB_PORT="${ADB_PORT:-5037}"
 startup_mode="${AGENT_BOOT_STARTUP_MODE:-relay-first}"
 require_adb="${AGENT_BOOT_REQUIRE_ADB_AT_START:-0}"
+cli_startup_mode=""
+bootstrap_cli_requested=false
+relay_only=false
+expect_startup_mode=false
+
+for arg in "$@"; do
+  if [[ "$expect_startup_mode" == true ]]; then
+    cli_startup_mode="$arg"
+    expect_startup_mode=false
+    continue
+  fi
+  case "$arg" in
+    --startup-mode)
+      expect_startup_mode=true
+      ;;
+    --startup-mode=*)
+      cli_startup_mode="${arg#*=}"
+      ;;
+    --relay-only)
+      relay_only=true
+      ;;
+    --bootstrap-only|-s|--serial|--serial=*|--apk|--apk=*|\
+    --tcpip-port|--tcpip-port=*|--skip-tcpip|--use-bundle|--skip-u2|\
+    --force-u2-install|--skip-atx|--skip-stf|--ws-url|--ws-url=*)
+      bootstrap_cli_requested=true
+      ;;
+  esac
+done
+
+effective_startup_mode="${cli_startup_mode:-$startup_mode}"
+wait_for_adb=false
+if [[ "$require_adb" =~ ^(1|true|yes|on)$ ]]; then
+  wait_for_adb=true
+elif [[ "$relay_only" != true ]] && {
+  [[ "$effective_startup_mode" == "legacy" ]] ||
+  [[ "$bootstrap_cli_requested" == true ]]
+}; then
+  wait_for_adb=true
+fi
 
 if [[ -z "${ADB_SERVER_SOCKET:-}" ]]; then
   echo "== ADB mode: local (USB in container) =="
@@ -30,7 +69,7 @@ else
   echo "== ADB mode: host server ${ADB_HOST}:${ADB_PORT} =="
 fi
 
-if [[ "$startup_mode" == "legacy" || "$require_adb" =~ ^(1|true|yes|on)$ ]]; then
+if [[ "$wait_for_adb" == true ]]; then
   if [[ -z "${ADB_SERVER_SOCKET:-}" ]]; then
     while (( elapsed < wait_seconds )); do
       if adb_server_ready; then

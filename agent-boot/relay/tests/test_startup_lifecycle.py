@@ -257,6 +257,53 @@ async def test_auto_bootstrap_does_not_occupy_shared_adb_executor(
         agent._bootstrap_coordinator.shutdown(wait=True)
 
 
+@pytest.mark.asyncio
+async def test_cancelling_one_waiter_does_not_cancel_shared_bootstrap(
+    monkeypatch,
+) -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._bootstrap_coordinator.shutdown(wait=True)
+    agent._bootstrap_coordinator = BootstrapCoordinator(max_concurrency=1)
+    blocker_started = threading.Event()
+    release_blocker = threading.Event()
+
+    def bootstrap(serial: str, timeout: int) -> tuple[str, int]:
+        if serial == "blocker":
+            blocker_started.set()
+            release_blocker.wait(timeout=2)
+        return f"ready:{serial}", 0
+
+    monkeypatch.setattr(relay_agent_module, "_bootstrap_device", bootstrap)
+    blocker = agent._submit_bootstrap("blocker", 180)
+    assert blocker_started.wait(timeout=1)
+
+    cancelled_waiter = asyncio.create_task(
+        agent._await_bootstrap("phone-1", 180)
+    )
+    surviving_waiter = asyncio.create_task(
+        agent._await_bootstrap("phone-1", 180)
+    )
+    await asyncio.sleep(0)
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+
+    try:
+        release_blocker.set()
+        assert await asyncio.wait_for(surviving_waiter, timeout=1.0) == (
+            "ready:phone-1",
+            0,
+        )
+    finally:
+        release_blocker.set()
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
 def test_relay_first_docker_entrypoint_does_not_wait_for_adb() -> None:
     entrypoint = Path(__file__).parents[2] / "docker" / "entrypoint.sh"
     env = os.environ.copy()
@@ -279,6 +326,40 @@ def test_relay_first_docker_entrypoint_does_not_wait_for_adb() -> None:
 
     assert completed.returncode == 0
     assert completed.stdout.endswith("command-ran")
+
+
+def test_docker_entrypoint_waits_for_adb_when_bootstrap_flags_are_explicit() -> None:
+    entrypoint = Path(__file__).parents[2] / "docker" / "entrypoint.sh"
+    env = os.environ.copy()
+    env.update(
+        {
+            "ADB_SERVER_SOCKET": "tcp:unreachable.invalid:5037",
+            "ADB_WAIT_SECONDS": "0",
+            "AGENT_BOOT_STARTUP_MODE": "relay-first",
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(entrypoint),
+            "bash",
+            "-c",
+            "printf command-ran",
+            "--",
+            "--serial",
+            "phone-1",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "command-ran" not in completed.stdout
+    assert "ADB not reachable" in completed.stderr
 
 
 def test_docker_default_command_allows_startup_mode_to_take_effect() -> None:

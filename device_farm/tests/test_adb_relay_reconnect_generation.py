@@ -29,3 +29,16 @@ async def test_stale_stream_cleanup_does_not_unregister_newer_connection() -> No
 
     assert manager.relay_for_serial("serial-1") is new_conn
     manager._remove_relay_from_redis.assert_not_awaited()
+
+
+def test_stale_stream_cleanup_does_not_remove_newer_grpc_control_queue() -> None:
+    manager = AdbRelayManager()
+    old_queue: asyncio.Queue = asyncio.Queue()
+    new_queue: asyncio.Queue = asyncio.Queue()
+
+    manager.register_grpc_agent("agent-1", old_queue)
+    manager.register_grpc_agent("agent-1", new_queue)
+    manager.unregister_grpc_agent("agent-1", expected_queue=old_queue)
+
+    assert manager._grpc_agents["agent-1"] is new_queue
+    assert new_queue.empty()

@@ -743,7 +743,8 @@ class DeviceClient:
             queues = list(self._frame_queues)
         if first_frame:
             self._logger.info(
-                "h264 video started → %d WS subscriber(s), avcc_len=%d",
+                "h264 video started key=%s → %d WS subscriber(s), avcc_len=%d",
+                is_key,
                 len(queues),
                 len(avcc_data),
             )

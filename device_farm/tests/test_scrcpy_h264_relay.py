@@ -207,6 +207,22 @@ class TestRelayJpegDemand:
 
 
 class TestH264RelayTelemetry:
+    def test_first_frame_info_identifies_keyframe(self, caplog):
+        device = _make_device_client()
+
+        with caplog.at_level(logging.INFO, logger="device.relay-log-test"):
+            device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)
+
+        matching = [
+            record
+            for record in caplog.records
+            if "h264 video started" in record.getMessage()
+        ]
+        assert [
+            (record.levelno, "key=True" in record.getMessage())
+            for record in matching
+        ] == [(logging.INFO, True)]
+
     def test_recurrent_keyframe_is_debug_only(self, caplog):
         device = _make_device_client()
         device._last_frame_time = 1.0

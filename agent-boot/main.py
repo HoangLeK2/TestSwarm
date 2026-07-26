@@ -2,7 +2,9 @@
 agent-boot/main.py — Entry point.
 
 Modes:
-  uv run main.py                     # bootstrap all devices + start relay daemon
+  uv run main.py                     # start relay immediately; reconcile via control plane
+  uv run main.py --startup-mode legacy
+                                      # bootstrap all devices, then start relay
   uv run main.py --relay-only        # skip bootstrap, just run relay
   uv run main.py --bootstrap-only    # setup devices, then exit
   uv run main.py --serial <serial>   # target a specific device
@@ -74,6 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Skip bootstrap, only run relay daemon")
     mode.add_argument("--bootstrap-only", action="store_true",
                       help="Bootstrap devices then exit (no relay)")
+    parser.add_argument(
+        "--startup-mode",
+        choices=("relay-first", "legacy"),
+        default=_env("AGENT_BOOT_STARTUP_MODE", "relay-first"),
+        help=(
+            "Default startup lifecycle: relay-first makes devices stream-capable "
+            "before background bootstrap; legacy bootstraps before relay "
+            "(default: $AGENT_BOOT_STARTUP_MODE or relay-first)"
+        ),
+    )
 
     # Device selection
     parser.add_argument("--serial", "-s", metavar="SERIAL",
@@ -306,8 +318,11 @@ def main() -> None:
         ok = _run_bootstrap(args)
         sys.exit(0 if ok else 1)
 
-    # Default: bootstrap → relay
-    _run_bootstrap(args)
+    # Default: make relay/video available first. The farm control plane performs
+    # idempotent device bootstrap after registration, on its maintenance lane,
+    # so slow U2/STF repair never blocks scrcpy startup.
+    if args.startup_mode == "legacy":
+        _run_bootstrap(args)
     _run_relay(args)
 
 

@@ -237,7 +237,7 @@ async def test_post_adb_connect_refresh_publishes_heartbeat(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_registry_heartbeat_seeds_from_adb_snapshot(monkeypatch):
+async def test_empty_registry_heartbeat_does_not_block_on_adb_snapshot(monkeypatch):
     agent = RelayAgent(
         server_url="localhost:50051",
         api_key="x",
@@ -246,7 +246,11 @@ async def test_empty_registry_heartbeat_seeds_from_adb_snapshot(monkeypatch):
     )
     send_q: asyncio.Queue = asyncio.Queue()
 
-    monkeypatch.setattr("relay.agent._list_serials", lambda: ["10AE7S00HD002JK"])
+    list_calls: list[bool] = []
+    monkeypatch.setattr(
+        "relay.agent._list_serials",
+        lambda: list_calls.append(True) or ["10AE7S00HD002JK"],
+    )
     monkeypatch.setattr(
         agent,
         "_ensure_capabilities_for_serials",
@@ -262,7 +266,8 @@ async def test_empty_registry_heartbeat_seeds_from_adb_snapshot(monkeypatch):
 
     heartbeat = json.loads(await asyncio.wait_for(send_q.get(), timeout=1.0))
     assert heartbeat["type"] == "heartbeat"
-    assert heartbeat["serials"] == ["10AE7S00HD002JK"]
+    assert heartbeat["serials"] == []
+    assert list_calls == []
     await asyncio.gather(*list(agent._capability_probe_tasks), return_exceptions=True)
 
 

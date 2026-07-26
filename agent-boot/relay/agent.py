@@ -32,6 +32,7 @@ from relay.adb           import (
     reconcile_usb_preferred_for_duplicate_devices,
 )
 from relay.mdns          import start_mdns_discovery
+from relay.bootstrap_lifecycle import BootstrapCoordinator, RelayRetryPolicy
 from relay.device_state  import DeviceRegistry, DeviceState
 from relay.device_watcher import AdbDeviceWatcher
 from relay.session_manager import ScrcpySessionManager
@@ -294,6 +295,12 @@ class RelayAgent:
         self._atx_forward_cache: dict[str, tuple[str, int]] = {}
         self._atx_forward_lock = threading.Lock()
         self._bootstrap_inflight: set[str] = set()
+        self._bootstrap_coordinator = BootstrapCoordinator(
+            max_concurrency=max(
+                1,
+                _env_int("RELAY_BOOTSTRAP_CONCURRENCY", 4),
+            )
+        )
 
         # Runtime: bounded executors + task registry + watchdog.
         # `_stream_tasks` is replaced per transport connect; this initial
@@ -449,11 +456,9 @@ class RelayAgent:
         except Exception:
             pass
 
-        attempt    = 0
-        base_delay = 0.5
-
-        # Brief initial delay so device_farm server has time to start
-        await asyncio.sleep(3.0)
+        attempt = 0
+        retry_policy = RelayRetryPolicy()
+        startup_started_at = asyncio.get_running_loop().time()
 
         try:
             while True:
@@ -469,8 +474,13 @@ class RelayAgent:
                     await asyncio.sleep(1.0)
                 except Exception as exc:
                     attempt += 1
-                    delay = min(base_delay * (2 ** attempt), 8.0)
-                    delay += delay * 0.2 * random.random()
+                    delay = retry_policy.delay(
+                        attempt=attempt,
+                        startup_elapsed=(
+                            asyncio.get_running_loop().time() - startup_started_at
+                        ),
+                        jitter_ratio=random.random(),
+                    )
                     logger.warning(
                         "%s stream failed (attempt %d): %s — retry in %.1fs",
                         self._relay_mode.upper(), attempt, exc, delay,
@@ -528,7 +538,10 @@ class RelayAgent:
             logger.info("WS connected → %s (relay_id=%s)", self._server_url, self._relay_id)
 
             # ── Register ──────────────────────────────────────────────────────
-            serials = self._registry.online_serials or _list_serials()
+            # Never block transport registration on ADB. The device watcher
+            # publishes an immediate heartbeat when an existing/new phone is
+            # observed, so an empty first register is safe and keeps startup fast.
+            serials = self._registry.online_serials
             await ws.send(dumps({
                 "type":     "register",
                 "relay_id": self._relay_id,
@@ -637,7 +650,9 @@ class RelayAgent:
 
             # ── Register on Channel 1 (video stream) for backward compat ──────
             # Channel 2 also sends register; server uses whichever arrives first.
-            serials = self._registry.online_serials or _list_serials()
+            # Register the relay immediately. ADB discovery is owned by the
+            # watcher/supervisor and must not block the event loop here.
+            serials = self._registry.online_serials
             register_msg = dumps({
                 "type":     "register",
                 "relay_id": self._relay_id,
@@ -765,7 +780,7 @@ class RelayAgent:
             logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
             output, rc = await loop.run_in_executor(
                 adb_executor(),
-                _bootstrap_device,
+                self._run_bootstrap_coordinated,
                 serial,
                 180,
             )
@@ -778,6 +793,18 @@ class RelayAgent:
             logger.warning("[%s] auto-bootstrap error: %s", serial, exc)
         finally:
             self._bootstrap_inflight.discard(serial)
+
+    def _run_bootstrap_coordinated(
+        self,
+        serial: str,
+        timeout: int,
+    ) -> tuple[str, int]:
+        """Coalesce duplicate requests and cap fleet-wide bootstrap pressure."""
+        return self._bootstrap_coordinator.run(
+            serial,
+            lambda: _bootstrap_device(serial, timeout=timeout),
+            wait_timeout=max(float(timeout) + 5.0, 10.0),
+        )
 
     def _clear_u2_warm_backoff(self, serial: str) -> None:
         self._u2_warm_fail_count.pop(serial, None)
@@ -1138,18 +1165,6 @@ class RelayAgent:
     ) -> None:
         serials = self._registry.online_serials
         loop = asyncio.get_running_loop()
-        if not serials:
-            try:
-                snapshot = await loop.run_in_executor(adb_executor(), _list_serials)
-            except Exception as exc:
-                logger.debug("heartbeat adb snapshot failed: %s", exc)
-                snapshot = []
-            if snapshot:
-                self._seed_registry_from_adb_serials(
-                    snapshot,
-                    source="heartbeat adb snapshot",
-                )
-                serials = self._registry.online_serials
         if self._u2_warm_on_heartbeat:
             for serial in serials:
                 ctx = self._registry.get(serial)
@@ -2482,7 +2497,10 @@ class RelayAgent:
             elif cmd_type == CMD_RESTART_ATX:
                 output, rc = _restart_atx(serial, timeout=timeout)
             elif cmd_type == CMD_BOOTSTRAP:
-                output, rc = _bootstrap_device(serial, timeout=max(timeout, 180))
+                output, rc = self._run_bootstrap_coordinated(
+                    serial,
+                    max(timeout, 180),
+                )
             elif cmd_type == CMD_SCREENCAP:
                 output, rc = _screencap(serial, timeout=timeout)
             elif cmd_type == CMD_PROBE_CAPS:

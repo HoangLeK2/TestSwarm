@@ -741,9 +741,18 @@ class DeviceClient:
                 # Store for late-joining subscribers (replaces _last_key_frame dict)
                 self._last_key_frame = msg
             queues = list(self._frame_queues)
-        if first_frame or is_key:
-            self._logger.info("h264 video key=%s queued → %d WS subscriber(s), avcc_len=%d",
-                              is_key, len(queues), len(avcc_data))
+        if first_frame:
+            self._logger.info(
+                "h264 video started → %d WS subscriber(s), avcc_len=%d",
+                len(queues),
+                len(avcc_data),
+            )
+        elif is_key:
+            self._logger.debug(
+                "h264 keyframe queued → %d WS subscriber(s), avcc_len=%d",
+                len(queues),
+                len(avcc_data),
+            )
         # FPS counter — log relay throughput every 5s
         if self._h264_fps_t0 == 0.0:
             self._h264_fps_t0 = time.monotonic()
@@ -751,7 +760,11 @@ class DeviceClient:
         _now = time.monotonic()
         if _now - self._h264_fps_t0 >= 5.0:
             fps = self._h264_fps_count / (_now - self._h264_fps_t0)
-            self._logger.info("h264 relay FPS=%.1f frames=%d (5s window)", fps, self._h264_fps_count)
+            self._logger.debug(
+                "h264 relay FPS=%.1f frames=%d (5s window)",
+                fps,
+                self._h264_fps_count,
+            )
             self._h264_fps_count = 0
             self._h264_fps_t0 = _now
         # NOTE: do NOT re-send config before every IDR. See on_agent_h264_config.

@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import io
+import logging
 import socket
 import struct
 import threading
@@ -20,6 +21,8 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+from core.config import Config
+from runtime.core.device_client import DeviceClient
 from runtime.transports.scrcpy_receiver import (
     PTS_CONFIG_MASK,
     RelayScrcpyReceiver,
@@ -64,6 +67,12 @@ def _make_receiver(**kwargs) -> ScrcpyReceiver:
     )
     defaults.update(kwargs)
     return ScrcpyReceiver(**defaults)
+
+
+def _make_device_client(serial: str = "relay-log-test") -> DeviceClient:
+    device = DeviceClient(serial=serial, index=0, config=Config())
+    device._loop = object()
+    return device
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -195,6 +204,37 @@ class TestRelayJpegDemand:
             receiver._event_loop.run_in_executor.assert_called_once()
         finally:
             receiver.stop_receiver()
+
+
+class TestH264RelayTelemetry:
+    def test_recurrent_keyframe_is_debug_only(self, caplog):
+        device = _make_device_client()
+        device._last_frame_time = 1.0
+
+        with caplog.at_level(logging.DEBUG, logger="device.relay-log-test"):
+            device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)
+
+        matching = [
+            record
+            for record in caplog.records
+            if "h264 keyframe queued" in record.getMessage()
+        ]
+        assert [record.levelno for record in matching] == [logging.DEBUG]
+
+    def test_fps_sample_is_debug_only(self, caplog):
+        device = _make_device_client()
+        device._last_frame_time = 1.0
+        device._h264_fps_t0 = time.monotonic() - 6.0
+
+        with caplog.at_level(logging.DEBUG, logger="device.relay-log-test"):
+            device.on_agent_h264_video(b"frame", is_key=False, pts_us=1)
+
+        matching = [
+            record
+            for record in caplog.records
+            if "h264 relay FPS=" in record.getMessage()
+        ]
+        assert [record.levelno for record in matching] == [logging.DEBUG]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

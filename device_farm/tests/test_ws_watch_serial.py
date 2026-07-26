@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -260,6 +261,95 @@ async def test_device_sender_sends_cached_bootstrap_once_without_forcing_idr():
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+async def test_device_sender_healthy_stats_are_debug_only(monkeypatch, caplog):
+    monkeypatch.setattr(
+        ws_module,
+        "STREAM_STATS_LOG_INTERVAL_S",
+        0.0,
+        raising=False,
+    )
+    dev = _FakeDevice(serial="SN_STATS")
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
+    ws = _CollectingWebSocket()
+
+    with caplog.at_level(logging.DEBUG, logger=ws_module.__name__):
+        task = asyncio.create_task(
+            ws_manager._device_sender(ws, dev, asyncio.Lock())
+        )
+        try:
+            for _ in range(20):
+                if dev._q is not None:
+                    break
+                await asyncio.sleep(0.01)
+            assert dev._q is not None
+            dev._q.put_nowait(_h264_key(dev.serial))
+
+            for _ in range(20):
+                if len(ws.sent) >= 3:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    matching = [
+        record
+        for record in caplog.records
+        if "[WS device sender]" in record.getMessage()
+    ]
+    assert [record.levelno for record in matching] == [logging.DEBUG]
+
+
+@pytest.mark.asyncio
+async def test_device_sender_drop_stats_are_warning(monkeypatch, caplog):
+    monkeypatch.setattr(
+        ws_module,
+        "STREAM_STATS_LOG_INTERVAL_S",
+        0.0,
+        raising=False,
+    )
+    dev = _FakeDevice(serial="SN_DROP")
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
+    ws = _CollectingWebSocket()
+    ws_send_lock = asyncio.Lock()
+
+    with caplog.at_level(logging.DEBUG, logger=ws_module.__name__):
+        task = asyncio.create_task(
+            ws_manager._device_sender(ws, dev, ws_send_lock)
+        )
+        try:
+            for _ in range(20):
+                if dev._q is not None and len(ws.sent) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert dev._q is not None
+            await ws_send_lock.acquire()
+            dev._q.put_nowait(_h264_key(dev.serial))
+
+            for _ in range(20):
+                if any(
+                    "[WS device sender]" in record.getMessage()
+                    for record in caplog.records
+                ):
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            if ws_send_lock.locked():
+                ws_send_lock.release()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    matching = [
+        record
+        for record in caplog.records
+        if "[WS device sender]" in record.getMessage()
+    ]
+    assert [record.levelno for record in matching] == [logging.WARNING]
 
 
 def test_stream_bootstrap_invalidates_key_when_config_generation_changes():

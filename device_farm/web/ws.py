@@ -64,6 +64,7 @@ STREAM_VIEWER_IDR_MIN_INTERVAL_S = max(
     0.1,
     float(os.environ.get("STREAM_VIEWER_IDR_MIN_INTERVAL_S", "0.5")),
 )
+STREAM_STATS_LOG_INTERVAL_S = 5.0
 
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -662,6 +663,22 @@ class WebSocketManager:
         last_force_idr_ts = time.monotonic()
         first_key_idr_retries = 0
 
+        def _log_sender_stats_if_due(now: float) -> None:
+            nonlocal sent_total, dropped_total, last_stats_ts
+            if now - last_stats_ts < STREAM_STATS_LOG_INTERVAL_S:
+                return
+            if sent_total or dropped_total:
+                log_fn = log.warning if dropped_total else log.debug
+                log_fn(
+                    "[WS device sender] serial=%s sent=%d dropped=%d",
+                    getattr(device, "serial", "unknown"),
+                    sent_total,
+                    dropped_total,
+                )
+            sent_total = 0
+            dropped_total = 0
+            last_stats_ts = now
+
         try:
             # Viewer refcount: drives DeviceClient auto-start/auto-stop.
             bootstrap = None
@@ -724,6 +741,7 @@ class WebSocketManager:
                 except asyncio.TimeoutError:
                     dropped_total += 1
                     _request_idr_recover()
+                    _log_sender_stats_if_due(time.monotonic())
                     continue
                 try:
                     await asyncio.wait_for(
@@ -739,18 +757,7 @@ class WebSocketManager:
                 sent_total += 1
                 await asyncio.sleep(0)
 
-                now = time.monotonic()
-                if now - last_stats_ts >= 5.0:
-                    if sent_total or dropped_total:
-                        log.info(
-                            "[WS device sender] serial=%s sent=%d dropped=%d",
-                            getattr(device, "serial", "unknown"),
-                            sent_total,
-                            dropped_total,
-                        )
-                    sent_total = 0
-                    dropped_total = 0
-                    last_stats_ts = now
+                _log_sender_stats_if_due(time.monotonic())
         finally:
             log.info(
                 "watch_serial: stopped video sender for %s",

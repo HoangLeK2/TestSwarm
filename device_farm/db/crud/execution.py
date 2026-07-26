@@ -87,6 +87,17 @@ async def get_execution(db: AsyncSession, execution_id: str) -> Optional[Executi
     return result.scalar_one_or_none()
 
 
+async def get_executions_by_ids(
+    db: AsyncSession,
+    execution_ids: list[str],
+) -> dict[str, Execution]:
+    ids = [execution_id for execution_id in dict.fromkeys(execution_ids) if execution_id]
+    if not ids:
+        return {}
+    result = await db.execute(select(Execution).where(Execution.id.in_(ids)))
+    return {execution.id: execution for execution in result.scalars().all()}
+
+
 async def list_executions(
     db: AsyncSession,
     *,
@@ -456,6 +467,7 @@ __all__ = [
     # Execution
     "create_execution",
     "get_execution",
+    "get_executions_by_ids",
     "list_executions",
     "update_execution",
     "delete_execution",

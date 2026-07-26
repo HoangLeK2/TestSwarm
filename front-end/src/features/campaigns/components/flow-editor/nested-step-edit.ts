@@ -17,3 +17,8 @@ export function shouldUseChildStepDialog(
 ): boolean {
   return !nestedInDialog && !compact;
 }
+
+/** A parent scenario must not persist while a buffered child edit is uncommitted. */
+export function canPersistScenario(childEditorOpen: boolean): boolean {
+  return !childEditorOpen;
+}

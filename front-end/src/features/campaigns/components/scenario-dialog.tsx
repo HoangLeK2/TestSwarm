@@ -76,6 +76,7 @@ import { useTranslations } from 'next-intl';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { FlowEditor } from './flow-editor/flow-editor';
 import { deriveNestedInlineRunStates } from './flow-editor/inline-run-key';
+import { canPersistScenario } from './flow-editor/nested-step-edit';
 import { sanitizeScenarioStepsForApi } from '@/features/devices/lib/sanitize-scenario-steps-for-api';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
 import { stepsToGraph } from '../utils/steps-to-graph';
@@ -1420,6 +1421,12 @@ export function ScenarioDialog({
   };
 
   const handleSave = () => {
+    if (!canPersistScenario(childStepEditorOpen)) {
+      toast.info(
+        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+      );
+      return;
+    }
     let variablesToSave: Record<string, any>;
     try {
       variablesToSave = resolveVariablesForSave();

@@ -127,11 +127,20 @@ async def open_dlq_for_failed_execution(
     resolved_reason = pick_richer_message(failure_reason, resolved_error) or resolved_error
     artifact_refs = _artifact_refs_from_steps(step_results)
     now = datetime.now(timezone.utc)
+    execution_org_id = str(getattr(execution, "org_id", None) or "").strip()
+    supplied_org_id = str(org_id or "").strip()
+    if supplied_org_id and execution_org_id and supplied_org_id != execution_org_id:
+        raise ValueError(
+            f"DLQ org_id mismatch for execution {execution_id}: "
+            f"expected {execution_org_id}, got {supplied_org_id}"
+        )
+    resolved_org_id = execution_org_id
 
     entry = await create_dlq_entry(
         db,
         execution_id=execution_id,
         device_serial=device_serial,
+        org_id=resolved_org_id,
         error=resolved_error,
         failed_step_id=failed_step_id,
         failure_reason=resolved_reason,
@@ -146,11 +155,11 @@ async def open_dlq_for_failed_execution(
     ):
         await update_execution(db, execution_id, status=ExecutionStatus.DLQ_OPEN.value)
 
-    if org_id:
+    if resolved_org_id:
         await emit_dlq_domain_event(
             db,
             event="execution.dlq.opened",
-            org_id=org_id,
+            org_id=resolved_org_id,
             execution_id=execution_id,
             user_id=user_id,
             details={
@@ -168,7 +177,7 @@ async def open_dlq_for_failed_execution(
             db,
             event_type=EXECUTION_DLQ_OPENED,
             execution_id=execution_id,
-            organization_id=org_id,
+            organization_id=resolved_org_id,
             campaign_id=execution.campaign_id if execution else None,
             step_id=failed_step_id,
             payload={

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  canPersistScenario,
   shouldUseChildStepDialog,
   shouldUseStepEditOverlay
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
@@ -49,4 +50,9 @@ test('shouldUseChildStepDialog is mutually exclusive with overlay mode', () => {
       `overlay and dialog must not both be true for nested=${nestedInDialog} compact=${compact}`
     );
   }
+});
+
+test('scenario persistence waits until the nested child edit is committed', () => {
+  assert.equal(canPersistScenario(true), false);
+  assert.equal(canPersistScenario(false), true);
 });

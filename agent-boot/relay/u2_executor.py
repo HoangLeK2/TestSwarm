@@ -30,6 +30,15 @@ DEFAULT_FLOW_WAIT_TIMEOUT = 3.0
 DEFAULT_FLOW_GONE_TIMEOUT = 1.0
 DEFAULT_SWIPE_DURATION = 0.12
 DEFAULT_SCROLL_MAX_SWIPES = 5
+_READ_ONLY_BATCH_OPS = frozenset({
+    "dump_hierarchy",
+    "exists",
+    "get_text",
+    "screenshot",
+    "sleep",
+    "wait_exists",
+    "wait_gone",
+})
 
 # Error substrings that signal a dead session — these should trigger evict+retry.
 # Kept as string patterns (not classes) because uiautomator2 exception hierarchy
@@ -564,6 +573,29 @@ class U2Executor:
         self._loop = loop
         self._http_dump = http_dump
         self._http_rpc = http_rpc
+        self._ui_generations: dict[str, int] = {}
+        self._ui_mutations_in_flight: dict[str, int] = {}
+
+    def ui_generation(self, serial: str) -> int:
+        """Monotonic marker used to invalidate short-lived UI handoffs."""
+        return self._ui_generations.get(serial, 0)
+
+    def ui_mutation_in_flight(self, serial: str) -> int:
+        return self._ui_mutations_in_flight.get(serial, 0)
+
+    def begin_ui_mutation(self, serial: str) -> None:
+        self._ui_generations[serial] = self.ui_generation(serial) + 1
+        self._ui_mutations_in_flight[serial] = (
+            self.ui_mutation_in_flight(serial) + 1
+        )
+
+    def end_ui_mutation(self, serial: str) -> None:
+        self._ui_generations[serial] = self.ui_generation(serial) + 1
+        remaining = self.ui_mutation_in_flight(serial) - 1
+        if remaining > 0:
+            self._ui_mutations_in_flight[serial] = remaining
+        else:
+            self._ui_mutations_in_flight.pop(serial, None)
 
     async def with_session(self, serial: str, coro: Callable[[], Awaitable[T]]) -> T:
         """Keep one warm u2 session for expand + dump (no reconnect between batches)."""
@@ -619,6 +651,12 @@ class U2Executor:
         if len(actions) > MAX_BATCH_ACTIONS:
             logger.warning("u2_batch: %d actions exceeds cap %d, truncating", len(actions), MAX_BATCH_ACTIONS)
             actions = actions[:MAX_BATCH_ACTIONS]
+        mutates_ui = any(
+            action.get("op") not in _READ_ONLY_BATCH_OPS
+            for action in actions
+        )
+        if mutates_ui:
+            self.begin_ui_mutation(serial)
 
         def _run_actions(dev: Any) -> dict:
             results: list[dict] = []
@@ -696,19 +734,24 @@ class U2Executor:
             return _finish({"ok": True, "stopped_at": None, "results": results, "error": None})
 
         try:
-            return await _run_with_retry(
-                self._pool,
-                self._loop,
-                serial,
-                _run_actions,
-            )
-        except Exception as exc:
-            return _finish({"ok": False, "stopped_at": 0, "results": [], "error": str(exc)})
+            try:
+                return await _run_with_retry(
+                    self._pool,
+                    self._loop,
+                    serial,
+                    _run_actions,
+                )
+            except Exception as exc:
+                return _finish({"ok": False, "stopped_at": 0, "results": [], "error": str(exc)})
+        finally:
+            if mutates_ui:
+                self.end_ui_mutation(serial)
 
     async def execute_flow(self, serial: str, flow: str, params: dict) -> dict:
         fn = _FLOW_TABLE.get(flow)
         if fn is None:
             return {"ok": False, "value": None, "error": f"unknown flow: {flow}"}
+        self.begin_ui_mutation(serial)
         try:
             value = await _run_with_retry(
                 self._pool, self._loop, serial,
@@ -718,6 +761,8 @@ class U2Executor:
         except Exception as exc:
             logger.warning("u2_flow %s failed serial=%s: %s", flow, serial, exc)
             return {"ok": False, "value": None, "error": str(exc)}
+        finally:
+            self.end_ui_mutation(serial)
 
     async def window_size(self, serial: str) -> tuple[int, int]:
         """Return (width, height) from u2 for swipe geometry."""

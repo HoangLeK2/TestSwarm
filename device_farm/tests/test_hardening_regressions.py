@@ -226,15 +226,24 @@ async def test_create_dlq_entry_is_idempotent_for_open_items():
     from db.crud.execution_dlq import create_dlq_entry
 
     db = AsyncMock()
-    existing = SimpleNamespace(status="pending", error=None)
+    existing = SimpleNamespace(
+        status="pending",
+        org_id="org-1",
+        error=None,
+        failure_reason=None,
+        failed_step_id=None,
+    )
     result_proxy = MagicMock()
     result_proxy.scalar_one_or_none.return_value = existing
-    db.execute.return_value = result_proxy
+    org_result_proxy = MagicMock()
+    org_result_proxy.scalar_one_or_none.return_value = "org-1"
+    db.execute.side_effect = [org_result_proxy, result_proxy]
 
     out = await create_dlq_entry(
         db,
         execution_id="exec-1",
         device_serial="SERIAL-1",
+        org_id="org-1",
         error="failed",
     )
     assert out is existing

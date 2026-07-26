@@ -68,6 +68,99 @@ def test_fb_comment_noise_filter_drops_empty_composer_placeholders() -> None:
     assert _is_comment_row_parse_noise({"author": "", "text": "see more"})
 
 
+@pytest.mark.asyncio
+async def test_process_payload_reports_partial_comment_target(monkeypatch) -> None:
+    server = ExtraDataIngestServer()
+
+    def fake_parse_items(strategy, xml_in, context):
+        assert strategy == "fb_comments"
+        frame = int(xml_in.split("frame-")[1].split('"')[0])
+        start = frame * 4
+        comments = [
+            {
+                "comment_key": f"comment-{index}",
+                "author": f"Author {index}",
+                "text": f"Comment {index}",
+            }
+            for index in range(start, start + 4)
+        ]
+        return comments, {
+            "reason_code": "ok",
+            "comments_returned": len(comments),
+        }
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse_items)
+    snapshots = [
+        f'<hierarchy><node text="frame-{index}" /></hierarchy>'
+        for index in range(5)
+    ]
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": snapshots[0],
+            "xml_snapshots": snapshots,
+            "context": {
+                "persist": False,
+                "return_items": True,
+                "max_items": 220,
+                "post_comment_count": 269,
+                "comment_target_effective": 220,
+                "comment_scroll_stopped_reason": "coverage_tail_no_new",
+                "comment_scroll_passes_effective": 220,
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 20
+    assert result["diagnostic"]["reason_code"] == "partial_target"
+    assert result["diagnostic"]["comment_target"] == 220
+    assert result["diagnostic"]["comments_returned"] == 20
+    assert result["diagnostic"]["coverage_ratio"] == pytest.approx(20 / 220)
+    assert (
+        result["diagnostic"]["comment_scroll_stopped_reason"]
+        == "coverage_tail_no_new"
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_payload_does_not_claim_partial_when_post_count_is_unknown(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_items",
+        lambda strategy, xml_in, context: (
+            [{"comment_key": "comment-1", "author": "Alice", "text": "Hello"}],
+            {"reason_code": "ok", "comments_returned": 1},
+        ),
+    )
+    xml = '<hierarchy><node text="frame" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": xml,
+            "xml_snapshots": [xml, xml.replace("frame", "frame-2")],
+            "context": {
+                "persist": False,
+                "max_items": 500,
+                "comment_target_effective": 500,
+                "post_comment_count": None,
+                "comment_scroll_stopped_reason": "coverage_tail_no_new",
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["diagnostic"]["reason_code"] == "ok"
+    assert result["diagnostic"]["comments_returned"] == 1
+    assert "coverage_ratio" not in result["diagnostic"]
+
+
 def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     class Module:
         pass
@@ -501,6 +594,132 @@ async def test_process_payload_merges_multiple_fb_post_snapshots(monkeypatch) ->
     assert result["diagnostic"]["frame_posts_returned"] == [2, 1]
     assert result["active_parent_post"]["pid"] == "pid-2"
     assert result["active_parent_post"]["parent_id"] == inserted[1]["content_hash"]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_reconciles_opened_feed_post_with_polluted_detail(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    feed_post = {
+        "_pid": "3504dc2886a603f3",
+        "post_key": "725fa9ebb9141fe3dcfcb90c81134ec940725420",
+        "stable_post_id": "6f9e3eff25f3f5721d15614150434eca61cd8dc1",
+        "author": "Nội dung do AI tạo",
+        "timestamp": "12 thg 6•Chia sẻ với: Nhóm công khai",
+        "text": "Trong Video mới này mình đã B… xem thêm Ảnh",
+        "reactions": 107,
+        "comments": 269,
+        "shares": 47,
+        "source_index": 0,
+    }
+    detail_post = {
+        "_pid": "b59c812bc0577086",
+        "post_key": "ac20583e9c21e6b908cfca34d3a8d14942645bc",
+        "stable_post_id": "bc0f4752f517aa233ea7d720ac732bbd722af017",
+        "author": "Nội dung do AI tạo",
+        "timestamp": "Vũ Nguyễn - AI Builder•12 thg 6•Chia sẻ với: Nhóm công khai",
+        "text": (
+            "Tham gia Claude - OpenClaw …•Tham gia Nội dung do AI tạo "
+            "Vũ Nguyễn - AI Builder Trong Video mới này mình đã BUILD CẢ PHÒNG "
+            "MARKETING bằng Claude - đây là cách nó hoạt động"
+        ),
+        "image_desc": "Ảnh bìa của nhóm",
+        "source_index": 1,
+    }
+    detail_chrome = {
+        "_pid": "chrome",
+        "post_key": "chrome-key",
+        "stable_post_id": "chrome-stable",
+        "author": "Đáng chú ý",
+        "timestamp": "",
+        "text": "Tham gia nhóm Claude - OpenClaw - Ai Agent Kiếm Cơm Ảnh Sự kiện File Album",
+        "source_index": 0,
+    }
+    detail_chrome_echo = {
+        "_pid": "detail-chrome",
+        "post_key": "detail-chrome-key",
+        "stable_post_id": "detail-chrome-stable",
+        "author": "Featured",
+        "timestamp": "12 thg 6•Chia sẻ với: Nhóm công khai",
+        "text": (
+            "Tham gia nhóm Claude - OpenClaw Trong Video mới này mình đã "
+            "BUILD CẢ PHÒNG MARKETING"
+        ),
+        "source_index": 1,
+    }
+
+    def fake_parse_items(strategy, xml_in, context):
+        assert strategy == "fb_posts"
+        if "detail" in xml_in:
+            return [detail_post, detail_chrome_echo], {
+                "reason_code": "ok",
+                "posts_returned": 2,
+            }
+        return [detail_chrome, feed_post], {
+            "reason_code": "ok",
+            "posts_returned": 2,
+        }
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse_items)
+
+    feed_xml = '<hierarchy><node text="feed" /></hierarchy>'
+    detail_xml = '<hierarchy><node text="detail" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": feed_xml,
+            "xml_snapshots": [feed_xml, detail_xml],
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "comment_sheet",
+                    "opened_post": {
+                        "pid": feed_post["_pid"],
+                        "post_key": feed_post["post_key"],
+                        "stable_post_id": feed_post["stable_post_id"],
+                        "author": feed_post["author"],
+                        "timestamp": feed_post["timestamp"],
+                        "text_prefix": feed_post["text"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 1
+    assert len(inserted) == 1
+    assert inserted[0]["author"] == "Vũ Nguyễn - AI Builder"
+    assert inserted[0]["body"].startswith(
+        "Trong Video mới này mình đã BUILD CẢ PHÒNG MARKETING"
+    )
+    assert "xem thêm" not in inserted[0]["body"].casefold()
+    assert inserted[0]["raw_data"]["reactions"] == 107
+    assert inserted[0]["raw_data"]["comments"] == 269
+    assert inserted[0]["raw_data"]["shares"] == 47
+    assert result["diagnostic"]["reconciled_post_count"] == 1
+    assert result["diagnostic"]["detail_chrome_dropped"] == 2
+    assert result["active_parent_post"]["pid"] == feed_post["_pid"]
+    assert result["active_parent_post"]["parent_id"] == inserted[0]["content_hash"]
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1233,9 @@ async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -
             "agent_boot_preparsed_comments": True,
             "parent_id": "parent-1",
             "require_verified_parent": False,
+            "post_comment_count": 269,
+            "comment_target_effective": 220,
+            "comment_scroll_stopped_reason": "coverage_tail_no_new",
         },
         "preparsed": {
             "items": [{"comment_key": "c1", "text": "first"}],
@@ -1030,6 +1252,9 @@ async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -
     assert result["xml_bytes"] == 12345
     assert result["payload_xml_bytes"] == len(xml.encode("utf-8"))
     assert result["diagnostic"]["preparsed"] is True
+    assert result["diagnostic"]["reason_code"] == "partial_target"
+    assert result["diagnostic"]["comment_target"] == 220
+    assert result["diagnostic"]["coverage_ratio"] == pytest.approx(1 / 220)
     assert result["items"][0]["comment_key"] == "c1"
     assert result["items"][0]["parent_content_hash"] == "parent-1"
 

@@ -12,6 +12,7 @@ DEFAULT_SESSION_IDLE_THRESHOLDS: dict[str, int] = {
     "manual": 300,
     "scenario": 60,
     "mcp": 120,
+    "campaign": 1800,
 }
 
 

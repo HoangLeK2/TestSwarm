@@ -1,7 +1,7 @@
 """DF-T-04-013 — execution event stream (outbox, SSE, catch-up)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import AsyncIterator
 
@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.deps import _get_current_user, _get_db
@@ -105,6 +106,211 @@ async def _seed_campaign_execution(session_factory) -> str:
             exec_id = ex.id
         await db.commit()
     return exec_id
+
+
+@pytest.mark.asyncio
+async def test_outbox_claim_query_skips_rows_locked_by_another_poller():
+    from db.crud.execution_events import claim_unpublished_events
+
+    class EmptyResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return []
+
+    class CaptureSession:
+        statement = None
+
+        async def execute(self, statement):
+            self.statement = statement
+            return EmptyResult()
+
+    db = CaptureSession()
+    await claim_unpublished_events(
+        db,
+        limit=200,
+        now=datetime.now(timezone.utc),
+    )
+
+    sql = str(db.statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "publish_claimed_at" in sql
+
+
+@pytest.mark.asyncio
+async def test_outbox_live_lease_prevents_duplicate_claim_and_expired_lease_recovers(
+    session_factory,
+):
+    from db.crud.execution import get_execution
+    from db.crud.execution_events import claim_unpublished_events
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            ex = await get_execution(db, exec_id)
+            await enqueue_execution_event(
+                db,
+                event_type=EXECUTION_CREATED,
+                execution_id=exec_id,
+                organization_id="org-1",
+                campaign_id="camp-1",
+                execution=ex,
+            )
+        await db.commit()
+
+    claimed_at = datetime.now(timezone.utc)
+    async with session_factory() as first:
+        first_claim = await claim_unpublished_events(
+            first,
+            limit=10,
+            lease_seconds=30,
+            now=claimed_at,
+        )
+        assert len(first_claim.rows) == 1
+        await first.commit()
+
+    async with session_factory() as second:
+        live_claim = await claim_unpublished_events(
+            second,
+            limit=10,
+            lease_seconds=30,
+            now=claimed_at + timedelta(seconds=29),
+        )
+        assert live_claim.rows == ()
+        await second.commit()
+
+    async with session_factory() as third:
+        recovered = await claim_unpublished_events(
+            third,
+            limit=10,
+            lease_seconds=30,
+            now=claimed_at + timedelta(seconds=31),
+        )
+        assert len(recovered.rows) == 1
+        assert recovered.token != first_claim.token
+        await third.rollback()
+
+
+@pytest.mark.asyncio
+async def test_outbox_publishes_outside_claim_transaction(session_factory, monkeypatch):
+    from db.crud.execution import get_execution
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            ex = await get_execution(db, exec_id)
+            await enqueue_execution_event(
+                db,
+                event_type=EXECUTION_CREATED,
+                execution_id=exec_id,
+                organization_id="org-1",
+                campaign_id="camp-1",
+                execution=ex,
+            )
+        await db.commit()
+
+    transaction_states: list[bool] = []
+    async with session_factory() as db:
+        async def publish(envelope):
+            transaction_states.append(db.in_transaction())
+
+        monkeypatch.setattr(
+            "services.execution.event_publisher.publish_row_to_broker",
+            publish,
+        )
+        published = await process_outbox_batch(db)
+
+    assert published == 1
+    assert transaction_states == [False]
+
+
+def test_outbox_lease_timeout_env_is_configurable_and_safely_bounded(monkeypatch):
+    from services.execution.outbox_poller import _lease_seconds
+
+    monkeypatch.setenv("EXECUTION_EVENT_OUTBOX_LEASE_SECONDS", "45.5")
+    assert _lease_seconds() == 45.5
+
+    monkeypatch.setenv("EXECUTION_EVENT_OUTBOX_LEASE_SECONDS", "1")
+    assert _lease_seconds() == 5.0
+
+    monkeypatch.setenv("EXECUTION_EVENT_OUTBOX_LEASE_SECONDS", "invalid")
+    assert _lease_seconds() == 30.0
+
+
+@pytest.mark.asyncio
+async def test_outbox_failed_publish_releases_lease_for_immediate_retry(
+    session_factory,
+    monkeypatch,
+):
+    from db.crud.execution import get_execution
+    from db.crud.execution_events import list_execution_events
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            ex = await get_execution(db, exec_id)
+            await enqueue_execution_event(
+                db,
+                event_type=EXECUTION_CREATED,
+                execution_id=exec_id,
+                organization_id="org-1",
+                campaign_id="camp-1",
+                execution=ex,
+            )
+        await db.commit()
+
+    async def fail_publish(envelope):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(
+        "services.execution.event_publisher.publish_row_to_broker",
+        fail_publish,
+    )
+    async with session_factory() as db:
+        assert await process_outbox_batch(db) == 0
+
+    async with session_factory() as db:
+        rows = await list_execution_events(db, exec_id)
+        assert rows[0].published_at is None
+        assert rows[0].publish_claim_token is None
+        assert rows[0].publish_claimed_at is None
+        assert rows[0].publish_attempts == 1
+
+    async def publish(envelope):
+        return None
+
+    monkeypatch.setattr(
+        "services.execution.event_publisher.publish_row_to_broker",
+        publish,
+    )
+    async with session_factory() as db:
+        assert await process_outbox_batch(db) == 1
+
+
+@pytest.mark.asyncio
+async def test_outbox_stats_report_oldest_unpublished_event_age(session_factory):
+    from db.crud.execution_events import get_unpublished_event_stats
+
+    exec_id = await _seed_campaign_execution(session_factory)
+    occurred_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            await enqueue_execution_event(
+                db,
+                event_type=EXECUTION_CREATED,
+                execution_id=exec_id,
+                organization_id="org-1",
+                campaign_id="camp-1",
+                occurred_at=occurred_at,
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        stats = await get_unpublished_event_stats(db)
+
+    assert stats.count == 1
+    assert 4.0 <= stats.oldest_age_seconds <= 10.0
 
 
 @pytest.mark.asyncio
@@ -214,6 +420,7 @@ async def test_step_retried_events(session_factory):
                     "extra_data_dump_ms": 40.0,
                     "extra_data_parse_ms": 3.5,
                     "extra_data_click_ms": 0.0,
+                    "extra_data_wait_ms": 12.5,
                     "extra_data_sleep_ms": 0.0,
                     "extra_data_steps": 1,
                     "scroll_to_flow_ms": 321.0,
@@ -241,6 +448,7 @@ async def test_step_retried_events(session_factory):
     assert rows[2].payload["extra_data_dump_ms"] == 40.0
     assert rows[2].payload["extra_data_parse_ms"] == 3.5
     assert rows[2].payload["extra_data_click_ms"] == 0.0
+    assert rows[2].payload["extra_data_wait_ms"] == 12.5
     assert rows[2].payload["extra_data_sleep_ms"] == 0.0
     assert rows[2].payload["extra_data_steps"] == 1
     assert rows[2].payload["scroll_to_flow_ms"] == 321.0

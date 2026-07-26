@@ -722,7 +722,7 @@ class DeviceClient:
         if not self._loop:
             return
         # Mark that scrcpy has started delivering — APK JPEG fallback will stop now.
-        first_frame = self._last_frame_time == 0
+        first_h264_frame = self._h264_fps_t0 == 0.0
         self._last_frame_time = time.monotonic()
         w = max(0, min(self.screen_width, 0xFFFF))
         h = max(0, min(self.screen_height, 0xFFFF))
@@ -741,7 +741,7 @@ class DeviceClient:
                 # Store for late-joining subscribers (replaces _last_key_frame dict)
                 self._last_key_frame = msg
             queues = list(self._frame_queues)
-        if first_frame:
+        if first_h264_frame:
             self._logger.info(
                 "h264 video started key=%s → %d WS subscriber(s), avcc_len=%d",
                 is_key,

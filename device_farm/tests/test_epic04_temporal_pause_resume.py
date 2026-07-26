@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import timedelta
 
 import pytest
 
@@ -734,6 +735,10 @@ async def test_scenario_workflow_forwards_pause_and_resume_to_child(pause_coord)
     async def mock_finalize(_inp):
         return None
 
+    @temporal_activity.defn(name="heartbeat_campaign_device_claim")
+    async def mock_claim_keepalive(_inp):
+        return 600
+
     scenario_inp = ScenarioInput(
         campaign_id="camp-pause",
         device_serial="emulator-5554",
@@ -747,7 +752,7 @@ async def test_scenario_workflow_forwards_pause_and_resume_to_child(pause_coord)
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_finalize],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -770,6 +775,335 @@ async def test_scenario_workflow_forwards_pause_and_resume_to_child(pause_coord)
 
     assert result.success is True
     assert coord["executed_indices"] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_campaign_keepalive_starts_during_initial_multi_day_pause():
+    """A start-with-pause signal must not leave the campaign claim without renewal."""
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+
+    batch_calls = 0
+    keepalive_calls = 0
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(inp):
+        nonlocal batch_calls
+        batch_calls += 1
+        indices = _batch_indices(inp)
+        return DeviceActionBatchResult(
+            results=[
+                {"index": i, "type": "wait", "ok": True, "message": "ok"}
+                for i in indices
+            ],
+            first_failure_index=-1,
+        )
+
+    @temporal_activity.defn(name="heartbeat_campaign_device_claim")
+    async def mock_claim_keepalive(_inp):
+        nonlocal keepalive_calls
+        keepalive_calls += 1
+        return 600
+
+    @temporal_activity.defn(name="finalize_campaign")
+    async def mock_finalize(_inp):
+        return None
+
+    scenario_inp = ScenarioInput(
+        campaign_id="camp-initial-pause",
+        device_serial="emulator-5554",
+        steps=_wait_steps(1),
+        scenario_config={"batch_size": 1},
+        execution_id="exec-initial-pause",
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ):
+            handle = await env.client.start_workflow(
+                ScenarioWorkflow.run,
+                scenario_inp,
+                id="test-campaign-initial-pause-keepalive",
+                task_queue=TASK_QUEUE_NAME,
+                start_signal="pause",
+            )
+
+            await _poll_until(lambda: keepalive_calls > 0)
+            initial_keepalive_calls = keepalive_calls
+            await env.sleep(timedelta(days=3))
+
+            assert keepalive_calls > initial_keepalive_calls
+            assert batch_calls == 0
+
+            await handle.signal(ScenarioWorkflow.resume)
+            result = await asyncio.wait_for(handle.result(), timeout=10.0)
+
+    assert result.success is True
+    assert batch_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_initial_pause_claim_loss_is_non_retryable_and_finalized():
+    """Ownership loss must fail closed once instead of retrying forever."""
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.activities import CampaignDeviceClaimLostError
+    from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+
+    batch_calls = 0
+    keepalive_calls = 0
+    finalize_payloads: list[dict] = []
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(_inp):
+        nonlocal batch_calls
+        batch_calls += 1
+        await asyncio.Event().wait()
+
+    @temporal_activity.defn(name="heartbeat_campaign_device_claim")
+    async def mock_claim_keepalive(_inp):
+        nonlocal keepalive_calls
+        keepalive_calls += 1
+        raise CampaignDeviceClaimLostError("campaign device claim lost: claim expired")
+
+    @temporal_activity.defn(name="finalize_campaign")
+    async def mock_finalize(inp):
+        finalize_payloads.append(dict(inp))
+
+    scenario_inp = ScenarioInput(
+        campaign_id="camp-claim-lost",
+        device_serial="emulator-5554",
+        steps=_wait_steps(1),
+        scenario_config={"batch_size": 1},
+        execution_id="exec-claim-lost",
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ):
+            result = await asyncio.wait_for(
+                env.client.execute_workflow(
+                    ScenarioWorkflow.run,
+                    scenario_inp,
+                    id="test-campaign-claim-loss-non-retryable",
+                    task_queue=TASK_QUEUE_NAME,
+                    start_signal="pause",
+                ),
+                timeout=10.0,
+            )
+
+    assert result.success is False
+    assert batch_calls == 0
+    assert keepalive_calls == 1
+    assert "campaign device claim lost" in result.failed_message
+    assert finalize_payloads[-1]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_child_start_is_finalized():
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+
+    finalize_payloads: list[dict] = []
+
+    @temporal_activity.defn(name="finalize_campaign")
+    async def mock_finalize(inp):
+        finalize_payloads.append(dict(inp))
+
+    scenario_inp = ScenarioInput(
+        campaign_id="camp-cancel-before-start",
+        device_serial="emulator-5554",
+        steps=_wait_steps(1),
+        execution_id="exec-cancel-before-start",
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_finalize],
+        ):
+            result = await env.client.execute_workflow(
+                ScenarioWorkflow.run,
+                scenario_inp,
+                id="test-cancel-before-child-start-finalized",
+                task_queue=TASK_QUEUE_NAME,
+                start_signal="cancel_scenario",
+            )
+
+    assert result.success is False
+    assert result.failed_message == "Cancelled before start"
+    assert finalize_payloads[-1]["success"] is False
+    assert finalize_payloads[-1]["failed_message"] == "Cancelled before start"
+
+
+@pytest.mark.asyncio
+async def test_paused_campaign_keeps_device_claim_alive_across_multi_day_gap():
+    """A running campaign must renew its claim even when no phone activity is executing."""
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+
+    batch_started = asyncio.Event()
+    batch_calls = 0
+    keepalive_calls = 0
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(inp):
+        nonlocal batch_calls
+        batch_calls += 1
+        indices = _batch_indices(inp)
+        if batch_calls == 1:
+            batch_started.set()
+            return DeviceActionBatchResult(
+                results=[],
+                first_failure_index=-1,
+                paused_mid_batch=True,
+            )
+        return DeviceActionBatchResult(
+            results=[
+                {"index": i, "type": "wait", "ok": True, "message": "ok"}
+                for i in indices
+            ],
+            first_failure_index=-1,
+        )
+
+    @temporal_activity.defn(name="heartbeat_campaign_device_claim")
+    async def mock_claim_keepalive(_inp):
+        nonlocal keepalive_calls
+        keepalive_calls += 1
+        return 600
+
+    @temporal_activity.defn(name="finalize_campaign")
+    async def mock_finalize(_inp):
+        return None
+
+    scenario_inp = ScenarioInput(
+        campaign_id="camp-multi-day",
+        device_serial="emulator-5554",
+        steps=_wait_steps(1),
+        scenario_config={"batch_size": 1},
+        execution_id="exec-multi-day",
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ):
+            handle = await env.client.start_workflow(
+                ScenarioWorkflow.run,
+                scenario_inp,
+                id="test-campaign-multi-day-keepalive",
+                task_queue=TASK_QUEUE_NAME,
+            )
+
+            await asyncio.wait_for(batch_started.wait(), timeout=5.0)
+            await _poll_until(lambda: keepalive_calls > 0)
+            initial_keepalive_calls = keepalive_calls
+            await env.sleep(timedelta(days=3))
+
+            assert keepalive_calls > initial_keepalive_calls
+
+            await handle.signal(ScenarioWorkflow.resume)
+            result = await asyncio.wait_for(handle.result(), timeout=10.0)
+            history = await handle.fetch_history()
+
+    assert result.success is True
+    assert len(history.events) < 10_000
+
+
+@pytest.mark.asyncio
+async def test_three_day_repeat_stays_below_temporal_history_guard():
+    """A five-minute loop running for three days must stay within the history budget."""
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow
+
+    batch_calls = 0
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(inp):
+        nonlocal batch_calls
+        batch_calls += 1
+        indices = _batch_indices(inp)
+        return DeviceActionBatchResult(
+            results=[
+                {"index": i, "type": "wait", "ok": True, "message": "ok"}
+                for i in indices
+            ],
+            first_failure_index=-1,
+        )
+
+    steps_inp = StepsInput(
+        device_serial="emulator-5554",
+        steps=[
+            {
+                "type": "repeat",
+                "count": 865,
+                "delay_between": 300,
+                "steps": _wait_steps(1),
+            }
+        ],
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioStepsWorkflow],
+            activities=[mock_batch],
+        ):
+            handle = await env.client.start_workflow(
+                ScenarioStepsWorkflow.run,
+                steps_inp,
+                id="test-three-day-repeat-history",
+                task_queue=TASK_QUEUE_NAME,
+            )
+            result = await asyncio.wait_for(handle.result(), timeout=20.0)
+            history = await handle.fetch_history()
+
+    assert result.success is True
+    assert batch_calls == 865
+    assert len(history.events) < 10_000
 
 
 @pytest.mark.asyncio
@@ -806,6 +1140,10 @@ async def test_scenario_workflow_treats_child_temporal_cancel_as_cancelled(pause
         finalize_payloads.append(dict(inp))
         return None
 
+    @temporal_activity.defn(name="heartbeat_campaign_device_claim")
+    async def mock_claim_keepalive(_inp):
+        return 600
+
     scenario_inp = ScenarioInput(
         campaign_id="camp-child-cancel",
         device_serial="emulator-5554",
@@ -819,7 +1157,7 @@ async def test_scenario_workflow_treats_child_temporal_cancel_as_cancelled(pause
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
-            activities=[mock_batch, mock_finalize],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,

@@ -104,6 +104,7 @@ async def emit_step_finished(
         "extra_data_dump_ms",
         "extra_data_parse_ms",
         "extra_data_click_ms",
+        "extra_data_wait_ms",
         "extra_data_sleep_ms",
         "extra_data_steps",
         "edge_extra_summary",

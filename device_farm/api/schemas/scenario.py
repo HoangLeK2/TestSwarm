@@ -648,6 +648,9 @@ class ExtractStep(StepBase):
     comment_scroll_duration_ms: Optional[IntOrVar] = None
     comment_scroll_pause_s: Optional[NumOrVar] = None
     comment_scroll_wall_s: Optional[NumOrVar] = None
+    comment_require_complete: Optional[bool] = None
+    comment_auto_coverage_target_max: Optional[IntOrVar] = None
+    allow_partial_comments: Optional[bool] = None
     comment_no_growth_break: Optional[IntOrVar] = None
     min_comment_scan_passes: Optional[IntOrVar] = None
     comment_max_snapshots: Optional[IntOrVar] = None

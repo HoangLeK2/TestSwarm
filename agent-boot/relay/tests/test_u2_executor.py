@@ -45,6 +45,7 @@ async def test_run_batch_empty(executor):
 @pytest.mark.asyncio
 async def test_run_batch_click_success(executor):
     exc, dev, pool = executor
+    assert exc.ui_generation("serial") == 0
     result = await exc.run_batch("serial", [
         {"op": "click", "x": 100, "y": 200},
     ])
@@ -55,6 +56,54 @@ async def test_run_batch_click_success(executor):
     assert result["total_ms"] >= 0
     assert result["results"][0]["duration_ms"] >= 0
     dev.click.assert_called_once_with(100, 200)
+    assert exc.ui_generation("serial") == 2
+    assert exc.ui_mutation_in_flight("serial") == 0
+
+
+@pytest.mark.asyncio
+async def test_run_batch_read_only_actions_do_not_advance_ui_generation(executor):
+    exc, dev, pool = executor
+    ui_obj = MagicMock()
+    ui_obj.exists = True
+    dev.return_value = ui_obj
+
+    await exc.run_batch("serial", [
+        {"op": "exists", "selector": {"text": "OK"}},
+        {"op": "sleep", "seconds": 0},
+    ])
+
+    assert exc.ui_generation("serial") == 0
+
+
+@pytest.mark.asyncio
+async def test_run_batch_mutation_is_marked_in_flight_until_completion(executor):
+    exc, dev, pool = executor
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _run_locked(serial: str, fn):
+        started.set()
+        await release.wait()
+        return fn(dev)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
+    task = asyncio.create_task(
+        exc.run_batch(
+            "serial",
+            [{"op": "click", "x": 100, "y": 200}],
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+
+    assert exc.ui_generation("serial") == 1
+    assert exc.ui_mutation_in_flight("serial") == 1
+
+    release.set()
+    result = await asyncio.wait_for(task, timeout=0.5)
+
+    assert result["ok"] is True
+    assert exc.ui_generation("serial") == 2
+    assert exc.ui_mutation_in_flight("serial") == 0
 
 
 @pytest.mark.asyncio

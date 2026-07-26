@@ -20,9 +20,11 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
+import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { toast } from 'sonner';
 
 type FormData = {
   name: string;
@@ -57,6 +59,12 @@ export function CreateTemplateDialog() {
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const onSubmit = (data: FormData) => {
+    if (!canPersistScenario(childStepEditorOpen)) {
+      toast.info(
+        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+      );
+      return;
+    }
     mutate(
       {
         name: data.name,
@@ -83,6 +91,12 @@ export function CreateTemplateDialog() {
   // ?templateId=, where the user can record/edit steps on a real device and
   // save back via the existing template update API.
   const onSubmitAndOpenControl = handleSubmit(async (data) => {
+    if (!canPersistScenario(childStepEditorOpen)) {
+      toast.info(
+        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+      );
+      return;
+    }
     setOpeningControl(true);
     try {
       const created = await mutateAsync({

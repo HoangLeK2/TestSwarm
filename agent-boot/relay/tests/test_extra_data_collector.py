@@ -13,6 +13,7 @@ from relay.extra_data.collector import (
     collect_fb_comment_target_with_tap,
     collect_xml_snapshots,
     expand_see_more_via_u2,
+    release_collect_lock,
     _looks_like_hierarchy_xml,
     _maybe_open_fb_post_detail,
     _u2_click_comment_target,
@@ -36,8 +37,45 @@ class _FakeExecutor:
         self.clicks: list[tuple[int, int]] = []
         self.selector_clicks = 0
         self.press_back_calls = 0
+        self._ui_generations: dict[str, int] = {}
+        self._ui_mutations_in_flight: dict[str, int] = {}
+
+    def ui_generation(self, serial: str) -> int:
+        return self._ui_generations.get(serial, 0)
+
+    def ui_mutation_in_flight(self, serial: str) -> int:
+        return self._ui_mutations_in_flight.get(serial, 0)
+
+    def begin_ui_mutation(self, serial: str) -> None:
+        self._ui_generations[serial] = self.ui_generation(serial) + 1
+        self._ui_mutations_in_flight[serial] = (
+            self.ui_mutation_in_flight(serial) + 1
+        )
+
+    def end_ui_mutation(self, serial: str) -> None:
+        self._ui_generations[serial] = self.ui_generation(serial) + 1
+        remaining = self.ui_mutation_in_flight(serial) - 1
+        if remaining > 0:
+            self._ui_mutations_in_flight[serial] = remaining
+        else:
+            self._ui_mutations_in_flight.pop(serial, None)
 
     async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        read_only_ops = {
+            "dump_hierarchy",
+            "exists",
+            "get_text",
+            "screenshot",
+            "sleep",
+            "wait_exists",
+            "wait_gone",
+        }
+        mutates_ui = any(
+            action.get("op") not in read_only_ops
+            for action in actions
+        )
+        if mutates_ui:
+            self.begin_ui_mutation(serial)
         self.batches.append(actions)
         results: list[dict] = []
         for act in actions:
@@ -56,6 +94,8 @@ class _FakeExecutor:
                 results.append({"op": op, "ok": True, "value": True})
             elif op == "wait_exists":
                 results.append({"op": op, "ok": True, "value": True})
+            elif op == "wait_gone":
+                results.append({"op": op, "ok": True, "value": True})
             elif op == "click_selector":
                 self.selector_clicks += 1
                 hit = self.selector_clicks <= 1
@@ -66,7 +106,11 @@ class _FakeExecutor:
             elif op == "sleep":
                 results.append({"op": op, "ok": True})
             else:
+                if mutates_ui:
+                    self.end_ui_mutation(serial)
                 return {"ok": False, "results": results, "error": "unexpected"}
+        if mutates_ui:
+            self.end_ui_mutation(serial)
         return {"ok": True, "results": results}
 
     async def window_size(self, serial: str) -> tuple[int, int]:
@@ -694,6 +738,139 @@ async def test_comment_scroll_auto_anchored_coverage_when_requested_exceeds_smal
 
 
 @pytest.mark.asyncio
+async def test_comment_scroll_strict_500_target_scales_coverage_snapshot_budget(
+    monkeypatch,
+) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    action_bar = (
+        ACTION_BAR_SNIPPET.replace('text="23"', 'text="269"')
+        .replace('content-desc="23"', 'content-desc="269"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node class="android.widget.Button" text="Đóng"',
+        f"{action_bar}<node class=\"android.widget.Button\" text=\"Đóng\"",
+    )
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        comments = [
+            {
+                "author": f"user-{i}",
+                "text": f"comment body {i}",
+                "comment_key": f"ck-{i}",
+            }
+            for i in range(3)
+        ]
+        return comments, {"reason_code": "ok"}
+
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.parse_fb_comments_from_xml_with_diagnostic",
+        fake_parse,
+    )
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 500,
+        "comment_scroll_passes": 269,
+        "comment_swipes_per_dump": 1,
+        "comment_max_snapshots": 10,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_target_budget": False,
+        "comment_require_complete": True,
+        "comment_auto_coverage_target_max": 500,
+        "comment_no_growth_break": 0,
+        "min_comment_scan_passes": 0,
+    }
+
+    snapshots, err = await collect_xml_snapshots(
+        _RotatingSheetExecutor(),
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert context["post_comment_count"] == 269
+    assert context["comment_target_effective"] == 269
+    assert context["comment_crawl_mode_effective"] == "anchored_coverage"
+    assert context["comment_max_snapshots_effective"] == 270
+    assert context["comment_scroll_stopped_reason"] == "coverage_tail_no_new"
+    assert context["comment_coverage_collected"] == 3
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_records_batched_budget_exhaustion(monkeypatch) -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+    from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
+
+    action_bar = (
+        ACTION_BAR_SNIPPET.replace('text="23"', 'text="600"')
+        .replace('content-desc="23"', 'content-desc="600"')
+    )
+    sheet = _sheet_xml().replace(
+        '<node class="android.widget.Button" text="Đóng"',
+        f"{action_bar}<node class=\"android.widget.Button\" text=\"Đóng\"",
+    )
+    monkeypatch.setattr(
+        "relay.extra_data.parsers.facebook.comment_pipeline.parse_fb_comments_from_xml_with_diagnostic",
+        lambda xml, **kwargs: (
+            [{"author": "Alice", "text": "Hello", "comment_key": "comment-1"}],
+            {"reason_code": "ok"},
+        ),
+    )
+
+    class _RotatingSheetExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__(xml=sheet)
+            self._n = 0
+
+        async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+            if actions and any(act.get("op") == "dump_hierarchy" for act in actions):
+                self._n += 1
+                self._dump_xml = sheet.replace('rotation="0"', f'rotation="{self._n}"')
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    context = {
+        "max_items": 600,
+        "comment_scroll_passes": 2,
+        "comment_swipes_per_dump": 1,
+        "comment_scroll_pause_s": 0,
+        "comment_scroll_settle_s": 0,
+        "comment_recover_chrome": False,
+        "comment_target_budget": False,
+        "comment_crawl_mode": "batched",
+        "comment_no_growth_break": 0,
+        "min_comment_scan_passes": 0,
+    }
+
+    snapshots, err = await collect_xml_snapshots(
+        _RotatingSheetExecutor(),
+        "dev1",
+        "fb_comments",
+        context,
+    )
+
+    assert err is None
+    assert snapshots
+    assert context["comment_crawl_mode_effective"] == "batched_tail_probe"
+    assert context["comment_scroll_stopped_reason"] == "swipe_budget_exhausted"
+
+
+@pytest.mark.asyncio
 async def test_comment_scroll_skips_when_post_comment_count_is_zero() -> None:
     from relay.tests.test_comment_filter import _sheet_xml
     from relay.tests.test_fb_action_bar_stats import ACTION_BAR_SNIPPET
@@ -1279,16 +1456,24 @@ async def test_expand_fast_noop_without_selector_match() -> None:
 @pytest.mark.asyncio
 async def test_expand_xml_probe_first_for_fb_posts() -> None:
     exec_ = _SeeMoreOnceExecutor(xml=_SEE_MORE_XML)
-    taps, cached = await expand_see_more_via_u2(
-        exec_,
-        "dev1",
-        {"expand_see_more": True, "expand_see_more_xml_probe_first": True},
-    )
+    with patch("asyncio.sleep") as sleep_mock:
+        taps, cached = await expand_see_more_via_u2(
+            exec_,
+            "dev1",
+            {"expand_see_more": True, "expand_see_more_xml_probe_first": True},
+        )
     assert taps == 1
     assert cached == _SAMPLE_XML
     assert exec_.clicks == [(200, 225)]
     assert not any(b and b[0].get("op") == "click_selector" for b in exec_.batches)
     assert len(_batches_with_dump(exec_.batches)) == 2
+    click_batch = next(batch for batch in exec_.batches if batch[0].get("op") == "click")
+    assert [action["op"] for action in click_batch] == [
+        "click",
+        "sleep",
+        "dump_hierarchy",
+    ]
+    sleep_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2036,7 +2221,10 @@ async def test_collect_fb_comment_filter_apply_single_session() -> None:
     def _fake_parse(strategy: str, xml: str, context: dict):
         return [], next(phases)
 
-    with patch("relay.extra_data.ingest._parse_items", side_effect=_fake_parse):
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        side_effect=_fake_parse,
+    ), patch("asyncio.sleep") as sleep_mock:
         report, err = await collect_fb_comment_filter_apply(
             exec_,
             "dev1",
@@ -2051,11 +2239,465 @@ async def test_collect_fb_comment_filter_apply_single_session() -> None:
     assert report["parse_ms"] >= 0
     assert report["click_ms"] >= 0
     assert report["sleep_ms"] >= 0
+    assert report["wait_ms"] >= 0
+    assert report["state_verified"] is True
     assert report["steps"][0]["dump_ms"] >= 0
     assert report["steps"][0]["parse_ms"] >= 0
     assert report["steps"][0]["click_ms"] >= 0
     assert exec_.clicks == [(20, 30), (360, 1080)]
     assert exec_.session_scope_calls == 1
+    sleep_mock.assert_not_called()
+    click_batches = [
+        batch for batch in exec_.batches
+        if batch and batch[0].get("op") == "click"
+    ]
+    assert click_batches[0][1]["op"] == "wait_exists"
+    assert click_batches[1][1]["op"] == "wait_gone"
+
+
+@pytest.mark.asyncio
+async def test_comment_filter_wait_error_still_verifies_successful_tap() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    class _WaitErrorExecutor(_SessionFakeExecutor):
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
+            if len(actions) == 2 and actions[0].get("op") == "click":
+                self._ui_generations[serial] = self.ui_generation(serial) + 1
+                self.batches.append(actions)
+                self.clicks.append((int(actions[0]["x"]), int(actions[0]["y"])))
+                return {
+                    "ok": False,
+                    "results": [
+                        {"op": "click", "ok": True, "duration_ms": 1.0},
+                        {
+                            "op": actions[1]["op"],
+                            "ok": False,
+                            "error": "transport error",
+                            "duration_ms": 2.0,
+                        },
+                    ],
+                    "error": "action[1] wait failed",
+                }
+            return await super().run_batch(serial, actions, early_exit=early_exit)
+
+    exec_ = _WaitErrorExecutor(xml=_sheet_xml())
+    phases = iter([
+        {
+            "phase": "select_option",
+            "reason_code": "select_filter",
+            "tap": {"bounds": [10, 20, 30, 40]},
+        },
+        {
+            "phase": "done",
+            "reason_code": "already_on_filter",
+            "tap": None,
+        },
+    ])
+
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        side_effect=lambda *_args: ([], next(phases)),
+    ):
+        report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev-wait-error",
+            {
+                "context_id": "exec-wait-error",
+                "parent_id": "parent-wait-error",
+                "comment_filter": "newest",
+            },
+        )
+
+    assert err is None
+    assert report["state_verified"] is True
+    assert report["reason_code"] == "already_on_filter"
+    assert report["steps"][0]["state_wait_hit"] is False
+    assert len([
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]) == 2
+
+
+@pytest.mark.asyncio
+async def test_fb_comments_reuses_verified_filter_hierarchy_once() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _SessionFakeExecutor(xml=_sheet_xml())
+    handoff_context = {
+        "context_id": "exec-handoff",
+        "parent_id": "parent-handoff",
+        "comment_filter": "all_comments",
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev1",
+            dict(handoff_context),
+        )
+
+    comment_context = {
+        **handoff_context,
+        "comment_scroll_passes": 0,
+        "require_verified_parent": True,
+    }
+    snapshots, collect_err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        comment_context,
+    )
+
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert err is None
+    assert collect_err is None
+    assert report["state_verified"] is True
+    assert snapshots == [_sheet_xml()]
+    assert len(dumps) == 1
+    assert comment_context["hierarchy_handoff_reused"] is True
+
+
+@pytest.mark.asyncio
+async def test_fb_comments_does_not_reuse_handoff_after_intervening_ui_action() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _SessionFakeExecutor(xml=_sheet_xml())
+    handoff_context = {
+        "context_id": "exec-interleaved",
+        "parent_id": "parent-interleaved",
+        "comment_filter": "all_comments",
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        _report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev-interleaved",
+            dict(handoff_context),
+        )
+
+    await exec_.run_batch(
+        "dev-interleaved",
+        [{"op": "click", "x": 1, "y": 1}],
+    )
+    comment_context = {**handoff_context, "comment_scroll_passes": 0}
+    _snapshots, collect_err = await collect_xml_snapshots(
+        exec_,
+        "dev-interleaved",
+        "fb_comments",
+        comment_context,
+    )
+
+    assert err is None
+    assert collect_err is None
+    assert "hierarchy_handoff_reused" not in comment_context
+    assert len([
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]) == 2
+
+
+@pytest.mark.asyncio
+async def test_filter_handoff_is_not_stored_when_ui_changes_during_final_dump() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    class _ConcurrentMutationExecutor(_SessionFakeExecutor):
+        async def run_batch(
+            self,
+            serial: str,
+            actions: list[dict],
+            early_exit: bool = True,
+        ) -> dict:
+            changes_during_dump = any(
+                action.get("op") == "dump_hierarchy"
+                for action in actions
+            )
+            if changes_during_dump:
+                self.begin_ui_mutation(serial)
+            try:
+                return await super().run_batch(
+                    serial,
+                    actions,
+                    early_exit=early_exit,
+                )
+            finally:
+                if changes_during_dump:
+                    self.end_ui_mutation(serial)
+
+    exec_ = _ConcurrentMutationExecutor(xml=_sheet_xml())
+    handoff_context = {
+        "context_id": "exec-concurrent-dump",
+        "parent_id": "parent-concurrent-dump",
+        "comment_filter": "all_comments",
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev-concurrent-dump",
+            dict(handoff_context),
+        )
+
+    comment_context = {**handoff_context, "comment_scroll_passes": 0}
+    _snapshots, collect_err = await collect_xml_snapshots(
+        exec_,
+        "dev-concurrent-dump",
+        "fb_comments",
+        comment_context,
+    )
+
+    assert err is None
+    assert collect_err is None
+    assert report["state_verified"] is True
+    assert report.get("hierarchy_handoff_stored") is not True
+    assert "hierarchy_handoff_reused" not in comment_context
+    assert len([
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]) == 2
+
+
+@pytest.mark.asyncio
+async def test_fb_comments_does_not_reuse_expired_filter_handoff() -> None:
+    from relay.extra_data import collector as collector_mod
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _SessionFakeExecutor(xml=_sheet_xml())
+    handoff_context = {
+        "context_id": "exec-expired",
+        "parent_id": "parent-expired",
+        "comment_filter": "all_comments",
+    }
+    with patch.object(
+        collector_mod,
+        "_FILTER_HIERARCHY_HANDOFF_TTL_S",
+        0.0,
+    ), patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        _report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev-expired",
+            dict(handoff_context),
+        )
+
+    comment_context = {**handoff_context, "comment_scroll_passes": 0}
+    _snapshots, collect_err = await collect_xml_snapshots(
+        exec_,
+        "dev-expired",
+        "fb_comments",
+        comment_context,
+    )
+
+    assert err is None
+    assert collect_err is None
+    assert "hierarchy_handoff_reused" not in comment_context
+    assert len([
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]) == 2
+
+
+@pytest.mark.asyncio
+async def test_release_collect_lock_clears_handoff_even_while_lock_is_held() -> None:
+    from relay.extra_data import collector as collector_mod
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _SessionFakeExecutor(xml=_sheet_xml())
+    handoff_context = {
+        "context_id": "exec-offline",
+        "parent_id": "parent-offline",
+        "comment_filter": "all_comments",
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        _report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev-offline",
+            dict(handoff_context),
+        )
+
+    lock = collector_mod._collect_lock("dev-offline")
+    await lock.acquire()
+    try:
+        release_collect_lock("dev-offline")
+    finally:
+        lock.release()
+
+    comment_context = {**handoff_context, "comment_scroll_passes": 0}
+    _snapshots, collect_err = await collect_xml_snapshots(
+        exec_,
+        "dev-offline",
+        "fb_comments",
+        comment_context,
+    )
+
+    assert err is None
+    assert collect_err is None
+    assert "hierarchy_handoff_reused" not in comment_context
+
+
+@pytest.mark.asyncio
+async def test_fb_comments_does_not_reuse_filter_hierarchy_for_another_parent() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _SessionFakeExecutor(xml=_sheet_xml())
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        _report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev1",
+            {
+                "context_id": "exec-parent-scope",
+                "parent_id": "parent-a",
+                "comment_filter": "all_comments",
+            },
+        )
+
+    comment_context = {
+        "context_id": "exec-parent-scope",
+        "parent_id": "parent-b",
+        "comment_filter": "all_comments",
+        "comment_scroll_passes": 0,
+        "require_verified_parent": True,
+    }
+    _snapshots, collect_err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        comment_context,
+    )
+
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert err is None
+    assert collect_err is None
+    assert len(dumps) == 2
+    assert "hierarchy_handoff_reused" not in comment_context
+
+
+@pytest.mark.asyncio
+async def test_fb_comments_filter_hierarchy_handoff_is_consumed_once() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _SessionFakeExecutor(xml=_sheet_xml())
+    handoff_context = {
+        "context_id": "exec-one-shot",
+        "parent_id": "parent-one-shot",
+        "comment_filter": "newest",
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=(
+            [],
+            {
+                "phase": "done",
+                "reason_code": "already_on_filter",
+                "tap": None,
+            },
+        ),
+    ):
+        _report, err = await collect_fb_comment_filter_apply(
+            exec_,
+            "dev1",
+            dict(handoff_context),
+        )
+
+    first_context = {**handoff_context, "comment_scroll_passes": 0}
+    second_context = {**handoff_context, "comment_scroll_passes": 0}
+    _first, first_err = await collect_xml_snapshots(
+        exec_, "dev1", "fb_comments", first_context
+    )
+    _second, second_err = await collect_xml_snapshots(
+        exec_, "dev1", "fb_comments", second_context
+    )
+
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert err is None
+    assert first_err is None
+    assert second_err is None
+    assert first_context["hierarchy_handoff_reused"] is True
+    assert "hierarchy_handoff_reused" not in second_context
+    assert len(dumps) == 2
 
 
 @pytest.mark.asyncio

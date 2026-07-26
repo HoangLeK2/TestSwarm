@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -291,6 +293,122 @@ async def test_a11y_query_does_not_emit_ack(monkeypatch):
     msg = json.loads(await asyncio.wait_for(send_q.get(), timeout=0.5))
     assert msg["type"] == "a11y_result"
     assert msg["id"] == "r-query"
+
+
+@pytest.mark.asyncio
+async def test_a11y_worker_marks_mutating_action_ui_generation(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+    agent._u2_executor = MagicMock()
+    monkeypatch.setattr(
+        agent,
+        "_execute_a11y_action",
+        lambda item: {
+            "type": "a11y_result",
+            "id": item["id"],
+            "serial": item["serial"],
+            "seq": item["seq"],
+            "ok": True,
+            "error": "",
+            "data": {},
+        },
+    )
+    q: asyncio.Queue = asyncio.Queue()
+    await q.put({
+        "id": "a11y-mutation",
+        "serial": "s1",
+        "seq": 1,
+        "session_id": "sess-1",
+        "mode": "mutate",
+        "action": "tap",
+        "payload": {"x": 1, "y": 2},
+    })
+    await q.put(None)
+    agent._a11y_state["s1"] = {
+        "session_id": "sess-1",
+        "last_seq": 0,
+        "queued_seqs": {1},
+    }
+
+    await agent._a11y_worker(
+        "s1",
+        q,
+        asyncio.Queue(),
+        asyncio.get_running_loop(),
+        query_lane=False,
+    )
+
+    agent._u2_executor.begin_ui_mutation.assert_called_once_with("s1")
+    agent._u2_executor.end_ui_mutation.assert_called_once_with("s1")
+
+
+@pytest.mark.asyncio
+async def test_a11y_cancel_keeps_mutation_in_flight_until_thread_finishes(
+    monkeypatch,
+):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+    agent._u2_executor = MagicMock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_action(item):
+        started.set()
+        release.wait(timeout=2.0)
+        return {
+            "type": "a11y_result",
+            "id": item["id"],
+            "serial": item["serial"],
+            "seq": item["seq"],
+            "ok": True,
+            "error": "",
+            "data": {},
+        }
+
+    monkeypatch.setattr(agent, "_execute_a11y_action", _blocking_action)
+    q: asyncio.Queue = asyncio.Queue()
+    await q.put({
+        "id": "a11y-cancelled",
+        "serial": "s1",
+        "seq": 1,
+        "session_id": "sess-1",
+        "mode": "mutate",
+        "action": "tap",
+        "payload": {"x": 1, "y": 2},
+    })
+    agent._a11y_state["s1"] = {
+        "session_id": "sess-1",
+        "last_seq": 0,
+        "queued_seqs": {1},
+    }
+    task = asyncio.create_task(
+        agent._a11y_worker(
+            "s1",
+            q,
+            asyncio.Queue(),
+            asyncio.get_running_loop(),
+            query_lane=False,
+        )
+    )
+    while not started.is_set():
+        await asyncio.sleep(0)
+
+    task.cancel()
+    await asyncio.sleep(0.01)
+    agent._u2_executor.end_ui_mutation.assert_not_called()
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=0.5)
+    agent._u2_executor.end_ui_mutation.assert_called_once_with("s1")
 
 
 def test_a11y_dump_hierarchy_retries_empty_stub(monkeypatch):

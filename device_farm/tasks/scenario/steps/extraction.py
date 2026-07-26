@@ -287,6 +287,8 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 
 _BALANCED_FB_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "max_items",
+    "comment_require_complete",
+    "comment_auto_coverage_target_max",
     "comment_scroll_passes",
     "comment_swipes_per_dump",
     "comment_scroll_distance",
@@ -764,6 +766,11 @@ def request_edge_extra_data(
         "parent_id_already_scoped": parent_id_already_scoped,
         "parent_post_id": parent_post_id,
         "parent_context_source": ctx.get("_active_comment_parent_source"),
+        "comment_filter": (
+            resolve_step_comment_filter(comment_filter_effective_step(step, ctx))
+            if strategy == "fb_comments"
+            else None
+        ),
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
         "_post_id_map": ctx.get("_post_id_map"),
         "_fb_posts_dedupe_field": ctx.get("_fb_posts_dedupe_field"),
@@ -794,6 +801,8 @@ def request_edge_extra_data(
         context.setdefault(key, val)
     for key in (
         "comment_scroll_passes",
+        "comment_require_complete",
+        "comment_auto_coverage_target_max",
         "comment_swipes_per_dump",
         "comment_scroll_distance",
         "comment_scroll_duration_ms",
@@ -915,7 +924,30 @@ def request_edge_extra_data(
             k: v for k, v in edge_extra_summary.items() if k != "screenshot_b64"
         }
     result["edge_extra_summary"] = edge_extra_summary
-    result["reason_code"] = ((ingest.get("diagnostic") or {}) if isinstance(ingest.get("diagnostic"), dict) else {}).get("reason_code", "ok")
+    diagnostic = (
+        ingest.get("diagnostic")
+        if isinstance(ingest.get("diagnostic"), dict)
+        else {}
+    )
+    result["reason_code"] = diagnostic.get("reason_code", "ok")
+    if (
+        strategy == "fb_comments"
+        and result["reason_code"] == "partial_target"
+        and _coerce_bool(step.get("comment_require_complete"), False)
+        and not _coerce_bool(step.get("allow_partial_comments"), False)
+    ):
+        returned = int(diagnostic.get("comments_returned") or parsed_count)
+        target = int(diagnostic.get("comment_target") or step.get("max_items") or 0)
+        stopped_reason = str(
+            diagnostic.get("comment_scroll_stopped_reason") or "target_not_reached"
+        )
+        result["ok"] = False
+        result["message"] = (
+            f"edge extra_data fb_comments incomplete: {returned}/{target} "
+            f"comments ({stopped_reason})"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
     if strategy == "fb_comments" and _coerce_bool(
         step.get("open_post_press_back_after_extract"),
         False,
@@ -1138,6 +1170,7 @@ def run_edge_comment_filter_switch(
     step: Dict[str, Any],
     result: Dict[str, Any],
     cancel_event: Any = None,
+    runtime_ctx: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Drive FB comment sort sheet via agent-boot (open sheet, tap chosen option)."""
 
@@ -1147,6 +1180,7 @@ def run_edge_comment_filter_switch(
             ("dump_ms", "extra_data_dump_ms"),
             ("parse_ms", "extra_data_parse_ms"),
             ("click_ms", "extra_data_click_ms"),
+            ("wait_ms", "extra_data_wait_ms"),
             ("sleep_ms", "extra_data_sleep_ms"),
             ("step_count", "extra_data_steps"),
         ):
@@ -1175,11 +1209,20 @@ def run_edge_comment_filter_switch(
         return report
 
     wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
+    runtime_ctx = runtime_ctx or {}
+    active_anchor = (
+        runtime_ctx.get("_active_comment_parent_anchor")
+        if isinstance(runtime_ctx.get("_active_comment_parent_anchor"), dict)
+        else {}
+    )
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
         **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
+        "parent_id": runtime_ctx.get("_active_comment_parent_hash"),
+        "parent_post_id": runtime_ctx.get("_fb_comment_parent_pid"),
+        "post_key": step.get("post_key") or active_anchor.get("post_key"),
         "comment_filter": target_filter,
         "switch_to_all_comments": True,
         "post_tap_wait_s": wait_s,
@@ -1218,8 +1261,17 @@ def run_edge_comment_filter_switch(
         diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
         report["steps"] = list(diagnostic.get("steps") or [])
         report["switched"] = bool(diagnostic.get("switched"))
+        report["state_verified"] = bool(diagnostic.get("state_verified"))
         report["reason_code"] = str(diagnostic.get("reason_code") or "ok")
-        for key in ("total_ms", "dump_ms", "parse_ms", "click_ms", "sleep_ms", "step_count"):
+        for key in (
+            "total_ms",
+            "dump_ms",
+            "parse_ms",
+            "click_ms",
+            "wait_ms",
+            "sleep_ms",
+            "step_count",
+        ):
             if key in diagnostic:
                 report[key] = diagnostic.get(key)
         _copy_filter_timing(report)

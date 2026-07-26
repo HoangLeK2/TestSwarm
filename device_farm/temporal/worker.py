@@ -76,6 +76,7 @@ async def create_temporal_worker(
         set_scheduler_deps(queue=queue, manager=manager, temporal_client=client, temporal_config=cfg)
         _schedule_activities = ScheduleActivities()
         activity_list = [
+            _activities.heartbeat_campaign_device_claim,
             _activities.execute_device_action,
             _activities.execute_device_action_batch,
             _activities.check_element_exists,
@@ -93,6 +94,7 @@ async def create_temporal_worker(
     else:
         # Secondary workers: device + shared activities (no schedule dispatch deps).
         activity_list = [
+            _activities.heartbeat_campaign_device_claim,
             _activities.execute_device_action,
             _activities.execute_device_action_batch,
             _activities.check_element_exists,

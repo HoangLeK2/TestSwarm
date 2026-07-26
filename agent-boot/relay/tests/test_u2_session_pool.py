@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -108,6 +109,41 @@ async def test_concurrent_get_session_safe(pool):
         # May be called once or twice (race), but the pool should converge to one entry
         assert fn.call_count <= 2
     finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_run_locked_cancel_waits_for_blocking_work_to_finish(pool):
+    p, _fn, _dev = pool
+    serial = "192.168.1.10:5555"
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def _blocking(_device):
+        started.set()
+        try:
+            release.wait(timeout=2.0)
+        finally:
+            finished.set()
+
+    await p.start()
+    try:
+        await p.get_session(serial)
+        task = asyncio.create_task(p.run_locked(serial, _blocking))
+        while not started.is_set():
+            await asyncio.sleep(0)
+
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not task.done()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+        assert finished.is_set()
+    finally:
+        release.set()
         await p.stop()
 
 

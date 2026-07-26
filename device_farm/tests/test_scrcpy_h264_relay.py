@@ -209,6 +209,8 @@ class TestRelayJpegDemand:
 class TestH264RelayTelemetry:
     def test_first_frame_info_identifies_keyframe(self, caplog):
         device = _make_device_client()
+        # A JPEG fallback frame may arrive before the first relay H264 packet.
+        device._last_frame_time = 1.0
 
         with caplog.at_level(logging.INFO, logger="device.relay-log-test"):
             device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)
@@ -226,6 +228,7 @@ class TestH264RelayTelemetry:
     def test_recurrent_keyframe_is_debug_only(self, caplog):
         device = _make_device_client()
         device._last_frame_time = 1.0
+        device._h264_fps_t0 = time.monotonic()
 
         with caplog.at_level(logging.DEBUG, logger="device.relay-log-test"):
             device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)

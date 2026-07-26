@@ -44,6 +44,14 @@ def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> 
         scoped = scope_content_hash(base, scope)
         if scoped:
             mapping[pid] = scoped
+            for variant in item.get("_source_variants") or []:
+                if not isinstance(variant, dict):
+                    continue
+                variant_pid = str(
+                    variant.get("_pid") or variant.get("fb_post_id") or ""
+                ).strip()
+                if variant_pid:
+                    mapping[variant_pid] = scoped
     return mapping
 
 
@@ -366,16 +374,58 @@ def _parse_fb_comment_snapshots(
         frame_context = {**context, "source_index": idx}
         items, diagnostic = _parse_items("fb_comments", snapshot, frame_context)
         frame_results.append((items, diagnostic))
-    return merge_fb_comment_frames(frame_results, max_items=max_items)
+    items, diagnostic = merge_fb_comment_frames(frame_results, max_items=max_items)
+    return items, _annotate_comment_target_diagnostic(
+        diagnostic,
+        context,
+        comments_returned=len(
+            [item for item in items if item.get("_type") != "post_stats"]
+        ),
+    )
+
+
+def _annotate_comment_target_diagnostic(
+    diagnostic: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    comments_returned: int,
+) -> dict[str, Any]:
+    annotated = dict(diagnostic)
+    target = int(context.get("comment_target_effective") or 0)
+    post_comment_count = context.get("post_comment_count")
+    target_is_known = (
+        isinstance(post_comment_count, int)
+        and not isinstance(post_comment_count, bool)
+        and post_comment_count > 0
+    ) or context.get("comment_require_target_without_count") is True
+    comments_returned = int(comments_returned)
+    annotated["comments_returned"] = comments_returned
+    if target > 0 and target_is_known:
+        annotated["comment_target"] = target
+        annotated["coverage_ratio"] = min(1.0, comments_returned / target)
+        for key in (
+            "post_comment_count",
+            "comment_scroll_stopped_reason",
+            "comment_scroll_passes_effective",
+            "comment_crawl_mode_effective",
+            "comment_coverage_collected",
+        ):
+            if context.get(key) is not None:
+                annotated[key] = context[key]
+        if comments_returned < target:
+            annotated["reason_code"] = "partial_target"
+    return annotated
 
 
 def _parse_fb_post_snapshots(
     snapshots: list[str],
     context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    from relay.extra_data.parsers.facebook.dedup import _dedup
+    from relay.extra_data.parsers.facebook.post_reconciliation import (
+        reconcile_fb_post_frames,
+    )
 
-    merged_items: list[dict[str, Any]] = []
+    frame_items: list[list[dict[str, Any]]] = []
     frame_codes: list[str] = []
     frame_posts_returned: list[int] = []
     last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
@@ -386,11 +436,16 @@ def _parse_fb_post_snapshots(
         last_diagnostic = diagnostic
         frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
         frame_posts_returned.append(int(diagnostic.get("posts_returned") or len(items)))
-        merged_items.extend(item for item in items if isinstance(item, dict))
+        frame_items.append([item for item in items if isinstance(item, dict)])
 
-    deduped = _dedup(merged_items)
+    opened = _opened_post_from_context(context)
+    deduped, reconciliation = reconcile_fb_post_frames(
+        frame_items,
+        opened_post=opened,
+    )
     diagnostic = {
         **last_diagnostic,
+        **reconciliation,
         "reason_code": "ok" if deduped else last_diagnostic.get("reason_code", "no_posts"),
         "snapshot_count": len(snapshots),
         "frame_reason_codes": frame_codes,
@@ -465,7 +520,11 @@ def _trusted_preparsed_fb_comments(
         except (TypeError, ValueError):
             pass
     diagnostic["preparsed"] = True
-    return items, diagnostic
+    return items, _annotate_comment_target_diagnostic(
+        diagnostic,
+        context,
+        comments_returned=comment_count,
+    )
 
 
 def _parse_payload_items(
@@ -730,6 +789,9 @@ def _post_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
         opened_value = str(opened.get(opened_key) or "").strip()
         if item_value and opened_value and item_value == opened_value:
             return True
+    for variant in item.get("_source_variants") or []:
+        if isinstance(variant, dict) and _post_matches_opened(variant, opened):
+            return True
     if _post_metadata_matches_opened(item, opened):
         return True
     return False
@@ -790,10 +852,23 @@ def _active_parent_from_opened_post(
             payload = _active_parent_post_payload(item, row)
             if payload is None:
                 return None
+            canonicalized = item.get("_canonicalized_from_detail") is True
             for key in ("pid", "post_key", "stable_post_id", "fb_post_id", "author", "timestamp"):
                 value = opened.get(key)
-                if key not in payload and value is not None and str(value).strip():
+                if (
+                    value is not None
+                    and str(value).strip()
+                    and (canonicalized or key not in payload)
+                ):
                     payload[key] = value
+            if canonicalized:
+                opened_text = (
+                    opened.get("text_prefix")
+                    or opened.get("text")
+                    or opened.get("body")
+                )
+                if opened_text is not None and str(opened_text).strip():
+                    payload["text_prefix"] = str(opened_text)[:220]
             return payload
     return None
 

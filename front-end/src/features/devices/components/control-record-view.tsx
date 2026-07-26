@@ -110,6 +110,7 @@ import {
   type CoordinatePickTarget
 } from '@/features/campaigns/components/flow-editor/coordinate-pick';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
+import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { deriveNestedInlineRunStates } from '@/features/campaigns/components/flow-editor/inline-run-key';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import {
@@ -257,6 +258,7 @@ export function ControlRecordView({
   const templatePerms = useResourcePermissions('scenario-templates');
   const orgScenarioPerms = useResourcePermissions('scenarios');
   const canExecuteDevice = devicePerms.canExecute && !safeReadOnly;
+  const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const savingOrgScenario = Boolean(initialOrgScenarioId);
   const canSaveWork =
     !safeReadOnly &&
@@ -2689,6 +2691,12 @@ export function ControlRecordView({
                   onOpenJson={() => setJsonDialogOpen(true)}
                   hasSteps={steps.items.length > 0}
                   onSave={() => {
+                    if (!canPersistScenario(childStepEditorOpen)) {
+                      toast.info(
+                        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+                      );
+                      return;
+                    }
                     if (save.templateContext) {
                       save.saveToTemplate(
                         syncDeviceVarKeysIntoScenarioVariables()
@@ -2908,6 +2916,7 @@ export function ControlRecordView({
                               selectedDevice ? handleStopInlineRun : undefined
                             }
                             stepRunStates={stepRunStates}
+                            onChildStepEditorOpenChange={setChildStepEditorOpen}
                           />
                         </div>
                       </div>

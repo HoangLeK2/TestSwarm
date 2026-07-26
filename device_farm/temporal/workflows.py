@@ -75,11 +75,25 @@ _ACTIVITY_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     backoff_coefficient=2.0,
     maximum_attempts=3,
-    non_retryable_error_types=["ValueError"],  # Don't retry validation errors
+    non_retryable_error_types=[
+        "ValueError",
+        "CampaignDeviceClaimLostError",
+    ],
 )
 
 _DEVICE_ACTION_RETRY = RetryPolicy(
     maximum_attempts=1,
+)
+
+_CAMPAIGN_CLAIM_KEEPALIVE_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=1),
+    maximum_interval=timedelta(seconds=30),
+    backoff_coefficient=2.0,
+    maximum_attempts=0,
+    non_retryable_error_types=[
+        "ValueError",
+        "CampaignDeviceClaimLostError",
+    ],
 )
 
 
@@ -156,6 +170,8 @@ _BATCH_TIMEOUT_CAP_SECONDS = 600
 _BATCH_RECOVERY_MARGIN_SECONDS = 30
 _BATCH_TIMEOUT_HARD_CAP_SECONDS = 3600
 _MAX_RETAINED_SUB_RESULTS = 50
+_CAMPAIGN_CLAIM_KEEPALIVE_PATCH = "campaign-device-claim-keepalive-v1"
+_CAMPAIGN_CLAIM_KEEPALIVE_MAX_SECONDS = 600
 
 # Step types that require individual activity calls (cannot be batched).
 # All other step types are "leaf" steps dispatched via execute_device_action_batch.
@@ -327,17 +343,28 @@ class ScenarioWorkflow:
         self._progress.total_steps = len(inp.steps)
         self._progress.status = WorkflowStatus.RUNNING.value
 
-        # Wait if paused before starting
-        await self._wait_if_paused()
-
-        if self._cancelled:
-            self._progress.status = WorkflowStatus.CANCELLED.value
-            return StepsResult(
-                success=False, steps_executed=0,
-                failed_message="Cancelled before start",
-            )
         result: StepsResult | None = None
         try:
+            # Wait if paused before starting. Keep this inside the terminal
+            # error boundary so claim loss during an initial pause is finalized.
+            await self._wait_if_paused(inp)
+
+            if self._cancelled:
+                self._progress.status = WorkflowStatus.CANCELLED.value
+                await self._finalize(
+                    inp.campaign_id,
+                    inp.run_id,
+                    success=False,
+                    execution_id=inp.execution_id,
+                    device_serial=inp.device_serial,
+                    failed_message="Cancelled before start",
+                )
+                return StepsResult(
+                    success=False,
+                    steps_executed=0,
+                    failed_message="Cancelled before start",
+                )
+
             # Merge capture_steps from ScenarioInput into scenario_config so activities
             # can access it via inp.scenario_config["capture_steps"].
             merged_config = dict(inp.scenario_config or {})
@@ -345,25 +372,21 @@ class ScenarioWorkflow:
                 merged_config["capture_steps"] = True
             elif inp.execution_id or inp.run_id:
                 merged_config.setdefault("capture_steps", True)
-            result = await workflow.execute_child_workflow(
-                ScenarioStepsWorkflow.run,
-                StepsInput(
-                    device_serial=inp.device_serial,
-                    steps=inp.steps,
-                    variables=inp.variables,
-                    campaign_vars=inp.campaign_vars,
-                    scenario_registry=inp.scenario_registry,
-                    depth=0,
-                    parent_runtime_vars={},
-                    scenario_config=merged_config,
-                    campaign_id=inp.campaign_id,
-                    run_id=inp.run_id,
-                    execution_id=inp.execution_id,
-                    start_step=int(getattr(inp, "start_step", 0) or 0),
-                ),
-                id=f"{workflow.info().workflow_id}:steps",
-                task_queue=TASK_QUEUE_NAME,
+            steps_input = StepsInput(
+                device_serial=inp.device_serial,
+                steps=inp.steps,
+                variables=inp.variables,
+                campaign_vars=inp.campaign_vars,
+                scenario_registry=inp.scenario_registry,
+                depth=0,
+                parent_runtime_vars={},
+                scenario_config=merged_config,
+                campaign_id=inp.campaign_id,
+                run_id=inp.run_id,
+                execution_id=inp.execution_id,
+                start_step=int(getattr(inp, "start_step", 0) or 0),
             )
+            result = await self._execute_steps_with_claim_keepalive(inp, steps_input)
 
             if self._cancelled:
                 self._progress.status = WorkflowStatus.CANCELLED.value
@@ -435,6 +458,84 @@ class ScenarioWorkflow:
                 failed_message=failed_message,
             )
 
+    async def _execute_steps_with_claim_keepalive(
+        self,
+        inp: ScenarioInput,
+        steps_input: StepsInput,
+    ) -> StepsResult:
+        child_execution = workflow.execute_child_workflow(
+            ScenarioStepsWorkflow.run,
+            steps_input,
+            id=f"{workflow.info().workflow_id}:steps",
+            task_queue=TASK_QUEUE_NAME,
+        )
+        execution_id = inp.execution_id or inp.run_id
+        keepalive_enabled = (
+            bool(inp.campaign_id and execution_id and inp.device_serial)
+            and workflow.patched(_CAMPAIGN_CLAIM_KEEPALIVE_PATCH)
+        )
+        if not keepalive_enabled:
+            return await child_execution
+
+        child_task = asyncio.create_task(child_execution)
+        keepalive_task = asyncio.create_task(
+            self._keep_campaign_claim_alive(
+                campaign_id=inp.campaign_id,
+                execution_id=execution_id,
+                device_serial=inp.device_serial,
+            )
+        )
+        try:
+            done, _pending = await workflow.wait(
+                {child_task, keepalive_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if keepalive_task in done:
+                keepalive_error = keepalive_task.exception()
+                child_task.cancel()
+                await asyncio.gather(child_task, return_exceptions=True)
+                if keepalive_error is not None:
+                    raise keepalive_error
+                raise RuntimeError("campaign device claim keepalive stopped unexpectedly")
+            return await child_task
+        except (asyncio.CancelledError, TemporalCancelledError):
+            child_task.cancel()
+            await asyncio.gather(child_task, return_exceptions=True)
+            raise
+        finally:
+            keepalive_task.cancel()
+            await asyncio.gather(keepalive_task, return_exceptions=True)
+
+    async def _keep_campaign_claim_alive(
+        self,
+        *,
+        campaign_id: str,
+        execution_id: str,
+        device_serial: str,
+    ) -> None:
+        delay_seconds = 0
+        while True:
+            if delay_seconds > 0:
+                await workflow.sleep(timedelta(seconds=delay_seconds))
+            recommended_delay: int = await workflow.execute_activity(
+                "heartbeat_campaign_device_claim",
+                {
+                    "campaign_id": campaign_id,
+                    "execution_id": execution_id,
+                    "device_serial": device_serial,
+                },
+                result_type=int,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_CAMPAIGN_CLAIM_KEEPALIVE_RETRY,
+            )
+            delay_seconds = max(
+                1,
+                min(
+                    int(recommended_delay),
+                    _CAMPAIGN_CLAIM_KEEPALIVE_MAX_SECONDS,
+                ),
+            )
+
     async def _forward_signal(self, signal_name: str) -> None:
         child_id = f"{workflow.info().workflow_id}:steps"
         try:
@@ -486,11 +587,55 @@ class ScenarioWorkflow:
         """Query current execution progress."""
         return self._progress
 
-    async def _wait_if_paused(self) -> None:
+    async def _wait_if_paused(self, inp: ScenarioInput | None = None) -> None:
         """Block until unpaused or cancelled."""
-        await workflow.wait_condition(
-            lambda: not self._paused or self._cancelled,
+        if not self._paused or self._cancelled:
+            return
+        execution_id = (inp.execution_id or inp.run_id) if inp is not None else None
+        keepalive_enabled = (
+            inp is not None
+            and bool(inp.campaign_id and execution_id and inp.device_serial)
+            and workflow.patched(_CAMPAIGN_CLAIM_KEEPALIVE_PATCH)
         )
+        if not keepalive_enabled:
+            await workflow.wait_condition(
+                lambda: not self._paused or self._cancelled,
+            )
+            return
+
+        keepalive_task = asyncio.create_task(
+            self._keep_campaign_claim_alive(
+                campaign_id=inp.campaign_id,
+                execution_id=execution_id,
+                device_serial=inp.device_serial,
+            )
+        )
+        pause_wait_task = asyncio.create_task(
+            workflow.wait_condition(
+                lambda: not self._paused or self._cancelled,
+            )
+        )
+        try:
+            done, _pending = await workflow.wait(
+                {pause_wait_task, keepalive_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if keepalive_task in done:
+                keepalive_error = keepalive_task.exception()
+                pause_wait_task.cancel()
+                await asyncio.gather(pause_wait_task, return_exceptions=True)
+                if keepalive_error is not None:
+                    raise keepalive_error
+                raise RuntimeError("campaign device claim keepalive stopped unexpectedly")
+            await pause_wait_task
+        finally:
+            keepalive_task.cancel()
+            pause_wait_task.cancel()
+            await asyncio.gather(
+                keepalive_task,
+                pause_wait_task,
+                return_exceptions=True,
+            )
 
     async def _finalize(
         self,
@@ -872,6 +1017,7 @@ class ScenarioStepsWorkflow:
                         campaign_vars=inp.campaign_vars,
                         scenario_config=getattr(inp, "scenario_config", {}),
                         scenario_registry=inp.scenario_registry,
+                        run_id=inp.run_id,
                         execution_id=inp.execution_id,
                         campaign_id=inp.campaign_id,
                         depth=inp.depth,
@@ -1076,6 +1222,7 @@ class ScenarioStepsWorkflow:
                             runtime_vars=runtime_vars,
                             context=runtime_context,
                             execution_id=inp.execution_id or inp.run_id,
+                            campaign_id=inp.campaign_id,
                         ),
                         result_type=bool,
                         start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
@@ -1282,7 +1429,7 @@ class ScenarioStepsWorkflow:
                         scenario_config=inp.scenario_config,
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
-                        execution_id=inp.execution_id,
+                        execution_id=inp.execution_id or inp.run_id,
                         user_id=inp.campaign_vars.get("__USER_ID__"),
                     ),
                     result_type=ExtractResult,
@@ -1442,6 +1589,7 @@ class ScenarioStepsWorkflow:
                         runtime_vars=runtime_vars,
                         context=ctx,
                         execution_id=inp.execution_id or inp.run_id,
+                        campaign_id=inp.campaign_id,
                     ),
                     result_type=bool,
                     start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
@@ -1502,6 +1650,7 @@ class ScenarioStepsWorkflow:
                 runtime_vars=runtime_vars,
                 context=runtime_context,
                 execution_id=inp.execution_id or inp.run_id,
+                campaign_id=inp.campaign_id,
             ),
             result_type=bool,
             start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
@@ -1625,6 +1774,8 @@ class ScenarioStepsWorkflow:
                     device_serial=inp.device_serial,
                     condition=condition,
                     runtime_vars=runtime_vars,
+                    execution_id=inp.execution_id or inp.run_id,
+                    campaign_id=inp.campaign_id,
                 ),
                 result_type=bool,
                 start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
@@ -1673,6 +1824,7 @@ class ScenarioStepsWorkflow:
                 device_serial=inp.device_serial,
                 by=by, value=value, timeout=timeout,
                 execution_id=inp.execution_id or inp.run_id,
+                campaign_id=inp.campaign_id,
             ),
             result_type=ElementCheckResult,
             start_to_close_timeout=timedelta(seconds=timeout + 10),

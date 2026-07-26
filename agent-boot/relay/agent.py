@@ -64,6 +64,26 @@ from relay.runtime         import (
 logger = logging.getLogger("relay.agent")
 
 
+async def _await_executor_completion(future: asyncio.Future[Any]) -> Any:
+    """Keep mutation guards active until blocking work really stops."""
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(future)
+            break
+        except asyncio.CancelledError:
+            if future.cancelled():
+                raise
+            cancelled = True
+        except Exception:
+            if cancelled:
+                raise asyncio.CancelledError
+            raise
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -1488,7 +1508,23 @@ class RelayAgent:
                 state.get("queued_seqs", set()).discard(seq)
                 continue
 
-            res = await loop.run_in_executor(adb_executor(), self._execute_a11y_action, item)
+            ui_executor = self._u2_executor
+            mutates_ui = (
+                ui_executor is not None
+                and item.get("action") != "dump_hierarchy"
+            )
+            if mutates_ui:
+                ui_executor.begin_ui_mutation(serial)
+            try:
+                future = loop.run_in_executor(
+                    adb_executor(),
+                    self._execute_a11y_action,
+                    item,
+                )
+                res = await _await_executor_completion(future)
+            finally:
+                if mutates_ui:
+                    ui_executor.end_ui_mutation(serial)
             if seq > 0:
                 state.get("queued_seqs", set()).discard(seq)
                 state["last_seq"] = max(int(state.get("last_seq", 0) or 0), seq)
@@ -1685,10 +1721,31 @@ class RelayAgent:
         content_type = msg.get("content_type", "")
         timeout      = max(1.0, float(msg.get("timeout", 30)))
 
-        loop   = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            u2_executor_pool(), self._do_u2_http, serial, method, path, body, content_type, timeout
+        ui_executor = self._u2_executor
+        mutates_ui = (
+            ui_executor is not None
+            and method == "POST"
+            and str(path).startswith("/jsonrpc/")
         )
+        if mutates_ui:
+            ui_executor.begin_ui_mutation(str(serial))
+
+        loop   = asyncio.get_running_loop()
+        try:
+            future = loop.run_in_executor(
+                u2_executor_pool(),
+                self._do_u2_http,
+                serial,
+                method,
+                path,
+                body,
+                content_type,
+                timeout,
+            )
+            result = await _await_executor_completion(future)
+        finally:
+            if mutates_ui:
+                ui_executor.end_ui_mutation(str(serial))
         result["type"]   = "u2_result"
         result["msg_id"] = msg_id
         # Bounded put: control results are important, but we MUST NOT block
@@ -1899,12 +1956,29 @@ class RelayAgent:
         if not isinstance(cancel_event, asyncio.Event):
             cancel_event = None
         started = time.perf_counter()
-        result = await self._try_u2_batch_touch_fast_path(
-            serial=serial,
-            actions=actions,
-            early_exit=bool(msg.get("early_exit", True)),
-            cancel_event=cancel_event,
+        ui_executor = self._u2_executor
+        fast_touch_candidate = bool(
+            ui_executor is not None
+            and isinstance(actions, list)
+            and actions
+            and all(
+                isinstance(action, dict)
+                and action.get("op") in {"click", "swipe", "long_click"}
+                for action in actions
+            )
         )
+        if fast_touch_candidate:
+            ui_executor.begin_ui_mutation(serial)
+        try:
+            result = await self._try_u2_batch_touch_fast_path(
+                serial=serial,
+                actions=actions,
+                early_exit=bool(msg.get("early_exit", True)),
+                cancel_event=cancel_event,
+            )
+        finally:
+            if fast_touch_candidate:
+                ui_executor.end_ui_mutation(serial)
         if result is not None:
             pass
         elif self._u2_executor is None:
@@ -2002,7 +2076,8 @@ class RelayAgent:
                 "error": None if all_ok else (results[-1].get("error") if results else "touch_failed"),
             }
 
-        return await loop.run_in_executor(u2_executor_pool(), _run)
+        future = loop.run_in_executor(u2_executor_pool(), _run)
+        return await _await_executor_completion(future)
 
     def _u2_touch_rpc_payload(self, act: dict, req_id: int) -> Optional[tuple[str, dict, float]]:
         op = str(act.get("op", "") or "")

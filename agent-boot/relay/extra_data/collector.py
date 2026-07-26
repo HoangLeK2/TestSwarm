@@ -32,6 +32,14 @@ _COMMENT_DEEP_MAX_SNAPSHOTS = 2_000
 _COMMENT_MIN_SCROLL_DURATION_S = 0.06
 _COMMENT_SCROLL_SETTLE_S = 0.0
 _POST_OPEN_TAP_SETTLE_S = 0.10
+_FILTER_HIERARCHY_HANDOFF_TTL_S = 5.0
+_FILTER_HIERARCHY_HANDOFF_MAX = 256
+_FILTER_HIERARCHY_HANDOFF_MAX_BYTES = 32 * 1024 * 1024
+_filter_hierarchy_handoffs: dict[
+    tuple[str, str, str, str],
+    tuple[float, str, int, int],
+] = {}
+_filter_hierarchy_handoff_bytes = 0
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -47,6 +55,120 @@ def _collect_lock(serial: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _collect_locks[serial] = lock
     return lock
+
+
+def _filter_hierarchy_handoff_key(
+    serial: str,
+    context: dict[str, Any],
+) -> tuple[str, str, str, str] | None:
+    context_id = str(context.get("context_id") or "").strip()
+    parent_id = str(
+        context.get("parent_id")
+        or context.get("parent_post_id")
+        or context.get("post_key")
+        or ""
+    ).strip()
+    target_filter = str(context.get("comment_filter") or "").strip().lower()
+    if not context_id or not parent_id or not target_filter:
+        return None
+    return serial, context_id, parent_id, target_filter
+
+
+def _executor_ui_state(
+    executor: Any,
+    serial: str,
+) -> tuple[int, int] | None:
+    generation_fn = getattr(executor, "ui_generation", None)
+    in_flight_fn = getattr(executor, "ui_mutation_in_flight", None)
+    if not callable(generation_fn) or not callable(in_flight_fn):
+        return None
+    try:
+        return int(generation_fn(serial)), int(in_flight_fn(serial))
+    except (TypeError, ValueError):
+        return None
+
+
+def _store_filter_hierarchy_handoff(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+    xml: str,
+    expected_generation: int,
+) -> bool:
+    global _filter_hierarchy_handoff_bytes
+
+    key = _filter_hierarchy_handoff_key(serial, context)
+    if key is None or not _looks_like_hierarchy_xml(xml) or not _diag_sheet_opened(xml):
+        return False
+    ui_state = _executor_ui_state(executor, serial)
+    if ui_state is None:
+        return False
+    ui_generation, mutations_in_flight = ui_state
+    if mutations_in_flight > 0 or ui_generation != expected_generation:
+        return False
+    xml_bytes = len(xml.encode("utf-8"))
+    if xml_bytes > _FILTER_HIERARCHY_HANDOFF_MAX_BYTES:
+        return False
+    now = time.monotonic()
+    expired = [
+        existing_key
+        for existing_key, (expires_at, _xml, _generation, _size) in _filter_hierarchy_handoffs.items()
+        if expires_at <= now
+    ]
+    for existing_key in expired:
+        entry = _filter_hierarchy_handoffs.pop(existing_key, None)
+        if entry is not None:
+            _filter_hierarchy_handoff_bytes -= entry[3]
+    replaced = _filter_hierarchy_handoffs.pop(key, None)
+    if replaced is not None:
+        _filter_hierarchy_handoff_bytes -= replaced[3]
+    while (
+        len(_filter_hierarchy_handoffs) >= _FILTER_HIERARCHY_HANDOFF_MAX
+        or _filter_hierarchy_handoff_bytes + xml_bytes
+        > _FILTER_HIERARCHY_HANDOFF_MAX_BYTES
+    ):
+        oldest = min(
+            _filter_hierarchy_handoffs,
+            key=lambda existing_key: _filter_hierarchy_handoffs[existing_key][0],
+        )
+        entry = _filter_hierarchy_handoffs.pop(oldest)
+        _filter_hierarchy_handoff_bytes -= entry[3]
+    _filter_hierarchy_handoffs[key] = (
+        now + _FILTER_HIERARCHY_HANDOFF_TTL_S,
+        xml,
+        ui_generation,
+        xml_bytes,
+    )
+    _filter_hierarchy_handoff_bytes += xml_bytes
+    return True
+
+
+def _consume_filter_hierarchy_handoff(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+) -> str | None:
+    global _filter_hierarchy_handoff_bytes
+
+    key = _filter_hierarchy_handoff_key(serial, context)
+    if key is None:
+        return None
+    entry = _filter_hierarchy_handoffs.pop(key, None)
+    if entry is None:
+        return None
+    expires_at, xml, stored_generation, xml_bytes = entry
+    _filter_hierarchy_handoff_bytes -= xml_bytes
+    if expires_at <= time.monotonic():
+        return None
+    ui_state = _executor_ui_state(executor, serial)
+    if ui_state is None:
+        return None
+    ui_generation, mutations_in_flight = ui_state
+    if mutations_in_flight > 0 or ui_generation != stored_generation:
+        return None
+    if not _looks_like_hierarchy_xml(xml) or not _diag_sheet_opened(xml):
+        return None
+    return xml
 
 
 def _cancel_event_from_context(context: dict[str, Any] | None) -> asyncio.Event | None:
@@ -89,14 +211,22 @@ def release_collect_lock(serial: str) -> None:
     """Drop the per-serial collect lock if it is idle.
 
     Called from the device-offline cascade in the relay agent so phones that
-    are cycled (cradle / USB replug) do not slowly grow this map. Safe to
-    call when a lock is held — in that case we leave it in place and the
-    holder will finish normally; the next OFFLINE event will free it.
+    are cycled (cradle / USB replug) do not slowly grow these maps. Any
+    hierarchy handoff is invalidated immediately; a held lock remains until
+    its current owner finishes.
     """
+    global _filter_hierarchy_handoff_bytes
+
+    stale_handoffs = [
+        key for key in _filter_hierarchy_handoffs
+        if key[0] == serial
+    ]
+    for key in stale_handoffs:
+        entry = _filter_hierarchy_handoffs.pop(key, None)
+        if entry is not None:
+            _filter_hierarchy_handoff_bytes -= entry[3]
     lock = _collect_locks.get(serial)
-    if lock is None:
-        return
-    if lock.locked():
+    if lock is None or lock.locked():
         return
     _collect_locks.pop(serial, None)
 
@@ -1067,6 +1197,7 @@ async def _expand_see_more_xml_probe_tap(
         serial,
         [
             {"op": "click", "x": cx, "y": cy},
+            {"op": "sleep", "seconds": settle_s},
             {"op": "dump_hierarchy", "compressed": compressed, "timeout": dump_timeout},
         ],
         early_exit=True,
@@ -1080,10 +1211,9 @@ async def _expand_see_more_xml_probe_tap(
         logger.warning("[%s] expand_see_more xml_probe: click failed at %s,%s", serial, cx, cy)
         return 0, xml
     logger.info("[%s] expand_see_more tap #1 at (%d,%d) (xml_probe)", serial, cx, cy)
-    await asyncio.sleep(settle_s)
     final_xml = None
-    if len(results) > 1 and results[1].get("ok"):
-        value = results[1].get("value")
+    if len(results) > 2 and results[2].get("ok"):
+        value = results[2].get("value")
         if isinstance(value, str) and _looks_like_hierarchy_xml(value):
             final_xml = value
             logger.info(
@@ -1342,6 +1472,7 @@ async def _collect_comment_snapshots(
         _COMMENT_DEEP_SCROLL_MAX_SWIPES if explicit_scroll_budget else _COMMENT_SCROLL_MAX_SWIPES,
     )
     if swipe_budget <= 0:
+        context["comment_scroll_stopped_reason"] = "scroll_disabled"
         return [initial_xml]
 
     explicit_swipes_per_dump = "comment_swipes_per_dump" in context
@@ -1787,6 +1918,9 @@ async def _collect_comment_snapshots(
             max_items,
         )
         context["comment_coverage_ledger"] = coverage_ledger
+        context["comment_scroll_stopped_reason"] = "target_reached"
+        context["comment_coverage_collected"] = len(seen_comment_keys)
+        context["comment_coverage_target"] = effective_comment_target
         return snapshots
 
     total_xml_bytes = initial_xml_bytes
@@ -1850,16 +1984,37 @@ async def _collect_comment_snapshots(
         requested_crawl_mode in {"anchored_coverage", "coverage", "lossless"}
         or (
             requested_crawl_mode == "auto"
-            and requested_capped_by_post_count
             and not large_target_fast_scroll
             and effective_comment_target <= auto_coverage_target_max
-            and _bool_context(context, "comment_auto_coverage_when_capped", True)
+            and (
+                requested_capped_by_post_count
+                or (
+                    _bool_context(context, "comment_require_complete", False)
+                    and explicit_target_budget
+                )
+            )
+            and _bool_context(context, "comment_auto_coverage", True)
         )
     )
     if anchored_coverage_enabled:
         context["comment_crawl_mode_effective"] = "anchored_coverage"
+        if _bool_context(context, "comment_require_complete", False):
+            max_snapshots = max(
+                max_snapshots,
+                min(snapshot_cap, swipe_budget + 1),
+            )
+            if not explicit_xml_byte_cap:
+                projected_xml_bytes = max_snapshots * max(
+                    initial_xml_bytes,
+                    512 * 1024,
+                )
+                max_xml_bytes = max(
+                    max_xml_bytes,
+                    min(xml_byte_hi, projected_xml_bytes),
+                )
     else:
         context["comment_crawl_mode_effective"] = "batched_tail_probe"
+    context["comment_max_snapshots_effective"] = max_snapshots
 
     async def _screen_swipe_coords() -> tuple[int, int, int, int]:
         _raise_if_cancelled(context)
@@ -2193,6 +2348,11 @@ async def _collect_comment_snapshots(
         context["comment_coverage_ledger"] = coverage_ledger
         context["comment_coverage_collected"] = len(seen_comment_keys)
         context["comment_coverage_target"] = effective_comment_target
+        if swipes_done >= swipe_budget:
+            context.setdefault(
+                "comment_scroll_stopped_reason",
+                "swipe_budget_exhausted",
+            )
         return True
 
     wall_deadline = (
@@ -2227,9 +2387,14 @@ async def _collect_comment_snapshots(
             return snapshots
     while swipes_done < swipe_budget:
         _raise_if_cancelled(context)
-        if len(snapshots) >= max_snapshots or swipes_done >= swipe_budget:
+        if len(snapshots) >= max_snapshots:
+            context["comment_scroll_stopped_reason"] = "snapshot_cap_reached"
+            break
+        if swipes_done >= swipe_budget:
+            context["comment_scroll_stopped_reason"] = "swipe_budget_exhausted"
             break
         if wall_deadline is not None and time.monotonic() >= wall_deadline:
+            context["comment_scroll_stopped_reason"] = "wall_timeout"
             logger.info(
                 "[%s] extra_data comment wall-clock cap %.1fs reached after %d dump "
                 "cycles (%d swipes, snapshots=%d)",
@@ -2255,6 +2420,7 @@ async def _collect_comment_snapshots(
         )
         swipes_done += completed_swipes
         if completed_swipes < batch_swipes or not batch_ok:
+            context["comment_scroll_stopped_reason"] = "swipe_batch_failed"
             logger.warning(
                 "[%s] extra_data comment swipe batch failed at swipe %d "
                 "(completed=%d/%d)",
@@ -2265,9 +2431,11 @@ async def _collect_comment_snapshots(
             )
             return snapshots
         if not next_xml:
+            context["comment_scroll_stopped_reason"] = "empty_dump"
             break
         next_xml, abort_scroll = await _recover_comment_chrome(next_xml)
         if abort_scroll:
+            context["comment_scroll_stopped_reason"] = "left_comment_sheet"
             logger.warning(
                 "[%s] extra_data comment scroll stopped: left comment sheet",
                 serial,
@@ -2301,6 +2469,7 @@ async def _collect_comment_snapshots(
                 no_new_comment_dumps += 1
                 stall_detected = True
             if _comment_target_reached():
+                context["comment_scroll_stopped_reason"] = "target_reached"
                 logger.info(
                     "[%s] extra_data comment target reached after %d dump cycles "
                     "(%d swipes, collected=%d target=%d post=%s max_items=%d)",
@@ -2319,6 +2488,7 @@ async def _collect_comment_snapshots(
                 and no_new_comment_dumps >= no_new_comment_threshold
                 and (cycle + 1) >= min_dumps
             ):
+                context["comment_scroll_stopped_reason"] = "tail_no_new"
                 logger.info(
                     "[%s] extra_data comment no-new break after %d dump cycles "
                     "(%d swipes, %d no-new comment dumps, snapshots=%d)",
@@ -2357,6 +2527,7 @@ async def _collect_comment_snapshots(
             and (cycle + 1) >= min_dumps
             and unchanged_dumps >= no_growth_break
         ):
+            context["comment_scroll_stopped_reason"] = "no_growth"
             logger.info(
                 "[%s] extra_data comment no-growth break after %d dump cycles "
                 "(%d swipes, %d unchanged XML dumps, snapshots=%d)",
@@ -2369,6 +2540,8 @@ async def _collect_comment_snapshots(
             break
         cycle += 1
 
+    if swipes_done >= swipe_budget:
+        context.setdefault("comment_scroll_stopped_reason", "swipe_budget_exhausted")
     logger.info(
         "[%s] extra_data comment scroll done swipes=%d dumps=%d snapshots=%d",
         serial,
@@ -2742,6 +2915,8 @@ async def collect_fb_comment_filter_apply(
         "parse_ms": 0.0,
         "click_ms": 0.0,
         "sleep_ms": 0.0,
+        "wait_ms": 0.0,
+        "state_verified": False,
     }
     if not target_filter:
         report["reason_code"] = "disabled"
@@ -2755,6 +2930,8 @@ async def collect_fb_comment_filter_apply(
 
         async def _flow() -> tuple[dict[str, Any], str | None]:
             started = time.monotonic()
+            final_xml: str | None = None
+            final_xml_generation: int | None = None
 
             def _elapsed_ms(since: float) -> float:
                 return round((time.monotonic() - since) * 1000.0, 1)
@@ -2772,9 +2949,26 @@ async def collect_fb_comment_filter_apply(
                 target_filter,
                 max_steps,
             )
+            filter_labels = {
+                "most_relevant": ("Phù hợp nhất", "Most relevant"),
+                "newest": ("Mới nhất", "Newest"),
+                "all_comments": ("Tất cả bình luận", "All comments"),
+            }
             for _ in range(max_steps):
+                ui_state_before_dump = _executor_ui_state(executor, serial)
                 dump_started = time.monotonic()
                 xml = await _dump_hierarchy(executor, serial, context)
+                ui_state_after_dump = _executor_ui_state(executor, serial)
+                if (
+                    ui_state_before_dump is not None
+                    and ui_state_before_dump == ui_state_after_dump
+                    and ui_state_after_dump[1] == 0
+                ):
+                    final_xml = xml
+                    final_xml_generation = ui_state_after_dump[0]
+                else:
+                    final_xml = None
+                    final_xml_generation = None
                 dump_ms = _elapsed_ms(dump_started)
                 _add_ms("dump_ms", dump_ms)
                 if not xml:
@@ -2796,12 +2990,14 @@ async def collect_fb_comment_filter_apply(
                     "parse_ms": parse_ms,
                     "click_ms": 0.0,
                     "sleep_ms": 0.0,
+                    "wait_ms": 0.0,
                 }
                 report["steps"].append(step_info)
 
                 if phase in {"done", "error"}:
                     if reason in {"already_on_filter", "already_all_comments"}:
                         report["switched"] = True
+                        report["state_verified"] = True
                     report["reason_code"] = reason or phase
                     report["phase"] = phase
                     break
@@ -2816,16 +3012,68 @@ async def collect_fb_comment_filter_apply(
                 x1, y1, x2, y2 = [int(v) for v in bounds]
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                 click_started = time.monotonic()
-                if not await _u2_click(executor, serial, cx, cy):
+                xml_lower = xml.lower()
+                label_index = 0 if any(
+                    labels[0].lower() in xml_lower
+                    for labels in filter_labels.values()
+                ) else 1
+                if phase == "open_sheet":
+                    wait_action = {
+                        "op": "wait_exists",
+                        "selector": {
+                            "text": filter_labels[target_filter][label_index],
+                        },
+                        "timeout": step_pause,
+                    }
+                else:
+                    non_target_mode = next(
+                        mode for mode in filter_labels
+                        if mode != target_filter
+                    )
+                    wait_action = {
+                        "op": "wait_gone",
+                        "selector": {
+                            "text": filter_labels[non_target_mode][label_index],
+                        },
+                        "timeout": post_select_s,
+                    }
+                transition = await executor.run_batch(
+                    serial,
+                    [
+                        {"op": "click", "x": cx, "y": cy},
+                        wait_action,
+                    ],
+                    early_exit=True,
+                )
+                transition_results = transition.get("results") or []
+                clicked = bool(
+                    transition_results
+                    and transition_results[0].get("ok")
+                )
+                if not clicked:
                     click_ms = _elapsed_ms(click_started)
                     step_info["click_ms"] = click_ms
                     _add_ms("click_ms", click_ms)
                     report["reason_code"] = "tap_failed"
                     report["phase"] = "error"
                     break
-                click_ms = _elapsed_ms(click_started)
+                click_ms = float(transition_results[0].get("duration_ms") or 0.0)
+                wait_ms = (
+                    float(transition_results[1].get("duration_ms") or 0.0)
+                    if len(transition_results) > 1
+                    else 0.0
+                )
+                if click_ms <= 0 and wait_ms <= 0:
+                    wait_ms = _elapsed_ms(click_started)
                 step_info["click_ms"] = click_ms
+                step_info["wait_ms"] = wait_ms
+                step_info["state_wait_hit"] = bool(
+                    len(transition_results) > 1
+                    and transition_results[1].get("ok")
+                    and transition_results[1].get("value")
+                )
                 _add_ms("click_ms", click_ms)
+                _add_ms("wait_ms", wait_ms)
                 step_info["tapped_at"] = [cx, cy]
                 logger.info(
                     "[%s] extra_data filter_apply tap phase=%s at (%d,%d)",
@@ -2835,21 +3083,6 @@ async def collect_fb_comment_filter_apply(
                     cy,
                 )
 
-                if phase in {"select_option", "select_all"}:
-                    if post_select_s > 0:
-                        sleep_started = time.monotonic()
-                        await asyncio.sleep(post_select_s)
-                        sleep_ms = _elapsed_ms(sleep_started)
-                        step_info["sleep_ms"] = round(float(step_info.get("sleep_ms") or 0.0) + sleep_ms, 1)
-                        _add_ms("sleep_ms", sleep_ms)
-                    continue
-
-                if step_pause > 0:
-                    sleep_started = time.monotonic()
-                    await asyncio.sleep(step_pause)
-                    sleep_ms = _elapsed_ms(sleep_started)
-                    step_info["sleep_ms"] = round(float(step_info.get("sleep_ms") or 0.0) + sleep_ms, 1)
-                    _add_ms("sleep_ms", sleep_ms)
             else:
                 if "reason_code" not in report:
                     report["reason_code"] = "max_steps"
@@ -2861,9 +3094,21 @@ async def collect_fb_comment_filter_apply(
                     report["reason_code"] = "filter_not_verified"
                     report["phase"] = "error"
 
+            if (
+                report.get("state_verified")
+                and final_xml
+                and final_xml_generation is not None
+            ):
+                report["hierarchy_handoff_stored"] = _store_filter_hierarchy_handoff(
+                    executor,
+                    serial,
+                    context,
+                    final_xml,
+                    final_xml_generation,
+                )
             _finish()
             logger.info(
-                "[%s] extra_data filter_apply done switched=%s reason=%s total=%.1fms dump=%.1fms parse=%.1fms click=%.1fms sleep=%.1fms steps=%d",
+                "[%s] extra_data filter_apply done switched=%s reason=%s total=%.1fms dump=%.1fms parse=%.1fms click=%.1fms wait=%.1fms sleep=%.1fms steps=%d",
                 serial,
                 report.get("switched"),
                 report.get("reason_code"),
@@ -2871,6 +3116,7 @@ async def collect_fb_comment_filter_apply(
                 report.get("dump_ms"),
                 report.get("parse_ms"),
                 report.get("click_ms"),
+                report.get("wait_ms"),
                 report.get("sleep_ms"),
                 len(report.get("steps") or []),
             )
@@ -2948,6 +3194,18 @@ async def collect_xml_snapshots(
 
             expand_default = strategy in _POST_STRATEGIES or str(strategy).endswith("_posts")
             cached_xml: str | None = detail_xml
+            if strategy == "fb_comments" and cached_xml is None:
+                cached_xml = _consume_filter_hierarchy_handoff(
+                    executor,
+                    serial,
+                    context,
+                )
+                if cached_xml is not None:
+                    context["hierarchy_handoff_reused"] = True
+                    logger.info(
+                        "[%s] extra_data reuse verified filter hierarchy",
+                        serial,
+                    )
             expand_requested = _bool_context(context, "expand_see_more", expand_default)
             if (
                 strategy == "fb_posts"

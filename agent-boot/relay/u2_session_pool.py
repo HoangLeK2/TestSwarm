@@ -45,6 +45,26 @@ _active_session: contextvars.ContextVar[tuple[str, "_Entry"] | None] = contextva
 )
 
 
+async def _await_executor_completion(future: asyncio.Future[Any]) -> Any:
+    """Preserve the serial lock until blocking work really stops on cancel."""
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(future)
+            break
+        except asyncio.CancelledError:
+            if future.cancelled():
+                raise
+            cancelled = True
+        except Exception:
+            if cancelled:
+                raise asyncio.CancelledError
+            raise
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
 @dataclass
 class _Entry:
     device: Any
@@ -177,7 +197,8 @@ class U2SessionPool:
             entry.last_used = time.monotonic()
             exec_started = time.perf_counter()
             try:
-                return await self._loop.run_in_executor(ex, fn, entry.device)
+                future = self._loop.run_in_executor(ex, fn, entry.device)
+                return await _await_executor_completion(future)
             finally:
                 total_ms = (time.perf_counter() - started) * 1000.0
                 if total_ms >= 1000.0:
@@ -197,7 +218,8 @@ class U2SessionPool:
             entry.last_used = time.monotonic()
             exec_started = time.perf_counter()
             try:
-                return await self._loop.run_in_executor(ex, fn, entry.device)
+                future = self._loop.run_in_executor(ex, fn, entry.device)
+                return await _await_executor_completion(future)
             finally:
                 exec_ms = (time.perf_counter() - exec_started) * 1000.0
                 total_ms = (time.perf_counter() - started) * 1000.0

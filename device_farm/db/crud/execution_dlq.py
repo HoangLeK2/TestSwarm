@@ -40,6 +40,7 @@ async def create_dlq_entry(
     *,
     execution_id: str,
     device_serial: str,
+    org_id: Optional[str] = None,
     error: Optional[str] = None,
     failed_step_id: Optional[str] = None,
     failure_reason: Optional[str] = None,
@@ -50,10 +51,23 @@ async def create_dlq_entry(
     """Create a new DLQ entry for a failed execution."""
     if failed_at is None:
         failed_at = datetime.now(timezone.utc)
+    supplied_org_id = str(org_id or "").strip()
+    org_result = await db.execute(
+        select(Execution.org_id).where(Execution.id == execution_id)
+    )
+    resolved_org_id = str(org_result.scalar_one_or_none() or "").strip()
+    if not resolved_org_id:
+        raise ValueError(f"org_id is required to create a DLQ entry: {execution_id}")
+    if supplied_org_id and supplied_org_id != resolved_org_id:
+        raise ValueError(
+            f"DLQ org_id mismatch for execution {execution_id}: "
+            f"expected {resolved_org_id}, got {supplied_org_id}"
+        )
     resolved_error, resolved_reason = _normalize_dlq_message(error, failure_reason)
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         payload = {
             "id": _uuid(),
+            "org_id": resolved_org_id,
             "execution_id": execution_id,
             "device_serial": device_serial,
             "error": resolved_error,
@@ -73,6 +87,7 @@ async def create_dlq_entry(
                 # Keep this predicate literal so Postgres can match the partial unique index.
                 index_where=text("status IN ('pending','retrying')"),
                 set_={
+                    "org_id": resolved_org_id,
                     "error": func.coalesce(
                         func.nullif(func.trim(ExecutionDLQ.error), ""),
                         resolved_error,
@@ -108,6 +123,7 @@ async def create_dlq_entry(
     if existing is not None:
         from services.campaign.dlq_message import pick_richer_message
 
+        existing.org_id = resolved_org_id
         existing.error = pick_richer_message(existing.error, resolved_error) or resolved_error
         existing.failure_reason = (
             pick_richer_message(existing.failure_reason, resolved_reason) or resolved_reason
@@ -118,6 +134,7 @@ async def create_dlq_entry(
         return existing
 
     entry = ExecutionDLQ(
+        org_id=resolved_org_id,
         execution_id=execution_id,
         device_serial=device_serial,
         error=resolved_error,

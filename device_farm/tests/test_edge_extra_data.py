@@ -110,6 +110,85 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
     assert "posts" not in sc.ctx
 
 
+def test_try_edge_extra_data_fails_incomplete_known_comment_target(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 20,
+            "inserted_count": 20,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "partial_target",
+                "comments_returned": 20,
+                "comment_target": 220,
+                "post_comment_count": 269,
+                "coverage_ratio": 20 / 220,
+                "comment_scroll_stopped_reason": "coverage_tail_no_new",
+            },
+        },
+    })
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "max_items": 220,
+            "comment_require_complete": True,
+        },
+        "fb_comments",
+        result,
+    )
+
+    assert handled is True
+    assert result["ok"] is False
+    assert result["extracted"] == 20
+    assert result["reason_code"] == "partial_target"
+    assert "20/220" in result["message"]
+    assert "coverage_tail_no_new" in result["message"]
+
+
+def test_try_edge_extra_data_reports_bounded_partial_without_retrying(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 20,
+            "inserted_count": 20,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "partial_target",
+                "comments_returned": 20,
+                "comment_target": 220,
+                "post_comment_count": 269,
+                "coverage_ratio": 20 / 220,
+                "comment_scroll_stopped_reason": "swipe_budget_exhausted",
+            },
+        },
+    })
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "max_items": 220,
+        },
+        "fb_comments",
+        result,
+    )
+
+    assert handled is True
+    assert result.get("ok", True) is True
+    assert result["extracted"] == 20
+    assert result["reason_code"] == "partial_target"
+
+
 def test_fb_posts_forces_root_item_level_for_malformed_step(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
@@ -297,13 +376,18 @@ def test_fb_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
                 "dump_ms": 80.0,
                 "parse_ms": 7.0,
                 "click_ms": 0.0,
+                "wait_ms": 12.5,
                 "sleep_ms": 0.0,
+                "state_verified": True,
             },
         },
         "route": "relay_u2",
         "request_id": "req-1",
     })
     sc = _ctx(device)
+    sc.ctx["_active_comment_parent_hash"] = "parent-filter"
+    sc.ctx["_fb_comment_parent_pid"] = "pid-filter"
+    sc.ctx["_active_comment_parent_anchor"] = {"post_key": "post-filter"}
     result = {}
 
     control_flow.handle_fb_apply_comment_filter(
@@ -318,8 +402,41 @@ def test_fb_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
     assert result["extra_data_dump_ms"] == 80.0
     assert result["extra_data_parse_ms"] == 7.0
     assert result["extra_data_click_ms"] == 0.0
+    assert result["extra_data_wait_ms"] == 12.5
     assert result["extra_data_sleep_ms"] == 0.0
     assert result["extra_data_steps"] == 1
+    assert device.calls[0]["context"]["parent_id"] == "parent-filter"
+    assert device.calls[0]["context"]["parent_post_id"] == "pid-filter"
+    assert device.calls[0]["context"]["post_key"] == "post-filter"
+
+
+def test_fb_apply_comment_filter_skips_settle_after_agent_verified_state(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
+    slept: list[float] = []
+    monkeypatch.setattr(control_flow.time, "sleep", slept.append)
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "switched": True,
+                "reason_code": "ok",
+                "state_verified": True,
+                "steps": [{"phase": "done", "reason_code": "already_on_filter"}],
+            },
+        },
+    })
+    sc = _ctx(device)
+    result = {}
+
+    control_flow.handle_fb_apply_comment_filter(
+        sc,
+        {"comment_filter": "newest", "comment_filter_settle_s": 0.45},
+        0,
+        result,
+    )
+
+    assert result["filter_applied"] is True
+    assert slept == []
 
 
 def test_fb_apply_comment_filter_skips_settle_on_noop(monkeypatch) -> None:
@@ -1539,6 +1656,7 @@ def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch
     sc.ctx["_edge_comment_parent_base_hash"] = "base-hash"
     sc.ctx["_active_comment_parent_hash"] = "scoped-hash"
     sc.ctx["_fb_comment_parent_pid"] = "pid-1"
+    sc.ctx["_fb_comment_filter_target"] = "newest"
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
@@ -1557,6 +1675,7 @@ def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch
     assert request["context"]["parent_id"] == "scoped-hash"
     assert request["context"]["parent_id_already_scoped"] is True
     assert request["context"]["parent_post_id"] == "pid-1"
+    assert request["context"]["comment_filter"] == "newest"
 
 
 def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> None:
@@ -1630,6 +1749,7 @@ def test_try_edge_extra_data_forwards_custom_comment_crawl_budget(monkeypatch) -
     assert context["comment_stop_if_no_new"] is False
     assert context["stop_if_no_new"] is False
     assert context["no_new_threshold"] == 6
+    assert "comment_require_complete" not in context
 
 
 def test_try_edge_extra_data_normalizes_legacy_balanced_comment_budget(monkeypatch) -> None:

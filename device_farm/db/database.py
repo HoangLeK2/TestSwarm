@@ -30,6 +30,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from core.config import load_config
 from core.env import farm_config_path
+from db.connection_budget import validate_connection_budget
 from tenancy.sqlalchemy import init_tenant_scoping
 
 log = logging.getLogger(__name__)
@@ -67,12 +68,23 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+_connection_budget = validate_connection_budget(os.environ)
+if _connection_budget.limit is not None:
+    log.info(
+        "database connection budget validated: configured=%s reserve=%s limit=%s headroom=%s",
+        _connection_budget.configured_demand,
+        _connection_budget.reserve,
+        _connection_budget.limit,
+        _connection_budget.headroom,
+    )
+
+
 # Main engine — pooled, used by FastAPI (single event loop).
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=max(1, _env_int("DB_POOL_SIZE", 15)),
-    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 15)),
+    pool_size=max(1, _env_int("DB_POOL_SIZE", 8)),
+    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 2)),
     pool_timeout=max(1, _env_int("DB_POOL_TIMEOUT", 5)),
     pool_pre_ping=True,
     pool_recycle=300,
@@ -116,8 +128,8 @@ def _engine_for_loop(loop: asyncio.AbstractEventLoop) -> tuple[AsyncEngine, asyn
         act_engine = create_async_engine(
             DATABASE_URL,
             echo=False,
-            pool_size=max(1, _env_int("DB_ACTIVITY_POOL_SIZE", 2)),
-            max_overflow=max(0, _env_int("DB_ACTIVITY_MAX_OVERFLOW", 2)),
+            pool_size=max(1, _env_int("DB_ACTIVITY_POOL_SIZE", 4)),
+            max_overflow=max(0, _env_int("DB_ACTIVITY_MAX_OVERFLOW", 0)),
             pool_timeout=max(1, _env_int("DB_ACTIVITY_POOL_TIMEOUT", 10)),
             pool_pre_ping=True,
             pool_recycle=300,

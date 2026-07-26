@@ -572,6 +572,7 @@ async def start_execution_runtime(
     temporal_client: Any = None,
     temporal_config: Any = None,
     manager: Any = None,
+    commit_before_start: bool = False,
 ) -> dict[str, Any]:
     """Start Temporal (or fallback) runtime for each running fan-out execution."""
     scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
@@ -648,6 +649,11 @@ async def start_execution_runtime(
             )
             for scenario_id in scenario_ids
         }
+        stored_device_index = (execution.meta or {}).get("device_index")
+        try:
+            prepared_device_index = int(stored_device_index)
+        except (TypeError, ValueError):
+            prepared_device_index = device_index
         scenario_input = _build_prepared_scenario_input(
             execution=execution,
             campaign=campaign,
@@ -660,7 +666,7 @@ async def start_execution_runtime(
             campaign_vars=campaign_vars,
             recovery_policy=recovery_policy,
             scenario_device_vars=scenario_device_vars,
-            device_index=device_index,
+            device_index=prepared_device_index,
         )
         if scenario_input is None:
             stats["failed"] += 1
@@ -671,6 +677,12 @@ async def start_execution_runtime(
 
     if not prepared:
         return stats
+
+    # HTTP dispatch persists snapshot + claims before any external RPC so row
+    # locks are not held while Temporal accepts up to hundreds of workflows.
+    # Other callers retain their existing transaction ownership by default.
+    if commit_before_start and db.in_transaction():
+        await db.commit()
 
     async def _start_temporal_item(
         item: tuple[FanOutExecutionView, Execution, ScenarioInput],

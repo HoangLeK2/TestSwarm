@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+import time
 from datetime import datetime
 from typing import Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -639,6 +640,8 @@ async def dispatch_campaign_route(
     ),
 ):
     """Fan-out campaign dispatch to explicit devices or device groups (DF-T-04-008)."""
+    dispatch_http_started = time.perf_counter()
+    phase_started = dispatch_http_started
     org_id = getattr(user, "org_id", None)
     if not org_id:
         raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
@@ -664,6 +667,16 @@ async def dispatch_campaign_route(
             detail={"code": exc.code, "message": str(exc), **exc.details},
         ) from exc
 
+    from web.metrics import (
+        campaign_dispatch_http_duration_seconds,
+        campaign_dispatch_phase_duration_seconds,
+    )
+
+    campaign_dispatch_phase_duration_seconds.labels(phase="fan_out").observe(
+        time.perf_counter() - phase_started
+    )
+    phase_started = time.perf_counter()
+
     from db.crud import campaign_entity as campaign_entity_repo
     from services.campaign.execution_runtime import start_execution_runtime
 
@@ -685,16 +698,26 @@ async def dispatch_campaign_route(
         temporal_client=temporal_client,
         temporal_config=temporal_config,
         manager=manager,
+        commit_before_start=True,
     )
 
     await db.commit()
 
-    from db.crud.execution import get_execution
+    campaign_dispatch_phase_duration_seconds.labels(phase="runtime_start").observe(
+        time.perf_counter() - phase_started
+    )
+    phase_started = time.perf_counter()
+
+    from db.crud.execution import get_executions_by_ids
 
     payload = result.to_dict(include_vars=include_vars)
+    executions_by_id = await get_executions_by_ids(
+        db,
+        [item["execution_id"] for item in payload["executions"]],
+    )
     execution_rows: list[CampaignDispatchExecutionOut] = []
     for item in payload["executions"]:
-        ex = await get_execution(db, item["execution_id"])
+        ex = executions_by_id.get(item["execution_id"])
         meta = (ex.meta or {}) if ex else {}
         execution_rows.append(
             CampaignDispatchExecutionOut(
@@ -703,13 +726,20 @@ async def dispatch_campaign_route(
                 workflow_id=meta.get("workflow_id"),
             )
         )
-    return CampaignDispatchOut(
+    response = CampaignDispatchOut(
         dispatch_id=payload["dispatch_id"],
         campaign_id=payload["campaign_id"],
         dispatch_strategy=payload["dispatch_strategy"],
         target_count=payload["target_count"],
         executions=execution_rows,
     )
+    campaign_dispatch_phase_duration_seconds.labels(phase="response_hydration").observe(
+        time.perf_counter() - phase_started
+    )
+    campaign_dispatch_http_duration_seconds.observe(
+        time.perf_counter() - dispatch_http_started
+    )
+    return response
 
 
 @router.post(

@@ -724,6 +724,74 @@ class TestDeviceClientOpenUrl:
         d._open_url_via_adb_relay.assert_called_once()
 
 
+class TestDeviceClientLaunchApp:
+    def test_launch_app_prefers_agent_boot_u2_batch_and_waits_for_foreground(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._loop = object()
+        d._agent_send = Mock()
+        d._u2_batch = Mock()
+        d._u2_batch.batch.return_value = [
+            {"op": "app_start", "ok": True},
+            {"op": "app_wait", "ok": True, "value": 321},
+        ]
+        relay = _FakeRelay(["logical-serial"])
+        relay.adb_shell = Mock()
+
+        with patch(
+            "runtime.transports.adb_relay_server.get_relay_manager",
+            return_value=relay,
+        ):
+            d.launch_app("com.facebook.katana")
+
+        d._u2_batch.batch.assert_called_once_with(
+            [
+                {
+                    "op": "app_start",
+                    "package": "com.facebook.katana",
+                    "stop_before": False,
+                    "use_monkey": False,
+                },
+                {
+                    "op": "app_wait",
+                    "package": "com.facebook.katana",
+                    "front": True,
+                    "timeout": 8.0,
+                },
+            ],
+            timeout=15.0,
+            cancel_event=None,
+        )
+        relay.adb_shell.assert_not_called()
+        d._agent_send.assert_not_called()
+
+    def test_launch_app_falls_back_to_adb_when_agent_boot_u2_batch_fails(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._loop = object()
+        d._agent_send = Mock()
+        d._u2_batch = Mock()
+        d._u2_batch.batch.side_effect = RuntimeError("u2 unavailable")
+        relay = _FakeRelay(["logical-serial"])
+        relay.adb_shell = Mock()
+        future = Mock()
+        future.result.return_value = "Starting: Intent"
+
+        with (
+            patch(
+                "runtime.transports.adb_relay_server.get_relay_manager",
+                return_value=relay,
+            ),
+            patch(
+                "runtime.core.device_client.asyncio.run_coroutine_threadsafe",
+                return_value=future,
+            ),
+        ):
+            d.launch_app("com.facebook.katana")
+
+        d._u2_batch.batch.assert_called_once()
+        relay.adb_shell.assert_called_once()
+        d._agent_send.assert_not_called()
+
+
 class TestWatchdogAtxProbe:
     """Docker/agent-boot watchdog probes must use relay before direct TCP."""
 

@@ -1863,6 +1863,46 @@ class DeviceClient:
             pkg = pkg.split("/", 1)[0].strip()
         if not pkg and not comp:
             return
+        if self._batch_enabled() and pkg:
+            try:
+                start_action: Dict[str, Any] = {
+                    "op": "app_start",
+                    "package": pkg,
+                    "stop_before": stop_before,
+                    "use_monkey": use_monkey,
+                }
+                if comp and "/" in comp:
+                    activity = comp.split("/", 1)[1].strip()
+                    if activity:
+                        start_action["activity"] = activity
+                results = self.u2_batch(
+                    [
+                        start_action,
+                        {
+                            "op": "app_wait",
+                            "package": pkg,
+                            "front": True,
+                            "timeout": 8.0,
+                        },
+                    ],
+                    timeout=15.0,
+                )
+                app_wait = results[-1] if results else {}
+                if app_wait.get("ok") and int(app_wait.get("value") or 0) > 0:
+                    self._log(
+                        f"launch_app route=agent_boot_u2_batch pkg={pkg} component={comp or '-'}"
+                    )
+                    return
+                self._log(
+                    f"launch_app via u2_batch did not reach foreground: pkg={pkg} "
+                    f"component={comp or '-'}",
+                    level=logging.WARNING,
+                )
+            except Exception as exc:
+                self._log(
+                    f"launch_app via u2_batch failed: {exc}",
+                    level=logging.WARNING,
+                )
         if stop_before:
             try:
                 self.stop_app(pkg)

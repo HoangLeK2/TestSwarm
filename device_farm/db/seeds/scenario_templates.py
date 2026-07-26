@@ -418,25 +418,16 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {
-                "type": "loop",
-                "count": "${MAX_PAGES}",
-                "steps": [
-                    {
-                        "type": "extract",
-                        "strategy": "fb_groups",
-                        "edge_extra_data": True,
-                        "search_query": "${SEARCH_QUERY}",
-                        "stop_if_no_new": False,
-                    },
-                    {
-                        "type": "scroll_down",
-                        "repeats": 1,
-                        "start_x_ratio": 0.5,
-                        "start_y_ratio": 0.78,
-                        "end_y_ratio": 0.32,
-                    },
-                    {"type": "wait", "seconds": 0.6},
-                ],
+                "type": "extract",
+                "strategy": "fb_groups",
+                "edge_extra_data": True,
+                "search_query": "${SEARCH_QUERY}",
+                "max_pages": "${MAX_PAGES}",
+                "max_items": 500,
+                "stop_if_no_new": True,
+                "no_new_threshold": 2,
+                "entity_scroll_pause_s": 0.6,
+                "edge_extra_timeout_s": 180,
             },
             {"type": "key", "key": "home"},
         ],
@@ -494,7 +485,42 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
 
             # ── Phase 4: Tap vào nhóm ───────────────────────────────────────
-            {"type": "tap_selector", "by": "text", "value": "${GROUP_TEXT}", "timeout": 8},
+            {
+                "type": "if_variable",
+                "name": "TARGET_SELECTOR_VALUE",
+                "then": [
+                    {
+                        "type": "if_element",
+                        "by": "${TARGET_SELECTOR_BY}",
+                        "value": "${TARGET_SELECTOR_VALUE}",
+                        "timeout": 8,
+                        "then": [
+                            {
+                                "type": "tap_selector",
+                                "by": "${TARGET_SELECTOR_BY}",
+                                "value": "${TARGET_SELECTOR_VALUE}",
+                                "timeout": 8,
+                            }
+                        ],
+                        "else": [
+                            {
+                                "type": "tap_selector",
+                                "by": "${TARGET_FALLBACK_SELECTOR_BY}",
+                                "value": "${TARGET_FALLBACK_SELECTOR_VALUE}",
+                                "timeout": 8,
+                            }
+                        ],
+                    }
+                ],
+                "else": [
+                    {
+                        "type": "tap_selector",
+                        "by": "text",
+                        "value": "${GROUP_TEXT}",
+                        "timeout": 8,
+                    }
+                ],
+            },
             {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
 
@@ -867,7 +893,42 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
 
             # ── Phase 4: Tap vào nhóm ───────────────────────────────────────
-            {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 8},
+            {
+                "type": "if_variable",
+                "name": "TARGET_SELECTOR_VALUE",
+                "then": [
+                    {
+                        "type": "if_element",
+                        "by": "${TARGET_SELECTOR_BY}",
+                        "value": "${TARGET_SELECTOR_VALUE}",
+                        "timeout": 8,
+                        "then": [
+                            {
+                                "type": "tap_selector",
+                                "by": "${TARGET_SELECTOR_BY}",
+                                "value": "${TARGET_SELECTOR_VALUE}",
+                                "timeout": 8,
+                            }
+                        ],
+                        "else": [
+                            {
+                                "type": "tap_selector",
+                                "by": "${TARGET_FALLBACK_SELECTOR_BY}",
+                                "value": "${TARGET_FALLBACK_SELECTOR_VALUE}",
+                                "timeout": 8,
+                            }
+                        ],
+                    }
+                ],
+                "else": [
+                    {
+                        "type": "tap_selector",
+                        "by": "xpath",
+                        "value": "${GROUP_XPATH}",
+                        "timeout": 8,
+                    }
+                ],
+            },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
             {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
@@ -962,8 +1023,35 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "SAVE_COLLECTION": "fb_group_posts",
         },
         "steps": [
-            {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${group_name}"},
-            {"type": "set_variable", "name": "TARGET_GROUP_NAME", "value": "${group_name}"},
+            {
+                "type": "if_variable",
+                "name": "TARGET_GROUP_NAME",
+                "then": [],
+                "else": [
+                    {
+                        "type": "set_variable",
+                        "name": "TARGET_GROUP_NAME",
+                        "value": "${group_name}",
+                    }
+                ],
+            },
+            {
+                "type": "set_variable",
+                "name": "SEARCH_TEXT",
+                "value": "${TARGET_GROUP_NAME}",
+            },
+            {
+                "type": "if_variable",
+                "name": "TARGET_SEARCH_QUERY",
+                "then": [
+                    {
+                        "type": "set_variable",
+                        "name": "SEARCH_TEXT",
+                        "value": "${TARGET_SEARCH_QUERY}",
+                    }
+                ],
+                "else": [],
+            },
             {
                 "type": "if_variable",
                 "name": "search",
@@ -992,21 +1080,80 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
             {
                 "type": "if_element",
-                "by": "description",
-                "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7",
+                "by": "descriptionContains",
+                "value": "tab Nhóm",
                 "timeout": 5,
                 "then": [
                     {
                         "type": "tap_selector",
-                        "by": "description",
-                        "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7",
+                        "by": "descriptionContains",
+                        "value": "tab Nhóm",
                         "timeout": 4,
                     },
                 ],
-                "else": [],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Nhóm",
+                        "timeout": 3,
+                        "then": [
+                            {
+                                "type": "tap_selector",
+                                "by": "text",
+                                "value": "Nhóm",
+                                "timeout": 3,
+                            }
+                        ],
+                        "else": [
+                            {
+                                "type": "tap_selector",
+                                "by": "text",
+                                "value": "Groups",
+                                "timeout": 3,
+                                "ignore_error": True,
+                            }
+                        ],
+                    }
+                ],
             },
             {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
-            {"type": "tap_selector", "by": "text", "value": "${TARGET_GROUP_NAME}", "timeout": 8},
+            {
+                "type": "if_variable",
+                "name": "TARGET_SELECTOR_VALUE",
+                "then": [
+                    {
+                        "type": "if_element",
+                        "by": "${TARGET_SELECTOR_BY}",
+                        "value": "${TARGET_SELECTOR_VALUE}",
+                        "timeout": 8,
+                        "then": [
+                            {
+                                "type": "tap_selector",
+                                "by": "${TARGET_SELECTOR_BY}",
+                                "value": "${TARGET_SELECTOR_VALUE}",
+                                "timeout": 8,
+                            }
+                        ],
+                        "else": [
+                            {
+                                "type": "tap_selector",
+                                "by": "${TARGET_FALLBACK_SELECTOR_BY}",
+                                "value": "${TARGET_FALLBACK_SELECTOR_VALUE}",
+                                "timeout": 8,
+                            }
+                        ],
+                    }
+                ],
+                "else": [
+                    {
+                        "type": "tap_selector",
+                        "by": "text",
+                        "value": "${TARGET_GROUP_NAME}",
+                        "timeout": 8,
+                    }
+                ],
+            },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
             {
                 "type": "scroll_down",

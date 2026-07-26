@@ -76,7 +76,7 @@ def _with_external_entity_vars(
 ) -> dict[str, Any]:
     if entity is None:
         return effective_vars
-    return {
+    target_vars = {
         **effective_vars,
         "TARGET_ENTITY_ID": entity.id,
         "TARGET_PLATFORM": entity.platform,
@@ -84,6 +84,47 @@ def _with_external_entity_vars(
         "TARGET_EXTERNAL_ID": entity.external_id or "",
         "TARGET_URL": entity.canonical_url or "",
         "TARGET_NAME": entity.display_name,
+    }
+    if entity.platform != "facebook" or entity.entity_type != "group":
+        return target_vars
+
+    attributes = (
+        entity.current_attributes
+        if isinstance(entity.current_attributes, dict)
+        else {}
+    )
+    locator = (
+        attributes.get("locator")
+        if isinstance(attributes.get("locator"), dict)
+        else {}
+    )
+    selector = (
+        locator.get("selector")
+        if isinstance(locator.get("selector"), dict)
+        else {}
+    )
+    fallback_selector = (
+        locator.get("fallback_selector")
+        if isinstance(locator.get("fallback_selector"), dict)
+        else {}
+    )
+    name = entity.display_name
+    return {
+        **target_vars,
+        "GROUP_NAME": name,
+        "TARGET_GROUP_NAME": name,
+        "TARGET_SEARCH_QUERY": str(locator.get("search_query") or name),
+        "TARGET_SELECTOR_BY": str(
+            selector.get("by") or "descriptionStartsWith"
+        ),
+        "TARGET_SELECTOR_VALUE": str(selector.get("value") or f"{name},"),
+        "TARGET_FALLBACK_SELECTOR_BY": str(
+            fallback_selector.get("by") or "descriptionContains"
+        ),
+        "TARGET_FALLBACK_SELECTOR_VALUE": str(
+            fallback_selector.get("value") or name
+        ),
+        "TARGET_LOCATOR": locator,
     }
 
 

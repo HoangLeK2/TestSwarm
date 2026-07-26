@@ -15,11 +15,14 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
 from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
+
+_JSON_DOCUMENT = JSON().with_variant(JSONB, "postgresql")
 
 
 class ExternalEntity(TenantScopedModel, Base):
@@ -56,8 +59,12 @@ class ExternalEntity(TenantScopedModel, Base):
     canonical_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     display_name: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="candidate")
-    current_attributes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    current_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    current_attributes: Mapped[dict[str, Any]] = mapped_column(
+        _JSON_DOCUMENT, default=dict
+    )
+    current_metrics: Mapped[dict[str, Any]] = mapped_column(
+        _JSON_DOCUMENT, default=dict
+    )
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
     )
@@ -114,9 +121,9 @@ class ExternalEntityObservation(TenantScopedModel, Base):
         DateTime(timezone=True), nullable=False, default=_now
     )
     display_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    attributes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    raw_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    attributes: Mapped[dict[str, Any]] = mapped_column(_JSON_DOCUMENT, default=dict)
+    metrics: Mapped[dict[str, Any]] = mapped_column(_JSON_DOCUMENT, default=dict)
+    raw_data: Mapped[dict[str, Any]] = mapped_column(_JSON_DOCUMENT, default=dict)
     account_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
@@ -167,7 +174,7 @@ class ExternalEntityDiscovery(TenantScopedModel, Base):
     external_entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
     query: Mapped[str] = mapped_column(String(500), nullable=False)
     rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    context: Mapped[dict[str, Any]] = mapped_column(_JSON_DOCUMENT, default=dict)
     account_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
@@ -231,7 +238,7 @@ class ExecutionEntityAssignment(TenantScopedModel, Base):
         String(64), nullable=False, default="primary"
     )
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="assigned")
-    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(_JSON_DOCUMENT, default=dict)
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
     )

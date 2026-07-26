@@ -8,7 +8,11 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 _GROUP_SIGNAL_RE = re.compile(
-    r"\b(nhóm\s+(?:công khai|riêng tư)|public\s+group|private\s+group)\b",
+    r"\b((?:nhóm\s+)?(?:công khai|riêng tư)|public\s+group|private\s+group)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_GROUP_SIGNAL_RE = re.compile(
+    r"\b(?:nhóm\s+(?:công khai|riêng tư)|public\s+group|private\s+group)\b",
     re.IGNORECASE,
 )
 _MEMBER_RE = re.compile(
@@ -77,6 +81,8 @@ def parse_group_search_results(
         label = _card_label(node)
         if not label or not _GROUP_SIGNAL_RE.search(label):
             continue
+        if not _EXPLICIT_GROUP_SIGNAL_RE.search(label) and not _MEMBER_RE.search(label):
+            continue
         name = _display_name(label)
         identity_name = _identity_name(name)
         if not identity_name or identity_name in seen:
@@ -94,6 +100,23 @@ def parse_group_search_results(
         count = _member_count(label)
         if count is not None:
             metrics["member_count"] = count
+        attributes: dict[str, Any] = {
+            "locator": {
+                "kind": "facebook_group_search_result",
+                "version": 1,
+                "search_query": name,
+                "selector": {
+                    "by": "descriptionStartsWith",
+                    "value": f"{name},",
+                },
+                "fallback_selector": {
+                    "by": "descriptionContains",
+                    "value": name,
+                },
+            }
+        }
+        if privacy:
+            attributes["privacy"] = privacy
         items.append(
             {
                 "platform": "facebook",
@@ -104,7 +127,7 @@ def parse_group_search_results(
                     + hashlib.sha256(identity_name.encode("utf-8")).hexdigest()
                 ),
                 "identity_confidence": "name_only",
-                "attributes": {"privacy": privacy} if privacy else {},
+                "attributes": attributes,
                 "metrics": metrics,
                 "raw_data": {
                     "label": label,

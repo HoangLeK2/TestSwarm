@@ -160,6 +160,21 @@ async def test_fan_out_assigns_one_external_entity_per_device_and_freezes_vars(
             entity_type="group",
             display_name="Group One",
             external_id="group-1",
+            attributes={
+                "locator": {
+                    "kind": "facebook_group_search_result",
+                    "version": 1,
+                    "search_query": "Group One",
+                    "selector": {
+                        "by": "descriptionStartsWith",
+                        "value": "Group One,",
+                    },
+                    "fallback_selector": {
+                        "by": "descriptionContains",
+                        "value": "Group One",
+                    },
+                }
+            },
         )
         second, _ = await upsert_external_entity(
             db,
@@ -209,6 +224,26 @@ async def test_fan_out_assigns_one_external_entity_per_device_and_freezes_vars(
     assert [row["effective_vars"]["TARGET_EXTERNAL_ID"] for row in rows] == [
         "group-1",
         "group-2",
+    ]
+    assert [row["effective_vars"]["TARGET_GROUP_NAME"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["GROUP_NAME"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["TARGET_SEARCH_QUERY"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["TARGET_SELECTOR_BY"] for row in rows] == [
+        "descriptionStartsWith",
+        "descriptionStartsWith",
+    ]
+    assert [row["effective_vars"]["TARGET_SELECTOR_VALUE"] for row in rows] == [
+        "Group One,",
+        "Group Two,",
     ]
 
     async with session_factory() as db:

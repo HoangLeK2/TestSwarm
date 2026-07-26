@@ -463,6 +463,64 @@ def _parse_fb_post_snapshots(
     return deduped, diagnostic
 
 
+def _parse_fb_group_snapshots(
+    snapshots: list[str],
+    context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def merge_non_empty(existing: Any, incoming: Any) -> Any:
+        if isinstance(existing, dict) and isinstance(incoming, dict):
+            merged_value = dict(existing)
+            for key, value in incoming.items():
+                merged_value[key] = merge_non_empty(merged_value.get(key), value)
+            return merged_value
+        if incoming in (None, "", [], {}):
+            return existing
+        return incoming
+
+    max_items = max(1, int(context.get("max_items") or 500))
+    merged: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    frame_codes: list[str] = []
+    frame_groups_returned: list[int] = []
+    last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
+
+    for snapshot in snapshots:
+        items, diagnostic = _parse_items("fb_groups", snapshot, context)
+        last_diagnostic = diagnostic
+        frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
+        frame_groups_returned.append(
+            int(diagnostic.get("groups_returned") or len(items))
+        )
+        for item in items:
+            identity_key = str(item.get("identity_key") or "").strip()
+            if not identity_key:
+                continue
+            position = positions.get(identity_key)
+            if position is None:
+                if len(merged) >= max_items:
+                    continue
+                positions[identity_key] = len(merged)
+                merged.append({**item, "rank": len(merged) + 1})
+                continue
+            first_rank = merged[position].get("rank")
+            merged[position] = merge_non_empty(merged[position], item)
+            merged[position]["rank"] = first_rank
+
+    diagnostic = {
+        **last_diagnostic,
+        "reason_code": (
+            "ok"
+            if merged
+            else last_diagnostic.get("reason_code", "no_groups")
+        ),
+        "snapshot_count": len(snapshots),
+        "frame_reason_codes": frame_codes,
+        "frame_groups_returned": frame_groups_returned,
+        "groups_returned": len(merged),
+    }
+    return merged, diagnostic
+
+
 def _trusted_preparsed_fb_comments(
     strategy: str,
     context: dict[str, Any],
@@ -552,6 +610,9 @@ def _parse_payload_items(
             return items, diagnostic, snapshots
     if strategy == "fb_posts" and len(snapshots) > 1:
         items, diagnostic = _parse_fb_post_snapshots(snapshots, context)
+        return items, diagnostic, snapshots
+    if strategy == "fb_groups" and len(snapshots) > 1:
+        items, diagnostic = _parse_fb_group_snapshots(snapshots, context)
         return items, diagnostic, snapshots
     items, diagnostic = _parse_items(strategy, xml, context)
     return items, diagnostic, snapshots

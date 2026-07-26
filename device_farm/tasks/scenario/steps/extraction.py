@@ -752,6 +752,21 @@ def request_edge_extra_data(
         from services.scenario_step_contract import resolve_extract_profile
 
         comment_defaults = get_profile_defaults(resolve_extract_profile(step), strategy)
+    campaign_vars = (
+        scenario.get("_campaign_vars")
+        if isinstance(scenario.get("_campaign_vars"), dict)
+        else {}
+    )
+    group_max_pages_raw = step.get("max_pages")
+    if (
+        group_max_pages_raw is None
+        or str(group_max_pages_raw).strip().startswith("${")
+    ):
+        group_max_pages_raw = campaign_vars.get("MAX_PAGES", 20)
+    try:
+        group_max_pages = max(1, min(200, int(group_max_pages_raw)))
+    except (TypeError, ValueError):
+        group_max_pages = 20
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
@@ -789,7 +804,13 @@ def request_edge_extra_data(
         "max_items": int(
             step.get("max_items")
             or comment_defaults.get("max_items")
-            or (400 if strategy in COMMENT_STRATEGIES else 50)
+            or (
+                400
+                if strategy in COMMENT_STRATEGIES
+                else 500
+                if strategy == "fb_groups"
+                else 50
+            )
         ),
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
         "persist": bool(collection) or strategy == "fb_groups",
@@ -797,6 +818,8 @@ def request_edge_extra_data(
         "search_query": step.get("search_query") or step.get("query"),
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
+    if strategy == "fb_groups":
+        context["max_pages"] = group_max_pages
     if strategy == "fb_posts":
         consumed_anchors = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
         if isinstance(consumed_anchors, list) and consumed_anchors:
@@ -848,6 +871,10 @@ def request_edge_extra_data(
         "require_open_post_detail",
         "require_verified_parent",
         "allow_a11y_xml_fallback",
+        "entity_scroll_pause_s",
+        "entity_scroll_distance",
+        "entity_scroll_duration_s",
+        "max_xml_bytes",
     ):
         if key in step:
             context[key] = step[key]
@@ -938,6 +965,32 @@ def request_edge_extra_data(
         else {}
     )
     result["reason_code"] = diagnostic.get("reason_code", "ok")
+    if strategy == "fb_groups" and parsed_count == 0:
+        result["ok"] = False
+        result["message"] = (
+            "edge extra_data fb_groups: không đọc được group nào "
+            f"({result['reason_code']})"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
+    if (
+        strategy == "fb_groups"
+        and parsed_count > 0
+        and "_loop_iter" in ctx
+        and int(context.get("max_pages") or 1) > 1
+        and (
+            _coerce_bool(step.get("break_legacy_pagination_loop"), False)
+            or (
+                "max_pages" not in step
+                and step.get("stop_if_no_new") is False
+            )
+        )
+    ):
+        # Old copied discovery templates used an outer loop, explicitly set
+        # stop_if_no_new=false, and had no per-step max_pages. That exact shape
+        # can stop after the first agent-owned bounded crawl without affecting
+        # unrelated loops that happen to contain a group extract.
+        ctx["_break"] = True
     if (
         strategy == "fb_comments"
         and result["reason_code"] == "partial_target"

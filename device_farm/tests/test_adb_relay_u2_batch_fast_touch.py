@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,6 +12,8 @@ from runtime.transports.adb_relay_server import AdbRelayManager
 
 class _FakeRelayConn:
     def __init__(self) -> None:
+        self.relay_id = "relay-1"
+        self.serials = {"serial-1"}
         self.u2_requests: list[tuple[str, str, str, dict, str, float]] = []
         self.json_requests: list[dict] = []
         self.json_messages: list[dict] = []
@@ -94,6 +97,29 @@ async def test_u2_batch_coordinate_touch_uses_u2_http_fast_path():
             1.5,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_u2_batch_waits_for_a_transient_relay_reconnect_before_sending():
+    manager = AdbRelayManager()
+    manager._sync_relay_to_redis = AsyncMock()
+    conn = _FakeRelayConn()
+
+    batch_task = asyncio.create_task(
+        manager.u2_batch(
+            "serial-1",
+            [{"op": "click", "x": 10, "y": 20}],
+            timeout=1.5,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert not batch_task.done()
+    await manager.register(conn)  # type: ignore[arg-type]
+
+    result = await asyncio.wait_for(batch_task, timeout=0.5)
+    assert result["ok"] is True
+    assert len(conn.u2_requests) == 1
 
 
 @pytest.mark.asyncio

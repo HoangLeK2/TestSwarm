@@ -81,6 +81,11 @@ services:
       context: ./device_farm
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "5"
     env_file:
       - ./.env
     depends_on:

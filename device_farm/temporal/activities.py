@@ -544,7 +544,7 @@ async def _to_thread_with_heartbeat(
         "execution_id": execution_id,
         "thread_fn": fn_name,
     }
-    trace_log.info("temporal_thread_start", **thread_ctx)
+    trace_log.debug("temporal_thread_start", **thread_ctx)
 
     async def _maybe_signal_cancel() -> bool:
         if cancel_event.is_set():
@@ -640,7 +640,7 @@ async def _to_thread_with_heartbeat(
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if thread_task in done:
-                trace_log.info("temporal_thread_end", **thread_ctx, ok=True)
+                trace_log.debug("temporal_thread_end", **thread_ctx, ok=True)
                 return thread_task.result()
             if heartbeat_task in done:
                 heartbeat_error = heartbeat_task.exception()
@@ -658,7 +658,7 @@ async def _to_thread_with_heartbeat(
                     raise heartbeat_error
             # Cancel watcher fired — give the worker thread time to stop cooperatively.
             return await _wait_for_thread_after_cancel()
-        trace_log.info("temporal_thread_end", **thread_ctx, ok=True)
+        trace_log.debug("temporal_thread_end", **thread_ctx, ok=True)
         return thread_task.result()
     except BaseException as exc:
         if _is_cancellation_exc(exc):
@@ -1479,7 +1479,7 @@ class DeviceActivities:
         except Exception as exc:
             log.debug("[%s] check_element state repair skipped: %s", inp.device_serial, exc)
         activity.heartbeat(f"check_element:{inp.by}={inp.value}")
-        trace_log.info(
+        trace_log.debug(
             "check_element_start",
             device_serial=inp.device_serial,
             execution_id=inp.execution_id,
@@ -1523,7 +1523,7 @@ class DeviceActivities:
             )
             found = eid is not None
             message = f"element {inp.by}={inp.value!r}: {'found' if found else 'not found'}"
-            trace_log.info(
+            trace_log.debug(
                 "check_element_end",
                 device_serial=inp.device_serial,
                 execution_id=inp.execution_id,

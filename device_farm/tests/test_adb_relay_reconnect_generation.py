@@ -16,6 +16,8 @@ async def test_stale_stream_cleanup_does_not_unregister_newer_connection() -> No
 
     old_conn = RelayConnection("relay-1", asyncio.Queue())
     old_conn.serials = {"serial-1"}
+    old_pending = asyncio.get_running_loop().create_future()
+    old_conn._pending["old-request"] = old_pending
     new_conn = RelayConnection("relay-1", asyncio.Queue())
     new_conn.serials = {"serial-1"}
 
@@ -28,6 +30,7 @@ async def test_stale_stream_cleanup_does_not_unregister_newer_connection() -> No
     )
 
     assert manager.relay_for_serial("serial-1") is new_conn
+    assert old_pending.result()["error"] == "old gRPC stream disconnected"
     manager._remove_relay_from_redis.assert_not_awaited()
 
 

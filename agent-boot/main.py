@@ -305,19 +305,29 @@ def _resolve_relay_id(args: argparse.Namespace) -> None:
     args.relay_id = load_or_create_relay_id()
 
 
-def _bootstrap_options_requested(args: argparse.Namespace) -> bool:
+def _bootstrap_options_requested(
+    args: argparse.Namespace,
+    argv: list[str],
+) -> bool:
     """Preserve the pre-relay bootstrap semantics of explicit bootstrap flags."""
+    explicit_flags = {
+        token.split("=", 1)[0]
+        for token in argv
+        if token.startswith("--")
+    }
     return any(
         (
             bool(args.serial),
             bool(args.apk),
             args.tcpip_port != 5555,
+            "--tcpip-port" in explicit_flags,
             bool(args.skip_tcpip),
             bool(args.use_bundle),
             bool(args.skip_u2),
             bool(args.force_u2_install),
             bool(args.skip_atx),
             bool(args.skip_stf),
+            "--ws-url" in explicit_flags,
         )
     )
 
@@ -339,7 +349,10 @@ def main() -> None:
     # idempotent device bootstrap after registration, on its maintenance lane,
     # so slow U2/STF repair never blocks scrcpy startup.
     bootstrap_first = args.startup_mode == "legacy"
-    if args.startup_mode == "relay-first" and _bootstrap_options_requested(args):
+    if args.startup_mode == "relay-first" and _bootstrap_options_requested(
+        args,
+        sys.argv[1:],
+    ):
         bootstrap_first = True
         print(
             "[agent-boot] explicit bootstrap option detected; "

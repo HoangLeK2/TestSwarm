@@ -57,6 +57,20 @@ def test_bootstrap_cli_options_keep_their_bootstrap_before_relay_semantics(
     ]
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--ws-url", "ws://farm.example/ws"),
+        ("--tcpip-port", "5555"),
+    ],
+)
+def test_explicit_value_flags_keep_bootstrap_semantics(
+    monkeypatch,
+    args: tuple[str, str],
+) -> None:
+    assert _run_main(monkeypatch, *args) == ["bootstrap", "relay"]
+
+
 def test_bootstrap_only_still_bootstraps_without_starting_relay(monkeypatch) -> None:
     with pytest.raises(SystemExit) as exited:
         _run_main(monkeypatch, "--bootstrap-only")
@@ -130,6 +144,7 @@ def test_concurrent_bootstrap_requests_for_one_phone_share_one_run() -> None:
     release_operation = threading.Event()
     calls: list[str] = []
     results: list[tuple[str, int]] = []
+    follower_submitted = threading.Event()
 
     def operation() -> tuple[str, int]:
         calls.append("run")
@@ -137,17 +152,22 @@ def test_concurrent_bootstrap_requests_for_one_phone_share_one_run() -> None:
         release_operation.wait(timeout=2)
         return "ready", 0
 
-    def invoke() -> None:
-        results.append(
-            coordinator.submit("phone-1", operation).result(timeout=2)
-        )
+    def invoke(*, follower: bool = False) -> None:
+        future = coordinator.submit("phone-1", operation)
+        if follower:
+            follower_submitted.set()
+        results.append(future.result(timeout=2))
 
     try:
         owner = threading.Thread(target=invoke)
-        follower = threading.Thread(target=invoke)
+        follower = threading.Thread(
+            target=invoke,
+            kwargs={"follower": True},
+        )
         owner.start()
         assert operation_started.wait(timeout=1)
         follower.start()
+        assert follower_submitted.wait(timeout=1)
         release_operation.set()
         owner.join(timeout=2)
         follower.join(timeout=2)

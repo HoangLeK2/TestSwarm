@@ -223,6 +223,17 @@ class ExecutionEntityAssignment(TenantScopedModel, Base):
             "device_id",
             "assigned_at",
         ),
+        Index(
+            "idx_execution_entity_assignments_active_source",
+            "org_id",
+            "external_entity_id",
+            postgresql_where=text(
+                "completed_at IS NULL AND status = 'assigned'"
+            ),
+            sqlite_where=text(
+                "completed_at IS NULL AND status = 'assigned'"
+            ),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

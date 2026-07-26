@@ -31,6 +31,8 @@ from api.schemas.campaign_entity import (
     CampaignDispatchIn,
     CampaignDispatchOut,
     CampaignDispatchExecutionOut,
+    CampaignDispatchPreviewAssignmentOut,
+    CampaignDispatchPreviewOut,
     CampaignScenarioRefOut,
     CampaignForceTransitionIn,
     CampaignForceTransitionOut,
@@ -624,6 +626,90 @@ async def get_campaign(campaign_id: str, db: DB, user: CurrentUser):
 
 
 @router.post(
+    "/{campaign_id}/dispatch-preview",
+    response_model=CampaignDispatchPreviewOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def preview_campaign_dispatch_route(
+    campaign_id: str,
+    body: CampaignDispatchIn,
+    db: DB,
+    user: CurrentUser,
+):
+    """Resolve devices and sources without creating executions or claims."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+
+    from api.schemas.campaign_entity import _dispatch_http_status
+    from services.campaign.dispatcher import (
+        CampaignDispatchError,
+        preview_campaign_dispatch,
+    )
+    from services.campaign.entity_allocation import SourcePoolSpec
+
+    source_pool = (
+        SourcePoolSpec(
+            platform=body.source_pool.platform,
+            entity_type=body.source_pool.entity_type,
+            search=body.source_pool.search,
+            statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+        )
+        if body.source_pool is not None
+        else None
+    )
+    try:
+        preview = await preview_campaign_dispatch(
+            db,
+            campaign_id=campaign_id,
+            org_id=org_id,
+            device_ids=body.target.device_ids,
+            device_group_ids=body.target.device_group_ids,
+            external_entity_ids=body.target.external_entity_ids,
+            source_pool=source_pool,
+            allocation_snapshot=[
+                (item.device_id, item.external_entity_id)
+                for item in body.allocation_snapshot
+            ],
+            allocation_policy=body.allocation_policy,
+            allow_partial=body.allow_partial,
+            require_online=body.require_online,
+        )
+    except CampaignDispatchError as exc:
+        raise HTTPException(
+            status_code=_dispatch_http_status(exc.code),
+            detail={"code": exc.code, "message": str(exc), **exc.details},
+        ) from exc
+
+    return CampaignDispatchPreviewOut(
+        campaign_id=preview.campaign_id,
+        allocation_policy=preview.allocation_policy,
+        device_count=len(preview.device_ids),
+        available_source_count=preview.allocation.available_count,
+        assignments=[
+            CampaignDispatchPreviewAssignmentOut(
+                device_id=assignment.device_id,
+                device_serial=(
+                    preview.devices_by_id[assignment.device_id].serial
+                    if assignment.device_id in preview.devices_by_id
+                    else assignment.device_id
+                ),
+                device_name=(
+                    preview.devices_by_id[assignment.device_id].name
+                    if assignment.device_id in preview.devices_by_id
+                    else None
+                ),
+                external_entity_id=assignment.entity.id,
+                display_name=assignment.entity.display_name,
+                platform=assignment.entity.platform,
+                entity_type=assignment.entity.entity_type,
+            )
+            for assignment in preview.allocation.assignments
+        ],
+    )
+
+
+@router.post(
     "/{campaign_id}/dispatch",
     response_model=CampaignDispatchOut,
     dependencies=[Depends(require_permission("campaigns", "execute"))],
@@ -648,6 +734,18 @@ async def dispatch_campaign_route(
 
     from api.schemas.campaign_entity import _dispatch_http_status
     from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
+    from services.campaign.entity_allocation import SourcePoolSpec
+
+    source_pool = (
+        SourcePoolSpec(
+            platform=body.source_pool.platform,
+            entity_type=body.source_pool.entity_type,
+            search=body.source_pool.search,
+            statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+        )
+        if body.source_pool is not None
+        else None
+    )
 
     try:
         result = await dispatch_campaign(
@@ -658,6 +756,12 @@ async def dispatch_campaign_route(
             device_ids=body.target.device_ids,
             device_group_ids=body.target.device_group_ids,
             external_entity_ids=body.target.external_entity_ids,
+            source_pool=source_pool,
+            allocation_snapshot=[
+                (item.device_id, item.external_entity_id)
+                for item in body.allocation_snapshot
+            ],
+            allocation_policy=body.allocation_policy,
             dispatch_strategy=body.dispatch_strategy,  # type: ignore[arg-type]
             allow_partial=body.allow_partial,
             require_online=body.require_online,

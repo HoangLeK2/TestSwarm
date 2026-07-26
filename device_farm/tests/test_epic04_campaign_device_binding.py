@@ -261,6 +261,329 @@ async def test_fan_out_assigns_one_external_entity_per_device_and_freezes_vars(
 
 
 @pytest.mark.asyncio
+async def test_preview_and_dispatch_allocate_one_source_per_device_from_org_pool(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-D1")
+    d2 = await _online_device(session_factory, serial="POOL-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        older, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Older Group",
+            external_id="pool-older",
+            observed_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        )
+        newer, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Newer Group",
+            external_id="pool-newer",
+            observed_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+        )
+        await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="profile",
+            display_name="Wrong Type",
+            external_id="wrong-type",
+            observed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+        )
+        await db.commit()
+
+    set_current_org_id(ORG_B)
+    async with session_factory() as db:
+        await upsert_external_entity(
+            db,
+            org_id=ORG_B,
+            platform="facebook",
+            entity_type="group",
+            display_name="Other Org Group",
+            external_id="other-org",
+            observed_at=datetime(2026, 7, 28, tzinfo=timezone.utc),
+        )
+        await db.commit()
+
+    body = {
+        "target": {"device_ids": [d1, d2]},
+        "source_pool": {
+            "platform": "facebook",
+            "entity_type": "group",
+        },
+        "allocation_policy": "one_per_device",
+    }
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPool")
+        preview = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json=body,
+        )
+
+        assert preview.status_code == 200, preview.text
+        preview_body = preview.json()
+        assert preview_body["device_count"] == 2
+        assert preview_body["available_source_count"] == 2
+        assert [
+            (
+                row["device_id"],
+                row["device_serial"],
+                row["external_entity_id"],
+            )
+            for row in preview_body["assignments"]
+        ] == [
+            (d1, "POOL-D1", newer.id),
+            (d2, "POOL-D2", older.id),
+        ]
+
+        set_current_org_id(ORG_A)
+        async with session_factory() as db:
+            late_one, _ = await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name="Late Group One",
+                external_id="pool-late-1",
+                observed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+            )
+            late_two, _ = await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name="Late Group Two",
+                external_id="pool-late-2",
+                observed_at=datetime(2026, 7, 28, tzinfo=timezone.utc),
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            assert await db.scalar(select(func.count(Execution.id))) == 0
+            assert (
+                await db.scalar(select(func.count(ExecutionEntityAssignment.id)))
+                == 0
+            )
+
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            dispatched = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch?include_vars=true",
+                json={
+                    **body,
+                    "allocation_snapshot": [
+                        {
+                            "device_id": row["device_id"],
+                            "external_entity_id": row["external_entity_id"],
+                        }
+                        for row in preview_body["assignments"]
+                    ],
+                },
+            )
+
+    assert dispatched.status_code == 200, dispatched.text
+    executions = dispatched.json()["executions"]
+    assert [
+        (row["device_id"], row["external_entity_id"]) for row in executions
+    ] == [(d1, newer.id), (d2, older.id)]
+    assert [row["effective_vars"]["TARGET_GROUP_NAME"] for row in executions] == [
+        "Newer Group",
+        "Older Group",
+    ]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        next_campaign_id = await _create_campaign(client, name="EntityPoolNext")
+        next_preview = await client.post(
+            f"/api/campaigns/{next_campaign_id}/dispatch-preview",
+            json=body,
+        )
+    assert next_preview.status_code == 200, next_preview.text
+    assert [
+        row["external_entity_id"] for row in next_preview.json()["assignments"]
+    ] == [late_two.id, late_one.id]
+
+
+@pytest.mark.asyncio
+async def test_source_pool_device_group_preview_order_is_stable(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-GROUP-D1")
+    d2 = await _online_device(session_factory, serial="POOL-GROUP-D2")
+    group_id = await _device_group(session_factory, [d2, d1])
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        for index in range(2):
+            await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name=f"Ordered Group {index}",
+                external_id=f"ordered-group-{index}",
+            )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPoolGroup")
+        response = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json={
+                "target": {"device_group_ids": [group_id]},
+                "source_pool": {
+                    "platform": "facebook",
+                    "entity_type": "group",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert [
+        row["device_id"] for row in response.json()["assignments"]
+    ] == sorted([d1, d2])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_preview_when_device_group_membership_changed(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-STALE-D1")
+    d2 = await _online_device(session_factory, serial="POOL-STALE-D2")
+    d3 = await _online_device(session_factory, serial="POOL-STALE-D3")
+    group_id = await _device_group(session_factory, [d1, d2])
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        for index in range(3):
+            await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name=f"Stale Group {index}",
+                external_id=f"stale-group-{index}",
+            )
+        await db.commit()
+
+    body = {
+        "target": {"device_group_ids": [group_id]},
+        "source_pool": {
+            "platform": "facebook",
+            "entity_type": "group",
+        },
+    }
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPoolStale")
+        preview = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json=body,
+        )
+        assert preview.status_code == 200, preview.text
+
+        set_current_org_id(ORG_A)
+        async with session_factory() as db:
+            await add_devices_to_group(db, group_id, [d3], org_id=ORG_A)
+            await db.commit()
+
+        dispatched = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={
+                **body,
+                "allocation_snapshot": [
+                    {
+                        "device_id": row["device_id"],
+                        "external_entity_id": row["external_entity_id"],
+                    }
+                    for row in preview.json()["assignments"]
+                ],
+            },
+        )
+
+    assert dispatched.status_code == 400
+    assert (
+        dispatched.json()["detail"]["code"]
+        == "ENTITY_ALLOCATION_SNAPSHOT_STALE"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_source_pool_reports_when_not_enough_sources(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-SHORT-D1")
+    d2 = await _online_device(session_factory, serial="POOL-SHORT-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Only Group",
+            external_id="pool-only",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPoolShort")
+        response = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json={
+                "target": {"device_ids": [d1, d2]},
+                "source_pool": {
+                    "platform": "facebook",
+                    "entity_type": "group",
+                },
+                "allocation_policy": "one_per_device",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "ENTITY_POOL_EXHAUSTED",
+        "message": "Source pool has 1 available sources for 2 devices",
+        "device_count": 2,
+        "available_entity_count": 1,
+        "missing_count": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fan_out_rejects_entity_count_different_from_valid_device_count(
     session_factory,
 ):
@@ -860,6 +1183,15 @@ async def test_ac6_device_claim_fail(session_factory):
 
     set_current_org_id(ORG_A)
     async with session_factory() as db:
+        for index in range(2):
+            await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name=f"Claim Group {index}",
+                external_id=f"claim-group-{index}",
+            )
         await claim_device_session(
             db,
             device_id=d1,
@@ -876,7 +1208,13 @@ async def test_ac6_device_claim_fail(session_factory):
         campaign_id = await _create_campaign(client, name="ClaimFail")
         resp = await client.post(
             f"/api/campaigns/{campaign_id}/dispatch",
-            json={"target": {"device_ids": [d1, d2]}},
+            json={
+                "target": {"device_ids": [d1, d2]},
+                "source_pool": {
+                    "platform": "facebook",
+                    "entity_type": "group",
+                },
+            },
         )
 
     assert resp.status_code == 200
@@ -884,6 +1222,21 @@ async def test_ac6_device_claim_fail(session_factory):
     assert by_device[d1]["status"] == "failed"
     assert by_device[d1]["failure_reason"] == "device_claim_failed"
     assert by_device[d2]["status"] == "running"
+    async with session_factory() as db:
+        assignments = list(
+            (
+                await db.scalars(
+                    select(ExecutionEntityAssignment).where(
+                        ExecutionEntityAssignment.device_id.in_([d1, d2])
+                    )
+                )
+            ).all()
+        )
+    assignment_by_device = {row.device_id: row for row in assignments}
+    assert assignment_by_device[d1].status == "failed"
+    assert assignment_by_device[d1].completed_at is not None
+    assert assignment_by_device[d2].status == "assigned"
+    assert assignment_by_device[d2].completed_at is None
 
 
 @pytest.mark.asyncio

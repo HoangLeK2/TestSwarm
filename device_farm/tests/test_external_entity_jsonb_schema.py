@@ -88,3 +88,28 @@ async def test_group_locator_migration_backfills_only_missing_facebook_groups() 
     assert "'by', 'descriptionStartsWith'" in sql
     assert "'by', 'descriptionContains'" in sql
     assert "'value', display_name || ','" in sql
+
+
+@pytest.mark.asyncio
+async def test_active_assignment_index_migration_is_partial_and_idempotent() -> None:
+    migration = importlib.import_module(
+        "db.migrations.095_external_entity_active_assignment_index"
+    )
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        async def execute(self, statement) -> None:
+            self.statements.append(str(statement))
+
+    conn = _Connection()
+    await migration.upgrade(conn)
+    sql = " ".join("\n".join(conn.statements).split())
+
+    assert "UPDATE execution_entity_assignments AS assignment" in sql
+    assert "assignment.execution_id = execution.id" in sql
+    assert "'completed', 'failed', 'cancelled', 'dlq_closed'" in sql
+    assert "CREATE INDEX IF NOT EXISTS" in sql
+    assert "(org_id, external_entity_id)" in sql
+    assert "completed_at IS NULL AND status = 'assigned'" in sql

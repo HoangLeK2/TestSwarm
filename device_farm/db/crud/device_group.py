@@ -164,7 +164,7 @@ async def snapshot_groups_device_ids(
         return {}
     stmt = select(DeviceGroupMember.group_id, DeviceGroupMember.device_id).where(
         DeviceGroupMember.group_id.in_(group_ids)
-    )
+    ).order_by(DeviceGroupMember.group_id, DeviceGroupMember.device_id)
     if for_update:
         stmt = stmt.with_for_update()
     result = await db.execute(stmt)

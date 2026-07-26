@@ -1,6 +1,6 @@
 import { farmApi } from '@/lib/farm-api';
 import type {
-  CampaignDispatchIn,
+  CampaignDispatchIn as GeneratedCampaignDispatchIn,
   CampaignDispatchOut,
   CampaignEntityOut,
   CampaignEntityUpdate,
@@ -48,12 +48,41 @@ export type {
 } from '../types';
 
 export type {
-  CampaignDispatchIn,
   CampaignDispatchOut,
   CampaignEntityOut,
   CampaignEntityUpdate,
   CampaignScenarioRefIn,
   CampaignAccountBindIn
+};
+
+export type CampaignDispatchIn = GeneratedCampaignDispatchIn & {
+  source_pool?: {
+    platform: string;
+    entity_type: string;
+    search?: string | null;
+    statuses?: string[];
+  } | null;
+  allocation_snapshot?: Array<{
+    device_id: string;
+    external_entity_id: string;
+  }>;
+  allocation_policy?: 'one_per_device';
+};
+
+export type CampaignDispatchPreviewOut = {
+  campaign_id: string;
+  allocation_policy: string;
+  device_count: number;
+  available_source_count: number;
+  assignments?: Array<{
+    device_id: string;
+    device_serial: string;
+    device_name?: string | null;
+    external_entity_id: string;
+    display_name: string;
+    platform: string;
+    entity_type: string;
+  }>;
 };
 
 /** Extended dispatch execution row (DF-T-04-010 runtime fields). */
@@ -314,6 +343,13 @@ export const campaignsApi = {
   dispatch: (id: string, body: CampaignDispatchIn) =>
     farmApi
       .post<CampaignDispatchResponse>(`/campaigns/${id}/dispatch`, body)
+      .then((r) => r.data),
+  previewDispatch: (id: string, body: CampaignDispatchIn) =>
+    farmApi
+      .post<CampaignDispatchPreviewOut>(
+        `/campaigns/${id}/dispatch-preview`,
+        body
+      )
       .then((r) => r.data),
   run: (id: string, deviceSerials?: string[]) =>
     farmApi

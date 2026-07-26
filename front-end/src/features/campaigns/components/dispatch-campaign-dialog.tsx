@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CheckSquare, Loader2, Smartphone, Square } from 'lucide-react';
+import { CheckSquare, Eye, Loader2, Smartphone, Square } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -41,9 +42,17 @@ import {
   externalEntitiesApi,
   normalizeCampaignOut
 } from '../services/api';
-import type { ExternalEntityCatalogItem } from '../services/api';
+import type {
+  CampaignDispatchIn,
+  CampaignDispatchPreviewOut,
+  ExternalEntityCatalogItem
+} from '../services/api';
 import type { CampaignDeviceOut, CampaignOut } from '../types';
-import type { CampaignDispatchIn } from '../../device-farm/services/generated/DeviceFarmApi';
+import {
+  buildSourcePoolInput,
+  isAllocatableSourceStatus,
+  listSourcePoolOptions
+} from './dispatch-source-pool';
 
 function deviceLabel(d: CampaignDeviceOut) {
   return d.name?.trim() || d.serial || '—';
@@ -87,9 +96,14 @@ export function DispatchCampaignDialog({
   const [externalEntities, setExternalEntities] = useState<
     ExternalEntityCatalogItem[]
   >([]);
-  const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(
-    new Set()
-  );
+  const [sourcePoolEnabled, setSourcePoolEnabled] = useState(false);
+  const [sourcePoolKey, setSourcePoolKey] = useState('');
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [sourcePreview, setSourcePreview] =
+    useState<CampaignDispatchPreviewOut | null>(null);
+  const [sourcePreviewKey, setSourcePreviewKey] = useState('');
+  const [sourcePreviewError, setSourcePreviewError] = useState('');
+  const [sourcePreviewLoading, setSourcePreviewLoading] = useState(false);
   const [strategy, setStrategy] = useState<'parallel' | 'sequential'>(
     'parallel'
   );
@@ -184,11 +198,15 @@ export function DispatchCampaignDialog({
       .list({ limit: 500 })
       .then((result) => {
         if (!cancelled) {
-          setExternalEntities(
-            result.items.filter(
-              (item) =>
-                !['archived', 'unavailable', 'deleted'].includes(item.status)
-            )
+          const available = result.items.filter((item) =>
+            isAllocatableSourceStatus(item.status)
+          );
+          setExternalEntities(available);
+          const options = listSourcePoolOptions(available);
+          setSourcePoolKey((current) =>
+            options.some((option) => option.key === current)
+              ? current
+              : options[0]?.key || ''
           );
         }
       })
@@ -204,7 +222,12 @@ export function DispatchCampaignDialog({
     if (!open) return;
     setSelectedIds(new Set(allDeviceIds));
     setGroupIds(new Set());
-    setSelectedEntityIds(new Set());
+    setSourcePoolEnabled(false);
+    setSourceSearch('');
+    setSourcePreview(null);
+    setSourcePreviewKey('');
+    setSourcePreviewError('');
+    setSourcePreviewLoading(false);
     setStrategy('parallel');
     setActiveDeviceId(firstDeviceId);
     setActiveScenarioId(firstScenarioId);
@@ -256,12 +279,27 @@ export function DispatchCampaignDialog({
     allDeviceIds.length > 0 && allDeviceIds.every((id) => selectedIds.has(id));
   const someSelected = allDeviceIds.some((id) => selectedIds.has(id));
   const hasTarget = someSelected || groupIds.size > 0;
-  const entityGroupUnsupported =
-    selectedEntityIds.size > 0 && groupIds.size > 0;
-  const entityCountMismatch =
-    selectedEntityIds.size > 0 &&
-    groupIds.size === 0 &&
-    selectedEntityIds.size !== selectedIds.size;
+  const sourcePoolOptions = useMemo(
+    () => listSourcePoolOptions(externalEntities),
+    [externalEntities]
+  );
+  const selectedSourcePool = useMemo(
+    () =>
+      sourcePoolKey ? buildSourcePoolInput(sourcePoolKey, sourceSearch) : null,
+    [sourcePoolKey, sourceSearch]
+  );
+  const currentSourcePreviewKey = useMemo(
+    () =>
+      JSON.stringify({
+        device_ids: allDeviceIds.filter((id) => selectedIds.has(id)),
+        device_group_ids: Array.from(groupIds).sort(),
+        source_pool: selectedSourcePool
+      }),
+    [allDeviceIds, groupIds, selectedIds, selectedSourcePool]
+  );
+  const sourcePreviewCurrent =
+    !sourcePoolEnabled ||
+    (sourcePreview != null && sourcePreviewKey === currentSourcePreviewKey);
 
   const parseMsgs = useMemo(
     () => ({
@@ -320,15 +358,6 @@ export function DispatchCampaignDialog({
       const next = new Set(prev);
       if (checked) next.add(groupId);
       else next.delete(groupId);
-      return next;
-    });
-  };
-
-  const toggleExternalEntity = (entityId: string, checked: boolean) => {
-    setSelectedEntityIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(entityId);
-      else next.delete(entityId);
       return next;
     });
   };
@@ -402,23 +431,64 @@ export function DispatchCampaignDialog({
     }
   };
 
-  const handleSubmit = async () => {
-    if (!(await saveDirtyDrafts())) return;
+  const buildDispatchBody = (
+    includeAllocationSnapshot = true
+  ): CampaignDispatchIn => {
     const device_ids = allDeviceIds.filter((id) => selectedIds.has(id));
     const device_group_ids = Array.from(groupIds);
-    const external_entity_ids = externalEntities
-      .filter((entity) => selectedEntityIds.has(entity.id))
-      .map((entity) => entity.id);
-    onConfirm({
+    return {
       target: {
         ...(device_ids.length ? { device_ids } : {}),
-        ...(device_group_ids.length ? { device_group_ids } : {}),
-        ...(external_entity_ids.length ? { external_entity_ids } : {})
+        ...(device_group_ids.length ? { device_group_ids } : {})
       },
+      ...(sourcePoolEnabled && selectedSourcePool
+        ? {
+            source_pool: selectedSourcePool,
+            ...(includeAllocationSnapshot &&
+            sourcePreviewCurrent &&
+            sourcePreview
+              ? {
+                  allocation_snapshot: (sourcePreview.assignments ?? []).map(
+                    (assignment) => ({
+                      device_id: assignment.device_id,
+                      external_entity_id: assignment.external_entity_id
+                    })
+                  )
+                }
+              : {}),
+            allocation_policy: 'one_per_device' as const
+          }
+        : {}),
       dispatch_strategy: strategy,
       require_online: true,
       allow_partial: false
-    });
+    };
+  };
+
+  const handleSourcePreview = async () => {
+    if (!sourcePoolEnabled || !selectedSourcePool || !hasTarget) return;
+    setSourcePreviewLoading(true);
+    setSourcePreviewError('');
+    try {
+      const preview = await campaignsApi.previewDispatch(
+        campaignId,
+        buildDispatchBody(false)
+      );
+      setSourcePreview(preview);
+      setSourcePreviewKey(currentSourcePreviewKey);
+    } catch (err) {
+      setSourcePreview(null);
+      setSourcePreviewKey('');
+      setSourcePreviewError(formatFarmApiError(err, t('previewFailed')));
+    } finally {
+      setSourcePreviewLoading(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!(await saveDirtyDrafts())) return;
+    if (!sourcePreviewCurrent) return;
+    onConfirm(buildDispatchBody());
   };
 
   const showVarsPanel = devices.length > 0;
@@ -587,46 +657,114 @@ export function DispatchCampaignDialog({
                 </div>
               )}
 
-              {externalEntities.length > 0 && (
+              {sourcePoolOptions.length > 0 && (
                 <div className='space-y-2'>
-                  <Label className='text-xs'>{t('entitiesLabel')}</Label>
-                  <p className='text-[11px] text-muted-foreground'>
-                    {t('entitiesHelp')}
-                  </p>
-                  <div className='max-h-36 space-y-2 overflow-y-auto rounded-md border p-3'>
-                    {externalEntities.map((entity) => (
-                      <label
-                        key={entity.id}
-                        className='flex cursor-pointer items-center gap-2 text-sm'
+                  <label className='flex cursor-pointer items-center gap-2 text-xs font-medium'>
+                    <Checkbox
+                      checked={sourcePoolEnabled}
+                      onCheckedChange={(checked) => {
+                        setSourcePoolEnabled(checked === true);
+                        setSourcePreview(null);
+                        setSourcePreviewKey('');
+                        setSourcePreviewError('');
+                      }}
+                    />
+                    {t('sourcePoolEnabled')}
+                  </label>
+                  {sourcePoolEnabled ? (
+                    <div className='space-y-2 rounded-md border p-3'>
+                      <Label className='text-[11px]'>
+                        {t('sourcePoolLabel')}
+                      </Label>
+                      <Select
+                        value={sourcePoolKey}
+                        onValueChange={(value) => {
+                          setSourcePoolKey(value);
+                          setSourcePreviewError('');
+                        }}
                       >
-                        <Checkbox
-                          checked={selectedEntityIds.has(entity.id)}
-                          onCheckedChange={(checked) =>
-                            toggleExternalEntity(entity.id, checked === true)
-                          }
-                        />
-                        <span className='min-w-0 flex-1 truncate'>
-                          {entity.display_name}
-                        </span>
-                        <Badge variant='outline' className='text-[10px]'>
-                          {entity.platform}
-                        </Badge>
-                      </label>
-                    ))}
-                  </div>
-                  {entityCountMismatch ? (
-                    <p className='text-[11px] text-destructive'>
-                      {t('entitiesCountMismatch', {
-                        entities: selectedEntityIds.size,
-                        devices: selectedIds.size
-                      })}
+                        <SelectTrigger className='h-8 text-xs'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sourcePoolOptions.map((option) => (
+                            <SelectItem key={option.key} value={option.key}>
+                              {option.platform} / {option.entityType} (
+                              {option.count})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={sourceSearch}
+                        onChange={(event) => {
+                          setSourceSearch(event.target.value);
+                          setSourcePreviewError('');
+                        }}
+                        placeholder={t('sourceSearchPlaceholder')}
+                        className='h-8 text-xs'
+                      />
+                      <p className='text-[11px] text-muted-foreground'>
+                        {t('sourcePolicyHelp')}
+                      </p>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        className='h-7 gap-1.5 text-xs'
+                        disabled={
+                          sourcePreviewLoading ||
+                          !hasTarget ||
+                          !selectedSourcePool
+                        }
+                        onClick={() => void handleSourcePreview()}
+                      >
+                        {sourcePreviewLoading ? (
+                          <Loader2 size={12} className='animate-spin' />
+                        ) : (
+                          <Eye size={12} />
+                        )}
+                        {t('previewAllocation')}
+                      </Button>
+                      {sourcePreviewError ? (
+                        <p className='text-[11px] text-destructive'>
+                          {sourcePreviewError}
+                        </p>
+                      ) : null}
+                      {sourcePreviewCurrent && sourcePreview ? (
+                        <div className='max-h-32 space-y-1 overflow-y-auto rounded bg-muted/40 p-2'>
+                          <p className='text-[11px] font-medium'>
+                            {t('previewSummary', {
+                              assigned: sourcePreview.assignments?.length ?? 0,
+                              available: sourcePreview.available_source_count
+                            })}
+                          </p>
+                          {(sourcePreview.assignments ?? []).map(
+                            (assignment) => {
+                              return (
+                                <p
+                                  key={assignment.device_id}
+                                  className='truncate text-[11px] text-muted-foreground'
+                                >
+                                  {assignment.device_serial ??
+                                    assignment.device_id}{' '}
+                                  → {assignment.display_name}
+                                </p>
+                              );
+                            }
+                          )}
+                        </div>
+                      ) : sourcePreview && !sourcePreviewCurrent ? (
+                        <p className='text-[11px] text-amber-600'>
+                          {t('previewStale')}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className='text-[11px] text-muted-foreground'>
+                      {t('sourcePoolDisabledHelp')}
                     </p>
-                  ) : null}
-                  {entityGroupUnsupported ? (
-                    <p className='text-[11px] text-destructive'>
-                      {t('entitiesGroupUnsupported')}
-                    </p>
-                  ) : null}
+                  )}
                 </div>
               )}
 
@@ -690,8 +828,7 @@ export function DispatchCampaignDialog({
               isDispatching ||
               isSaving ||
               !hasTarget ||
-              entityGroupUnsupported ||
-              entityCountMismatch ||
+              !sourcePreviewCurrent ||
               !!currentJsonError
             }
             onClick={() => void handleSubmit()}

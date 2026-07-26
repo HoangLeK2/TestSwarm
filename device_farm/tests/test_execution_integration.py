@@ -426,6 +426,9 @@ async def test_finish_fan_out_reuses_finished_execution_and_device_id():
         )
 
     finish.assert_not_awaited()
+    db.execute.assert_awaited_once()
+    assignment_update = db.execute.await_args.args[0]
+    assert assignment_update.compile().params["status"] == "completed"
     release.assert_awaited_once_with(
         db,
         execution,

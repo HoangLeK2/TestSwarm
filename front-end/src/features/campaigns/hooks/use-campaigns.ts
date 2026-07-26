@@ -15,12 +15,10 @@ import {
   scenariosApi,
   tasksApi,
   workflowsApi,
+  type CampaignDispatchIn,
   type CampaignEntityUpdate
 } from '../services/api';
-import type {
-  CampaignAccountBindIn,
-  CampaignDispatchIn
-} from '../../device-farm/services/generated/DeviceFarmApi';
+import type { CampaignAccountBindIn } from '../../device-farm/services/generated/DeviceFarmApi';
 import {
   isCampaignActiveExecution,
   isCampaignTerminal,

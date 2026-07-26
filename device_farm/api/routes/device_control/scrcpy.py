@@ -271,6 +271,7 @@ def build_scrcpy_router(
         viewer_lease_ttl_s = max(0.0, scrcpy_viewer_lease_ttl_s)
     viewer_lease_deadlines: dict[tuple[str, str], float] = {}
     viewer_lease_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+    profile_reapply_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def _persist_scrcpy_enabled(serial: str, enabled: bool) -> None:
         if not db_enabled:
@@ -287,6 +288,31 @@ def build_scrcpy_router(
         task = viewer_lease_tasks.pop(key, None)
         if task and task is not asyncio.current_task() and not task.done():
             task.cancel()
+
+    def _cancel_profile_reapply(serial: str) -> None:
+        task = profile_reapply_tasks.pop(serial, None)
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    def _profile_reapply_pending(serial: str) -> bool:
+        task = profile_reapply_tasks.get(serial)
+        if task is None:
+            return False
+        if task.done():
+            profile_reapply_tasks.pop(serial, None)
+            return False
+        return True
+
+    def _should_defer_profile_downgrade(
+        removed_viewer_id: str,
+        viewers: set[str],
+    ) -> bool:
+        return (
+            scrcpy_detach_grace_s > 0
+            and _is_control_viewer(removed_viewer_id)
+            and bool(viewers)
+            and all(_is_preview_viewer(viewer_id) for viewer_id in viewers)
+        )
 
     async def _reapply_effective_viewer_profile(
         serial: str,
@@ -312,6 +338,49 @@ def build_scrcpy_router(
             ),
         )
         return raw_status != "unavailable"
+
+    async def _reapply_profile_after_grace(serial: str) -> None:
+        try:
+            await asyncio.sleep(scrcpy_detach_grace_s)
+            lock = _scrcpy_op_lock(serial)
+            async with lock:
+                if profile_reapply_tasks.get(serial) is not asyncio.current_task():
+                    return
+                viewers = _SCRCPY_VIEWERS.get(serial)
+                if (
+                    not viewers
+                    or _has_control_scrcpy_viewer(viewers)
+                    or not all(_is_preview_viewer(viewer_id) for viewer_id in viewers)
+                ):
+                    return
+                device = manager.get_device(serial)
+                if not device:
+                    return
+                profile_reapplied = await _reapply_effective_viewer_profile(
+                    serial,
+                    device,
+                    viewers,
+                )
+            log.info(
+                "scrcpy profile downgrade serial=%s active_viewers=%d "
+                "profile_reapplied=%s",
+                serial,
+                len(viewers),
+                profile_reapplied,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("delayed scrcpy profile downgrade failed for %s: %s", serial, exc)
+        finally:
+            if profile_reapply_tasks.get(serial) is asyncio.current_task():
+                profile_reapply_tasks.pop(serial, None)
+
+    def _schedule_profile_reapply(serial: str) -> None:
+        _cancel_profile_reapply(serial)
+        profile_reapply_tasks[serial] = asyncio.create_task(
+            _reapply_profile_after_grace(serial)
+        )
 
     async def _expire_viewer_lease(serial: str, viewer_id: str) -> None:
         key = (serial, viewer_id)
@@ -343,23 +412,27 @@ def build_scrcpy_router(
                         device = manager.get_device(serial)
                         profile_reapplied = False
                         if device:
-                            profile_reapplied = (
-                                await _reapply_effective_viewer_profile(
+                            if _should_defer_profile_downgrade(viewer_id, viewers):
+                                _schedule_profile_reapply(serial)
+                            else:
+                                profile_reapplied = await _reapply_effective_viewer_profile(
                                     serial,
                                     device,
                                     viewers,
                                 )
-                            )
                         log.info(
                             "scrcpy viewer lease expired serial=%s viewer=%s "
-                            "active_viewers=%d stop=False profile_reapplied=%s",
+                            "active_viewers=%d stop=False profile_reapplied=%s "
+                            "profile_reapply_scheduled=%s",
                             serial,
                             viewer_id,
                             len(viewers),
                             profile_reapplied,
+                            _profile_reapply_pending(serial),
                         )
                         return
 
+                    _cancel_profile_reapply(serial)
                     _SCRCPY_VIEWERS.pop(serial, None)
                     _SCRCPY_VIEWER_REQUESTS.pop(serial, None)
                     device = manager.get_device(serial)
@@ -471,6 +544,8 @@ def build_scrcpy_router(
             _SCRCPY_STOP_VIEWERS.pop(serial, None)
             if stop_task and not stop_task.done():
                 stop_task.cancel()
+            if not _is_preview_viewer(viewer_id):
+                _cancel_profile_reapply(serial)
             viewers = _SCRCPY_VIEWERS.setdefault(serial, set())
             scrcpy_active = bool(getattr(device, "_scrcpy_active", False))
             scrcpy_pending = bool(getattr(device, "_scrcpy_pending_registered_ip", None))
@@ -483,6 +558,7 @@ def build_scrcpy_router(
             should_reapply_profile = (
                 (scrcpy_active or scrcpy_pending)
                 and not _scrcpy_request_matches_device(device, attach_request)
+                and not _profile_reapply_pending(serial)
             )
             attach_status = "active"
             if should_start or should_reapply_profile:
@@ -521,6 +597,8 @@ def build_scrcpy_router(
                     viewers.discard(viewer_id)
                     _forget_viewer_request(serial, viewer_id)
                     _clear_viewer_lease(serial, viewer_id)
+                    if _should_defer_profile_downgrade(viewer_id, viewers):
+                        _schedule_profile_reapply(serial)
                     if not viewers:
                         _SCRCPY_VIEWERS.pop(serial, None)
                     raise
@@ -528,6 +606,8 @@ def build_scrcpy_router(
                     viewers.discard(viewer_id)
                     _forget_viewer_request(serial, viewer_id)
                     _clear_viewer_lease(serial, viewer_id)
+                    if _should_defer_profile_downgrade(viewer_id, viewers):
+                        _schedule_profile_reapply(serial)
                     if not viewers:
                         _SCRCPY_VIEWERS.pop(serial, None)
                     return JSONResponse(
@@ -601,25 +681,36 @@ def build_scrcpy_router(
                 _forget_viewer_request(serial, viewer_id)
                 _clear_viewer_lease(serial, viewer_id)
                 if viewers:
-                    profile_reapplied = await _reapply_effective_viewer_profile(
-                        serial,
-                        device,
+                    profile_reapply_scheduled = _should_defer_profile_downgrade(
+                        viewer_id,
                         viewers,
                     )
+                    if profile_reapply_scheduled:
+                        _schedule_profile_reapply(serial)
+                        profile_reapplied = False
+                    else:
+                        profile_reapplied = await _reapply_effective_viewer_profile(
+                            serial,
+                            device,
+                            viewers,
+                        )
                     log.info(
                         "api_scrcpy_detach serial=%s viewer=%s active_viewers=%d "
-                        "stop=False profile_reapplied=%s",
+                        "stop=False profile_reapplied=%s profile_reapply_scheduled=%s",
                         serial,
                         viewer_id,
                         len(viewers),
                         profile_reapplied,
+                        profile_reapply_scheduled,
                     )
                     return {
                         "ok": True,
                         "serial": serial,
                         "active_viewers": len(viewers),
                         "profile_reapplied": profile_reapplied,
+                        "profile_reapply_scheduled": profile_reapply_scheduled,
                     }
+                _cancel_profile_reapply(serial)
                 _SCRCPY_VIEWERS.pop(serial, None)
                 _SCRCPY_VIEWER_REQUESTS.pop(serial, None)
 

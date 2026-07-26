@@ -332,6 +332,117 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 
     {
+        "name": "Khám phá nguồn từ Facebook Groups",
+        "category": "facebook",
+        "description": (
+            "Tìm theo từ khóa, mở tab Nhóm/Xem tất cả và lưu các group tìm thấy "
+            "vào kho nguồn dùng chung của organization. Mỗi lần chạy tạo observation "
+            "mới để theo dõi dữ liệu thay đổi mà vẫn tái sử dụng cùng một nguồn."
+        ),
+        "tags": "facebook,group,discovery,external-entity",
+        "variables": {
+            "SEARCH_QUERY": "openclaw",
+            "MAX_PAGES": 20,
+        },
+        "steps": [
+            {
+                "type": "launch_app",
+                "package": "com.facebook.katana",
+                "title": "Mở Facebook",
+            },
+            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+            {"type": "dismiss_popup", "retries": 2},
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "Tìm kiếm",
+                "timeout": 5,
+                "then": [
+                    {
+                        "type": "tap_selector",
+                        "by": "content-desc",
+                        "value": "Tìm kiếm",
+                        "timeout": 4,
+                    }
+                ],
+                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            {"type": "input_text", "text": "${SEARCH_QUERY}", "via": "u2"},
+            {"type": "key", "key": "enter"},
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Nhóm",
+                "timeout": 4,
+                "then": [
+                    {
+                        "type": "tap_selector",
+                        "by": "text",
+                        "value": "Nhóm",
+                        "timeout": 3,
+                    }
+                ],
+                "else": [
+                    {
+                        "type": "tap_selector",
+                        "by": "text",
+                        "value": "Groups",
+                        "timeout": 3,
+                        "ignore_error": True,
+                    }
+                ],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Xem tất cả",
+                "timeout": 2,
+                "then": [
+                    {
+                        "type": "tap_selector",
+                        "by": "text",
+                        "value": "Xem tất cả",
+                        "timeout": 2,
+                    }
+                ],
+                "else": [
+                    {
+                        "type": "tap_selector",
+                        "by": "text",
+                        "value": "See all",
+                        "timeout": 2,
+                        "ignore_error": True,
+                    }
+                ],
+            },
+            {
+                "type": "loop",
+                "count": "${MAX_PAGES}",
+                "steps": [
+                    {
+                        "type": "extract",
+                        "strategy": "fb_groups",
+                        "edge_extra_data": True,
+                        "search_query": "${SEARCH_QUERY}",
+                        "stop_if_no_new": False,
+                    },
+                    {
+                        "type": "scroll_down",
+                        "repeats": 1,
+                        "start_x_ratio": 0.5,
+                        "start_y_ratio": 0.78,
+                        "end_y_ratio": 0.32,
+                    },
+                    {"type": "wait", "seconds": 0.6},
+                ],
+            },
+            {"type": "key", "key": "home"},
+        ],
+    },
+
+    {
         "name": "Crawl bài viết + bình luận 1 nhóm Facebook",
         "category": "facebook",
         "description": (

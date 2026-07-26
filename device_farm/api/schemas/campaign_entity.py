@@ -49,6 +49,7 @@ class CampaignAccountBindIn(BaseModel):
 class CampaignDispatchTargetIn(BaseModel):
     device_ids: list[str] = Field(default_factory=list)
     device_group_ids: list[str] = Field(default_factory=list)
+    external_entity_ids: list[str] = Field(default_factory=list)
 
 
 class CampaignDispatchIn(BaseModel):
@@ -66,6 +67,7 @@ class CampaignDispatchExecutionOut(BaseModel):
     account_id: Optional[str] = None
     failure_reason: Optional[str] = None
     claim_session_id: Optional[str] = None
+    external_entity_id: Optional[str] = None
     dispatch_source: Optional[str] = None
     workflow_id: Optional[str] = None
 

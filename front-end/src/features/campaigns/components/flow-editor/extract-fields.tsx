@@ -74,6 +74,11 @@ const STRATEGIES = [
     descKey: 'strategyCommentsDesc'
   },
   {
+    value: 'fb_groups',
+    titleKey: 'strategyGroupsTitle',
+    descKey: 'strategyGroupsDesc'
+  },
+  {
     value: 'text_nodes',
     titleKey: 'strategyTextTitle',
     descKey: 'strategyTextDesc'

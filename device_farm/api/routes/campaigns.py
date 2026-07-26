@@ -657,6 +657,7 @@ async def dispatch_campaign_route(
             actor_user_id=user.id,
             device_ids=body.target.device_ids,
             device_group_ids=body.target.device_group_ids,
+            external_entity_ids=body.target.external_entity_ids,
             dispatch_strategy=body.dispatch_strategy,  # type: ignore[arg-type]
             allow_partial=body.allow_partial,
             require_online=body.require_online,

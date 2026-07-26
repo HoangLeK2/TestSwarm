@@ -12,6 +12,7 @@ from typing import Any
 
 from relay.extra_data.writer import ContentItemWriter, build_content_item_row
 from relay.extra_data.writer import compute_content_hash, scope_content_hash
+from relay.extra_data.entity_writer import ExternalEntityWriter
 
 logger = logging.getLogger("relay.extra_data")
 
@@ -22,6 +23,7 @@ _SUPPORTED_CONTENT_STRATEGIES = (
     | _MULTI_PLATFORM_POST_STRATEGIES
     | _MULTI_PLATFORM_COMMENT_STRATEGIES
 )
+_SUPPORTED_ENTITY_STRATEGIES = {"fb_groups"}
 
 
 def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, str]:
@@ -138,6 +140,12 @@ def _multi_platform_items(
 
 
 def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if strategy == "fb_groups":
+        from relay.extra_data.parsers.facebook.group_pipeline import (
+            parse_group_search_results,
+        )
+
+        return parse_group_search_results(xml)
     if strategy == "fb_comment_filter_next":
         from relay.extra_data.parsers.facebook.comment_filter import resolve_comment_filter_next_tap
 
@@ -881,6 +889,7 @@ class ExtraDataIngestServer:
         self._token = os.getenv("AGENT_BOOT_EXTRA_TOKEN", "").strip()
         self._allow_unauth = os.getenv("AGENT_BOOT_EXTRA_ALLOW_UNAUTH", "").strip().lower() in {"1", "true", "yes", "on"}
         self._writer = ContentItemWriter()
+        self._entity_writer = ExternalEntityWriter(self._writer._ensure_pool)
         default_workers = max(2, min(4, os.cpu_count() or 2))
         workers = max(1, int(os.getenv("AGENT_BOOT_XML_PARSE_WORKERS", str(default_workers))))
         self._parse_sem = asyncio.Semaphore(workers)
@@ -1028,12 +1037,51 @@ class ExtraDataIngestServer:
                 )
                 parse_ms = int((time.perf_counter() - parse_started) * 1000)
 
-            if strategy not in _SUPPORTED_CONTENT_STRATEGIES and strategy not in {
+            if (
+                strategy not in _SUPPORTED_CONTENT_STRATEGIES
+                and strategy not in _SUPPORTED_ENTITY_STRATEGIES
+                and strategy not in {
                 "fb_comment_target",
                 "fb_comment_target_tap",
                 "fb_comment_filter_next",
-            }:
+                }
+            ):
                 return {"ok": False, "error": "unsupported_strategy", "strategy": strategy}
+
+            if strategy in _SUPPORTED_ENTITY_STRATEGIES:
+                if bool(context.get("persist", True)):
+                    context = await self._writer.prepare_context_for_persist(context)
+                    entity_write = await self._entity_writer.persist_items(
+                        items,
+                        context=context,
+                        captured_at=payload.get("captured_at"),
+                    )
+                else:
+                    entity_write = {
+                        "attempted": 0,
+                        "upserted": 0,
+                        "observed": 0,
+                        "discovered": 0,
+                        "entity_ids": [],
+                    }
+                return {
+                    "ok": True,
+                    "serial": serial,
+                    "strategy": strategy,
+                    "parsed_count": len(items),
+                    "inserted_attempted": entity_write["attempted"],
+                    "inserted_count": entity_write["upserted"],
+                    "duplicate_count": 0,
+                    "entity_ids": entity_write.get("entity_ids") or [],
+                    "observation_count": entity_write["observed"],
+                    "discovery_count": entity_write["discovered"],
+                    "diagnostic": diagnostic,
+                    "xml_sha256": actual_sha,
+                    "parse_ms": parse_ms,
+                    "db_ms": int((time.perf_counter() - started) * 1000) - parse_ms,
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    **({"items": items} if bool(context.get("return_items", True)) else {}),
+                }
 
             should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
             if should_persist:

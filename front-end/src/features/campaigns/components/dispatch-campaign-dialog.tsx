@@ -38,8 +38,10 @@ import {
   campaignPerDeviceOverrides as readCampaignPerDeviceOverrides,
   campaignVariables as readCampaignVariables,
   campaignsApi,
+  externalEntitiesApi,
   normalizeCampaignOut
 } from '../services/api';
+import type { ExternalEntityCatalogItem } from '../services/api';
 import type { CampaignDeviceOut, CampaignOut } from '../types';
 import type { CampaignDispatchIn } from '../../device-farm/services/generated/DeviceFarmApi';
 
@@ -82,6 +84,12 @@ export function DispatchCampaignDialog({
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [groupIds, setGroupIds] = useState<Set<string>>(new Set());
+  const [externalEntities, setExternalEntities] = useState<
+    ExternalEntityCatalogItem[]
+  >([]);
+  const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(
+    new Set()
+  );
   const [strategy, setStrategy] = useState<'parallel' | 'sequential'>(
     'parallel'
   );
@@ -171,8 +179,32 @@ export function DispatchCampaignDialog({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    externalEntitiesApi
+      .list({ limit: 500 })
+      .then((result) => {
+        if (!cancelled) {
+          setExternalEntities(
+            result.items.filter(
+              (item) =>
+                !['archived', 'unavailable', 'deleted'].includes(item.status)
+            )
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setExternalEntities([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     setSelectedIds(new Set(allDeviceIds));
     setGroupIds(new Set());
+    setSelectedEntityIds(new Set());
     setStrategy('parallel');
     setActiveDeviceId(firstDeviceId);
     setActiveScenarioId(firstScenarioId);
@@ -224,6 +256,12 @@ export function DispatchCampaignDialog({
     allDeviceIds.length > 0 && allDeviceIds.every((id) => selectedIds.has(id));
   const someSelected = allDeviceIds.some((id) => selectedIds.has(id));
   const hasTarget = someSelected || groupIds.size > 0;
+  const entityGroupUnsupported =
+    selectedEntityIds.size > 0 && groupIds.size > 0;
+  const entityCountMismatch =
+    selectedEntityIds.size > 0 &&
+    groupIds.size === 0 &&
+    selectedEntityIds.size !== selectedIds.size;
 
   const parseMsgs = useMemo(
     () => ({
@@ -282,6 +320,15 @@ export function DispatchCampaignDialog({
       const next = new Set(prev);
       if (checked) next.add(groupId);
       else next.delete(groupId);
+      return next;
+    });
+  };
+
+  const toggleExternalEntity = (entityId: string, checked: boolean) => {
+    setSelectedEntityIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(entityId);
+      else next.delete(entityId);
       return next;
     });
   };
@@ -359,10 +406,14 @@ export function DispatchCampaignDialog({
     if (!(await saveDirtyDrafts())) return;
     const device_ids = allDeviceIds.filter((id) => selectedIds.has(id));
     const device_group_ids = Array.from(groupIds);
+    const external_entity_ids = externalEntities
+      .filter((entity) => selectedEntityIds.has(entity.id))
+      .map((entity) => entity.id);
     onConfirm({
       target: {
         ...(device_ids.length ? { device_ids } : {}),
-        ...(device_group_ids.length ? { device_group_ids } : {})
+        ...(device_group_ids.length ? { device_group_ids } : {}),
+        ...(external_entity_ids.length ? { external_entity_ids } : {})
       },
       dispatch_strategy: strategy,
       require_online: true,
@@ -536,6 +587,49 @@ export function DispatchCampaignDialog({
                 </div>
               )}
 
+              {externalEntities.length > 0 && (
+                <div className='space-y-2'>
+                  <Label className='text-xs'>{t('entitiesLabel')}</Label>
+                  <p className='text-[11px] text-muted-foreground'>
+                    {t('entitiesHelp')}
+                  </p>
+                  <div className='max-h-36 space-y-2 overflow-y-auto rounded-md border p-3'>
+                    {externalEntities.map((entity) => (
+                      <label
+                        key={entity.id}
+                        className='flex cursor-pointer items-center gap-2 text-sm'
+                      >
+                        <Checkbox
+                          checked={selectedEntityIds.has(entity.id)}
+                          onCheckedChange={(checked) =>
+                            toggleExternalEntity(entity.id, checked === true)
+                          }
+                        />
+                        <span className='min-w-0 flex-1 truncate'>
+                          {entity.display_name}
+                        </span>
+                        <Badge variant='outline' className='text-[10px]'>
+                          {entity.platform}
+                        </Badge>
+                      </label>
+                    ))}
+                  </div>
+                  {entityCountMismatch ? (
+                    <p className='text-[11px] text-destructive'>
+                      {t('entitiesCountMismatch', {
+                        entities: selectedEntityIds.size,
+                        devices: selectedIds.size
+                      })}
+                    </p>
+                  ) : null}
+                  {entityGroupUnsupported ? (
+                    <p className='text-[11px] text-destructive'>
+                      {t('entitiesGroupUnsupported')}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+
               <div className='space-y-1.5'>
                 <Label className='text-xs'>{t('strategyLabel')}</Label>
                 <Select
@@ -593,7 +687,12 @@ export function DispatchCampaignDialog({
             size='sm'
             className='h-7 gap-1.5 text-xs'
             disabled={
-              isDispatching || isSaving || !hasTarget || !!currentJsonError
+              isDispatching ||
+              isSaving ||
+              !hasTarget ||
+              entityGroupUnsupported ||
+              entityCountMismatch ||
+              !!currentJsonError
             }
             onClick={() => void handleSubmit()}
           >

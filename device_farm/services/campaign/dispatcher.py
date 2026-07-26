@@ -22,6 +22,7 @@ from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.enums import CampaignStatus, DeviceReserveOwnerType, ExecutionStatus
 from db.models.execution import Execution, ExecutionDevice, ExecutionResult
+from db.models.external_entity import ExecutionEntityAssignment, ExternalEntity
 from services.campaign.constants import MAX_DISPATCH_TARGETS
 from services.campaign.device_validator import (
     DispatchValidationError,
@@ -54,6 +55,64 @@ DispatchStrategy = Literal["parallel", "sequential"]
 DISPATCH_PERSIST_CHUNK_SIZE = 25
 
 
+def _external_entity_snapshot(entity: ExternalEntity) -> dict[str, Any]:
+    return {
+        "id": entity.id,
+        "platform": entity.platform,
+        "entity_type": entity.entity_type,
+        "external_id": entity.external_id,
+        "canonical_url": entity.canonical_url,
+        "display_name": entity.display_name,
+        "identity_key": entity.identity_key,
+        "attributes": dict(entity.current_attributes or {}),
+        "metrics": dict(entity.current_metrics or {}),
+        "last_seen_at": entity.last_seen_at.isoformat() if entity.last_seen_at else None,
+    }
+
+
+def _with_external_entity_vars(
+    effective_vars: dict[str, Any],
+    entity: ExternalEntity | None,
+) -> dict[str, Any]:
+    if entity is None:
+        return effective_vars
+    return {
+        **effective_vars,
+        "TARGET_ENTITY_ID": entity.id,
+        "TARGET_PLATFORM": entity.platform,
+        "TARGET_ENTITY_TYPE": entity.entity_type,
+        "TARGET_EXTERNAL_ID": entity.external_id or "",
+        "TARGET_URL": entity.canonical_url or "",
+        "TARGET_NAME": entity.display_name,
+    }
+
+
+def _assignment_values(
+    *,
+    campaign: Campaign,
+    dispatch_id: str,
+    execution_id: str,
+    device_id: str,
+    entity: ExternalEntity | None,
+    assigned_at: datetime,
+) -> dict[str, Any] | None:
+    if entity is None:
+        return None
+    return {
+        "id": str(uuid.uuid4()),
+        "org_id": campaign.org_id,
+        "dispatch_id": dispatch_id,
+        "execution_id": execution_id,
+        "device_id": device_id,
+        "external_entity_id": entity.id,
+        "assignment_key": "primary",
+        "status": "assigned",
+        "snapshot": _external_entity_snapshot(entity),
+        "assigned_at": assigned_at,
+        "completed_at": None,
+    }
+
+
 class CampaignDispatchError(Exception):
     def __init__(self, message: str, *, code: str, details: dict | None = None) -> None:
         super().__init__(message)
@@ -70,6 +129,7 @@ class FanOutExecutionView:
     account_id: str | None = None
     failure_reason: str | None = None
     claim_session_id: str | None = None
+    external_entity_id: str | None = None
 
     def to_dict(self, *, include_vars: bool = True) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -79,6 +139,7 @@ class FanOutExecutionView:
             "account_id": self.account_id,
             "failure_reason": self.failure_reason,
             "claim_session_id": self.claim_session_id,
+            "external_entity_id": self.external_entity_id,
         }
         if include_vars:
             out["effective_vars"] = self.effective_vars
@@ -107,6 +168,7 @@ class _PreparedFanOutExecution:
     execution_values: dict[str, Any]
     link_values: dict[str, Any]
     result_values: dict[str, Any]
+    assignment_values: dict[str, Any] | None
     view: FanOutExecutionView
 
 
@@ -122,6 +184,7 @@ class CampaignDispatcher:
         actor_user_id: str,
         device_ids: list[str] | None = None,
         device_group_ids: list[str] | None = None,
+        external_entity_ids: list[str] | None = None,
         dispatch_strategy: DispatchStrategy = "parallel",
         allow_partial: bool = False,
         require_online: bool = True,
@@ -195,6 +258,64 @@ class CampaignDispatcher:
                 code="EMPTY_DISPATCH_TARGET",
             )
 
+        entity_by_device: dict[str, ExternalEntity] = {}
+        requested_entity_ids = list(external_entity_ids or [])
+        if requested_entity_ids:
+            if device_group_ids:
+                raise CampaignDispatchError(
+                    "External entity assignment requires explicit device IDs",
+                    code="ENTITY_ASSIGNMENT_REQUIRES_EXPLICIT_DEVICES",
+                )
+            if len(requested_entity_ids) != len(set(requested_entity_ids)):
+                raise CampaignDispatchError(
+                    "External entities must be unique within one dispatch",
+                    code="DUPLICATE_EXTERNAL_ENTITY",
+                )
+            if len(requested_entity_ids) != len(valid_entries):
+                raise CampaignDispatchError(
+                    "External entity count must match the valid device count",
+                    code="ENTITY_ASSIGNMENT_COUNT_MISMATCH",
+                    details={
+                        "entity_count": len(requested_entity_ids),
+                        "device_count": len(valid_entries),
+                    },
+                )
+            from db.crud.external_entity import get_external_entities_by_ids
+
+            entities = await get_external_entities_by_ids(
+                db,
+                org_id=org_id,
+                entity_ids=requested_entity_ids,
+            )
+            if len(entities) != len(requested_entity_ids):
+                found = {entity.id for entity in entities}
+                raise CampaignDispatchError(
+                    "One or more external entities were not found in this organization",
+                    code="EXTERNAL_ENTITY_NOT_FOUND",
+                    details={
+                        "entity_ids": [
+                            entity_id
+                            for entity_id in requested_entity_ids
+                            if entity_id not in found
+                        ]
+                    },
+                )
+            unavailable = [
+                entity.id
+                for entity in entities
+                if entity.status in {"archived", "unavailable", "deleted"}
+            ]
+            if unavailable:
+                raise CampaignDispatchError(
+                    "One or more external entities are unavailable",
+                    code="EXTERNAL_ENTITY_UNAVAILABLE",
+                    details={"entity_ids": unavailable},
+                )
+            entity_by_device = {
+                entry.device_id: entity
+                for entry, entity in zip(valid_entries, entities, strict=True)
+            }
+
         try:
             await assert_dispatch_account_guard(db, campaign=campaign, org_id=org_id)
         except AccountBindingError as exc:
@@ -264,6 +385,7 @@ class CampaignDispatcher:
                     claim_device=True,
                     device_index=device_index_by_id[entry.device_id],
                     resolved_account=account_by_device.get(entry.device_id),
+                    external_entity=entity_by_device.get(entry.device_id),
                 )
                 for entry in ordered_claims[
                     offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
@@ -284,6 +406,7 @@ class CampaignDispatcher:
                     scenario_refs=scenario_refs,
                     device_index=device_index_by_id[entry.device_id],
                     resolved_account=account_by_device.get(entry.device_id),
+                    external_entity=entity_by_device.get(entry.device_id),
                 )
                 for entry in queue_later[
                     offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
@@ -379,6 +502,13 @@ class CampaignDispatcher:
             insert(ExecutionResult),
             [prepared.result_values for prepared in prepared_batch],
         )
+        assignments = [
+            prepared.assignment_values
+            for prepared in prepared_batch
+            if prepared.assignment_values is not None
+        ]
+        if assignments:
+            await db.execute(insert(ExecutionEntityAssignment), assignments)
 
     async def _create_device_execution(
         self,
@@ -395,6 +525,7 @@ class CampaignDispatcher:
         claim_device: bool,
         device_index: int,
         resolved_account: ResolvedDeviceAccount | None = None,
+        external_entity: ExternalEntity | None = None,
     ) -> _PreparedFanOutExecution:
         effective_vars = merge_effective_vars(
             campaign_vars=campaign.variables,
@@ -404,6 +535,7 @@ class CampaignDispatcher:
         account_vars = (resolved_account.account_vars if resolved_account else {}) or {}
         if account_vars:
             effective_vars = {**effective_vars, **account_vars}
+        effective_vars = _with_external_entity_vars(effective_vars, external_entity)
 
         device = device_map.get(entry.device_id)
         device_serial = device.serial if device else ""
@@ -433,6 +565,7 @@ class CampaignDispatcher:
                 "source_kind": entry.source_kind,
                 "source_ref_id": entry.source_ref_id,
                 "device_index": device_index,
+                "external_entity_id": external_entity.id if external_entity else None,
             },
             "user_id": campaign.created_by or campaign.user_id,
             "account_id": account_id,
@@ -474,6 +607,15 @@ class CampaignDispatcher:
                     effective_vars=effective_vars,
                     account_id=account_id,
                     failure_reason=failure_reason,
+                    external_entity_id=external_entity.id if external_entity else None,
+                ),
+                assignment_values=_assignment_values(
+                    campaign=campaign,
+                    dispatch_id=dispatch_id,
+                    execution_id=execution_id,
+                    device_id=entry.device_id,
+                    entity=external_entity,
+                    assigned_at=created_at,
                 ),
             )
 
@@ -532,6 +674,15 @@ class CampaignDispatcher:
                 account_id=account_id,
                 failure_reason=failure_reason,
                 claim_session_id=claim_session_id,
+                external_entity_id=external_entity.id if external_entity else None,
+            ),
+            assignment_values=_assignment_values(
+                campaign=campaign,
+                dispatch_id=dispatch_id,
+                execution_id=execution_id,
+                device_id=entry.device_id,
+                entity=external_entity,
+                assigned_at=created_at,
             ),
         )
 
@@ -545,6 +696,7 @@ class CampaignDispatcher:
         scenario_refs: list[dict[str, Any]],
         device_index: int,
         resolved_account: ResolvedDeviceAccount | None = None,
+        external_entity: ExternalEntity | None = None,
     ) -> _PreparedFanOutExecution:
         effective_vars = merge_effective_vars(
             campaign_vars=campaign.variables,
@@ -554,6 +706,7 @@ class CampaignDispatcher:
         account_vars = (resolved_account.account_vars if resolved_account else {}) or {}
         if account_vars:
             effective_vars = {**effective_vars, **account_vars}
+        effective_vars = _with_external_entity_vars(effective_vars, external_entity)
         account_id = resolved_account.account_id if resolved_account else None
         execution_id = str(uuid.uuid4())
         execution_values: dict[str, Any] = {
@@ -579,6 +732,7 @@ class CampaignDispatcher:
                 "source_ref_id": entry.source_ref_id,
                 "queued": True,
                 "device_index": device_index,
+                "external_entity_id": external_entity.id if external_entity else None,
             },
             "user_id": campaign.created_by or campaign.user_id,
             "account_id": account_id,
@@ -612,6 +766,15 @@ class CampaignDispatcher:
                     effective_vars=effective_vars,
                     account_id=account_id,
                     failure_reason=failure_reason,
+                    external_entity_id=external_entity.id if external_entity else None,
+                ),
+                assignment_values=_assignment_values(
+                    campaign=campaign,
+                    dispatch_id=dispatch_id,
+                    execution_id=execution_id,
+                    device_id=entry.device_id,
+                    entity=external_entity,
+                    assigned_at=execution_values["created_at"],
                 ),
             )
 
@@ -625,6 +788,15 @@ class CampaignDispatcher:
                 status=ExecutionStatus.PENDING.value,
                 effective_vars=effective_vars,
                 account_id=account_id,
+                external_entity_id=external_entity.id if external_entity else None,
+            ),
+            assignment_values=_assignment_values(
+                campaign=campaign,
+                dispatch_id=dispatch_id,
+                execution_id=execution_id,
+                device_id=entry.device_id,
+                entity=external_entity,
+                assigned_at=execution_values["created_at"],
             ),
         )
 
@@ -638,6 +810,7 @@ class CampaignDispatcher:
         error_detail: str | None = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
+        assignment_values: dict[str, Any] | None = None,
     ) -> _PreparedFanOutExecution:
         execution_id = str(execution_values["id"])
         created_at = execution_values["created_at"]
@@ -662,6 +835,7 @@ class CampaignDispatcher:
                 "finished_at": finished_at,
                 "created_at": created_at,
             },
+            assignment_values=assignment_values,
             view=view,
         )
 
@@ -801,6 +975,11 @@ class CampaignDispatcher:
             account_id=account_id or (resolved.account_id if resolved else None),
             failure_reason=failure_reason,
             claim_session_id=claim_session_id,
+            external_entity_id=(
+                str(effective_vars.get("TARGET_ENTITY_ID"))
+                if effective_vars.get("TARGET_ENTITY_ID")
+                else None
+            ),
         )
 
 
@@ -827,6 +1006,7 @@ async def dispatch_campaign(
     actor_user_id: str,
     device_ids: list[str] | None = None,
     device_group_ids: list[str] | None = None,
+    external_entity_ids: list[str] | None = None,
     dispatch_strategy: DispatchStrategy = "parallel",
     allow_partial: bool = False,
     require_online: bool = True,
@@ -861,6 +1041,7 @@ async def dispatch_campaign(
             actor_user_id=actor_user_id,
             device_ids=device_ids,
             device_group_ids=device_group_ids,
+            external_entity_ids=external_entity_ids,
             dispatch_strategy=dispatch_strategy,
             allow_partial=allow_partial,
             require_online=require_online,

@@ -65,8 +65,36 @@ export type CampaignDispatchExecutionOut = {
   account_id?: string | null;
   failure_reason?: string | null;
   claim_session_id?: string | null;
+  external_entity_id?: string | null;
   dispatch_source?: string | null;
   workflow_id?: string | null;
+};
+
+export type ExternalEntityCatalogItem = {
+  id: string;
+  platform: string;
+  entity_type: string;
+  display_name: string;
+  external_id?: string | null;
+  canonical_url?: string | null;
+  status: string;
+  current_metrics?: Record<string, unknown>;
+  last_seen_at: string;
+};
+
+export const externalEntitiesApi = {
+  list: (params?: {
+    platform?: string;
+    entity_type?: string;
+    status?: string;
+    limit?: number;
+  }) =>
+    farmApi
+      .get<{
+        items: ExternalEntityCatalogItem[];
+        total: number;
+      }>('/external-entities', { params })
+      .then((response) => response.data)
 };
 
 export type CampaignDispatchResponse = Omit<

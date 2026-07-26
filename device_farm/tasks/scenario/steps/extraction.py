@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 EDGE_CONTENT_STRATEGIES = {
     "fb_posts",
     "fb_comments",
+    "fb_groups",
     "text_nodes",
     "ig_posts",
     "tiktok_posts",
@@ -65,6 +66,8 @@ def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
         return str(explicit)
     if strategy == "text_nodes":
         return "text_nodes"
+    if strategy == "fb_groups":
+        return "groups"
     if strategy in COMMENT_STRATEGIES:
         return "comments"
     return "posts"
@@ -738,7 +741,11 @@ def request_edge_extra_data(
             parent_id_already_scoped = bool(parent_id)
     if strategy == "fb_posts" and step.get("dedupe_field"):
         ctx["_fb_posts_dedupe_field"] = step.get("dedupe_field")
-    return_items = _edge_extra_should_return_items(step, collection)
+    return_items = (
+        True
+        if strategy == "fb_groups"
+        else _edge_extra_should_return_items(step, collection)
+    )
     comment_defaults: dict[str, Any] = {}
     if strategy in COMMENT_STRATEGIES:
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
@@ -785,8 +792,9 @@ def request_edge_extra_data(
             or (400 if strategy in COMMENT_STRATEGIES else 50)
         ),
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
-        "persist": bool(collection),
+        "persist": bool(collection) or strategy == "fb_groups",
         "return_items": return_items,
+        "search_query": step.get("search_query") or step.get("query"),
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
     if strategy == "fb_posts":

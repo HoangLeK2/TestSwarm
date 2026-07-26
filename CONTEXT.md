@@ -58,6 +58,22 @@ _Avoid_: scraping, testing output
 A content classification key that combines target platform and social data object, such as `fb_post` or `tiktok_comment`.
 _Avoid_: ambiguous generic content type when platform-specific classification matters
 
+**External Entity**:
+An organization-owned, reusable identity for an external source such as a group, profile, page, channel, or community.
+_Avoid_: Facebook-only group record, search-result row
+
+**External Entity Observation**:
+A time-stamped set of mutable facts seen for an **External Entity**, such as member count, privacy, status, or display name.
+_Avoid_: overwriting history, treating changing metrics as identity
+
+**External Entity Discovery**:
+The search or navigation context that explains how an **External Entity** was found, including query and result rank.
+_Avoid_: using a search query as the entity identity
+
+**Entity Assignment**:
+The dispatch-time mapping that gives one **Independent Device Session** one **External Entity** and freezes the target facts used by that run.
+_Avoid_: resolving the target again during retry, sharing one mutable target across devices
+
 **Threads Post**:
 A platform-qualified content type for a post-like item from Meta Threads.
 _Avoid_: generic thread object
@@ -172,6 +188,9 @@ _Avoid_: core product focus
 - A **Platform Extraction Strategy** should identify the target platform and extracted data object.
 - A **Legacy Platform Step Alias** may remain valid for old scenarios, but new docs and templates should use the canonical naming model.
 - A **Platform-Qualified Content Type** is the primary content classification key for social extraction output.
+- An **External Entity** is stable and reusable; changing platform facts belong to **External Entity Observations**.
+- An **External Entity Discovery** records why a source appeared without becoming part of its identity.
+- An **Entity Assignment** belongs to one **Independent Device Session** and remains stable for retries of that run.
 - Use **Threads Post** for post-like items from the Threads platform.
 - Use **Conversation Thread** for reply/conversation grouping; do not make `thread` a generic social content object by default.
 - A **Social Account** is a resource, but the current product slice may pass account-related values through **Account Runtime Config** for simplicity.

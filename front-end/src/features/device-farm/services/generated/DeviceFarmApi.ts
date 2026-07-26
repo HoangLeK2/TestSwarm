@@ -851,6 +851,8 @@ export interface CampaignDispatchExecutionOut {
   failure_reason?: string | null;
   /** Claim Session Id */
   claim_session_id?: string | null;
+  /** External Entity Id */
+  external_entity_id?: string | null;
   /** Dispatch Source */
   dispatch_source?: string | null;
   /** Workflow Id */
@@ -898,6 +900,8 @@ export interface CampaignDispatchTargetIn {
   device_ids?: string[];
   /** Device Group Ids */
   device_group_ids?: string[];
+  /** External Entity Ids */
+  external_entity_ids?: string[];
 }
 
 /** CampaignEntityOut */

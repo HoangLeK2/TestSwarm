@@ -616,6 +616,7 @@ class ExtractStep(StepBase):
         "fb_posts",
         "text_nodes",
         "fb_comments",
+        "fb_groups",
         "ig_posts",
         "tiktok_posts",
         "linkedin_posts",
@@ -625,6 +626,7 @@ class ExtractStep(StepBase):
         "linkedin_comments",
         "auto_comments",
     ]
+    search_query: Optional[str] = None
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=1000)
     # Literal profile or "${VAR}" resolved from scenario variables at runtime.

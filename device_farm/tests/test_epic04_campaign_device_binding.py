@@ -20,6 +20,8 @@ from db.crud.device_reserve_session import get_active_session
 from db.models.campaign import CampaignTarget
 from db.models.enums import CampaignStatus, DeviceFsmEvent
 from db.models.execution import Execution, ExecutionDevice, ExecutionResult
+from db.models.external_entity import ExecutionEntityAssignment
+from db.crud.external_entity import upsert_external_entity
 from services.campaign.dispatcher import (
     FanOutExecutionView,
     FanOutResult,
@@ -139,6 +141,128 @@ async def test_ac1_fan_out_by_device_ids(session_factory):
             assert session is not None
             assert session.owner_type == "campaign"
             assert session.owner_id == campaign_id
+
+
+@pytest.mark.asyncio
+async def test_fan_out_assigns_one_external_entity_per_device_and_freezes_vars(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="ENTITY-D1")
+    d2 = await _online_device(session_factory, serial="ENTITY-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        first, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Group One",
+            external_id="group-1",
+        )
+        second, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Group Two",
+            external_id="group-2",
+        )
+        await db.commit()
+        entity_ids = [first.id, second.id]
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityFanOut")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch?include_vars=true",
+                json={
+                    "target": {
+                        "device_ids": [d1, d2],
+                        "external_entity_ids": entity_ids,
+                    }
+                },
+            )
+
+    assert response.status_code == 200, response.text
+    rows = response.json()["executions"]
+    assert [row["external_entity_id"] for row in rows] == entity_ids
+    assert [row["effective_vars"]["TARGET_NAME"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["TARGET_EXTERNAL_ID"] for row in rows] == [
+        "group-1",
+        "group-2",
+    ]
+
+    async with session_factory() as db:
+        assignments = (
+            await db.execute(
+                select(ExecutionEntityAssignment).order_by(
+                    ExecutionEntityAssignment.assigned_at,
+                    ExecutionEntityAssignment.execution_id,
+                )
+            )
+        ).scalars().all()
+        assert len(assignments) == 2
+        assert {row.device_id for row in assignments} == {d1, d2}
+        assert {row.external_entity_id for row in assignments} == set(entity_ids)
+
+
+@pytest.mark.asyncio
+async def test_fan_out_rejects_entity_count_different_from_valid_device_count(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="ENTITY-COUNT-D1")
+    d2 = await _online_device(session_factory, serial="ENTITY-COUNT-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        entity, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Only Group",
+            external_id="only-group",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityCount")
+        response = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={
+                "target": {
+                    "device_ids": [d1, d2],
+                    "external_entity_ids": [entity.id],
+                }
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "ENTITY_ASSIGNMENT_COUNT_MISMATCH"
 
 
 @pytest.mark.asyncio
@@ -1014,18 +1138,15 @@ async def test_dispatch_creates_execution_records(session_factory):
     await _seed_orgs(session_factory)
     d1 = await _online_device(session_factory, serial="E-D1")
 
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="DirectDispatch")
+
     set_current_org_id(ORG_A)
     async with session_factory() as db:
-        campaign = await campaign_repo.create_campaign_entity(
-            db,
-            org_id=ORG_A,
-            name="DirectDispatch",
-            variables={"kw": "g"},
-            created_by=USER_OWNER,
-        )
-        await db.commit()
-        campaign_id = campaign.id
-
         result = await dispatch_campaign(
             db,
             campaign_id=campaign_id,

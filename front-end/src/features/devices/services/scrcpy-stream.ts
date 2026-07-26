@@ -26,6 +26,7 @@ type ScrcpyViewerHeartbeat = {
 };
 
 const scrcpyViewerHeartbeats = new Map<string, ScrcpyViewerHeartbeat>();
+const pendingScrcpyAttachControllers = new Map<string, Set<AbortController>>();
 
 export type ScrcpyAttachOptions = {
   enableControl?: boolean;
@@ -65,6 +66,53 @@ function scrcpyViewerHeartbeatKey(serial: string, viewerId: string): string {
   return JSON.stringify([serial, viewerId]);
 }
 
+function abortPendingScrcpyAttach(serial: string, viewerId?: string): void {
+  if (!viewerId) return;
+  const key = scrcpyViewerHeartbeatKey(serial, viewerId);
+  const controllers = pendingScrcpyAttachControllers.get(key);
+  if (!controllers) return;
+  pendingScrcpyAttachControllers.delete(key);
+  controllers.forEach((controller) => controller.abort());
+}
+
+async function postScrcpyAttach(
+  serial: string,
+  viewerId: string | undefined,
+  options: ScrcpyAttachOptions | undefined,
+  skip429Retry: boolean
+) {
+  const controller =
+    viewerId && typeof AbortController !== 'undefined'
+      ? new AbortController()
+      : null;
+  const key = viewerId ? scrcpyViewerHeartbeatKey(serial, viewerId) : null;
+  if (controller && key) {
+    const controllers =
+      pendingScrcpyAttachControllers.get(key) ?? new Set<AbortController>();
+    controllers.add(controller);
+    pendingScrcpyAttachControllers.set(key, controllers);
+  }
+  try {
+    return await farmApi.post(
+      `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
+      scrcpyAttachPayload(viewerId, options),
+      {
+        timeout: SCRCPY_STREAM_TIMEOUT_MS,
+        _skip429Retry: skip429Retry,
+        ...(controller ? { signal: controller.signal } : {})
+      }
+    );
+  } finally {
+    if (controller && key) {
+      const controllers = pendingScrcpyAttachControllers.get(key);
+      controllers?.delete(controller);
+      if (controllers?.size === 0) {
+        pendingScrcpyAttachControllers.delete(key);
+      }
+    }
+  }
+}
+
 function viewerUsesLease(viewerId?: string): viewerId is string {
   return (
     viewerId !== undefined &&
@@ -94,13 +142,11 @@ function scheduleScrcpyViewerHeartbeat(
 
   const recoverViewer = async () => {
     try {
-      await farmApi.post(
-        `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
-        scrcpyAttachPayload(viewerId, heartbeat.options),
-        {
-          timeout: SCRCPY_STREAM_TIMEOUT_MS,
-          _skip429Retry: viewerId.startsWith('snapshot-preview:')
-        }
+      await postScrcpyAttach(
+        serial,
+        viewerId,
+        heartbeat.options,
+        viewerId.startsWith('snapshot-preview:')
       );
     } catch {
       return;
@@ -205,6 +251,14 @@ export function isRecoverableScrcpyAttachError(error: unknown): boolean {
   );
 }
 
+export function isScrcpyAttachCancellation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; name?: unknown };
+  return (
+    candidate.code === 'ERR_CANCELED' || candidate.name === 'CanceledError'
+  );
+}
+
 export function createScrcpyViewerId(prefix: string): string {
   const random =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -221,10 +275,11 @@ export const attachScrcpyStream = createSingleFlight(
     if (shouldClearH264CacheBeforeScrcpyAttach(viewerId)) {
       clearH264Cache(serial);
     }
-    const { data } = await farmApi.post(
-      `/devices/${encodeURIComponent(serial)}/scrcpy/attach`,
-      scrcpyAttachPayload(viewerId, options),
-      { timeout: SCRCPY_STREAM_TIMEOUT_MS, _skip429Retry: skip429Retry }
+    const { data } = await postScrcpyAttach(
+      serial,
+      viewerId,
+      options,
+      skip429Retry
     );
     if (viewerUsesLease(viewerId)) {
       scheduleScrcpyViewerHeartbeat(serial, viewerId, options);
@@ -246,3 +301,28 @@ export const detachScrcpyStream = createSingleFlight(
   },
   (serial, viewerId) => `${serial}:${viewerId ?? 'legacy'}`
 );
+
+/**
+ * Deliver viewer cleanup while the document is unloading.
+ *
+ * Axios' default XHR request can be aborted by pagehide/navigation. The fetch
+ * adapter with keepalive preserves the same auth/org interceptors while letting
+ * the small detach request finish after the page starts unloading.
+ */
+export async function detachScrcpyStreamOnPageHide(
+  serial: string,
+  viewerId?: string
+) {
+  abortPendingScrcpyAttach(serial, viewerId);
+  void stopScrcpyViewerHeartbeat(serial, viewerId);
+  const { data } = await farmApi.post(
+    `/devices/${encodeURIComponent(serial)}/scrcpy/detach`,
+    viewerId ? { viewer_id: viewerId } : {},
+    {
+      timeout: SCRCPY_STREAM_TIMEOUT_MS,
+      adapter: 'fetch',
+      fetchOptions: { keepalive: true }
+    }
+  );
+  return data;
+}

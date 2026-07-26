@@ -28,7 +28,9 @@ import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import {
   attachScrcpyStream,
   detachScrcpyStream,
+  detachScrcpyStreamOnPageHide,
   isRecoverableScrcpyAttachError,
+  isScrcpyAttachCancellation,
   scrcpyAttachErrorMessage,
   type ScrcpyAttachOptions
 } from '../services/scrcpy-stream';
@@ -551,13 +553,20 @@ export function DeviceScreen({
       pendingScrcpyAttachSerialRef.current = null;
       attachedScrcpyWsGenerationRef.current = null;
       clearScrcpyAttachRetryTimer();
-      detachScrcpyViewer(attachedSerial, pendingSerial);
+      Array.from(
+        new Set([attachedSerial, pendingSerial].filter(Boolean) as string[])
+      ).forEach((serial) => {
+        const viewerId = scrcpyViewerIdForSerial(serial);
+        cancelPendingScrcpyDetach(serial, viewerId);
+        forgetScrcpyAttach(serial, viewerId);
+        detachScrcpyStreamOnPageHide(serial, viewerId).catch(() => {});
+      });
     };
     window.addEventListener('pagehide', onPageHide);
     return () => {
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [clearScrcpyAttachRetryTimer, detachScrcpyViewer]);
+  }, [clearScrcpyAttachRetryTimer, scrcpyViewerIdForSerial]);
 
   useEffect(() => {
     return () => {
@@ -668,6 +677,7 @@ export function DeviceScreen({
           pendingScrcpyAttachSerialRef.current = null;
           return;
         }
+        if (isScrcpyAttachCancellation(err)) return;
         if (!isRecoverableScrcpyAttachError(err)) {
           const msg = scrcpyAttachErrorMessage(err);
           toast.error(t('screenStreamAttachError'), {

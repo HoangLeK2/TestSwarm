@@ -30,8 +30,25 @@ async function loadScrcpyStream(): Promise<ScrcpyStreamModule> {
     const attachMatch = url.match(/\/devices\/([^/]+)\/scrcpy\/attach/);
     const attachSerial = attachMatch?.[1];
     if (attachSerial && blockedAttachSerials.has(attachSerial)) {
-      await new Promise<void>((resolve) => {
-        blockedAttachResolvers.set(attachSerial, resolve);
+      const signal = (config as { signal?: AbortSignal } | undefined)?.signal;
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          blockedAttachResolvers.delete(attachSerial);
+          reject(
+            Object.assign(new Error('attach aborted'), {
+              name: 'CanceledError'
+            })
+          );
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+        blockedAttachResolvers.set(attachSerial, () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        });
       });
     }
     const heartbeatMatch = url.match(/\/devices\/([^/]+)\/scrcpy\/heartbeat/);
@@ -90,6 +107,20 @@ test('snapshot preview attach keeps cached H264 bootstrap frames', async () => {
   );
 });
 
+test('attach cancellation is not treated as a stream failure', async () => {
+  const stream = await loadScrcpyStream();
+
+  assert.equal(
+    stream.isScrcpyAttachCancellation({ code: 'ERR_CANCELED' }),
+    true
+  );
+  assert.equal(
+    stream.isScrcpyAttachCancellation({ name: 'CanceledError' }),
+    true
+  );
+  assert.equal(stream.isScrcpyAttachCancellation(new Error('network')), false);
+});
+
 test('control screen attach uses normal retry policy and payload', async () => {
   const stream = await loadScrcpyStream();
   postCalls.length = 0;
@@ -101,10 +132,14 @@ test('control screen attach uses normal retry policy and payload', async () => {
   assert.deepEqual(postCalls[0]?.payload, {
     viewer_id: 'device-screen:viewer-1'
   });
-  assert.deepEqual(postCalls[0]?.config, {
-    timeout: 10_000,
-    _skip429Retry: false
-  });
+  const controlConfig = postCalls[0]?.config as {
+    timeout?: number;
+    _skip429Retry?: boolean;
+    signal?: AbortSignal;
+  };
+  assert.equal(controlConfig.timeout, 10_000);
+  assert.equal(controlConfig._skip429Retry, false);
+  assert.equal(controlConfig.signal?.aborted, false);
   await stream.detachScrcpyStream('serial one', 'device-screen:viewer-1');
 });
 
@@ -131,10 +166,14 @@ test('snapshot preview attach keeps lightweight no-retry policy', async () => {
     max_width: 360,
     bitrate: 100_000
   });
-  assert.deepEqual(postCalls[0]?.config, {
-    timeout: 10_000,
-    _skip429Retry: true
-  });
+  const previewConfig = postCalls[0]?.config as {
+    timeout?: number;
+    _skip429Retry?: boolean;
+    signal?: AbortSignal;
+  };
+  assert.equal(previewConfig.timeout, 10_000);
+  assert.equal(previewConfig._skip429Retry, true);
+  assert.equal(previewConfig.signal?.aborted, false);
   await stream.detachScrcpyStream(
     'serial-preview',
     'snapshot-preview:viewer-1'
@@ -176,6 +215,66 @@ test('leased viewer heartbeat is lightweight and cannot delay detach', async () 
     postCalls.filter((call) => call.url.endsWith('/scrcpy/heartbeat')).length,
     heartbeatCountAfterDetach
   );
+});
+
+test('pagehide detach uses fetch keepalive and stops the viewer heartbeat', async () => {
+  const stream = await loadScrcpyStream();
+  postCalls.length = 0;
+  const serial = 'serial-pagehide';
+  const viewerId = 'control-screen:pagehide';
+
+  await stream.attachScrcpyStream(serial, viewerId);
+  postCalls.length = 0;
+
+  await stream.detachScrcpyStreamOnPageHide(serial, viewerId);
+
+  assert.deepEqual(postCalls[0], {
+    url: '/devices/serial-pagehide/scrcpy/detach',
+    payload: { viewer_id: viewerId },
+    config: {
+      timeout: 10_000,
+      adapter: 'fetch',
+      fetchOptions: { keepalive: true }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1050));
+  assert.equal(
+    postCalls.filter((call) => call.url.endsWith('/scrcpy/heartbeat')).length,
+    0
+  );
+});
+
+test('pagehide aborts a pending attach before sending its detach', async () => {
+  const stream = await loadScrcpyStream();
+  postCalls.length = 0;
+  const serial = 'serial-pagehide-pending';
+  const viewerId = 'control-screen:pagehide-pending';
+  blockedAttachSerials.add(serial);
+
+  const attachPromise = stream.attachScrcpyStream(serial, viewerId);
+  await waitFor(() =>
+    postCalls.some((call) => call.url.endsWith('/scrcpy/attach'))
+  );
+  const attachCall = postCalls.find((call) =>
+    call.url.endsWith('/scrcpy/attach')
+  );
+  const attachSignal = (attachCall?.config as { signal?: AbortSignal } | null)
+    ?.signal;
+
+  try {
+    await stream.detachScrcpyStreamOnPageHide(serial, viewerId);
+
+    assert.ok(attachSignal);
+    assert.equal(attachSignal.aborted, true);
+    assert.ok(postCalls.some((call) => call.url.endsWith('/scrcpy/detach')));
+  } finally {
+    blockedAttachSerials.delete(serial);
+    blockedAttachResolvers.get(serial)?.();
+    blockedAttachResolvers.delete(serial);
+    await attachPromise.catch(() => undefined);
+    await stream.detachScrcpyStream(serial, viewerId);
+  }
 });
 
 test('heartbeat 404 reattaches viewer with its original profile', async () => {

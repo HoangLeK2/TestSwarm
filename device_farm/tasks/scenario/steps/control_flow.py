@@ -442,6 +442,7 @@ def _remember_fb_comment_target(
         "text_prefix": target.get("text_prefix"),
     }
     sc.ctx["_active_comment_anchor_verified"] = True
+    sc.ctx.pop("_fb_comment_target_missing", None)
     result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
     result["_pid"] = target.get("pid")
     result["parent_context_preserved"] = keep_post_detail_parent
@@ -788,6 +789,7 @@ def handle_tap_fb_comment_button(
             )
         )
         if keep_existing_parent:
+            sc.ctx.pop("_fb_comment_target_missing", None)
             result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
             result["_pid"] = sc.ctx.get("_fb_comment_parent_pid")
             result["parent_context_preserved"] = True
@@ -845,6 +847,7 @@ def handle_tap_fb_comment_button(
                         "text_prefix": target.get("text_prefix"),
                     }
                     sc.ctx["_active_comment_anchor_verified"] = True
+                    sc.ctx.pop("_fb_comment_target_missing", None)
                     result["tapped_at"] = [cx, cy]
                     result["agent_tapped"] = agent_tapped
                     result["_bounds"] = bounds

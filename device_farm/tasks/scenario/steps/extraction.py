@@ -695,6 +695,16 @@ def request_edge_extra_data(
         return False
     if strategy not in EDGE_CONTENT_STRATEGIES:
         return False
+    if strategy == "fb_posts":
+        # A new post attempt invalidates the previous post→comment binding.
+        # Keep the marker until this attempt establishes a verified replacement,
+        # so ignored post failures cannot crawl comments under a stale parent.
+        _remember_consumed_comment_parent(ctx)
+        _clear_active_comment_parent(ctx)
+        ctx["_fb_comment_target_missing"] = {
+            "reason_code": "post_extract_pending",
+            "source_index": int(ctx.get("_loop_iter", 0) or 0),
+        }
     if strategy == "fb_comments" and isinstance(ctx.get("_fb_comment_target_missing"), dict):
         result["ok"] = True
         result["skipped"] = True
@@ -992,6 +1002,18 @@ def request_edge_extra_data(
         # unrelated loops that happen to contain a group extract.
         ctx["_break"] = True
     if (
+        strategy == "fb_posts"
+        and result["reason_code"]
+        in {"post_detail_incomplete", "post_detail_target_not_reconciled"}
+    ):
+        result["ok"] = False
+        result["message"] = (
+            "edge extra_data fb_posts incomplete: "
+            f"{result['reason_code']}"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
+    if (
         strategy == "fb_comments"
         and result["reason_code"] == "partial_target"
         and _coerce_bool(step.get("comment_require_complete"), False)
@@ -1016,7 +1038,6 @@ def request_edge_extra_data(
         _remember_consumed_comment_parent(ctx)
         _clear_active_comment_parent(ctx)
     if strategy == "fb_posts":
-        ctx.pop("_fb_comment_target_missing", None)
         pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
         if pid_map:
             merged = ctx.setdefault("_post_id_map", {})
@@ -1035,6 +1056,8 @@ def request_edge_extra_data(
             )
             result["edge_extra_summary"] = edge_extra_summary
             return True
+        if ctx.get("_active_comment_anchor_verified"):
+            ctx.pop("_fb_comment_target_missing", None)
     items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
     if items:
         _store_returned_items(ctx, strategy, step, items)

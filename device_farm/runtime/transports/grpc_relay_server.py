@@ -108,9 +108,13 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
         except Exception as exc:
             log.debug("gRPC stream error agent=%s: %s", agent_id, exc)
         finally:
-            self._rm.unregister_grpc_agent(agent_id)
+            self._rm.unregister_grpc_agent(agent_id, expected_queue=ctrl_q)
             if relay_id:
-                await self._rm.unregister(relay_id, "gRPC agent disconnected")
+                await self._rm.unregister(
+                    relay_id,
+                    "gRPC agent disconnected",
+                    expected_conn=conn,
+                )
             log.info("gRPC agent disconnected: %s", agent_id)
 
     async def _handle_json(

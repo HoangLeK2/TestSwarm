@@ -621,51 +621,19 @@ class RelayAgent:
 
         logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
 
-        # Keep the high-volume video stream and the control stream on separate
-        # channels. In practice, reconnect/cancel churn on one grpc.aio stream
-        # can poison pending sends on another stream when both share a channel,
-        # surfacing as INTERNAL "Failed execute_batch" on the agent.
+        # Keep the long-lived campaign control channel independent from the
+        # replaceable video channel. grpc.aio may surface scrcpy reset/cancel
+        # churn as INTERNAL "Failed execute_batch"; only the poisoned video
+        # channel should be discarded in that case.
         async with create_grpc_channel(
             self._grpc_addr,
             tls_enabled=self._grpc_tls_enabled,
             root_cert_file=self._grpc_root_cert_file,
-        ) as stream_channel, create_grpc_channel(
-            self._grpc_addr,
-            tls_enabled=self._grpc_tls_enabled,
-            root_cert_file=self._grpc_root_cert_file,
         ) as control_channel:
-            client = GrpcRelayClient(
-                server_addr=self._grpc_addr,
-                api_key=self._api_key,
-                agent_id=self._relay_id,
-                send_queue=send_queue,
-                loop=loop,
-                channel=stream_channel,
-                tls_enabled=self._grpc_tls_enabled,
-                root_cert_file=self._grpc_root_cert_file,
-            )
-
             # Channel 2: control plane (register/heartbeat/commands) — runs
             # independently; a 180s bootstrap never blocks video frames.
             ctrl_client = AgentControlClient(control_channel, self._api_key, self)
             ctrl_task = asyncio.create_task(ctrl_client.run(), name="grpc-ctrl-client")
-
-            # ── Register on Channel 1 (video stream) for backward compat ──────
-            # Channel 2 also sends register; server uses whichever arrives first.
-            # Register the relay immediately. ADB discovery is owned by the
-            # watcher/supervisor and must not block the event loop here.
-            serials = self._registry.online_serials
-            register_msg = dumps({
-                "type":     "register",
-                "relay_id": self._relay_id,
-                "serials":  serials,
-                "version":  "2.0.0",
-            })
-            await send_queue.put(register_msg)
-            await self._send_heartbeat(send_queue)
-            if self._scrcpy_auto_resume_enabled:
-                self._ensure_default_scrcpy_desired()
-                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
 
             # ── Device watcher + heartbeat ────────────────────────────────────
             watcher = AdbDeviceWatcher(
@@ -676,8 +644,27 @@ class RelayAgent:
                 self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
             )
 
-            # ── ControlMsg consumer: routes server msgs to sessions ───────────
-            async def _consume_ctrl() -> None:
+            # RelayService still carries U2 batch/meta results alongside H264,
+            # so it must be re-registered after every video-channel replacement.
+            async def _register_video_stream() -> str:
+                serials = self._registry.online_serials
+                register_msg = dumps({
+                    "type":     "register",
+                    "relay_id": self._relay_id,
+                    "serials":  serials,
+                    "version":  "2.0.0",
+                })
+                await self._send_heartbeat(send_queue)
+                if self._scrcpy_auto_resume_enabled:
+                    self._ensure_default_scrcpy_desired()
+                    await self._resume_desired_scrcpy_sessions(
+                        send_queue,
+                        loop,
+                        source="grpc-connected",
+                    )
+                return register_msg
+
+            async def _consume_ctrl(client: GrpcRelayClient) -> None:
                 while True:
                     ctrl_msg = await client.ctrl_q.get()
                     if ctrl_msg is None:
@@ -695,12 +682,79 @@ class RelayAgent:
                             ctrl_msg.data,
                         )
 
-            consume_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
-
+            # A stable video session followed by one transient failure should
+            # retry from the minimum delay, not retain an attempt count from
+            # hours earlier. Video retries cap at 2s; campaign control remains
+            # alive on control_channel throughout.
+            video_retry = RelayRetryPolicy(startup_window_s=float("inf"))
+            video_attempt = 0
             try:
-                await client._stream_once(stream_channel)
+                while True:
+                    client: GrpcRelayClient | None = None
+                    consume_task: asyncio.Task | None = None
+                    stream_started_at = loop.time()
+                    failure: Exception | None = None
+                    try:
+                        async with create_grpc_channel(
+                            self._grpc_addr,
+                            tls_enabled=self._grpc_tls_enabled,
+                            root_cert_file=self._grpc_root_cert_file,
+                        ) as stream_channel:
+                            client = GrpcRelayClient(
+                                server_addr=self._grpc_addr,
+                                api_key=self._api_key,
+                                agent_id=self._relay_id,
+                                send_queue=send_queue,
+                                loop=loop,
+                                channel=stream_channel,
+                                tls_enabled=self._grpc_tls_enabled,
+                                root_cert_file=self._grpc_root_cert_file,
+                            )
+                            consume_task = asyncio.create_task(
+                                _consume_ctrl(client),
+                                name="grpc-video-ctrl-consumer",
+                            )
+                            register_msg = await _register_video_stream()
+                            await client._stream_once(
+                                stream_channel,
+                                initial_meta=register_msg,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        failure = exc
+                    finally:
+                        if client is not None:
+                            client.stop()
+                        await _cancel_and_await(consume_task)
+
+                    stream_uptime = loop.time() - stream_started_at
+                    if stream_uptime >= 10.0:
+                        video_attempt = 0
+                    video_attempt += 1
+                    delay = video_retry.delay(
+                        attempt=video_attempt,
+                        startup_elapsed=0.0,
+                        jitter_ratio=random.random(),
+                    )
+                    if failure is None:
+                        logger.info(
+                            "gRPC video stream closed cleanly after %.1fs; "
+                            "control remains online — retry in %.1fs",
+                            stream_uptime,
+                            delay,
+                        )
+                    else:
+                        logger.warning(
+                            "gRPC video stream failed (attempt %d, uptime %.1fs): %s; "
+                            "control remains online — retry in %.1fs",
+                            video_attempt,
+                            stream_uptime,
+                            failure,
+                            delay,
+                        )
+                    await asyncio.sleep(delay)
             finally:
-                client.stop()
                 ctrl_client.stop()
                 await send_queue.put(None)
                 await _cancel_and_await(

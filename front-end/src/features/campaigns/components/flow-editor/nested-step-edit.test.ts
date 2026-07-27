@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   canPersistScenario,
+  resolveStepEditOverlayHost,
   shouldUseChildStepDialog,
-  shouldUseStepEditOverlay
+  shouldUseStepEditOverlay,
+  STEP_EDIT_OVERLAY_HOST_SELECTOR
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './nested-step-edit.ts';
 import { Z_FLOATING } from '../../../../lib/z-index.ts';
@@ -12,6 +15,31 @@ import { Z_FLOATING } from '../../../../lib/z-index.ts';
 test('nested step editor z-index contract sits above default dialog layer', () => {
   assert.equal(Z_FLOATING, 10050);
   assert.ok(Z_FLOATING > 9999);
+});
+
+test('nested step editor avoids a nested Radix Presence layer', () => {
+  const source = readFileSync(
+    new URL('./step-edit-overlay.tsx', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /createPortal/);
+  assert.match(source, /resolveStepEditOverlayHost/);
+  assert.doesNotMatch(source, /from '@\/components\/ui\/dialog'/);
+});
+
+test('nested step editor portal stays inside its parent modal focus scope', () => {
+  const modalHost = {} as HTMLElement;
+  const fallback = {} as HTMLElement;
+  const anchor = {
+    closest(selector: string) {
+      assert.equal(selector, STEP_EDIT_OVERLAY_HOST_SELECTOR);
+      return modalHost;
+    }
+  } as Pick<Element, 'closest'>;
+
+  assert.equal(resolveStepEditOverlayHost(anchor, fallback), modalHost);
+  assert.equal(resolveStepEditOverlayHost(null, fallback), fallback);
 });
 
 test('shouldUseStepEditOverlay enables editor in scenario dialog (nested + compact)', () => {

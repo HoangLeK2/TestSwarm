@@ -41,7 +41,8 @@ function mergeStatusIntoDevice(device: Device, message: StatusMessage): Device {
     state: message.state ?? device.state,
     battery: message.battery ?? device.battery,
     current_app: message.current_app ?? device.current_app,
-    screen_width: message.device_width ?? message.screen_width ?? device.screen_width,
+    screen_width:
+      message.device_width ?? message.screen_width ?? device.screen_width,
     screen_height:
       message.device_height ?? message.screen_height ?? device.screen_height,
     touch_method: message.touch_method ?? device.touch_method,
@@ -73,6 +74,8 @@ export function mergeDeviceFarmWsStatus(
   if (!exists) return [...previous, deviceFromStatus(message)];
 
   return previous.map((device) =>
-    device.serial === message.serial ? mergeStatusIntoDevice(device, message) : device
+    device.serial === message.serial
+      ? mergeStatusIntoDevice(device, message)
+      : device
   );
 }

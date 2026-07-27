@@ -1079,10 +1079,7 @@ export function StepDetailPanel({
                         value={step.timeout ?? 6}
                         onChange={(e) =>
                           update({
-                            timeout: Math.max(
-                              0.1,
-                              Number(e.target.value) || 6
-                            )
+                            timeout: Math.max(0.1, Number(e.target.value) || 6)
                           })
                         }
                       />
@@ -1097,10 +1094,7 @@ export function StepDetailPanel({
                         value={step.poll ?? 0.4}
                         onChange={(e) =>
                           update({
-                            poll: Math.max(
-                              0.05,
-                              Number(e.target.value) || 0.4
-                            )
+                            poll: Math.max(0.05, Number(e.target.value) || 0.4)
                           })
                         }
                       />

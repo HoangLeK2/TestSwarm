@@ -5,7 +5,6 @@ import { useLocale, useTranslations } from 'next-intl';
 import {
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   RefreshCw,
   Search,
   Users,
@@ -34,38 +33,12 @@ import { cn } from '@/lib/utils';
 import { useGroupCatalog } from '../hooks/use-group-catalog';
 import {
   getGroupMemberCount,
-  getGroupOpenMode,
   getGroupPrivacy,
-  getSafeGroupUrl,
   isGroupStale
 } from '../lib/group-catalog';
 import type { ExternalEntityCatalogItem } from '../services/api';
 
 const PAGE_SIZE = 25;
-
-function OpenModeBadge({ item }: { item: ExternalEntityCatalogItem }) {
-  const t = useTranslations('externalEntityFeature.groups');
-  const mode = getGroupOpenMode(item);
-  const label =
-    mode === 'direct'
-      ? t('openDirect')
-      : mode === 'search'
-        ? t('openBySearch')
-        : t('openUnavailable');
-  return (
-    <Badge
-      variant={mode === 'unavailable' ? 'destructive' : 'secondary'}
-      className={cn(
-        'whitespace-nowrap',
-        mode === 'direct' &&
-          'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-        mode === 'search' && 'bg-blue-500/10 text-blue-700 dark:text-blue-300'
-      )}
-    >
-      {label}
-    </Badge>
-  );
-}
 
 function GroupTable({
   items,
@@ -82,12 +55,10 @@ function GroupTable({
       <TableHeader>
         <TableRow>
           <TableHead>{t('columnGroup')}</TableHead>
-          <TableHead>{t('columnOpenMode')}</TableHead>
           <TableHead>{t('columnPrivacy')}</TableHead>
           <TableHead>{t('columnMembers')}</TableHead>
           <TableHead>{t('columnLastSeen')}</TableHead>
           <TableHead>{t('columnStatus')}</TableHead>
-          <TableHead className='text-right'>{t('columnActions')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -95,7 +66,6 @@ function GroupTable({
           const privacy = getGroupPrivacy(item);
           const memberCount = getGroupMemberCount(item);
           const stale = isGroupStale(item, now);
-          const safeUrl = getSafeGroupUrl(item);
           const statusLabel =
             item.status === 'candidate'
               ? t('statusCandidate')
@@ -122,9 +92,6 @@ function GroupTable({
                     </p>
                   </div>
                 </div>
-              </TableCell>
-              <TableCell>
-                <OpenModeBadge item={item} />
               </TableCell>
               <TableCell>
                 {privacy === 'public'
@@ -158,20 +125,6 @@ function GroupTable({
               </TableCell>
               <TableCell>
                 <Badge variant='outline'>{statusLabel}</Badge>
-              </TableCell>
-              <TableCell className='text-right'>
-                {safeUrl ? (
-                  <Button asChild size='sm' variant='ghost' className='h-8'>
-                    <a href={safeUrl} target='_blank' rel='noopener noreferrer'>
-                      <ExternalLink className='mr-1.5 size-3.5' />
-                      {t('openLink')}
-                    </a>
-                  </Button>
-                ) : (
-                  <span className='text-xs text-muted-foreground'>
-                    {t('noDirectLink')}
-                  </span>
-                )}
               </TableCell>
             </TableRow>
           );

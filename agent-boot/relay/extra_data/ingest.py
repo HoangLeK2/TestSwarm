@@ -447,14 +447,22 @@ def _parse_fb_post_snapshots(
         frame_items.append([item for item in items if isinstance(item, dict)])
 
     opened = _opened_post_from_context(context)
+    open_diagnostic = context.get("open_post_detail_diagnostic")
+    opened_state = (
+        str(open_diagnostic.get("reason_code") or "")
+        if isinstance(open_diagnostic, dict)
+        else None
+    )
     deduped, reconciliation = reconcile_fb_post_frames(
         frame_items,
         opened_post=opened,
+        opened_state=opened_state,
     )
     diagnostic = {
         **last_diagnostic,
         **reconciliation,
-        "reason_code": "ok" if deduped else last_diagnostic.get("reason_code", "no_posts"),
+        "reason_code": reconciliation.get("reason_code")
+        or ("ok" if deduped else last_diagnostic.get("reason_code", "no_posts")),
         "snapshot_count": len(snapshots),
         "frame_reason_codes": frame_codes,
         "frame_posts_returned": frame_posts_returned,
@@ -1279,7 +1287,14 @@ class ExtraDataIngestServer:
                 for item in items
                 if isinstance(item, dict) and item.get("_type") != "post_stats"
             ]
-            if strategy == "fb_posts" and not row_items and context.get("open_post_detail"):
+            if (
+                strategy == "fb_posts"
+                and not row_items
+                and context.get("open_post_detail")
+                and not str(diagnostic.get("reason_code") or "").startswith(
+                    "post_detail_"
+                )
+            ):
                 synthetic_parent = _synthetic_post_from_opened_post(context)
                 if synthetic_parent:
                     items.append(synthetic_parent)

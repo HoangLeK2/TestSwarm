@@ -2994,6 +2994,115 @@ async def test_open_post_explicit_settle_is_not_clamped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_open_post_prioritizes_narrow_author_gap_over_slow_header_fallbacks() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][520,504]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    target = {
+        "bounds": [132, 468, 520, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+        "tap_alternates": [
+            {
+                "bounds": [420, 420, 980, 464],
+                "tap_kind": "author_row_gap",
+                "tap_label": "",
+            },
+            {
+                "bounds": [600, 420, 780, 464],
+                "tap_kind": "author_row_gap",
+                "tap_label": "",
+            },
+        ],
+    }
+    ctx: dict = {
+        "open_post_before_extract": True,
+        "post_open_verify": True,
+        "post_open_max_attempts": 2,
+        "post_open_tap_settle_s": 0.1,
+    }
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "hierarchy_is_fb_post_detail_from_xml",
+        side_effect=[False, True],
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == _SAMPLE_XML
+    assert diag["reason_code"] == "ok"
+    assert diag["tap_kind"] == "author_row_gap"
+    assert len(diag["attempts"]) == 1
+    assert exec_.clicks[0] == (636, 442)
+
+
+@pytest.mark.asyncio
+async def test_open_post_keeps_primary_timestamp_as_second_attempt() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][520,504]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    target = {
+        "bounds": [132, 468, 520, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+        "tap_alternates": [
+            {
+                "bounds": [420, 420, 980, 464],
+                "tap_kind": "author_row_gap",
+            },
+            {
+                "bounds": [600, 420, 780, 464],
+                "tap_kind": "author_row_gap",
+            },
+        ],
+    }
+    ctx: dict = {
+        "open_post_before_extract": True,
+        "post_open_verify": True,
+        "post_open_max_attempts": 2,
+        "post_open_tap_settle_s": 0.1,
+    }
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "hierarchy_is_fb_post_detail_from_xml",
+        side_effect=[False, False, True],
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == _SAMPLE_XML
+    assert diag["reason_code"] == "ok"
+    assert [attempt["tap_kind"] for attempt in diag["attempts"]] == [
+        "author_row_gap",
+        "timestamp",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_open_post_uses_comment_sheet_for_extract_without_marking_detail_ok() -> None:
     exec_ = _SessionFakeExecutor()
     feed_xml = """<?xml version="1.0"?>
@@ -3039,6 +3148,70 @@ async def test_open_post_uses_comment_sheet_for_extract_without_marking_detail_o
 
     assert detail_xml == comment_sheet_xml
     assert diag["reason_code"] == "comment_sheet"
+    assert diag["attempts"][0]["comment_sheet_opened"] is True
+    assert ctx.get("open_post_detail") is True
+    assert exec_.press_back_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_open_post_prefers_comment_sheet_when_detail_classifiers_overlap() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,300][1260,2600]">
+    <node bounds="[0,420][1260,1200]">
+      <node text="Trí Hưng" bounds="[132,440][420,500]"/>
+      <node text="23 giờ" bounds="[132,510][300,560]" clickable="true"/>
+      <node content-desc="Đây là cách GG làm trong cuộc đua AI =))"
+            bounds="[36,600][1224,760]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    detail_with_comments_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Đóng" bounds="[0,80][120,180]"/>
+  <node package="com.facebook.katana" content-desc="Bài viết của Trí Hưng"
+        bounds="[120,80][900,180]"/>
+  <node package="com.facebook.katana"
+        class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,300][1260,2500]">
+    <node text="Tất cả bình luận" bounds="[40,1700][500,1780]"/>
+    <node text="Người bình luận" bounds="[40,1820][400,1880]"/>
+    <node text="Nội dung bình luận" bounds="[40,1900][1100,1980]"/>
+  </node>
+  <node package="com.facebook.katana"
+        class="android.widget.AutoCompleteTextView"
+        text="Viết bình luận…" bounds="[120,2500][1100,2640]"/>
+</hierarchy>"""
+    exec_._dump_xml = detail_with_comments_xml
+    target = {
+        "bounds": [132, 510, 300, 560],
+        "tap_kind": "timestamp",
+        "tap_label": "23 giờ",
+        "post": {
+            "_pid": "tri-hung-post",
+            "post_key": "tri-hung-post-key",
+            "stable_post_id": "tri-hung-stable",
+            "author": "Trí Hưng",
+            "timestamp": "23 giờ",
+            "text": "Đây là cách GG làm trong cuộc đua AI =))",
+        },
+    }
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
+
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == detail_with_comments_xml
+    assert diag["reason_code"] == "comment_sheet"
+    assert diag["post_detail_verified"] is True
     assert diag["attempts"][0]["comment_sheet_opened"] is True
     assert ctx.get("open_post_detail") is True
     assert exec_.press_back_calls == 0
@@ -3179,6 +3352,101 @@ async def test_open_post_does_not_reuse_stale_detail_by_default() -> None:
     assert diag["reason_code"] == "stale_post_detail_requires_feed"
     assert exec_.press_back_calls == 1
     assert ctx.get("open_post_detail") is not True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group_locked", [True, False])
+async def test_open_post_recovers_verified_stale_detail_while_group_back_is_locked(
+    group_locked: bool,
+) -> None:
+    exec_ = _SessionFakeExecutor()
+    stale_detail_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Đóng" bounds="[0,80][120,180]"/>
+  <node package="com.facebook.katana" content-desc="Bài viết của Trí Hưng"
+        bounds="[120,80][900,180]"/>
+  <node package="com.facebook.katana"
+        class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,300][1260,2500]">
+    <node text="Tất cả bình luận" bounds="[40,1700][500,1780]"/>
+  </node>
+</hierarchy>"""
+    fresh_feed_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node text="Bạn viết gì đi…" bounds="[40,200][900,280]"/>
+  <node class="androidx.recyclerview.widget.RecyclerView" scrollable="true"
+        bounds="[0,300][1260,2600]">
+    <node bounds="[0,420][1260,1200]">
+      <node text="Tác giả mới" bounds="[132,440][420,500]"/>
+      <node text="1 giờ" bounds="[132,510][300,560]" clickable="true"/>
+      <node content-desc="Bài viết mới" bounds="[36,600][1224,760]" clickable="true"/>
+      <node content-desc="Bình luận" bounds="[300,900][700,980]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    wrong_facebook_surface_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node package="com.facebook.katana" text="Facebook" bounds="[40,120][500,220]"/>
+  <node package="com.facebook.katana" text="Trang chủ" bounds="[40,260][500,340]"/>
+</hierarchy>"""
+    new_detail_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1260,2800]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Đóng" bounds="[0,80][120,180]"/>
+  <node package="com.facebook.katana" content-desc="Bài viết của Tác giả mới"
+        bounds="[120,80][900,180]"/>
+</hierarchy>"""
+    target = {
+        "bounds": [132, 510, 300, 560],
+        "tap_kind": "timestamp",
+        "tap_label": "1 giờ",
+        "post": {
+            "_pid": "new-post",
+            "post_key": "new-post-key",
+            "author": "Tác giả mới",
+            "timestamp": "1 giờ",
+            "text": "Bài viết mới",
+        },
+    }
+    ctx: dict = {
+        "open_post_before_extract": True,
+        "post_open_verify": True,
+        "strategy": "fb_posts",
+        "post_open_stale_back_settle_s": 0,
+        "post_open_stale_feed_verify_retries": 2,
+        "post_open_stale_feed_verify_pause_s": 0,
+    }
+    if group_locked:
+        ctx["tags"] = "group,crawl"
+
+    with patch(
+        "relay.extra_data.collector._press_back",
+        return_value=True,
+    ) as back_mock, patch(
+        "relay.extra_data.collector._dump_hierarchy",
+        side_effect=[
+            stale_detail_xml,
+            wrong_facebook_surface_xml,
+            fresh_feed_xml,
+        ],
+    ) as dump_mock, patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline."
+        "resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.collector._u2_click_post_open_target_and_dump",
+        return_value=(True, "click_coord_batch_dump", new_detail_xml),
+    ):
+        opened_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, stale_detail_xml
+        )
+
+    assert opened_xml == new_detail_xml
+    assert diag["reason_code"] == "ok"
+    assert ctx["post_open_feed_refreshed"] is True
+    back_mock.assert_awaited_once()
+    assert dump_mock.await_count == 3
 
 
 @pytest.mark.asyncio

@@ -665,11 +665,16 @@ async def _maybe_open_fb_post_detail(
 ) -> tuple[str | None, dict[str, Any]]:
     """Open post detail from feed header tap; return detail XML or None to keep feed."""
     from relay.extra_data.parsers.facebook.post_open_pipeline import (
+        _hierarchy_has_post_detail_chrome,
         hierarchy_is_fb_post_detail_from_xml,
         resolve_post_open_targets_from_xml,
     )
+    from relay.extra_data.parsers.facebook.parser import _parse_xml
     from relay.extra_data.parsers.facebook.comment_pipeline import (
+        _hierarchy_looks_like_fb_post_feed,
         detect_transient_overlay_from_xml,
+        fb_group_navigation_locked,
+        is_group_feed_from_xml,
         note_fb_group_navigation,
         should_press_back_after_failed_tap,
     )
@@ -696,26 +701,92 @@ async def _maybe_open_fb_post_detail(
 
     if hierarchy_is_fb_post_detail_from_xml(feed_xml):
         if not _bool_context(context, "open_post_reuse_current_detail", False):
-            backed = await _press_back_unless_group_locked(
-                executor,
-                serial,
-                context,
-                xml=feed_xml,
-                reason="stale_post_detail_before_open",
+            stale_root = _parse_xml(feed_xml)
+            verified_dismissible_detail = bool(
+                _diag_sheet_opened(feed_xml)
+                or (
+                    stale_root is not None
+                    and _hierarchy_has_post_detail_chrome(stale_root)
+                )
             )
+            if verified_dismissible_detail:
+                # The group BACK lock protects the feed itself. A verified detail
+                # overlay is the opposite case: closing it returns to that feed.
+                backed = await _press_back(executor, serial)
+            else:
+                backed = await _press_back_unless_group_locked(
+                    executor,
+                    serial,
+                    context,
+                    xml=feed_xml,
+                    reason="stale_post_detail_before_open",
+                )
             if not backed:
                 return None, _finish_diagnostic({
                     "reason_code": "stale_post_detail_requires_feed",
                     "message": "current detail screen was not reused; could not return to feed",
+                    "verified_dismissible_detail": verified_dismissible_detail,
                 })
-            refreshed_feed_xml = await _dump_hierarchy(executor, serial, context)
-            if not refreshed_feed_xml or hierarchy_is_fb_post_detail_from_xml(refreshed_feed_xml):
+            stale_back_settle_s = _float_context(
+                context,
+                "post_open_stale_back_settle_s",
+                0.35,
+                0.0,
+                2.0,
+            )
+            if stale_back_settle_s > 0:
+                settle_started = time.monotonic()
+                await asyncio.sleep(stale_back_settle_s)
+                _add_timing("stale_back_settle_ms", _elapsed_ms(settle_started))
+            stale_feed_verify_retries = _int_context(
+                context,
+                "post_open_stale_feed_verify_retries",
+                2,
+                0,
+                4,
+            )
+            stale_feed_verify_pause_s = _float_context(
+                context,
+                "post_open_stale_feed_verify_pause_s",
+                0.15,
+                0.0,
+                1.0,
+            )
+            refreshed_feed_xml: str | None = None
+            stale_feed_verify_attempts = 0
+            require_group_feed = fb_group_navigation_locked(context)
+            for verify_index in range(stale_feed_verify_retries + 1):
+                stale_feed_verify_attempts += 1
+                candidate_xml = await _dump_hierarchy(executor, serial, context)
+                candidate_root = _parse_xml(candidate_xml) if candidate_xml else None
+                candidate_is_expected_feed = bool(
+                    is_group_feed_from_xml(candidate_xml)
+                    if require_group_feed and candidate_xml
+                    else _hierarchy_looks_like_fb_post_feed(candidate_root)
+                )
+                if (
+                    candidate_xml
+                    and not hierarchy_is_fb_post_detail_from_xml(candidate_xml)
+                    and candidate_is_expected_feed
+                ):
+                    refreshed_feed_xml = candidate_xml
+                    break
+                if (
+                    verify_index < stale_feed_verify_retries
+                    and stale_feed_verify_pause_s > 0
+                ):
+                    await asyncio.sleep(stale_feed_verify_pause_s)
+            if not refreshed_feed_xml:
                 return None, _finish_diagnostic({
                     "reason_code": "stale_post_detail_requires_feed",
                     "message": "current detail screen was not replaced by a fresh feed hierarchy",
+                    "verified_dismissible_detail": verified_dismissible_detail,
+                    "required_group_feed": require_group_feed,
+                    "stale_feed_verify_attempts": stale_feed_verify_attempts,
                 })
             feed_xml = refreshed_feed_xml
             context["post_open_feed_refreshed"] = True
+            context["post_open_stale_feed_verify_attempts"] = stale_feed_verify_attempts
             note_fb_group_navigation(context, feed_xml)
         else:
             probe_posts: list[dict[str, Any]] = []
@@ -762,10 +833,49 @@ async def _maybe_open_fb_post_detail(
     ]
     attempt_targets: list[dict[str, Any]] = []
     if primary:
-        attempt_targets.append(primary)
+        primary_attempts = [primary]
         for alt_tap in primary.get("tap_alternates") or []:
             if isinstance(alt_tap, dict):
-                attempt_targets.append({**primary, **alt_tap})
+                primary_attempts.append({**primary, **alt_tap})
+        header_kinds = {"author_row_gap", "timestamp", "metadata", "privacy"}
+        if (
+            _bool_context(context, "post_open_fast_header_order", True)
+            and len(primary_attempts) > 1
+            and all(
+                str(target.get("tap_kind") or "") in header_kinds
+                for target in primary_attempts
+            )
+        ):
+            gap_attempts = [
+                target
+                for target in primary_attempts
+                if target.get("tap_kind") == "author_row_gap"
+            ]
+
+            def _gap_width(target: dict[str, Any]) -> int:
+                bounds = target.get("bounds") or [0, 0, 0, 0]
+                return max(0, int(bounds[2]) - int(bounds[0]))
+
+            # Runtime evidence on vivo: the narrow author→menu gap opens the
+            # post directly; wider gaps/timestamps often need a second tap.
+            gap_attempts.sort(key=_gap_width)
+            non_gap_attempts = [
+                target
+                for target in primary_attempts
+                if target.get("tap_kind") != "author_row_gap"
+            ]
+            if gap_attempts and primary.get("tap_kind") != "author_row_gap":
+                # Keep the resolver's primary target as the second attempt.
+                # This preserves a proven fallback when max_attempts is small,
+                # while still taking the faster narrow gap first.
+                primary_attempts = (
+                    [gap_attempts[0], primary]
+                    + gap_attempts[1:]
+                    + [target for target in non_gap_attempts if target is not primary]
+                )
+            else:
+                primary_attempts = gap_attempts + non_gap_attempts
+        attempt_targets.extend(primary_attempts)
     for alt in alternates:
         if isinstance(alt, dict) and alt.get("post_key") != (primary or {}).get("post_key"):
             attempt_targets.append(alt)
@@ -892,27 +1002,16 @@ async def _maybe_open_fb_post_detail(
                 "attempt_ms": _elapsed_ms(attempt_started),
             }
         )
-        if opened or not verify:
-            context["open_post_detail"] = True
-            context["open_post_detail_tap_kind"] = target.get("tap_kind")
-            diagnostic = {
-                "reason_code": "ok" if opened else "unverified",
-                "attempts": attempts,
-                "tap_kind": target.get("tap_kind"),
-                "candidate_count": len(candidates),
-                "attempt_target_count": len(attempt_targets),
-            }
-            opened_post = _opened_post_payload_from_target(target)
-            if opened_post:
-                diagnostic["opened_post"] = opened_post
-            return (detail_xml or feed_xml), _finish_diagnostic(diagnostic)
         if comment_sheet_opened:
             # Timestamp/metadata taps on vivo often open the comment sheet directly.
-            # Keep the sheet for extract; backing would drop parent/comment context.
+            # Some Facebook layouts also satisfy the post-detail heuristic. Prefer
+            # the more specific sheet state so ingest can safely fall back to the
+            # complete feed row when the sheet exposes no parseable post row.
             context["open_post_detail"] = True
             context["open_post_detail_tap_kind"] = target.get("tap_kind")
             diagnostic = {
                 "reason_code": "comment_sheet",
+                "post_detail_verified": opened,
                 "attempts": attempts,
                 "tap_kind": target.get("tap_kind"),
                 "candidate_count": len(candidates),
@@ -926,6 +1025,20 @@ async def _maybe_open_fb_post_detail(
                 serial,
                 idx,
             )
+            return (detail_xml or feed_xml), _finish_diagnostic(diagnostic)
+        if opened or not verify:
+            context["open_post_detail"] = True
+            context["open_post_detail_tap_kind"] = target.get("tap_kind")
+            diagnostic = {
+                "reason_code": "ok" if opened else "unverified",
+                "attempts": attempts,
+                "tap_kind": target.get("tap_kind"),
+                "candidate_count": len(candidates),
+                "attempt_target_count": len(attempt_targets),
+            }
+            opened_post = _opened_post_payload_from_target(target)
+            if opened_post:
+                diagnostic["opened_post"] = opened_post
             return (detail_xml or feed_xml), _finish_diagnostic(diagnostic)
         overlay_reason = detect_transient_overlay_from_xml(detail_xml) if detail_xml else None
         # A changed hierarchy alone is not proof that the requested post opened.

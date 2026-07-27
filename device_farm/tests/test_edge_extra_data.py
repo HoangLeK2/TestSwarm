@@ -189,6 +189,85 @@ def test_try_edge_extra_data_reports_bounded_partial_without_retrying(monkeypatc
     assert result["reason_code"] == "partial_target"
 
 
+def test_try_edge_extra_data_fails_when_opened_post_detail_is_incomplete(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 0,
+            "inserted_count": 0,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "post_detail_incomplete",
+                "posts_returned": 0,
+            },
+        },
+    })
+    result = {}
+    sc = _ctx(device)
+    sc.ctx.update(
+        {
+            "_active_comment_parent_hash": "previous-post-hash",
+            "_fb_comment_parent_pid": "previous-post-pid",
+            "_active_comment_parent_anchor": {
+                "pid": "previous-post-pid",
+                "post_key": "previous-post-key",
+            },
+            "_active_comment_anchor_verified": True,
+            "_active_comment_parent_source": "post_detail",
+            "_fb_comment_session": {"session_id": "previous-post-session"},
+        }
+    )
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb_group_posts",
+            "content_type": "fb_post",
+            "edge_extra_data": True,
+            "open_post_before_extract": True,
+            "expand_see_more": True,
+        },
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result["ok"] is False
+    assert result["reason_code"] == "post_detail_incomplete"
+    assert "fb_posts incomplete" in result["message"]
+    assert "_active_comment_parent_hash" not in sc.ctx
+    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_active_comment_parent_anchor" not in sc.ctx
+    assert "_active_comment_anchor_verified" not in sc.ctx
+    assert "_active_comment_parent_source" not in sc.ctx
+    assert "_fb_comment_session" not in sc.ctx
+    assert sc.ctx["_fb_comment_target_missing"]["reason_code"] == "post_extract_pending"
+
+    comment_result = {}
+    comment_handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb_group_posts",
+            "content_type": "fb_comment",
+            "edge_extra_data": True,
+            "max_items": 500,
+        },
+        "fb_comments",
+        comment_result,
+    )
+
+    assert comment_handled is True
+    assert comment_result["ok"] is True
+    assert comment_result["skipped"] is True
+    assert comment_result["comment_target_missing"] is True
+    assert comment_result["comment_target_missing_detail"]["reason_code"] == "post_extract_pending"
+    assert len(device.calls) == 1
+
+
 def test_fb_posts_forces_root_item_level_for_malformed_step(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
@@ -1153,6 +1232,9 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
 
     device.tap = tap
     sc = _ctx(device)
+    sc.ctx["_fb_comment_target_missing"] = {
+        "reason_code": "scroll_target_missing",
+    }
     result = {}
 
     control_flow.handle_tap_fb_comment_button(
@@ -1168,6 +1250,7 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
     assert sc.ctx["_edge_comment_parent_base_hash"] == "base-hash"
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
     assert sc.ctx["_active_comment_parent_source"] == "tap_fb_comment_button"
+    assert "_fb_comment_target_missing" not in sc.ctx
 
 
 def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) -> None:
@@ -1616,6 +1699,9 @@ def test_split_fb_comment_nodes_find_tap_filter_sequentially() -> None:
     assert device.calls[0]["strategy"] == "fb_comment_target"
     assert device.taps == []
     assert sc.ctx["_fb_comment_target"]["post_key"] == "post-1"
+    sc.ctx["_fb_comment_target_missing"] = {
+        "reason_code": "scroll_target_missing",
+    }
 
     tap_result = {}
     control_flow.handle_fb_tap_comment_target(sc, {}, 1, tap_result)
@@ -1626,6 +1712,7 @@ def test_split_fb_comment_nodes_find_tap_filter_sequentially() -> None:
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
     assert sc.ctx["_active_comment_parent_source"] == "fb_tap_comment_target"
     assert "_fb_comment_target" not in sc.ctx
+    assert "_fb_comment_target_missing" not in sc.ctx
 
     filter_result = {}
     control_flow.handle_fb_apply_comment_filter(

@@ -59,7 +59,7 @@ class _FakeRelayManager:
         except asyncio.QueueFull:
             self.register_errors += 1
 
-    def unregister_grpc_agent(self, agent_id: str) -> None:
+    def unregister_grpc_agent(self, agent_id: str, *, expected_queue=None) -> None:
         q = self.grpc_agents.pop(agent_id, None)
         if q is not None:
             try:
@@ -70,7 +70,13 @@ class _FakeRelayManager:
     async def register(self, conn) -> None:
         self.relay_register_calls.append(conn.relay_id)
 
-    async def unregister(self, relay_id: str, _error: str = "") -> None:
+    async def unregister(
+        self,
+        relay_id: str,
+        _error: str = "",
+        *,
+        expected_conn=None,
+    ) -> None:
         self.relay_unregister_calls.append(relay_id)
 
     async def update_serials(self, relay_id: str, serials: set[str]) -> None:

@@ -282,6 +282,10 @@ class AdbRelayManager:
         self._grpc_agents: Dict[str, "asyncio.Queue"] = {}
         # Per-device monotonic sequence for a11y_action
         self._a11y_seq: Dict[str, int] = {}
+        # Wakes commands admitted during a short gRPC video-channel reconnect.
+        # A Condition avoids polling and lets all waiting phones re-check their
+        # own serial atomically after one relay registration/heartbeat update.
+        self._relay_state_changed = asyncio.Condition()
 
     def set_on_device_online(self, callback: Any) -> None:
         """Register a callback fired with (serial) when a new relay device appears."""
@@ -344,6 +348,8 @@ class AdbRelayManager:
                 cb(serial)
             except Exception as exc:
                 logger.debug("pending scrcpy callback error ip=%s: %s", ip, exc)
+        async with self._relay_state_changed:
+            self._relay_state_changed.notify_all()
         await self._sync_relay_to_redis(conn)
         if self._on_device_online:
             for s in conn.serials:
@@ -382,12 +388,58 @@ class AdbRelayManager:
                         self._on_device_online(s)
                     except Exception as exc:
                         logger.debug("on_device_online error serial=%s: %s", s, exc)
+        if new_serials:
+            async with self._relay_state_changed:
+                self._relay_state_changed.notify_all()
 
-    async def unregister(self, relay_id: str, error: str = "relay disconnected") -> None:
+    async def _wait_for_relay(
+        self,
+        serial: str,
+        *,
+        timeout: float,
+    ) -> Optional[RelayConnection]:
+        """Wait for one transient reconnect without polling or replaying work."""
+        conn = self.relay_for_serial(serial)
+        if conn is not None or timeout <= 0:
+            return conn
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        async with self._relay_state_changed:
+            while True:
+                conn = self.relay_for_serial(serial)
+                if conn is not None:
+                    return conn
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return None
+                try:
+                    await asyncio.wait_for(
+                        self._relay_state_changed.wait(),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    return None
+
+    async def unregister(
+        self,
+        relay_id: str,
+        error: str = "relay disconnected",
+        *,
+        expected_conn: Optional[RelayConnection] = None,
+    ) -> None:
         async with self._lock:
-            conn = self._relays.pop(relay_id, None)
+            conn = self._relays.get(relay_id)
             if not conn:
                 return
+            if expected_conn is not None and conn is not expected_conn:
+                expected_conn.fail_all(error)
+                logger.debug(
+                    "skip stale relay unregister: id=%s current connection is newer",
+                    relay_id,
+                )
+                return
+            self._relays.pop(relay_id, None)
             offline_serials = set(conn.serials)
             for s in conn.serials:
                 self._serial_index.pop(s, None)
@@ -799,8 +851,20 @@ class AdbRelayManager:
         """Register a gRPC agent's ctrl queue (device_farm → agent-boot direction)."""
         self._grpc_agents[agent_id] = ctrl_q
 
-    def unregister_grpc_agent(self, agent_id: str) -> None:
+    def unregister_grpc_agent(
+        self,
+        agent_id: str,
+        *,
+        expected_queue: Optional["asyncio.Queue"] = None,
+    ) -> None:
         """Remove gRPC agent and signal its ctrl sender to stop."""
+        q = self._grpc_agents.get(agent_id)
+        if expected_queue is not None and q is not expected_queue:
+            logger.debug(
+                "skip stale gRPC agent unregister: id=%s current queue is newer",
+                agent_id,
+            )
+            return
         q = self._grpc_agents.pop(agent_id, None)
         if q:
             try:
@@ -998,10 +1062,21 @@ class AdbRelayManager:
                 "error": "cancelled",
                 "cancelled": True,
             }
-        conn = self.relay_for_serial(serial)
+        conn = await self._wait_for_relay(
+            serial,
+            timeout=min(2.0, max(0.0, float(timeout))),
+        )
         if conn is None:
             return {"ok": False, "stopped_at": 0, "results": [],
                     "error": f"no relay for serial={serial!r}"}
+        if cancel_event is not None and cancel_event.is_set():
+            return {
+                "ok": False,
+                "stopped_at": 0,
+                "results": [],
+                "error": "cancelled",
+                "cancelled": True,
+            }
         actual = self.resolve_serial(serial)
         fast_touch = self._u2_batch_touch_fast_path_actions(actions)
         if fast_touch is not None:

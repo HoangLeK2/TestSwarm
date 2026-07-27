@@ -111,6 +111,34 @@ def test_scroll_to_caps_facebook_comment_target_fast_path(monkeypatch):
     assert sc.ctx["_fb_comment_target_missing"]["max_swipes_effective"] == 8
 
 
+def test_scroll_to_skips_facebook_comment_target_while_post_extract_is_pending():
+    from tasks.scenario.steps.navigation import handle_scroll_to
+
+    sc = _make_sc()
+    marker = {
+        "reason_code": "post_extract_pending",
+        "source_index": 2,
+    }
+    sc.ctx["_fb_comment_target_missing"] = marker
+    step = {
+        "type": "scroll_to",
+        "by": "description",
+        "value": "Bình luận",
+        "max_swipes": 50,
+    }
+    result = {"index": 0, "type": "scroll_to", "ok": True}
+
+    handle_scroll_to(sc, step, 0, result)
+
+    assert result["skipped"] is True
+    assert result["comment_target_missing"] is True
+    assert result["comment_target_missing_detail"] == marker
+    assert result["message"] == "scroll_to: skipped — current post extract not ready"
+    assert sc.ctx["_fb_comment_target_missing"] == marker
+    sc.device.u2_flow.assert_not_called()
+    assert sc.device.swipe.call_count == 0
+
+
 def test_scroll_to_falls_back_to_loop_when_u2_flow_unavailable(monkeypatch):
     from tasks.scenario.steps import navigation
     from tasks.scenario.steps.navigation import handle_scroll_to

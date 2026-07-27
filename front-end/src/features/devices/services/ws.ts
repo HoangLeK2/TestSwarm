@@ -1,11 +1,15 @@
 import type { WsMessage } from '../types';
 import { tokenStorage } from '@/lib/token-storage';
-import { shouldReplayCachedKeyFrameAge } from './h264-cache';
+import {
+  shouldInvalidateCachedH264KeyForConfig,
+  shouldReplayCachedKeyFrameAge
+} from './h264-cache';
 import { isCurrentTabNetworkActive } from '../lib/tab-network-activity';
 import {
   DEVICE_FARM_WS_CLIENT_PING_INTERVAL_MS,
   isCurrentDeviceFarmWsEvent,
   nextReconnectDelayMs,
+  shouldSendIdrRequest,
   shouldReconnectStaleSocketOnFocus
 } from './ws-keepalive';
 import {
@@ -121,7 +125,12 @@ function flushPendingIdrRequests() {
   if (pendingIdrSerials.size === 0) return;
   const serials = Array.from(pendingIdrSerials);
   pendingIdrSerials.clear();
-  serials.forEach((serial) => requestIdr(serial, 0));
+  serials.forEach((serial) => {
+    // This request was never delivered. A recent timestamp from the previous
+    // socket must not suppress the first recovery IDR on the replacement one.
+    lastIdrRequestBySerial.delete(serial);
+    requestIdr(serial, 0);
+  });
 }
 
 function flushWsReadyQueue() {
@@ -167,25 +176,102 @@ function decodeSerial(buf: ArrayBuffer, slen: number): string {
   return textDecoder.decode(new Uint8Array(buf, 2, slen));
 }
 
-function isH264KeyFrame(
-  view: DataView,
-  buf: ArrayBuffer,
-  slen: number
-): boolean {
+function annexBPayloadContainsIdr(bytes: Uint8Array, offset: number): boolean {
+  let start = -1;
+  for (let i = offset; i < bytes.length; ) {
+    let scLen = 0;
+    if (
+      i + 3 <= bytes.length &&
+      bytes[i] === 0 &&
+      bytes[i + 1] === 0 &&
+      bytes[i + 2] === 1
+    ) {
+      scLen = 3;
+    } else if (
+      i + 4 <= bytes.length &&
+      bytes[i] === 0 &&
+      bytes[i + 1] === 0 &&
+      bytes[i + 2] === 0 &&
+      bytes[i + 3] === 1
+    ) {
+      scLen = 4;
+    }
+    if (scLen > 0) {
+      if (
+        start >= 0 &&
+        start < i &&
+        (bytes[start] & 0x1f) === 5 &&
+        i - start > 1
+      ) {
+        return true;
+      }
+      start = i + scLen;
+      i += scLen;
+      continue;
+    }
+    i++;
+  }
+  return (
+    start >= 0 &&
+    start < bytes.length &&
+    (bytes[start] & 0x1f) === 5 &&
+    bytes.length - start > 1
+  );
+}
+
+function isH264KeyFrame(buf: ArrayBuffer, slen: number): boolean {
   const doff = 2 + slen + 4;
-  return buf.byteLength > doff && view.getUint8(doff) !== 0;
+  if (buf.byteLength <= doff + 9) return false;
+  // Verify AVCC payload actually contains an IDR NAL (type 5). The wire
+  // is_key flag alone is not trustworthy after stream restarts, and relay can
+  // miss IDR when SPS/PPS/AUD NALs precede the slice.
+  let offset = doff + 9;
+  const bytes = new Uint8Array(buf);
+  let avccValid = false;
+  let avccHasIdr = false;
+  const avccStart = offset;
+  while (offset + 4 <= bytes.length) {
+    const len =
+      ((bytes[offset] << 24) |
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3]) >>>
+      0;
+    if (len === 0 || offset + 4 + len > bytes.length) {
+      avccValid = false;
+      break;
+    }
+    const nalType = bytes[offset + 4] & 0x1f;
+    if (nalType === 5 && len > 1) avccHasIdr = true;
+    offset += 4 + len;
+  }
+  avccValid = offset === bytes.length && offset > avccStart;
+  if (avccValid) return avccHasIdr;
+  if (
+    (avccStart + 3 <= bytes.length &&
+      bytes[avccStart] === 0 &&
+      bytes[avccStart + 1] === 0 &&
+      bytes[avccStart + 2] === 1) ||
+    (avccStart + 4 <= bytes.length &&
+      bytes[avccStart] === 0 &&
+      bytes[avccStart + 1] === 0 &&
+      bytes[avccStart + 2] === 0 &&
+      bytes[avccStart + 3] === 1)
+  ) {
+    return annexBPayloadContainsIdr(bytes, avccStart);
+  }
+  return false;
 }
 
 // Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
 if (typeof window !== 'undefined') {
   window.addEventListener('visibilitychange', () => {
     if (!isCurrentTabNetworkActive()) {
-      if (
-        sharedSocket?.readyState === WebSocket.OPEN ||
-        sharedSocket?.readyState === WebSocket.CONNECTING
-      ) {
-        sharedSocket.close();
-      }
+      // Keep the shared socket warm while a control stream is active. Chrome can
+      // briefly report hidden during tab switches, DevTools focus changes, and
+      // page lifecycle transitions; closing here tears down watch_serial and
+      // causes scrcpy attach/detach churn. Real page unload is handled by the
+      // DeviceScreen pagehide detach path.
       return;
     }
     if (
@@ -422,13 +508,23 @@ function connectShared() {
         if (slen > 0 && buf.byteLength >= 2 + slen) {
           parsedSerial = decodeSerial(buf, slen);
           if (ft === 0x10) {
+            if (
+              shouldInvalidateCachedH264KeyForConfig(
+                lastConfigBySerial.get(parsedSerial),
+                buf
+              )
+            ) {
+              lastKeyBySerial.delete(parsedSerial);
+              lastKeyTsBySerial.delete(parsedSerial);
+              waitForKeyBySerial.add(parsedSerial);
+            }
             // Keep cache ownership stable: listeners may transfer incoming buffers
             // to workers, which detaches them.
             lastConfigBySerial.set(parsedSerial, buf.slice(0));
           } else if (ft === 0x11) {
             // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
             // instead of waiting up to 14 s for the next one.
-            if (isH264KeyFrame(view, buf, slen)) {
+            if (isH264KeyFrame(buf, slen)) {
               // Same ownership rule as config cache above.
               lastKeyBySerial.set(parsedSerial, buf.slice(0));
               lastKeyTsBySerial.set(parsedSerial, Date.now());
@@ -573,6 +669,12 @@ export function clearH264Cache(serial: string): void {
   waitForKeyBySerial.add(serial);
 }
 
+export function discardCachedH264KeyFrame(serial: string): void {
+  lastKeyBySerial.delete(serial);
+  lastKeyTsBySerial.delete(serial);
+  waitForKeyBySerial.add(serial);
+}
+
 /**
  * Age of the cached keyframe for a serial in ms. Returns Infinity if no key
  * cached. Callers should treat values > STALE_KEY_MS as unsafe to replay.
@@ -597,12 +699,13 @@ export function requestIdr(serial: string, minIntervalMs = 700): void {
   ensureWatchSerial(serial);
   const now = Date.now();
   const last = lastIdrRequestBySerial.get(serial) ?? 0;
-  if (minIntervalMs > 0 && now - last < minIntervalMs) return;
+  if (!shouldSendIdrRequest(last, now, minIntervalMs)) return;
   if (sharedSocket?.readyState === WebSocket.OPEN) {
     try {
       lastIdrRequestBySerial.set(serial, now);
       sharedSocket.send(JSON.stringify({ type: 'request_idr', serial }));
     } catch {
+      lastIdrRequestBySerial.delete(serial);
       pendingIdrSerials.add(serial);
     }
     return;

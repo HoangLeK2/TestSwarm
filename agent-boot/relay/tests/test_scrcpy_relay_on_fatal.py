@@ -80,6 +80,19 @@ def test_on_fatal_not_fired_on_clean_stop():
     assert fatal_calls == []
 
 
+def test_streaming_health_requires_handshake_and_clears_with_sockets():
+    session = _make_session(lambda _serial, _reason: None)
+    session._relay_thread = threading.current_thread()
+
+    assert session.is_streaming() is False
+
+    session._stream_ready.set()
+    assert session.is_streaming() is True
+
+    session._close_sockets()
+    assert session.is_streaming() is False
+
+
 def test_stop_during_server_start_does_not_leave_late_scrcpy_server():
     """A stop racing _start_scrcpy_server must not let the old thread keep streaming."""
     fatal_calls: list[tuple[str, str]] = []

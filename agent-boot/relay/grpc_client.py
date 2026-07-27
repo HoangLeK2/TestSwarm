@@ -134,7 +134,7 @@ class GrpcRelayClient:
     def stop(self) -> None:
         self._running = False
 
-    async def _stream_once(self, channel=None) -> None:
+    async def _stream_once(self, channel=None, *, initial_meta: str | None = None) -> None:
         # Called either from start() (which already set _running=True) or
         # directly from agent.py — ensure the generator loop runs in both cases.
         self._running = True
@@ -151,7 +151,7 @@ class GrpcRelayClient:
         if shared is not None:
             stub = relay_pb2_grpc.RelayServiceStub(shared)
             call = stub.Stream(
-                self._frame_generator(relay_pb2),
+                self._frame_generator(relay_pb2, initial_meta=initial_meta),
                 metadata=metadata,
             )
             async for ctrl_msg in call:
@@ -168,7 +168,7 @@ class GrpcRelayClient:
         ) as ch:
             stub = relay_pb2_grpc.RelayServiceStub(ch)
             call = stub.Stream(
-                self._frame_generator(relay_pb2),
+                self._frame_generator(relay_pb2, initial_meta=initial_meta),
                 metadata=metadata,
             )
             # Drain ControlMsg responses from the server
@@ -178,13 +178,20 @@ class GrpcRelayClient:
                 except asyncio.QueueFull:
                     pass
 
-    async def _frame_generator(self, relay_pb2):
+    async def _frame_generator(self, relay_pb2, *, initial_meta: str | None = None):
         """
         Yield AgentMsg objects from send_queue.
+
+        initial_meta belongs to this RPC attempt and is yielded before the
+        shared queue. If the RPC fails before consuming the generator, it
+        cannot leak into a later attempt.
 
         Items are str (JSON → meta) or bytes (0x53 binary → video).
         Stops when self._running is False or a None sentinel is received.
         """
+        if initial_meta is not None:
+            yield relay_pb2.AgentMsg(meta=initial_meta.encode())
+
         while self._running:
             try:
                 item = await asyncio.wait_for(self._send_queue.get(), timeout=5.0)

@@ -37,12 +37,12 @@ export function createFollowerH264SlotPool(
 }
 
 const configuredLimit = Number(
-  process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_LIMIT ?? 10
+  process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_LIMIT ?? 4
 );
 const followerH264SlotPool = createFollowerH264SlotPool(
   Number.isFinite(configuredLimit)
     ? Math.max(1, Math.min(20, configuredLimit))
-    : 10
+    : 4
 );
 
 export const acquireFollowerH264Slot = followerH264SlotPool.acquire;

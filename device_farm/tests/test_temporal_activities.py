@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -105,6 +105,43 @@ class MockDevice:
 
     def take_screenshot(self) -> Optional[bytes]:
         return None
+
+
+@pytest.mark.asyncio
+async def test_successful_check_element_lifecycle_is_debug_only() -> None:
+    device = MockDevice(u2=MockU2({("text", "OK")}))
+    trace_log = MagicMock()
+
+    with (
+        patch(
+            "temporal.activities._heartbeat_campaign_device_claim",
+            AsyncMock(return_value=None),
+        ),
+        patch("temporal.activities._get_device", return_value=device),
+        patch("temporal.activities._validate_serial"),
+        patch("temporal.activities.activity.heartbeat", MagicMock()),
+        patch(
+            "temporal.activities._to_thread_with_heartbeat",
+            AsyncMock(return_value="eid:text:OK"),
+        ),
+        patch("temporal.activities.trace_log", trace_log),
+    ):
+        result = await DeviceActivities().check_element_exists(
+            ElementCheckInput(
+                device_serial="test_serial",
+                by="text",
+                value="OK",
+                execution_id="exec-1",
+            )
+        )
+
+    assert result.found is True
+    assert [call.args[0] for call in trace_log.debug.call_args_list] == [
+        "check_element_start",
+        "check_element_end",
+    ]
+    trace_log.info.assert_not_called()
+    trace_log.warning.assert_not_called()
 
 
 @pytest.mark.asyncio

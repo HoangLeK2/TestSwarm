@@ -1,14 +1,27 @@
 """CRUD for execution_events outbox/archive (DF-T-04-013)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.execution_event import ExecutionEvent
 from db.models.utils import _uuid
+
+
+@dataclass(frozen=True)
+class UnpublishedEventStats:
+    count: int
+    oldest_age_seconds: float
+
+
+@dataclass(frozen=True)
+class ClaimedEventBatch:
+    token: str
+    rows: tuple[ExecutionEvent, ...]
 
 
 async def insert_execution_event(
@@ -81,8 +94,75 @@ async def fetch_unpublished_events(
         .where(ExecutionEvent.published_at.is_(None))
         .order_by(ExecutionEvent.id.asc())
         .limit(min(max(limit, 1), 500))
+        .with_for_update(skip_locked=True)
     )
     return list(result.scalars().all())
+
+
+async def claim_unpublished_events(
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    lease_seconds: float = 30.0,
+    now: datetime | None = None,
+) -> ClaimedEventBatch:
+    """Lease a batch transactionally; caller must commit before publishing."""
+    if now is None:
+        clock_result = await db.execute(select(func.now()))
+        claimed_at = clock_result.scalar_one()
+        if claimed_at.tzinfo is None:
+            claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+    else:
+        claimed_at = now
+    lease_cutoff = claimed_at - timedelta(seconds=max(1.0, lease_seconds))
+    token = _uuid()
+    result = await db.execute(
+        select(ExecutionEvent)
+        .where(
+            ExecutionEvent.published_at.is_(None),
+            or_(
+                ExecutionEvent.publish_claimed_at.is_(None),
+                ExecutionEvent.publish_claimed_at <= lease_cutoff,
+            ),
+        )
+        .order_by(ExecutionEvent.id.asc())
+        .limit(min(max(limit, 1), 500))
+        .with_for_update(skip_locked=True)
+    )
+    rows = tuple(result.scalars().all())
+    if not rows:
+        return ClaimedEventBatch(token=token, rows=())
+
+    row_ids = [row.id for row in rows]
+    await db.execute(
+        update(ExecutionEvent)
+        .where(
+            ExecutionEvent.id.in_(row_ids),
+            ExecutionEvent.published_at.is_(None),
+        )
+        .values(
+            publish_claim_token=token,
+            publish_claimed_at=claimed_at,
+        )
+    )
+    await db.flush()
+    return ClaimedEventBatch(token=token, rows=rows)
+
+
+async def get_unpublished_event_stats(db: AsyncSession) -> UnpublishedEventStats:
+    result = await db.execute(
+        select(
+            func.count(ExecutionEvent.id),
+            func.min(ExecutionEvent.occurred_at),
+        ).where(ExecutionEvent.published_at.is_(None))
+    )
+    count, oldest = result.one()
+    if oldest is None:
+        return UnpublishedEventStats(count=0, oldest_age_seconds=0.0)
+    if oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=timezone.utc)
+    age = max(0.0, (datetime.now(timezone.utc) - oldest).total_seconds())
+    return UnpublishedEventStats(count=int(count or 0), oldest_age_seconds=age)
 
 
 async def mark_event_published(
@@ -94,6 +174,54 @@ async def mark_event_published(
         .where(ExecutionEvent.id == event_row_id)
         .values(published_at=datetime.now(timezone.utc))
     )
+
+
+async def mark_claimed_events_published(
+    db: AsyncSession,
+    event_row_ids: list[int],
+    *,
+    claim_token: str,
+) -> int:
+    if not event_row_ids:
+        return 0
+    result = await db.execute(
+        update(ExecutionEvent)
+        .where(
+            ExecutionEvent.id.in_(event_row_ids),
+            ExecutionEvent.published_at.is_(None),
+            ExecutionEvent.publish_claim_token == claim_token,
+        )
+        .values(
+            published_at=datetime.now(timezone.utc),
+            publish_claim_token=None,
+            publish_claimed_at=None,
+        )
+    )
+    return int(result.rowcount or 0)
+
+
+async def release_event_claims(
+    db: AsyncSession,
+    event_row_ids: list[int],
+    *,
+    claim_token: str,
+) -> int:
+    if not event_row_ids:
+        return 0
+    result = await db.execute(
+        update(ExecutionEvent)
+        .where(
+            ExecutionEvent.id.in_(event_row_ids),
+            ExecutionEvent.published_at.is_(None),
+            ExecutionEvent.publish_claim_token == claim_token,
+        )
+        .values(
+            publish_claim_token=None,
+            publish_claimed_at=None,
+            publish_attempts=ExecutionEvent.publish_attempts + 1,
+        )
+    )
+    return int(result.rowcount or 0)
 
 
 async def increment_publish_attempt(

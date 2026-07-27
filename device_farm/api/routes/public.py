@@ -122,6 +122,18 @@ def _relay_online_for_serial(serial: str, *, relay=None, ctrl=None) -> bool:
     return False
 
 
+def _relay_online_for_live_device(
+    serial: str,
+    *,
+    relay=None,
+    ctrl=None,
+    requires_relay: bool = False,
+) -> bool:
+    """Return the transport signal that should keep a live-grid device online."""
+    if requires_relay:
+        return _relay_online_for_serial(serial, ctrl=ctrl)
+    return _relay_online_for_serial(serial, relay=relay, ctrl=ctrl)
+
 def _relay_capabilities_for_serial(serial: str, *, relay=None) -> dict[str, object]:
     if relay is None:
         return {}
@@ -279,6 +291,17 @@ def _apply_realtime_connectivity(
     u2_ready = bool(device.get("u2_ready"))
     minitouch_ready = bool(device.get("minitouch_ready"))
     touch_ready = u2_ready or minitouch_ready
+
+    if requires_relay and not relay_online:
+        device["state"] = "DISCONNECTED"
+        device["agent_connected"] = False
+        device["touch_method"] = "none"
+        device["stf_connected"] = False
+        return
+    if requires_relay and relay_online:
+        device["agent_connected"] = True
+        agent_connected = True
+
     if state == "DEAD":
         if agent_connected or touch_ready:
             device["state"] = "READY"
@@ -296,6 +319,7 @@ def _apply_realtime_connectivity(
 
     if requires_relay and not relay_online:
         device["state"] = "DISCONNECTED"
+        device["agent_connected"] = False
         device["touch_method"] = "none"
         device["stf_connected"] = False
         return
@@ -507,7 +531,12 @@ def build_public_router(
                 info,
             )
             relay_online = any(
-                _relay_online_for_serial(str(alias), relay=relay, ctrl=ctrl)
+                _relay_online_for_live_device(
+                    str(alias),
+                    relay=relay,
+                    ctrl=ctrl,
+                    requires_relay=requires_relay,
+                )
                 for alias in aliases
             )
             _apply_realtime_connectivity(

@@ -52,6 +52,10 @@ services:
       - POSTGRES_USER=${DB_USER:-postgres}
       - POSTGRES_PWD=${DB_PASSWORD:-postgres}
       - POSTGRES_SEEDS=${DB_HOST:-host.docker.internal}
+      - SQL_MAX_CONNS=${TEMPORAL_SQL_MAX_CONNS:-5}
+      - SQL_MAX_IDLE_CONNS=${TEMPORAL_SQL_MAX_IDLE_CONNS:-5}
+      - SQL_VIS_MAX_CONNS=${TEMPORAL_SQL_VIS_MAX_CONNS:-3}
+      - SQL_VIS_MAX_IDLE_CONNS=${TEMPORAL_SQL_VIS_MAX_IDLE_CONNS:-3}
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development-sql.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -112,6 +116,11 @@ services:
       context: ./device_farm
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "5"
     env_file:
       - ./.env
     depends_on:
@@ -140,7 +149,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       TEMPORAL_SERVER_URL: temporal:7233
       # Parallel Temporal worker threads (each has own event loop + activity DB pool).
-      # Override via .env; default 6 × 20 = 120 activity slots (target ~120 devices).
+      # 7 × 20 = 140 slots: 120 target devices plus 20 slots for finalize/control.
       TEMPORAL_WORKER_COUNT: ${TEMPORAL_WORKER_COUNT:-6}
       TEMPORAL_WORKER_MAX_CONCURRENT_ACTIVITIES: ${TEMPORAL_WORKER_MAX_CONCURRENT_ACTIVITIES:-20}
       TEMPORAL_WORKER_MAX_CONCURRENT_WORKFLOWS: ${TEMPORAL_WORKER_MAX_CONCURRENT_WORKFLOWS:-60}
@@ -173,14 +182,20 @@ services:
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-15}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-8}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-2}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-5}
-      # Per-worker-loop pool for Temporal activities (finalize_campaign, device actions).
-      # Was 2+2=4 → QueuePool timeout under parallel finalize. Sized for ~20 activities/worker.
-      DB_ACTIVITY_POOL_SIZE: ${DB_ACTIVITY_POOL_SIZE:-12}
-      DB_ACTIVITY_MAX_OVERFLOW: ${DB_ACTIVITY_MAX_OVERFLOW:-12}
+      # Each of the seven activity event loops gets a bounded pool; activity slots queue
+      # for DB access instead of exhausting a PostgreSQL instance shared with Temporal.
+      DB_ACTIVITY_POOL_SIZE: ${DB_ACTIVITY_POOL_SIZE:-4}
+      DB_ACTIVITY_MAX_OVERFLOW: ${DB_ACTIVITY_MAX_OVERFLOW:-0}
       DB_ACTIVITY_POOL_TIMEOUT: ${DB_ACTIVITY_POOL_TIMEOUT:-30}
+      DB_CONNECTION_LIMIT: ${DB_CONNECTION_LIMIT:-100}
+      DB_CONNECTION_RESERVE: ${DB_CONNECTION_RESERVE:-15}
+      TEMPORAL_DB_MAX_CONNECTIONS: ${TEMPORAL_DB_MAX_CONNECTIONS:-40}
+      METRICS_ENABLED: ${METRICS_ENABLED:-0}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      EXECUTION_EVENT_OUTBOX_LEASE_SECONDS: ${EXECUTION_EVENT_OUTBOX_LEASE_SECONDS:-30}
       DB_IDLE_TRANSACTION_TIMEOUT_MS: ${DB_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
       # Reconcile idempotent migration file drift on local Docker volumes (015 edited after first apply).
       MIGRATION_RECONCILE_DRIFT: ${MIGRATION_RECONCILE_DRIFT:-1}

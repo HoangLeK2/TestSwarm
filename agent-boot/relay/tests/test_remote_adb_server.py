@@ -40,9 +40,9 @@ def test_scrcpy_session_missing_profile_uses_fleet_defaults() -> None:
             bitrate=0,
         )
 
-        assert session._max_fps == 15
-        assert session._max_width == 540
-        assert session._bitrate == 800_000
+        assert session._max_fps == scrcpy_mod.SCRCPY_DEFAULT_MAX_FPS
+        assert session._max_width == scrcpy_mod.SCRCPY_DEFAULT_MAX_WIDTH
+        assert session._bitrate == scrcpy_mod.SCRCPY_DEFAULT_BITRATE
         assert session.matches_config(
             max_fps=0,
             max_width=0,
@@ -212,3 +212,30 @@ def test_scrcpy_server_launch_allows_cleanup_override(monkeypatch) -> None:
 
     assert popen_calls
     assert "cleanup=true" in popen_calls[0][-1]
+
+
+def test_scrcpy_server_launch_omits_unsupported_turn_screen_on(monkeypatch) -> None:
+    session = _make_session()
+    popen_calls: list[list[str]] = []
+
+    def fake_adb(*args, **_kwargs):
+        if args and args[0] == "forward":
+            return "", 0
+        return "", 1
+
+    def fake_popen(cmd, **_kwargs):
+        popen_calls.append(cmd)
+        return SimpleNamespace(stdout=[])
+
+    monkeypatch.setattr(session, "_kill_server", lambda: None)
+    monkeypatch.setattr(session, "_ensure_server_jar_on_device", lambda: None)
+    monkeypatch.setattr(session, "_load_device_oem_hints", lambda: ("", ""))
+    monkeypatch.setattr(scrcpy_mod, "_adb", fake_adb)
+    monkeypatch.setattr(scrcpy_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(scrcpy_mod.time, "sleep", lambda _seconds: None)
+
+    session._start_scrcpy_server()
+
+    assert popen_calls
+    assert "stay_awake=true" in popen_calls[0][-1]
+    assert "turn_screen_on=" not in popen_calls[0][-1]

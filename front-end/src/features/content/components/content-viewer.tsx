@@ -181,7 +181,9 @@ function StatCard({
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_CONTENT_TYPE = 'fb_post';
+type ContentDatasetType = 'fb_post' | 'fb_comment';
+
+const DEFAULT_CONTENT_TYPE: ContentDatasetType = 'fb_post';
 
 interface FiltersProps {
   search: string;
@@ -192,12 +194,13 @@ interface FiltersProps {
   onCollectionChange: (v: string) => void;
   platform: string;
   onPlatformChange: (v: string) => void;
-  contentType: string;
-  onContentTypeChange: (v: string) => void;
+  contentType: ContentDatasetType;
+  onContentTypeChange: (v: ContentDatasetType) => void;
   onRefresh: () => void;
   onApply: () => void;
   onClear: () => void;
   loading: boolean;
+  showContentTypeTabs: boolean;
 }
 
 function Filters({
@@ -214,7 +217,8 @@ function Filters({
   onRefresh,
   onApply,
   onClear,
-  loading
+  loading,
+  showContentTypeTabs
 }: FiltersProps) {
   const t = useTranslations('contentFeature.list');
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns();
@@ -241,7 +245,7 @@ function Filters({
     campaignId ||
     collection ||
     platform ||
-    (contentType && contentType !== DEFAULT_CONTENT_TYPE)
+    (showContentTypeTabs && contentType && contentType !== DEFAULT_CONTENT_TYPE)
   );
 
   const platformOptions = Object.keys(stats?.by_platform ?? {}).sort((a, b) =>
@@ -260,28 +264,32 @@ function Filters({
     <div className='space-y-3'>
       {/* Tabs + actions */}
       <div className='flex flex-wrap items-center justify-between gap-2'>
-        <div className='inline-flex items-center gap-1 rounded-xl bg-muted/60 p-1 ring-1 ring-border/40'>
-          {contentTypeTabs.map((tab) => {
-            const active = contentType === tab.value;
-            return (
-              <button
-                key={tab.value}
-                type='button'
-                onClick={() => onContentTypeChange(tab.value)}
-                className={cn(
-                  'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
-                  active
-                    ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
-                    : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'
-                )}
-                aria-pressed={active}
-              >
-                {tab.icon}
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
+        {showContentTypeTabs ? (
+          <div className='inline-flex items-center gap-1 rounded-xl bg-muted/60 p-1 ring-1 ring-border/40'>
+            {contentTypeTabs.map((tab) => {
+              const active = contentType === tab.value;
+              return (
+                <button
+                  key={tab.value}
+                  type='button'
+                  onClick={() => onContentTypeChange(tab.value)}
+                  className={cn(
+                    'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
+                    active
+                      ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
+                      : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'
+                  )}
+                  aria-pressed={active}
+                >
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <span />
+        )}
 
         <div className='flex items-center gap-2'>
           {hasFilters && (
@@ -579,12 +587,18 @@ interface Props {
   defaultExecutionId?: string;
   /** Pre-filter by a content hash, e.g. parent post opened from a comment. */
   defaultContentHash?: string;
+  /** Select the initial content dataset when rendered inside a parent tab bar. */
+  defaultContentType?: 'fb_post' | 'fb_comment';
+  /** Keep the legacy local post/comment switch for existing callers. */
+  showContentTypeTabs?: boolean;
 }
 
 export function ContentViewer({
   defaultCampaignId,
   defaultExecutionId,
-  defaultContentHash
+  defaultContentHash,
+  defaultContentType = DEFAULT_CONTENT_TYPE,
+  showContentTypeTabs = true
 }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -592,7 +606,7 @@ export function ContentViewer({
   const [executionId, setExecutionId] = useState(defaultExecutionId ?? '');
   const [collection, setCollection] = useState('');
   const [platform, setPlatform] = useState('');
-  const [contentType, setContentType] = useState(DEFAULT_CONTENT_TYPE);
+  const [contentType, setContentType] = useState(defaultContentType);
   const [exportOpen, setExportOpen] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   const tList = useTranslations('contentFeature.list');
@@ -620,7 +634,7 @@ export function ContentViewer({
       campaign_id: defaultCampaignId || undefined,
       run_id: defaultExecutionId || undefined,
       content_hash: defaultContentHash || undefined,
-      content_type: defaultContentHash ? undefined : DEFAULT_CONTENT_TYPE
+      content_type: defaultContentHash ? undefined : defaultContentType
     },
     { pageSize }
   );
@@ -709,7 +723,7 @@ export function ContentViewer({
     setContentType(DEFAULT_CONTENT_TYPE);
   };
 
-  const handleContentTypeChange = (v: string) => {
+  const handleContentTypeChange = (v: ContentDatasetType) => {
     setContentType(v);
     handleApply({ contentType: v });
   };
@@ -720,8 +734,8 @@ export function ContentViewer({
     setExecutionId('');
     setCollection('');
     setPlatform('');
-    setContentType(DEFAULT_CONTENT_TYPE);
-    applyFilters({ content_type: DEFAULT_CONTENT_TYPE });
+    setContentType(defaultContentType);
+    applyFilters({ content_type: defaultContentType });
   };
 
   const hasFilters = !!(
@@ -730,7 +744,9 @@ export function ContentViewer({
     executionId ||
     collection ||
     platform ||
-    (contentType && contentType !== DEFAULT_CONTENT_TYPE) ||
+    (showContentTypeTabs &&
+      contentType &&
+      contentType !== DEFAULT_CONTENT_TYPE) ||
     filters.content_hash
   );
 
@@ -841,6 +857,7 @@ export function ContentViewer({
             onApply={() => handleApply()}
             onClear={handleClear}
             loading={loading}
+            showContentTypeTabs={showContentTypeTabs}
           />
         </div>
 

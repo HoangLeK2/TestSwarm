@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CampaignScenarioRefIn(BaseModel):
@@ -49,13 +49,65 @@ class CampaignAccountBindIn(BaseModel):
 class CampaignDispatchTargetIn(BaseModel):
     device_ids: list[str] = Field(default_factory=list)
     device_group_ids: list[str] = Field(default_factory=list)
+    external_entity_ids: list[str] = Field(default_factory=list)
+
+
+class CampaignSourcePoolIn(BaseModel):
+    platform: str = Field(min_length=1, max_length=32)
+    entity_type: str = Field(min_length=1, max_length=32)
+    search: Optional[str] = Field(default=None, max_length=500)
+    statuses: list[str] = Field(
+        default_factory=lambda: ["candidate", "active", "available"],
+        min_length=1,
+        max_length=10,
+    )
+
+
+class CampaignAllocationSnapshotItemIn(BaseModel):
+    device_id: str = Field(min_length=1, max_length=36)
+    external_entity_id: str = Field(min_length=1, max_length=36)
 
 
 class CampaignDispatchIn(BaseModel):
     target: CampaignDispatchTargetIn
+    source_pool: Optional[CampaignSourcePoolIn] = None
+    allocation_snapshot: list[CampaignAllocationSnapshotItemIn] = Field(
+        default_factory=list
+    )
+    allocation_policy: Literal["one_per_device"] = "one_per_device"
     dispatch_strategy: str = Field(default="parallel", pattern="^(parallel|sequential)$")
     allow_partial: bool = False
     require_online: bool = True
+
+    @model_validator(mode="after")
+    def validate_source_selection(self):
+        if self.source_pool is not None and self.target.external_entity_ids:
+            raise ValueError(
+                "source_pool and target.external_entity_ids are mutually exclusive"
+            )
+        if self.allocation_snapshot and self.source_pool is None:
+            raise ValueError("allocation_snapshot requires source_pool")
+        return self
+
+
+class CampaignDispatchPreviewAssignmentOut(BaseModel):
+    device_id: str
+    device_serial: str
+    device_name: Optional[str] = None
+    external_entity_id: str
+    display_name: str
+    platform: str
+    entity_type: str
+
+
+class CampaignDispatchPreviewOut(BaseModel):
+    campaign_id: str
+    allocation_policy: str
+    device_count: int
+    available_source_count: int
+    assignments: list[CampaignDispatchPreviewAssignmentOut] = Field(
+        default_factory=list
+    )
 
 
 class CampaignDispatchExecutionOut(BaseModel):
@@ -66,6 +118,7 @@ class CampaignDispatchExecutionOut(BaseModel):
     account_id: Optional[str] = None
     failure_reason: Optional[str] = None
     claim_session_id: Optional[str] = None
+    external_entity_id: Optional[str] = None
     dispatch_source: Optional[str] = None
     workflow_id: Optional[str] = None
 

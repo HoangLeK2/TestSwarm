@@ -15,12 +15,10 @@ import {
   scenariosApi,
   tasksApi,
   workflowsApi,
+  type CampaignDispatchIn,
   type CampaignEntityUpdate
 } from '../services/api';
-import type {
-  CampaignAccountBindIn,
-  CampaignDispatchIn
-} from '../../device-farm/services/generated/DeviceFarmApi';
+import type { CampaignAccountBindIn } from '../../device-farm/services/generated/DeviceFarmApi';
 import {
   isCampaignActiveExecution,
   isCampaignTerminal,
@@ -53,13 +51,13 @@ const KEYS = {
 };
 
 /** Shared poll tuning — reduces API spam when monitor / campaigns are open. */
-const CAMPAIGN_LIST_ACTIVE_POLL_MS = 10_000;
-const MONITOR_WORKFLOW_POLL_MS = 8_000;
-const MONITOR_EXECUTION_POLL_MS = 15_000;
-const MONITOR_SIDEBAR_ACTIVE_POLL_MS = 15_000;
-const MONITOR_SIDEBAR_IDLE_POLL_MS = 45_000;
-const WORKFLOW_PROGRESS_POLL_MS = 5_000;
-const WORKFLOW_STEPS_POLL_MS = 10_000;
+const CAMPAIGN_LIST_ACTIVE_POLL_MS = 15_000;
+const MONITOR_WORKFLOW_POLL_MS = 12_000;
+const MONITOR_EXECUTION_POLL_MS = 20_000;
+const MONITOR_SIDEBAR_ACTIVE_POLL_MS = 30_000;
+const MONITOR_SIDEBAR_IDLE_POLL_MS = 60_000;
+const WORKFLOW_PROGRESS_POLL_MS = 8_000;
+const WORKFLOW_STEPS_POLL_MS = 15_000;
 
 const monitorQueryDefaults = {
   refetchOnWindowFocus: false
@@ -150,11 +148,11 @@ export function useCampaign(id: string, enabled = true) {
   });
 }
 
-export function useCampaignDevices(campaignId: string) {
+export function useCampaignDevices(campaignId: string, enabled = true) {
   return useQuery({
     queryKey: KEYS.devices(campaignId),
     queryFn: () => campaignsApi.getDevices(campaignId),
-    enabled: !!campaignId
+    enabled: enabled && !!campaignId
   });
 }
 
@@ -407,11 +405,11 @@ export function useCampaignProgress(campaignId: string, enabled: boolean) {
 
 // ── Scenario hooks ────────────────────────────────────────────────────────────
 
-export function useScenarios(campaignId: string) {
+export function useScenarios(campaignId: string, enabled = true) {
   return useQuery({
     queryKey: KEYS.scenarios(campaignId),
     queryFn: () => scenariosApi.list(campaignId),
-    enabled: !!campaignId
+    enabled: enabled && !!campaignId
   });
 }
 

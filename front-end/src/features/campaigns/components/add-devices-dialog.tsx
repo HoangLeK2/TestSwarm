@@ -64,10 +64,11 @@ export function AddDevicesToCampaignDialog({
   const [bulkAdding, setBulkAdding] = useState(false);
 
   const { data: campaignDevices = [], isLoading: loadingCampaign } =
-    useCampaignDevices(campaignId);
+    useCampaignDevices(campaignId, open);
   const { data: allDevices = [], isLoading: loadingAll } = useQuery({
     queryKey: ['devices'],
-    queryFn: () => devicesApi.list()
+    queryFn: () => devicesApi.list(),
+    enabled: open
   });
   const { data: groups = [] } = useDeviceGroups();
   const { data: pickedGroup } = useDeviceGroup(pickedGroupId);
@@ -110,7 +111,7 @@ export function AddDevicesToCampaignDialog({
     } catch {
       toast.error(t('addError'));
     }
-  }, [campaignId, selectedIds, addDeviceAsync]);
+  }, [campaignId, selectedIds, addDeviceAsync, t]);
 
   const addOne = useCallback(
     (deviceId: string) => {
@@ -119,13 +120,16 @@ export function AddDevicesToCampaignDialog({
     [campaignId, addDevice]
   );
 
-  const onOpenChange = useCallback((v: boolean) => {
-    setOpen(v);
-    if (!v) {
-      setSelectedIds(new Set());
-      setPickedGroupId('');
-    }
-  }, []);
+  const onOpenChange = useCallback(
+    (v: boolean) => {
+      setOpen(v);
+      if (!v) {
+        setSelectedIds(new Set());
+        setPickedGroupId('');
+      }
+    },
+    [setOpen]
+  );
 
   const groupNewDeviceIds = (pickedGroup?.devices ?? [])
     .map((d) => d.id)

@@ -2,7 +2,7 @@
 relay/agent.py — RelayAgent: WebSocket bidi stream + command dispatch.
 
 1 WebSocket connection per agent.
-Reconnect: jittered exponential backoff 0.5s → 60s.
+Reconnect: startup backoff 0.25s → 2s, then steady-state up to 8s.
 
 Protocol:
   Text frames  → JSON control messages (register, heartbeat, result, ack, command, ...)
@@ -20,6 +20,7 @@ import struct
 import threading
 import uuid
 import time
+from concurrent.futures import Future
 from typing import Any, Optional
 
 from relay.adb           import (
@@ -32,6 +33,7 @@ from relay.adb           import (
     reconcile_usb_preferred_for_duplicate_devices,
 )
 from relay.mdns          import start_mdns_discovery
+from relay.bootstrap_lifecycle import BootstrapCoordinator, RelayRetryPolicy
 from relay.device_state  import DeviceRegistry, DeviceState
 from relay.device_watcher import AdbDeviceWatcher
 from relay.session_manager import ScrcpySessionManager
@@ -62,6 +64,26 @@ from relay.runtime         import (
 )
 
 logger = logging.getLogger("relay.agent")
+
+
+async def _await_executor_completion(future: asyncio.Future[Any]) -> Any:
+    """Keep mutation guards active until blocking work really stops."""
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(future)
+            break
+        except asyncio.CancelledError:
+            if future.cancelled():
+                raise
+            cancelled = True
+        except Exception:
+            if cancelled:
+                raise asyncio.CancelledError
+            raise
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
 
 
 def _env_int(name: str, default: int) -> int:
@@ -126,9 +148,9 @@ SCRCPY_RESTART_MAX_ATTEMPTS = 5
 SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
 SCRCPY_STABLE_RESET_SECONDS = 30.0
 RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
-SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 15))
-SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 540))
-SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 800_000))
+SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 12))
+SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 480))
+SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 600_000))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _AGENT_BOOT_ROOT = os.path.dirname(_HERE)
@@ -274,6 +296,12 @@ class RelayAgent:
         self._atx_forward_cache: dict[str, tuple[str, int]] = {}
         self._atx_forward_lock = threading.Lock()
         self._bootstrap_inflight: set[str] = set()
+        self._bootstrap_coordinator = BootstrapCoordinator(
+            max_concurrency=max(
+                1,
+                _env_int("RELAY_BOOTSTRAP_CONCURRENCY", 4),
+            )
+        )
 
         # Runtime: bounded executors + task registry + watchdog.
         # `_stream_tasks` is replaced per transport connect; this initial
@@ -429,11 +457,9 @@ class RelayAgent:
         except Exception:
             pass
 
-        attempt    = 0
-        base_delay = 0.5
-
-        # Brief initial delay so device_farm server has time to start
-        await asyncio.sleep(3.0)
+        attempt = 0
+        retry_policy = RelayRetryPolicy()
+        startup_started_at = asyncio.get_running_loop().time()
 
         try:
             while True:
@@ -449,8 +475,13 @@ class RelayAgent:
                     await asyncio.sleep(1.0)
                 except Exception as exc:
                     attempt += 1
-                    delay = min(base_delay * (2 ** attempt), 8.0)
-                    delay += delay * 0.2 * random.random()
+                    delay = retry_policy.delay(
+                        attempt=attempt,
+                        startup_elapsed=(
+                            asyncio.get_running_loop().time() - startup_started_at
+                        ),
+                        jitter_ratio=random.random(),
+                    )
                     logger.warning(
                         "%s stream failed (attempt %d): %s — retry in %.1fs",
                         self._relay_mode.upper(), attempt, exc, delay,
@@ -471,6 +502,7 @@ class RelayAgent:
                 await self._loop_watchdog.stop()
             if self._runtime_stats:
                 await self._runtime_stats.stop()
+            self._bootstrap_coordinator.shutdown(wait=False)
             shutdown_executors(wait=False)
             if zc:
                 zc.close()
@@ -508,7 +540,10 @@ class RelayAgent:
             logger.info("WS connected → %s (relay_id=%s)", self._server_url, self._relay_id)
 
             # ── Register ──────────────────────────────────────────────────────
-            serials = self._registry.online_serials or _list_serials()
+            # Never block transport registration on ADB. The device watcher
+            # publishes an immediate heartbeat when an existing/new phone is
+            # observed, so an empty first register is safe and keeps startup fast.
+            serials = self._registry.online_serials
             await ws.send(dumps({
                 "type":     "register",
                 "relay_id": self._relay_id,
@@ -586,49 +621,19 @@ class RelayAgent:
 
         logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
 
-        # Keep the high-volume video stream and the control stream on separate
-        # channels. In practice, reconnect/cancel churn on one grpc.aio stream
-        # can poison pending sends on another stream when both share a channel,
-        # surfacing as INTERNAL "Failed execute_batch" on the agent.
+        # Keep the long-lived campaign control channel independent from the
+        # replaceable video channel. grpc.aio may surface scrcpy reset/cancel
+        # churn as INTERNAL "Failed execute_batch"; only the poisoned video
+        # channel should be discarded in that case.
         async with create_grpc_channel(
             self._grpc_addr,
             tls_enabled=self._grpc_tls_enabled,
             root_cert_file=self._grpc_root_cert_file,
-        ) as stream_channel, create_grpc_channel(
-            self._grpc_addr,
-            tls_enabled=self._grpc_tls_enabled,
-            root_cert_file=self._grpc_root_cert_file,
         ) as control_channel:
-            client = GrpcRelayClient(
-                server_addr=self._grpc_addr,
-                api_key=self._api_key,
-                agent_id=self._relay_id,
-                send_queue=send_queue,
-                loop=loop,
-                channel=stream_channel,
-                tls_enabled=self._grpc_tls_enabled,
-                root_cert_file=self._grpc_root_cert_file,
-            )
-
             # Channel 2: control plane (register/heartbeat/commands) — runs
             # independently; a 180s bootstrap never blocks video frames.
             ctrl_client = AgentControlClient(control_channel, self._api_key, self)
             ctrl_task = asyncio.create_task(ctrl_client.run(), name="grpc-ctrl-client")
-
-            # ── Register on Channel 1 (video stream) for backward compat ──────
-            # Channel 2 also sends register; server uses whichever arrives first.
-            serials = self._registry.online_serials or _list_serials()
-            register_msg = dumps({
-                "type":     "register",
-                "relay_id": self._relay_id,
-                "serials":  serials,
-                "version":  "2.0.0",
-            })
-            await send_queue.put(register_msg)
-            await self._send_heartbeat(send_queue)
-            if self._scrcpy_auto_resume_enabled:
-                self._ensure_default_scrcpy_desired()
-                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
 
             # ── Device watcher + heartbeat ────────────────────────────────────
             watcher = AdbDeviceWatcher(
@@ -639,8 +644,27 @@ class RelayAgent:
                 self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
             )
 
-            # ── ControlMsg consumer: routes server msgs to sessions ───────────
-            async def _consume_ctrl() -> None:
+            # RelayService still carries U2 batch/meta results alongside H264,
+            # so it must be re-registered after every video-channel replacement.
+            async def _register_video_stream() -> str:
+                serials = self._registry.online_serials
+                register_msg = dumps({
+                    "type":     "register",
+                    "relay_id": self._relay_id,
+                    "serials":  serials,
+                    "version":  "2.0.0",
+                })
+                await self._send_heartbeat(send_queue)
+                if self._scrcpy_auto_resume_enabled:
+                    self._ensure_default_scrcpy_desired()
+                    await self._resume_desired_scrcpy_sessions(
+                        send_queue,
+                        loop,
+                        source="grpc-connected",
+                    )
+                return register_msg
+
+            async def _consume_ctrl(client: GrpcRelayClient) -> None:
                 while True:
                     ctrl_msg = await client.ctrl_q.get()
                     if ctrl_msg is None:
@@ -658,12 +682,79 @@ class RelayAgent:
                             ctrl_msg.data,
                         )
 
-            consume_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
-
+            # A stable video session followed by one transient failure should
+            # retry from the minimum delay, not retain an attempt count from
+            # hours earlier. Video retries cap at 2s; campaign control remains
+            # alive on control_channel throughout.
+            video_retry = RelayRetryPolicy(startup_window_s=float("inf"))
+            video_attempt = 0
             try:
-                await client._stream_once(stream_channel)
+                while True:
+                    client: GrpcRelayClient | None = None
+                    consume_task: asyncio.Task | None = None
+                    stream_started_at = loop.time()
+                    failure: Exception | None = None
+                    try:
+                        async with create_grpc_channel(
+                            self._grpc_addr,
+                            tls_enabled=self._grpc_tls_enabled,
+                            root_cert_file=self._grpc_root_cert_file,
+                        ) as stream_channel:
+                            client = GrpcRelayClient(
+                                server_addr=self._grpc_addr,
+                                api_key=self._api_key,
+                                agent_id=self._relay_id,
+                                send_queue=send_queue,
+                                loop=loop,
+                                channel=stream_channel,
+                                tls_enabled=self._grpc_tls_enabled,
+                                root_cert_file=self._grpc_root_cert_file,
+                            )
+                            consume_task = asyncio.create_task(
+                                _consume_ctrl(client),
+                                name="grpc-video-ctrl-consumer",
+                            )
+                            register_msg = await _register_video_stream()
+                            await client._stream_once(
+                                stream_channel,
+                                initial_meta=register_msg,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        failure = exc
+                    finally:
+                        if client is not None:
+                            client.stop()
+                        await _cancel_and_await(consume_task)
+
+                    stream_uptime = loop.time() - stream_started_at
+                    if stream_uptime >= 10.0:
+                        video_attempt = 0
+                    video_attempt += 1
+                    delay = video_retry.delay(
+                        attempt=video_attempt,
+                        startup_elapsed=0.0,
+                        jitter_ratio=random.random(),
+                    )
+                    if failure is None:
+                        logger.info(
+                            "gRPC video stream closed cleanly after %.1fs; "
+                            "control remains online — retry in %.1fs",
+                            stream_uptime,
+                            delay,
+                        )
+                    else:
+                        logger.warning(
+                            "gRPC video stream failed (attempt %d, uptime %.1fs): %s; "
+                            "control remains online — retry in %.1fs",
+                            video_attempt,
+                            stream_uptime,
+                            failure,
+                            delay,
+                        )
+                    await asyncio.sleep(delay)
             finally:
-                client.stop()
                 ctrl_client.stop()
                 await send_queue.put(None)
                 await _cancel_and_await(
@@ -741,14 +832,8 @@ class RelayAgent:
             return
         self._bootstrap_inflight.add(serial)
         try:
-            loop = asyncio.get_running_loop()
             logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
-            output, rc = await loop.run_in_executor(
-                adb_executor(),
-                _bootstrap_device,
-                serial,
-                180,
-            )
+            output, rc = await self._await_bootstrap(serial, 180)
             if rc == 0:
                 logger.info("[%s] auto-bootstrap ok: %s", serial, output[:500])
                 self._schedule_u2_warm(serial, reason="auto-bootstrap")
@@ -758,6 +843,32 @@ class RelayAgent:
             logger.warning("[%s] auto-bootstrap error: %s", serial, exc)
         finally:
             self._bootstrap_inflight.discard(serial)
+
+    def _submit_bootstrap(
+        self,
+        serial: str,
+        timeout: int,
+    ) -> Future[tuple[str, int]]:
+        """Submit repair without occupying a shared ADB executor worker."""
+        return self._bootstrap_coordinator.submit(
+            serial,
+            lambda: _bootstrap_device(serial, timeout=timeout),
+        )
+
+    async def _await_bootstrap(
+        self,
+        serial: str,
+        timeout: int,
+    ) -> tuple[str, int]:
+        """Await shared repair without letting one waiter cancel fleet work."""
+        wrapped = asyncio.wrap_future(self._submit_bootstrap(serial, timeout))
+        try:
+            return await asyncio.shield(wrapped)
+        except asyncio.CancelledError:
+            wrapped.add_done_callback(
+                lambda done: None if done.cancelled() else done.exception()
+            )
+            raise
 
     def _clear_u2_warm_backoff(self, serial: str) -> None:
         self._u2_warm_fail_count.pop(serial, None)
@@ -1118,18 +1229,6 @@ class RelayAgent:
     ) -> None:
         serials = self._registry.online_serials
         loop = asyncio.get_running_loop()
-        if not serials:
-            try:
-                snapshot = await loop.run_in_executor(adb_executor(), _list_serials)
-            except Exception as exc:
-                logger.debug("heartbeat adb snapshot failed: %s", exc)
-                snapshot = []
-            if snapshot:
-                self._seed_registry_from_adb_serials(
-                    snapshot,
-                    source="heartbeat adb snapshot",
-                )
-                serials = self._registry.online_serials
         if self._u2_warm_on_heartbeat:
             for serial in serials:
                 ctx = self._registry.get(serial)
@@ -1488,7 +1587,23 @@ class RelayAgent:
                 state.get("queued_seqs", set()).discard(seq)
                 continue
 
-            res = await loop.run_in_executor(adb_executor(), self._execute_a11y_action, item)
+            ui_executor = self._u2_executor
+            mutates_ui = (
+                ui_executor is not None
+                and item.get("action") != "dump_hierarchy"
+            )
+            if mutates_ui:
+                ui_executor.begin_ui_mutation(serial)
+            try:
+                future = loop.run_in_executor(
+                    adb_executor(),
+                    self._execute_a11y_action,
+                    item,
+                )
+                res = await _await_executor_completion(future)
+            finally:
+                if mutates_ui:
+                    ui_executor.end_ui_mutation(serial)
             if seq > 0:
                 state.get("queued_seqs", set()).discard(seq)
                 state["last_seq"] = max(int(state.get("last_seq", 0) or 0), seq)
@@ -1685,10 +1800,31 @@ class RelayAgent:
         content_type = msg.get("content_type", "")
         timeout      = max(1.0, float(msg.get("timeout", 30)))
 
-        loop   = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            u2_executor_pool(), self._do_u2_http, serial, method, path, body, content_type, timeout
+        ui_executor = self._u2_executor
+        mutates_ui = (
+            ui_executor is not None
+            and method == "POST"
+            and str(path).startswith("/jsonrpc/")
         )
+        if mutates_ui:
+            ui_executor.begin_ui_mutation(str(serial))
+
+        loop   = asyncio.get_running_loop()
+        try:
+            future = loop.run_in_executor(
+                u2_executor_pool(),
+                self._do_u2_http,
+                serial,
+                method,
+                path,
+                body,
+                content_type,
+                timeout,
+            )
+            result = await _await_executor_completion(future)
+        finally:
+            if mutates_ui:
+                ui_executor.end_ui_mutation(str(serial))
         result["type"]   = "u2_result"
         result["msg_id"] = msg_id
         # Bounded put: control results are important, but we MUST NOT block
@@ -1899,12 +2035,29 @@ class RelayAgent:
         if not isinstance(cancel_event, asyncio.Event):
             cancel_event = None
         started = time.perf_counter()
-        result = await self._try_u2_batch_touch_fast_path(
-            serial=serial,
-            actions=actions,
-            early_exit=bool(msg.get("early_exit", True)),
-            cancel_event=cancel_event,
+        ui_executor = self._u2_executor
+        fast_touch_candidate = bool(
+            ui_executor is not None
+            and isinstance(actions, list)
+            and actions
+            and all(
+                isinstance(action, dict)
+                and action.get("op") in {"click", "swipe", "long_click"}
+                for action in actions
+            )
         )
+        if fast_touch_candidate:
+            ui_executor.begin_ui_mutation(serial)
+        try:
+            result = await self._try_u2_batch_touch_fast_path(
+                serial=serial,
+                actions=actions,
+                early_exit=bool(msg.get("early_exit", True)),
+                cancel_event=cancel_event,
+            )
+        finally:
+            if fast_touch_candidate:
+                ui_executor.end_ui_mutation(serial)
         if result is not None:
             pass
         elif self._u2_executor is None:
@@ -2002,7 +2155,8 @@ class RelayAgent:
                 "error": None if all_ok else (results[-1].get("error") if results else "touch_failed"),
             }
 
-        return await loop.run_in_executor(u2_executor_pool(), _run)
+        future = loop.run_in_executor(u2_executor_pool(), _run)
+        return await _await_executor_completion(future)
 
     def _u2_touch_rpc_payload(self, act: dict, req_id: int) -> Optional[tuple[str, dict, float]]:
         op = str(act.get("op", "") or "")
@@ -2323,15 +2477,22 @@ class RelayAgent:
                 return
             cmd_serial = str(msg.get("serial", "") or "")
             cmd_type = int(msg.get("cmd_type", CMD_SHELL))
-            result = await loop.run_in_executor(
-                adb_executor(),
-                self._execute_command,
-                msg.get("msg_id", ""),
-                cmd_serial,
-                msg.get("cmd", ""),
-                int(msg.get("timeout", 30)),
-                cmd_type,
-            )
+            if cmd_type == CMD_BOOTSTRAP:
+                result = await self._execute_bootstrap_command(
+                    msg.get("msg_id", ""),
+                    cmd_serial,
+                    int(msg.get("timeout", 30)),
+                )
+            else:
+                result = await loop.run_in_executor(
+                    adb_executor(),
+                    self._execute_command,
+                    msg.get("msg_id", ""),
+                    cmd_serial,
+                    msg.get("cmd", ""),
+                    int(msg.get("timeout", 30)),
+                    cmd_type,
+                )
             bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
             if cmd_type == CMD_ADB_CONNECT:
                 try:
@@ -2344,6 +2505,43 @@ class RelayAgent:
                         loop,
                         cmd_serial,
                     )
+
+    async def _execute_bootstrap_command(
+        self,
+        msg_id: str,
+        serial: str,
+        timeout: int,
+    ) -> str:
+        ctx = self._registry.get(serial)
+        if ctx is None or not ctx.is_available:
+            state_str = ctx.state.value if ctx else "unknown"
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": f"serial {serial!r} not available (state={state_str})",
+            })
+        try:
+            output, rc = await self._await_bootstrap(serial, max(timeout, 180))
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": rc == 0,
+                "exit_code": rc,
+                "output": output,
+                "error": "" if rc == 0 else output,
+            })
+        except Exception as exc:
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": str(exc),
+            })
 
     def _cancel_command_workers(self, serial: str | None = None) -> None:
         if serial is not None:
@@ -2407,7 +2605,7 @@ class RelayAgent:
             elif cmd_type == CMD_RESTART_ATX:
                 output, rc = _restart_atx(serial, timeout=timeout)
             elif cmd_type == CMD_BOOTSTRAP:
-                output, rc = _bootstrap_device(serial, timeout=max(timeout, 180))
+                raise RuntimeError("bootstrap command must use async admission")
             elif cmd_type == CMD_SCREENCAP:
                 output, rc = _screencap(serial, timeout=timeout)
             elif cmd_type == CMD_PROBE_CAPS:

@@ -1,6 +1,8 @@
 """Epic 04 DF-T-04-009: campaign account binding & no-implicit-account guard."""
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 pytest_plugins = ["tests.test_epic04_scenario_entity"]
@@ -11,10 +13,14 @@ from sqlalchemy import func, select
 from db.crud.account import assign_account_to_device, create_account
 from db.crud.account_group import add_members, create_group
 from db.crud.device import create_device
+from db.crud.device_reserve_session import get_active_session
+from db.models.account import Account
 from db.models.activity import ActivityLog
+from db.models.campaign import Campaign
 from db.models.enums import AccountState, DeviceFsmEvent
 from db.models.execution import Execution
 from services.campaign.account_resolver import scenario_requires_account
+from services.campaign.dispatcher import CampaignDispatcher
 from services.device_state.service import DeviceStateService
 from tenancy.context import set_current_org_id
 from tests.test_epic04_scenario_entity import (
@@ -139,6 +145,53 @@ async def test_ac1_account_group_fan_out(session_factory):
     async with session_factory() as db:
         rows = (await db.execute(select(Execution.account_id))).scalars().all()
         assert set(rows) == {a1.id, a2.id, a3.id}
+
+
+@pytest.mark.asyncio
+async def test_account_group_exhaustion_does_not_claim_phone_without_account(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="GROUP-EXHAUST-D1")
+    d2 = await _online_device(session_factory, serial="GROUP-EXHAUST-D2")
+    account = await _account(session_factory, "group-exhaust-a1")
+    group_id = await _account_group(session_factory, [account.id])
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="GroupExhaust")
+        bind = await client.post(
+            f"/api/campaigns/{campaign_id}/accounts",
+            json={"account_group_id": group_id},
+        )
+        assert bind.status_code == 200
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch",
+                json={"target": {"device_ids": [d1, d2]}},
+            )
+
+    assert response.status_code == 200
+    rows = response.json()["executions"]
+    failed = next(row for row in rows if row["status"] == "failed")
+    running = next(row for row in rows if row["status"] == "running")
+    assert failed["failure_reason"] == "account_unavailable"
+    assert running["account_id"] == account.id
+    async with session_factory() as db:
+        assert await get_active_session(db, failed["device_id"]) is None
 
 
 @pytest.mark.asyncio
@@ -297,6 +350,82 @@ async def test_ac5_suspended_account_partial_fail(session_factory):
     assert by_device[d1]["failure_reason"] == "account_unavailable"
     assert by_device[d2]["status"] == "running"
     assert by_device[d2]["account_id"] == active.id
+
+
+@pytest.mark.asyncio
+async def test_queued_execution_revalidates_account_before_claiming_phone(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="QUEUE-ACCOUNT-D1")
+    d2 = await _online_device(session_factory, serial="QUEUE-ACCOUNT-D2")
+    a1 = await _account(session_factory, "queue-account-a1")
+    a2 = await _account(session_factory, "queue-account-a2")
+    group_id = await _account_group(session_factory, [a1.id, a2.id])
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="QueuedAccount")
+        bind = await client.post(
+            f"/api/campaigns/{campaign_id}/accounts",
+            json={"account_group_id": group_id},
+        )
+        assert bind.status_code == 200
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch",
+                json={
+                    "target": {"device_ids": [d1, d2]},
+                    "dispatch_strategy": "sequential",
+                },
+            )
+    assert response.status_code == 200
+    queued = next(
+        row for row in response.json()["executions"] if row["device_id"] == d2
+    )
+    assert queued["status"] == "pending"
+    assert queued["account_id"] in {a1.id, a2.id}
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        account = await db.get(Account, queued["account_id"])
+        assert account is not None
+        account.state = AccountState.SUSPENDED.value
+        account.status = AccountState.SUSPENDED.value
+        await db.commit()
+
+    async with session_factory() as db:
+        execution = await db.get(Execution, queued["execution_id"])
+        campaign = await db.get(Campaign, campaign_id)
+        assert execution is not None
+        assert campaign is not None
+        promoted = await CampaignDispatcher().activate_queued_execution(
+            db,
+            execution=execution,
+            campaign=campaign,
+            org_id=ORG_A,
+            actor_user_id=USER_OWNER,
+        )
+        await db.commit()
+
+    assert promoted is not None
+    assert promoted.status == "failed"
+    assert promoted.failure_reason == "account_unavailable"
+    async with session_factory() as db:
+        assert await get_active_session(db, d2) is None
 
 
 @pytest.mark.asyncio

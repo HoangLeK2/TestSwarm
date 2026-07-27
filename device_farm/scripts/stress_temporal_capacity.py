@@ -6,7 +6,8 @@ Each run occupies one activity slot for --delay-ms, so wall-time scaling shows
 whether worker_count × max_concurrent_activities can absorb the fan-out.
 
 Does not need physical phones. Use --production-120 for the current production
-target: 120 activity slots plus a 120-way activity DB connection hold probe.
+target: 120 concurrent probes on 140 activity slots, plus a 120-way activity DB
+connection hold probe.
 
 Usage (host, Temporal published on :7233):
 
@@ -94,6 +95,11 @@ class WaveResult:
         if self.wall_s <= 0 or hold_s <= 0:
             return 0.0
         return self.ok * hold_s / self.wall_s
+
+    @property
+    def p95_queue_delay_s(self) -> float:
+        hold_s = max(0.0, self.payload_delay_ms / 1000.0)
+        return max(0.0, self.p95_s - hold_s)
 
 
 @dataclass
@@ -220,6 +226,7 @@ def _print_wave(result: WaveResult) -> None:
         f"ok={result.ok:>4} fail={result.fail:>3}  "
         f"wall={result.wall_s:6.2f}s  "
         f"p50={result.p50_s:5.2f}s p95={result.p95_s:5.2f}s p99={result.p99_s:5.2f}s  "
+        f"queue_p95={result.p95_queue_delay_s:5.2f}s  "
         f"mean={result.mean_s:5.2f}s  thr={result.throughput_per_s:5.1f}/s  "
         f"eff_slots={result.effective_slots:6.1f}"
     )
@@ -293,6 +300,7 @@ def _wave_to_dict(result: WaveResult) -> dict:
         mean_s=result.mean_s,
         throughput_per_s=result.throughput_per_s,
         effective_slots=result.effective_slots,
+        p95_queue_delay_s=result.p95_queue_delay_s,
     )
     return data
 
@@ -336,18 +344,16 @@ async def _run_waves(
     return results
 
 
-def _meets_effective_slot_budget(
+def _meets_schedule_to_start_budget(
     result: WaveResult,
     *,
-    target_phones: int,
-    min_effective_slots_ratio: float,
+    max_queue_delay_s: float,
 ) -> bool:
-    required = target_phones * min_effective_slots_ratio
-    if result.effective_slots >= required:
+    if result.p95_queue_delay_s <= max_queue_delay_s:
         return True
     print(
-        f"FAIL: effective_slots {result.effective_slots:.1f} < "
-        f"{required:.1f} ({min_effective_slots_ratio:.0%} of target {target_phones})"
+        f"FAIL: schedule-to-start proxy p95 {result.p95_queue_delay_s:.2f}s > "
+        f"{max_queue_delay_s:.2f}s"
     )
     return False
 
@@ -385,10 +391,9 @@ async def _run_production_120_suite(
         max_fail=args.max_fail,
         max_p95_s=args.slot_max_p95_s,
     ) and ok
-    ok = _meets_effective_slot_budget(
+    ok = _meets_schedule_to_start_budget(
         slot_target,
-        target_phones=math_.target_phones,
-        min_effective_slots_ratio=args.min_effective_slots_ratio,
+        max_queue_delay_s=args.slot_max_schedule_to_start_s,
     ) and ok
 
     db_results = await _run_waves(
@@ -433,13 +438,17 @@ async def _run_production_120_suite(
         print(
             f"PASS production-120: target={math_.target_phones} "
             f"slot_eff={slot_target.effective_slots:.1f} "
-            f"slot_p95={slot_target.p95_s:.2f}s db_p95={db_target.p95_s:.2f}s"
+            f"slot_p95={slot_target.p95_s:.2f}s "
+            f"queue_p95={slot_target.p95_queue_delay_s:.2f}s "
+            f"db_p95={db_target.p95_s:.2f}s"
         )
         return 0
     print(
         f"FAIL production-120: target={math_.target_phones} "
         f"slot_eff={slot_target.effective_slots:.1f} "
-        f"slot_p95={slot_target.p95_s:.2f}s db_p95={db_target.p95_s:.2f}s"
+        f"slot_p95={slot_target.p95_s:.2f}s "
+        f"queue_p95={slot_target.p95_queue_delay_s:.2f}s "
+        f"db_p95={db_target.p95_s:.2f}s"
     )
     return 1
 
@@ -520,7 +529,7 @@ def main() -> int:
     parser.add_argument(
         "--worker-count",
         type=int,
-        default=_env_int("TEMPORAL_WORKER_COUNT", 6),
+        default=_env_int("TEMPORAL_WORKER_COUNT", 7),
     )
     parser.add_argument(
         "--activities-per-worker",
@@ -535,15 +544,15 @@ def main() -> int:
     parser.add_argument(
         "--db-activity-pool-size",
         type=int,
-        default=_env_int("DB_ACTIVITY_POOL_SIZE", 12),
+        default=_env_int("DB_ACTIVITY_POOL_SIZE", 4),
     )
     parser.add_argument(
         "--db-activity-max-overflow",
         type=int,
-        default=_env_int("DB_ACTIVITY_MAX_OVERFLOW", 12),
+        default=_env_int("DB_ACTIVITY_MAX_OVERFLOW", 0),
     )
-    parser.add_argument("--db-pool-size", type=int, default=_env_int("DB_POOL_SIZE", 15))
-    parser.add_argument("--db-max-overflow", type=int, default=_env_int("DB_MAX_OVERFLOW", 15))
+    parser.add_argument("--db-pool-size", type=int, default=_env_int("DB_POOL_SIZE", 8))
+    parser.add_argument("--db-max-overflow", type=int, default=_env_int("DB_MAX_OVERFLOW", 2))
     parser.add_argument(
         "--slot-delay-ms",
         type=int,
@@ -558,7 +567,12 @@ def main() -> int:
     )
     parser.add_argument("--slot-max-p95-s", type=float, default=15.0)
     parser.add_argument("--db-max-p95-s", type=float, default=30.0)
-    parser.add_argument("--min-effective-slots-ratio", type=float, default=0.90)
+    parser.add_argument(
+        "--slot-max-schedule-to-start-s",
+        type=float,
+        default=2.0,
+        help="Maximum p95 workflow/activity overhead above --slot-delay-ms",
+    )
     parser.add_argument("--json-output", default="")
     parser.add_argument(
         "--workflow",

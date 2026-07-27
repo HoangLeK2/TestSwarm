@@ -442,6 +442,7 @@ def _remember_fb_comment_target(
         "text_prefix": target.get("text_prefix"),
     }
     sc.ctx["_active_comment_anchor_verified"] = True
+    sc.ctx.pop("_fb_comment_target_missing", None)
     result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
     result["_pid"] = target.get("pid")
     result["parent_context_preserved"] = keep_post_detail_parent
@@ -608,6 +609,7 @@ def handle_fb_apply_comment_filter(
         step=step,
         result=result,
         cancel_event=sc.cancel_event,
+        runtime_ctx=sc.ctx,
     )
     target_filter = filter_report.get("target_filter") or target_filter
     reason = str(filter_report.get("reason_code") or "")
@@ -623,7 +625,10 @@ def handle_fb_apply_comment_filter(
         or sc.ctx.get("_fb_comment_filter_settle_s")
         or 0.45
     )
-    settle_needed = applied and reason not in {
+    settle_needed = (
+        applied
+        and not bool(filter_report.get("state_verified"))
+        and reason not in {
         "already_on_filter",
         "already_all_comments",
         "not_comment_sheet",
@@ -631,7 +636,8 @@ def handle_fb_apply_comment_filter(
         "disabled",
         "no_relay",
         "ingest_failed",
-    }
+        }
+    )
     if settle_s > 0 and settle_needed:
         if sc.cancel_event is not None:
             sc.cancel_event.wait(settle_s)
@@ -783,6 +789,7 @@ def handle_tap_fb_comment_button(
             )
         )
         if keep_existing_parent:
+            sc.ctx.pop("_fb_comment_target_missing", None)
             result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
             result["_pid"] = sc.ctx.get("_fb_comment_parent_pid")
             result["parent_context_preserved"] = True
@@ -840,6 +847,7 @@ def handle_tap_fb_comment_button(
                         "text_prefix": target.get("text_prefix"),
                     }
                     sc.ctx["_active_comment_anchor_verified"] = True
+                    sc.ctx.pop("_fb_comment_target_missing", None)
                     result["tapped_at"] = [cx, cy]
                     result["agent_tapped"] = agent_tapped
                     result["_bounds"] = bounds
@@ -865,6 +873,7 @@ def handle_tap_fb_comment_button(
                 step=step,
                 result=result,
                 cancel_event=sc.cancel_event,
+                runtime_ctx=sc.ctx,
             )
             filter_report = result["filter_switch"] if isinstance(result.get("filter_switch"), dict) else {}
             target_filter = filter_report.get("target_filter") or target_filter
@@ -882,7 +891,11 @@ def handle_tap_fb_comment_button(
             or sc.ctx.get("_fb_comment_filter_settle_s")
             or 0.45
         )
-        if settle_s > 0:
+        filter_state_verified = bool(
+            isinstance(result.get("filter_switch"), dict)
+            and result["filter_switch"].get("state_verified")
+        )
+        if settle_s > 0 and not filter_state_verified:
             if sc.cancel_event is not None:
                 sc.cancel_event.wait(settle_s)
             else:

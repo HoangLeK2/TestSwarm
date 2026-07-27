@@ -16,6 +16,12 @@ import { Button } from '@/components/ui/button';
 import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { cn } from '@/lib/utils';
+import type { CampaignDeviceOut } from '../../types';
+import {
+  explicitCampaignDeviceAssignmentsKnown,
+  resolveExplicitCampaignDevices,
+  shouldFetchExplicitCampaignDevices
+} from '../../lib/campaign-device-summary-state';
 
 // ── Group-based summary ───────────────────────────────────────────────────────
 
@@ -130,21 +136,57 @@ function GroupDevicesSummary({
 function ExplicitDevicesSummary({
   campaignId,
   campaignName,
+  initialDevices,
   triggerClassName
 }: {
   campaignId: string;
   campaignName: string;
+  initialDevices?: CampaignDeviceOut[];
   triggerClassName?: string;
 }) {
   const t = useTranslations('campaignsFeature.list');
   const { canUpdate } = useResourcePermissions('campaigns');
-  const { data: devices = [] } = useCampaignDevices(campaignId);
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const shouldFetchDevices = shouldFetchExplicitCampaignDevices(
+    initialDevices,
+    open,
+    addOpen
+  );
+  const { data: fetchedDevices, isLoading } = useCampaignDevices(
+    campaignId,
+    shouldFetchDevices
+  );
+  const devices = resolveExplicitCampaignDevices(
+    fetchedDevices,
+    initialDevices
+  );
+  const assignmentsKnown = explicitCampaignDeviceAssignmentsKnown(
+    fetchedDevices,
+    initialDevices
+  );
   const buttonClassName = cn(
     'h-7 max-w-[190px] justify-start gap-1.5 px-2 text-[11px]',
     triggerClassName
   );
+
+  if (!assignmentsKnown && isLoading) {
+    return (
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        className={buttonClassName}
+        disabled
+      >
+        <Loader2
+          size={12}
+          className='shrink-0 animate-spin text-muted-foreground'
+        />
+        Đang tải thiết bị
+      </Button>
+    );
+  }
 
   if (devices.length === 0) {
     if (!canUpdate) {
@@ -260,11 +302,13 @@ export function CampaignDevicesSummary({
   campaignId,
   campaignName,
   targetGroupId,
+  initialDevices,
   triggerClassName
 }: {
   campaignId: string;
   campaignName: string;
   targetGroupId?: string | null;
+  initialDevices?: CampaignDeviceOut[];
   triggerClassName?: string;
 }) {
   if (targetGroupId) {
@@ -279,6 +323,7 @@ export function CampaignDevicesSummary({
     <ExplicitDevicesSummary
       campaignId={campaignId}
       campaignName={campaignName}
+      initialDevices={initialDevices}
       triggerClassName={triggerClassName}
     />
   );

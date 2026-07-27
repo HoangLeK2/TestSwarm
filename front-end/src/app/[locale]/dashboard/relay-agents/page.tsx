@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CheckSquare,
@@ -55,6 +55,7 @@ import { TitleTooltip } from '@/components/title-tooltip';
 import { cn } from '@/lib/utils';
 import { RelayAgentStatusBadge } from '@/features/devices/components/relay-agent-status-badge';
 import {
+  filterRelayAgentsWithVisibleDevices,
   getRelayConnectionState,
   getVisibleRelaySerials,
   isRelayOperational
@@ -749,6 +750,10 @@ export default function RelayAgentsPage() {
   });
 
   const hasHosts = agents.length > 0;
+  const agentsWithDevices = useMemo(
+    () => filterRelayAgentsWithVisibleDevices(agents),
+    [agents]
+  );
 
   const connectedCount = agents.filter(
     (a) => getRelayConnectionState(a) === 'connected'
@@ -810,11 +815,11 @@ export default function RelayAgentsPage() {
         </div>
       )}
 
-      {agents.length > 0 && (
+      {agentsWithDevices.length > 0 && (
         <>
           <p className='text-xs text-muted-foreground'>{t('dedupeHint')}</p>
           <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-3'>
-            {agents.map((agent) => (
+            {agentsWithDevices.map((agent) => (
               <RelayAgentCard
                 key={agent.relay_id}
                 agent={agent}

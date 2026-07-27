@@ -42,6 +42,9 @@ type ExtractStep = FlowStep & {
   comment_scroll_duration_ms?: number | string;
   comment_scroll_pause_s?: number | string;
   comment_scroll_wall_s?: number | string;
+  comment_require_complete?: boolean;
+  comment_auto_coverage_target_max?: number | string;
+  allow_partial_comments?: boolean;
   comment_no_growth_break?: number | string;
   min_comment_scan_passes?: number | string;
   comment_max_snapshots?: number | string;
@@ -69,6 +72,11 @@ const STRATEGIES = [
     value: 'fb_comments',
     titleKey: 'strategyCommentsTitle',
     descKey: 'strategyCommentsDesc'
+  },
+  {
+    value: 'fb_groups',
+    titleKey: 'strategyGroupsTitle',
+    descKey: 'strategyGroupsDesc'
   },
   {
     value: 'text_nodes',

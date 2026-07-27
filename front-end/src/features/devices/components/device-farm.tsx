@@ -23,9 +23,11 @@ import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devi
 import {
   DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX,
   DEVICE_GRID_GAP_PX,
+  DEVICE_GRID_TILE_WIDTH_PX,
   getDeviceGridColumnCount,
   getDeviceGridRowBounds,
-  getDeviceGridRowCount
+  getDeviceGridRowCount,
+  shouldLoadDeviceGridPreview
 } from '../lib/device-farm-virtual-grid';
 
 const DEFAULT_GRID_PAGE_SIZE = (() => {
@@ -51,7 +53,9 @@ export function DeviceFarm() {
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [stepsSerial, setStepsSerial] = useState<string | null>(null);
 
-  const { devices, tasks, wsConnected, error } = useDeviceFarm();
+  const { devices, tasks, wsConnected, error } = useDeviceFarm({
+    liveSnapshotAuthoritative: true
+  });
 
   const activeDevices = useMemo(
     () => devices.filter(isVisibleDeviceFarmActiveDevice),
@@ -236,18 +240,23 @@ export function DeviceFarm() {
                     data-index={virtualRow.index}
                     className='absolute left-0 top-0 grid w-full justify-start gap-4'
                     style={{
-                      gridTemplateColumns:
-                        'repeat(auto-fill, minmax(min(100%, 280px), 320px))',
+                      gridTemplateColumns: `repeat(${end - start}, minmax(0, min(100%, ${DEVICE_GRID_TILE_WIDTH_PX}px)))`,
                       contain: 'layout paint'
                     }}
                   >
-                    {pageDevices.slice(start, end).map((device) => (
-                      <DeviceTilePreview
-                        key={device.serial}
-                        device={device}
-                        onOpenSteps={openStepsMonitor}
-                      />
-                    ))}
+                    {pageDevices.slice(start, end).map((device, offset) => {
+                      const pageDeviceIndex = start + offset;
+                      return (
+                        <DeviceTilePreview
+                          key={device.serial}
+                          device={device}
+                          onOpenSteps={openStepsMonitor}
+                          previewEnabled={shouldLoadDeviceGridPreview(
+                            pageDeviceIndex
+                          )}
+                        />
+                      );
+                    })}
                   </div>
                 );
               })}

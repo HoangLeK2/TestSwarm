@@ -34,6 +34,7 @@ _ERROR_DETAIL_KEYS = (
     "extra_data_dump_ms",
     "extra_data_parse_ms",
     "extra_data_click_ms",
+    "extra_data_wait_ms",
     "extra_data_sleep_ms",
     "extra_data_steps",
 )

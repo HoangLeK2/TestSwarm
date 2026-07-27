@@ -327,6 +327,47 @@ async def test_start_runtime_uses_temporal_when_available(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_http_runtime_mode_releases_db_transaction_before_temporal_rpc(session_factory):
+    await _seed_orgs(session_factory)
+    campaign_id, execution_id = await _seed_campaign_execution(session_factory)
+    fan_out = FanOutResult(
+        dispatch_id="d-transaction-boundary",
+        campaign_id=campaign_id,
+        dispatch_strategy="parallel",
+        executions=[
+            FanOutExecutionView(
+                execution_id=execution_id,
+                device_id="dev-1",
+                status="running",
+                effective_vars={},
+            )
+        ],
+    )
+    transaction_states: list[bool] = []
+
+    async with session_factory() as db:
+        campaign = await _load_campaign(db, campaign_id)
+
+        async def _start_workflow(*_args, **_kwargs):
+            transaction_states.append(db.in_transaction())
+
+        temporal_client = SimpleNamespace(start_workflow=_start_workflow)
+        await start_execution_runtime(
+            db,
+            fan_out=fan_out,
+            campaign=campaign,
+            org_id=campaign.org_id,
+            actor_user_id="user-owner",
+            temporal_client=temporal_client,
+            temporal_config=SimpleNamespace(enabled=True, task_queue="device-scenario"),
+            manager=None,
+            commit_before_start=True,
+        )
+
+    assert transaction_states == [False]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("device_count", "budget_ms"),
     [

@@ -28,6 +28,29 @@ async def test_set_and_check_execution_cancelled_local():
 
 
 @pytest.mark.asyncio
+async def test_successful_thread_lifecycle_is_debug_only():
+    with (
+        patch("temporal.activities.trace_log") as trace_log,
+        patch("temporal.activities.activity") as mock_activity,
+    ):
+        mock_activity.heartbeat = MagicMock()
+        mock_activity.is_cancelled = MagicMock(return_value=False)
+
+        result = await _to_thread_with_heartbeat(
+            lambda: "done",
+            heartbeat_interval=0.05,
+        )
+
+    assert result == "done"
+    assert [call.args[0] for call in trace_log.debug.call_args_list] == [
+        "temporal_thread_start",
+        "temporal_thread_end",
+    ]
+    trace_log.info.assert_not_called()
+    trace_log.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_to_thread_with_heartbeat_stops_on_execution_cancel_flag():
     cancel_event = threading.Event()
     started = threading.Event()

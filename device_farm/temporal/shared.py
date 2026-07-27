@@ -107,6 +107,7 @@ class DeviceActionBatchInput:
     campaign_vars: dict[str, Any] = field(default_factory=dict)
     scenario_config: dict[str, Any] = field(default_factory=dict)
     scenario_registry: dict[str, Any] = field(default_factory=dict)
+    run_id: str | None = None  # Legacy alias for execution_id
     execution_id: str | None = None
     campaign_id: str | None = None
     depth: int = 0
@@ -129,6 +130,7 @@ class ElementCheckInput:
     value: str
     timeout: float = 3.0
     execution_id: str | None = None
+    campaign_id: str | None = None
 
 
 @dataclass
@@ -142,6 +144,8 @@ class ConditionCheckInput:
     device_serial: str
     condition: dict[str, Any]
     runtime_vars: dict[str, Any] = field(default_factory=dict)
+    execution_id: str | None = None
+    campaign_id: str | None = None
 
 
 class WorkflowStatus(str, Enum):
@@ -182,6 +186,7 @@ class LegacyConditionCheckInput:
     # Carries posts, text_nodes, vars etc. so condition checks have full ctx
     context: dict[str, Any] = field(default_factory=dict)
     execution_id: str | None = None
+    campaign_id: str | None = None
 
 
 @dataclass

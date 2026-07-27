@@ -12,6 +12,8 @@ class FleetDeviceItemOut(BaseModel):
     device_serial: str
     adb_serial: Optional[str] = None
     relay_serial: Optional[str] = None
+    adb_ip: Optional[str] = None
+    adb_port: int = 5555
     name: str
     state: str
     group_ids: list[str] = Field(default_factory=list)

@@ -10,7 +10,8 @@ Responsibilities:
   - Send RegisterMsg on connect
   - Send HeartbeatMsg every 30s
   - Receive ServerControlMsg (bootstrap / restart_u2 / restart_atx / shell)
-  - Execute via relay_agent._execute_command (runs in thread pool)
+  - Route bootstrap to the dedicated async admission path
+  - Execute other commands via relay_agent._execute_command (ADB thread pool)
   - Send CommandResultMsg back
   - Reconnect independently of Channel 1 with exponential backoff
 """
@@ -294,14 +295,22 @@ class AgentControlClient:
         timeout  = int(cmd.timeout) if cmd.timeout else 60
         msg_id   = cmd.msg_id
 
-        loop = asyncio.get_event_loop()
         try:
-            from relay.runtime import adb_executor
-            raw_result = await loop.run_in_executor(
-                adb_executor(),
-                self._agent._execute_command,
-                msg_id, serial, raw_cmd, timeout, cmd_type,
-            )
+            if kind == "bootstrap":
+                raw_result = await self._agent._execute_bootstrap_command(
+                    msg_id,
+                    serial,
+                    timeout,
+                )
+            else:
+                from relay.runtime import adb_executor
+
+                loop = asyncio.get_running_loop()
+                raw_result = await loop.run_in_executor(
+                    adb_executor(),
+                    self._agent._execute_command,
+                    msg_id, serial, raw_cmd, timeout, cmd_type,
+                )
             res = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
         except Exception as exc:
             res = {"ok": False, "exit_code": -1, "output": "", "error": str(exc)}

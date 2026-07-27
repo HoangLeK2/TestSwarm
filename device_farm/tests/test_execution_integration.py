@@ -399,6 +399,45 @@ class TestCampaignDispatchExecution:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.asyncio
+async def test_finish_fan_out_reuses_finished_execution_and_device_id():
+    from services.campaign.dispatcher import finish_fan_out_execution
+
+    execution = SimpleNamespace(id="exec-1", campaign_id=None)
+    db = AsyncMock()
+    finish = AsyncMock()
+    release = AsyncMock()
+
+    with (
+        patch("services.campaign.dispatcher.finish_execution", finish),
+        patch(
+            "services.campaign.dispatcher.release_execution_device_claim",
+            release,
+        ),
+    ):
+        await finish_fan_out_execution(
+            db,
+            execution,
+            org_id="org-1",
+            actor_user_id="user-1",
+            status="completed",
+            execution_already_finished=True,
+            device_id="device-1",
+        )
+
+    finish.assert_not_awaited()
+    db.execute.assert_awaited_once()
+    assignment_update = db.execute.await_args.args[0]
+    assert assignment_update.compile().params["status"] == "completed"
+    release.assert_awaited_once_with(
+        db,
+        execution,
+        org_id="org-1",
+        actor_user_id="user-1",
+        device_id="device-1",
+    )
+
+
 class TestFinalizeCampaignExecutionResult:
     """finalize_campaign upserts ExecutionResult when execution_id provided."""
 
@@ -409,9 +448,142 @@ class TestFinalizeCampaignExecutionResult:
         return acts
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        (
+            "dispatch_strategy",
+            "initial_status",
+            "expected_status",
+            "campaign_lookup_count",
+            "promotion_count",
+        ),
+        [
+            ("parallel", "running", "completed", 0, 0),
+            ("sequential", "running", "completed", 1, 1),
+            ("parallel", "failed", "failed", 0, 0),
+        ],
+    )
+    async def test_fan_out_finalize_reuses_loaded_rows(
+        self,
+        dispatch_strategy,
+        initial_status,
+        expected_status,
+        campaign_lookup_count,
+        promotion_count,
+    ):
+        acts = self._make_activities()
+        db_mock = _make_db_mock()
+        execution = SimpleNamespace(
+            id="exec-fast-finalize",
+            status=initial_status,
+            meta={
+                "dispatch_source": "temporal",
+                "dispatch_strategy": dispatch_strategy,
+            },
+            org_id="org-test",
+            campaign_id="camp-1",
+            user_id="user-1",
+            device_config={"claim_session_id": "claim-1"},
+        )
+        device = SimpleNamespace(id="dev-db-1")
+        finish_fan_out = AsyncMock()
+        campaign_lookup = AsyncMock(return_value=SimpleNamespace(id="camp-1"))
+        upsert_result = AsyncMock()
+        update_execution = AsyncMock()
+        promote = AsyncMock()
+
+        inp = {
+            "campaign_id": "camp-1",
+            "execution_id": execution.id,
+            "device_serial": "SN-FAST",
+            "org_id": "org-test",
+            "success": True,
+            "step_results": [
+                {"index": 0, "type": "capacity_probe", "ok": True}
+            ],
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("temporal.activities.activity"))
+            stack.enter_context(
+                patch("db.database.activity_session", return_value=db_mock)
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.execution.get_execution",
+                    AsyncMock(return_value=execution),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.execution.update_execution",
+                    update_execution,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.execution.upsert_execution_result",
+                    upsert_result,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.device.get_device_by_serial",
+                    AsyncMock(return_value=device),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.execution.step_store.persist_execution_steps_from_results",
+                    AsyncMock(),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.execution.event_publisher.enqueue_execution_event",
+                    AsyncMock(),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.campaign_entity.get_campaign_entity",
+                    campaign_lookup,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.campaign.dispatcher.finish_fan_out_execution",
+                    finish_fan_out,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.campaign.execution_runtime.maybe_promote_sequential_execution",
+                    promote,
+                )
+            )
+            stack.enter_context(patch("temporal.activities._temporal_config", None))
+
+            await acts.finalize_campaign(inp)
+
+        assert campaign_lookup.await_count == campaign_lookup_count
+        update_execution.assert_not_awaited()
+        assert promote.await_count == promotion_count
+        assert execution.status == expected_status
+        assert isinstance(execution.finished_at, datetime)
+        upsert_result.assert_awaited_once()
+        assert upsert_result.await_args.kwargs["status"] == (
+            "failed" if expected_status == "failed" else "passed"
+        )
+        finish_fan_out.assert_awaited_once()
+        assert finish_fan_out.await_args.kwargs["status"] == expected_status
+        assert finish_fan_out.await_args.kwargs["execution_already_finished"] is True
+        assert finish_fan_out.await_args.kwargs["device_id"] == device.id
+
+    @pytest.mark.asyncio
     async def test_upsert_execution_result_called_on_success(self):
         acts = self._make_activities()
         db_mock = _make_db_mock()
+        db_mock.add = MagicMock()
         mock_device = MagicMock()
         mock_device.id = "dev-db-1"
 
@@ -429,9 +601,18 @@ class TestFinalizeCampaignExecutionResult:
         }
 
         upsert_mock = AsyncMock()
-        get_execution_mock = AsyncMock(return_value=SimpleNamespace(status="running", meta={}))
+        get_execution_mock = AsyncMock(
+            return_value=SimpleNamespace(
+                status="running",
+                meta={},
+                org_id="org-test",
+                campaign_id="camp-1",
+                device_config={},
+            )
+        )
         update_execution_mock = AsyncMock()
         get_device_mock = AsyncMock(return_value=mock_device)
+        inline_publish = AsyncMock()
 
         with ExitStack() as stack:
             stack.enter_context(patch("temporal.activities.activity"))
@@ -455,6 +636,14 @@ class TestFinalizeCampaignExecutionResult:
                 "services.execution.step_store.persist_execution_steps_from_results",
                 AsyncMock(),
             ))
+            stack.enter_context(patch(
+                "services.execution.event_publisher.process_outbox_batch",
+                inline_publish,
+            ))
+            stack.enter_context(patch(
+                "services.webhook_dispatcher.dispatch_webhook",
+                AsyncMock(),
+            ))
             # Patch campaign-idle check to avoid Temporal client call
             stack.enter_context(patch(
                 "temporal.activities._temporal_config", None
@@ -469,6 +658,7 @@ class TestFinalizeCampaignExecutionResult:
         assert kwargs["status"] == "passed"
         assert len(kwargs["passed_steps"]) == 2
         assert kwargs["failed_steps"] == []
+        inline_publish.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_upsert_execution_result_called_on_failure(self):

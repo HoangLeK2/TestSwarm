@@ -2,7 +2,9 @@
 agent-boot/main.py — Entry point.
 
 Modes:
-  uv run main.py                     # bootstrap all devices + start relay daemon
+  uv run main.py                     # start relay immediately; reconcile via control plane
+  uv run main.py --startup-mode legacy
+                                      # bootstrap all devices, then start relay
   uv run main.py --relay-only        # skip bootstrap, just run relay
   uv run main.py --bootstrap-only    # setup devices, then exit
   uv run main.py --serial <serial>   # target a specific device
@@ -74,6 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Skip bootstrap, only run relay daemon")
     mode.add_argument("--bootstrap-only", action="store_true",
                       help="Bootstrap devices then exit (no relay)")
+    parser.add_argument(
+        "--startup-mode",
+        choices=("relay-first", "legacy"),
+        default=_env("AGENT_BOOT_STARTUP_MODE", "relay-first"),
+        help=(
+            "Default startup lifecycle: relay-first makes devices stream-capable "
+            "before background bootstrap; legacy bootstraps before relay "
+            "(default: $AGENT_BOOT_STARTUP_MODE or relay-first)"
+        ),
+    )
 
     # Device selection
     parser.add_argument("--serial", "-s", metavar="SERIAL",
@@ -293,6 +305,33 @@ def _resolve_relay_id(args: argparse.Namespace) -> None:
     args.relay_id = load_or_create_relay_id()
 
 
+def _bootstrap_options_requested(
+    args: argparse.Namespace,
+    argv: list[str],
+) -> bool:
+    """Preserve the pre-relay bootstrap semantics of explicit bootstrap flags."""
+    explicit_flags = {
+        token.split("=", 1)[0]
+        for token in argv
+        if token.startswith("--")
+    }
+    return any(
+        (
+            bool(args.serial),
+            bool(args.apk),
+            args.tcpip_port != 5555,
+            "--tcpip-port" in explicit_flags,
+            bool(args.skip_tcpip),
+            bool(args.use_bundle),
+            bool(args.skip_u2),
+            bool(args.force_u2_install),
+            bool(args.skip_atx),
+            bool(args.skip_stf),
+            "--ws-url" in explicit_flags,
+        )
+    )
+
+
 def main() -> None:
     _load_dotenv()
     args = _build_parser().parse_args()
@@ -306,8 +345,22 @@ def main() -> None:
         ok = _run_bootstrap(args)
         sys.exit(0 if ok else 1)
 
-    # Default: bootstrap → relay
-    _run_bootstrap(args)
+    # Default: make relay/video available first. The farm control plane performs
+    # idempotent device bootstrap after registration, on its maintenance lane,
+    # so slow U2/STF repair never blocks scrcpy startup.
+    bootstrap_first = args.startup_mode == "legacy"
+    if args.startup_mode == "relay-first" and _bootstrap_options_requested(
+        args,
+        sys.argv[1:],
+    ):
+        bootstrap_first = True
+        print(
+            "[agent-boot] explicit bootstrap option detected; "
+            "preserving bootstrap-before-relay behavior",
+            file=sys.stderr,
+        )
+    if bootstrap_first:
+        _run_bootstrap(args)
     _run_relay(args)
 
 

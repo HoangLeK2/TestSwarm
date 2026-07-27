@@ -20,9 +20,11 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
+import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { toast } from 'sonner';
 
 type FormData = {
   name: string;
@@ -83,6 +85,12 @@ export function EditTemplateDialog({
   }, [open, template, reset]);
 
   const onSubmit = (data: FormData) => {
+    if (!canPersistScenario(childStepEditorOpen)) {
+      toast.info(
+        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+      );
+      return;
+    }
     mutate(
       {
         templateId: template.id,

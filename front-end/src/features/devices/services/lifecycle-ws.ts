@@ -60,6 +60,8 @@ export type LifecycleWsHandle = {
   close: () => void;
 };
 
+const CONNECTING_CLOSE_TIMEOUT_MS = 5_000;
+
 /**
  * Dedicated /ws/lifecycle connection (auth required). Separate from shared /ws
  * used for device streaming/control.
@@ -72,6 +74,46 @@ export function connectLifecycleWs(
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectAttempt = 0;
+
+  const closeSocket = (ws: WebSocket) => {
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+
+    if (ws.readyState === WebSocket.CONNECTING) {
+      // Calling close() during CONNECTING emits a noisy browser warning. Let
+      // the handshake settle, but retain a bounded fallback for a handshake
+      // that never completes.
+      let settled = false;
+
+      const release = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(closeTimer);
+        ws.onopen = null;
+        ws.onerror = null;
+        ws.onclose = null;
+      };
+      const close = () => {
+        release();
+        if (
+          ws.readyState === WebSocket.CONNECTING ||
+          ws.readyState === WebSocket.OPEN
+        ) {
+          ws.close();
+        }
+      };
+
+      ws.onopen = close;
+      ws.onerror = () => {};
+      ws.onclose = release;
+      const closeTimer = setTimeout(close, CONNECTING_CLOSE_TIMEOUT_MS);
+      return;
+    }
+
+    ws.onopen = null;
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+  };
 
   const scheduleReconnect = () => {
     if (closed) return;
@@ -89,37 +131,44 @@ export function connectLifecycleWs(
     }
 
     try {
-      socket = new WebSocket(url);
+      const ws = new WebSocket(url);
+      socket = ws;
+
+      ws.onopen = () => {
+        if (closed || socket !== ws) {
+          closeSocket(ws);
+          return;
+        }
+        reconnectAttempt = 0;
+        onConnectionChange?.(true);
+      };
+
+      ws.onmessage = (ev) => {
+        if (closed || socket !== ws) return;
+        try {
+          const parsed: unknown = JSON.parse(String(ev.data));
+          if (isLifecycleWsMessage(parsed)) {
+            onMessage(parsed);
+          }
+        } catch {
+          // ignore malformed frames
+        }
+      };
+
+      ws.onclose = () => {
+        if (socket !== ws) return;
+        onConnectionChange?.(false);
+        socket = null;
+        if (!closed) scheduleReconnect();
+      };
+
+      // Browser WebSockets always follow an error with close. Reconnect from
+      // onclose; calling close() here can hit a socket still CONNECTING.
+      ws.onerror = () => {};
     } catch {
       scheduleReconnect();
       return;
     }
-
-    socket.onopen = () => {
-      reconnectAttempt = 0;
-      onConnectionChange?.(true);
-    };
-
-    socket.onmessage = (ev) => {
-      try {
-        const parsed: unknown = JSON.parse(String(ev.data));
-        if (isLifecycleWsMessage(parsed)) {
-          onMessage(parsed);
-        }
-      } catch {
-        // ignore malformed frames
-      }
-    };
-
-    socket.onclose = () => {
-      onConnectionChange?.(false);
-      socket = null;
-      if (!closed) scheduleReconnect();
-    };
-
-    socket.onerror = () => {
-      socket?.close();
-    };
   };
 
   connect();
@@ -128,8 +177,9 @@ export function connectLifecycleWs(
     close() {
       closed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      socket?.close();
+      const activeSocket = socket;
       socket = null;
+      if (activeSocket) closeSocket(activeSocket);
       onConnectionChange?.(false);
     }
   };

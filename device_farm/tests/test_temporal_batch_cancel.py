@@ -10,6 +10,16 @@ import pytest
 from temporal.shared import DeviceActionBatchInput, DeviceActionBatchResult
 
 
+@pytest.fixture(autouse=True)
+def _isolate_campaign_claim_database():
+    """These batch-unit tests do not exercise campaign claim persistence."""
+    with patch(
+        "temporal.activities._heartbeat_campaign_device_claim",
+        AsyncMock(),
+    ):
+        yield
+
+
 def test_device_action_batch_temporal_retry_is_single_attempt():
     """Device actions are side-effectful; Temporal must not replay a timed-out batch."""
     import ast
@@ -718,11 +728,12 @@ async def test_emit_step_events_for_activity_uses_cached_event_context():
     resolve_context = AsyncMock(side_effect=AssertionError("context should be cached"))
     emit_started = AsyncMock()
 
+    inline_publish = AsyncMock()
     with (
         patch("db.database.activity_session", return_value=FakeSession()),
         patch("services.execution.event_publisher.resolve_execution_event_context", resolve_context),
         patch("services.execution.activity_events.emit_step_started", emit_started),
-        patch("services.execution.event_publisher.process_outbox_batch", AsyncMock()),
+        patch("services.execution.event_publisher.process_outbox_batch", inline_publish),
         patch("tenancy.context.tenant_context", fake_tenant_context),
     ):
         await activities._emit_step_events_for_activity(
@@ -735,6 +746,7 @@ async def test_emit_step_events_for_activity_uses_cached_event_context():
 
     resolve_context.assert_not_awaited()
     emit_started.assert_awaited_once()
+    inline_publish.assert_not_awaited()
     assert emit_started.await_args.kwargs["org_id"] == "org-1"
     assert emit_started.await_args.kwargs["campaign_id"] == "camp-cached"
 

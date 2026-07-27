@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,6 +35,8 @@ async def test_u2_batch_coordinate_touch_uses_http_fast_path(monkeypatch):
         relay_mode="grpc",
     )
     agent._u2_executor = AsyncMock()
+    agent._u2_executor.begin_ui_mutation = MagicMock()
+    agent._u2_executor.end_ui_mutation = MagicMock()
 
     calls: list[tuple[str, str, str, dict, float]] = []
 
@@ -79,6 +81,57 @@ async def test_u2_batch_coordinate_touch_uses_http_fast_path(monkeypatch):
         )
     ]
     agent._u2_executor.run_batch.assert_not_called()
+    agent._u2_executor.begin_ui_mutation.assert_called_once_with(
+        "10AE7S00HD002JK"
+    )
+    agent._u2_executor.end_ui_mutation.assert_called_once_with(
+        "10AE7S00HD002JK"
+    )
+
+
+@pytest.mark.asyncio
+async def test_u2_request_jsonrpc_post_marks_ui_mutation(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+    agent._u2_executor = MagicMock()
+    monkeypatch.setattr(
+        agent,
+        "_do_u2_http",
+        lambda *_args: {
+            "ok": True,
+            "status": 200,
+            "body": json.dumps({"jsonrpc": "2.0", "id": 1, "result": True}),
+            "content_type": "application/json",
+        },
+    )
+
+    send_q: asyncio.Queue = asyncio.Queue()
+    await agent._handle_u2_request(
+        {
+            "msg_id": "request-1",
+            "serial": "10AE7S00HD002JK",
+            "method": "POST",
+            "path": "/jsonrpc/0",
+            "body": json.dumps({
+                "jsonrpc": "2.0",
+                "method": "click",
+                "id": 1,
+                "params": [100, 200],
+            }),
+        },
+        send_q,
+    )
+
+    agent._u2_executor.begin_ui_mutation.assert_called_once_with(
+        "10AE7S00HD002JK"
+    )
+    agent._u2_executor.end_ui_mutation.assert_called_once_with(
+        "10AE7S00HD002JK"
+    )
 
 
 @pytest.mark.asyncio
@@ -132,6 +185,8 @@ async def test_u2_batch_fast_path_respects_early_exit_false(monkeypatch):
         relay_mode="grpc",
     )
     agent._u2_executor = AsyncMock()
+    agent._u2_executor.begin_ui_mutation = MagicMock()
+    agent._u2_executor.end_ui_mutation = MagicMock()
     calls = 0
 
     def _fake_u2_http(serial, method, path, body, content_type, timeout):

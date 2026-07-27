@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import av
 
 from runtime.transports.h264_utils import (
-    annexb_to_avcc_maybe,
+    annexb_to_avcc,
     annexb_to_avcc_record_maybe,
     _is_annexb,
 )
@@ -36,26 +36,9 @@ log = logging.getLogger(__name__)
 
 
 def _is_idr(avcc_data: bytes) -> bool:
+    """Return whether an AVCC access unit contains an IDR NAL."""
     if not avcc_data:
         return False
-    if avcc_data[:4] == b"\x00\x00\x00\x01" or avcc_data[:3] == b"\x00\x00\x01":
-        i = 0
-        n = len(avcc_data)
-        while i < n - 2:
-            if i + 3 < n and avcc_data[i:i+4] == b"\x00\x00\x00\x01":
-                nal_start = i + 4
-                if nal_start < n and (avcc_data[nal_start] & 0x1F) == _IDR_NAL_TYPE:
-                    return True
-                i = nal_start
-            elif avcc_data[i:i+3] == b"\x00\x00\x01":
-                nal_start = i + 3
-                if nal_start < n and (avcc_data[nal_start] & 0x1F) == _IDR_NAL_TYPE:
-                    return True
-                i = nal_start
-            else:
-                i += 1
-        return False
-    # AVCC format: iterate length-prefixed NAL units
     i = 0
     n = len(avcc_data)
     while i + 4 <= n:
@@ -519,9 +502,10 @@ class ScrcpyReceiver(threading.Thread):
                         pass
                     continue
 
-                # Video packet: convert Annex-B → AVCC if needed, detect keyframe
+                # The local scrcpy socket protocol emits Annex-B access units.
+                # Convert at this known boundary instead of sniffing ambiguous bytes.
                 try:
-                    avcc_data = annexb_to_avcc_maybe(data)
+                    avcc_data = annexb_to_avcc(data)
                 except Exception:
                     avcc_data = data
 
@@ -690,6 +674,8 @@ class RelayScrcpyReceiver:
         # Without throttling, submitting P-frames at 20fps to the executor queues
         # up ~100ms of work, causing MJPEG latency to grow unboundedly.
         self._last_jpeg_t: float = 0.0
+        self._jpeg_demand_until: float = 0.0
+        self._jpeg_wait_for_idr: bool = True
 
         self._logger = logging.getLogger(f"relay_scrcpy.{serial}")
 
@@ -710,6 +696,34 @@ class RelayScrcpyReceiver:
 
     def get_latest_frame(self) -> Optional[bytes]:
         return None  # screenshot is handled via on_frame callback
+
+    def request_jpeg_frames(self, duration_s: float = 3.0) -> None:
+        """Temporarily enable H264→JPEG work for screenshot/MJPEG consumers."""
+        now = time.monotonic()
+        was_active = now < self._jpeg_demand_until
+        self._jpeg_demand_until = max(
+            self._jpeg_demand_until,
+            now + max(0.25, float(duration_s)),
+        )
+        if was_active:
+            return
+
+        # Decoder state is intentionally discarded while idle. Resume from an
+        # IDR instead of feeding an arbitrary P-frame into a fresh codec.
+        self._codec_ctx = None
+        self._jpeg_wait_for_idr = True
+        ctrl = self.control
+        request_idr = (
+            getattr(ctrl, "_request_idr_throttled", None)
+            or getattr(ctrl, "request_idr", None)
+            if ctrl is not None
+            else None
+        )
+        if request_idr is not None:
+            try:
+                request_idr()
+            except Exception:
+                pass
 
     # ── Frame intake (called by AdbRelayManager) ──────────────────────────────
 
@@ -779,11 +793,8 @@ class RelayScrcpyReceiver:
             )
 
     def _handle_video(self, data: bytes, pts_us: int, hint_is_key: bool = False) -> None:
-        # Relay agents convert Annex-B → AVCC in their relay thread before sending,
-        # so annexb_to_avcc_maybe is a fast O(1) no-op for relay-sourced frames
-        # (data doesn't start with Annex-B start code → returns unchanged immediately).
-        # For local ADB path (ScrcpyReceiver), the data is still Annex-B → converted here.
-        avcc_data = annexb_to_avcc_maybe(data)
+        # Relay agents convert Annex-B to AVCC before sending this binary packet.
+        avcc_data = data
         # Trust agent's pre-computed keyframe flag — avoids redundant IDR scan.
         is_key = hint_is_key
 
@@ -795,11 +806,18 @@ class RelayScrcpyReceiver:
         if self.on_h264_packet:
             self.on_h264_packet(avcc_data, is_key, pts_us)
 
-        # Submit ALL frames to the JPEG executor to maintain H264 decoder state
-        # (P-frames require all preceding frames since the last IDR to be decoded).
-        # _decode_and_emit_throttled handles the JPEG emission rate limit (≤3fps).
-        # At 20fps input × 15ms/frame, the single-worker executor runs at ~30% load —
-        # no queue buildup, no event-loop stalls.
+        # H264 forwarding is always active. JPEG decoding is demand-driven so
+        # H264-only viewers do not spend CPU decoding and re-encoding every frame.
+        jpeg_requested = time.monotonic() < self._jpeg_demand_until
+        if not jpeg_requested:
+            return
+        if self._jpeg_wait_for_idr:
+            if not is_key:
+                return
+            self._jpeg_wait_for_idr = False
+
+        # While requested, submit every frame to preserve decoder references.
+        # _decode_and_emit_throttled limits JPEG encoding/emission to ≤3fps.
         if self.on_frame and self._last_config:
             loop = self._event_loop
             if loop is not None:

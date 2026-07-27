@@ -60,6 +60,11 @@ STREAM_FIRST_KEY_IDR_MAX_RETRIES = max(
     1,
     int(os.environ.get("STREAM_FIRST_KEY_IDR_MAX_RETRIES", "3")),
 )
+STREAM_VIEWER_IDR_MIN_INTERVAL_S = max(
+    0.1,
+    float(os.environ.get("STREAM_VIEWER_IDR_MIN_INTERVAL_S", "0.5")),
+)
+STREAM_STATS_LOG_INTERVAL_S = 5.0
 
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -234,6 +239,7 @@ class WebSocketManager:
         self._allowed_serials: Dict[str, Optional[set[str]]] = {}
         self._conn_sender_groups: Dict[str, list[asyncio.Task]] = {}
         self._pending_unwatch_tasks: Dict[tuple[str, str], asyncio.Task] = {}
+        self._viewer_idr_request_at: Dict[str, float] = {}
         self._session_to_conn: Dict[str, str] = {}
         self._conn_sessions: Dict[str, Optional[str]] = {}
         self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
@@ -657,21 +663,41 @@ class WebSocketManager:
         last_force_idr_ts = time.monotonic()
         first_key_idr_retries = 0
 
+        def _log_sender_stats_if_due(now: float) -> None:
+            nonlocal sent_total, dropped_total, last_stats_ts
+            if now - last_stats_ts < STREAM_STATS_LOG_INTERVAL_S:
+                return
+            if sent_total or dropped_total:
+                log_fn = log.warning if dropped_total else log.debug
+                log_fn(
+                    "[WS device sender] serial=%s sent=%d dropped=%d",
+                    getattr(device, "serial", "unknown"),
+                    sent_total,
+                    dropped_total,
+                )
+            sent_total = 0
+            dropped_total = 0
+            last_stats_ts = now
+
         try:
             # Viewer refcount: drives DeviceClient auto-start/auto-stop.
+            bootstrap = None
             try:
-                device.subscribe_frames(frame_q)
+                bootstrap = device.subscribe_frames(frame_q)
             except Exception:
                 pass
 
-            # Bootstrap cached config/key quickly (helps late-join).
-            cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=60.0)
+            if isinstance(bootstrap, tuple) and len(bootstrap) == 2:
+                cfg_ref, key_ref = bootstrap
+            else:
+                cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=2.0)
             try:
                 async with ws_send_lock:
                     if cfg_ref:
                         await asyncio.wait_for(ws.send_bytes(cfg_ref), timeout=0.2)
                     if key_ref:
                         await asyncio.wait_for(ws.send_bytes(key_ref), timeout=0.2)
+                        saw_key_sent = True
             except asyncio.TimeoutError:
                 pass
             except Exception:
@@ -681,9 +707,12 @@ class WebSocketManager:
                     exc_info=True,
                 )
 
-            # Ensure first-frame latency: force at least one IDR.
-            _request_idr_recover(force=True)
-            first_key_idr_retries += 1
+            # A fresh cached key is already a complete bootstrap. Request IDR
+            # only when the cache cannot start the decoder.
+            if not saw_key_sent:
+                _request_idr_recover(force=True)
+                first_key_idr_retries += 1
+                last_force_idr_ts = time.monotonic()
 
             while True:
                 if (
@@ -712,6 +741,7 @@ class WebSocketManager:
                 except asyncio.TimeoutError:
                     dropped_total += 1
                     _request_idr_recover()
+                    _log_sender_stats_if_due(time.monotonic())
                     continue
                 try:
                     await asyncio.wait_for(
@@ -727,18 +757,7 @@ class WebSocketManager:
                 sent_total += 1
                 await asyncio.sleep(0)
 
-                now = time.monotonic()
-                if now - last_stats_ts >= 5.0:
-                    if sent_total or dropped_total:
-                        log.info(
-                            "[WS device sender] serial=%s sent=%d dropped=%d",
-                            getattr(device, "serial", "unknown"),
-                            sent_total,
-                            dropped_total,
-                        )
-                    sent_total = 0
-                    dropped_total = 0
-                    last_stats_ts = now
+                _log_sender_stats_if_due(time.monotonic())
         finally:
             log.info(
                 "watch_serial: stopped video sender for %s",
@@ -918,9 +937,19 @@ class WebSocketManager:
                 # ~100ms instead of waiting up to ~14s for a natural IDR.
                 # Not gated by write-frame rules — this is a stream-level
                 # recovery hint, not a device input mutation.
+                now = time.monotonic()
+                last_request_at = self._viewer_idr_request_at.get(serial, 0.0)
+                if now - last_request_at < STREAM_VIEWER_IDR_MIN_INTERVAL_S:
+                    continue
+                self._viewer_idr_request_at[serial] = now
                 recv = getattr(device, "_scrcpy_receiver", None)
                 ctrl = getattr(recv, "control", None) if recv is not None else None
-                fn = getattr(ctrl, "request_idr", None) if ctrl is not None else None
+                fn = (
+                    getattr(ctrl, "_request_idr_throttled", None)
+                    or getattr(ctrl, "request_idr", None)
+                    if ctrl is not None
+                    else None
+                )
                 if fn is not None:
                     try:
                         loop.run_in_executor(None, fn)
@@ -1849,9 +1878,16 @@ class DeviceAgentSession:
                             raw_data = base64.b64decode(data_b64)
                             is_key = bool(msg.get("key", False) or msg.get("is_key", False))
                             pts_us = int(msg.get("pts", 0) or msg.get("pts_us", 0) or 0)
-                            # Convert Annex B → AVCC if needed
-                            from runtime.transports.h264_utils import annexb_to_avcc_maybe
-                            avcc_data = annexb_to_avcc_maybe(raw_data)
+                            # Legacy JSON agents historically send Annex-B. New agents
+                            # can declare AVCC explicitly; never infer framing from bytes.
+                            framing = str(
+                                msg.get("framing", msg.get("format", "annexb"))
+                            ).strip().lower()
+                            if framing == "avcc":
+                                avcc_data = raw_data
+                            else:
+                                from runtime.transports.h264_utils import annexb_to_avcc
+                                avcc_data = annexb_to_avcc(raw_data)
                             device.on_agent_h264_video(avcc_data, is_key, pts_us)
 
                     elif msg_type == "tunnel_data":

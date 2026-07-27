@@ -168,6 +168,17 @@ campaign_dispatch_duration_seconds = Histogram(
     "Wall time for campaign fan-out dispatch handler",
     buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
 )
+campaign_dispatch_http_duration_seconds = Histogram(
+    "campaign_dispatch_http_duration_seconds",
+    "End-to-end campaign dispatch HTTP handler wall time",
+    buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
+)
+campaign_dispatch_phase_duration_seconds = Histogram(
+    "campaign_dispatch_phase_duration_seconds",
+    "Campaign dispatch wall time by bounded internal phase",
+    ["phase"],
+    buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+)
 
 # ── Campaign account binding (DF-T-04-009) ──
 campaign_account_fallback_triggered_count = Counter(
@@ -214,6 +225,24 @@ execution_events_published_total = Counter(
 execution_event_outbox_lag_seconds = Gauge(
     "execution_event_outbox_lag_seconds",
     "Age of oldest unpublished execution event in outbox (seconds)",
+)
+execution_event_outbox_backlog = Gauge(
+    "execution_event_outbox_backlog",
+    "Number of unpublished execution events waiting in the outbox",
+)
+execution_event_outbox_batch_duration_seconds = Histogram(
+    "execution_event_outbox_batch_duration_seconds",
+    "Wall time to claim and publish one execution-event outbox batch",
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+)
+execution_event_outbox_batch_size = Histogram(
+    "execution_event_outbox_batch_size",
+    "Execution events claimed by one outbox poll",
+    buckets=[0, 1, 5, 10, 25, 50, 100, 200, 500],
+)
+execution_event_outbox_publish_failures_total = Counter(
+    "execution_event_outbox_publish_failures_total",
+    "Execution event broker publication failures",
 )
 execution_event_bus_backpressure_total = Counter(
     "execution_event_bus_backpressure_total",

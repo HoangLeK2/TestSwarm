@@ -49,6 +49,12 @@ from .execution_step import ExecutionStep
 from .scenario_version import ScenarioVersion
 from .execution_dlq import ExecutionDLQ
 from .execution_event import ExecutionEvent
+from .external_entity import (
+    ExecutionEntityAssignment,
+    ExternalEntity,
+    ExternalEntityDiscovery,
+    ExternalEntityObservation,
+)
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
 from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgentToken
@@ -111,6 +117,10 @@ __all__ = [
     "ScenarioVersion",
     "ExecutionDLQ",
     "ExecutionEvent",
+    "ExternalEntity",
+    "ExternalEntityObservation",
+    "ExternalEntityDiscovery",
+    "ExecutionEntityAssignment",
     "U2RecoveryEvent",
     "DeviceEvent",
     "RelayAgent",

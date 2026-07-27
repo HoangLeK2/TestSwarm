@@ -129,6 +129,7 @@ async def test_open_dlq_sets_execution_dlq_open(session_factory):
                     id="exec-fail",
                     run_type="campaign_device",
                     status=ExecutionStatus.FAILED.value,
+                    org_id="org-1",
                     campaign_id="camp-1",
                     user_id="u1",
                     created_at=datetime.now(timezone.utc),
@@ -148,7 +149,47 @@ async def test_open_dlq_sets_execution_dlq_open(session_factory):
 
     assert entry.failed_step_id == "3"
     assert entry.failure_reason == "tap failed"
+    assert entry.org_id == "org-1"
     assert ex.status == ExecutionStatus.DLQ_OPEN.value
+
+
+@pytest.mark.asyncio
+async def test_create_dlq_derives_org_id_from_execution(session_factory):
+    exec_id = await _seed_epic04_execution(
+        session_factory,
+        exec_id="exec-derived-dlq-org",
+    )
+
+    async with session_factory() as db:
+        with tenant_context("org-1"):
+            entry = await create_dlq_entry(
+                db,
+                execution_id=exec_id,
+                device_serial="SN1",
+                error="boom",
+            )
+        await db.commit()
+
+    assert entry.org_id == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_open_dlq_rejects_org_id_mismatch(session_factory):
+    exec_id = await _seed_epic04_execution(
+        session_factory,
+        exec_id="exec-dlq-org-mismatch",
+    )
+
+    async with session_factory() as db:
+        with pytest.raises(ValueError, match="DLQ org_id mismatch"):
+            await open_dlq_for_failed_execution(
+                db,
+                execution_id=exec_id,
+                device_serial="SN1",
+                error_msg="boom",
+                org_id="org-2",
+                user_id="u1",
+            )
 
 
 @pytest.mark.asyncio

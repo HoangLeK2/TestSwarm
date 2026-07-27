@@ -14,6 +14,8 @@ export interface Device {
   touch_method?: string;
   minitouch_ready?: boolean;
   u2_ready?: boolean;
+  agent_connected?: boolean;
+  stf_connected?: boolean;
   relay_scrcpy_enabled?: boolean;
   /** >0 when a Temporal scenario/campaign is actively driving this device */
   scenario_active?: number;
@@ -62,6 +64,8 @@ export type WsMessage =
       touch_method?: string;
       minitouch_ready?: boolean;
       u2_ready?: boolean;
+      agent_connected?: boolean;
+      stf_connected?: boolean;
       scenario_active?: number;
       manual_takeover_active?: boolean;
     }

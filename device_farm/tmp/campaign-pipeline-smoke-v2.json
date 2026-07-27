@@ -1,0 +1,162 @@
+{
+  "config": {
+    "levels": [
+      2
+    ],
+    "repeats": 1,
+    "timeout_s": 180.0,
+    "warmups": 0
+  },
+  "environment": {
+    "database_url": "postgresql://postgres:***@localhost:5433/device_farm_benchmark",
+    "observer_connections": 1,
+    "org_id": "940258e1-3d93-4644-9a96-174e78df89ae",
+    "probe_delay_ms": 25,
+    "task_queue": "campaign-pipeline-benchmark-2739887210",
+    "temporal_namespace": "default",
+    "temporal_server": "localhost:7233"
+  },
+  "finished_at": "2026-07-24T07:18:57.035638+00:00",
+  "gates": {
+    "checks": {
+      "db_peak_percent": {
+        "budget": 85.0,
+        "status": "passed",
+        "value": 35.0
+      },
+      "event_delivery": {
+        "budget": {
+          "all_published": true,
+          "lag_for_every_event": true,
+          "minimum_total": 2
+        },
+        "status": "passed",
+        "value": {
+          "lag_samples": 2,
+          "published": 2,
+          "total": 2
+        }
+      },
+      "failed": {
+        "budget": 0,
+        "status": "passed",
+        "value": 0
+      },
+      "finalization_duration_p95_ms": {
+        "budget": 2000.0,
+        "status": "passed",
+        "value": 45.4960023984313
+      },
+      "finalization_schedule_to_start_p95_ms": {
+        "budget": 1000.0,
+        "status": "passed",
+        "value": 3.52655
+      },
+      "http_p95_s": {
+        "budget": 5.0,
+        "status": "passed",
+        "value": 0.06930475000262959
+      },
+      "improvement_30_percent": {
+        "budget_percent": 30.0,
+        "status": "not_evaluated",
+        "value_percent": null
+      },
+      "outbox_lag_p95_ms": {
+        "budget": 2000.0,
+        "status": "passed",
+        "value": 46.0462
+      },
+      "pool_timeouts": {
+        "budget": 0,
+        "status": "passed",
+        "value": 0
+      },
+      "schedule_to_start_p95_ms": {
+        "budget": 2000.0,
+        "status": "passed",
+        "value": 3.8732999999999995
+      }
+    },
+    "passed": false
+  },
+  "git_sha": "d37435eca7065d1ef0e6d3a7cf8dd3cc54fa25aa",
+  "run_id": "2739887210",
+  "schema_version": 1,
+  "started_at": "2026-07-24T07:18:54.993600+00:00",
+  "summary": {
+    "2": {
+      "db_max_connections": 100,
+      "db_peak_connections": 35,
+      "db_peak_percent": 35.0,
+      "events_published": 2,
+      "events_total": 2,
+      "failed": 0,
+      "finalization_duration_p95_ms": 45.4960023984313,
+      "finalization_schedule_to_start_p95_ms": 3.52655,
+      "http_p50_s": 0.06930475000262959,
+      "http_p95_s": 0.06930475000262959,
+      "http_p99_s": 0.06930475000262959,
+      "outbox_lag_p95_ms": 46.0462,
+      "outbox_samples": 2,
+      "pool_timeouts": 0,
+      "runs": 1,
+      "schedule_to_start_p95_ms": 3.8732999999999995,
+      "sql_count_mean": 108.0,
+      "sql_duration_mean_s": 0.09715479098667856,
+      "terminal_p95_s": 0.19116708300134633,
+      "total_p95_s": 0.204178291001881
+    }
+  },
+  "waves": [
+    {
+      "completed": 2,
+      "db_max_connections": 100,
+      "db_peak_connections": 35,
+      "errors": [],
+      "events_published": 2,
+      "events_total": 2,
+      "execution_count": 2,
+      "failed": 0,
+      "finalization_duration_ms": [
+        45.45250000228407,
+        45.498291998228524
+      ],
+      "finalization_schedule_to_start_ms": [
+        3.569,
+        2.72
+      ],
+      "http_s": 0.06930475000262959,
+      "http_status": 200,
+      "outbox_lag_ms": [
+        46.379,
+        39.723
+      ],
+      "phase_s": {
+        "fan_out": 0.04025470800115727,
+        "http": 0.06733279100444634,
+        "response_hydration": 0.0029755420036963187,
+        "runtime_start": 0.02409679199627135
+      },
+      "pool_peak": 2,
+      "pool_timeouts": 0,
+      "repeat": 1,
+      "schedule_to_start_ms": [
+        3.8939999999999997,
+        3.48
+      ],
+      "sql_by_verb": {
+        "INSERT": 21,
+        "SELECT": 71,
+        "UPDATE": 16
+      },
+      "sql_count": 108,
+      "sql_duration_s": 0.09715479098667856,
+      "sql_executemany_calls": 5,
+      "target_count": 2,
+      "terminal_s": 0.19116708300134633,
+      "total_s": 0.204178291001881,
+      "warmup": false
+    }
+  ]
+}

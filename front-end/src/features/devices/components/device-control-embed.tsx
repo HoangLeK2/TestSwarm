@@ -1,7 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDeviceFarm } from '../hooks/use-device-farm';
+import { resolveControlRecordSelectedDevice } from '../lib/control-record-device-state';
+import { shouldRunEmbedStream } from '../lib/embed-stream-visibility';
+import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import { DeviceTile } from './device-tile';
 
 type Props = {
@@ -29,6 +32,14 @@ type Props = {
   ) => void;
 };
 
+/** Lightweight scrcpy profile for campaign-monitor embeds — avoids fighting control streams. */
+const MONITOR_PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: false,
+  maxFps: 4,
+  maxWidth: 360,
+  bitrate: 120_000
+};
+
 export function DeviceControlEmbed({
   initialSerial,
   compact = true,
@@ -38,6 +49,63 @@ export function DeviceControlEmbed({
   onSwipe,
   onDragGesture
 }: Props) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [nearViewport, setNearViewport] = useState(!readOnlyPreview);
+  const [previewStreamEnabled, setPreviewStreamEnabled] =
+    useState(!readOnlyPreview);
+
+  useLayoutEffect(() => {
+    if (!readOnlyPreview) {
+      setNearViewport(true);
+      return;
+    }
+    const element = viewportRef.current;
+    if (!element) return;
+    const margin = 160;
+    const sync = () => {
+      const rect = element.getBoundingClientRect();
+      setNearViewport(
+        document.visibilityState !== 'hidden' &&
+          rect.bottom > -margin &&
+          rect.top < window.innerHeight + margin
+      );
+    };
+
+    sync();
+    window.addEventListener('scroll', sync, { passive: true, capture: true });
+    window.addEventListener('resize', sync);
+    window.addEventListener('focus', sync);
+    window.addEventListener('pageshow', sync);
+    document.addEventListener('visibilitychange', sync);
+    const observer =
+      typeof IntersectionObserver === 'undefined'
+        ? null
+        : new IntersectionObserver(sync, {
+            root: null,
+            rootMargin: `${margin}px`,
+            threshold: 0.04
+          });
+    observer?.observe(element);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('scroll', sync, { capture: true });
+      window.removeEventListener('resize', sync);
+      window.removeEventListener('focus', sync);
+      window.removeEventListener('pageshow', sync);
+      document.removeEventListener('visibilitychange', sync);
+    };
+  }, [readOnlyPreview]);
+
+  useEffect(() => {
+    if (!readOnlyPreview || nearViewport) {
+      setPreviewStreamEnabled(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setPreviewStreamEnabled(false), 700);
+    return () => window.clearTimeout(timer);
+  }, [nearViewport, readOnlyPreview]);
+
   const {
     devices,
     logs,
@@ -46,17 +114,18 @@ export function DeviceControlEmbed({
     handleToggleMode,
     handleRestart,
     error
-  } = useDeviceFarm();
+  } = useDeviceFarm({
+    liveRefreshMs: readOnlyPreview ? 15_000 : undefined,
+    loadTasks: false,
+    refreshRegisteredOnFocus: !readOnlyPreview
+  });
 
   const activeDevices = devices.filter(
     (d) => d.state && !['DISCONNECTED', 'DEAD'].includes(d.state.toUpperCase())
   );
 
   const selectedDevice = useMemo(
-    () =>
-      activeDevices.find((d) => d.serial === initialSerial) ??
-      activeDevices[0] ??
-      null,
+    () => resolveControlRecordSelectedDevice(activeDevices, initialSerial),
     [activeDevices, initialSerial]
   );
 
@@ -90,13 +159,10 @@ export function DeviceControlEmbed({
   }
 
   return (
-    <div className={compact ? 'w-full min-w-0 max-w-full' : ''}>
-      {selectedDevice.serial !== initialSerial && (
-        <p className='mb-1 text-[10px] text-muted-foreground'>
-          Thiết bị {initialSerial} chưa online — đang hiển thị:{' '}
-          {selectedDevice.serial}
-        </p>
-      )}
+    <div
+      ref={viewportRef}
+      className={compact ? 'w-full min-w-0 max-w-full' : ''}
+    >
       <DeviceTile
         device={selectedDevice}
         logLines={compact ? [] : (logs[selectedDevice.serial] ?? [])}
@@ -124,6 +190,18 @@ export function DeviceControlEmbed({
         hideControls={readOnlyPreview}
         hideDeviceFunctions={readOnlyPreview}
         readOnlyPreview={readOnlyPreview}
+        streamFetchPriority={readOnlyPreview ? 'low' : 'auto'}
+        streamTransport={readOnlyPreview ? 'h264-only' : 'auto'}
+        scrcpyViewerRole={
+          readOnlyPreview ? 'campaign-monitor' : 'control-screen'
+        }
+        scrcpyAttachOptions={
+          readOnlyPreview ? MONITOR_PREVIEW_SCRCPY_OPTIONS : undefined
+        }
+        streamEnabled={shouldRunEmbedStream({
+          readOnlyPreview,
+          nearViewport: previewStreamEnabled
+        })}
       />
     </div>
   );

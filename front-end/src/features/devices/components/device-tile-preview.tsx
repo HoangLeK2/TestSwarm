@@ -25,6 +25,7 @@ import { DeviceStepMonitorButton } from './device-step-monitor';
 import { Badge } from '@/components/ui/badge';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
+import { DEVICE_GRID_TILE_WIDTH_PX } from '../lib/device-farm-virtual-grid';
 import {
   acquireSnapshotPreviewWarmup,
   subscribeSnapshotPreviewWarmupChanges,
@@ -34,18 +35,25 @@ import { useH264Video } from '../hooks/use-h264-canvas';
 import { requestIdr } from '../services/ws';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
+import {
+  isGridH264Enabled,
+  nextSnapshotRetryDelayMs,
+  selectDeviceTilePreviewMode,
+  type WebCodecsSupport
+} from '../lib/device-tile-preview-policy';
 
 /** Lazy by default so multiple dashboard tabs do not exhaust browser stream connections. */
 const GRID_PREVIEW_EAGER =
   (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '0').trim() !==
   '0';
-const GRID_PREVIEW_H264 =
-  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264 ?? '1').trim() !== '0';
+const GRID_PREVIEW_H264 = isGridH264Enabled(
+  process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264
+);
 const DASHBOARD_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MS ?? 1_000
+    process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MS ?? 2_000
   );
-  if (!Number.isFinite(raw)) return 1_000;
+  if (!Number.isFinite(raw)) return 2_000;
   return Math.max(500, Math.min(5_000, Math.round(raw)));
 })();
 const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
@@ -60,13 +68,15 @@ const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
 interface DeviceTilePreviewProps {
   device: Device;
   onOpenSteps?: (serial: string) => void;
+  previewEnabled?: boolean;
 }
 
 type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
 
 function DeviceTilePreviewInner({
   device,
-  onOpenSteps
+  onOpenSteps,
+  previewEnabled = true
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -75,8 +85,12 @@ function DeviceTilePreviewInner({
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewWarmupRef = useRef<SnapshotPreviewWarmupHandle | null>(null);
+  const snapshotFailureCountRef = useRef(0);
   const [inView, setInView] = useState(false);
   const [lazyLoadStream, setLazyLoadStream] = useState(false);
+  const [webCodecsSupport, setWebCodecsSupport] =
+    useState<WebCodecsSupport>('unknown');
+  const [h264Stalled, setH264Stalled] = useState(false);
 
   useLayoutEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -134,29 +148,32 @@ function DeviceTilePreviewInner({
   }, [inView]);
 
   const loadStream =
-    tabActive && (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
-  const shouldUseH264Preview = GRID_PREVIEW_H264 && isActive && loadStream;
+    previewEnabled &&
+    tabActive &&
+    (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
+  const previewMode = selectDeviceTilePreviewMode({
+    h264Enabled: GRID_PREVIEW_H264,
+    webCodecsSupport,
+    h264Stalled
+  });
+  const shouldUseH264Preview = previewMode.useH264 && isActive && loadStream;
+  const shouldUseSnapshotPreview =
+    previewMode.useSnapshot && isActive && loadStream;
+  const shouldWarmupPreview = isActive && loadStream;
   const h264PreviewActive =
     shouldUseH264Preview &&
     (previewWarmupState === 'attaching' || previewWarmupState === 'live');
 
   const previewUrl = useMemo(() => {
-    if (shouldUseH264Preview) return null;
+    if (!shouldUseSnapshotPreview) return null;
     if (!tabActive) return null;
-    if (!isActive || !loadStream) return null;
-    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}`;
+    const base = `${deviceFarmMediaBase}/screenshot/${encodeURIComponent(device.serial)}?_r=${previewAttempt}&max_age_ms=${DASHBOARD_PREVIEW_MAX_AGE_MS}&max_width=360`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [
-    device.serial,
-    isActive,
-    loadStream,
-    previewAttempt,
-    tabActive,
-    shouldUseH264Preview
-  ]);
+  }, [device.serial, previewAttempt, tabActive, shouldUseSnapshotPreview]);
 
-  const showPreviewImg = Boolean(displayedPreviewUrl);
+  const showPreviewImg =
+    shouldUseSnapshotPreview && Boolean(displayedPreviewUrl);
 
   /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
   const previewMockupScreenWidth = 198;
@@ -164,7 +181,7 @@ function DeviceTilePreviewInner({
     () => mockupOuterHeightPx(previewMockupScreenWidth),
     [previewMockupScreenWidth]
   );
-  const tileWidthPx = previewMockupScreenWidth + 90;
+  const tileWidthPx = DEVICE_GRID_TILE_WIDTH_PX;
 
   const isPreviewQueued =
     shouldUseH264Preview && previewWarmupState === 'queued';
@@ -176,20 +193,39 @@ function DeviceTilePreviewInner({
     loadingElapsedSec >= 12;
 
   useEffect(() => {
+    if (!GRID_PREVIEW_H264) {
+      setWebCodecsSupport('unsupported');
+      return;
+    }
+    setWebCodecsSupport(
+      typeof window !== 'undefined' && 'VideoDecoder' in window
+        ? 'supported'
+        : 'unsupported'
+    );
+  }, []);
+
+  useEffect(() => {
     setHasFrame(false);
+    setH264Stalled(false);
     setDisplayedPreviewUrl(null);
     setPreviewAttempt(0);
+    snapshotFailureCountRef.current = 0;
     setPreviewWarmupState('idle');
   }, [device.serial]);
 
   useH264Video(h264PreviewActive ? device.serial : '', previewCanvasRef, {
     onFrame: useCallback(() => {
       setHasFrame(true);
+      setH264Stalled(false);
+      setDisplayedPreviewUrl(null);
+    }, []),
+    onStall: useCallback(() => {
+      setH264Stalled(true);
     }, [])
   });
 
   useEffect(() => {
-    if (!shouldUseH264Preview) {
+    if (!shouldWarmupPreview) {
       previewWarmupRef.current?.release();
       previewWarmupRef.current = null;
       setPreviewWarmupState('idle');
@@ -249,32 +285,45 @@ function DeviceTilePreviewInner({
       previewWarmupRef.current?.release();
       previewWarmupRef.current = null;
     };
-  }, [device.serial, shouldUseH264Preview]);
+  }, [device.serial, shouldWarmupPreview]);
 
   useEffect(() => {
     if (!previewUrl) return;
     let cancelled = false;
+    let refreshTimer: number | undefined;
     const image = new Image();
+    const scheduleRefresh = (delayMs: number) => {
+      refreshTimer = window.setTimeout(() => {
+        setPreviewAttempt((n) => n + 1);
+      }, delayMs);
+    };
     image.onload = () => {
       if (cancelled) return;
+      snapshotFailureCountRef.current = 0;
       setDisplayedPreviewUrl(previewUrl);
       setHasFrame(true);
+      scheduleRefresh(DASHBOARD_PREVIEW_REFRESH_MS);
+    };
+    image.onerror = () => {
+      if (cancelled) return;
+      snapshotFailureCountRef.current += 1;
+      scheduleRefresh(
+        nextSnapshotRetryDelayMs({
+          consecutiveFailureCount: snapshotFailureCountRef.current,
+          refreshMs: DASHBOARD_PREVIEW_REFRESH_MS
+        })
+      );
     };
     image.src = previewUrl;
     return () => {
       cancelled = true;
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer);
+      }
       image.onload = null;
+      image.onerror = null;
     };
   }, [previewUrl]);
-
-  useEffect(() => {
-    if (shouldUseH264Preview) return;
-    if (!isActive || !loadStream) return;
-    const timer = window.setInterval(() => {
-      setPreviewAttempt((n) => n + 1);
-    }, DASHBOARD_PREVIEW_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [isActive, loadStream, shouldUseH264Preview]);
 
   useEffect(() => {
     return () => {
@@ -392,9 +441,7 @@ function DeviceTilePreviewInner({
                     decoding='async'
                     className={cn(
                       'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
-                      hasFrame && !shouldUseH264Preview
-                        ? 'opacity-100'
-                        : 'opacity-0'
+                      showPreviewImg ? 'opacity-100' : 'opacity-0'
                     )}
                     draggable={false}
                   />
@@ -405,7 +452,7 @@ function DeviceTilePreviewInner({
                     aria-hidden='true'
                     className={cn(
                       'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-500',
-                      hasFrame ? 'opacity-100' : 'opacity-0'
+                      hasFrame && !showPreviewImg ? 'opacity-100' : 'opacity-0'
                     )}
                   />
                 )}
@@ -415,9 +462,13 @@ function DeviceTilePreviewInner({
                   </div>
                 ) : !loadStream ? (
                   <div className='absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-zinc-800 to-zinc-950 px-2 text-center'>
-                    <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400/70 border-t-transparent' />
+                    {previewEnabled ? (
+                      <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400/70 border-t-transparent' />
+                    ) : null}
                     <p className='text-[10px] text-muted-foreground'>
-                      {t('previewScrollToLoad')}
+                      {previewEnabled
+                        ? t('previewScrollToLoad')
+                        : t('previewDeferred')}
                     </p>
                   </div>
                 ) : (
@@ -463,6 +514,7 @@ function tilePreviewPropsEqual(
 ) {
   if (prev.device.serial !== next.device.serial) return false;
   if (prev.onOpenSteps !== next.onOpenSteps) return false;
+  if (prev.previewEnabled !== next.previewEnabled) return false;
   const pd = prev.device;
   const nd = next.device;
   return (

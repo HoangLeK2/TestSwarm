@@ -59,4 +59,4 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     AGENT_BOOT_AUTO_BOOTSTRAP=1
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["/app/.venv/bin/python", "main.py", "--relay-only"]
+CMD ["/app/.venv/bin/python", "main.py"]

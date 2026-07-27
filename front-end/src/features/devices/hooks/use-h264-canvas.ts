@@ -20,8 +20,19 @@ import {
   subscribeDeviceFarm,
   requestIdr,
   isCachedKeyFrameStale,
-  notifyDecoderBackpressure
+  notifyDecoderBackpressure,
+  discardCachedH264KeyFrame
 } from '../services/ws';
+import { h264HardwareFailureRegistry } from '../services/h264-hardware-failure';
+
+const H264_CANVAS_DEBUG = false;
+
+function postWorkerReset(worker: Worker, serial: string): void {
+  worker.postMessage({
+    type: 'reset',
+    retryHardware: !h264HardwareFailureRegistry.has(serial)
+  });
+}
 
 export function useH264Video(
   serial: string,
@@ -30,6 +41,7 @@ export function useH264Video(
     restartKey?: number;
     onFrame?: (frame?: { mostlyBlack: boolean }) => void;
     onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
+    inspectFramesForBlack?: boolean;
     notifyStallWithVisibleFrame?: boolean;
     visibleFrameRecoveryMinIntervalMs?: number;
     renderedFrameStaleMs?: number;
@@ -43,7 +55,9 @@ export function useH264Video(
 ) {
   const restartKey = opts?.restartKey ?? 0;
   const workerRef = useRef<Worker | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const renderCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const blackProbeRef = useRef<BlackFrameProbe | null>(null);
   const mountedAtRef = useRef(0);
   const lastVideoPacketAtRef = useRef(0);
   const lastRenderedFrameAtRef = useRef(0);
@@ -58,6 +72,7 @@ export function useH264Video(
   const onFrameRef = useRef(opts?.onFrame);
   const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
+  const inspectFramesForBlackRef = useRef(opts?.inspectFramesForBlack ?? true);
   const notifyStallWithVisibleFrameRef = useRef(
     opts?.notifyStallWithVisibleFrame
   );
@@ -76,6 +91,7 @@ export function useH264Video(
   onFrameRef.current = opts?.onFrame;
   onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
+  inspectFramesForBlackRef.current = opts?.inspectFramesForBlack ?? true;
   notifyStallWithVisibleFrameRef.current = opts?.notifyStallWithVisibleFrame;
   visibleFrameRecoveryMinIntervalMsRef.current =
     opts?.visibleFrameRecoveryMinIntervalMs ?? 3000;
@@ -97,11 +113,25 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=32');
+    const worker = new Worker('/h264-worker.js?v=46');
     workerRef.current = worker;
     mountedAtRef.current = Date.now();
 
-    worker.postMessage({ type: 'init' });
+    worker.postMessage({
+      type: 'init',
+      preferHardware: !h264HardwareFailureRegistry.has(serial)
+    });
+
+    const getRenderContext = (canvas: HTMLCanvasElement) => {
+      if (renderCanvasRef.current !== canvas) {
+        renderCanvasRef.current = canvas;
+        renderCtxRef.current = canvas.getContext('2d', {
+          alpha: false,
+          desynchronized: true
+        });
+      }
+      return renderCtxRef.current;
+    };
 
     // Render frame immediately when worker pushes it. Use 2D canvas instead of
     // WebGL: WebCodecs VideoFrame -> WebGL texture is GPU/driver-sensitive and
@@ -123,14 +153,16 @@ export function useH264Video(
           canvas.width = width;
           canvas.height = height;
         }
-        const ctx = canvas.getContext('2d', { alpha: false });
+        const ctx = getRenderContext(canvas);
         if (!ctx) return;
         ctx.drawImage(frame, 0, 0, width, height);
-        const mostlyBlack = isCanvasMostlyBlack(ctx, width, height);
+        const mostlyBlack = inspectFramesForBlackRef.current
+          ? isFrameMostlyBlack(frame, width, height, blackProbeRef)
+          : false;
         lastRenderedFrameAtRef.current = Date.now();
         onFrameRef.current?.({ mostlyBlack });
       } catch (err) {
-        console.debug('[H264] render skipped:', err);
+        if (H264_CANVAS_DEBUG) console.debug('[H264] render skipped:', err);
       } finally {
         try {
           frame.close();
@@ -140,20 +172,27 @@ export function useH264Video(
       }
     };
 
-    // RAF sends pull-frame as fallback for missed pushes (decoder reset, tab restore).
-    const keepalive = () => {
-      workerRef.current?.postMessage({ type: 'pull-frame' });
-      rafRef.current = requestAnimationFrame(keepalive);
-    };
-    rafRef.current = requestAnimationFrame(keepalive);
-
     worker.onmessage = ({ data }) => {
+      if (workerRef.current !== worker || serialRef.current !== serial) {
+        if (data.type === 'frame' && data.frame) {
+          try {
+            data.frame.close();
+          } catch {
+            /* ok */
+          }
+        }
+        return;
+      }
       if (data.type === 'error')
         console.error('[H264] worker error:', data.message);
+      if (data.type === 'hardware-fallback') {
+        h264HardwareFailureRegistry.remember(serial);
+        return;
+      }
       if (data.type === 'decoder-error') {
         const now = Date.now();
-        const s = serialRef.current;
-        const w = workerRef.current;
+        const s = serial;
+        const w = worker;
         const hasVisibleFrame = lastRenderedFrameAtRef.current > 0;
         const recoveryMinInterval = hasVisibleFrame
           ? visibleFrameRecoveryMinIntervalMsRef.current
@@ -161,17 +200,15 @@ export function useH264Video(
         if (s && w && now - lastRecoveryAtRef.current > recoveryMinInterval) {
           lastRecoveryAtRef.current = now;
           onStallRef.current?.('decoder_stalled');
-          w.postMessage({ type: 'reset' });
+          discardCachedH264KeyFrame(s);
+          w.postMessage({ type: 'reset', retryHardware: false });
           clearLatestFrame();
           setTimeout(() => requestIdr(s, 0), 30);
         }
         return;
       }
       if (data.type === 'decoder-backpressure') {
-        const s = serialRef.current;
-        if (s) {
-          notifyDecoderBackpressure(s, 500);
-        }
+        notifyDecoderBackpressure(serial, 500);
         return;
       }
       if (data.type === 'frame' && data.frame) {
@@ -189,10 +226,12 @@ export function useH264Video(
           decodedFrames: Number(data.decodedFrames ?? 0),
           accel: String(data.accel ?? '')
         });
-        console.debug(
-          '[H264] stats',
-          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`
-        );
+        if (H264_CANVAS_DEBUG) {
+          console.debug(
+            '[H264] stats',
+            `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`
+          );
+        }
       }
     };
     worker.onerror = (e) =>
@@ -238,13 +277,11 @@ export function useH264Video(
     return () => {
       unsubscribe();
       mountedAtRef.current = 0;
-      worker.postMessage({ type: 'reset' });
+      postWorkerReset(worker, serial);
       worker.terminate();
-      workerRef.current = null;
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
+      if (workerRef.current === worker) workerRef.current = null;
+      renderCanvasRef.current = null;
+      renderCtxRef.current = null;
       // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
   }, [canvasRef, serial, restartKey]);
@@ -252,8 +289,8 @@ export function useH264Video(
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
   // (3-14 s depending on device). With replay, it decodes within ~50 ms.
-  const replayCachedBootstrap = (w: Worker, serialValue: string) => {
-    if (!serialValue) return;
+  const replayCachedBootstrap = (w: Worker, serialValue: string): boolean => {
+    if (!serialValue) return false;
     // Replay config (SPS/PPS)
     const cfgBuf = getLastConfigFrame(serialValue);
     if (cfgBuf) {
@@ -261,7 +298,7 @@ export function useH264Video(
       try {
         view = new DataView(cfgBuf);
       } catch {
-        return;
+        return false;
       }
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
@@ -278,8 +315,7 @@ export function useH264Video(
     // IDR that arrived while the tab was hidden, so replaying it drifts the
     // decoder. The server-side forced IDR (requested below) fills the gap.
     if (isCachedKeyFrameStale(serialValue)) {
-      requestIdr(serialValue, 0);
-      return;
+      return false;
     }
     const keyBuf = getLastKeyFrame(serialValue);
     if (keyBuf) {
@@ -287,7 +323,7 @@ export function useH264Video(
       try {
         view = new DataView(keyBuf);
       } catch {
-        return;
+        return false;
       }
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
@@ -304,9 +340,11 @@ export function useH264Video(
             { type: 'frame', isKey: true, ptsUs, frameData: frameData.buffer },
             [frameData.buffer]
           );
+          return true;
         }
       }
     }
+    return false;
   };
 
   useEffect(() => {
@@ -317,15 +355,15 @@ export function useH264Video(
     lastRenderedFrameAtRef.current = 0;
     lastRecoveryAtRef.current = 0;
     mountedAtRef.current = Date.now();
-    w.postMessage({ type: 'reset' });
+    postWorkerReset(w, serial);
     clearLatestFrame();
     if (!serial) return;
-    replayCachedBootstrap(w, serial);
-    // Always ask server for a fresh IDR on mount / serial change.
-    // The bootstrap cache covers fast path (~50ms replay), but the cache may
-    // be stale or missing; the server-forced IDR lands within ~100ms and
-    // guarantees decoder sync even if no prior viewer primed the cache.
-    requestIdr(serial, 0);
+    const replayedFreshKey = replayCachedBootstrap(w, serial);
+    if (replayedFreshKey) return;
+    const recoveryTimer = setTimeout(() => {
+      if (lastRenderedFrameAtRef.current === 0) requestIdr(serial, 0);
+    }, 350);
+    return () => clearTimeout(recoveryTimer);
   }, [serial, restartKey]);
 
   // Reconnect warm-up: WS reconnect often leaves decoder on stale refs.
@@ -347,7 +385,14 @@ export function useH264Video(
         // opening socket (common on client-side navigation). Prime the stream now.
         const s = serialRef.current;
         if (s) {
-          setTimeout(() => requestIdr(s, 0), 50);
+          setTimeout(() => {
+            if (
+              serialRef.current === s &&
+              lastRenderedFrameAtRef.current === 0
+            ) {
+              requestIdr(s, 0);
+            }
+          }, 350);
         }
         return;
       }
@@ -355,7 +400,7 @@ export function useH264Video(
       const w = workerRef.current;
       const s = serialRef.current;
       if (!w || !s) return;
-      w.postMessage({ type: 'reset' });
+      postWorkerReset(w, s);
       clearLatestFrame();
       // Allow ws.ts cache replay microtask to settle before bootstrap replay.
       setTimeout(() => {
@@ -377,7 +422,7 @@ export function useH264Video(
       const w = workerRef.current;
       const s = serialRef.current;
       if (!w || !s) return;
-      w.postMessage({ type: 'reset' });
+      postWorkerReset(w, s);
       clearLatestFrame();
       // Push model: worker pumps frames on its own. frame-consumed unblocks
       // the worker's frameInFlight gate in case it stalled while hidden.
@@ -437,7 +482,7 @@ export function useH264Video(
         }
         lastRecoveryAtRef.current = now;
         if (!lastRenderedAt) {
-          w.postMessage({ type: 'reset' });
+          postWorkerReset(w, s);
           clearLatestFrame();
         }
         requestIdr(s, 0);
@@ -466,7 +511,7 @@ export function useH264Video(
       ) {
         lastRecoveryAtRef.current = now;
         onStallRef.current?.('decoder_stalled');
-        w.postMessage({ type: 'reset' });
+        postWorkerReset(w, s);
         clearLatestFrame();
         setTimeout(() => {
           replayCachedBootstrap(w, s);
@@ -478,18 +523,52 @@ export function useH264Video(
   }, []);
 }
 
-function isCanvasMostlyBlack(
-  ctx: CanvasRenderingContext2D,
+type BlackFrameProbe = {
+  canvas: HTMLCanvasElement | OffscreenCanvas;
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+};
+
+function getBlackFrameProbe(
+  probeRef: React.MutableRefObject<BlackFrameProbe | null>
+): BlackFrameProbe | null {
+  if (probeRef.current) return probeRef.current;
+  let canvas: HTMLCanvasElement | OffscreenCanvas;
+  if (typeof OffscreenCanvas !== 'undefined') {
+    canvas = new OffscreenCanvas(32, 32);
+  } else if (typeof document !== 'undefined') {
+    canvas = document.createElement('canvas');
+    canvas.width = 32;
+    canvas.height = 32;
+  } else {
+    return null;
+  }
+  const ctx = canvas.getContext('2d', {
+    alpha: false,
+    willReadFrequently: true
+  });
+  if (!ctx) return null;
+  probeRef.current = { canvas, ctx };
+  return probeRef.current;
+}
+
+function isFrameMostlyBlack(
+  frame: VideoFrame,
   width: number,
-  height: number
+  height: number,
+  probeRef: React.MutableRefObject<BlackFrameProbe | null>
 ): boolean {
   const sampleW = Math.min(32, width);
   const sampleH = Math.min(32, height);
   const x = Math.max(0, Math.floor((width - sampleW) / 2));
   const y = Math.max(0, Math.floor((height - sampleH) / 2));
+  const probe = getBlackFrameProbe(probeRef);
+  if (!probe) return false;
+  if (probe.canvas.width !== sampleW) probe.canvas.width = sampleW;
+  if (probe.canvas.height !== sampleH) probe.canvas.height = sampleH;
   let data: Uint8ClampedArray;
   try {
-    data = ctx.getImageData(x, y, sampleW, sampleH).data;
+    probe.ctx.drawImage(frame, x, y, sampleW, sampleH, 0, 0, sampleW, sampleH);
+    data = probe.ctx.getImageData(0, 0, sampleW, sampleH).data;
   } catch {
     return false;
   }

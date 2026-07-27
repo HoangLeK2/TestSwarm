@@ -86,10 +86,12 @@ export function CampaignRowActions({
   const [addDevicesOpen, setAddDevicesOpen] = useState(false);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [entityEditOpen, setEntityEditOpen] = useState(false);
+  const detailNeeded =
+    runDialogOpen || dispatchDialogOpen || scenarioOpen || entityEditOpen;
 
   const { data: campaignDetail, isFetching: detailFetching } = useCampaign(
     campaign.id,
-    perms.canExecute || perms.canUpdate
+    detailNeeded
   );
   const effectiveCampaign = campaignDetail ?? campaign;
   const isEntityCampaign =
@@ -127,8 +129,18 @@ export function CampaignRowActions({
     [orgScenarioBodies, orgScenarios, scenarioRefIds]
   );
 
-  const { data: devices = [] } = useCampaignDevices(campaign.id);
-  const { data: scenarios = [] } = useScenarios(campaign.id);
+  const { data: fetchedDevices } = useCampaignDevices(
+    campaign.id,
+    runDialogOpen || dispatchDialogOpen || addDevicesOpen
+  );
+  const { data: fetchedScenarios } = useScenarios(
+    campaign.id,
+    runDialogOpen || scenarioOpen
+  );
+  const devices = fetchedDevices ?? campaign.devices ?? [];
+  const scenarios = fetchedScenarios ?? campaign.scenarios ?? [];
+  const deviceAssignmentsKnown =
+    fetchedDevices !== undefined || Array.isArray(campaign.devices);
   const { data: executionRuntime } = useExecutionRuntime();
 
   const runMutation = useRunCampaign(() => toast.success(t('campaignDone')), {
@@ -203,7 +215,7 @@ export function CampaignRowActions({
           tooltip: t('missingScenario')
         };
       }
-      if (devices.length === 0 && !isEntityCampaign) {
+      if (deviceAssignmentsKnown && devices.length === 0 && !isEntityCampaign) {
         return {
           label: t('titleNeedDevice'),
           onClick: () => setAddDevicesOpen(true),
@@ -215,7 +227,7 @@ export function CampaignRowActions({
 
     const canRun = isEntityCampaign
       ? hasScenario
-      : devices.length > 0 && hasScenario;
+      : (!deviceAssignmentsKnown || devices.length > 0) && hasScenario;
     return {
       label: t('titleRun'),
       onClick: () =>
@@ -223,7 +235,7 @@ export function CampaignRowActions({
       disabled: !canRun || !perms.canExecute,
       tooltip: !hasScenario
         ? t('missingScenario')
-        : !isEntityCampaign && devices.length === 0
+        : !isEntityCampaign && deviceAssignmentsKnown && devices.length === 0
           ? t('titleNeedDevice')
           : undefined
     };

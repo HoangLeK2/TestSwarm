@@ -25,6 +25,7 @@ import {
 import { RelayAgentStatusBadge } from './relay-agent-status-badge';
 import { invalidateDeviceFleetQueries } from '../hooks/use-devices';
 import {
+  filterRelayAgentsWithVisibleDevices,
   getRelayConnectionState,
   getVisibleRelaySerials,
   isRelayOperational
@@ -185,7 +186,8 @@ export function RelayAgentsPanel({
   const t = useTranslations('relayAgentsFeature');
   const [open, setOpen] = useState(false);
   const didAutoOpen = useRef(false);
-  const hasOnline = agents.some(
+  const agentsWithDevices = filterRelayAgentsWithVisibleDevices(agents);
+  const hasOnline = agentsWithDevices.some(
     (a) => getRelayConnectionState(a) === 'connected'
   );
 
@@ -196,11 +198,11 @@ export function RelayAgentsPanel({
     }
   }, [hasOnline]);
 
-  const connectedCount = agents.filter(
+  const connectedCount = agentsWithDevices.filter(
     (a) => getRelayConnectionState(a) === 'connected'
   ).length;
 
-  if (agents.length === 0) return null;
+  if (agentsWithDevices.length === 0) return null;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -216,14 +218,14 @@ export function RelayAgentsPanel({
           <span className='rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
             {t('onlineSummary', {
               connected: connectedCount,
-              total: agents.length
+              total: agentsWithDevices.length
             })}
           </span>
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className='mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
-          {agents.map((agent) => (
+          {agentsWithDevices.map((agent) => (
             <RelayAgentCard
               key={agent.relay_id}
               agent={agent}

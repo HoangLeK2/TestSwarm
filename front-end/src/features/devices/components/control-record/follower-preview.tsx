@@ -264,6 +264,7 @@ export const FollowerPreview = memo(function FollowerPreview({
                   streamTransport='auto'
                   streamFit='contain'
                   streamCoverAlign='center'
+                  scrcpyViewerRole='follower-preview'
                   scrcpyAttachOptions={FOLLOWER_H264_OPTIONS}
                 />
               ) : displayedPreviewUrl ? (

@@ -68,6 +68,99 @@ def test_fb_comment_noise_filter_drops_empty_composer_placeholders() -> None:
     assert _is_comment_row_parse_noise({"author": "", "text": "see more"})
 
 
+@pytest.mark.asyncio
+async def test_process_payload_reports_partial_comment_target(monkeypatch) -> None:
+    server = ExtraDataIngestServer()
+
+    def fake_parse_items(strategy, xml_in, context):
+        assert strategy == "fb_comments"
+        frame = int(xml_in.split("frame-")[1].split('"')[0])
+        start = frame * 4
+        comments = [
+            {
+                "comment_key": f"comment-{index}",
+                "author": f"Author {index}",
+                "text": f"Comment {index}",
+            }
+            for index in range(start, start + 4)
+        ]
+        return comments, {
+            "reason_code": "ok",
+            "comments_returned": len(comments),
+        }
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse_items)
+    snapshots = [
+        f'<hierarchy><node text="frame-{index}" /></hierarchy>'
+        for index in range(5)
+    ]
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": snapshots[0],
+            "xml_snapshots": snapshots,
+            "context": {
+                "persist": False,
+                "return_items": True,
+                "max_items": 220,
+                "post_comment_count": 269,
+                "comment_target_effective": 220,
+                "comment_scroll_stopped_reason": "coverage_tail_no_new",
+                "comment_scroll_passes_effective": 220,
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 20
+    assert result["diagnostic"]["reason_code"] == "partial_target"
+    assert result["diagnostic"]["comment_target"] == 220
+    assert result["diagnostic"]["comments_returned"] == 20
+    assert result["diagnostic"]["coverage_ratio"] == pytest.approx(20 / 220)
+    assert (
+        result["diagnostic"]["comment_scroll_stopped_reason"]
+        == "coverage_tail_no_new"
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_payload_does_not_claim_partial_when_post_count_is_unknown(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_items",
+        lambda strategy, xml_in, context: (
+            [{"comment_key": "comment-1", "author": "Alice", "text": "Hello"}],
+            {"reason_code": "ok", "comments_returned": 1},
+        ),
+    )
+    xml = '<hierarchy><node text="frame" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": xml,
+            "xml_snapshots": [xml, xml.replace("frame", "frame-2")],
+            "context": {
+                "persist": False,
+                "max_items": 500,
+                "comment_target_effective": 500,
+                "post_comment_count": None,
+                "comment_scroll_stopped_reason": "coverage_tail_no_new",
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["diagnostic"]["reason_code"] == "ok"
+    assert result["diagnostic"]["comments_returned"] == 1
+    assert "coverage_ratio" not in result["diagnostic"]
+
+
 def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     class Module:
         pass
@@ -412,7 +505,7 @@ async def test_process_payload_does_not_return_active_parent_for_multiple_fb_pos
 
 
 @pytest.mark.asyncio
-async def test_process_payload_merges_multiple_fb_post_snapshots(monkeypatch) -> None:
+async def test_process_payload_keeps_only_opened_fb_post_from_snapshots(monkeypatch) -> None:
     server = ExtraDataIngestServer()
     inserted: list[dict[str, Any]] = []
 
@@ -491,16 +584,324 @@ async def test_process_payload_merges_multiple_fb_post_snapshots(monkeypatch) ->
     )
 
     assert result["ok"] is True
-    assert result["parsed_count"] == 2
-    assert len(inserted) == 2
+    assert result["parsed_count"] == 1
+    assert len(inserted) == 1
     assert [row["body"] for row in inserted] == [
-        "first post body",
         "second post full body from detail",
     ]
     assert result["diagnostic"]["snapshot_count"] == 2
     assert result["diagnostic"]["frame_posts_returned"] == [2, 1]
     assert result["active_parent_post"]["pid"] == "pid-2"
-    assert result["active_parent_post"]["parent_id"] == inserted[1]["content_hash"]
+    assert result["active_parent_post"]["parent_id"] == inserted[0]["content_hash"]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_reconciles_opened_feed_post_with_polluted_detail(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    feed_post = {
+        "_pid": "3504dc2886a603f3",
+        "post_key": "725fa9ebb9141fe3dcfcb90c81134ec940725420",
+        "stable_post_id": "6f9e3eff25f3f5721d15614150434eca61cd8dc1",
+        "author": "Nội dung do AI tạo",
+        "timestamp": "12 thg 6•Chia sẻ với: Nhóm công khai",
+        "text": "Trong Video mới này mình đã B… xem thêm Ảnh",
+        "reactions": 107,
+        "comments": 269,
+        "shares": 47,
+        "source_index": 0,
+    }
+    detail_post = {
+        "_pid": "b59c812bc0577086",
+        "post_key": "ac20583e9c21e6b908cfca34d3a8d14942645bc",
+        "stable_post_id": "bc0f4752f517aa233ea7d720ac732bbd722af017",
+        "author": "Nội dung do AI tạo",
+        "timestamp": "Vũ Nguyễn - AI Builder•12 thg 6•Chia sẻ với: Nhóm công khai",
+        "text": (
+            "Tham gia Claude - OpenClaw …•Tham gia Nội dung do AI tạo "
+            "Vũ Nguyễn - AI Builder Trong Video mới này mình đã BUILD CẢ PHÒNG "
+            "MARKETING bằng Claude - đây là cách nó hoạt động"
+        ),
+        "image_desc": "Ảnh bìa của nhóm",
+        "source_index": 1,
+    }
+    detail_chrome = {
+        "_pid": "chrome",
+        "post_key": "chrome-key",
+        "stable_post_id": "chrome-stable",
+        "author": "Đáng chú ý",
+        "timestamp": "",
+        "text": "Tham gia nhóm Claude - OpenClaw - Ai Agent Kiếm Cơm Ảnh Sự kiện File Album",
+        "source_index": 0,
+    }
+    detail_chrome_echo = {
+        "_pid": "detail-chrome",
+        "post_key": "detail-chrome-key",
+        "stable_post_id": "detail-chrome-stable",
+        "author": "Featured",
+        "timestamp": "12 thg 6•Chia sẻ với: Nhóm công khai",
+        "text": (
+            "Tham gia nhóm Claude - OpenClaw Trong Video mới này mình đã "
+            "BUILD CẢ PHÒNG MARKETING"
+        ),
+        "source_index": 1,
+    }
+    unopened_feed_post = {
+        "_pid": "unopened-feed",
+        "post_key": "unopened-feed-key",
+        "stable_post_id": "unopened-feed-stable",
+        "author": "AIcream",
+        "timestamp": "27 thg 5•Chia sẻ với: Nhóm công khai",
+        "text": ".. Mình mới thấy một skill khá … xem thêm Ảnh",
+        "source_index": 0,
+    }
+
+    def fake_parse_items(strategy, xml_in, context):
+        assert strategy == "fb_posts"
+        if "detail" in xml_in:
+            return [detail_post, detail_chrome_echo], {
+                "reason_code": "ok",
+                "posts_returned": 2,
+            }
+        return [detail_chrome, unopened_feed_post, feed_post], {
+            "reason_code": "ok",
+            "posts_returned": 3,
+        }
+
+    monkeypatch.setattr(extra_data_ingest, "_parse_items", fake_parse_items)
+
+    feed_xml = '<hierarchy><node text="feed" /></hierarchy>'
+    detail_xml = '<hierarchy><node text="detail" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": feed_xml,
+            "xml_snapshots": [feed_xml, detail_xml],
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "comment_sheet",
+                    "opened_post": {
+                        "pid": feed_post["_pid"],
+                        "post_key": feed_post["post_key"],
+                        "stable_post_id": feed_post["stable_post_id"],
+                        "author": feed_post["author"],
+                        "timestamp": feed_post["timestamp"],
+                        "text_prefix": feed_post["text"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 1
+    assert len(inserted) == 1
+    assert inserted[0]["author"] == "Vũ Nguyễn - AI Builder"
+    assert inserted[0]["body"].startswith(
+        "Trong Video mới này mình đã BUILD CẢ PHÒNG MARKETING"
+    )
+    assert "xem thêm" not in inserted[0]["body"].casefold()
+    assert inserted[0]["raw_data"]["reactions"] == 107
+    assert inserted[0]["raw_data"]["comments"] == 269
+    assert inserted[0]["raw_data"]["shares"] == 47
+    assert result["diagnostic"]["reconciled_post_count"] == 1
+    assert result["diagnostic"]["detail_chrome_dropped"] == 2
+    assert result["active_parent_post"]["pid"] == feed_post["_pid"]
+    assert result["active_parent_post"]["parent_id"] == inserted[0]["content_hash"]
+
+
+def test_verified_single_post_detail_is_authoritative_over_feed_preview_hashes() -> None:
+    from relay.extra_data.parsers.facebook.post_reconciliation import (
+        reconcile_fb_post_frames,
+    )
+
+    feed_post = {
+        "_pid": "18096e5f28a92169",
+        "post_key": "0fc69384e3a212777445c43c1845f218d5f9686a",
+        "stable_post_id": "5a90c70c78fbeda1ed2ed4f7b03a3715fc403885",
+        "author": "Phan Đông Giang",
+        "timestamp": "23 giờ•Chia sẻ với: Nhóm công khai",
+        "text": "Quản trị viên Quản trị viên Apple đã tham chiến: Hãy giữ A… xem thêm Ảnh",
+        "reactions": "19",
+        "comments": "2",
+        "source_index": 0,
+    }
+    detail_post = {
+        "_pid": "d3fb1fce98d63e51",
+        "post_key": "d233e2fa154de9c12d0694a263dc5942701c04ce",
+        "stable_post_id": "9db9d344d7e42dfe8a63b9d336e533a6aa6b168c",
+        "author": "Phan Đông Giang",
+        "timestamp": "23 giờ•Chia sẻ với: Nhóm công khai",
+        "text": (
+            "Cộng Đồng Claude …•Tham gia Tham gia Quản trị viên Quản trị viên "
+            "Phan Đông Giang Apple đã tham chiến: Hãy giữ Agent của bạn làm việc "
+            "liên tục 24/7 Ảnh Tặng quà Tặng quà"
+        ),
+        "reactions": "19",
+        "comments": "2",
+        "source_index": 1,
+    }
+    opened_post = {
+        "pid": feed_post["_pid"],
+        "post_key": feed_post["post_key"],
+        "stable_post_id": feed_post["stable_post_id"],
+        "author": feed_post["author"],
+        "timestamp": feed_post["timestamp"],
+        "text_prefix": feed_post["text"],
+    }
+
+    rows, diagnostic = reconcile_fb_post_frames(
+        [[feed_post], [detail_post]],
+        opened_post=opened_post,
+        opened_state="ok",
+    )
+
+    assert diagnostic["reason_code"] == "ok"
+    assert diagnostic["selection_reason"] == "feed_detail_match"
+    assert len(rows) == 1
+    assert rows[0]["author"] == "Phan Đông Giang"
+    assert rows[0]["text"].startswith("Apple đã tham chiến:")
+    assert "xem thêm" not in rows[0]["text"].casefold()
+    assert rows[0]["comments"] == "2"
+
+
+def test_verified_single_post_detail_rejects_unrelated_body() -> None:
+    from relay.extra_data.parsers.facebook.post_reconciliation import (
+        reconcile_fb_post_frames,
+    )
+
+    feed_post = {
+        "_pid": "feed-pid",
+        "post_key": "feed-key",
+        "stable_post_id": "feed-stable",
+        "author": "Phan Đông Giang",
+        "timestamp": "23 giờ•Chia sẻ với: Nhóm công khai",
+        "text": "Apple đã tham chiến: Hãy giữ A… xem thêm Ảnh",
+    }
+    unrelated_detail = {
+        "_pid": "detail-pid",
+        "post_key": "detail-key",
+        "stable_post_id": "detail-stable",
+        "author": "Phan Đông Giang",
+        "timestamp": "23 giờ•Chia sẻ với: Nhóm công khai",
+        "text": "Claude Code 101: Hướng dẫn toàn diện cho người mới",
+    }
+
+    rows, diagnostic = reconcile_fb_post_frames(
+        [[feed_post], [unrelated_detail]],
+        opened_post={
+            "pid": feed_post["_pid"],
+            "post_key": feed_post["post_key"],
+            "stable_post_id": feed_post["stable_post_id"],
+            "author": feed_post["author"],
+            "timestamp": feed_post["timestamp"],
+            "text_prefix": feed_post["text"],
+        },
+        opened_state="ok",
+    )
+
+    assert rows == []
+    assert diagnostic["reason_code"] == "post_detail_target_not_reconciled"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_rejects_opened_post_when_detail_is_still_truncated(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    truncated_post = {
+        "_pid": "feed-pid",
+        "post_key": "feed-key",
+        "stable_post_id": "feed-stable",
+        "author": "Quoc Modoro",
+        "timestamp": "1 giờ•Chia sẻ với: Nhóm công khai",
+        "text": "Tôi vừa viết xong 1 Claude Plugin - Business Builder…",
+        "source_index": 0,
+    }
+    detail_post = {
+        **truncated_post,
+        "_pid": "detail-pid",
+        "post_key": "detail-key",
+        "stable_post_id": "detail-stable",
+        "source_index": 1,
+    }
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_items",
+        lambda strategy, xml_in, context: (
+            [detail_post] if "detail" in xml_in else [truncated_post],
+            {"reason_code": "ok", "posts_returned": 1},
+        ),
+    )
+
+    feed_xml = '<hierarchy><node text="feed" /></hierarchy>'
+    detail_xml = '<hierarchy><node text="detail" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": feed_xml,
+            "xml_snapshots": [feed_xml, detail_xml],
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "opened_post": {
+                        "pid": truncated_post["_pid"],
+                        "post_key": truncated_post["post_key"],
+                        "stable_post_id": truncated_post["stable_post_id"],
+                        "author": truncated_post["author"],
+                        "timestamp": truncated_post["timestamp"],
+                        "text_prefix": truncated_post["text"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 0
+    assert result["inserted_count"] == 0
+    assert result["diagnostic"]["reason_code"] == "post_detail_incomplete"
+    assert inserted == []
+    assert "active_parent_post" not in result
 
 
 @pytest.mark.asyncio
@@ -635,13 +1036,20 @@ async def test_process_payload_persists_opened_post_parent_when_comment_sheet_ha
     server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
     server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
 
+    feed_post = {
+        "_pid": "pid-comment-sheet",
+        "post_key": "post-comment-sheet",
+        "author": "Alice",
+        "timestamp": "5 phút",
+        "text": "opened post body before comment sheet",
+    }
     monkeypatch.setattr(
         extra_data_ingest,
-        "_parse_payload_items",
-        lambda strategy, xml_in, context, payload: (
-            [],
-            {"reason_code": "no_post_rows"},
-            [xml_in],
+        "_parse_items",
+        lambda strategy, xml_in, context: (
+            ([feed_post], {"reason_code": "ok", "posts_returned": 1})
+            if "feed" in xml_in
+            else ([], {"reason_code": "already_on_comment_sheet", "posts_returned": 0})
         ),
     )
 
@@ -649,7 +1057,11 @@ async def test_process_payload_persists_opened_post_parent_when_comment_sheet_ha
         {
             "serial": "serial-1",
             "strategy": "fb_posts",
-            "xml": '<hierarchy><node text="comment sheet" /></hierarchy>',
+            "xml": '<hierarchy><node text="feed" /></hierarchy>',
+            "xml_snapshots": [
+                '<hierarchy><node text="feed" /></hierarchy>',
+                '<hierarchy><node text="comment sheet" /></hierarchy>',
+            ],
             "context": {
                 "persist": True,
                 "collection": "fb_posts",
@@ -675,10 +1087,166 @@ async def test_process_payload_persists_opened_post_parent_when_comment_sheet_ha
     assert len(inserted) == 1
     assert inserted[0]["raw_data"]["post_key"] == "post-comment-sheet"
     assert inserted[0]["body"] == "opened post body before comment sheet"
-    assert result["diagnostic"]["opened_post_synthetic_parent"] is True
+    assert result["diagnostic"]["reason_code"] == "ok"
+    assert result["diagnostic"]["comment_sheet_feed_fallback"] is True
     assert result["active_parent_post"]["parent_id"] == inserted[0]["content_hash"]
     assert result["active_parent_post"]["pid"] == "pid-comment-sheet"
     assert result["active_parent_post"]["source"] == "post_detail"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_uses_complete_feed_post_when_comment_sheet_has_only_chrome(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    feed_post = {
+        "_pid": "pid-comment-sheet-chrome",
+        "post_key": "post-comment-sheet-chrome",
+        "author": "Trí Hưng",
+        "timestamp": "23 giờ",
+        "text": "Đây là cách GG làm trong cuộc đua AI =))",
+    }
+    detail_chrome = {
+        "_pid": "detail-chrome",
+        "post_key": "detail-chrome-key",
+        "author": "Featured",
+        "timestamp": "",
+        "text": "Join group Cộng Đồng Claude",
+    }
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_items",
+        lambda strategy, xml_in, context: (
+            ([feed_post], {"reason_code": "ok", "posts_returned": 1})
+            if "feed" in xml_in
+            else ([detail_chrome], {"reason_code": "ok", "posts_returned": 1})
+        ),
+    )
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": '<hierarchy><node text="feed" /></hierarchy>',
+            "xml_snapshots": [
+                '<hierarchy><node text="feed" /></hierarchy>',
+                '<hierarchy><node text="detail" /></hierarchy>',
+            ],
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "comment_sheet",
+                    "opened_post": {
+                        "pid": feed_post["_pid"],
+                        "post_key": feed_post["post_key"],
+                        "author": feed_post["author"],
+                        "timestamp": feed_post["timestamp"],
+                        "text_prefix": feed_post["text"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["diagnostic"]["reason_code"] == "ok"
+    assert result["diagnostic"]["comment_sheet_feed_fallback"] is True
+    assert result["diagnostic"]["detail_chrome_dropped"] == 1
+    assert len(inserted) == 1
+    assert inserted[0]["body"] == feed_post["text"]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_accepts_richer_complete_detail_ending_in_ellipsis(
+    monkeypatch,
+) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    feed_post = {
+        "_pid": "pid-ellipsis",
+        "post_key": "post-ellipsis-feed",
+        "stable_post_id": "stable-ellipsis",
+        "author": "Alice",
+        "text": "A deliberately thoughtful post…",
+    }
+    detail_post = {
+        **feed_post,
+        "post_key": "post-ellipsis-detail",
+        "text": (
+            "A deliberately thoughtful post whose complete final sentence "
+            "intentionally trails off…"
+        ),
+    }
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_items",
+        lambda strategy, xml_in, context: (
+            [detail_post] if "detail" in xml_in else [feed_post],
+            {"reason_code": "ok", "posts_returned": 1},
+        ),
+    )
+
+    feed_xml = '<hierarchy><node text="feed" /></hierarchy>'
+    detail_xml = '<hierarchy><node text="detail" /></hierarchy>'
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": feed_xml,
+            "xml_snapshots": [feed_xml, detail_xml],
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "ok",
+                    "opened_post": {
+                        "pid": feed_post["_pid"],
+                        "post_key": feed_post["post_key"],
+                        "stable_post_id": feed_post["stable_post_id"],
+                        "author": feed_post["author"],
+                        "text_prefix": feed_post["text"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 1
+    assert len(inserted) == 1
+    assert inserted[0]["body"] == detail_post["text"]
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1582,9 @@ async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -
             "agent_boot_preparsed_comments": True,
             "parent_id": "parent-1",
             "require_verified_parent": False,
+            "post_comment_count": 269,
+            "comment_target_effective": 220,
+            "comment_scroll_stopped_reason": "coverage_tail_no_new",
         },
         "preparsed": {
             "items": [{"comment_key": "c1", "text": "first"}],
@@ -1030,6 +1601,9 @@ async def test_process_payload_uses_trusted_preparsed_fb_comments(monkeypatch) -
     assert result["xml_bytes"] == 12345
     assert result["payload_xml_bytes"] == len(xml.encode("utf-8"))
     assert result["diagnostic"]["preparsed"] is True
+    assert result["diagnostic"]["reason_code"] == "partial_target"
+    assert result["diagnostic"]["comment_target"] == 220
+    assert result["diagnostic"]["coverage_ratio"] == pytest.approx(1 / 220)
     assert result["items"][0]["comment_key"] == "c1"
     assert result["items"][0]["parent_content_hash"] == "parent-1"
 

@@ -390,11 +390,14 @@ class ScenarioExecutor:
         failed_steps = [r for r in sc.step_results if _failure_counts_for_result(r)]
         all_ok = not failed_steps
         first_fail_msg = failed_steps[0].get("message", "step failed") if failed_steps else ""
+        if failed_steps and failed_steps[0].get("cancelled"):
+            failed_index = int(failed_steps[0].get("index", 0)) + 1
+            first_fail_msg = f"Cancelled at step {failed_index}"
 
         result = {
             "serial": sc.serial,
             "success": all_ok,
-            "steps_executed": len(sc.steps),
+            "steps_executed": len(sc.step_results),
             "step_results": sc.step_results,
             "failed_message": first_fail_msg if not all_ok else None,
             "context": sc.ctx,

@@ -39,7 +39,8 @@ import { canApplyDeviceScopedResult } from '../lib/control-record-multi';
 import {
   isControlRecordConnectedDevice,
   resolveControlRecordHierarchySerial,
-  resolveControlRecordConnectedDevices
+  resolveControlRecordConnectedDevices,
+  resolveControlRecordSelectedDevice
 } from '../lib/control-record-device-state';
 import { resolveInteractionHierarchyXml } from '../lib/control-record-hierarchy';
 import { mergeCampaignScenarioVariables } from '@/components/device-vars-json-model';
@@ -57,6 +58,7 @@ const HIERARCHY_APP_CHANGE_FETCH_COOLDOWN_MS = 10_000;
 const HIERARCHY_BOOTSTRAP_FETCH_COOLDOWN_MS = 10_000;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
+const CONTROL_RECORD_DEVICE_DISCONNECT_GRACE_MS = 45_000;
 
 function bySavedScenarioOrder(a: ScenarioOut, b: ScenarioOut) {
   return (a.order ?? 0) - (b.order ?? 0);
@@ -230,38 +232,53 @@ export function useControlRecord(
   const [lastConnectedDevices, setLastConnectedDevices] = useState<Device[]>(
     []
   );
-
-  const liveConnectedDevices = useMemo(
-    () => devices.filter(isControlRecordConnectedDevice),
-    [devices]
-  );
+  const lastConnectedAtBySerialRef = useRef(new Map<string, number>());
+  const requestedSerial =
+    (selectedSerial ?? initialSerial ?? '').trim() || null;
+  const preserveTerminalSerials = useMemo(() => {
+    if (!requestedSerial) return undefined;
+    const current = devices.find((device) => device.serial === requestedSerial);
+    if (current && isControlRecordConnectedDevice(current)) return undefined;
+    const lastConnectedAt =
+      lastConnectedAtBySerialRef.current.get(requestedSerial);
+    if (
+      lastConnectedAt === undefined ||
+      Date.now() - lastConnectedAt > CONTROL_RECORD_DEVICE_DISCONNECT_GRACE_MS
+    ) {
+      return undefined;
+    }
+    return new Set([requestedSerial]);
+  }, [devices, requestedSerial]);
 
   useEffect(() => {
-    if (liveConnectedDevices.length > 0) {
-      setLastConnectedDevices(liveConnectedDevices);
-      return;
-    }
-    if (
-      devices.length > 0 &&
-      lastConnectedDevices.length > 0 &&
-      resolveControlRecordConnectedDevices(devices, lastConnectedDevices)
-        .length === 0
-    ) {
-      setLastConnectedDevices([]);
-    }
-  }, [devices, liveConnectedDevices, lastConnectedDevices]);
+    const now = Date.now();
+    devices
+      .filter(isControlRecordConnectedDevice)
+      .forEach((device) =>
+        lastConnectedAtBySerialRef.current.set(device.serial, now)
+      );
+    setLastConnectedDevices((previous) => {
+      const next = resolveControlRecordConnectedDevices(devices, previous, {
+        preserveTerminalSerials
+      });
+      return next.length === previous.length &&
+        next.every((device, index) => device === previous[index])
+        ? previous
+        : next;
+    });
+  }, [devices, preserveTerminalSerials]);
 
   const connectedDevices = useMemo(
-    () => resolveControlRecordConnectedDevices(devices, lastConnectedDevices),
-    [devices, lastConnectedDevices]
+    () =>
+      resolveControlRecordConnectedDevices(devices, lastConnectedDevices, {
+        preserveTerminalSerials
+      }),
+    [devices, lastConnectedDevices, preserveTerminalSerials]
   );
 
   const selectedDevice = useMemo(
-    () =>
-      connectedDevices.find((d) => d.serial === selectedSerial) ??
-      connectedDevices[0] ??
-      null,
-    [connectedDevices, selectedSerial]
+    () => resolveControlRecordSelectedDevice(connectedDevices, requestedSerial),
+    [connectedDevices, requestedSerial]
   );
   const selectedDeviceSerial = selectedDevice?.serial ?? null;
   const selectedDeviceSerialRef = useRef<string | null>(selectedDeviceSerial);
@@ -283,7 +300,9 @@ export function useControlRecord(
       initialSerialAppliedRef.current = true;
       return;
     }
-    if (!selectedSerial) setSelectedSerial(connectedDevices[0].serial);
+    if (!selectedSerial && !initialSerial) {
+      setSelectedSerial(connectedDevices[0].serial);
+    }
   }, [connectedDevices, selectedSerial, initialSerial]);
 
   // ── Recording ────────────────────────────────────────────────────────────

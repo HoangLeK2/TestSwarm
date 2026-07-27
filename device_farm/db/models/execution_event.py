@@ -24,6 +24,12 @@ class ExecutionEvent(Base):
             "occurred_at",
             postgresql_where=text("published_at IS NULL"),
         ),
+        Index(
+            "idx_execution_events_outbox_lease",
+            "publish_claimed_at",
+            "id",
+            postgresql_where=text("published_at IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -47,6 +53,11 @@ class ExecutionEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     publish_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    publish_claim_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    publish_claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     def to_envelope(self) -> dict:

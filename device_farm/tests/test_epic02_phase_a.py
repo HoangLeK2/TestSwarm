@@ -377,3 +377,52 @@ async def test_tenant_idle_threshold_override(session_factory):
         released = await auto_release_expired_sessions(db)
         await db.commit()
         assert released == 0
+
+
+@pytest.mark.asyncio
+async def test_campaign_heartbeat_renews_claim_beyond_initial_ttl(
+    session_factory,
+):
+    await _seed_org(session_factory)
+    device_id = await _online_device(
+        session_factory,
+        serial="R58-CAMPAIGN-HEARTBEAT",
+    )
+    set_current_org_id(ORG_ID)
+
+    async with session_factory() as db:
+        await claim_device_session(
+            db,
+            device_id=device_id,
+            org_id=ORG_ID,
+            actor_user_id=USER_A,
+            owner_type="campaign",
+            owner_id="campaign-long-run",
+        )
+        session = await get_active_session(db, device_id)
+        assert session is not None
+        session.claimed_at = NOW - timedelta(minutes=31)
+        session.last_heartbeat = NOW - timedelta(seconds=10)
+        await db.commit()
+
+    async with session_factory() as db:
+        released = await auto_release_expired_sessions(db, now=NOW)
+        await db.commit()
+        session = await get_active_session(db, device_id)
+
+    assert released == 0
+    assert session is not None
+
+    async with session_factory() as db:
+        session = await get_active_session(db, device_id)
+        assert session is not None
+        session.last_heartbeat = NOW - timedelta(minutes=31)
+        await db.commit()
+
+    async with session_factory() as db:
+        released = await auto_release_expired_sessions(db, now=NOW)
+        await db.commit()
+        session = await get_active_session(db, device_id)
+
+    assert released == 1
+    assert session is None

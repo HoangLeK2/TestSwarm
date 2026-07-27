@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+import time
 from datetime import datetime
 from typing import Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -30,6 +31,8 @@ from api.schemas.campaign_entity import (
     CampaignDispatchIn,
     CampaignDispatchOut,
     CampaignDispatchExecutionOut,
+    CampaignDispatchPreviewAssignmentOut,
+    CampaignDispatchPreviewOut,
     CampaignScenarioRefOut,
     CampaignForceTransitionIn,
     CampaignForceTransitionOut,
@@ -623,6 +626,90 @@ async def get_campaign(campaign_id: str, db: DB, user: CurrentUser):
 
 
 @router.post(
+    "/{campaign_id}/dispatch-preview",
+    response_model=CampaignDispatchPreviewOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def preview_campaign_dispatch_route(
+    campaign_id: str,
+    body: CampaignDispatchIn,
+    db: DB,
+    user: CurrentUser,
+):
+    """Resolve devices and sources without creating executions or claims."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+
+    from api.schemas.campaign_entity import _dispatch_http_status
+    from services.campaign.dispatcher import (
+        CampaignDispatchError,
+        preview_campaign_dispatch,
+    )
+    from services.campaign.entity_allocation import SourcePoolSpec
+
+    source_pool = (
+        SourcePoolSpec(
+            platform=body.source_pool.platform,
+            entity_type=body.source_pool.entity_type,
+            search=body.source_pool.search,
+            statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+        )
+        if body.source_pool is not None
+        else None
+    )
+    try:
+        preview = await preview_campaign_dispatch(
+            db,
+            campaign_id=campaign_id,
+            org_id=org_id,
+            device_ids=body.target.device_ids,
+            device_group_ids=body.target.device_group_ids,
+            external_entity_ids=body.target.external_entity_ids,
+            source_pool=source_pool,
+            allocation_snapshot=[
+                (item.device_id, item.external_entity_id)
+                for item in body.allocation_snapshot
+            ],
+            allocation_policy=body.allocation_policy,
+            allow_partial=body.allow_partial,
+            require_online=body.require_online,
+        )
+    except CampaignDispatchError as exc:
+        raise HTTPException(
+            status_code=_dispatch_http_status(exc.code),
+            detail={"code": exc.code, "message": str(exc), **exc.details},
+        ) from exc
+
+    return CampaignDispatchPreviewOut(
+        campaign_id=preview.campaign_id,
+        allocation_policy=preview.allocation_policy,
+        device_count=len(preview.device_ids),
+        available_source_count=preview.allocation.available_count,
+        assignments=[
+            CampaignDispatchPreviewAssignmentOut(
+                device_id=assignment.device_id,
+                device_serial=(
+                    preview.devices_by_id[assignment.device_id].serial
+                    if assignment.device_id in preview.devices_by_id
+                    else assignment.device_id
+                ),
+                device_name=(
+                    preview.devices_by_id[assignment.device_id].name
+                    if assignment.device_id in preview.devices_by_id
+                    else None
+                ),
+                external_entity_id=assignment.entity.id,
+                display_name=assignment.entity.display_name,
+                platform=assignment.entity.platform,
+                entity_type=assignment.entity.entity_type,
+            )
+            for assignment in preview.allocation.assignments
+        ],
+    )
+
+
+@router.post(
     "/{campaign_id}/dispatch",
     response_model=CampaignDispatchOut,
     dependencies=[Depends(require_permission("campaigns", "execute"))],
@@ -639,12 +726,26 @@ async def dispatch_campaign_route(
     ),
 ):
     """Fan-out campaign dispatch to explicit devices or device groups (DF-T-04-008)."""
+    dispatch_http_started = time.perf_counter()
+    phase_started = dispatch_http_started
     org_id = getattr(user, "org_id", None)
     if not org_id:
         raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
 
     from api.schemas.campaign_entity import _dispatch_http_status
     from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
+    from services.campaign.entity_allocation import SourcePoolSpec
+
+    source_pool = (
+        SourcePoolSpec(
+            platform=body.source_pool.platform,
+            entity_type=body.source_pool.entity_type,
+            search=body.source_pool.search,
+            statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+        )
+        if body.source_pool is not None
+        else None
+    )
 
     try:
         result = await dispatch_campaign(
@@ -654,6 +755,13 @@ async def dispatch_campaign_route(
             actor_user_id=user.id,
             device_ids=body.target.device_ids,
             device_group_ids=body.target.device_group_ids,
+            external_entity_ids=body.target.external_entity_ids,
+            source_pool=source_pool,
+            allocation_snapshot=[
+                (item.device_id, item.external_entity_id)
+                for item in body.allocation_snapshot
+            ],
+            allocation_policy=body.allocation_policy,
             dispatch_strategy=body.dispatch_strategy,  # type: ignore[arg-type]
             allow_partial=body.allow_partial,
             require_online=body.require_online,
@@ -663,6 +771,16 @@ async def dispatch_campaign_route(
             status_code=_dispatch_http_status(exc.code),
             detail={"code": exc.code, "message": str(exc), **exc.details},
         ) from exc
+
+    from web.metrics import (
+        campaign_dispatch_http_duration_seconds,
+        campaign_dispatch_phase_duration_seconds,
+    )
+
+    campaign_dispatch_phase_duration_seconds.labels(phase="fan_out").observe(
+        time.perf_counter() - phase_started
+    )
+    phase_started = time.perf_counter()
 
     from db.crud import campaign_entity as campaign_entity_repo
     from services.campaign.execution_runtime import start_execution_runtime
@@ -685,16 +803,26 @@ async def dispatch_campaign_route(
         temporal_client=temporal_client,
         temporal_config=temporal_config,
         manager=manager,
+        commit_before_start=True,
     )
 
     await db.commit()
 
-    from db.crud.execution import get_execution
+    campaign_dispatch_phase_duration_seconds.labels(phase="runtime_start").observe(
+        time.perf_counter() - phase_started
+    )
+    phase_started = time.perf_counter()
+
+    from db.crud.execution import get_executions_by_ids
 
     payload = result.to_dict(include_vars=include_vars)
+    executions_by_id = await get_executions_by_ids(
+        db,
+        [item["execution_id"] for item in payload["executions"]],
+    )
     execution_rows: list[CampaignDispatchExecutionOut] = []
     for item in payload["executions"]:
-        ex = await get_execution(db, item["execution_id"])
+        ex = executions_by_id.get(item["execution_id"])
         meta = (ex.meta or {}) if ex else {}
         execution_rows.append(
             CampaignDispatchExecutionOut(
@@ -703,13 +831,20 @@ async def dispatch_campaign_route(
                 workflow_id=meta.get("workflow_id"),
             )
         )
-    return CampaignDispatchOut(
+    response = CampaignDispatchOut(
         dispatch_id=payload["dispatch_id"],
         campaign_id=payload["campaign_id"],
         dispatch_strategy=payload["dispatch_strategy"],
         target_count=payload["target_count"],
         executions=execution_rows,
     )
+    campaign_dispatch_phase_duration_seconds.labels(phase="response_hydration").observe(
+        time.perf_counter() - phase_started
+    )
+    campaign_dispatch_http_duration_seconds.observe(
+        time.perf_counter() - dispatch_http_started
+    )
+    return response
 
 
 @router.post(

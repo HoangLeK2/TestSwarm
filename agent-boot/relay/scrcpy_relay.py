@@ -175,9 +175,9 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 15))
-SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 540))
-SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 800_000))
+SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 12))
+SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 480))
+SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 600_000))
 
 
 def _per_serial_env(base: str, serial: str, fallback: str) -> str:
@@ -374,6 +374,7 @@ class ScrcpyRelaySession:
         self._relay_thread: Optional[threading.Thread] = None
         self._server_proc: Optional[subprocess.Popen] = None
         self._callback_fired   = False   # guards against double _on_fatal emit
+        self._stream_ready     = threading.Event()
 
         self._video_sock: Optional[socket.socket] = None
         self._ctrl_sock:  Optional[socket.socket] = None
@@ -415,6 +416,7 @@ class ScrcpyRelaySession:
         # copy; otherwise re-push.
         self._ensure_server_jar_on_device()
 
+        self._stream_ready.clear()
         self._running = True
         self._relay_thread = threading.Thread(
             target=self._relay_loop,
@@ -490,6 +492,10 @@ class ScrcpyRelaySession:
         t = self._relay_thread
         return t is not None and t.is_alive()
 
+    def is_streaming(self) -> bool:
+        """True only after the current scrcpy socket handshake succeeds."""
+        return self.is_alive() and self._stream_ready.is_set()
+
     def matches_config(
         self,
         max_fps: int,
@@ -543,6 +549,7 @@ class ScrcpyRelaySession:
                         break
 
                     # Connect sockets and stream until error or stop.
+                    self._stream_ready.clear()
                     stream_started = time.monotonic()
                     self._connect_and_stream()
 
@@ -792,7 +799,7 @@ class ScrcpyRelaySession:
             f"video_codec={codec}{encoder_arg} max_fps={self._max_fps} max_size={self._max_width} "
             f"video_bit_rate={self._bitrate} "
             f"video_codec_options={','.join(codec_options)} "
-            f"stay_awake=true turn_screen_on=true cleanup={str(_SCRCPY_CLEANUP_DEFAULT).lower()} "
+            f"stay_awake=true cleanup={str(_SCRCPY_CLEANUP_DEFAULT).lower()} "
             f"send_device_meta=true send_frame_meta=true"
         )
 
@@ -902,6 +909,7 @@ class ScrcpyRelaySession:
         if w and h:
             self._device_width  = w
             self._device_height = h
+        self._stream_ready.set()
         logger.info("[%s] handshake OK — %dx%d", self._serial, self._device_width, self._device_height)
 
         # 4. Stream H264 packets → gRPC send_queue.
@@ -1126,6 +1134,7 @@ class ScrcpyRelaySession:
         )
 
     def _close_sockets(self) -> None:
+        self._stream_ready.clear()
         for attr in ("_video_sock", "_ctrl_sock"):
             s = getattr(self, attr, None)
             if s:

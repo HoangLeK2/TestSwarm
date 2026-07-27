@@ -1,12 +1,17 @@
 """Epic 04 DF-T-04-008: campaign device binding & fan-out."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 pytest_plugins = ["tests.test_epic04_scenario_entity"]
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select, update
 
 from db.crud import campaign_entity as campaign_repo
 from db.crud.device import create_device
@@ -14,13 +19,21 @@ from db.crud.device_group import add_devices_to_group, create_group
 from db.crud.device_reserve_session import get_active_session
 from db.models.campaign import CampaignTarget
 from db.models.enums import CampaignStatus, DeviceFsmEvent
-from db.models.execution import Execution
-from services.campaign.dispatcher import dispatch_campaign
+from db.models.execution import Execution, ExecutionDevice, ExecutionResult
+from db.models.external_entity import ExecutionEntityAssignment
+from db.crud.external_entity import upsert_external_entity
+from services.campaign.dispatcher import (
+    FanOutExecutionView,
+    FanOutResult,
+    dispatch_campaign,
+)
+from services.campaign.execution_runtime import start_execution_runtime
 from services.campaign.override_resolver import merge_effective_vars
 from services.device_reserve.service import claim_device_session
 from services.device_state.service import DeviceStateService
 from services.scenario_dsl.variable_resolver import EffectiveVariableResolver
-from tenancy.context import set_current_org_id
+from temporal.shared import DeviceActionBatchInput
+from tenancy.context import set_current_org_id, tenant_context
 from tests.test_epic04_scenario_entity import (
     ORG_A,
     ORG_B,
@@ -128,6 +141,893 @@ async def test_ac1_fan_out_by_device_ids(session_factory):
             assert session is not None
             assert session.owner_type == "campaign"
             assert session.owner_id == campaign_id
+
+
+@pytest.mark.asyncio
+async def test_fan_out_assigns_one_external_entity_per_device_and_freezes_vars(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="ENTITY-D1")
+    d2 = await _online_device(session_factory, serial="ENTITY-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        first, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Group One",
+            external_id="group-1",
+            attributes={
+                "locator": {
+                    "kind": "facebook_group_search_result",
+                    "version": 1,
+                    "search_query": "Group One",
+                    "selector": {
+                        "by": "descriptionStartsWith",
+                        "value": "Group One,",
+                    },
+                    "fallback_selector": {
+                        "by": "descriptionContains",
+                        "value": "Group One",
+                    },
+                }
+            },
+        )
+        second, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Group Two",
+            external_id="group-2",
+        )
+        await db.commit()
+        entity_ids = [first.id, second.id]
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityFanOut")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch?include_vars=true",
+                json={
+                    "target": {
+                        "device_ids": [d1, d2],
+                        "external_entity_ids": entity_ids,
+                    }
+                },
+            )
+
+    assert response.status_code == 200, response.text
+    rows = response.json()["executions"]
+    assert [row["external_entity_id"] for row in rows] == entity_ids
+    assert [row["effective_vars"]["TARGET_NAME"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["TARGET_EXTERNAL_ID"] for row in rows] == [
+        "group-1",
+        "group-2",
+    ]
+    assert [row["effective_vars"]["TARGET_GROUP_NAME"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["GROUP_NAME"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["TARGET_SEARCH_QUERY"] for row in rows] == [
+        "Group One",
+        "Group Two",
+    ]
+    assert [row["effective_vars"]["TARGET_SELECTOR_BY"] for row in rows] == [
+        "descriptionStartsWith",
+        "descriptionStartsWith",
+    ]
+    assert [row["effective_vars"]["TARGET_SELECTOR_VALUE"] for row in rows] == [
+        "Group One,",
+        "Group Two,",
+    ]
+
+    async with session_factory() as db:
+        assignments = (
+            await db.execute(
+                select(ExecutionEntityAssignment).order_by(
+                    ExecutionEntityAssignment.assigned_at,
+                    ExecutionEntityAssignment.execution_id,
+                )
+            )
+        ).scalars().all()
+        assert len(assignments) == 2
+        assert {row.device_id for row in assignments} == {d1, d2}
+        assert {row.external_entity_id for row in assignments} == set(entity_ids)
+
+
+@pytest.mark.asyncio
+async def test_preview_and_dispatch_allocate_one_source_per_device_from_org_pool(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-D1")
+    d2 = await _online_device(session_factory, serial="POOL-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        older, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Older Group",
+            external_id="pool-older",
+            observed_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        )
+        newer, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Newer Group",
+            external_id="pool-newer",
+            observed_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+        )
+        await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="profile",
+            display_name="Wrong Type",
+            external_id="wrong-type",
+            observed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+        )
+        await db.commit()
+
+    set_current_org_id(ORG_B)
+    async with session_factory() as db:
+        await upsert_external_entity(
+            db,
+            org_id=ORG_B,
+            platform="facebook",
+            entity_type="group",
+            display_name="Other Org Group",
+            external_id="other-org",
+            observed_at=datetime(2026, 7, 28, tzinfo=timezone.utc),
+        )
+        await db.commit()
+
+    body = {
+        "target": {"device_ids": [d1, d2]},
+        "source_pool": {
+            "platform": "facebook",
+            "entity_type": "group",
+        },
+        "allocation_policy": "one_per_device",
+    }
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPool")
+        preview = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json=body,
+        )
+
+        assert preview.status_code == 200, preview.text
+        preview_body = preview.json()
+        assert preview_body["device_count"] == 2
+        assert preview_body["available_source_count"] == 2
+        assert [
+            (
+                row["device_id"],
+                row["device_serial"],
+                row["external_entity_id"],
+            )
+            for row in preview_body["assignments"]
+        ] == [
+            (d1, "POOL-D1", newer.id),
+            (d2, "POOL-D2", older.id),
+        ]
+
+        set_current_org_id(ORG_A)
+        async with session_factory() as db:
+            late_one, _ = await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name="Late Group One",
+                external_id="pool-late-1",
+                observed_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+            )
+            late_two, _ = await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name="Late Group Two",
+                external_id="pool-late-2",
+                observed_at=datetime(2026, 7, 28, tzinfo=timezone.utc),
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            assert await db.scalar(select(func.count(Execution.id))) == 0
+            assert (
+                await db.scalar(select(func.count(ExecutionEntityAssignment.id)))
+                == 0
+            )
+
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            dispatched = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch?include_vars=true",
+                json={
+                    **body,
+                    "allocation_snapshot": [
+                        {
+                            "device_id": row["device_id"],
+                            "external_entity_id": row["external_entity_id"],
+                        }
+                        for row in preview_body["assignments"]
+                    ],
+                },
+            )
+
+    assert dispatched.status_code == 200, dispatched.text
+    executions = dispatched.json()["executions"]
+    assert [
+        (row["device_id"], row["external_entity_id"]) for row in executions
+    ] == [(d1, newer.id), (d2, older.id)]
+    assert [row["effective_vars"]["TARGET_GROUP_NAME"] for row in executions] == [
+        "Newer Group",
+        "Older Group",
+    ]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        next_campaign_id = await _create_campaign(client, name="EntityPoolNext")
+        next_preview = await client.post(
+            f"/api/campaigns/{next_campaign_id}/dispatch-preview",
+            json=body,
+        )
+    assert next_preview.status_code == 200, next_preview.text
+    assert [
+        row["external_entity_id"] for row in next_preview.json()["assignments"]
+    ] == [late_two.id, late_one.id]
+
+
+@pytest.mark.asyncio
+async def test_source_pool_device_group_preview_order_is_stable(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-GROUP-D1")
+    d2 = await _online_device(session_factory, serial="POOL-GROUP-D2")
+    group_id = await _device_group(session_factory, [d2, d1])
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        for index in range(2):
+            await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name=f"Ordered Group {index}",
+                external_id=f"ordered-group-{index}",
+            )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPoolGroup")
+        response = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json={
+                "target": {"device_group_ids": [group_id]},
+                "source_pool": {
+                    "platform": "facebook",
+                    "entity_type": "group",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert [
+        row["device_id"] for row in response.json()["assignments"]
+    ] == sorted([d1, d2])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_preview_when_device_group_membership_changed(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-STALE-D1")
+    d2 = await _online_device(session_factory, serial="POOL-STALE-D2")
+    d3 = await _online_device(session_factory, serial="POOL-STALE-D3")
+    group_id = await _device_group(session_factory, [d1, d2])
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        for index in range(3):
+            await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name=f"Stale Group {index}",
+                external_id=f"stale-group-{index}",
+            )
+        await db.commit()
+
+    body = {
+        "target": {"device_group_ids": [group_id]},
+        "source_pool": {
+            "platform": "facebook",
+            "entity_type": "group",
+        },
+    }
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPoolStale")
+        preview = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json=body,
+        )
+        assert preview.status_code == 200, preview.text
+
+        set_current_org_id(ORG_A)
+        async with session_factory() as db:
+            await add_devices_to_group(db, group_id, [d3], org_id=ORG_A)
+            await db.commit()
+
+        dispatched = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={
+                **body,
+                "allocation_snapshot": [
+                    {
+                        "device_id": row["device_id"],
+                        "external_entity_id": row["external_entity_id"],
+                    }
+                    for row in preview.json()["assignments"]
+                ],
+            },
+        )
+
+    assert dispatched.status_code == 400
+    assert (
+        dispatched.json()["detail"]["code"]
+        == "ENTITY_ALLOCATION_SNAPSHOT_STALE"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_source_pool_reports_when_not_enough_sources(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="POOL-SHORT-D1")
+    d2 = await _online_device(session_factory, serial="POOL-SHORT-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Only Group",
+            external_id="pool-only",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityPoolShort")
+        response = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json={
+                "target": {"device_ids": [d1, d2]},
+                "source_pool": {
+                    "platform": "facebook",
+                    "entity_type": "group",
+                },
+                "allocation_policy": "one_per_device",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "ENTITY_POOL_EXHAUSTED",
+        "message": "Source pool has 1 available sources for 2 devices",
+        "device_count": 2,
+        "available_entity_count": 1,
+        "missing_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fan_out_rejects_entity_count_different_from_valid_device_count(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="ENTITY-COUNT-D1")
+    d2 = await _online_device(session_factory, serial="ENTITY-COUNT-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        entity, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Only Group",
+            external_id="only-group",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="EntityCount")
+        response = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={
+                "target": {
+                    "device_ids": [d1, d2],
+                    "external_entity_ids": [entity.id],
+                }
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "ENTITY_ASSIGNMENT_COUNT_MISMATCH"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload_version",
+    ["current", "legacy_campaign_id", "legacy_run_id"],
+)
+async def test_campaign_activity_does_not_touch_phone_after_claim_is_lost(
+    session_factory,
+    payload_version,
+):
+    await _seed_orgs(session_factory)
+    device_id = await _online_device(session_factory, serial="CLAIM-LOST-1")
+    app = _build_app(session_factory)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="ClaimLost")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 1,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch",
+                json={"target": {"device_ids": [device_id]}},
+            )
+    assert response.status_code == 200
+    execution_id = response.json()["executions"][0]["execution_id"]
+
+    async with session_factory() as db:
+        session = await get_active_session(db, device_id)
+        assert session is not None
+        session.released_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    @asynccontextmanager
+    async def _activity_session():
+        async with session_factory() as db:
+            yield db
+
+    phone = MagicMock()
+    phone.model = "mock-phone"
+    phone.screen_width = 1080
+    phone.screen_height = 1920
+    phone._batch_enabled.return_value = True
+    phone.u2_batch.return_value = [{"op": "click", "ok": True}]
+
+    from temporal.activities import DeviceActivities, set_device_registry
+
+    inp = DeviceActionBatchInput(
+        device_serial="CLAIM-LOST-1",
+        steps=[{"type": "tap_position", "pos": "middle_center"}],
+        step_indices=[0],
+        run_id=execution_id if payload_version == "legacy_run_id" else None,
+        execution_id=None if payload_version == "legacy_run_id" else execution_id,
+        campaign_id=campaign_id if payload_version == "current" else None,
+    )
+    set_device_registry(
+        SimpleNamespace(
+            get_device=lambda serial: phone if serial == "CLAIM-LOST-1" else None
+        )
+    )
+    try:
+        with (
+            patch("db.database.activity_session", _activity_session),
+            patch("temporal.activities.activity") as mock_activity,
+            patch(
+                "services.execution_pause_flags.is_execution_cancelled_async",
+                AsyncMock(return_value=False),
+            ),
+            patch(
+                "services.execution_pause_flags.is_execution_paused_async",
+                AsyncMock(return_value=False),
+            ),
+        ):
+            mock_activity.heartbeat = MagicMock()
+            mock_activity.is_cancelled = MagicMock(return_value=False)
+            with pytest.raises(RuntimeError, match="campaign device claim"):
+                await DeviceActivities().execute_device_action_batch(inp)
+    finally:
+        set_device_registry(None)
+
+    phone.u2_batch.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("heartbeat_age", "should_renew"),
+    [
+        (timedelta(minutes=10), True),
+        (timedelta(minutes=31), False),
+    ],
+)
+async def test_campaign_keepalive_activity_requires_live_multi_day_device_claim(
+    session_factory,
+    heartbeat_age,
+    should_renew,
+):
+    await _seed_orgs(session_factory)
+    device_id = await _online_device(session_factory, serial="CLAIM-MULTI-DAY-1")
+    app = _build_app(session_factory)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="ClaimMultiDay")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 1,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch",
+                json={"target": {"device_ids": [device_id]}},
+            )
+    assert response.status_code == 200
+    execution_id = response.json()["executions"][0]["execution_id"]
+    now = datetime.now(timezone.utc)
+    previous_heartbeat = now - heartbeat_age
+
+    async with session_factory() as db:
+        session = await get_active_session(db, device_id)
+        assert session is not None
+        session.claimed_at = now - timedelta(days=3)
+        session.last_heartbeat = previous_heartbeat
+        await db.commit()
+
+    @asynccontextmanager
+    async def _activity_session():
+        async with session_factory() as db:
+            try:
+                yield db
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+
+    from temporal.activities import CampaignDeviceClaimLostError, DeviceActivities
+
+    with tenant_context(None), patch("db.database.activity_session", _activity_session):
+        payload = {
+            "campaign_id": campaign_id,
+            "execution_id": execution_id,
+            "device_serial": "CLAIM-MULTI-DAY-1",
+        }
+        if should_renew:
+            recommended_interval = (
+                await DeviceActivities().heartbeat_campaign_device_claim(payload)
+            )
+        else:
+            with pytest.raises(CampaignDeviceClaimLostError, match="claim expired"):
+                await DeviceActivities().heartbeat_campaign_device_claim(payload)
+
+    async with session_factory() as db:
+        renewed_session = await get_active_session(db, device_id)
+
+    assert renewed_session is not None
+    renewed_heartbeat = renewed_session.last_heartbeat
+    if renewed_heartbeat.tzinfo is None:
+        renewed_heartbeat = renewed_heartbeat.replace(tzinfo=timezone.utc)
+    if should_renew:
+        assert recommended_interval == 600
+        assert renewed_heartbeat > previous_heartbeat
+    else:
+        assert renewed_heartbeat == previous_heartbeat
+
+
+@pytest.mark.asyncio
+async def test_dispatch_response_bulk_loads_execution_metadata(session_factory, engine):
+    await _seed_orgs(session_factory)
+    device_ids = [
+        await _online_device(session_factory, serial=f"BULK-{idx:02d}")
+        for idx in range(12)
+    ]
+    app = _build_app(session_factory)
+    capture_response_queries = False
+    individual_execution_reads = 0
+
+    def _before_cursor_execute(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal individual_execution_reads
+        normalized = " ".join(statement.split())
+        if (
+            capture_response_queries
+            and "FROM executions" in normalized
+            and "WHERE executions.id =" in normalized
+        ):
+            individual_execution_reads += 1
+
+    async def _runtime_stub(db, *, fan_out, **_kwargs):
+        nonlocal capture_response_queries
+        execution_ids = [view.execution_id for view in fan_out.executions]
+        await db.execute(
+            update(Execution)
+            .where(Execution.id.in_(execution_ids))
+            .values(
+                meta={
+                    "dispatch_source": "temporal",
+                    "workflow_id": "workflow-bulk",
+                }
+            )
+        )
+        capture_response_queries = True
+        return {"temporal": 0, "fallback": 0, "failed": 0, "skipped": 12}
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            campaign_id = await _create_campaign(client, name="BulkResponse")
+            with patch(
+                "services.campaign.execution_runtime.start_execution_runtime",
+                side_effect=_runtime_stub,
+            ):
+                response = await client.post(
+                    f"/api/campaigns/{campaign_id}/dispatch",
+                    json={"target": {"device_ids": device_ids}},
+                )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["target_count"] == 12
+    assert {
+        (row["dispatch_source"], row["workflow_id"])
+        for row in payload["executions"]
+    } == {("temporal", "workflow-bulk")}
+    assert individual_execution_reads == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_batches_persistence_and_preserves_response_order(
+    session_factory,
+    engine,
+):
+    await _seed_orgs(session_factory)
+    device_ids = [
+        await _online_device(session_factory, serial=f"PERSIST-{idx:02d}")
+        for idx in range(120)
+    ]
+    requested_device_ids = list(reversed(device_ids))
+    app = _build_app(session_factory)
+    inserted_statements: list[str] = []
+    claimed_device_ids: list[str] = []
+
+    def _before_cursor_execute(_conn, _cursor, statement, _params, _context, _many):
+        normalized = " ".join(statement.split())
+        if normalized.startswith(
+            (
+                "INSERT INTO executions ",
+                "INSERT INTO execution_devices ",
+                "INSERT INTO execution_results ",
+            )
+        ):
+            inserted_statements.append(normalized)
+
+    async def _claim_stub(_db, *, device_id: str, **_kwargs):
+        claimed_device_ids.append(device_id)
+        return SimpleNamespace(session_id=f"claim-{device_id}")
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            campaign_id = await _create_campaign(client, name="BatchedPersistence")
+            with (
+                patch(
+                    "services.campaign.dispatcher.claim_device_session",
+                    side_effect=_claim_stub,
+                ),
+                patch(
+                    "services.campaign.execution_runtime.start_execution_runtime",
+                    return_value={
+                        "temporal": 0,
+                        "fallback": 0,
+                        "failed": 0,
+                        "skipped": 120,
+                    },
+                ),
+            ):
+                response = await client.post(
+                    f"/api/campaigns/{campaign_id}/dispatch",
+                    json={"target": {"device_ids": requested_device_ids}},
+                )
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+
+    assert response.status_code == 200
+    assert claimed_device_ids == sorted(requested_device_ids)
+    assert [
+        row["device_id"] for row in response.json()["executions"]
+    ] == requested_device_ids
+    # 120 rows at chunk size 25 => five statements per persistence table.
+    assert len(inserted_statements) == 15
+    execution_ids = [
+        row["execution_id"] for row in response.json()["executions"]
+    ]
+    async with session_factory() as db:
+        execution_count = await db.scalar(
+            select(func.count(Execution.id)).where(Execution.id.in_(execution_ids))
+        )
+        link_count = await db.scalar(
+            select(func.count(ExecutionDevice.id)).where(
+                ExecutionDevice.execution_id.in_(execution_ids)
+            )
+        )
+        result_count = await db.scalar(
+            select(func.count(ExecutionResult.id)).where(
+                ExecutionResult.execution_id.in_(execution_ids)
+            )
+        )
+    assert (execution_count, link_count, result_count) == (120, 120, 120)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rolls_back_claims_and_first_chunk_when_later_chunk_fails(
+    session_factory,
+    engine,
+):
+    await _seed_orgs(session_factory)
+    device_ids = [
+        await _online_device(session_factory, serial=f"ROLLBACK-{idx:02d}")
+        for idx in range(26)
+    ]
+    app = _build_app(session_factory)
+    execution_insert_count = 0
+
+    def _fail_second_execution_batch(
+        _conn,
+        _cursor,
+        statement,
+        _params,
+        _context,
+        _many,
+    ):
+        nonlocal execution_insert_count
+        normalized = " ".join(statement.split())
+        if not normalized.startswith("INSERT INTO executions "):
+            return
+        execution_insert_count += 1
+        if execution_insert_count == 2:
+            raise RuntimeError("forced second-chunk persistence failure")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        campaign_id = await _create_campaign(client, name="RollbackBatch")
+        event.listen(
+            engine.sync_engine,
+            "before_cursor_execute",
+            _fail_second_execution_batch,
+        )
+        try:
+            with patch(
+                "services.campaign.execution_runtime.start_execution_runtime"
+            ) as runtime_start:
+                with pytest.raises(
+                    RuntimeError,
+                    match="forced second-chunk persistence failure",
+                ):
+                    await client.post(
+                        f"/api/campaigns/{campaign_id}/dispatch",
+                        json={"target": {"device_ids": device_ids}},
+                    )
+                runtime_start.assert_not_awaited()
+        finally:
+            event.remove(
+                engine.sync_engine,
+                "before_cursor_execute",
+                _fail_second_execution_batch,
+            )
+
+    assert execution_insert_count == 2
+    async with session_factory() as db:
+        execution_count = await db.scalar(
+            select(func.count(Execution.id)).where(
+                Execution.campaign_id == campaign_id
+            )
+        )
+        target_count = await db.scalar(
+            select(func.count(CampaignTarget.id)).where(
+                CampaignTarget.campaign_id == campaign_id
+            )
+        )
+        active_sessions = [
+            await get_active_session(db, device_id) for device_id in device_ids
+        ]
+    assert (execution_count, target_count) == (0, 0)
+    assert active_sessions == [None] * len(device_ids)
 
 
 @pytest.mark.asyncio
@@ -283,6 +1183,15 @@ async def test_ac6_device_claim_fail(session_factory):
 
     set_current_org_id(ORG_A)
     async with session_factory() as db:
+        for index in range(2):
+            await upsert_external_entity(
+                db,
+                org_id=ORG_A,
+                platform="facebook",
+                entity_type="group",
+                display_name=f"Claim Group {index}",
+                external_id=f"claim-group-{index}",
+            )
         await claim_device_session(
             db,
             device_id=d1,
@@ -299,7 +1208,13 @@ async def test_ac6_device_claim_fail(session_factory):
         campaign_id = await _create_campaign(client, name="ClaimFail")
         resp = await client.post(
             f"/api/campaigns/{campaign_id}/dispatch",
-            json={"target": {"device_ids": [d1, d2]}},
+            json={
+                "target": {"device_ids": [d1, d2]},
+                "source_pool": {
+                    "platform": "facebook",
+                    "entity_type": "group",
+                },
+            },
         )
 
     assert resp.status_code == 200
@@ -307,6 +1222,21 @@ async def test_ac6_device_claim_fail(session_factory):
     assert by_device[d1]["status"] == "failed"
     assert by_device[d1]["failure_reason"] == "device_claim_failed"
     assert by_device[d2]["status"] == "running"
+    async with session_factory() as db:
+        assignments = list(
+            (
+                await db.scalars(
+                    select(ExecutionEntityAssignment).where(
+                        ExecutionEntityAssignment.device_id.in_([d1, d2])
+                    )
+                )
+            ).all()
+        )
+    assignment_by_device = {row.device_id: row for row in assignments}
+    assert assignment_by_device[d1].status == "failed"
+    assert assignment_by_device[d1].completed_at is not None
+    assert assignment_by_device[d2].status == "assigned"
+    assert assignment_by_device[d2].completed_at is None
 
 
 @pytest.mark.asyncio
@@ -387,6 +1317,89 @@ async def test_sequential_dispatch_promotes_next_device_when_first_claim_fails(s
     assert row.status == CampaignStatus.RUNNING.value
     assert session is not None
     assert session.owner_id == campaign_id
+
+
+@pytest.mark.asyncio
+async def test_promoted_sequential_phone_keeps_original_device_index(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="SEQ-INDEX-D1")
+    d2 = await _online_device(session_factory, serial="SEQ-INDEX-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        await claim_device_session(
+            db,
+            device_id=d1,
+            org_id=ORG_A,
+            actor_user_id=USER_OWNER,
+            owner_type="manual",
+            owner_id="other-campaign",
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="SequentialIndex")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch",
+                json={
+                    "target": {"device_ids": [d1, d2]},
+                    "dispatch_strategy": "sequential",
+                },
+            )
+    assert response.status_code == 200
+    promoted = next(
+        row for row in response.json()["executions"] if row["device_id"] == d2
+    )
+    assert promoted["status"] == "running"
+
+    temporal_client = SimpleNamespace(start_workflow=AsyncMock())
+    async with session_factory() as db:
+        campaign = await campaign_repo.get_campaign_entity(db, campaign_id)
+        assert campaign is not None
+        await start_execution_runtime(
+            db,
+            fan_out=FanOutResult(
+                dispatch_id="sequential-index",
+                campaign_id=campaign_id,
+                dispatch_strategy="sequential",
+                executions=[
+                    FanOutExecutionView(
+                        execution_id=promoted["execution_id"],
+                        device_id=d2,
+                        status="running",
+                        effective_vars={},
+                    )
+                ],
+            ),
+            campaign=campaign,
+            org_id=ORG_A,
+            actor_user_id=USER_OWNER,
+            temporal_client=temporal_client,
+            temporal_config=SimpleNamespace(
+                enabled=True,
+                task_queue="device-scenario",
+            ),
+            manager=None,
+        )
+
+    scenario_input = temporal_client.start_workflow.await_args.args[1]
+    assert scenario_input.device_serial == "SEQ-INDEX-D2"
+    assert scenario_input.steps[0]["variables"]["DEVICE_INDEX"] == "1"
 
 
 @pytest.mark.asyncio
@@ -513,18 +1526,15 @@ async def test_dispatch_creates_execution_records(session_factory):
     await _seed_orgs(session_factory)
     d1 = await _online_device(session_factory, serial="E-D1")
 
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign(client, name="DirectDispatch")
+
     set_current_org_id(ORG_A)
     async with session_factory() as db:
-        campaign = await campaign_repo.create_campaign_entity(
-            db,
-            org_id=ORG_A,
-            name="DirectDispatch",
-            variables={"kw": "g"},
-            created_by=USER_OWNER,
-        )
-        await db.commit()
-        campaign_id = campaign.id
-
         result = await dispatch_campaign(
             db,
             campaign_id=campaign_id,

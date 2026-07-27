@@ -12,6 +12,7 @@ from typing import Any
 
 from relay.extra_data.writer import ContentItemWriter, build_content_item_row
 from relay.extra_data.writer import compute_content_hash, scope_content_hash
+from relay.extra_data.entity_writer import ExternalEntityWriter
 
 logger = logging.getLogger("relay.extra_data")
 
@@ -22,6 +23,7 @@ _SUPPORTED_CONTENT_STRATEGIES = (
     | _MULTI_PLATFORM_POST_STRATEGIES
     | _MULTI_PLATFORM_COMMENT_STRATEGIES
 )
+_SUPPORTED_ENTITY_STRATEGIES = {"fb_groups"}
 
 
 def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, str]:
@@ -44,6 +46,14 @@ def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> 
         scoped = scope_content_hash(base, scope)
         if scoped:
             mapping[pid] = scoped
+            for variant in item.get("_source_variants") or []:
+                if not isinstance(variant, dict):
+                    continue
+                variant_pid = str(
+                    variant.get("_pid") or variant.get("fb_post_id") or ""
+                ).strip()
+                if variant_pid:
+                    mapping[variant_pid] = scoped
     return mapping
 
 
@@ -130,6 +140,12 @@ def _multi_platform_items(
 
 
 def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if strategy == "fb_groups":
+        from relay.extra_data.parsers.facebook.group_pipeline import (
+            parse_group_search_results,
+        )
+
+        return parse_group_search_results(xml)
     if strategy == "fb_comment_filter_next":
         from relay.extra_data.parsers.facebook.comment_filter import resolve_comment_filter_next_tap
 
@@ -366,16 +382,58 @@ def _parse_fb_comment_snapshots(
         frame_context = {**context, "source_index": idx}
         items, diagnostic = _parse_items("fb_comments", snapshot, frame_context)
         frame_results.append((items, diagnostic))
-    return merge_fb_comment_frames(frame_results, max_items=max_items)
+    items, diagnostic = merge_fb_comment_frames(frame_results, max_items=max_items)
+    return items, _annotate_comment_target_diagnostic(
+        diagnostic,
+        context,
+        comments_returned=len(
+            [item for item in items if item.get("_type") != "post_stats"]
+        ),
+    )
+
+
+def _annotate_comment_target_diagnostic(
+    diagnostic: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    comments_returned: int,
+) -> dict[str, Any]:
+    annotated = dict(diagnostic)
+    target = int(context.get("comment_target_effective") or 0)
+    post_comment_count = context.get("post_comment_count")
+    target_is_known = (
+        isinstance(post_comment_count, int)
+        and not isinstance(post_comment_count, bool)
+        and post_comment_count > 0
+    ) or context.get("comment_require_target_without_count") is True
+    comments_returned = int(comments_returned)
+    annotated["comments_returned"] = comments_returned
+    if target > 0 and target_is_known:
+        annotated["comment_target"] = target
+        annotated["coverage_ratio"] = min(1.0, comments_returned / target)
+        for key in (
+            "post_comment_count",
+            "comment_scroll_stopped_reason",
+            "comment_scroll_passes_effective",
+            "comment_crawl_mode_effective",
+            "comment_coverage_collected",
+        ):
+            if context.get(key) is not None:
+                annotated[key] = context[key]
+        if comments_returned < target:
+            annotated["reason_code"] = "partial_target"
+    return annotated
 
 
 def _parse_fb_post_snapshots(
     snapshots: list[str],
     context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    from relay.extra_data.parsers.facebook.dedup import _dedup
+    from relay.extra_data.parsers.facebook.post_reconciliation import (
+        reconcile_fb_post_frames,
+    )
 
-    merged_items: list[dict[str, Any]] = []
+    frame_items: list[list[dict[str, Any]]] = []
     frame_codes: list[str] = []
     frame_posts_returned: list[int] = []
     last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
@@ -386,18 +444,89 @@ def _parse_fb_post_snapshots(
         last_diagnostic = diagnostic
         frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
         frame_posts_returned.append(int(diagnostic.get("posts_returned") or len(items)))
-        merged_items.extend(item for item in items if isinstance(item, dict))
+        frame_items.append([item for item in items if isinstance(item, dict)])
 
-    deduped = _dedup(merged_items)
+    opened = _opened_post_from_context(context)
+    open_diagnostic = context.get("open_post_detail_diagnostic")
+    opened_state = (
+        str(open_diagnostic.get("reason_code") or "")
+        if isinstance(open_diagnostic, dict)
+        else None
+    )
+    deduped, reconciliation = reconcile_fb_post_frames(
+        frame_items,
+        opened_post=opened,
+        opened_state=opened_state,
+    )
     diagnostic = {
         **last_diagnostic,
-        "reason_code": "ok" if deduped else last_diagnostic.get("reason_code", "no_posts"),
+        **reconciliation,
+        "reason_code": reconciliation.get("reason_code")
+        or ("ok" if deduped else last_diagnostic.get("reason_code", "no_posts")),
         "snapshot_count": len(snapshots),
         "frame_reason_codes": frame_codes,
         "frame_posts_returned": frame_posts_returned,
         "posts_returned": len(deduped),
     }
     return deduped, diagnostic
+
+
+def _parse_fb_group_snapshots(
+    snapshots: list[str],
+    context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def merge_non_empty(existing: Any, incoming: Any) -> Any:
+        if isinstance(existing, dict) and isinstance(incoming, dict):
+            merged_value = dict(existing)
+            for key, value in incoming.items():
+                merged_value[key] = merge_non_empty(merged_value.get(key), value)
+            return merged_value
+        if incoming in (None, "", [], {}):
+            return existing
+        return incoming
+
+    max_items = max(1, int(context.get("max_items") or 500))
+    merged: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    frame_codes: list[str] = []
+    frame_groups_returned: list[int] = []
+    last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
+
+    for snapshot in snapshots:
+        items, diagnostic = _parse_items("fb_groups", snapshot, context)
+        last_diagnostic = diagnostic
+        frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
+        frame_groups_returned.append(
+            int(diagnostic.get("groups_returned") or len(items))
+        )
+        for item in items:
+            identity_key = str(item.get("identity_key") or "").strip()
+            if not identity_key:
+                continue
+            position = positions.get(identity_key)
+            if position is None:
+                if len(merged) >= max_items:
+                    continue
+                positions[identity_key] = len(merged)
+                merged.append({**item, "rank": len(merged) + 1})
+                continue
+            first_rank = merged[position].get("rank")
+            merged[position] = merge_non_empty(merged[position], item)
+            merged[position]["rank"] = first_rank
+
+    diagnostic = {
+        **last_diagnostic,
+        "reason_code": (
+            "ok"
+            if merged
+            else last_diagnostic.get("reason_code", "no_groups")
+        ),
+        "snapshot_count": len(snapshots),
+        "frame_reason_codes": frame_codes,
+        "frame_groups_returned": frame_groups_returned,
+        "groups_returned": len(merged),
+    }
+    return merged, diagnostic
 
 
 def _trusted_preparsed_fb_comments(
@@ -465,7 +594,11 @@ def _trusted_preparsed_fb_comments(
         except (TypeError, ValueError):
             pass
     diagnostic["preparsed"] = True
-    return items, diagnostic
+    return items, _annotate_comment_target_diagnostic(
+        diagnostic,
+        context,
+        comments_returned=comment_count,
+    )
 
 
 def _parse_payload_items(
@@ -485,6 +618,9 @@ def _parse_payload_items(
             return items, diagnostic, snapshots
     if strategy == "fb_posts" and len(snapshots) > 1:
         items, diagnostic = _parse_fb_post_snapshots(snapshots, context)
+        return items, diagnostic, snapshots
+    if strategy == "fb_groups" and len(snapshots) > 1:
+        items, diagnostic = _parse_fb_group_snapshots(snapshots, context)
         return items, diagnostic, snapshots
     items, diagnostic = _parse_items(strategy, xml, context)
     return items, diagnostic, snapshots
@@ -730,6 +866,9 @@ def _post_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
         opened_value = str(opened.get(opened_key) or "").strip()
         if item_value and opened_value and item_value == opened_value:
             return True
+    for variant in item.get("_source_variants") or []:
+        if isinstance(variant, dict) and _post_matches_opened(variant, opened):
+            return True
     if _post_metadata_matches_opened(item, opened):
         return True
     return False
@@ -790,10 +929,23 @@ def _active_parent_from_opened_post(
             payload = _active_parent_post_payload(item, row)
             if payload is None:
                 return None
+            canonicalized = item.get("_canonicalized_from_detail") is True
             for key in ("pid", "post_key", "stable_post_id", "fb_post_id", "author", "timestamp"):
                 value = opened.get(key)
-                if key not in payload and value is not None and str(value).strip():
+                if (
+                    value is not None
+                    and str(value).strip()
+                    and (canonicalized or key not in payload)
+                ):
                     payload[key] = value
+            if canonicalized:
+                opened_text = (
+                    opened.get("text_prefix")
+                    or opened.get("text")
+                    or opened.get("body")
+                )
+                if opened_text is not None and str(opened_text).strip():
+                    payload["text_prefix"] = str(opened_text)[:220]
             return payload
     return None
 
@@ -806,6 +958,7 @@ class ExtraDataIngestServer:
         self._token = os.getenv("AGENT_BOOT_EXTRA_TOKEN", "").strip()
         self._allow_unauth = os.getenv("AGENT_BOOT_EXTRA_ALLOW_UNAUTH", "").strip().lower() in {"1", "true", "yes", "on"}
         self._writer = ContentItemWriter()
+        self._entity_writer = ExternalEntityWriter(self._writer._ensure_pool)
         default_workers = max(2, min(4, os.cpu_count() or 2))
         workers = max(1, int(os.getenv("AGENT_BOOT_XML_PARSE_WORKERS", str(default_workers))))
         self._parse_sem = asyncio.Semaphore(workers)
@@ -953,12 +1106,51 @@ class ExtraDataIngestServer:
                 )
                 parse_ms = int((time.perf_counter() - parse_started) * 1000)
 
-            if strategy not in _SUPPORTED_CONTENT_STRATEGIES and strategy not in {
+            if (
+                strategy not in _SUPPORTED_CONTENT_STRATEGIES
+                and strategy not in _SUPPORTED_ENTITY_STRATEGIES
+                and strategy not in {
                 "fb_comment_target",
                 "fb_comment_target_tap",
                 "fb_comment_filter_next",
-            }:
+                }
+            ):
                 return {"ok": False, "error": "unsupported_strategy", "strategy": strategy}
+
+            if strategy in _SUPPORTED_ENTITY_STRATEGIES:
+                if bool(context.get("persist", True)):
+                    context = await self._writer.prepare_context_for_persist(context)
+                    entity_write = await self._entity_writer.persist_items(
+                        items,
+                        context=context,
+                        captured_at=payload.get("captured_at"),
+                    )
+                else:
+                    entity_write = {
+                        "attempted": 0,
+                        "upserted": 0,
+                        "observed": 0,
+                        "discovered": 0,
+                        "entity_ids": [],
+                    }
+                return {
+                    "ok": True,
+                    "serial": serial,
+                    "strategy": strategy,
+                    "parsed_count": len(items),
+                    "inserted_attempted": entity_write["attempted"],
+                    "inserted_count": entity_write["upserted"],
+                    "duplicate_count": 0,
+                    "entity_ids": entity_write.get("entity_ids") or [],
+                    "observation_count": entity_write["observed"],
+                    "discovery_count": entity_write["discovered"],
+                    "diagnostic": diagnostic,
+                    "xml_sha256": actual_sha,
+                    "parse_ms": parse_ms,
+                    "db_ms": int((time.perf_counter() - started) * 1000) - parse_ms,
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    **({"items": items} if bool(context.get("return_items", True)) else {}),
+                }
 
             should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
             if should_persist:
@@ -1095,7 +1287,14 @@ class ExtraDataIngestServer:
                 for item in items
                 if isinstance(item, dict) and item.get("_type") != "post_stats"
             ]
-            if strategy == "fb_posts" and not row_items and context.get("open_post_detail"):
+            if (
+                strategy == "fb_posts"
+                and not row_items
+                and context.get("open_post_detail")
+                and not str(diagnostic.get("reason_code") or "").startswith(
+                    "post_detail_"
+                )
+            ):
                 synthetic_parent = _synthetic_post_from_opened_post(context)
                 if synthetic_parent:
                     items.append(synthetic_parent)

@@ -8,13 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from sqlalchemy import insert, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud import campaign_entity as campaign_repo
 from db.crud import campaign_target as target_repo
 from db.crud.execution import (
-    add_device_to_execution,
-    create_execution,
     finish_execution,
     get_execution,
     upsert_execution_result,
@@ -22,13 +21,22 @@ from db.crud.execution import (
 from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.enums import CampaignStatus, DeviceReserveOwnerType, ExecutionStatus
-from db.models.execution import Execution
+from db.models.execution import Execution, ExecutionDevice, ExecutionResult
+from db.models.external_entity import ExecutionEntityAssignment, ExternalEntity
 from services.campaign.constants import MAX_DISPATCH_TARGETS
 from services.campaign.device_validator import (
     DispatchValidationError,
     ResolvedTargetEntry,
     resolve_dispatch_targets,
     validate_devices_for_dispatch,
+)
+from services.campaign.entity_allocation import (
+    EntityAllocationError,
+    EntityAllocationPlan,
+    SourcePoolSpec,
+    load_source_pool_snapshot,
+    plan_from_source_pool,
+    plan_one_per_device,
 )
 from services.campaign.account_resolver import (
     AccountBindingError,
@@ -52,6 +60,106 @@ from web.metrics import (
 log = logging.getLogger(__name__)
 
 DispatchStrategy = Literal["parallel", "sequential"]
+DISPATCH_PERSIST_CHUNK_SIZE = 25
+
+
+def _external_entity_snapshot(entity: ExternalEntity) -> dict[str, Any]:
+    return {
+        "id": entity.id,
+        "platform": entity.platform,
+        "entity_type": entity.entity_type,
+        "external_id": entity.external_id,
+        "canonical_url": entity.canonical_url,
+        "display_name": entity.display_name,
+        "identity_key": entity.identity_key,
+        "attributes": dict(entity.current_attributes or {}),
+        "metrics": dict(entity.current_metrics or {}),
+        "last_seen_at": entity.last_seen_at.isoformat() if entity.last_seen_at else None,
+    }
+
+
+def _with_external_entity_vars(
+    effective_vars: dict[str, Any],
+    entity: ExternalEntity | None,
+) -> dict[str, Any]:
+    if entity is None:
+        return effective_vars
+    target_vars = {
+        **effective_vars,
+        "TARGET_ENTITY_ID": entity.id,
+        "TARGET_PLATFORM": entity.platform,
+        "TARGET_ENTITY_TYPE": entity.entity_type,
+        "TARGET_EXTERNAL_ID": entity.external_id or "",
+        "TARGET_URL": entity.canonical_url or "",
+        "TARGET_NAME": entity.display_name,
+    }
+    if entity.platform != "facebook" or entity.entity_type != "group":
+        return target_vars
+
+    attributes = (
+        entity.current_attributes
+        if isinstance(entity.current_attributes, dict)
+        else {}
+    )
+    locator = (
+        attributes.get("locator")
+        if isinstance(attributes.get("locator"), dict)
+        else {}
+    )
+    selector = (
+        locator.get("selector")
+        if isinstance(locator.get("selector"), dict)
+        else {}
+    )
+    fallback_selector = (
+        locator.get("fallback_selector")
+        if isinstance(locator.get("fallback_selector"), dict)
+        else {}
+    )
+    name = entity.display_name
+    return {
+        **target_vars,
+        "GROUP_NAME": name,
+        "TARGET_GROUP_NAME": name,
+        "TARGET_SEARCH_QUERY": str(locator.get("search_query") or name),
+        "TARGET_SELECTOR_BY": str(
+            selector.get("by") or "descriptionStartsWith"
+        ),
+        "TARGET_SELECTOR_VALUE": str(selector.get("value") or f"{name},"),
+        "TARGET_FALLBACK_SELECTOR_BY": str(
+            fallback_selector.get("by") or "descriptionContains"
+        ),
+        "TARGET_FALLBACK_SELECTOR_VALUE": str(
+            fallback_selector.get("value") or name
+        ),
+        "TARGET_LOCATOR": locator,
+    }
+
+
+def _assignment_values(
+    *,
+    campaign: Campaign,
+    dispatch_id: str,
+    execution_id: str,
+    device_id: str,
+    entity: ExternalEntity | None,
+    assigned_at: datetime,
+) -> dict[str, Any] | None:
+    if entity is None:
+        return None
+    return {
+        "id": str(uuid.uuid4()),
+        "org_id": campaign.org_id,
+        "dispatch_id": dispatch_id,
+        "execution_id": execution_id,
+        "device_id": device_id,
+        "external_entity_id": entity.id,
+        "assignment_key": "primary",
+        "status": "assigned",
+        "snapshot": _external_entity_snapshot(entity),
+        "assigned_at": assigned_at,
+        "completed_at": None,
+    }
 
 
 class CampaignDispatchError(Exception):
@@ -70,6 +178,7 @@ class FanOutExecutionView:
     account_id: str | None = None
     failure_reason: str | None = None
     claim_session_id: str | None = None
+    external_entity_id: str | None = None
 
     def to_dict(self, *, include_vars: bool = True) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -79,6 +188,7 @@ class FanOutExecutionView:
             "account_id": self.account_id,
             "failure_reason": self.failure_reason,
             "claim_session_id": self.claim_session_id,
+            "external_entity_id": self.external_entity_id,
         }
         if include_vars:
             out["effective_vars"] = self.effective_vars
@@ -102,6 +212,138 @@ class FanOutResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchPreview:
+    campaign_id: str
+    allocation_policy: str
+    device_ids: list[str]
+    devices_by_id: dict[str, Device]
+    allocation: EntityAllocationPlan
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedFanOutExecution:
+    execution_values: dict[str, Any]
+    link_values: dict[str, Any]
+    result_values: dict[str, Any]
+    assignment_values: dict[str, Any] | None
+    view: FanOutExecutionView
+
+
+async def _plan_entity_assignments(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_ids: list[str],
+    device_group_ids: list[str] | None,
+    external_entity_ids: list[str] | None,
+    source_pool: SourcePoolSpec | None,
+    allocation_snapshot: list[tuple[str, str]] | None,
+    allocation_policy: str,
+    lock_sources: bool,
+) -> EntityAllocationPlan:
+    snapshot = list(allocation_snapshot or [])
+    if snapshot:
+        if source_pool is None:
+            raise CampaignDispatchError(
+                "Allocation snapshot requires a source pool",
+                code="ENTITY_ALLOCATION_SNAPSHOT_INVALID",
+            )
+        snapshot_device_ids = [device_id for device_id, _ in snapshot]
+        snapshot_entity_ids = [entity_id for _, entity_id in snapshot]
+        if (
+            snapshot_device_ids != device_ids
+            or len(snapshot_entity_ids) != len(set(snapshot_entity_ids))
+        ):
+            raise CampaignDispatchError(
+                "Allocation preview is stale; preview the mapping again",
+                code="ENTITY_ALLOCATION_SNAPSHOT_STALE",
+                details={
+                    "device_ids": device_ids,
+                    "snapshot_device_ids": snapshot_device_ids,
+                },
+            )
+        entities = await load_source_pool_snapshot(
+            db,
+            org_id=org_id,
+            spec=source_pool,
+            entity_ids=snapshot_entity_ids,
+            lock_sources=lock_sources,
+        )
+        if len(entities) != len(snapshot_entity_ids):
+            raise CampaignDispatchError(
+                "Allocation preview is stale; preview the mapping again",
+                code="ENTITY_ALLOCATION_SNAPSHOT_STALE",
+                details={"external_entity_ids": snapshot_entity_ids},
+            )
+        return plan_one_per_device(device_ids=device_ids, entities=entities)
+
+    requested_entity_ids = list(external_entity_ids or [])
+    if requested_entity_ids:
+        if device_group_ids:
+            raise CampaignDispatchError(
+                "External entity assignment requires explicit device IDs",
+                code="ENTITY_ASSIGNMENT_REQUIRES_EXPLICIT_DEVICES",
+            )
+        if len(requested_entity_ids) != len(set(requested_entity_ids)):
+            raise CampaignDispatchError(
+                "External entities must be unique within one dispatch",
+                code="DUPLICATE_EXTERNAL_ENTITY",
+            )
+        if len(requested_entity_ids) != len(device_ids):
+            raise CampaignDispatchError(
+                "External entity count must match the valid device count",
+                code="ENTITY_ASSIGNMENT_COUNT_MISMATCH",
+                details={
+                    "entity_count": len(requested_entity_ids),
+                    "device_count": len(device_ids),
+                },
+            )
+        from db.crud.external_entity import get_external_entities_by_ids
+
+        entities = await get_external_entities_by_ids(
+            db,
+            org_id=org_id,
+            entity_ids=requested_entity_ids,
+        )
+        if len(entities) != len(requested_entity_ids):
+            found = {entity.id for entity in entities}
+            raise CampaignDispatchError(
+                "One or more external entities were not found in this organization",
+                code="EXTERNAL_ENTITY_NOT_FOUND",
+                details={
+                    "entity_ids": [
+                        entity_id
+                        for entity_id in requested_entity_ids
+                        if entity_id not in found
+                    ]
+                },
+            )
+        try:
+            return plan_one_per_device(device_ids=device_ids, entities=entities)
+        except EntityAllocationError as exc:
+            raise CampaignDispatchError(
+                str(exc), code=exc.code, details=exc.details
+            ) from exc
+
+    if source_pool is None:
+        return EntityAllocationPlan(assignments=[], available_count=0)
+
+    try:
+        return await plan_from_source_pool(
+            db,
+            org_id=org_id,
+            device_ids=device_ids,
+            spec=source_pool,
+            policy=allocation_policy,
+            lock_sources=lock_sources,
+        )
+    except EntityAllocationError as exc:
+        raise CampaignDispatchError(
+            str(exc), code=exc.code, details=exc.details
+        ) from exc
+
+
 class CampaignDispatcher:
     """Resolve targets, validate devices, snapshot membership, and fan-out executions."""
 
@@ -114,6 +356,10 @@ class CampaignDispatcher:
         actor_user_id: str,
         device_ids: list[str] | None = None,
         device_group_ids: list[str] | None = None,
+        external_entity_ids: list[str] | None = None,
+        source_pool: SourcePoolSpec | None = None,
+        allocation_snapshot: list[tuple[str, str]] | None = None,
+        allocation_policy: str = "one_per_device",
         dispatch_strategy: DispatchStrategy = "parallel",
         allow_partial: bool = False,
         require_online: bool = True,
@@ -187,6 +433,19 @@ class CampaignDispatcher:
                 code="EMPTY_DISPATCH_TARGET",
             )
 
+        allocation = await _plan_entity_assignments(
+            db,
+            org_id=org_id,
+            device_ids=[entry.device_id for entry in valid_entries],
+            device_group_ids=device_group_ids,
+            external_entity_ids=external_entity_ids,
+            source_pool=source_pool,
+            allocation_snapshot=allocation_snapshot,
+            allocation_policy=allocation_policy,
+            lock_sources=True,
+        )
+        entity_by_device = allocation.entity_by_device
+
         try:
             await assert_dispatch_account_guard(db, campaign=campaign, org_id=org_id)
         except AccountBindingError as exc:
@@ -229,12 +488,20 @@ class CampaignDispatcher:
             ],
         )
 
-        executions: list[FanOutExecutionView] = []
         claim_now = valid_entries if dispatch_strategy == "parallel" else valid_entries[:1]
         queue_later = valid_entries[1:] if dispatch_strategy == "sequential" else []
+        device_index_by_id = {
+            entry.device_id: index for index, entry in enumerate(valid_entries)
+        }
+        ordered_claims = (
+            sorted(claim_now, key=lambda entry: entry.device_id)
+            if dispatch_strategy == "parallel"
+            else claim_now
+        )
+        prepared_by_device: dict[str, _PreparedFanOutExecution] = {}
 
-        for entry in claim_now:
-            executions.append(
+        for offset in range(0, len(ordered_claims), DISPATCH_PERSIST_CHUNK_SIZE):
+            prepared_batch = [
                 await self._create_device_execution(
                     db,
                     campaign=campaign,
@@ -246,22 +513,43 @@ class CampaignDispatcher:
                     scenario_refs=scenario_refs,
                     device_map=device_map,
                     claim_device=True,
+                    device_index=device_index_by_id[entry.device_id],
                     resolved_account=account_by_device.get(entry.device_id),
+                    external_entity=entity_by_device.get(entry.device_id),
                 )
+                for entry in ordered_claims[
+                    offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
+                ]
+            ]
+            await self._persist_execution_batch(db, prepared_batch)
+            prepared_by_device.update(
+                {prepared.view.device_id: prepared for prepared in prepared_batch}
             )
 
-        for entry in queue_later:
-            executions.append(
+        for offset in range(0, len(queue_later), DISPATCH_PERSIST_CHUNK_SIZE):
+            prepared_batch = [
                 await self._create_queued_execution(
-                    db,
                     campaign=campaign,
                     entry=entry,
                     dispatch_id=dispatch_id,
                     dispatch_strategy=dispatch_strategy,
                     scenario_refs=scenario_refs,
+                    device_index=device_index_by_id[entry.device_id],
                     resolved_account=account_by_device.get(entry.device_id),
+                    external_entity=entity_by_device.get(entry.device_id),
                 )
+                for entry in queue_later[
+                    offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
+                ]
+            ]
+            await self._persist_execution_batch(db, prepared_batch)
+            prepared_by_device.update(
+                {prepared.view.device_id: prepared for prepared in prepared_batch}
             )
+
+        executions = [
+            prepared_by_device[entry.device_id].view for entry in valid_entries
+        ]
 
         if dispatch_strategy == "sequential" and not any(
             view.status == ExecutionStatus.RUNNING.value for view in executions
@@ -325,6 +613,43 @@ class CampaignDispatcher:
             executions=executions,
         )
 
+    @staticmethod
+    async def _persist_execution_batch(
+        db: AsyncSession,
+        prepared_batch: list[_PreparedFanOutExecution],
+    ) -> None:
+        if not prepared_batch:
+            return
+        await db.execute(
+            insert(Execution),
+            [prepared.execution_values for prepared in prepared_batch],
+        )
+        await db.execute(
+            insert(ExecutionDevice),
+            [prepared.link_values for prepared in prepared_batch],
+        )
+        await db.execute(
+            insert(ExecutionResult),
+            [prepared.result_values for prepared in prepared_batch],
+        )
+        terminal_statuses = {
+            ExecutionStatus.COMPLETED.value,
+            ExecutionStatus.FAILED.value,
+            ExecutionStatus.CANCELLED.value,
+            ExecutionStatus.DLQ_CLOSED.value,
+        }
+        assignments = []
+        for prepared in prepared_batch:
+            if prepared.assignment_values is None:
+                continue
+            assignment = dict(prepared.assignment_values)
+            if prepared.view.status in terminal_statuses:
+                assignment["status"] = prepared.view.status
+                assignment["completed_at"] = datetime.now(timezone.utc)
+            assignments.append(assignment)
+        if assignments:
+            await db.execute(insert(ExecutionEntityAssignment), assignments)
+
     async def _create_device_execution(
         self,
         db: AsyncSession,
@@ -338,8 +663,10 @@ class CampaignDispatcher:
         scenario_refs: list[dict[str, Any]],
         device_map: dict[str, Device],
         claim_device: bool,
+        device_index: int,
         resolved_account: ResolvedDeviceAccount | None = None,
-    ) -> FanOutExecutionView:
+        external_entity: ExternalEntity | None = None,
+    ) -> _PreparedFanOutExecution:
         effective_vars = merge_effective_vars(
             campaign_vars=campaign.variables,
             per_device_overrides=campaign.per_device_overrides,
@@ -348,62 +675,88 @@ class CampaignDispatcher:
         account_vars = (resolved_account.account_vars if resolved_account else {}) or {}
         if account_vars:
             effective_vars = {**effective_vars, **account_vars}
+        effective_vars = _with_external_entity_vars(effective_vars, external_entity)
 
         device = device_map.get(entry.device_id)
         device_serial = device.serial if device else ""
         account_id = resolved_account.account_id if resolved_account else None
-
-        execution = await create_execution(
-            db,
-            run_type="campaign_device",
-            campaign_id=campaign.id,
-            organization_id=campaign.org_id,
-            user_id=campaign.created_by or campaign.user_id,
-            account_id=account_id,
-            status=ExecutionStatus.PENDING.value,
-            meta={
+        execution_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        execution_values: dict[str, Any] = {
+            "id": execution_id,
+            "run_type": "campaign_device",
+            "kind": "campaign",
+            "status": ExecutionStatus.PENDING.value,
+            "org_id": campaign.org_id,
+            "campaign_id": campaign.id,
+            "scenario_id": None,
+            "scenario_version_id": None,
+            "device_config": {
+                "effective_vars": effective_vars,
+                "account_vars": account_vars,
+                "device_serial": device_serial,
+            },
+            "loop_config": {},
+            "error_config": {},
+            "meta": {
                 "dispatch_id": dispatch_id,
                 "dispatch_strategy": dispatch_strategy,
                 "org_scenario_refs": scenario_refs,
                 "source_kind": entry.source_kind,
                 "source_ref_id": entry.source_ref_id,
+                "device_index": device_index,
+                "external_entity_id": external_entity.id if external_entity else None,
             },
-            device_config={
-                "effective_vars": effective_vars,
-                "account_vars": account_vars,
-                "device_serial": device_serial,
-            },
-        )
-        await add_device_to_execution(db, execution.id, entry.device_id)
+            "user_id": campaign.created_by or campaign.user_id,
+            "account_id": account_id,
+            "priority": 0,
+            "checkpoint_step": 0,
+            "created_at": created_at,
+            "started_at": None,
+            "finished_at": None,
+        }
 
         claim_session_id: str | None = None
         failure_reason: str | None = None
-        status = ExecutionStatus.RUNNING.value
+        status = (
+            ExecutionStatus.RUNNING.value
+            if claim_device
+            else ExecutionStatus.PENDING.value
+        )
 
         if resolved_account and resolved_account.unavailable:
             failure_reason = resolved_account.failure_reason or "account_unavailable"
             status = ExecutionStatus.FAILED.value
-            execution.status = status
-            execution.finished_at = datetime.now(timezone.utc)
-            execution.device_config = {
-                **(execution.device_config or {}),
+            finished_at = datetime.now(timezone.utc)
+            execution_values["status"] = status
+            execution_values["finished_at"] = finished_at
+            execution_values["device_config"] = {
+                **execution_values["device_config"],
                 "failure_reason": failure_reason,
             }
-            await upsert_execution_result(
-                db,
-                execution_id=execution.id,
+            return self._prepared_execution(
+                execution_values=execution_values,
                 device_id=entry.device_id,
-                status="failed",
+                result_status="failed",
                 error_detail=failure_reason,
-                finished_at=execution.finished_at,
-            )
-            return FanOutExecutionView(
-                execution_id=execution.id,
-                device_id=entry.device_id,
-                status=status,
-                effective_vars=effective_vars,
-                account_id=account_id,
-                failure_reason=failure_reason,
+                finished_at=finished_at,
+                view=FanOutExecutionView(
+                    execution_id=execution_id,
+                    device_id=entry.device_id,
+                    status=status,
+                    effective_vars=effective_vars,
+                    account_id=account_id,
+                    failure_reason=failure_reason,
+                    external_entity_id=external_entity.id if external_entity else None,
+                ),
+                assignment_values=_assignment_values(
+                    campaign=campaign,
+                    dispatch_id=dispatch_id,
+                    execution_id=execution_id,
+                    device_id=entry.device_id,
+                    entity=external_entity,
+                    assigned_at=created_at,
+                ),
             )
 
         if claim_device:
@@ -415,65 +768,76 @@ class CampaignDispatcher:
                     actor_user_id=actor_user_id,
                     owner_type=DeviceReserveOwnerType.CAMPAIGN.value,
                     owner_id=campaign.id,
-                    ctx={"dispatch_id": dispatch_id, "execution_id": execution.id},
+                    ctx={"dispatch_id": dispatch_id, "execution_id": execution_id},
                 )
                 claim_session_id = claim.session_id
-                execution.device_config = {
-                    **(execution.device_config or {}),
+                started_at = datetime.now(timezone.utc)
+                execution_values["device_config"] = {
+                    **execution_values["device_config"],
                     "claim_session_id": claim_session_id,
                 }
-                execution.status = ExecutionStatus.RUNNING.value
-                execution.started_at = datetime.now(timezone.utc)
-                await upsert_execution_result(
-                    db,
-                    execution_id=execution.id,
-                    device_id=entry.device_id,
-                    status="running",
-                    started_at=execution.started_at,
-                )
+                execution_values["status"] = ExecutionStatus.RUNNING.value
+                execution_values["started_at"] = started_at
             except (DeviceBusyError, DeviceSessionError) as exc:
                 campaign_dispatch_claim_fail_count.inc()
                 failure_reason = "device_claim_failed"
                 status = ExecutionStatus.FAILED.value
-                execution.status = status
-                execution.finished_at = datetime.now(timezone.utc)
+                finished_at = datetime.now(timezone.utc)
+                execution_values["status"] = status
+                execution_values["finished_at"] = finished_at
                 cfg = {
-                    **(execution.device_config or {}),
+                    **execution_values["device_config"],
                     "failure_reason": failure_reason,
                 }
                 if isinstance(exc, DeviceSessionError):
                     cfg["claim_error"] = exc.code
-                execution.device_config = cfg
-                await upsert_execution_result(
-                    db,
-                    execution_id=execution.id,
-                    device_id=entry.device_id,
-                    status="failed",
-                    error_detail=failure_reason,
-                    finished_at=execution.finished_at,
-                )
+                execution_values["device_config"] = cfg
 
-        return FanOutExecutionView(
-            execution_id=execution.id,
+        return self._prepared_execution(
+            execution_values=execution_values,
             device_id=entry.device_id,
-            status=status,
-            effective_vars=effective_vars,
-            account_id=account_id,
-            failure_reason=failure_reason,
-            claim_session_id=claim_session_id,
+            result_status=(
+                "failed"
+                if status == ExecutionStatus.FAILED.value
+                else "running"
+                if status == ExecutionStatus.RUNNING.value
+                else "pending"
+            ),
+            error_detail=failure_reason,
+            started_at=execution_values["started_at"],
+            finished_at=execution_values["finished_at"],
+            view=FanOutExecutionView(
+                execution_id=execution_id,
+                device_id=entry.device_id,
+                status=status,
+                effective_vars=effective_vars,
+                account_id=account_id,
+                failure_reason=failure_reason,
+                claim_session_id=claim_session_id,
+                external_entity_id=external_entity.id if external_entity else None,
+            ),
+            assignment_values=_assignment_values(
+                campaign=campaign,
+                dispatch_id=dispatch_id,
+                execution_id=execution_id,
+                device_id=entry.device_id,
+                entity=external_entity,
+                assigned_at=created_at,
+            ),
         )
 
     async def _create_queued_execution(
         self,
-        db: AsyncSession,
         *,
         campaign: Campaign,
         entry: ResolvedTargetEntry,
         dispatch_id: str,
         dispatch_strategy: DispatchStrategy,
         scenario_refs: list[dict[str, Any]],
+        device_index: int,
         resolved_account: ResolvedDeviceAccount | None = None,
-    ) -> FanOutExecutionView:
+        external_entity: ExternalEntity | None = None,
+    ) -> _PreparedFanOutExecution:
         effective_vars = merge_effective_vars(
             campaign_vars=campaign.variables,
             per_device_overrides=campaign.per_device_overrides,
@@ -482,42 +846,137 @@ class CampaignDispatcher:
         account_vars = (resolved_account.account_vars if resolved_account else {}) or {}
         if account_vars:
             effective_vars = {**effective_vars, **account_vars}
+        effective_vars = _with_external_entity_vars(effective_vars, external_entity)
         account_id = resolved_account.account_id if resolved_account else None
-
-        execution = await create_execution(
-            db,
-            run_type="campaign_device",
-            campaign_id=campaign.id,
-            organization_id=campaign.org_id,
-            user_id=campaign.created_by or campaign.user_id,
-            account_id=account_id,
-            status=ExecutionStatus.PENDING.value,
-            meta={
+        execution_id = str(uuid.uuid4())
+        execution_values: dict[str, Any] = {
+            "id": execution_id,
+            "run_type": "campaign_device",
+            "kind": "campaign",
+            "status": ExecutionStatus.PENDING.value,
+            "org_id": campaign.org_id,
+            "campaign_id": campaign.id,
+            "scenario_id": None,
+            "scenario_version_id": None,
+            "device_config": {
+                "effective_vars": effective_vars,
+                "account_vars": account_vars,
+            },
+            "loop_config": {},
+            "error_config": {},
+            "meta": {
                 "dispatch_id": dispatch_id,
                 "dispatch_strategy": dispatch_strategy,
                 "org_scenario_refs": scenario_refs,
                 "source_kind": entry.source_kind,
                 "source_ref_id": entry.source_ref_id,
                 "queued": True,
+                "device_index": device_index,
+                "external_entity_id": external_entity.id if external_entity else None,
             },
-            device_config={
-                "effective_vars": effective_vars,
-                "account_vars": account_vars,
+            "user_id": campaign.created_by or campaign.user_id,
+            "account_id": account_id,
+            "priority": 0,
+            "checkpoint_step": 0,
+            "created_at": datetime.now(timezone.utc),
+            "started_at": None,
+            "finished_at": None,
+        }
+        if resolved_account and resolved_account.unavailable:
+            failure_reason = (
+                resolved_account.failure_reason or "account_unavailable"
+            )
+            finished_at = datetime.now(timezone.utc)
+            execution_values["status"] = ExecutionStatus.FAILED.value
+            execution_values["finished_at"] = finished_at
+            execution_values["device_config"] = {
+                **execution_values["device_config"],
+                "failure_reason": failure_reason,
+            }
+            return self._prepared_execution(
+                execution_values=execution_values,
+                device_id=entry.device_id,
+                result_status="failed",
+                error_detail=failure_reason,
+                finished_at=finished_at,
+                view=FanOutExecutionView(
+                    execution_id=execution_id,
+                    device_id=entry.device_id,
+                    status=ExecutionStatus.FAILED.value,
+                    effective_vars=effective_vars,
+                    account_id=account_id,
+                    failure_reason=failure_reason,
+                    external_entity_id=external_entity.id if external_entity else None,
+                ),
+                assignment_values=_assignment_values(
+                    campaign=campaign,
+                    dispatch_id=dispatch_id,
+                    execution_id=execution_id,
+                    device_id=entry.device_id,
+                    entity=external_entity,
+                    assigned_at=execution_values["created_at"],
+                ),
+            )
+
+        return self._prepared_execution(
+            execution_values=execution_values,
+            device_id=entry.device_id,
+            result_status="pending",
+            view=FanOutExecutionView(
+                execution_id=execution_id,
+                device_id=entry.device_id,
+                status=ExecutionStatus.PENDING.value,
+                effective_vars=effective_vars,
+                account_id=account_id,
+                external_entity_id=external_entity.id if external_entity else None,
+            ),
+            assignment_values=_assignment_values(
+                campaign=campaign,
+                dispatch_id=dispatch_id,
+                execution_id=execution_id,
+                device_id=entry.device_id,
+                entity=external_entity,
+                assigned_at=execution_values["created_at"],
+            ),
+        )
+
+    @staticmethod
+    def _prepared_execution(
+        *,
+        execution_values: dict[str, Any],
+        device_id: str,
+        result_status: str,
+        view: FanOutExecutionView,
+        error_detail: str | None = None,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+        assignment_values: dict[str, Any] | None = None,
+    ) -> _PreparedFanOutExecution:
+        execution_id = str(execution_values["id"])
+        created_at = execution_values["created_at"]
+        return _PreparedFanOutExecution(
+            execution_values=execution_values,
+            link_values={
+                "id": str(uuid.uuid4()),
+                "execution_id": execution_id,
+                "device_id": device_id,
             },
-        )
-        await add_device_to_execution(db, execution.id, entry.device_id)
-        await upsert_execution_result(
-            db,
-            execution_id=execution.id,
-            device_id=entry.device_id,
-            status="pending",
-        )
-        return FanOutExecutionView(
-            execution_id=execution.id,
-            device_id=entry.device_id,
-            status=ExecutionStatus.PENDING.value,
-            effective_vars=effective_vars,
-            account_id=account_id,
+            result_values={
+                "id": str(uuid.uuid4()),
+                "org_id": execution_values["org_id"],
+                "execution_id": execution_id,
+                "device_id": device_id,
+                "status": result_status,
+                "run_time_sec": None,
+                "passed_steps": [],
+                "failed_steps": [],
+                "error_detail": error_detail,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "created_at": created_at,
+            },
+            assignment_values=assignment_values,
+            view=view,
         )
 
     async def activate_queued_execution(
@@ -544,13 +1003,16 @@ class CampaignDispatcher:
         if not isinstance(scenario_refs, list) or not scenario_refs:
             scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
 
-        from services.campaign.account_resolver import resolve_accounts_for_devices
+        from services.campaign.account_resolver import (
+            campaign_has_account_binding,
+            revalidate_persisted_account,
+        )
 
-        account_by_device = await resolve_accounts_for_devices(
+        resolved = await revalidate_persisted_account(
             db,
-            campaign=campaign,
+            account_id=execution.account_id,
             org_id=org_id,
-            device_ids=[device_id],
+            required=campaign_has_account_binding(campaign),
         )
 
         cfg = execution.device_config or {}
@@ -559,6 +1021,33 @@ class CampaignDispatcher:
         claim_session_id: str | None = cfg.get("claim_session_id")
         failure_reason: str | None = None
         status = ExecutionStatus.RUNNING.value
+
+        if resolved.unavailable:
+            failure_reason = resolved.failure_reason or "account_unavailable"
+            status = ExecutionStatus.FAILED.value
+            execution.status = status
+            execution.finished_at = datetime.now(timezone.utc)
+            execution.device_config = {
+                **cfg,
+                "failure_reason": failure_reason,
+            }
+            await upsert_execution_result(
+                db,
+                execution_id=execution.id,
+                device_id=device_id,
+                status="failed",
+                error_detail=failure_reason,
+                finished_at=execution.finished_at,
+            )
+            return FanOutExecutionView(
+                execution_id=execution.id,
+                device_id=device_id,
+                status=status,
+                effective_vars=effective_vars,
+                account_id=account_id or resolved.account_id,
+                failure_reason=failure_reason,
+                claim_session_id=claim_session_id,
+            )
 
         try:
             claim = await claim_device_session(
@@ -618,7 +1107,6 @@ class CampaignDispatcher:
                 finished_at=execution.finished_at,
             )
 
-        resolved = account_by_device.get(device_id)
         return FanOutExecutionView(
             execution_id=execution.id,
             device_id=device_id,
@@ -627,6 +1115,11 @@ class CampaignDispatcher:
             account_id=account_id or (resolved.account_id if resolved else None),
             failure_reason=failure_reason,
             claim_session_id=claim_session_id,
+            external_entity_id=(
+                str(effective_vars.get("TARGET_ENTITY_ID"))
+                if effective_vars.get("TARGET_ENTITY_ID")
+                else None
+            ),
         )
 
 
@@ -645,6 +1138,101 @@ async def resolve_campaign_scenario_refs(
     return await _resolve(db, campaign)
 
 
+async def preview_campaign_dispatch(
+    db: AsyncSession,
+    *,
+    campaign_id: str,
+    org_id: str,
+    device_ids: list[str] | None = None,
+    device_group_ids: list[str] | None = None,
+    external_entity_ids: list[str] | None = None,
+    source_pool: SourcePoolSpec | None = None,
+    allocation_snapshot: list[tuple[str, str]] | None = None,
+    allocation_policy: str = "one_per_device",
+    allow_partial: bool = False,
+    require_online: bool = True,
+) -> DispatchPreview:
+    campaign = await campaign_repo.get_campaign_entity(db, campaign_id)
+    if (
+        campaign is None
+        or campaign.org_id != org_id
+        or campaign.status == CampaignStatus.ARCHIVED.value
+    ):
+        raise CampaignDispatchError("Campaign not found", code="CAMPAIGN_NOT_FOUND")
+
+    try:
+        entries = await resolve_dispatch_targets(
+            db,
+            org_id=org_id,
+            device_ids=device_ids,
+            device_group_ids=device_group_ids,
+        )
+    except DispatchValidationError as exc:
+        raise CampaignDispatchError(
+            str(exc), code=exc.code, details=exc.details
+        ) from exc
+    if not entries:
+        raise CampaignDispatchError(
+            "Dispatch target is empty",
+            code="EMPTY_DISPATCH_TARGET",
+        )
+    if len(entries) > MAX_DISPATCH_TARGETS:
+        raise CampaignDispatchError(
+            f"Dispatch target exceeds limit of {MAX_DISPATCH_TARGETS} devices",
+            code="DISPATCH_TARGET_TOO_LARGE",
+            details={"limit": MAX_DISPATCH_TARGETS, "requested": len(entries)},
+        )
+
+    validation = await validate_devices_for_dispatch(
+        db,
+        org_id=org_id,
+        entries=entries,
+        require_online=require_online,
+        allow_partial=allow_partial,
+    )
+    if validation.cross_org_ids or validation.not_found_ids:
+        raise CampaignDispatchError(
+            "One or more devices were not found in this organization",
+            code="DEVICE_NOT_FOUND",
+            details={
+                "device_ids": validation.cross_org_ids
+                or validation.not_found_ids
+            },
+        )
+    if validation.offline_ids and not allow_partial:
+        raise CampaignDispatchError(
+            "One or more target devices are offline",
+            code="DEVICE_OFFLINE",
+            details={"device_ids": validation.offline_ids},
+        )
+    valid_entries = validation.entries
+    if not valid_entries:
+        raise CampaignDispatchError(
+            "Dispatch target is empty after validation",
+            code="EMPTY_DISPATCH_TARGET",
+        )
+
+    device_ids_ordered = [entry.device_id for entry in valid_entries]
+    allocation = await _plan_entity_assignments(
+        db,
+        org_id=org_id,
+        device_ids=device_ids_ordered,
+        device_group_ids=device_group_ids,
+        external_entity_ids=external_entity_ids,
+        source_pool=source_pool,
+        allocation_snapshot=allocation_snapshot,
+        allocation_policy=allocation_policy,
+        lock_sources=False,
+    )
+    return DispatchPreview(
+        campaign_id=campaign.id,
+        allocation_policy=allocation_policy,
+        device_ids=device_ids_ordered,
+        devices_by_id=validation.devices_by_id,
+        allocation=allocation,
+    )
+
+
 async def dispatch_campaign(
     db: AsyncSession,
     *,
@@ -653,6 +1241,10 @@ async def dispatch_campaign(
     actor_user_id: str,
     device_ids: list[str] | None = None,
     device_group_ids: list[str] | None = None,
+    external_entity_ids: list[str] | None = None,
+    source_pool: SourcePoolSpec | None = None,
+    allocation_snapshot: list[tuple[str, str]] | None = None,
+    allocation_policy: str = "one_per_device",
     dispatch_strategy: DispatchStrategy = "parallel",
     allow_partial: bool = False,
     require_online: bool = True,
@@ -687,6 +1279,10 @@ async def dispatch_campaign(
             actor_user_id=actor_user_id,
             device_ids=device_ids,
             device_group_ids=device_group_ids,
+            external_entity_ids=external_entity_ids,
+            source_pool=source_pool,
+            allocation_snapshot=allocation_snapshot,
+            allocation_policy=allocation_policy,
             dispatch_strategy=dispatch_strategy,
             allow_partial=allow_partial,
             require_online=require_online,
@@ -701,16 +1297,18 @@ async def release_execution_device_claim(
     *,
     org_id: str,
     actor_user_id: str,
+    device_id: str | None = None,
 ) -> None:
     """Release device reserve session when a fan-out execution reaches terminal state."""
     cfg = execution.device_config or {}
     session_id = cfg.get("claim_session_id")
     if not session_id:
         return
-    from db.crud.execution import list_execution_devices
+    if device_id is None:
+        from db.crud.execution import list_execution_devices
 
-    linked = await list_execution_devices(db, execution.id)
-    device_id = linked[0].id if linked else None
+        linked = await list_execution_devices(db, execution.id)
+        device_id = linked[0].id if linked else None
     if not device_id:
         return
     try:
@@ -740,11 +1338,30 @@ async def finish_fan_out_execution(
     org_id: str,
     actor_user_id: str,
     status: str = "completed",
+    execution_already_finished: bool = False,
+    device_id: str | None = None,
 ) -> None:
     """Mark execution terminal and release any campaign dispatch claim."""
-    await finish_execution(db, execution.id, status=status)
+    if not execution_already_finished:
+        await finish_execution(db, execution.id, status=status)
+    await db.execute(
+        update(ExecutionEntityAssignment)
+        .where(
+            ExecutionEntityAssignment.org_id == org_id,
+            ExecutionEntityAssignment.execution_id == execution.id,
+            ExecutionEntityAssignment.completed_at.is_(None),
+        )
+        .values(
+            status=status,
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
     await release_execution_device_claim(
-        db, execution, org_id=org_id, actor_user_id=actor_user_id
+        db,
+        execution,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        device_id=device_id,
     )
     if execution.campaign_id:
         from services.campaign.aggregator_scheduler import request_campaign_status_evaluation

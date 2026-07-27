@@ -1296,9 +1296,9 @@ def create_app(
         prefix="/api",
     )
 
-    # ── Prometheus instrumentation (tạm tắt) ──
-    # from prometheus_fastapi_instrumentator import Instrumentator
-    # Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+    from web.metrics_endpoint import build_metrics_router
+
+    app.include_router(build_metrics_router())
 
     # ── Health endpoints ──
     @app.get("/health")

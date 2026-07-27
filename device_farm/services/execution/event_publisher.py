@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -107,24 +108,91 @@ async def publish_row_to_broker(envelope: dict[str, Any]) -> None:
         pass
 
 
-async def process_outbox_batch(db: AsyncSession, *, limit: int = 100) -> int:
+async def process_outbox_batch(
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    lease_seconds: float = 30.0,
+) -> int:
+    """Lease, commit, publish without a DB transaction, then acknowledge in bulk.
+
+    Delivery remains at-least-once: a process crash after broker publication
+    but before acknowledgement lets the lease expire and safely republishes.
+    This function owns its claim/ack transaction boundaries.
+    """
     from db.crud.execution_events import (
-        fetch_unpublished_events,
-        increment_publish_attempt,
-        mark_event_published,
+        claim_unpublished_events,
+        mark_claimed_events_published,
+        release_event_claims,
     )
 
-    rows = await fetch_unpublished_events(db, limit=limit)
+    started = time.perf_counter()
+    claim = await claim_unpublished_events(
+        db,
+        limit=limit,
+        lease_seconds=lease_seconds,
+    )
+    claimed = [
+        (row.id, row.event_id, row.to_envelope())
+        for row in claim.rows
+    ]
+    # Release row locks and the connection before awaiting the event bus.
+    await db.commit()
+    try:
+        from web.metrics import execution_event_outbox_batch_size
+
+        execution_event_outbox_batch_size.observe(len(claimed))
+    except Exception:
+        pass
     published = 0
-    for row in rows:
-        envelope = row.to_envelope()
+    published_ids: list[int] = []
+    failed_ids: list[int] = []
+    try:
+        if not claimed:
+            return 0
+
+        for row_id, event_id, envelope in claimed:
+            try:
+                await publish_row_to_broker(envelope)
+                published += 1
+                published_ids.append(row_id)
+            except Exception as exc:
+                failed_ids.append(row_id)
+                try:
+                    from web.metrics import execution_event_outbox_publish_failures_total
+
+                    execution_event_outbox_publish_failures_total.inc()
+                except Exception:
+                    pass
+                log.warning("outbox publish failed event=%s: %s", event_id[:8], exc)
+
+        acknowledged = await mark_claimed_events_published(
+            db,
+            published_ids,
+            claim_token=claim.token,
+        )
+        if acknowledged != len(published_ids):
+            log.warning(
+                "outbox acknowledgement mismatch claimed=%s acknowledged=%s",
+                len(published_ids),
+                acknowledged,
+            )
+        await release_event_claims(
+            db,
+            failed_ids,
+            claim_token=claim.token,
+        )
+        await db.commit()
+        return published
+    except BaseException:
+        await db.rollback()
+        raise
+    finally:
         try:
-            await publish_row_to_broker(envelope)
-            await mark_event_published(db, row.id)
-            published += 1
-        except Exception as exc:
-            await increment_publish_attempt(db, row.id)
-            log.warning("outbox publish failed event=%s: %s", row.event_id[:8], exc)
-    if published:
-        await db.flush()
-    return published
+            from web.metrics import execution_event_outbox_batch_duration_seconds
+
+            execution_event_outbox_batch_duration_seconds.observe(
+                time.perf_counter() - started
+            )
+        except Exception:
+            pass

@@ -33,6 +33,9 @@ class MetadataOnlyHandler:
 
 
 FACEBOOK_STEP_TYPES = [
+    "content_interaction",
+    "connection_request",
+    "community_membership",
     "fb_like_post",
     "fb_comment_post",
     "fb_share_post",

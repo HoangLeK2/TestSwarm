@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 EDGE_CONTENT_STRATEGIES = {
     "fb_posts",
     "fb_comments",
+    "fb_groups",
     "text_nodes",
     "ig_posts",
     "tiktok_posts",
@@ -65,6 +66,8 @@ def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
         return str(explicit)
     if strategy == "text_nodes":
         return "text_nodes"
+    if strategy == "fb_groups":
+        return "groups"
     if strategy in COMMENT_STRATEGIES:
         return "comments"
     return "posts"
@@ -287,6 +290,8 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 
 _BALANCED_FB_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "max_items",
+    "comment_require_complete",
+    "comment_auto_coverage_target_max",
     "comment_scroll_passes",
     "comment_swipes_per_dump",
     "comment_scroll_distance",
@@ -690,6 +695,16 @@ def request_edge_extra_data(
         return False
     if strategy not in EDGE_CONTENT_STRATEGIES:
         return False
+    if strategy == "fb_posts":
+        # A new post attempt invalidates the previous post→comment binding.
+        # Keep the marker until this attempt establishes a verified replacement,
+        # so ignored post failures cannot crawl comments under a stale parent.
+        _remember_consumed_comment_parent(ctx)
+        _clear_active_comment_parent(ctx)
+        ctx["_fb_comment_target_missing"] = {
+            "reason_code": "post_extract_pending",
+            "source_index": int(ctx.get("_loop_iter", 0) or 0),
+        }
     if strategy == "fb_comments" and isinstance(ctx.get("_fb_comment_target_missing"), dict):
         result["ok"] = True
         result["skipped"] = True
@@ -736,13 +751,32 @@ def request_edge_extra_data(
             parent_id_already_scoped = bool(parent_id)
     if strategy == "fb_posts" and step.get("dedupe_field"):
         ctx["_fb_posts_dedupe_field"] = step.get("dedupe_field")
-    return_items = _edge_extra_should_return_items(step, collection)
+    return_items = (
+        True
+        if strategy == "fb_groups"
+        else _edge_extra_should_return_items(step, collection)
+    )
     comment_defaults: dict[str, Any] = {}
     if strategy in COMMENT_STRATEGIES:
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
         from services.scenario_step_contract import resolve_extract_profile
 
         comment_defaults = get_profile_defaults(resolve_extract_profile(step), strategy)
+    campaign_vars = (
+        scenario.get("_campaign_vars")
+        if isinstance(scenario.get("_campaign_vars"), dict)
+        else {}
+    )
+    group_max_pages_raw = step.get("max_pages")
+    if (
+        group_max_pages_raw is None
+        or str(group_max_pages_raw).strip().startswith("${")
+    ):
+        group_max_pages_raw = campaign_vars.get("MAX_PAGES", 20)
+    try:
+        group_max_pages = max(1, min(200, int(group_max_pages_raw)))
+    except (TypeError, ValueError):
+        group_max_pages = 20
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
@@ -764,6 +798,11 @@ def request_edge_extra_data(
         "parent_id_already_scoped": parent_id_already_scoped,
         "parent_post_id": parent_post_id,
         "parent_context_source": ctx.get("_active_comment_parent_source"),
+        "comment_filter": (
+            resolve_step_comment_filter(comment_filter_effective_step(step, ctx))
+            if strategy == "fb_comments"
+            else None
+        ),
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
         "_post_id_map": ctx.get("_post_id_map"),
         "_fb_posts_dedupe_field": ctx.get("_fb_posts_dedupe_field"),
@@ -775,13 +814,22 @@ def request_edge_extra_data(
         "max_items": int(
             step.get("max_items")
             or comment_defaults.get("max_items")
-            or (400 if strategy in COMMENT_STRATEGIES else 50)
+            or (
+                400
+                if strategy in COMMENT_STRATEGIES
+                else 500
+                if strategy == "fb_groups"
+                else 50
+            )
         ),
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
-        "persist": bool(collection),
+        "persist": bool(collection) or strategy == "fb_groups",
         "return_items": return_items,
+        "search_query": step.get("search_query") or step.get("query"),
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
+    if strategy == "fb_groups":
+        context["max_pages"] = group_max_pages
     if strategy == "fb_posts":
         consumed_anchors = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
         if isinstance(consumed_anchors, list) and consumed_anchors:
@@ -794,6 +842,8 @@ def request_edge_extra_data(
         context.setdefault(key, val)
     for key in (
         "comment_scroll_passes",
+        "comment_require_complete",
+        "comment_auto_coverage_target_max",
         "comment_swipes_per_dump",
         "comment_scroll_distance",
         "comment_scroll_duration_ms",
@@ -827,9 +877,14 @@ def request_edge_extra_data(
         "open_post_tap_settle_s",
         "open_post_max_attempts",
         "open_post_verify",
+        "open_post_reuse_current_detail",
         "require_open_post_detail",
         "require_verified_parent",
         "allow_a11y_xml_fallback",
+        "entity_scroll_pause_s",
+        "entity_scroll_distance",
+        "entity_scroll_duration_s",
+        "max_xml_bytes",
     ):
         if key in step:
             context[key] = step[key]
@@ -914,7 +969,68 @@ def request_edge_extra_data(
             k: v for k, v in edge_extra_summary.items() if k != "screenshot_b64"
         }
     result["edge_extra_summary"] = edge_extra_summary
-    result["reason_code"] = ((ingest.get("diagnostic") or {}) if isinstance(ingest.get("diagnostic"), dict) else {}).get("reason_code", "ok")
+    diagnostic = (
+        ingest.get("diagnostic")
+        if isinstance(ingest.get("diagnostic"), dict)
+        else {}
+    )
+    result["reason_code"] = diagnostic.get("reason_code", "ok")
+    if strategy == "fb_groups" and parsed_count == 0:
+        result["ok"] = False
+        result["message"] = (
+            "edge extra_data fb_groups: không đọc được group nào "
+            f"({result['reason_code']})"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
+    if (
+        strategy == "fb_groups"
+        and parsed_count > 0
+        and "_loop_iter" in ctx
+        and int(context.get("max_pages") or 1) > 1
+        and (
+            _coerce_bool(step.get("break_legacy_pagination_loop"), False)
+            or (
+                "max_pages" not in step
+                and step.get("stop_if_no_new") is False
+            )
+        )
+    ):
+        # Old copied discovery templates used an outer loop, explicitly set
+        # stop_if_no_new=false, and had no per-step max_pages. That exact shape
+        # can stop after the first agent-owned bounded crawl without affecting
+        # unrelated loops that happen to contain a group extract.
+        ctx["_break"] = True
+    if (
+        strategy == "fb_posts"
+        and result["reason_code"]
+        in {"post_detail_incomplete", "post_detail_target_not_reconciled"}
+    ):
+        result["ok"] = False
+        result["message"] = (
+            "edge extra_data fb_posts incomplete: "
+            f"{result['reason_code']}"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
+    if (
+        strategy == "fb_comments"
+        and result["reason_code"] == "partial_target"
+        and _coerce_bool(step.get("comment_require_complete"), False)
+        and not _coerce_bool(step.get("allow_partial_comments"), False)
+    ):
+        returned = int(diagnostic.get("comments_returned") or parsed_count)
+        target = int(diagnostic.get("comment_target") or step.get("max_items") or 0)
+        stopped_reason = str(
+            diagnostic.get("comment_scroll_stopped_reason") or "target_not_reached"
+        )
+        result["ok"] = False
+        result["message"] = (
+            f"edge extra_data fb_comments incomplete: {returned}/{target} "
+            f"comments ({stopped_reason})"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
     if strategy == "fb_comments" and _coerce_bool(
         step.get("open_post_press_back_after_extract"),
         False,
@@ -922,7 +1038,6 @@ def request_edge_extra_data(
         _remember_consumed_comment_parent(ctx)
         _clear_active_comment_parent(ctx)
     if strategy == "fb_posts":
-        ctx.pop("_fb_comment_target_missing", None)
         pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
         if pid_map:
             merged = ctx.setdefault("_post_id_map", {})
@@ -941,6 +1056,8 @@ def request_edge_extra_data(
             )
             result["edge_extra_summary"] = edge_extra_summary
             return True
+        if ctx.get("_active_comment_anchor_verified"):
+            ctx.pop("_fb_comment_target_missing", None)
     items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
     if items:
         _store_returned_items(ctx, strategy, step, items)
@@ -1137,6 +1254,7 @@ def run_edge_comment_filter_switch(
     step: Dict[str, Any],
     result: Dict[str, Any],
     cancel_event: Any = None,
+    runtime_ctx: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Drive FB comment sort sheet via agent-boot (open sheet, tap chosen option)."""
 
@@ -1146,6 +1264,7 @@ def run_edge_comment_filter_switch(
             ("dump_ms", "extra_data_dump_ms"),
             ("parse_ms", "extra_data_parse_ms"),
             ("click_ms", "extra_data_click_ms"),
+            ("wait_ms", "extra_data_wait_ms"),
             ("sleep_ms", "extra_data_sleep_ms"),
             ("step_count", "extra_data_steps"),
         ):
@@ -1174,11 +1293,20 @@ def run_edge_comment_filter_switch(
         return report
 
     wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
+    runtime_ctx = runtime_ctx or {}
+    active_anchor = (
+        runtime_ctx.get("_active_comment_parent_anchor")
+        if isinstance(runtime_ctx.get("_active_comment_parent_anchor"), dict)
+        else {}
+    )
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
         **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
+        "parent_id": runtime_ctx.get("_active_comment_parent_hash"),
+        "parent_post_id": runtime_ctx.get("_fb_comment_parent_pid"),
+        "post_key": step.get("post_key") or active_anchor.get("post_key"),
         "comment_filter": target_filter,
         "switch_to_all_comments": True,
         "post_tap_wait_s": wait_s,
@@ -1217,8 +1345,17 @@ def run_edge_comment_filter_switch(
         diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
         report["steps"] = list(diagnostic.get("steps") or [])
         report["switched"] = bool(diagnostic.get("switched"))
+        report["state_verified"] = bool(diagnostic.get("state_verified"))
         report["reason_code"] = str(diagnostic.get("reason_code") or "ok")
-        for key in ("total_ms", "dump_ms", "parse_ms", "click_ms", "sleep_ms", "step_count"):
+        for key in (
+            "total_ms",
+            "dump_ms",
+            "parse_ms",
+            "click_ms",
+            "wait_ms",
+            "sleep_ms",
+            "step_count",
+        ):
             if key in diagnostic:
                 report[key] = diagnostic.get(key)
         _copy_filter_timing(report)

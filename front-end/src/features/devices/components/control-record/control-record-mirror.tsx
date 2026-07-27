@@ -49,19 +49,19 @@ const CONTROL_RECORD_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
   enableControl: true,
   maxFps: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_FPS',
-    12,
+    10,
     4,
     15
   ),
   maxWidth: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_WIDTH',
-    540,
+    480,
     360,
     720
   ),
   bitrate: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_BITRATE',
-    1_200_000,
+    800_000,
     300_000,
     2_000_000
   )

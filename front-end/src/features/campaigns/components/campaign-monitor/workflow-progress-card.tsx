@@ -16,7 +16,9 @@ import {
   List,
   AlertTriangle,
   RefreshCw,
-  SkipForward
+  SkipForward,
+  MonitorPlay,
+  MonitorOff
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
@@ -31,6 +33,12 @@ import {
   useWorkflowResume
 } from '../../hooks/use-campaigns';
 import { useExecutionEventStream } from '../../hooks/use-execution-event-stream';
+import {
+  claimCampaignMonitorLiveMirror,
+  getCampaignMonitorLiveMirrorSerial,
+  releaseCampaignMonitorLiveMirror,
+  subscribeCampaignMonitorLiveMirror
+} from '../../lib/campaign-monitor-live-mirror';
 import { resolveExecutionIdForWorkflow } from '../../lib/execution-event-utils';
 import { detectActiveRecoveryFromEvents } from '../../lib/workflow-incident-display';
 import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
@@ -168,6 +176,9 @@ export function WorkflowProgressCard({
   const { getStepTypeName } = useCampaignFlowI18n();
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [liveMirrorSerial, setLiveMirrorSerial] = useState<string | null>(() =>
+    getCampaignMonitorLiveMirrorSerial()
+  );
 
   const isActive =
     wf.status === 'RUNNING' ||
@@ -190,6 +201,23 @@ export function WorkflowProgressCard({
     return String(cfg.device_serial ?? fromWorkflow);
   }, [wf.device_serial, wf.workflow_id, executions, executionId]);
 
+  const showLiveMirror = expanded && liveMirrorSerial === serial;
+
+  useEffect(() => {
+    return subscribeCampaignMonitorLiveMirror(setLiveMirrorSerial);
+  }, []);
+
+  useEffect(() => {
+    if (expanded) return;
+    releaseCampaignMonitorLiveMirror(serial);
+  }, [expanded, serial]);
+
+  useEffect(() => {
+    return () => {
+      releaseCampaignMonitorLiveMirror(serial);
+    };
+  }, [serial]);
+
   const scenarioId = wf.scenario_id || parseScenarioId(wf.workflow_id);
   const workflowCampaignId = wf.campaign_id || campaignId;
   const campaignLabel =
@@ -202,8 +230,9 @@ export function WorkflowProgressCard({
         ? `#${scenarioId.slice(0, 8)}`
         : t('monitorWorkflowUnknownScenario'));
 
+  // SSE only while expanded — N collapsed cards must not open N event streams.
   const eventStream = useExecutionEventStream(executionId, {
-    enabled: isActive && !!executionId,
+    enabled: isActive && !!executionId && expanded,
     workflowId: wf.workflow_id,
     deviceSerial: serial
   });
@@ -224,7 +253,7 @@ export function WorkflowProgressCard({
 
   const pollProgress = useWorkflowProgress(
     wf.workflow_id,
-    isActive && !eventStream.connected
+    isActive && (!expanded || !eventStream.connected)
   );
   const prog = eventStream.progress ?? pollProgress.data;
   const stepAction = useStepAction(campaignId);
@@ -530,12 +559,53 @@ export function WorkflowProgressCard({
         <div className='overflow-hidden border-t bg-card'>
           <div className='flex min-h-0 divide-x overflow-x-auto'>
             <div className='w-[320px] shrink-0 p-2 md:w-[420px]'>
-              <DeviceControlEmbed
-                initialSerial={serial}
-                compact
-                hideStepMonitor
-                readOnlyPreview
-              />
+              {showLiveMirror ? (
+                <div className='space-y-2'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <p className='text-[10px] font-medium text-muted-foreground'>
+                      {t('titleLivePreview')}
+                    </p>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='ghost'
+                      className='h-6 gap-1 px-2 text-[10px]'
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        releaseCampaignMonitorLiveMirror(serial);
+                      }}
+                    >
+                      <MonitorOff size={10} />
+                      {t('monitorHideLiveMirror')}
+                    </Button>
+                  </div>
+                  <DeviceControlEmbed
+                    initialSerial={serial}
+                    compact
+                    hideStepMonitor
+                    readOnlyPreview
+                  />
+                </div>
+              ) : (
+                <div className='flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-6 text-center'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    {t('monitorLiveMirrorHint')}
+                  </p>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    className='h-7 gap-1.5 text-[11px]'
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      claimCampaignMonitorLiveMirror(serial);
+                    }}
+                  >
+                    <MonitorPlay size={12} />
+                    {t('titleLivePreview')}
+                  </Button>
+                </div>
+              )}
             </div>
             <div className='min-w-0 flex-1 px-3 py-3'>
               <p className='mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>

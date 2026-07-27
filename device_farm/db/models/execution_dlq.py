@@ -39,10 +39,10 @@ class ExecutionDLQ(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    org_id: Mapped[Optional[str]] = mapped_column(
+    org_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("organizations.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
 

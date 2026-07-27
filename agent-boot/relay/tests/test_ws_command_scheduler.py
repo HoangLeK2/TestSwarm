@@ -6,7 +6,8 @@ import threading
 
 import pytest
 
-from relay.agent import CMD_ADB_CONNECT, CMD_SHELL, RelayAgent
+import relay.agent as relay_agent_module
+from relay.agent import CMD_ADB_CONNECT, CMD_BOOTSTRAP, CMD_SHELL, RelayAgent
 
 
 async def _wait_event(event: threading.Event, timeout: float) -> bool:
@@ -206,6 +207,55 @@ async def test_adb_connect_command_refreshes_devices_immediately(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_command_does_not_occupy_shared_adb_executor(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="ws",
+    )
+    agent._registry.on_adb_event("dev-001", "device")
+    send_q: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    monkeypatch.setattr(
+        relay_agent_module,
+        "adb_executor",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("bootstrap must not use the shared ADB executor")
+        ),
+    )
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_bootstrap_device",
+        lambda serial, timeout: (f"ready:{serial}", 0),
+    )
+
+    try:
+        await agent._handle_server_msg(
+            {
+                "type": "command",
+                "msg_id": "cmd-bootstrap",
+                "serial": "dev-001",
+                "cmd": "",
+                "timeout": 5,
+                "cmd_type": CMD_BOOTSTRAP,
+            },
+            send_q,
+            loop,
+        )
+        result = json.loads(
+            await asyncio.wait_for(send_q.get(), timeout=1.0)
+        )
+    finally:
+        agent._cancel_command_workers()
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+    assert result["ok"] is True
+    assert result["output"] == "ready:dev-001"
+
+
+@pytest.mark.asyncio
 async def test_post_adb_connect_refresh_publishes_heartbeat(monkeypatch):
     agent = RelayAgent(
         server_url="localhost:50051",
@@ -237,7 +287,7 @@ async def test_post_adb_connect_refresh_publishes_heartbeat(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_registry_heartbeat_seeds_from_adb_snapshot(monkeypatch):
+async def test_empty_registry_heartbeat_does_not_block_on_adb_snapshot(monkeypatch):
     agent = RelayAgent(
         server_url="localhost:50051",
         api_key="x",
@@ -246,7 +296,11 @@ async def test_empty_registry_heartbeat_seeds_from_adb_snapshot(monkeypatch):
     )
     send_q: asyncio.Queue = asyncio.Queue()
 
-    monkeypatch.setattr("relay.agent._list_serials", lambda: ["10AE7S00HD002JK"])
+    list_calls: list[bool] = []
+    monkeypatch.setattr(
+        "relay.agent._list_serials",
+        lambda: list_calls.append(True) or ["10AE7S00HD002JK"],
+    )
     monkeypatch.setattr(
         agent,
         "_ensure_capabilities_for_serials",
@@ -262,7 +316,8 @@ async def test_empty_registry_heartbeat_seeds_from_adb_snapshot(monkeypatch):
 
     heartbeat = json.loads(await asyncio.wait_for(send_q.get(), timeout=1.0))
     assert heartbeat["type"] == "heartbeat"
-    assert heartbeat["serials"] == ["10AE7S00HD002JK"]
+    assert heartbeat["serials"] == []
+    assert list_calls == []
     await asyncio.gather(*list(agent._capability_probe_tasks), return_exceptions=True)
 
 

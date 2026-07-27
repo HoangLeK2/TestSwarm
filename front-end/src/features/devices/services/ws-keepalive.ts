@@ -2,6 +2,19 @@ export const DEVICE_FARM_WS_FOCUS_STALE_MS = 45_000;
 export const DEVICE_FARM_WS_CLIENT_PING_INTERVAL_MS = 20_000;
 export const DEVICE_FARM_WS_RECONNECT_BASE_MS = 500;
 export const DEVICE_FARM_WS_RECONNECT_MAX_MS = 5_000;
+export const DEVICE_FARM_IDR_HARD_MIN_INTERVAL_MS = 300;
+
+export function shouldSendIdrRequest(
+  lastSentAt: number,
+  now: number,
+  requestedMinIntervalMs: number
+): boolean {
+  const requested = Number.isFinite(requestedMinIntervalMs)
+    ? Math.max(0, requestedMinIntervalMs)
+    : 0;
+  const minInterval = Math.max(DEVICE_FARM_IDR_HARD_MIN_INTERVAL_MS, requested);
+  return lastSentAt <= 0 || now - lastSentAt >= minInterval;
+}
 
 export function shouldReconnectStaleSocketOnFocus(
   lastMessageAt: number,

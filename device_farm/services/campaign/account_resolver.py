@@ -32,6 +32,9 @@ _ACCOUNT_BINDING_TYPE_HINTS = (
     ".send",
     ".share",
 )
+_ACCOUNT_BINDING_EXACT_TYPES = frozenset(
+    {"content_interaction", "connection_request", "community_membership"}
+)
 
 
 class AccountBindingError(Exception):
@@ -73,7 +76,9 @@ def _social_write_requires_account_binding(step_type: str) -> bool:
     t = (step_type or "").lower()
     if not t:
         return False
-    return any(hint in t for hint in _ACCOUNT_BINDING_TYPE_HINTS)
+    return t in _ACCOUNT_BINDING_EXACT_TYPES or any(
+        hint in t for hint in _ACCOUNT_BINDING_TYPE_HINTS
+    )
 
 
 def _step_requires_account(step: dict) -> bool:
@@ -227,6 +232,30 @@ def _resolve_account_row(
     )
 
 
+async def revalidate_persisted_account(
+    db: AsyncSession,
+    *,
+    account_id: str | None,
+    org_id: str,
+    required: bool = False,
+) -> ResolvedDeviceAccount:
+    """Revalidate the exact account snapshotted onto a queued execution."""
+    if not account_id:
+        return ResolvedDeviceAccount(
+            account_id=None,
+            account_vars={},
+            unavailable=required,
+            failure_reason="account_unavailable" if required else None,
+        )
+    now = datetime.now(timezone.utc)
+    rows = await get_accounts_by_ids(db, [account_id], org_id=org_id)
+    return _resolve_account_row(
+        rows.get(account_id),
+        org_id=org_id,
+        now=now,
+    )
+
+
 async def resolve_accounts_for_devices(
     db: AsyncSession,
     *,
@@ -278,7 +307,12 @@ async def resolve_accounts_for_devices(
         if group_id and device_id in devices_for_group:
             account = next(group_iter, None)
             if account is None:
-                out[device_id] = ResolvedDeviceAccount(account_id=None, account_vars={})
+                out[device_id] = ResolvedDeviceAccount(
+                    account_id=None,
+                    account_vars={},
+                    unavailable=True,
+                    failure_reason="account_unavailable",
+                )
             else:
                 out[device_id] = _resolve_account_row(account, org_id=org_id, now=now)
             continue

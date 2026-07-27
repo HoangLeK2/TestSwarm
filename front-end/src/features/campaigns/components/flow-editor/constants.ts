@@ -44,6 +44,9 @@ export const STEP_COLORS: Record<string, string> = {
   fb_find_comment_button: 'border-l-sky-500',
   fb_tap_comment_target: 'border-l-blue-500',
   fb_apply_comment_filter: 'border-l-emerald-500',
+  content_interaction: 'border-l-blue-500',
+  connection_request: 'border-l-sky-500',
+  community_membership: 'border-l-emerald-500',
   extract_text_hierarchy: 'border-l-fuchsia-500',
   extract_text_ocr: 'border-l-fuchsia-500',
   extract_text_ai: 'border-l-fuchsia-500',
@@ -317,6 +320,9 @@ export const INSERT_MENU_DEF = [
   {
     groupKey: 'facebook' as const,
     items: [
+      'content_interaction',
+      'connection_request',
+      'community_membership',
       'fb_find_comment_button',
       'fb_tap_comment_target',
       'fb_apply_comment_filter',
@@ -534,6 +540,12 @@ export function getStepSummary(step: FlowStep): string {
       return `tap target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
     case 'fb_apply_comment_filter':
       return `Lọc bình luận → ${localizeCommentFilterVi(step.comment_filter)}`;
+    case 'content_interaction':
+      return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
+    case 'connection_request':
+      return `${step.platform ?? 'facebook'} · gửi lời mời`;
+    case 'community_membership':
+      return `${step.platform ?? 'facebook'} · tham gia nhóm`;
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return step.collection
@@ -775,6 +787,14 @@ export function getStepDisplay(
           : `Filter · ${filterLabel}`
       };
     }
+    case 'content_interaction':
+      return {
+        target: `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`
+      };
+    case 'connection_request':
+      return { target: `${step.platform ?? 'facebook'} · request` };
+    case 'community_membership':
+      return { target: `${step.platform ?? 'facebook'} · join` };
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return {

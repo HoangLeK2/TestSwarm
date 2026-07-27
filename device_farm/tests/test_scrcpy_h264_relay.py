@@ -1,7 +1,7 @@
 """Tests for ScrcpyReceiver WebCodecs relay mode.
 
 Covers:
-  - _is_idr(): keyframe detection from AVCC and Annex-B data
+  - _is_idr(): keyframe detection from normalized AVCC data
   - ScrcpyReceiver constructor: on_h264_config / on_h264_packet callbacks stored
   - _decode_stream relay path: config packets → on_h264_config, video packets → on_h264_packet
   - Keyframe JPEG still produced in relay mode (for take_screenshot)
@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import io
+import logging
 import socket
 import struct
 import threading
@@ -20,7 +21,14 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from runtime.transports.scrcpy_receiver import ScrcpyReceiver, _is_idr, PTS_CONFIG_MASK
+from core.config import Config
+from runtime.core.device_client import DeviceClient
+from runtime.transports.scrcpy_receiver import (
+    PTS_CONFIG_MASK,
+    RelayScrcpyReceiver,
+    ScrcpyReceiver,
+    _is_idr,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -61,6 +69,12 @@ def _make_receiver(**kwargs) -> ScrcpyReceiver:
     return ScrcpyReceiver(**defaults)
 
 
+def _make_device_client(serial: str = "relay-log-test") -> DeviceClient:
+    device = DeviceClient(serial=serial, index=0, config=Config())
+    device._loop = object()
+    return device
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # _is_idr
 # ──────────────────────────────────────────────────────────────────────────────
@@ -80,11 +94,13 @@ class TestIsIdr:
         assert _is_idr(data) is True
 
     def test_annexb_idr_returns_true(self):
-        data = _annexb([_NAL_IDR + b"\xAB" * 10])
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(_annexb([_NAL_IDR + b"\xAB" * 10]))
         assert _is_idr(data) is True
 
     def test_annexb_p_frame_returns_false(self):
-        data = _annexb([_NAL_SLICE + b"\xAB" * 10])
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(_annexb([_NAL_SLICE + b"\xAB" * 10]))
         assert _is_idr(data) is False
 
     def test_empty_returns_false(self):
@@ -102,16 +118,19 @@ class TestIsIdr:
 
     def test_annexb_3byte_idr_returns_true(self):
         """IDR NAL after 3-byte start code (00 00 01) must be detected."""
-        data = b"\x00\x00\x01" + _NAL_IDR + b"\xAB" * 10
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(b"\x00\x00\x01" + _NAL_IDR + b"\xAB" * 10)
         assert _is_idr(data) is True
 
     def test_annexb_3byte_p_frame_returns_false(self):
-        data = b"\x00\x00\x01" + _NAL_SLICE + b"\xAB" * 10
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(b"\x00\x00\x01" + _NAL_SLICE + b"\xAB" * 10)
         assert _is_idr(data) is False
 
     def test_annexb_mixed_idr_second_with_3byte_start(self):
         """Packet: [4B SC][SPS][3B SC][IDR] — IDR in 2nd NAL with 3-byte start code."""
-        data = (
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(
             b"\x00\x00\x00\x01" + _NAL_SPS
             + b"\x00\x00\x01" + _NAL_IDR + b"\xCC" * 5
         )
@@ -119,7 +138,8 @@ class TestIsIdr:
 
     def test_annexb_multiple_nals_3byte_between(self):
         """[4B][SPS][3B][PPS][3B][IDR] — all 3-byte boundaries, IDR at end."""
-        data = (
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(
             b"\x00\x00\x00\x01" + _NAL_SPS
             + b"\x00\x00\x01" + _NAL_PPS
             + b"\x00\x00\x01" + _NAL_IDR + b"\xAA"
@@ -128,7 +148,8 @@ class TestIsIdr:
 
     def test_annexb_multiple_nals_no_idr(self):
         """Multi-NALU Annex-B packet with only P-frames → False."""
-        data = (
+        from runtime.transports.h264_utils import annexb_to_avcc
+        data = annexb_to_avcc(
             b"\x00\x00\x00\x01" + _NAL_SLICE
             + b"\x00\x00\x01" + _NAL_SLICE + b"\x01"
         )
@@ -161,6 +182,78 @@ class TestScrcpyReceiverCallbacks:
         r = _make_receiver(on_h264_packet=MagicMock(), on_h264_config=MagicMock())
         assert r.on_h264_packet is not None
         assert r.on_h264_config is not None
+
+
+class TestRelayJpegDemand:
+    def test_relay_decodes_jpeg_only_during_an_active_request_window(self):
+        receiver = RelayScrcpyReceiver(
+            serial="relay-demand",
+            on_frame=MagicMock(),
+            on_h264_packet=MagicMock(),
+        )
+        receiver._last_config = b"avcc-config"
+        receiver._event_loop = MagicMock()
+
+        try:
+            receiver._handle_video(b"p-frame", pts_us=1, hint_is_key=False)
+            receiver._event_loop.run_in_executor.assert_not_called()
+
+            receiver.request_jpeg_frames(duration_s=1.0)
+            receiver._handle_video(b"idr-frame", pts_us=2, hint_is_key=True)
+
+            receiver._event_loop.run_in_executor.assert_called_once()
+        finally:
+            receiver.stop_receiver()
+
+
+class TestH264RelayTelemetry:
+    def test_first_frame_info_identifies_keyframe(self, caplog):
+        device = _make_device_client()
+        # A JPEG fallback frame may arrive before the first relay H264 packet.
+        device._last_frame_time = 1.0
+
+        with caplog.at_level(logging.INFO, logger="device.relay-log-test"):
+            device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)
+
+        matching = [
+            record
+            for record in caplog.records
+            if "h264 video started" in record.getMessage()
+        ]
+        assert [
+            (record.levelno, "key=True" in record.getMessage())
+            for record in matching
+        ] == [(logging.INFO, True)]
+
+    def test_recurrent_keyframe_is_debug_only(self, caplog):
+        device = _make_device_client()
+        device._last_frame_time = 1.0
+        device._h264_fps_t0 = time.monotonic()
+
+        with caplog.at_level(logging.DEBUG, logger="device.relay-log-test"):
+            device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)
+
+        matching = [
+            record
+            for record in caplog.records
+            if "h264 keyframe queued" in record.getMessage()
+        ]
+        assert [record.levelno for record in matching] == [logging.DEBUG]
+
+    def test_fps_sample_is_debug_only(self, caplog):
+        device = _make_device_client()
+        device._last_frame_time = 1.0
+        device._h264_fps_t0 = time.monotonic() - 6.0
+
+        with caplog.at_level(logging.DEBUG, logger="device.relay-log-test"):
+            device.on_agent_h264_video(b"frame", is_key=False, pts_us=1)
+
+        matching = [
+            record
+            for record in caplog.records
+            if "h264 relay FPS=" in record.getMessage()
+        ]
+        assert [record.levelno for record in matching] == [logging.DEBUG]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -245,6 +338,24 @@ class TestDecodeStreamRelay:
         assert isinstance(avcc_data, bytes)
         assert is_key is False   # _NAL_SLICE is not IDR
         assert isinstance(pts_us, int)
+
+    def test_ambiguous_three_byte_annexb_frame_is_converted_explicitly(self):
+        pkt_cb = MagicMock()
+        r = _make_receiver(on_h264_packet=pkt_cb)
+
+        # The first four bytes also form a plausible AVCC length (0x165 = 357).
+        # Local scrcpy is known to emit Annex-B, so this must not be sniffed.
+        nal = _NAL_IDR + b"\x88" * 357
+        video_data = b"\x00\x00\x01" + nal
+
+        with patch("runtime.transports.scrcpy_receiver.av.CodecContext") as mock_codec_cls:
+            mock_codec_cls.create.return_value = MagicMock(decode=lambda *args: [])
+            _run_decode_stream(r, [(1000, video_data)])
+
+        pkt_cb.assert_called_once()
+        avcc_data, is_key, _ = pkt_cb.call_args[0]
+        assert avcc_data == struct.pack(">I", len(nal)) + nal
+        assert is_key is True
 
     def test_keyframe_triggers_jpeg_decode(self):
         """In relay mode, on_frame should be called for IDR (keyframe) packets."""
@@ -381,11 +492,6 @@ class TestAnnexBToAvcc:
         # Result should start with 4-byte length of first NAL
         expected_len = len(nals[0])
         assert result[:4] == struct.pack(">I", expected_len)
-
-    def test_avcc_maybe_passthrough(self):
-        from runtime.transports.h264_utils import annexb_to_avcc_maybe
-        avcc = _avcc([b"\x41" + b"\xAB" * 10])
-        assert annexb_to_avcc_maybe(avcc) == avcc
 
     def test_build_avcc_record_structure(self):
         from runtime.transports.h264_utils import build_avcc_record

@@ -496,6 +496,17 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         return
     lbl = selector_summary(spec)
     is_fb_comment_target = _is_fb_comment_scroll_target(step, by, value)
+    pending_post = sc.ctx.get("_fb_comment_target_missing")
+    if (
+        is_fb_comment_target
+        and isinstance(pending_post, dict)
+        and pending_post.get("reason_code") == "post_extract_pending"
+    ):
+        result["skipped"] = True
+        result["comment_target_missing"] = True
+        result["comment_target_missing_detail"] = pending_post
+        result["message"] = "scroll_to: skipped — current post extract not ready"
+        return
     if is_fb_comment_target:
         comment_cap = _env_int(
             "FB_COMMENT_SCROLL_TO_MAX_SWIPES",

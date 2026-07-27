@@ -16,6 +16,7 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { CronBuilder } from './cron-builder';
 import { VariableEditor } from '@/components/variable-editor';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
+import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import { Button } from '@/components/ui/button';
@@ -50,6 +51,7 @@ export function ScheduleFormDialog({
   mode: Mode;
   schedule?: ScheduleOut | null;
 }) {
+  const [childStepEditorOpen, setChildStepEditorOpen] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [targetType, setTargetType] =
@@ -138,6 +140,12 @@ export function ScheduleFormDialog({
   }, [open, mode, schedule]);
 
   const onSubmit = async () => {
+    if (!canPersistScenario(childStepEditorOpen)) {
+      toast.info(
+        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+      );
+      return;
+    }
     if (!name.trim()) {
       toast.error(t('errorNameRequired'));
       return;
@@ -378,6 +386,7 @@ export function ScheduleFormDialog({
                   onChange={setInlineSteps}
                   compact
                   maxHeight='min(320px,40vh)'
+                  onChildStepEditorOpenChange={setChildStepEditorOpen}
                 />
               </div>
             )}

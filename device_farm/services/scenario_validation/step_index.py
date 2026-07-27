@@ -79,6 +79,9 @@ _INTERACTION_PREFIXES = (
     "stop_app",
 )
 _SOCIAL_MARKERS = ("tap_fb", "fb_", "ig_", "tiktok_", "linkedin_")
+_GENERIC_SOCIAL_TYPES = frozenset(
+    {"content_interaction", "connection_request", "community_membership"}
+)
 
 
 def _is_interaction_type(step_type: str) -> bool:
@@ -87,6 +90,8 @@ def _is_interaction_type(step_type: str) -> bool:
 
 def _is_social_step(step: dict) -> bool:
     t = str(step.get("type") or "")
+    if t in _GENERIC_SOCIAL_TYPES:
+        return True
     if any(marker in t for marker in _SOCIAL_MARKERS):
         return True
     strategy = str(step.get("strategy") or "")

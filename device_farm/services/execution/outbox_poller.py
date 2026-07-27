@@ -3,12 +3,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 1.0
 RETENTION_DAYS = 30
+
+
+def _lease_seconds() -> float:
+    try:
+        return max(5.0, float(os.getenv("EXECUTION_EVENT_OUTBOX_LEASE_SECONDS", "30")))
+    except (TypeError, ValueError):
+        return 30.0
 
 
 async def execution_event_outbox_loop() -> None:
@@ -24,15 +32,25 @@ async def execution_event_outbox_loop() -> None:
             continue
         try:
             async with AsyncSessionLocal() as db:
-                count = await process_outbox_batch(db, limit=200)
-                await db.commit()
-                if count:
-                    try:
-                        from web.metrics import execution_event_outbox_lag_seconds
+                await process_outbox_batch(
+                    db,
+                    limit=200,
+                    lease_seconds=_lease_seconds(),
+                )
+                from db.crud.execution_events import get_unpublished_event_stats
 
-                        execution_event_outbox_lag_seconds.set(0)
-                    except Exception:
-                        pass
+                stats = await get_unpublished_event_stats(db)
+                await db.commit()
+                try:
+                    from web.metrics import (
+                        execution_event_outbox_backlog,
+                        execution_event_outbox_lag_seconds,
+                    )
+
+                    execution_event_outbox_backlog.set(stats.count)
+                    execution_event_outbox_lag_seconds.set(stats.oldest_age_seconds)
+                except Exception:
+                    pass
         except Exception as exc:
             log.warning("execution event outbox poll failed: %s", exc)
 

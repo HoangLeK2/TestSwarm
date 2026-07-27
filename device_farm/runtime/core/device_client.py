@@ -130,7 +130,18 @@ class LatestFrameStore:
         if not isinstance(cfg_frame, bytes):
             cfg_frame = bytes(cfg_frame)
         with self._lock:
+            changed = self._last_config != cfg_frame
             self._last_config = cfg_frame
+            if changed:
+                self._last_keyframe = None
+                self._last_keyframe_ts = 0.0
+
+    def reset_bootstrap(self) -> None:
+        """Start a new encoder generation without reusing prior config/key frames."""
+        with self._lock:
+            self._last_config = None
+            self._last_keyframe = None
+            self._last_keyframe_ts = 0.0
 
     def get_snapshot(self) -> tuple[Optional[bytes], int, float, bool]:
         with self._lock:
@@ -219,6 +230,7 @@ class DeviceClient:
         self._latest_jpeg:      Optional[bytes] = None
         self._latest_jpeg_lock  = threading.Lock()
         self._last_frame_time:  float = 0.0  # monotonic timestamp of last received frame
+        self._last_jpeg_frame_time: float = 0.0
 
         # Scrcpy receiver for Mode A+scrcpy hybrid (agent touch + scrcpy screen)
         self._scrcpy_receiver:  Optional[ScrcpyReceiver] = None
@@ -607,7 +619,9 @@ class DeviceClient:
         jpeg = base64.b64decode(jpeg_b64)
         with self._latest_jpeg_lock:
             self._latest_jpeg = jpeg
-            self._last_frame_time = time.monotonic()
+            now = time.monotonic()
+            self._last_frame_time = now
+            self._last_jpeg_frame_time = now
         # In periodic mode, only update cache — periodic timer handles publishing
         if self.config.streaming.mode == "periodic":
             return
@@ -648,6 +662,7 @@ class DeviceClient:
             return
         with self._latest_jpeg_lock:
             self._latest_jpeg = jpeg_bytes
+            self._last_jpeg_frame_time = time.monotonic()
         # In periodic mode, only update cache
         if self.config.streaming.mode == "periodic":
             return
@@ -679,9 +694,9 @@ class DeviceClient:
             + bytes([flags])
             + avcc_record
         )
-        self._last_config_frame = msg
-        self._latest_stream.set_config(msg)
         with self._frame_lock:
+            self._last_config_frame = msg
+            self._latest_stream.set_config(msg)
             queues = list(self._frame_queues)
         self._logger.info("h264 config queued → %d WS subscriber(s), avcc_len=%d",
                           len(queues), len(avcc_record))
@@ -707,7 +722,7 @@ class DeviceClient:
         if not self._loop:
             return
         # Mark that scrcpy has started delivering — APK JPEG fallback will stop now.
-        first_frame = self._last_frame_time == 0
+        first_h264_frame = self._h264_fps_t0 == 0.0
         self._last_frame_time = time.monotonic()
         w = max(0, min(self.screen_width, 0xFFFF))
         h = max(0, min(self.screen_height, 0xFFFF))
@@ -720,15 +735,25 @@ class DeviceClient:
             + struct.pack(">II", pts_hi, pts_lo)
             + avcc_data
         )
-        self._latest_stream.set_frame(msg, is_key=is_key)
-        if is_key:
-            # Store for late-joining subscribers (replaces _last_key_frame dict)
-            self._last_key_frame = msg
         with self._frame_lock:
+            self._latest_stream.set_frame(msg, is_key=is_key)
+            if is_key:
+                # Store for late-joining subscribers (replaces _last_key_frame dict)
+                self._last_key_frame = msg
             queues = list(self._frame_queues)
-        if first_frame or is_key:
-            self._logger.info("h264 video key=%s queued → %d WS subscriber(s), avcc_len=%d",
-                              is_key, len(queues), len(avcc_data))
+        if first_h264_frame:
+            self._logger.info(
+                "h264 video started key=%s → %d WS subscriber(s), avcc_len=%d",
+                is_key,
+                len(queues),
+                len(avcc_data),
+            )
+        elif is_key:
+            self._logger.debug(
+                "h264 keyframe queued → %d WS subscriber(s), avcc_len=%d",
+                len(queues),
+                len(avcc_data),
+            )
         # FPS counter — log relay throughput every 5s
         if self._h264_fps_t0 == 0.0:
             self._h264_fps_t0 = time.monotonic()
@@ -736,7 +761,11 @@ class DeviceClient:
         _now = time.monotonic()
         if _now - self._h264_fps_t0 >= 5.0:
             fps = self._h264_fps_count / (_now - self._h264_fps_t0)
-            self._logger.info("h264 relay FPS=%.1f frames=%d (5s window)", fps, self._h264_fps_count)
+            self._logger.debug(
+                "h264 relay FPS=%.1f frames=%d (5s window)",
+                fps,
+                self._h264_fps_count,
+            )
             self._h264_fps_count = 0
             self._h264_fps_t0 = _now
         # NOTE: do NOT re-send config before every IDR. See on_agent_h264_config.
@@ -831,6 +860,26 @@ class DeviceClient:
         with self._latest_jpeg_lock:
             return self._latest_jpeg
 
+    def request_stream_jpeg_frames(self, duration_s: float = 3.0) -> bool:
+        """Enable relay H264→JPEG conversion only while an image consumer is active."""
+        receiver = self._scrcpy_receiver
+        request = (
+            getattr(receiver, "request_jpeg_frames", None)
+            if receiver is not None
+            else None
+        )
+        if request is not None:
+            request(duration_s=duration_s)
+            return True
+        return False
+
+    def reset_stream_bootstrap_generation(self) -> None:
+        """Atomically invalidate cached stream bootstrap before a new encoder."""
+        with self._frame_lock:
+            self._latest_stream.reset_bootstrap()
+            self._last_config_frame = None
+            self._last_key_frame = None
+
     def capture_screenshot(
         self,
         quality: int = 70,
@@ -909,6 +958,7 @@ class DeviceClient:
         if jpeg is not None and not allow_ws_u2_fallback and not skip_cache:
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
+                self._last_jpeg_frame_time = time.monotonic()
 
         return jpeg
 
@@ -1813,6 +1863,46 @@ class DeviceClient:
             pkg = pkg.split("/", 1)[0].strip()
         if not pkg and not comp:
             return
+        if self._batch_enabled() and pkg:
+            try:
+                start_action: Dict[str, Any] = {
+                    "op": "app_start",
+                    "package": pkg,
+                    "stop_before": stop_before,
+                    "use_monkey": use_monkey,
+                }
+                if comp and "/" in comp:
+                    activity = comp.split("/", 1)[1].strip()
+                    if activity:
+                        start_action["activity"] = activity
+                results = self.u2_batch(
+                    [
+                        start_action,
+                        {
+                            "op": "app_wait",
+                            "package": pkg,
+                            "front": True,
+                            "timeout": 8.0,
+                        },
+                    ],
+                    timeout=15.0,
+                )
+                app_wait = results[-1] if results else {}
+                if app_wait.get("ok") and int(app_wait.get("value") or 0) > 0:
+                    self._log(
+                        f"launch_app route=agent_boot_u2_batch pkg={pkg} component={comp or '-'}"
+                    )
+                    return
+                self._log(
+                    f"launch_app via u2_batch did not reach foreground: pkg={pkg} "
+                    f"component={comp or '-'}",
+                    level=logging.WARNING,
+                )
+            except Exception as exc:
+                self._log(
+                    f"launch_app via u2_batch failed: {exc}",
+                    level=logging.WARNING,
+                )
         if stop_before:
             try:
                 self.stop_app(pkg)
@@ -3229,6 +3319,10 @@ class DeviceClient:
         else:
             # Restart path: still cancel stale pending/retry from a prior failed attach.
             self._cancel_scrcpy_pending_attach()
+        # A newly created receiver is a new encoder generation even when it
+        # emits byte-identical SPS/PPS. Never bootstrap it with an IDR from the
+        # previous scrcpy process.
+        self.reset_stream_bootstrap_generation()
         # Store params so subscribe_frames can restart scrcpy after an auto-stop.
         self._scrcpy_params = attach_params
 
@@ -3248,7 +3342,9 @@ class DeviceClient:
                 self._log(f"ScrcpyControl coords updated to real resolution: {self.screen_width}x{self.screen_height}")
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
-                self._last_frame_time = time.monotonic()
+                now = time.monotonic()
+                self._last_frame_time = now
+                self._last_jpeg_frame_time = now
 
         def _on_scrcpy_h264_config(avcc_record: bytes, w: int, h: int, changed: bool = False) -> None:
             self.on_agent_h264_config(
@@ -3639,6 +3735,7 @@ class DeviceClient:
             self._scrcpy_receiver = None
         self._scrcpy_active = False
         self._last_frame_time = 0.0
+        self._last_jpeg_frame_time = 0.0
         self._scrcpy_params = None   # prevent demand-restart on subscribe_frames
         # Cancel pending auto-stop so it doesn't call detach_scrcpy_stream
         if self._scrcpy_stop_task is not None:
@@ -3683,6 +3780,7 @@ class DeviceClient:
         self._scrcpy_active = False
         self._scrcpy_attached_at = 0.0
         self._last_frame_time = 0.0
+        self._last_jpeg_frame_time = 0.0
         self._cancel_scrcpy_pending_attach()
         self._log(
             f"scrcpy relay offline for {relay_serial or receiver_serial} — marked inactive",
@@ -4709,40 +4807,22 @@ class DeviceClient:
         if jpeg:
             self.publish_frame(jpeg)
 
-    def subscribe_frames(self, queue: asyncio.Queue) -> None:
-        _had_key = False
+    def subscribe_frames(
+        self,
+        queue: asyncio.Queue,
+        *,
+        max_key_age_s: float = 2.0,
+    ) -> tuple[Optional[bytes], Optional[bytes]]:
         with self._frame_lock:
             was_empty = len(self._frame_queues) == 0
+            bootstrap = self._latest_stream.get_bootstrap(
+                max_key_age_s=max_key_age_s
+            )
             if queue not in self._frame_queues:
-                # Bootstrap UNDER THE LOCK: inject config+key before appending queue
-                # to _frame_queues.  No live frame can target this queue yet (gRPC
-                # thread checks _frame_queues under the same lock).  Using put_nowait
-                # guarantees config arrives as the FIRST item the browser sees, without
-                # racing against call_soon_threadsafe callbacks from the video thread.
-                if self._last_config_frame is not None:
-                    try:
-                        queue.put_nowait(self._last_config_frame)
-                    except Exception:
-                        pass
-                if self._last_key_frame is not None:
-                    _had_key = True
-                    try:
-                        queue.put_nowait(self._last_key_frame)
-                    except Exception:
-                        pass
+                # Snapshot + subscribe share the producer lock, so no live
+                # delta can be queued before the bootstrap generation selected
+                # above. WebSocketManager owns sending these cached frames.
                 self._frame_queues.append(queue)
-
-        # No cached IDR → request one immediately via scrcpy RESET_VIDEO (MSG_RESET_VIDEO=16).
-        # This eliminates the wait for the encoder's natural IDR interval (up to 14s default).
-        # request_idr() is a no-op on older scrcpy that doesn't support RESET_VIDEO.
-        if not _had_key:
-            recv = self._scrcpy_receiver
-            ctrl = getattr(recv, 'control', None) if recv is not None else None
-            if ctrl is not None and hasattr(ctrl, 'request_idr'):
-                try:
-                    ctrl.request_idr()
-                except Exception:
-                    pass
 
         if self._loop:
             # Cancel any pending auto-stop — viewer is back
@@ -4774,6 +4854,7 @@ class DeviceClient:
                         )
 
                 self._loop.run_in_executor(None, _start)
+        return bootstrap
 
     def unsubscribe_frames(self, queue: asyncio.Queue) -> None:
         with self._frame_lock:
@@ -4852,8 +4933,8 @@ class DeviceClient:
             + struct.pack(">HH", w, h)
             + jpeg_bytes
         )
-        self._latest_stream.set_frame(msg, is_key=False)
         with self._frame_lock:
+            self._latest_stream.set_frame(msg, is_key=False)
             queues = list(self._frame_queues)
         loop = self._loop
         for q in queues:

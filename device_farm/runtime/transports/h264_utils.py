@@ -105,17 +105,6 @@ def annexb_to_avcc(data: bytes) -> bytes:
     return b"".join(parts)
 
 
-def annexb_to_avcc_maybe(data: bytes) -> bytes:
-    """
-    Return AVCC-formatted data.
-    - If *data* starts with an Annex B start code → convert via annexb_to_avcc().
-    - Otherwise assume it is already in AVCC format and return as-is.
-    """
-    if _is_annexb(data):
-        return annexb_to_avcc(data)
-    return data
-
-
 def extract_sps_pps(annexb_config: bytes) -> tuple[bytes, bytes]:
     """
     Extract raw SPS and PPS NAL units from Annex B config data.

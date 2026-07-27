@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import threading
 import time
 
@@ -23,6 +24,10 @@ class _FlakyStreamDevice:
     def __init__(self) -> None:
         self.cache_reads = 0
         self.captures = 0
+        self.jpeg_requests = 0
+
+    def request_stream_jpeg_frames(self, **_kwargs):
+        self.jpeg_requests += 1
 
     def take_screenshot(self):
         self.cache_reads += 1
@@ -34,11 +39,19 @@ class _FlakyStreamDevice:
 
 
 class _SnapshotDevice:
+    screen_width = 1080
+    screen_height = 1920
+
     def __init__(self, cached: bytes = b"old-frame") -> None:
         self._latest_jpeg = cached
         self._latest_jpeg_lock = threading.Lock()
         self._last_frame_time = time.monotonic()
+        self._last_jpeg_frame_time = self._last_frame_time
         self.captures = 0
+        self.jpeg_requests = 0
+
+    def request_stream_jpeg_frames(self, **_kwargs):
+        self.jpeg_requests += 1
 
     def take_screenshot(self):
         with self._latest_jpeg_lock:
@@ -86,6 +99,28 @@ async def test_screenshot_uses_cached_frame_when_fresh_enough():
     assert response.status_code == 200
     assert body == b"old-frame"
     assert device.captures == 0
+    assert device.jpeg_requests == 1
+
+
+@pytest.mark.anyio
+async def test_screenshot_resizes_cached_frame_for_grid_preview():
+    from PIL import Image
+
+    source = io.BytesIO()
+    Image.new("RGB", (1080, 1920), color="red").save(source, format="JPEG")
+    device = _SnapshotDevice(cached=source.getvalue())
+    router = build_device_media_router(_Manager(device))
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}")
+
+    response = await route.endpoint(
+        "serial-1", fresh=False, max_age_ms=5_000, max_width=360
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    with Image.open(io.BytesIO(body)) as resized:
+        assert resized.width == 360
+        assert resized.height == 640
+    assert device.captures == 0
 
 
 @pytest.mark.anyio
@@ -106,6 +141,7 @@ async def test_api_screenshot_path_uses_media_endpoint():
 async def test_screenshot_refreshes_stale_cache_once():
     device = _SnapshotDevice()
     device._last_frame_time = time.monotonic() - 10
+    device._last_jpeg_frame_time = device._last_frame_time
     router = build_device_media_router(_Manager(device))
     route = next(r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}")
 
@@ -116,3 +152,44 @@ async def test_screenshot_refreshes_stale_cache_once():
     assert body == b"fresh-frame"
     assert device.captures == 1
     assert device.take_screenshot() == b"fresh-frame"
+
+
+@pytest.mark.anyio
+async def test_screenshot_freshness_uses_jpeg_time_not_h264_packet_time():
+    device = _SnapshotDevice()
+    device._last_frame_time = time.monotonic()
+    device._last_jpeg_frame_time = time.monotonic() - 10
+    router = build_device_media_router(_Manager(device))
+    route = next(
+        r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}"
+    )
+
+    response = await route.endpoint("serial-1", fresh=False, max_age_ms=500)
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    assert response.status_code == 200
+    assert body == b"fresh-frame"
+    assert device.captures == 1
+
+
+@pytest.mark.anyio
+async def test_screenshot_b64_caches_fresh_fallback_frame():
+    class _DemandSnapshotDevice(_SnapshotDevice):
+        def request_stream_jpeg_frames(self, **_kwargs):
+            self.jpeg_requests += 1
+            return True
+
+    device = _DemandSnapshotDevice()
+    device._last_jpeg_frame_time = time.monotonic() - 10
+    router = build_device_media_router(_Manager(device))
+    route = next(
+        r
+        for r in router.routes
+        if getattr(r, "path", "") == "/api/screenshot-b64/{serial}"
+    )
+
+    response = await route.endpoint("serial-1")
+
+    assert response.status_code == 200
+    assert device.take_screenshot() == b"fresh-frame"
+    assert device.captures == 1

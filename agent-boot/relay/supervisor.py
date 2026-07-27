@@ -110,7 +110,7 @@ class RelaySupervisor:
         if not desired:
             return
 
-        healthy = scrcpy_missing = restart_pending = breaker_open = not_online = 0
+        healthy = recovering = scrcpy_missing = restart_pending = breaker_open = not_online = 0
         to_schedule: list[str] = []
 
         scrcpy_mgr = agent._scrcpy_mgr
@@ -126,9 +126,21 @@ class RelaySupervisor:
                 not_online += 1
                 continue
 
-            if scrcpy_mgr.get(adb_serial) is not None:
-                healthy += 1
-                continue
+            session = scrcpy_mgr.get(adb_serial)
+            if session is not None:
+                is_streaming = getattr(session, "is_streaming", None)
+                if callable(is_streaming) and is_streaming():
+                    healthy += 1
+                    continue
+                elif getattr(session, "is_alive", lambda: False)():
+                    # A live relay thread may still be starting the server,
+                    # waiting for its socket handshake, or reconnecting. It
+                    # already owns the retry budget, so do not start a second
+                    # competing session; expose the state accurately instead.
+                    recovering += 1
+                    continue
+                # Stale session object: thread is already dead, so let the
+                # normal missing-path schedule a clean restart.
 
             scrcpy_missing += 1
             restart_task = state.get("restart_task")
@@ -148,8 +160,10 @@ class RelaySupervisor:
             to_schedule.append(logical)
 
         logger.info(
-            "supervisor tick desired=%d healthy=%d missing=%d pending=%d breaker_open=%d offline=%d",
-            len(desired), healthy, scrcpy_missing, restart_pending, breaker_open, not_online,
+            "supervisor tick desired=%d healthy=%d recovering=%d missing=%d "
+            "pending=%d breaker_open=%d offline=%d",
+            len(desired), healthy, recovering, scrcpy_missing, restart_pending,
+            breaker_open, not_online,
         )
 
         for logical in to_schedule:

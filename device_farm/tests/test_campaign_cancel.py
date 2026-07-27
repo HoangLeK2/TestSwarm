@@ -204,8 +204,8 @@ class TestScenarioTaskCancellation:
         result = result_holder[0]
         assert result is not None
         assert result["success"] is False
-        assert result["steps_executed"] < 3
-        assert "Cancelled" in result["failed_message"]
+        assert result["steps_executed"] == 2
+        assert result["failed_message"] == "Cancelled at step 2"
 
     def test_no_cancel_event_runs_normally(self):
         device = _make_device()

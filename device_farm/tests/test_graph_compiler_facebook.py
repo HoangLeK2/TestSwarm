@@ -74,6 +74,50 @@ def test_facebook_group_template_keeps_extra_data_tuning_in_steps_not_variables(
     assert _count_fb_comment_extracts(round_tripped) == 1
 
 
+def test_facebook_group_templates_open_catalog_target_with_stable_selector() -> None:
+    def has_step(steps: list[dict], predicate) -> bool:
+        for step in steps:
+            if predicate(step):
+                return True
+            for key in ("steps", "then", "else"):
+                children = step.get(key)
+                if isinstance(children, list) and has_step(children, predicate):
+                    return True
+        return False
+
+    for name in (
+        "Crawl bài viết + bình luận 1 nhóm Facebook",
+        "fb_group_1h",
+        "craw fb",
+    ):
+        spec = BUILTIN_TEMPLATE_BY_NAME[name]
+        assert has_step(
+            spec["steps"],
+            lambda step: (
+                step.get("type") == "tap_selector"
+                and step.get("by") == "${TARGET_SELECTOR_BY}"
+                and step.get("value") == "${TARGET_SELECTOR_VALUE}"
+            ),
+        ), name
+        assert has_step(
+            spec["steps"],
+            lambda step: (
+                step.get("type") == "tap_selector"
+                and step.get("by") == "${TARGET_FALLBACK_SELECTOR_BY}"
+                and step.get("value") == "${TARGET_FALLBACK_SELECTOR_VALUE}"
+            ),
+        ), name
+
+    assert has_step(
+        BUILTIN_TEMPLATE_BY_NAME["craw fb"]["steps"],
+        lambda step: (
+            step.get("type") == "tap_selector"
+            and step.get("by") == "descriptionContains"
+            and step.get("value") == "tab Nhóm"
+        ),
+    )
+
+
 def test_facebook_builtin_post_comment_flows_stay_on_detail_until_comments_extracted() -> None:
     flows: list[tuple[str, list[dict], int, int, int, int, int]] = []
     for spec in BUILTIN_TEMPLATE_BY_NAME.values():

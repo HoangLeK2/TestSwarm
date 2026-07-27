@@ -8,6 +8,7 @@ import {
   isManualControlEligible,
   resolveControlRecordConnectedDevices,
   resolveControlRecordHierarchySerial,
+  resolveControlRecordSelectedDevice,
   shouldShowControlRecordNoDeviceBanner
 } from './control-record-device-state.ts';
 
@@ -163,6 +164,73 @@ test('resolveControlRecordConnectedDevices preserves previous devices during tra
   );
 });
 
+test('resolveControlRecordConnectedDevices preserves a selected-capable device during a partial disconnect snapshot', () => {
+  const previous = [
+    {
+      serial: 'target',
+      brand: '',
+      model: '',
+      state: 'READY',
+      battery: 80,
+      current_app: '',
+      screen_width: 1080,
+      screen_height: 1920
+    },
+    {
+      serial: 'fallback',
+      brand: '',
+      model: '',
+      state: 'READY',
+      battery: 80,
+      current_app: '',
+      screen_width: 1080,
+      screen_height: 1920
+    }
+  ];
+
+  const resolved = resolveControlRecordConnectedDevices(
+    [
+      {
+        ...previous[0],
+        state: 'DISCONNECTED',
+        touch_method: 'none',
+        u2_ready: false
+      },
+      previous[1]
+    ],
+    previous
+  );
+
+  assert.deepEqual(
+    resolved.map((device) => device.serial),
+    ['target', 'fallback']
+  );
+  assert.equal(resolved[0].state, 'READY');
+});
+
+test('resolveControlRecordConnectedDevices can grace a selected device through a terminal snapshot', () => {
+  const previous = [
+    {
+      serial: 'target',
+      brand: '',
+      model: '',
+      state: 'READY',
+      battery: 80,
+      current_app: '',
+      screen_width: 1080,
+      screen_height: 1920
+    }
+  ];
+
+  const resolved = resolveControlRecordConnectedDevices(
+    [{ ...previous[0], state: 'DEAD' }],
+    previous,
+    { preserveTerminalSerials: new Set(['target']) }
+  );
+
+  assert.equal(resolved[0], previous[0]);
+});
+
 test('resolveControlRecordHierarchySerial keeps the user-selected serial stable during device snapshot gaps', () => {
   assert.equal(
     resolveControlRecordHierarchySerial('10AE7S00HD002JK', null),
@@ -177,6 +245,25 @@ test('resolveControlRecordHierarchySerial keeps the user-selected serial stable 
     '10AE7S00HD002JK'
   );
   assert.equal(resolveControlRecordHierarchySerial('', ''), null);
+});
+
+test('resolveControlRecordSelectedDevice never falls through to another device for an explicit serial', () => {
+  const fallback = {
+    serial: 'fallback',
+    brand: '',
+    model: '',
+    state: 'READY',
+    battery: 80,
+    current_app: '',
+    screen_width: 1080,
+    screen_height: 1920
+  };
+
+  assert.equal(resolveControlRecordSelectedDevice([fallback], 'target'), null);
+  assert.equal(
+    resolveControlRecordSelectedDevice([fallback], null)?.serial,
+    'fallback'
+  );
 });
 
 test('shouldShowControlRecordNoDeviceBanner waits for live devices hydration', () => {

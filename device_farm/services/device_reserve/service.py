@@ -278,7 +278,12 @@ async def session_is_expired(
     last_hb = _as_utc(session.last_heartbeat)
     claimed = _as_utc(session.claimed_at)
     idle_seconds = (ts - last_hb).total_seconds()
-    ttl_elapsed = (ts - claimed).total_seconds()
+    ttl_anchor = (
+        last_hb
+        if session.owner_type == DeviceReserveOwnerType.CAMPAIGN.value
+        else claimed
+    )
+    ttl_elapsed = (ts - ttl_anchor).total_seconds()
     expired_idle = idle_seconds > idle_threshold
     expired_ttl = ttl_elapsed > session.ttl_sec
     return expired_idle or expired_ttl, int(idle_seconds)
@@ -295,6 +300,15 @@ async def try_auto_release_session(
     session = await reserve_repo.get_session_by_id(db, session_id)
     if session is None or session.released_at is not None:
         return False
+    await reserve_repo.lock_device_row(db, session.device_id)
+    session = await reserve_repo.get_active_session(
+        db,
+        session.device_id,
+        for_update=True,
+    )
+    if session is None or session.id != session_id:
+        return False
+    await db.refresh(session)
     with use_tenant_scope(session.org_id):
         expired, idle_seconds = await session_is_expired(db, session, now=ts)
         if not expired:

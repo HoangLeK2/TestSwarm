@@ -46,6 +46,10 @@ log = logging.getLogger(__name__)
 _SERIAL_RE = re.compile(r"^[\w.:_-]{1,128}$")
 
 
+class CampaignDeviceClaimLostError(RuntimeError):
+    """The execution no longer owns a live campaign claim for this device."""
+
+
 def _finalize_step_results(
     *,
     success: bool,
@@ -376,6 +380,7 @@ def _collect_primitive_touch_batch(
 # Global device registry reference — set by worker at startup (before any activity runs).
 _device_registry = None
 _temporal_config = None
+_non_campaign_execution_cache: dict[str, float] = {}
 
 
 def set_device_registry(registry) -> None:
@@ -405,6 +410,105 @@ def _is_cancellation_exc(exc: BaseException) -> bool:
     return False
 
 
+async def _heartbeat_campaign_device_claim(
+    *,
+    execution_id: str | None,
+    campaign_id: str | None,
+    device_serial: str,
+) -> int | None:
+    """Verify campaign activity ownership and refresh its device claim."""
+    if not isinstance(execution_id, str) or not execution_id.strip():
+        return
+    normalized_campaign_id = (
+        campaign_id.strip()
+        if isinstance(campaign_id, str) and campaign_id.strip()
+        else None
+    )
+    now = time.monotonic()
+    if (
+        normalized_campaign_id is None
+        and _non_campaign_execution_cache.get(execution_id, 0.0) > now
+    ):
+        return
+
+    from db.crud.device import get_device_by_serial
+    from db.crud.execution import get_execution
+    from db.crud import device_reserve_session as reserve_repo
+    from db.crud.tenant_settings import get_session_idle_threshold_sec
+    from db.database import activity_session
+    from tenancy.context import tenant_context
+
+    error_prefix = (
+        f"campaign device claim lost: execution={execution_id} "
+        f"device={device_serial}"
+    )
+    async with activity_session() as db:
+        execution = await get_execution(db, execution_id)
+        if execution is None:
+            raise CampaignDeviceClaimLostError(f"{error_prefix}: execution mismatch")
+        persisted_campaign_id = str(execution.campaign_id or "").strip()
+        if not persisted_campaign_id:
+            if normalized_campaign_id is not None:
+                raise CampaignDeviceClaimLostError(f"{error_prefix}: execution mismatch")
+            if len(_non_campaign_execution_cache) >= 4096:
+                _non_campaign_execution_cache.pop(
+                    next(iter(_non_campaign_execution_cache)),
+                    None,
+                )
+            _non_campaign_execution_cache[execution_id] = now + 300.0
+            return
+        if (
+            normalized_campaign_id is not None
+            and persisted_campaign_id != normalized_campaign_id
+        ):
+            raise CampaignDeviceClaimLostError(f"{error_prefix}: execution mismatch")
+        normalized_campaign_id = persisted_campaign_id
+
+        claim_session_id = str(
+            (execution.device_config or {}).get("claim_session_id") or ""
+        )
+        if not claim_session_id:
+            raise CampaignDeviceClaimLostError(f"{error_prefix}: claim session missing")
+
+        session = await reserve_repo.get_session_by_id(
+            db,
+            claim_session_id,
+            for_update=True,
+        )
+        session_ctx = dict(getattr(session, "ctx", None) or {}) if session else {}
+        if (
+            session is None
+            or session.released_at is not None
+            or session.owner_type != "campaign"
+            or str(session.owner_id or "") != normalized_campaign_id
+            or str(session.org_id or "") != str(execution.org_id or "")
+            or str(session_ctx.get("execution_id") or "") != str(execution_id)
+        ):
+            raise CampaignDeviceClaimLostError(f"{error_prefix}: ownership mismatch")
+
+        with tenant_context(execution.org_id):
+            device = await get_device_by_serial(db, device_serial)
+        if device is None or str(device.id) != str(session.device_id):
+            raise CampaignDeviceClaimLostError(f"{error_prefix}: device mismatch")
+
+        from services.device_reserve.service import session_is_expired
+
+        expired, _idle_seconds = await session_is_expired(db, session)
+        if expired:
+            raise CampaignDeviceClaimLostError(f"{error_prefix}: claim expired")
+        await reserve_repo.touch_session_heartbeat(db, session)
+        idle_threshold = await get_session_idle_threshold_sec(
+            db,
+            session.org_id,
+            session.owner_type,
+        )
+        lease_window = min(
+            max(1, int(session.ttl_sec)),
+            max(1, int(idle_threshold)),
+        )
+        return max(1, lease_window // 3)
+
+
 async def _to_thread_with_heartbeat(
     fn: Callable,
     *args: Any,
@@ -412,6 +516,9 @@ async def _to_thread_with_heartbeat(
     cooperative_cancel_event: threading.Event | None = None,
     cancel_grace_s: float = 5.0,
     execution_id: str | None = None,
+    campaign_id: str | None = None,
+    device_serial: str | None = None,
+    claim_heartbeat_interval: float = 60.0,
     stop_on_pause: bool = False,
     **kwargs: Any,
 ) -> Any:
@@ -437,7 +544,7 @@ async def _to_thread_with_heartbeat(
         "execution_id": execution_id,
         "thread_fn": fn_name,
     }
-    trace_log.info("temporal_thread_start", **thread_ctx)
+    trace_log.debug("temporal_thread_start", **thread_ctx)
 
     async def _maybe_signal_cancel() -> bool:
         if cancel_event.is_set():
@@ -477,10 +584,25 @@ async def _to_thread_with_heartbeat(
 
     async def _heartbeat_loop() -> None:
         n = 0
+        claim_heartbeat_at = time.monotonic()
         while True:
             await asyncio.sleep(heartbeat_interval)
             _safe_activity_heartbeat(f"running:{n}")
             await _maybe_signal_cancel()
+            now = time.monotonic()
+            if (
+                isinstance(execution_id, str)
+                and execution_id
+                and isinstance(device_serial, str)
+                and device_serial
+                and now - claim_heartbeat_at >= claim_heartbeat_interval
+            ):
+                await _heartbeat_campaign_device_claim(
+                    execution_id=execution_id,
+                    campaign_id=campaign_id,
+                    device_serial=device_serial,
+                )
+                claim_heartbeat_at = now
             n += 1
 
     async def _cancel_watcher() -> None:
@@ -514,15 +636,29 @@ async def _to_thread_with_heartbeat(
     try:
         while not thread_task.done():
             done, _pending = await asyncio.wait(
-                {thread_task, cancel_watch_task},
+                {thread_task, cancel_watch_task, heartbeat_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if thread_task in done:
-                trace_log.info("temporal_thread_end", **thread_ctx, ok=True)
+                trace_log.debug("temporal_thread_end", **thread_ctx, ok=True)
                 return thread_task.result()
+            if heartbeat_task in done:
+                heartbeat_error = heartbeat_task.exception()
+                if heartbeat_error is not None:
+                    cancel_event.set()
+                    with contextlib.suppress(
+                        Exception,
+                        asyncio.CancelledError,
+                        asyncio.TimeoutError,
+                    ):
+                        await asyncio.wait_for(
+                            asyncio.shield(thread_task),
+                            timeout=cancel_grace_s,
+                        )
+                    raise heartbeat_error
             # Cancel watcher fired — give the worker thread time to stop cooperatively.
             return await _wait_for_thread_after_cancel()
-        trace_log.info("temporal_thread_end", **thread_ctx, ok=True)
+        trace_log.debug("temporal_thread_end", **thread_ctx, ok=True)
         return thread_task.result()
     except BaseException as exc:
         if _is_cancellation_exc(exc):
@@ -532,7 +668,7 @@ async def _to_thread_with_heartbeat(
     finally:
         heartbeat_task.cancel()
         cancel_watch_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        with contextlib.suppress(Exception, asyncio.CancelledError):
             await heartbeat_task
         with contextlib.suppress(asyncio.CancelledError):
             await cancel_watch_task
@@ -571,7 +707,7 @@ async def _emit_step_events_for_activity(
         return
     from db.database import activity_session
     from services.execution.activity_events import emit_step_finished, emit_step_started
-    from services.execution.event_publisher import process_outbox_batch, resolve_execution_event_context
+    from services.execution.event_publisher import resolve_execution_event_context
 
     from tenancy.context import tenant_context
 
@@ -610,7 +746,6 @@ async def _emit_step_events_for_activity(
                     step_result=step_result,
                     depth=getattr(inp, "depth", 0),
                 )
-            await process_outbox_batch(db)
             await db.commit()
 
 
@@ -677,6 +812,22 @@ class DeviceActivities:
             return pwd
 
     @activity.defn
+    async def heartbeat_campaign_device_claim(self, inp: dict[str, Any]) -> int:
+        """Keep a campaign's phone claim alive while its workflow is otherwise idle."""
+        device_serial = str(inp.get("device_serial") or "")
+        _validate_serial(device_serial)
+        interval = await _heartbeat_campaign_device_claim(
+            execution_id=str(inp.get("execution_id") or ""),
+            campaign_id=str(inp.get("campaign_id") or ""),
+            device_serial=device_serial,
+        )
+        if interval is None:
+            raise CampaignDeviceClaimLostError(
+                "campaign device claim keepalive requires a campaign execution"
+            )
+        return interval
+
+    @activity.defn
     async def execute_device_action(self, inp: DeviceActionInput) -> StepResult:
         """
         Execute a single device action step using the original scenario executor.
@@ -686,6 +837,11 @@ class DeviceActivities:
         detection — exactly as described in flow.md.
         """
         _validate_serial(inp.device_serial)
+        await _heartbeat_campaign_device_claim(
+            execution_id=inp.execution_id,
+            campaign_id=inp.campaign_id,
+            device_serial=inp.device_serial,
+        )
         device = _get_device(inp.device_serial)
         step = _prepare_activity_step(dict(inp.step))
         step_type = step.get("type", "")
@@ -752,6 +908,8 @@ class DeviceActivities:
                 cancel_event=cancel_event,
                 cooperative_cancel_event=cancel_event,
                 execution_id=inp.execution_id,
+                campaign_id=inp.campaign_id,
+                device_serial=inp.device_serial,
             )
             activity_step_duration_ms = round(
                 (time.monotonic() - activity_step_started) * 1000.0,
@@ -822,6 +980,12 @@ class DeviceActivities:
         the step has ignore_error=True.
         """
         _validate_serial(inp.device_serial)
+        execution_id = inp.execution_id or inp.run_id
+        await _heartbeat_campaign_device_claim(
+            execution_id=execution_id,
+            campaign_id=inp.campaign_id,
+            device_serial=inp.device_serial,
+        )
         device = _get_device(inp.device_serial)
         _safe_activity_heartbeat(f"batch:0/{len(inp.steps)}")
 
@@ -836,7 +1000,7 @@ class DeviceActivities:
         acct_id = inp.campaign_vars.get("__ACCOUNT_ID__") or inp.variables.get("__ACCOUNT_ID__")
         if acct_id:
             pwd = await self._resolve_password(
-                acct_id, execution_id=inp.execution_id,
+                acct_id, execution_id=execution_id,
             )
             if pwd is None:
                 return DeviceActionBatchResult(
@@ -858,7 +1022,7 @@ class DeviceActivities:
         )
         cancel_event = threading.Event()
         batch_context = _copy_runtime_context(getattr(inp, "context", None))
-        flag_probe = _ExecutionFlagProbe(inp.execution_id)
+        flag_probe = _ExecutionFlagProbe(execution_id)
         event_context_cache: dict[str, Any] = {}
         touch_batch_size = _primitive_touch_batch_size(inp)
 
@@ -905,7 +1069,9 @@ class DeviceActivities:
                         timeout=touch_timeout,
                         cancel_event=cancel_event,
                         cooperative_cancel_event=cancel_event,
-                        execution_id=inp.execution_id,
+                        execution_id=execution_id,
+                        campaign_id=inp.campaign_id,
+                        device_serial=inp.device_serial,
                         stop_on_pause=True,
                     )
                     u2_batch_duration_ms = round(
@@ -1168,7 +1334,9 @@ class DeviceActivities:
                     _var_ctx=var_ctx,
                     cancel_event=cancel_event,
                     cooperative_cancel_event=cancel_event,
-                    execution_id=inp.execution_id,
+                    execution_id=execution_id,
+                    campaign_id=inp.campaign_id,
+                    device_serial=inp.device_serial,
                 )
                 activity_step_duration_ms = round(
                     (time.monotonic() - activity_step_started) * 1000.0,
@@ -1288,6 +1456,11 @@ class DeviceActivities:
         Uses the same _wait_for_element from scenario_task.py for consistency.
         """
         _validate_serial(inp.device_serial)
+        await _heartbeat_campaign_device_claim(
+            execution_id=inp.execution_id,
+            campaign_id=inp.campaign_id,
+            device_serial=inp.device_serial,
+        )
         device = _get_device(inp.device_serial)
         try:
             from runtime.core.device_client import DeviceState
@@ -1306,7 +1479,7 @@ class DeviceActivities:
         except Exception as exc:
             log.debug("[%s] check_element state repair skipped: %s", inp.device_serial, exc)
         activity.heartbeat(f"check_element:{inp.by}={inp.value}")
-        trace_log.info(
+        trace_log.debug(
             "check_element_start",
             device_serial=inp.device_serial,
             execution_id=inp.execution_id,
@@ -1345,10 +1518,12 @@ class DeviceActivities:
                 cancel_event=cancel_event,
                 cooperative_cancel_event=cancel_event,
                 execution_id=inp.execution_id,
+                campaign_id=inp.campaign_id,
+                device_serial=inp.device_serial,
             )
             found = eid is not None
             message = f"element {inp.by}={inp.value!r}: {'found' if found else 'not found'}"
-            trace_log.info(
+            trace_log.debug(
                 "check_element_end",
                 device_serial=inp.device_serial,
                 execution_id=inp.execution_id,
@@ -1386,6 +1561,11 @@ class DeviceActivities:
         scenario_task.py so condition semantics stay in one place.
         """
         _validate_serial(inp.device_serial)
+        await _heartbeat_campaign_device_claim(
+            execution_id=inp.execution_id,
+            campaign_id=inp.campaign_id,
+            device_serial=inp.device_serial,
+        )
         device = _get_device(inp.device_serial)
         activity.heartbeat("evaluate_legacy_condition")
 
@@ -1406,6 +1586,8 @@ class DeviceActivities:
                 ctx,
                 cooperative_cancel_event=cancel_event,
                 execution_id=inp.execution_id,
+                campaign_id=inp.campaign_id,
+                device_serial=inp.device_serial,
             )
         except asyncio.CancelledError:
             return False
@@ -1422,6 +1604,12 @@ class DeviceActivities:
         break_requested flag when stop_if_no_new triggers.
         """
         _validate_serial(inp.device_serial)
+        execution_id = inp.execution_id or inp.run_id
+        await _heartbeat_campaign_device_claim(
+            execution_id=execution_id,
+            campaign_id=inp.campaign_id,
+            device_serial=inp.device_serial,
+        )
         device = _get_device(inp.device_serial)
         step = _prepare_activity_step(dict(inp.step))
         idx = inp.step_index
@@ -1447,13 +1635,13 @@ class DeviceActivities:
                 persist_campaign_id = await resolve_persist_campaign_id(
                     db,
                     campaign_id=inp.campaign_id,
-                    execution_id=inp.execution_id or inp.run_id,
+                    execution_id=execution_id,
                 )
             scenario_meta = {
                 "_campaign_id": persist_campaign_id,
                 "_campaign_id_resolved": True,
-                "_execution_id": inp.execution_id or inp.run_id,
-                "_run_hash_scope": inp.execution_id or inp.run_id,
+                "_execution_id": execution_id,
+                "_run_hash_scope": execution_id,
                 "_campaign_vars": {"__USER_ID__": inp.user_id} if inp.user_id else {},
                 "__USER_ID__": inp.user_id,
                 "name": inp.scenario_config.get("name") or inp.scenario_config.get("scenario_name"),
@@ -1461,13 +1649,27 @@ class DeviceActivities:
             from tasks.scenario.steps.extraction import request_edge_extra_data
 
             async def _wait_until_unpaused() -> None:
-                if not inp.execution_id:
+                if not execution_id:
                     return
                 from services.execution_pause_flags import is_execution_paused_async
 
-                while await is_execution_paused_async(inp.execution_id):
+                claim_heartbeat_at = 0.0
+                while await is_execution_paused_async(execution_id):
                     _safe_activity_heartbeat(f"extract:{idx}:paused")
+                    now = time.monotonic()
+                    if now - claim_heartbeat_at >= 60.0:
+                        await _heartbeat_campaign_device_claim(
+                            execution_id=execution_id,
+                            campaign_id=inp.campaign_id,
+                            device_serial=inp.device_serial,
+                        )
+                        claim_heartbeat_at = now
                     await asyncio.sleep(0.5)
+                await _heartbeat_campaign_device_claim(
+                    execution_id=execution_id,
+                    campaign_id=inp.campaign_id,
+                    device_serial=inp.device_serial,
+                )
 
             while True:
                 edge_result = {}
@@ -1475,7 +1677,7 @@ class DeviceActivities:
                 stop_reason = {"reason": ""}
 
                 async def _pause_monitor() -> None:
-                    if not inp.execution_id:
+                    if not execution_id:
                         return
                     from services.execution_pause_flags import (
                         is_execution_cancelled_async,
@@ -1487,11 +1689,11 @@ class DeviceActivities:
                             stop_reason["reason"] = "cancelled"
                             cancel_event.set()
                             return
-                        if await is_execution_cancelled_async(inp.execution_id):
+                        if await is_execution_cancelled_async(execution_id):
                             stop_reason["reason"] = "cancelled"
                             cancel_event.set()
                             return
-                        if await is_execution_paused_async(inp.execution_id):
+                        if await is_execution_paused_async(execution_id):
                             stop_reason["reason"] = "paused"
                             cancel_event.set()
                             return
@@ -1510,7 +1712,9 @@ class DeviceActivities:
                         result=edge_result,
                         cancel_event=cancel_event,
                         cooperative_cancel_event=cancel_event,
-                        execution_id=inp.execution_id,
+                        execution_id=execution_id,
+                        campaign_id=inp.campaign_id,
+                        device_serial=inp.device_serial,
                     )
                 finally:
                     pause_task.cancel()
@@ -1670,6 +1874,11 @@ class DeviceActivities:
         Uses _eval_ru_condition from scenario_task.py for consistency.
         """
         _validate_serial(inp.device_serial)
+        await _heartbeat_campaign_device_claim(
+            execution_id=inp.execution_id,
+            campaign_id=inp.campaign_id,
+            device_serial=inp.device_serial,
+        )
         device = _get_device(inp.device_serial)
         activity.heartbeat("evaluate_condition")
 
@@ -1728,7 +1937,6 @@ class DeviceActivities:
                 from db.crud.execution import (
                     cancel_execution_record,
                     get_execution,
-                    update_execution,
                     upsert_execution_result,
                 )
                 from db.crud.device import get_device_by_serial
@@ -1761,12 +1969,6 @@ class DeviceActivities:
                     with tenant_context(org_id_epic):
                         execution_campaign_id = getattr(ex_row, "campaign_id", None) if ex_row else None
                         execution_user_id = getattr(ex_row, "user_id", None) if ex_row else None
-                        if execution_campaign_id:
-                            from db.crud import campaign_entity as campaign_entity_repo
-
-                            campaign_row = await campaign_entity_repo.get_campaign_entity(
-                                db, execution_campaign_id
-                            )
                         device = await get_device_by_serial(db, device_serial)
                         if device:
                             _device_id = device.id
@@ -1821,15 +2023,23 @@ class DeviceActivities:
                             failed_steps = slim_step_results(
                                 [s for s in step_results if not s.get("ok")]
                             )
-                            if execution_campaign_id:
+                            ignored_warnings = _ignored_step_warnings_from_results(
+                                step_results
+                            )
+                            if execution_campaign_id and ignored_warnings:
+                                from db.crud import (
+                                    campaign_entity as campaign_entity_repo,
+                                )
                                 from services.campaign.events import emit_campaign_step_warning
 
-                                campaign_name = (
-                                    getattr(campaign_row, "name", None)
-                                    if campaign_row is not None
-                                    else None
+                                campaign_row = (
+                                    await campaign_entity_repo.get_campaign_entity(
+                                        db,
+                                        execution_campaign_id,
+                                    )
                                 )
-                                for warning in _ignored_step_warnings_from_results(step_results):
+                                campaign_name = getattr(campaign_row, "name", None)
+                                for warning in ignored_warnings:
                                     await emit_campaign_step_warning(
                                         db,
                                         org_id=org_id_epic,
@@ -1849,6 +2059,17 @@ class DeviceActivities:
                                     workflow_failed_message=workflow_failed_message,
                                 )
                             )
+                            terminal = (
+                                "completed" if success
+                                else "cancelled" if cancelled_terminal
+                                else "dlq_open"
+                            )
+                            if (
+                                terminal == "completed"
+                                and getattr(ex_row, "status", None) == "failed"
+                            ):
+                                terminal = "failed"
+                                er_status = "failed"
                             await upsert_execution_result(
                                 db,
                                 execution_id=execution_id,
@@ -1858,11 +2079,7 @@ class DeviceActivities:
                                 failed_steps=failed_steps,
                                 finished_at=finished_at,
                             )
-                            terminal = (
-                                "completed" if success
-                                else "cancelled" if cancelled_terminal
-                                else "dlq_open"
-                            )
+                            execution_already_finished = False
                             if cancelled_terminal:
                                 await cancel_execution_record(
                                     db,
@@ -1886,10 +2103,12 @@ class DeviceActivities:
                                     user_id=execution_user_id,
                                 )
                             elif ex_row and getattr(ex_row, "status", None) not in ("cancelled", "paused"):
-                                await update_execution(db, execution_id, status=terminal)
+                                ex_row.status = terminal
+                                ex_row.finished_at = finished_at
+                                await db.flush()
+                                execution_already_finished = True
                                 from services.execution.event_publisher import (
                                     enqueue_execution_event,
-                                    process_outbox_batch,
                                 )
                                 from services.execution.event_types import EXECUTION_COMPLETED
 
@@ -1902,7 +2121,6 @@ class DeviceActivities:
                                     payload={"device_serial": device_serial},
                                     execution=ex_row,
                                 )
-                                await process_outbox_batch(db)
                             if ex_row and (getattr(ex_row, "meta", {}) or {}).get("dispatch_source"):
                                 from services.campaign.dispatcher import finish_fan_out_execution
                                 from services.campaign.execution_runtime import (
@@ -1915,16 +2133,42 @@ class DeviceActivities:
                                     org_id=org_id_epic,
                                     actor_user_id=execution_user_id or "system",
                                     status=terminal,
+                                    execution_already_finished=execution_already_finished,
+                                    device_id=device.id,
                                 )
-                                temporal_client = None
-                                if _temporal_config and getattr(_temporal_config, "enabled", False):
-                                    try:
-                                        from temporal.worker import get_temporal_client
+                                dispatch_strategy = str(
+                                    (getattr(ex_row, "meta", {}) or {}).get(
+                                        "dispatch_strategy"
+                                    )
+                                    or ""
+                                )
+                                if (
+                                    dispatch_strategy == "sequential"
+                                    and execution_campaign_id
+                                ):
+                                    if campaign_row is None:
+                                        from db.crud import (
+                                            campaign_entity as campaign_entity_repo,
+                                        )
 
-                                        temporal_client = await get_temporal_client(_temporal_config)
-                                    except Exception:
-                                        pass
-                                if campaign_row is not None:
+                                        campaign_row = await campaign_entity_repo.get_campaign_entity(
+                                            db,
+                                            execution_campaign_id,
+                                        )
+                                    temporal_client = None
+                                    if _temporal_config and getattr(
+                                        _temporal_config,
+                                        "enabled",
+                                        False,
+                                    ):
+                                        try:
+                                            from temporal.worker import get_temporal_client
+
+                                            temporal_client = await get_temporal_client(
+                                                _temporal_config
+                                            )
+                                        except Exception:
+                                            pass
                                     await maybe_promote_sequential_execution(
                                         db,
                                         ex_row,

@@ -42,3 +42,15 @@ test('mergeLiveDeviceSnapshot merges runtime serial changes through registered s
   assert.equal(result[0].serial, '10.0.0.9:41111');
   assert.equal(result[0].registered_serial, 'HW123');
 });
+
+test('mergeLiveDeviceSnapshot drops stale devices missing from a non-empty live snapshot', () => {
+  const result = mergeLiveDeviceSnapshot(
+    [device('stale-relay-host'), device('phone-1')],
+    [device('phone-1')]
+  );
+
+  assert.deepEqual(
+    result.map((item) => item.serial),
+    ['phone-1']
+  );
+});

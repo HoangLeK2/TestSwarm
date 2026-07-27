@@ -58,6 +58,7 @@ async def recover_stuck_executions(stale_after_minutes: int = 5) -> dict:
                     db,
                     execution_id=exc.id,
                     device_serial="",  # unknown at recovery time; per-device result carries it
+                    org_id=exc.org_id,
                     error=f"Interrupted by server restart at step {exc.checkpoint_step}",
                 )
             except Exception as e:

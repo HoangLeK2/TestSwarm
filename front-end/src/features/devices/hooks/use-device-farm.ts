@@ -8,6 +8,7 @@ import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
 import { devicesApi, type DeviceOut } from '../services/manage-api';
 import { filterVisibleDeviceFarmDevices } from '../lib/device-farm-visible-devices';
 import { mergeLiveDeviceSnapshot } from '../lib/device-farm-live-snapshot';
+import { mergeDeviceFarmWsStatus } from '../lib/device-farm-ws-status';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { useTabNetworkActive } from './use-tab-network-active';
@@ -18,12 +19,14 @@ type UseDeviceFarmOptions = {
   liveRefreshMs?: number | false;
   loadTasks?: boolean;
   refreshRegisteredOnFocus?: boolean;
+  liveSnapshotAuthoritative?: boolean;
 };
 
 export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   const liveRefreshMs = options.liveRefreshMs ?? LIVE_DEVICE_REFRESH_MS;
   const loadTasks = options.loadTasks ?? true;
   const refreshRegisteredOnFocus = options.refreshRegisteredOnFocus ?? true;
+  const liveSnapshotAuthoritative = options.liveSnapshotAuthoritative ?? false;
   const [devices, setDevices] = useState<Device[]>([]);
   const [registeredDevices, setRegisteredDevices] = useState<DeviceOut[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -146,52 +149,9 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
 
       if (msg.type === 'status' && 'serial' in msg) {
         setDevices((prev) => {
-          const exists = prev.some((d) => d.serial === msg.serial);
-          if (!exists) {
-            return [
-              ...prev,
-              {
-                serial: msg.serial,
-                brand: msg.brand ?? '',
-                model: msg.model ?? '',
-                state: msg.state ?? 'CONNECTING',
-                battery: msg.battery ?? -1,
-                current_app: msg.current_app ?? '',
-                screen_width: msg.device_width ?? msg.screen_width ?? 1080,
-                screen_height: msg.device_height ?? msg.screen_height ?? 1920,
-                touch_method: msg.touch_method,
-                minitouch_ready: msg.minitouch_ready,
-                u2_ready: msg.u2_ready,
-                scenario_active: msg.scenario_active ?? 0,
-                manual_takeover_active: Boolean(msg.manual_takeover_active)
-              }
-            ];
-          }
-          return prev.map((d) =>
-            d.serial === msg.serial
-              ? {
-                  ...d,
-                  state: msg.state ?? d.state,
-                  battery: msg.battery ?? d.battery,
-                  current_app: msg.current_app ?? d.current_app,
-                  screen_width:
-                    msg.device_width ?? msg.screen_width ?? d.screen_width,
-                  screen_height:
-                    msg.device_height ?? msg.screen_height ?? d.screen_height,
-                  touch_method: msg.touch_method ?? d.touch_method,
-                  minitouch_ready: msg.minitouch_ready ?? d.minitouch_ready,
-                  u2_ready: msg.u2_ready ?? d.u2_ready,
-                  scenario_active:
-                    'scenario_active' in msg
-                      ? (msg.scenario_active ?? 0)
-                      : d.scenario_active,
-                  manual_takeover_active:
-                    'manual_takeover_active' in msg
-                      ? Boolean(msg.manual_takeover_active)
-                      : d.manual_takeover_active
-                }
-              : d
-          );
+          return mergeDeviceFarmWsStatus(prev, msg, {
+            liveSnapshotAuthoritative
+          });
         });
         // If we see a new device via WebSocket that is now registered, update serial set
         setRegisteredDevices((prev) => {
@@ -235,7 +195,7 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [refreshDevices, tabActive]);
+  }, [liveSnapshotAuthoritative, refreshDevices, tabActive]);
 
   const handleToggleMode = useCallback((serial: string) => {
     setModes((prev) => ({

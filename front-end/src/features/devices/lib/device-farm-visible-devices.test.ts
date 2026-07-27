@@ -102,11 +102,41 @@ test('dashboard active check keeps transport-live devices visible despite stale 
   );
   assert.equal(
     isVisibleDeviceFarmActiveDevice({
-      ...live('u2-1'),
-      state: 'DeviceState.DEAD',
-      u2_ready: true
-    }),
+      ...live('agent-1'),
+      state: 'DISCONNECTED',
+      agent_connected: true,
+      u2_ready: true,
+      touch_method: 'u2'
+    } as Device),
     true
+  );
+});
+
+test('dashboard active check drops disconnected devices with only stale readiness flags', () => {
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('10AE7S00HD002JK'),
+      state: 'DISCONNECTED',
+      agent_connected: false,
+      u2_ready: true,
+      touch_method: 'none',
+      stf_connected: false
+    }),
+    false
+  );
+});
+
+test('dashboard active check drops disconnected devices with stale touch method', () => {
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('10AE7S00HD002JK'),
+      state: 'DISCONNECTED',
+      agent_connected: false,
+      u2_ready: true,
+      touch_method: 'u2',
+      stf_connected: false
+    }),
+    false
   );
 });
 

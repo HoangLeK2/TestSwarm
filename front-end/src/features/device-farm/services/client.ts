@@ -7,16 +7,25 @@ import type { ApiConfig, OrganizationOut } from './generated/DeviceFarmApi';
 import { DeviceFarmHttpClient } from './generated/DeviceFarmApi';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
+import { resolveClientOrganizationId } from './client-organization';
 
 /** Must match `OrganizationProvider` storage key. */
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
+type DeviceFarmClientConfig = Omit<
+  ApiConfig<{ token: string }>,
+  'securityWorker'
+> & {
+  organizationId?: string;
+};
+
 export function createDeviceFarmHttpClient(
-  config?: Omit<ApiConfig<{ token: string }>, 'securityWorker'>
+  config?: DeviceFarmClientConfig
 ): DeviceFarmHttpClient<{ token: string }> {
+  const { organizationId, ...apiConfig } = config ?? {};
   return new DeviceFarmHttpClient({
     baseURL: deviceFarmBackendBase,
-    ...config,
+    ...apiConfig,
     securityWorker: async (securityData) => {
       const token = securityData?.token ?? tokenStorage.getAuthToken();
       const headers: Record<string, string> = {};
@@ -24,7 +33,10 @@ export function createDeviceFarmHttpClient(
         headers.Authorization = `Bearer ${token}`;
       }
       if (typeof window !== 'undefined') {
-        const orgId = localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim();
+        const orgId = resolveClientOrganizationId(
+          organizationId,
+          localStorage.getItem(CURRENT_ORG_STORAGE_KEY)
+        );
         if (orgId) {
           headers['X-Organization-Id'] = orgId;
         }

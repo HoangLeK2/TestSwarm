@@ -762,6 +762,22 @@ export interface CampaignAccountBindIn {
   per_device_accounts?: Record<string, string>;
 }
 
+/** CampaignAllocationSnapshotItemIn */
+export interface CampaignAllocationSnapshotItemIn {
+  /**
+   * Device Id
+   * @minLength 1
+   * @maxLength 36
+   */
+  device_id: string;
+  /**
+   * External Entity Id
+   * @minLength 1
+   * @maxLength 36
+   */
+  external_entity_id: string;
+}
+
 /** CampaignControlOut */
 export interface CampaignControlOut {
   /** Campaign Id */
@@ -862,6 +878,14 @@ export interface CampaignDispatchExecutionOut {
 /** CampaignDispatchIn */
 export interface CampaignDispatchIn {
   target: CampaignDispatchTargetIn;
+  source_pool?: CampaignSourcePoolIn | null;
+  /** Allocation Snapshot */
+  allocation_snapshot?: CampaignAllocationSnapshotItemIn[];
+  /**
+   * Allocation Policy
+   * @default "one_per_device"
+   */
+  allocation_policy?: "one_per_device";
   /**
    * Dispatch Strategy
    * @default "parallel"
@@ -892,6 +916,38 @@ export interface CampaignDispatchOut {
   target_count: number;
   /** Executions */
   executions?: CampaignDispatchExecutionOut[];
+}
+
+/** CampaignDispatchPreviewAssignmentOut */
+export interface CampaignDispatchPreviewAssignmentOut {
+  /** Device Id */
+  device_id: string;
+  /** Device Serial */
+  device_serial: string;
+  /** Device Name */
+  device_name?: string | null;
+  /** External Entity Id */
+  external_entity_id: string;
+  /** Display Name */
+  display_name: string;
+  /** Platform */
+  platform: string;
+  /** Entity Type */
+  entity_type: string;
+}
+
+/** CampaignDispatchPreviewOut */
+export interface CampaignDispatchPreviewOut {
+  /** Campaign Id */
+  campaign_id: string;
+  /** Allocation Policy */
+  allocation_policy: string;
+  /** Device Count */
+  device_count: number;
+  /** Available Source Count */
+  available_source_count: number;
+  /** Assignments */
+  assignments?: CampaignDispatchPreviewAssignmentOut[];
 }
 
 /** CampaignDispatchTargetIn */
@@ -1062,6 +1118,30 @@ export interface CampaignScenarioRefOut {
   scenario_id: string;
   /** Scenario Version */
   scenario_version: number;
+}
+
+/** CampaignSourcePoolIn */
+export interface CampaignSourcePoolIn {
+  /**
+   * Platform
+   * @minLength 1
+   * @maxLength 32
+   */
+  platform: string;
+  /**
+   * Entity Type
+   * @minLength 1
+   * @maxLength 32
+   */
+  entity_type: string;
+  /** Search */
+  search?: string | null;
+  /**
+   * Statuses
+   * @maxItems 10
+   * @minItems 1
+   */
+  statuses?: string[];
 }
 
 /** CapacityGroupBreakdownOut */
@@ -2088,6 +2168,143 @@ export interface ExecutionStepOut {
   marked_ignored?: boolean;
   /** Message */
   message?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** ExternalEntityBulkObserveIn */
+export interface ExternalEntityBulkObserveIn {
+  /**
+   * Items
+   * @maxItems 500
+   * @minItems 1
+   */
+  items: ExternalEntityObserveIn[];
+}
+
+/** ExternalEntityBulkObserveOut */
+export interface ExternalEntityBulkObserveOut {
+  /** Items */
+  items: ExternalEntityObserveOut[];
+  /** Observed Count */
+  observed_count: number;
+  /** Created Count */
+  created_count: number;
+}
+
+/** ExternalEntityListOut */
+export interface ExternalEntityListOut {
+  /** Items */
+  items: ExternalEntityOut[];
+  /** Total */
+  total: number;
+  /** Limit */
+  limit: number;
+  /** Offset */
+  offset: number;
+}
+
+/** ExternalEntityObserveIn */
+export interface ExternalEntityObserveIn {
+  /**
+   * Platform
+   * @minLength 1
+   * @maxLength 32
+   */
+  platform: string;
+  /**
+   * Entity Type
+   * @minLength 1
+   * @maxLength 32
+   */
+  entity_type: string;
+  /**
+   * Display Name
+   * @minLength 1
+   * @maxLength 500
+   */
+  display_name: string;
+  /** External Id */
+  external_id?: string | null;
+  /** Canonical Url */
+  canonical_url?: string | null;
+  /**
+   * Status
+   * @maxLength 24
+   * @default "candidate"
+   */
+  status?: string;
+  /** Attributes */
+  attributes?: Record<string, any>;
+  /** Metrics */
+  metrics?: Record<string, any>;
+  /** Observed At */
+  observed_at?: string | null;
+  /** Query */
+  query?: string | null;
+  /** Rank */
+  rank?: number | null;
+  /** Discovery Context */
+  discovery_context?: Record<string, any>;
+  /** Raw Data */
+  raw_data?: Record<string, any>;
+  /** Account Id */
+  account_id?: string | null;
+  /** Execution Id */
+  execution_id?: string | null;
+}
+
+/** ExternalEntityObserveOut */
+export interface ExternalEntityObserveOut {
+  entity: ExternalEntityOut;
+  /** Created */
+  created: boolean;
+}
+
+/** ExternalEntityOut */
+export interface ExternalEntityOut {
+  /** Id */
+  id: string;
+  /** Org Id */
+  org_id: string;
+  /** Platform */
+  platform: string;
+  /** Entity Type */
+  entity_type: string;
+  /** Identity Key */
+  identity_key: string;
+  /** Identity Confidence */
+  identity_confidence: string;
+  /** External Id */
+  external_id?: string | null;
+  /** Canonical Url */
+  canonical_url?: string | null;
+  /** Display Name */
+  display_name: string;
+  /** Status */
+  status: string;
+  /** Current Attributes */
+  current_attributes?: Record<string, any>;
+  /** Current Metrics */
+  current_metrics?: Record<string, any>;
+  /**
+   * First Seen At
+   * @format date-time
+   */
+  first_seen_at: string;
+  /**
+   * Last Seen At
+   * @format date-time
+   */
+  last_seen_at: string;
   /**
    * Created At
    * @format date-time
@@ -3967,6 +4184,12 @@ export interface ScrcpyAttachRequest {
   enable_control?: boolean;
   /** Viewer Id */
   viewer_id?: string | null;
+  /** Max Fps */
+  max_fps?: number | null;
+  /** Max Width */
+  max_width?: number | null;
+  /** Bitrate */
+  bitrate?: number | null;
 }
 
 /** ScrcpyDetachRequest */
@@ -5735,6 +5958,30 @@ export class DeviceFarmHttpClient<
         path: `/api/campaigns/${campaignId}`,
         method: "DELETE",
         secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Resolve devices and sources without creating executions or claims.
+     *
+     * @tags campaigns
+     * @name PreviewCampaignDispatchRouteApiCampaignsCampaignIdDispatchPreviewPost
+     * @summary Preview Campaign Dispatch Route
+     * @request POST:/api/campaigns/{campaign_id}/dispatch-preview
+     * @secure
+     */
+    previewCampaignDispatchRouteApiCampaignsCampaignIdDispatchPreviewPost: (
+      campaignId: string,
+      data: CampaignDispatchIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignDispatchPreviewOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/dispatch-preview`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),
@@ -10790,6 +11037,117 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
+     * @tags external-entities
+     * @name ListExternalEntitiesRouteApiExternalEntitiesGet
+     * @summary List External Entities Route
+     * @request GET:/api/external-entities
+     * @secure
+     */
+    listExternalEntitiesRouteApiExternalEntitiesGet: (
+      query?: {
+        /** Platform */
+        platform?: string | null;
+        /** Entity Type */
+        entity_type?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Search */
+        search?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 500
+         * @default 100
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ExternalEntityListOut, HTTPValidationError>({
+        path: `/api/external-entities`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags external-entities
+     * @name ObserveExternalEntityRouteApiExternalEntitiesObservePost
+     * @summary Observe External Entity Route
+     * @request POST:/api/external-entities/observe
+     * @secure
+     */
+    observeExternalEntityRouteApiExternalEntitiesObservePost: (
+      data: ExternalEntityObserveIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<ExternalEntityObserveOut, HTTPValidationError>({
+        path: `/api/external-entities/observe`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags external-entities
+     * @name BulkObserveExternalEntitiesRouteApiExternalEntitiesBulkObservePost
+     * @summary Bulk Observe External Entities Route
+     * @request POST:/api/external-entities/bulk-observe
+     * @secure
+     */
+    bulkObserveExternalEntitiesRouteApiExternalEntitiesBulkObservePost: (
+      data: ExternalEntityBulkObserveIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<ExternalEntityBulkObserveOut, HTTPValidationError>({
+        path: `/api/external-entities/bulk-observe`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags external-entities
+     * @name GetExternalEntityRouteApiExternalEntitiesEntityIdGet
+     * @summary Get External Entity Route
+     * @request GET:/api/external-entities/{entity_id}
+     * @secure
+     */
+    getExternalEntityRouteApiExternalEntitiesEntityIdGet: (
+      entityId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ExternalEntityOut, HTTPValidationError>({
+        path: `/api/external-entities/${entityId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
      * @tags device-control
      * @name ApiConnectInfoApiConnectInfoGet
      * @summary Api Connect Info
@@ -10862,6 +11220,30 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<any, HTTPValidationError>({
         path: `/api/devices/${serial}/scrcpy/attach`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control
+     * @name ApiScrcpyHeartbeatApiDevicesSerialScrcpyHeartbeatPost
+     * @summary Api Scrcpy Heartbeat
+     * @request POST:/api/devices/{serial}/scrcpy/heartbeat
+     * @secure
+     */
+    apiScrcpyHeartbeatApiDevicesSerialScrcpyHeartbeatPost: (
+      serial: string,
+      data: ScrcpyDetachRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/scrcpy/heartbeat`,
         method: "POST",
         body: data,
         secure: true,
@@ -12153,6 +12535,8 @@ export class DeviceFarmHttpClient<
         fresh?: boolean;
         /** Max Age Ms */
         max_age_ms?: number | null;
+        /** Max Width */
+        max_width?: number | null;
       },
       params: RequestParams = {},
     ) =>

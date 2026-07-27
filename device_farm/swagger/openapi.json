@@ -2476,6 +2476,64 @@
         }
       }
     },
+    "/api/campaigns/{campaign_id}/dispatch-preview": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Preview Campaign Dispatch Route",
+        "description": "Resolve devices and sources without creating executions or claims.",
+        "operationId": "preview_campaign_dispatch_route_api_campaigns__campaign_id__dispatch_preview_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignDispatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignDispatchPreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/campaigns/{campaign_id}/dispatch": {
       "post": {
         "tags": [
@@ -13906,6 +13964,270 @@
         }
       }
     },
+    "/api/external-entities": {
+      "get": {
+        "tags": [
+          "external-entities"
+        ],
+        "summary": "List External Entities Route",
+        "operationId": "list_external_entities_route_api_external_entities_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Platform"
+            }
+          },
+          {
+            "name": "entity_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Type"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEntityListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/external-entities/observe": {
+      "post": {
+        "tags": [
+          "external-entities"
+        ],
+        "summary": "Observe External Entity Route",
+        "operationId": "observe_external_entity_route_api_external_entities_observe_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalEntityObserveIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEntityObserveOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/external-entities/bulk-observe": {
+      "post": {
+        "tags": [
+          "external-entities"
+        ],
+        "summary": "Bulk Observe External Entities Route",
+        "operationId": "bulk_observe_external_entities_route_api_external_entities_bulk_observe_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalEntityBulkObserveIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEntityBulkObserveOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/external-entities/{entity_id}": {
+      "get": {
+        "tags": [
+          "external-entities"
+        ],
+        "summary": "Get External Entity Route",
+        "operationId": "get_external_entity_route_api_external_entities__entity_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Entity Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEntityOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Dashboard",
@@ -14045,6 +14367,61 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ScrcpyAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{serial}/scrcpy/heartbeat": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Scrcpy Heartbeat",
+        "operationId": "api_scrcpy_heartbeat_api_devices__serial__scrcpy_heartbeat_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrcpyDetachRequest"
               }
             }
           }
@@ -16920,6 +17297,22 @@
               ],
               "title": "Max Age Ms"
             }
+          },
+          {
+            "name": "max_width",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Width"
+            }
           }
         ],
         "responses": {
@@ -19071,6 +19464,28 @@
         "type": "object",
         "title": "CampaignAccountBindIn"
       },
+      "CampaignAllocationSnapshotItemIn": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Device Id"
+          },
+          "external_entity_id": {
+            "type": "string",
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "External Entity Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "external_entity_id"
+        ],
+        "title": "CampaignAllocationSnapshotItemIn"
+      },
       "CampaignControlOut": {
         "properties": {
           "campaign_id": {
@@ -19331,6 +19746,17 @@
             ],
             "title": "Claim Session Id"
           },
+          "external_entity_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Entity Id"
+          },
           "dispatch_source": {
             "anyOf": [
               {
@@ -19366,6 +19792,29 @@
         "properties": {
           "target": {
             "$ref": "#/components/schemas/CampaignDispatchTargetIn"
+          },
+          "source_pool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignSourcePoolIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allocation_snapshot": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignAllocationSnapshotItemIn"
+            },
+            "type": "array",
+            "title": "Allocation Snapshot"
+          },
+          "allocation_policy": {
+            "type": "string",
+            "const": "one_per_device",
+            "title": "Allocation Policy",
+            "default": "one_per_device"
           },
           "dispatch_strategy": {
             "type": "string",
@@ -19425,6 +19874,90 @@
         ],
         "title": "CampaignDispatchOut"
       },
+      "CampaignDispatchPreviewAssignmentOut": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "device_serial": {
+            "type": "string",
+            "title": "Device Serial"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "external_entity_id": {
+            "type": "string",
+            "title": "External Entity Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "device_serial",
+          "external_entity_id",
+          "display_name",
+          "platform",
+          "entity_type"
+        ],
+        "title": "CampaignDispatchPreviewAssignmentOut"
+      },
+      "CampaignDispatchPreviewOut": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "allocation_policy": {
+            "type": "string",
+            "title": "Allocation Policy"
+          },
+          "device_count": {
+            "type": "integer",
+            "title": "Device Count"
+          },
+          "available_source_count": {
+            "type": "integer",
+            "title": "Available Source Count"
+          },
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignDispatchPreviewAssignmentOut"
+            },
+            "type": "array",
+            "title": "Assignments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "allocation_policy",
+          "device_count",
+          "available_source_count"
+        ],
+        "title": "CampaignDispatchPreviewOut"
+      },
       "CampaignDispatchTargetIn": {
         "properties": {
           "device_ids": {
@@ -19440,6 +19973,13 @@
             },
             "type": "array",
             "title": "Device Group Ids"
+          },
+          "external_entity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "External Entity Ids"
           }
         },
         "type": "object",
@@ -19925,6 +20465,49 @@
           "scenario_version"
         ],
         "title": "CampaignScenarioRefOut"
+      },
+      "CampaignSourcePoolIn": {
+        "properties": {
+          "platform": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Platform"
+          },
+          "entity_type": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Entity Type"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search"
+          },
+          "statuses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Statuses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "platform",
+          "entity_type"
+        ],
+        "title": "CampaignSourcePoolIn"
       },
       "CapacityGroupBreakdownOut": {
         "properties": {
@@ -22688,6 +23271,339 @@
           "updated_at"
         ],
         "title": "ExecutionStepOut"
+      },
+      "ExternalEntityBulkObserveIn": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalEntityObserveIn"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ExternalEntityBulkObserveIn"
+      },
+      "ExternalEntityBulkObserveOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalEntityObserveOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "observed_count": {
+            "type": "integer",
+            "title": "Observed Count"
+          },
+          "created_count": {
+            "type": "integer",
+            "title": "Created Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "observed_count",
+          "created_count"
+        ],
+        "title": "ExternalEntityBulkObserveOut"
+      },
+      "ExternalEntityListOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalEntityOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ExternalEntityListOut"
+      },
+      "ExternalEntityObserveIn": {
+        "properties": {
+          "platform": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Platform"
+          },
+          "entity_type": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Entity Type"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Display Name"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "canonical_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Url"
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 24,
+            "title": "Status",
+            "default": "candidate"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Attributes"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "discovery_context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Discovery Context"
+          },
+          "raw_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw Data"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "execution_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "platform",
+          "entity_type",
+          "display_name"
+        ],
+        "title": "ExternalEntityObserveIn"
+      },
+      "ExternalEntityObserveOut": {
+        "properties": {
+          "entity": {
+            "$ref": "#/components/schemas/ExternalEntityOut"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "created"
+        ],
+        "title": "ExternalEntityObserveOut"
+      },
+      "ExternalEntityOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "identity_key": {
+            "type": "string",
+            "title": "Identity Key"
+          },
+          "identity_confidence": {
+            "type": "string",
+            "title": "Identity Confidence"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "canonical_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Url"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "current_attributes": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Current Attributes"
+          },
+          "current_metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Current Metrics"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "platform",
+          "entity_type",
+          "identity_key",
+          "identity_confidence",
+          "display_name",
+          "status",
+          "first_seen_at",
+          "last_seen_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ExternalEntityOut"
       },
       "FinishBody": {
         "properties": {
@@ -27487,6 +28403,39 @@
               }
             ],
             "title": "Viewer Id"
+          },
+          "max_fps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Fps"
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Width"
+          },
+          "bitrate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bitrate"
           }
         },
         "type": "object",

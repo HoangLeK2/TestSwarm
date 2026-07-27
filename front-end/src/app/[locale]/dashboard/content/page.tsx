@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { ContentViewer } from '@/features/content/components/content-viewer';
+import { CollectedDataViewer } from '@/features/content/components/collected-data-viewer';
 
 export default function ContentPage() {
   const params = useSearchParams();
@@ -11,7 +11,7 @@ export default function ContentPage() {
 
   return (
     <div className=''>
-      <ContentViewer
+      <CollectedDataViewer
         defaultCampaignId={campaignId}
         defaultExecutionId={executionId}
         defaultContentHash={contentHash}

@@ -4,7 +4,7 @@
 # Usage:
 #   ./scripts/package-docker-release-windows.sh
 #   ./scripts/package-docker-release-windows.sh 0.1.0
-#   BUILD_IMAGE=1 ./scripts/package-docker-release-windows.sh   # rebuild amd64 if missing/stale
+#   REUSE_IMAGE=1 ./scripts/package-docker-release-windows.sh   # explicitly reuse existing amd64 tar
 #
 # Output:
 #   dist/agent-boot-docker-windows-<version>.zip
@@ -27,9 +27,11 @@ ZIP="$OUT_DIR/${NAME}.zip"
 
 mkdir -p "$OUT_DIR"
 
-if [[ ! -f "$IMAGE_AMD64" ]] || [[ "${BUILD_IMAGE:-0}" == "1" ]]; then
+if [[ ! -f "$IMAGE_AMD64" ]] || [[ "${REUSE_IMAGE:-0}" != "1" ]]; then
   echo "== Building linux/amd64 image tar =="
   "$ROOT/scripts/docker-save-image.sh" "$VERSION" amd64
+else
+  echo "== Reusing existing linux/amd64 image tar (REUSE_IMAGE=1) =="
 fi
 
 if [[ ! -f "$IMAGE_AMD64" ]]; then
@@ -49,7 +51,31 @@ if [[ -f "$ROOT/deploy/INSTALL.windows.md" ]]; then
 else
   cp "$ROOT/deploy/INSTALL.md" "$DEST/INSTALL.md"
 fi
-cp "$ROOT/.env.example" "$DEST/.env.example"
+
+CUSTOMER_ENV="$ROOT/deploy/.env.customer.example"
+if [[ ! -f "$CUSTOMER_ENV" ]]; then
+  echo "error: missing customer-safe env template: $CUSTOMER_ENV" >&2
+  exit 1
+fi
+cp "$CUSTOMER_ENV" "$DEST/.env.example"
+
+# Customer bundles must never ship an active direct-database connection string.
+if grep -Eq \
+  '^[[:space:]]*AGENT_BOOT_CONTENT_DATABASE_URL[[:space:]]*=[[:space:]]*[^#[:space:]]' \
+  "$DEST/.env.example"; then
+  echo "error: customer env template contains an active database URL" >&2
+  exit 1
+fi
+CONTENT_DB_ENABLED_LINES="$(
+  grep -Ec '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=' "$DEST/.env.example" \
+    || true
+)"
+if [[ "$CONTENT_DB_ENABLED_LINES" -ne 1 ]] || ! grep -Eq \
+  '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=[[:space:]]*0([[:space:]]*(#.*)?)?$' \
+  "$DEST/.env.example"; then
+  echo "error: customer env template must disable direct database writes" >&2
+  exit 1
+fi
 
 for ps1 in docker-up.ps1 docker-load.ps1; do
   cp "$ROOT/deploy/scripts/$ps1" "$DEST/scripts/$ps1"

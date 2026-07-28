@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "websockets>=12.0",
-    "zeroconf>=0.131.0",
+    "zeroconf>=0.149.16",
     "rich>=13.0",
     # adb operations use subprocess (system adb binary) — no ppadb dependency
     "grpcio>=1.80.0",
@@ -18,7 +18,12 @@ dependencies = [
     "asyncpg>=0.30.0,<0.31",
     "dateparser>=1.2",
     "ftfy>=6.2",
-    "lxml>=5.0.0",
+    "lxml>=6.1.0",
+    # customer Docker releases must stay above the patched transitive versions
+    # used by requests/uiautomator2 and their image/XML helpers.
+    "idna>=3.15",
+    "pillow>=12.3.0",
+    "urllib3>=2.7.0",
     # perf: orjson is a C-based JSON serializer that releases the GIL on dump,
     # ~5–10x faster than stdlib json. Used everywhere we serialize device
     # results so cpu_executor can run dumps in real parallel.

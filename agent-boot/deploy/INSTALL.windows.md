@@ -25,6 +25,10 @@ Trong `.env` sửa tối thiểu:
 - `RELAY_API_KEY`
 - `RELAY_ENROLLMENT_TOKEN`
 
+Gói không chứa credential database. Ghi trực tiếp vào database được tắt mặc
+định (`AGENT_BOOT_CONTENT_DB_ENABLED=0`). Chỉ bật khi quản trị viên cấp riêng
+một database URL giới hạn quyền cho khách hàng này.
+
 (TLS cert đã có trong image.)
 
 > **Không double-click file `.ps1`** — Windows mở Notepad. Dùng `.cmd` hoặc:
@@ -93,5 +97,6 @@ docker compose logs -f agent-boot
 | Host có máy, container không thấy | ADB đang localhost-only → restart với `adb -a` |
 | `image not found` | `scripts\docker-load.cmd` |
 | Container restart loop | `docker compose logs`; kiểm tra `.env` (`RELAY_*`) |
+| Tính năng cần ghi database trực tiếp không chạy | Giữ mặc định nếu không cần; nếu cần, xin database URL giới hạn quyền rồi cấu hình `AGENT_BOOT_CONTENT_DB_*` |
 | `exec format error` | Gói này chỉ cho PC Windows x86_64 (amd64). Máy ARM Windows cần gói khác |
 | Docker daemon not running | Mở Docker Desktop, đợi sẵn sàng, rồi thử lại |

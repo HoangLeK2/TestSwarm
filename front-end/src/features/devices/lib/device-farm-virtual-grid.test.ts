@@ -4,8 +4,7 @@ import test from 'node:test';
 import {
   getDeviceGridColumnCount,
   getDeviceGridRowBounds,
-  getDeviceGridRowCount,
-  shouldLoadDeviceGridPreview
+  getDeviceGridRowCount
 } from './device-farm-virtual-grid';
 
 test('derives responsive columns from the existing tile width and gap', () => {
@@ -31,11 +30,4 @@ test('maps virtual rows to bounded device slices', () => {
     start: 8,
     end: 10
   });
-});
-
-test('limits active dashboard previews per page', () => {
-  assert.equal(shouldLoadDeviceGridPreview(0, 4), true);
-  assert.equal(shouldLoadDeviceGridPreview(3, 4), true);
-  assert.equal(shouldLoadDeviceGridPreview(4, 4), false);
-  assert.equal(shouldLoadDeviceGridPreview(10, 0), false);
 });

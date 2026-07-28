@@ -75,6 +75,13 @@ function abortPendingScrcpyAttach(serial: string, viewerId?: string): void {
   controllers.forEach((controller) => controller.abort());
 }
 
+export function cancelPendingScrcpyAttach(
+  serial: string,
+  viewerId?: string
+): void {
+  abortPendingScrcpyAttach(serial, viewerId);
+}
+
 async function postScrcpyAttach(
   serial: string,
   viewerId: string | undefined,

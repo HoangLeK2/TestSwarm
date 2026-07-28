@@ -26,8 +26,7 @@ import {
   DEVICE_GRID_TILE_WIDTH_PX,
   getDeviceGridColumnCount,
   getDeviceGridRowBounds,
-  getDeviceGridRowCount,
-  shouldLoadDeviceGridPreview
+  getDeviceGridRowCount
 } from '../lib/device-farm-virtual-grid';
 
 const DEFAULT_GRID_PAGE_SIZE = (() => {
@@ -244,19 +243,13 @@ export function DeviceFarm() {
                       contain: 'layout paint'
                     }}
                   >
-                    {pageDevices.slice(start, end).map((device, offset) => {
-                      const pageDeviceIndex = start + offset;
-                      return (
-                        <DeviceTilePreview
-                          key={device.serial}
-                          device={device}
-                          onOpenSteps={openStepsMonitor}
-                          previewEnabled={shouldLoadDeviceGridPreview(
-                            pageDeviceIndex
-                          )}
-                        />
-                      );
-                    })}
+                    {pageDevices.slice(start, end).map((device) => (
+                      <DeviceTilePreview
+                        key={device.serial}
+                        device={device}
+                        onOpenSteps={openStepsMonitor}
+                      />
+                    ))}
                   </div>
                 );
               })}

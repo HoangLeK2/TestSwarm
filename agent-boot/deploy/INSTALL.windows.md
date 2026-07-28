@@ -20,10 +20,17 @@ scripts\docker-up.cmd up -d
 scripts\docker-up.cmd logs -f
 ```
 
-Trong `.env` sửa tối thiểu:
+Trong `.env`, bắt buộc điền ba giá trị đang để trống:
 
 - `RELAY_API_KEY`
 - `RELAY_ENROLLMENT_TOKEN`
+- `AGENT_BOOT_CONTENT_DATABASE_URL`
+
+`AGENT_BOOT_CONTENT_DB_ENABLED=1` đã được bật để content writer hoạt động.
+Database URL phải là PostgreSQL credential giới hạn quyền, cấp riêng cho khách
+hàng; không dùng tài khoản owner/superuser. Các env vận hành còn lại đã có đầy
+đủ giá trị mặc định trong `.env.example`. Script khởi động sẽ từ chối chạy nếu
+ba giá trị bắt buộc chưa được điền.
 
 (TLS cert đã có trong image.)
 
@@ -69,11 +76,16 @@ scripts\docker-up.cmd ps
 scripts\docker-up.cmd down
 ```
 
-Hoặc sau khi ADB đã chạy đúng:
+Relay ID tự sinh được lưu trong Docker volume `agent-boot-state`, nên vẫn giữ
+nguyên sau `down`/`up`. Chỉ `docker compose down -v` mới xóa identity này.
+
+Luôn dùng `scripts\docker-up.cmd` để `up`/`restart`, vì wrapper kiểm tra secret
+và ADB trước khi khởi động. Có thể dùng Docker Compose trực tiếp cho các lệnh
+quan sát hoặc dừng:
 
 ```bat
-docker compose up -d
 docker compose logs -f
+docker compose ps
 docker compose down
 ```
 
@@ -93,5 +105,6 @@ docker compose logs -f agent-boot
 | Host có máy, container không thấy | ADB đang localhost-only → restart với `adb -a` |
 | `image not found` | `scripts\docker-load.cmd` |
 | Container restart loop | `docker compose logs`; kiểm tra `.env` (`RELAY_*`) |
+| Content writer báo lỗi kết nối | Kiểm tra `AGENT_BOOT_CONTENT_DATABASE_URL`, firewall/VPN và quyền insert của PostgreSQL role |
 | `exec format error` | Gói này chỉ cho PC Windows x86_64 (amd64). Máy ARM Windows cần gói khác |
 | Docker daemon not running | Mở Docker Desktop, đợi sẵn sàng, rồi thử lại |

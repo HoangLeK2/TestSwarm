@@ -12,13 +12,22 @@ services:
       - path: .env
         required: false
     environment:
-      ADB_HOST: host.docker.internal
-      ADB_PORT: "5037"
-      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
-      ANDROID_ADB_SERVER_HOST: host.docker.internal
-      ANDROID_ADB_SERVER_PORT: "5037"
+      RELAY_API_KEY: ${RELAY_API_KEY:-}
+      RELAY_ENROLLMENT_TOKEN: ${RELAY_ENROLLMENT_TOKEN:-}
+      AGENT_BOOT_CONTENT_DATABASE_URL: ${AGENT_BOOT_CONTENT_DATABASE_URL:-}
+      ADB_HOST: ${ADB_HOST:-host.docker.internal}
+      ADB_PORT: ${ADB_PORT:-5037}
+      ADB_SERVER_SOCKET: "tcp:${ADB_HOST:-host.docker.internal}:${ADB_PORT:-5037}"
+      ANDROID_ADB_SERVER_HOST: ${ADB_HOST:-host.docker.internal}
+      ANDROID_ADB_SERVER_PORT: ${ADB_PORT:-5037}
+      AGENT_BOOT_STATE_DIR: /app/state
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - agent-boot-state:/app/state
     # Optional: mount custom APKs/binaries over baked-in /app/assets
     # volumes:
     #   - ./assets:/app/assets:ro
+
+volumes:
+  agent-boot-state:

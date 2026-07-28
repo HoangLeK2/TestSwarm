@@ -28,7 +28,6 @@ import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devi
 import { DEVICE_GRID_TILE_WIDTH_PX } from '../lib/device-farm-virtual-grid';
 import {
   acquireSnapshotPreviewWarmup,
-  subscribeSnapshotPreviewWarmupChanges,
   type SnapshotPreviewWarmupHandle
 } from '../services/snapshot-preview-warmup';
 import { useH264Video } from '../hooks/use-h264-canvas';
@@ -250,12 +249,18 @@ function DeviceTilePreviewInner({
       if (cancelled || previewWarmupRef.current) return;
       const handle = acquireSnapshotPreviewWarmup(device.serial);
       if (!handle) {
-        setPreviewWarmupState('queued');
+        setPreviewWarmupState('error');
+        scheduleRetry(1500);
         return;
       }
 
       previewWarmupRef.current = handle;
-      setPreviewWarmupState('attaching');
+      setPreviewWarmupState('queued');
+      handle.started.then((started) => {
+        if (!started || cancelled || previewWarmupRef.current !== handle)
+          return;
+        setPreviewWarmupState('attaching');
+      });
       handle.attached.then((attached) => {
         if (cancelled || previewWarmupRef.current !== handle) return;
         if (attached) {
@@ -272,15 +277,9 @@ function DeviceTilePreviewInner({
       });
     };
 
-    const unsubscribe = subscribeSnapshotPreviewWarmupChanges(() => {
-      if (cancelled || previewWarmupRef.current) return;
-      scheduleRetry(120 + Math.floor(Math.random() * 260));
-    });
-
     tryAcquire();
     return () => {
       cancelled = true;
-      unsubscribe();
       clearRetry();
       previewWarmupRef.current?.release();
       previewWarmupRef.current = null;

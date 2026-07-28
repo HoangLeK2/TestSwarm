@@ -46,13 +46,13 @@ function Test-Command($Name) {
 
 function Test-AdbPortListening {
     param([int]$Port)
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue -Confirm:$false
+    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     return [bool]$conn
 }
 
 function Test-AdbServerGlobal {
     param([int]$Port)
-    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue -Confirm:$false
+    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     foreach ($l in $listeners) {
         if ($l.LocalAddress -in @('0.0.0.0', '::', '[::]')) {
             return $true

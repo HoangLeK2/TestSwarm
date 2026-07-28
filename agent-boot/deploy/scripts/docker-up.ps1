@@ -1,5 +1,11 @@
 ﻿# Host runs ADB (USB/Wi-Fi devices); container is ADB client via host.docker.internal:5037.
 param(
+    [Alias('d')]
+    [switch]$Detach,
+    [Alias('f')]
+    [switch]$Follow,
+    [Alias('v')]
+    [switch]$Volumes,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ComposeArgs
 )
@@ -10,9 +16,29 @@ $ConfirmPreference = 'None'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
+$Subcommands = @('up', 'run', 'build', 'down', 'ps', 'logs', 'exec', 'pull', 'stop', 'restart', 'config')
+if ($ComposeArgs.Count -eq 0) {
+    $ComposeArgs = @('up')
+    if (-not $Detach -and -not $Follow -and -not $Volumes) {
+        $Detach = $true
+    }
+} elseif ($ComposeArgs[0] -notin $Subcommands) {
+    $ComposeArgs = @('up') + $ComposeArgs
+}
+if ($Detach) {
+    $ComposeArgs += '-d'
+}
+if ($Follow) {
+    $ComposeArgs += '-f'
+}
+if ($Volumes) {
+    $ComposeArgs += '-v'
+}
+$RequiresRuntimeConfig = $ComposeArgs[0] -in @('up', 'run', 'restart')
+
+$EnvFile = Join-Path $Root '.env'
 $AgentBootVersion = if ($env:AGENT_BOOT_VERSION) { $env:AGENT_BOOT_VERSION } else { '0.1.0' }
 $Image = "agent-boot:$AgentBootVersion"
-$AdbPort = if ($env:ADB_PORT) { [int]$env:ADB_PORT } else { 5037 }
 
 function Test-Command($Name) {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
@@ -51,9 +77,6 @@ function Start-GlobalAdbServer {
     }
 }
 
-if (-not (Test-Command adb)) {
-    throw 'missing command: adb (install Android SDK Platform-Tools and add to PATH)'
-}
 if (-not (Test-Command docker)) {
     throw 'missing command: docker (install Docker Desktop)'
 }
@@ -66,6 +89,45 @@ if ($LASTEXITCODE -ne 0) {
 docker compose version *> $null
 if ($LASTEXITCODE -ne 0) {
     throw 'docker compose (v2) is required'
+}
+
+if (-not $RequiresRuntimeConfig) {
+    & docker compose @ComposeArgs
+    exit $LASTEXITCODE
+}
+
+if (-not (Test-Path -LiteralPath $EnvFile)) {
+    throw 'missing .env. Run: copy .env.example .env, then fill the required values.'
+}
+
+$ComposeConfigJson = (& docker compose config --format json | Out-String)
+if ($LASTEXITCODE -ne 0) {
+    throw 'invalid .env or docker-compose.yml; fill all required values shown above'
+}
+try {
+    $ResolvedCompose = $ComposeConfigJson | ConvertFrom-Json
+    $ResolvedEnvironment = $ResolvedCompose.services.'agent-boot'.environment
+    foreach ($name in @(
+        'RELAY_API_KEY',
+        'RELAY_ENROLLMENT_TOKEN',
+        'AGENT_BOOT_CONTENT_DATABASE_URL'
+    )) {
+        $property = $ResolvedEnvironment.PSObject.Properties[$name]
+        if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            throw "configure $name in .env before starting agent-boot"
+        }
+    }
+    $AdbPortValue = [string]$ResolvedEnvironment.ADB_PORT
+    $AdbPort = [int]$AdbPortValue
+} catch {
+    throw $_
+}
+if ($AdbPort -lt 1 -or $AdbPort -gt 65535) {
+    throw "ADB_PORT must be between 1 and 65535 (got $AdbPort)"
+}
+
+if (-not (Test-Command adb)) {
+    throw 'missing command: adb (install Android SDK Platform-Tools and add to PATH)'
 }
 
 docker image inspect $Image *> $null
@@ -86,13 +148,6 @@ if (Test-AdbPortListening -Port $AdbPort) {
 
 Write-Host '== Host devices =='
 adb -P $AdbPort devices
-
-$Subcommands = @('up', 'run', 'build', 'down', 'ps', 'logs', 'exec', 'pull', 'stop', 'restart', 'config')
-if ($ComposeArgs.Count -eq 0) {
-    $ComposeArgs = @('up', '-d')
-} elseif ($ComposeArgs[0] -notin $Subcommands) {
-    $ComposeArgs = @('up') + $ComposeArgs
-}
 
 Write-Host "== docker compose $($ComposeArgs -join ' ') =="
 & docker compose @ComposeArgs

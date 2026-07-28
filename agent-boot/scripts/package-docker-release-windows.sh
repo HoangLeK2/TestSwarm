@@ -59,23 +59,70 @@ if [[ ! -f "$CUSTOMER_ENV" ]]; then
 fi
 cp "$CUSTOMER_ENV" "$DEST/.env.example"
 
-# Customer bundles must never ship an active direct-database connection string.
-if grep -Eq \
-  '^[[:space:]]*AGENT_BOOT_CONTENT_DATABASE_URL[[:space:]]*=[[:space:]]*[^#[:space:]]' \
-  "$DEST/.env.example"; then
-  echo "error: customer env template contains an active database URL" >&2
-  exit 1
-fi
+# Customer bundles must contain each secret key exactly once in the canonical
+# empty form. Count optional dotenv "export" assignments too, so a second
+# effective value cannot bypass validation.
+SECRET_CUSTOMER_ENV_KEYS=(
+  RELAY_API_KEY
+  RELAY_ENROLLMENT_TOKEN
+  AGENT_BOOT_CONTENT_DATABASE_URL
+)
+for key in "${SECRET_CUSTOMER_ENV_KEYS[@]}"; do
+  assignment_count="$(
+    grep -Ec \
+      "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" \
+      "$DEST/.env.example" \
+      || true
+  )"
+  if [[ "$assignment_count" -ne 1 ]] || ! grep -Eq \
+    "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*$" \
+    "$DEST/.env.example"; then
+    echo "error: customer env template must contain one empty ${key} assignment" >&2
+    exit 1
+  fi
+done
 CONTENT_DB_ENABLED_LINES="$(
   grep -Ec '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=' "$DEST/.env.example" \
     || true
 )"
 if [[ "$CONTENT_DB_ENABLED_LINES" -ne 1 ]] || ! grep -Eq \
-  '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=[[:space:]]*0([[:space:]]*(#.*)?)?$' \
+  '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$' \
   "$DEST/.env.example"; then
-  echo "error: customer env template must disable direct database writes" >&2
+  echo "error: customer env template must enable direct database writes" >&2
   exit 1
 fi
+REQUIRED_CUSTOMER_ENV_KEYS=(
+  RELAY_API_KEY
+  RELAY_ENROLLMENT_TOKEN
+  AGENT_BOOT_CONTENT_DATABASE_URL
+  RELAY_MODE
+  RELAY_SERVER
+  RELAY_GRPC_TLS
+  ADB_HOST
+  ADB_PORT
+  ADB_WAIT_SECONDS
+  AGENT_BOOT_STARTUP_MODE
+  AGENT_BOOT_AUTO_BOOTSTRAP
+  AGENT_BOOT_CONTENT_DB_ENABLED
+  AGENT_BOOT_CONTENT_DB_POOL_SIZE
+  AGENT_BOOT_CONTENT_DB_COMMAND_TIMEOUT
+  AGENT_BOOT_CONTENT_DB_RETRIES
+  AGENT_BOOT_CAPTURE_SCREENSHOT
+  RELAY_ADB_POOL_SIZE
+  RELAY_U2_POOL_SIZE
+  SCRCPY_DEFAULT_MAX_FPS
+  SCRCPY_DEFAULT_MAX_WIDTH
+  SCRCPY_DEFAULT_BITRATE
+)
+for key in "${REQUIRED_CUSTOMER_ENV_KEYS[@]}"; do
+  assignment_count="$(
+    grep -Ec "^[[:space:]]*${key}[[:space:]]*=" "$DEST/.env.example" || true
+  )"
+  if [[ "$assignment_count" -ne 1 ]]; then
+    echo "error: customer env template must contain exactly one ${key} assignment" >&2
+    exit 1
+  fi
+done
 
 for ps1 in docker-up.ps1 docker-load.ps1; do
   cp "$ROOT/deploy/scripts/$ps1" "$DEST/scripts/$ps1"
@@ -115,5 +162,6 @@ echo "Customer:"
 echo "  1) Giải nén $(basename "$ZIP")"
 echo "  2) cd $NAME"
 echo "  3) scripts\\docker-load.cmd"
-echo "  4) copy .env.example .env  # edit RELAY_API_KEY + RELAY_ENROLLMENT_TOKEN"
+echo "  4) copy .env.example .env"
+echo "     edit RELAY_API_KEY + RELAY_ENROLLMENT_TOKEN + AGENT_BOOT_CONTENT_DATABASE_URL"
 echo "  5) scripts\\docker-up.cmd up -d"

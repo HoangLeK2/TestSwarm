@@ -1,7 +1,13 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  Plus,
+  Trash2
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +20,7 @@ import {
   ensureFormRecipe,
   ensureLoginRecipe,
   firstCandidate,
+  getLoginSetupStatus,
   listToCsv,
   locatorNames,
   patchFormField,
@@ -21,6 +28,7 @@ import {
   patchLocator,
   patchLoginField,
   patchLoginRecipe,
+  patchLoginTarget,
   patchPopupWatcher,
   patchProfile,
   removeFormField,
@@ -298,19 +306,142 @@ function LocatorEditor({ step, update, t }: Props & { t: AppAutomationT }) {
 function LoginEditor({
   step,
   update,
-  availableVariables,
+  availableVariables = [],
   t
 }: Props & { t: AppAutomationT }) {
   const profile = appAutomationProfile(step);
   const recipe = ensureLoginRecipe(profile);
   const fields = recipe.fields ?? {};
+  const status = getLoginSetupStatus(step);
+  const loggedInText = listToCsv(recipe.detect_logged_in?.any_text);
+  const submitText = listToCsv(recipe.submit?.tap_text_any);
+
+  const packageValue = profile.package ?? '';
+  const detectedPackagePreset =
+    packageValue === 'com.facebook.katana' ||
+    packageValue === 'com.facebook.lite'
+      ? packageValue
+      : packageValue
+        ? 'custom'
+        : '';
+  const [customPackageMode, setCustomPackageMode] = useState(
+    detectedPackagePreset === 'custom'
+  );
+  const loginStepIdentity = String(
+    (step as Record<string, unknown>)._fgId ??
+      (step as Record<string, unknown>).id ??
+      step.type
+  );
+  useEffect(() => {
+    setCustomPackageMode(detectedPackagePreset === 'custom');
+  }, [detectedPackagePreset, loginStepIdentity]);
+  const packagePreset =
+    detectedPackagePreset === 'custom' ||
+    (customPackageMode && !detectedPackagePreset)
+      ? 'custom'
+      : detectedPackagePreset;
+
+  const patchTargetValue = (
+    fieldName: (typeof LOGIN_FIELD_NAMES)[number],
+    mode: 'resource-id' | 'description' | 'text',
+    value: string
+  ) => {
+    commit(
+      update,
+      patchLoginTarget(step, fieldName, {
+        resource_id_contains: mode === 'resource-id' ? value : undefined,
+        description_contains: mode === 'description' ? value : undefined,
+        by: mode === 'text' ? 'text' : undefined,
+        value: mode === 'text' ? value : undefined
+      })
+    );
+  };
+
   return (
-    <MiniSection title={t('sections.loginRecipe')}>
-      <div className='grid gap-2 sm:grid-cols-2'>
-        <F label={t('fields.loggedInText')}>
+    <div className='space-y-3'>
+      <div
+        className={`flex gap-2.5 rounded-lg border p-3 ${
+          status.ready
+            ? 'border-emerald-500/30 bg-emerald-500/5'
+            : 'border-amber-500/30 bg-amber-500/5'
+        }`}
+      >
+        {status.ready ? (
+          <CheckCircle2 className='mt-0.5 size-4 shrink-0 text-emerald-600' />
+        ) : (
+          <AlertCircle className='mt-0.5 size-4 shrink-0 text-amber-600' />
+        )}
+        <div className='min-w-0 space-y-1'>
+          <div className='text-xs font-semibold'>
+            {status.ready
+              ? t('loginUi.statusReady')
+              : t('loginUi.statusMissing', {
+                  count: status.missing.length
+                })}
+          </div>
+          <p className='text-[11px] leading-relaxed text-muted-foreground'>
+            {status.ready
+              ? t('loginUi.readyDescription')
+              : status.missing
+                  .map((item) => t(`loginUi.missing.${item}`))
+                  .join(' · ')}
+          </p>
+        </div>
+      </div>
+
+      <StepPanelHint>{t('loginUi.intro')}</StepPanelHint>
+
+      <div className='space-y-3 rounded-lg border border-border/60 bg-background/70 p-3'>
+        <div className='text-xs font-semibold'>{t('loginUi.application')}</div>
+        <F label={t('loginUi.applicationLabel')}>
+          <select
+            className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+            value={packagePreset}
+            onChange={(e) => {
+              const next = e.target.value;
+              setCustomPackageMode(next === 'custom');
+              if (next === 'custom') return;
+              commit(
+                update,
+                patchProfile(step, {
+                  package: next
+                })
+              );
+            }}
+          >
+            <option value=''>{t('loginUi.applicationPlaceholder')}</option>
+            <option value='com.facebook.katana'>Facebook</option>
+            <option value='com.facebook.lite'>Facebook Lite</option>
+            <option value='custom'>{t('loginUi.customApplication')}</option>
+          </select>
+        </F>
+        {packagePreset === 'custom' ? (
+          <F label={t('fields.package')}>
+            <Input
+              className='h-8 font-mono text-xs'
+              value={packageValue}
+              onChange={(e) =>
+                commit(update, patchProfile(step, { package: e.target.value }))
+              }
+            />
+          </F>
+        ) : null}
+      </div>
+
+      <div className='space-y-3 rounded-lg border border-border/60 bg-background/70 p-3'>
+        <div>
+          <div className='text-xs font-semibold'>
+            {t('loginUi.loggedInTitle')}
+          </div>
+          <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+            {t('loginUi.loggedInDescription')}
+          </p>
+        </div>
+        <F label={t('loginUi.loggedInLabel')}>
           <Input
-            className='h-8 text-xs'
-            value={listToCsv(recipe.detect_logged_in?.any_text)}
+            className='h-9 text-xs'
+            value={loggedInText}
+            placeholder={t('loginUi.loggedInPlaceholder')}
             onChange={(e) =>
               commit(
                 update,
@@ -321,10 +452,161 @@ function LoginEditor({
             }
           />
         </F>
-        <F label={t('fields.submitText')}>
+      </div>
+
+      <div className='space-y-2'>
+        <div className='px-0.5'>
+          <div className='text-xs font-semibold'>
+            {t('loginUi.credentialsTitle')}
+          </div>
+          <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+            {t('loginUi.credentialsDescription')}
+          </p>
+        </div>
+        {LOGIN_FIELD_NAMES.map((fieldName) => {
+          const field = fields[fieldName];
+          const locator = field?.locator
+            ? profile.semantic_locators?.[field.locator]
+            : undefined;
+          const candidate = firstCandidate(locator);
+          const targetMode =
+            candidate.description_contains != null ||
+            candidate.by === 'description'
+              ? 'description'
+              : candidate.by === 'text'
+                ? 'text'
+                : 'resource-id';
+          const targetValue =
+            targetMode === 'description'
+              ? (candidate.description_contains ??
+                (candidate.by === 'description' ? candidate.value : '') ??
+                '')
+              : targetMode === 'text'
+                ? (candidate.value ?? '')
+                : (candidate.resource_id_contains ??
+                  (candidate.by === 'resource-id' ? candidate.value : '') ??
+                  '');
+          const fieldReady = !status.missing.includes(fieldName);
+          const defaultValueFrom =
+            fieldName === 'password'
+              ? 'secret.login_password'
+              : 'account.username';
+
+          return (
+            <div
+              key={fieldName}
+              className='space-y-3 rounded-lg border border-border/60 bg-background/70 p-3'
+            >
+              <div className='flex items-center justify-between gap-2'>
+                <div className='text-xs font-semibold'>
+                  {t(LOGIN_FIELD_LABEL_KEYS[fieldName])}
+                </div>
+                <span
+                  className={`text-[10px] font-medium ${
+                    fieldReady ? 'text-emerald-600' : 'text-amber-600'
+                  }`}
+                >
+                  {fieldReady
+                    ? t('loginUi.fieldReady')
+                    : t('loginUi.fieldMissing')}
+                </span>
+              </div>
+
+              <F label={t('loginUi.valueSource')}>
+                <select
+                  className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                  value={field?.value_from ?? defaultValueFrom}
+                  onChange={(e) =>
+                    commit(
+                      update,
+                      patchLoginField(step, fieldName, {
+                        value_from: e.target.value
+                      })
+                    )
+                  }
+                >
+                  {fieldName === 'username' ? (
+                    <>
+                      <option value='account.username'>
+                        {t('loginUi.sources.accountUsername')}
+                      </option>
+                      <option value='account.display_name'>
+                        {t('loginUi.sources.accountDisplayName')}
+                      </option>
+                      <option value='scenario.username'>
+                        {t('loginUi.sources.scenarioUsername')}
+                      </option>
+                    </>
+                  ) : (
+                    <option value='secret.login_password'>
+                      {t('loginUi.sources.securePassword')}
+                    </option>
+                  )}
+                  {availableVariables.map((name) => (
+                    <option key={name} value={`variables.${name}`}>
+                      {t('loginUi.sources.variable', { name })}
+                    </option>
+                  ))}
+                </select>
+              </F>
+
+              <div className='grid gap-2 sm:grid-cols-[0.8fr_1.2fr]'>
+                <F label={t('loginUi.findFieldBy')}>
+                  <select
+                    className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                    value={targetMode}
+                    onChange={(e) =>
+                      patchTargetValue(
+                        fieldName,
+                        e.target.value as
+                          | 'resource-id'
+                          | 'description'
+                          | 'text',
+                        targetValue
+                      )
+                    }
+                  >
+                    <option value='resource-id'>
+                      {t('loginUi.targetModes.resourceId')}
+                    </option>
+                    <option value='description'>
+                      {t('loginUi.targetModes.description')}
+                    </option>
+                    <option value='text'>
+                      {t('loginUi.targetModes.text')}
+                    </option>
+                  </select>
+                </F>
+                <F label={t('loginUi.findFieldValue')}>
+                  <Input
+                    className='h-9 text-xs'
+                    value={targetValue}
+                    placeholder={t(`loginUi.placeholders.${fieldName}`)}
+                    onChange={(e) =>
+                      patchTargetValue(fieldName, targetMode, e.target.value)
+                    }
+                  />
+                </F>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className='space-y-3 rounded-lg border border-border/60 bg-background/70 p-3'>
+        <div>
+          <div className='text-xs font-semibold'>
+            {t('loginUi.submitTitle')}
+          </div>
+          <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+            {t('loginUi.submitDescription')}
+          </p>
+        </div>
+        <F label={t('loginUi.submitLabel')}>
           <Input
-            className='h-8 text-xs'
-            value={listToCsv(recipe.submit?.tap_text_any)}
+            className='h-9 text-xs'
+            value={submitText}
+            placeholder={t('loginUi.submitPlaceholder')}
             onChange={(e) =>
               commit(
                 update,
@@ -338,59 +620,38 @@ function LoginEditor({
             }
           />
         </F>
+        <StepPanelToggle
+          label={t('fields.clearFirst')}
+          description={t('loginUi.clearFirstDescription')}
+          checked={step.clear_first ?? true}
+          onCheckedChange={(checked) => update({ clear_first: checked })}
+        />
       </div>
-      {LOGIN_FIELD_NAMES.map((fieldName) => (
-        <div
-          key={fieldName}
-          className='grid gap-2 rounded-md border border-border/60 bg-background/70 p-2 sm:grid-cols-2'
-        >
-          <F
-            label={t('fields.loginLocator', {
-              field: t(LOGIN_FIELD_LABEL_KEYS[fieldName])
-            })}
-          >
-            <select
-              className='h-8 w-full rounded-md border border-input bg-background px-2 font-mono text-xs'
-              value={fields[fieldName]?.locator ?? ''}
-              onChange={(e) =>
-                commit(
-                  update,
-                  patchLoginField(step, fieldName, {
-                    locator: e.target.value
-                  })
-                )
-              }
-            >
-              <option value=''>{t('fields.locator')}</option>
-              {locatorNames(profile).map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </F>
-          <F
-            label={t('fields.loginValueFrom', {
-              field: t(LOGIN_FIELD_LABEL_KEYS[fieldName])
-            })}
-          >
-            <ValueRefSelect
-              value={fields[fieldName]?.value_from ?? ''}
-              availableVariables={availableVariables}
-              t={t}
-              onChange={(value_from) =>
-                commit(update, patchLoginField(step, fieldName, { value_from }))
-              }
-            />
-          </F>
+
+      <div className='rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 py-2.5'>
+        <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
+          {t('loginUi.summaryTitle')}
         </div>
-      ))}
-      <StepPanelToggle
-        label={t('fields.clearFirst')}
-        checked={step.clear_first ?? true}
-        onCheckedChange={(checked) => update({ clear_first: checked })}
-      />
-    </MiniSection>
+        <p className='mt-1 text-[11px] leading-relaxed text-foreground'>
+          {t('loginUi.summary', {
+            loggedIn: loggedInText || t('loginUi.summaryLoggedInFallback'),
+            submit: submitText || t('loginUi.summarySubmitFallback')
+          })}
+        </p>
+      </div>
+
+      <details className='group rounded-lg border border-border/60 bg-muted/10'>
+        <summary className='flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs font-semibold'>
+          <span>{t('loginUi.advancedTitle')}</span>
+          <ChevronDown className='size-4 text-muted-foreground transition-transform group-open:rotate-180' />
+        </summary>
+        <div className='space-y-4 border-t border-border/60 p-3'>
+          <StepPanelHint>{t('loginUi.advancedDescription')}</StepPanelHint>
+          <LocatorEditor step={step} update={update} t={t} />
+          <WatcherEditor step={step} update={update} t={t} />
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -773,6 +1034,16 @@ export function AppAutomationStepFields({
 }: Props) {
   const t = useTranslations('campaignsFeature.stepEditor.appAutomation');
   const profile = appAutomationProfile(step);
+  if (step.type === 'login_if_needed') {
+    return (
+      <LoginEditor
+        step={step}
+        update={update}
+        availableVariables={availableVariables}
+        t={t}
+      />
+    );
+  }
   return (
     <div className='space-y-4'>
       <MiniSection title={t('sections.profile')}>
@@ -787,14 +1058,6 @@ export function AppAutomationStepFields({
         </F>
       </MiniSection>
       <LocatorEditor step={step} update={update} t={t} />
-      {step.type === 'login_if_needed' ? (
-        <LoginEditor
-          step={step}
-          update={update}
-          availableVariables={availableVariables}
-          t={t}
-        />
-      ) : null}
       {step.type === 'fill_form' ? (
         <FormEditor
           step={step}

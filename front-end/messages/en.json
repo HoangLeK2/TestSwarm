@@ -1726,6 +1726,61 @@
           "username": "Username",
           "password": "Password"
         },
+        "loginUi": {
+          "intro": "If the app is already signed in, this step is skipped. Otherwise, it uses the account assigned to the phone.",
+          "statusReady": "Ready",
+          "statusMissing": "{count} setup items missing",
+          "readyDescription": "This node has enough information to check and perform sign-in.",
+          "missing": {
+            "package": "No application selected",
+            "loggedInSignal": "No signed-in signal",
+            "username": "Username field is not configured",
+            "password": "Password field is not configured",
+            "submit": "Sign-in button is not configured"
+          },
+          "application": "Application",
+          "applicationLabel": "Which application should be signed in?",
+          "applicationPlaceholder": "Select an application",
+          "customApplication": "Another application",
+          "loggedInTitle": "1. Detect an existing sign-in",
+          "loggedInDescription": "When any signal below is visible, this node skips the sign-in flow.",
+          "loggedInLabel": "Signals visible on screen",
+          "loggedInPlaceholder": "e.g. Home, Menu, Feed",
+          "credentialsTitle": "2. Information to enter",
+          "credentialsDescription": "Choose the data source and how to identify each field on screen.",
+          "fieldReady": "Configured",
+          "fieldMissing": "Needs setup",
+          "valueSource": "Where should the data come from?",
+          "sources": {
+            "accountUsername": "Username of the account assigned to this phone",
+            "accountDisplayName": "Account display name",
+            "scenarioUsername": "Username provided by the scenario",
+            "securePassword": "Securely stored password",
+            "variable": "Variable: {name}"
+          },
+          "findFieldBy": "Identify the field by",
+          "findFieldValue": "Value to find",
+          "targetModes": {
+            "resourceId": "Field ID",
+            "description": "Field description",
+            "text": "Visible text"
+          },
+          "placeholders": {
+            "username": "e.g. email, username",
+            "password": "e.g. password"
+          },
+          "submitTitle": "3. Tap the sign-in button",
+          "submitDescription": "Enter the labels that may appear on the button, separated by commas.",
+          "submitLabel": "Button labels",
+          "submitPlaceholder": "Sign in, Login",
+          "clearFirstDescription": "Prevents new data from being appended to existing field content.",
+          "summaryTitle": "What this node will do",
+          "summary": "If “{loggedIn}” is not visible → fill the username and password → tap “{submit}”.",
+          "summaryLoggedInFallback": "a signed-in signal",
+          "summarySubmitFallback": "the sign-in button",
+          "advancedTitle": "Advanced settings",
+          "advancedDescription": "Use this when multiple matching strategies or popup handling are needed. These settings share the same configuration as the fields above."
+        },
         "options": {
           "none": "None",
           "any": "Any"

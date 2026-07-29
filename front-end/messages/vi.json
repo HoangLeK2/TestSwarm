@@ -1728,6 +1728,61 @@
           "username": "Tài khoản",
           "password": "Mật khẩu"
         },
+        "loginUi": {
+          "intro": "Nếu ứng dụng đã đăng nhập, bước này sẽ tự động bỏ qua. Nếu chưa, hệ thống dùng tài khoản được gán cho phone.",
+          "statusReady": "Đã sẵn sàng",
+          "statusMissing": "Thiếu {count} mục cần cấu hình",
+          "readyDescription": "Node đã có đủ thông tin để kiểm tra và thực hiện đăng nhập.",
+          "missing": {
+            "package": "Chưa chọn ứng dụng",
+            "loggedInSignal": "Chưa có dấu hiệu đã đăng nhập",
+            "username": "Chưa cấu hình ô tài khoản",
+            "password": "Chưa cấu hình ô mật khẩu",
+            "submit": "Chưa cấu hình nút đăng nhập"
+          },
+          "application": "Ứng dụng",
+          "applicationLabel": "Bạn muốn đăng nhập ứng dụng nào?",
+          "applicationPlaceholder": "Chọn ứng dụng",
+          "customApplication": "Ứng dụng khác",
+          "loggedInTitle": "1. Nhận biết đã đăng nhập",
+          "loggedInDescription": "Chỉ cần thấy một trong các dấu hiệu bên dưới, node sẽ bỏ qua việc đăng nhập.",
+          "loggedInLabel": "Dấu hiệu trên màn hình",
+          "loggedInPlaceholder": "VD: Trang chủ, Menu, Bảng feed",
+          "credentialsTitle": "2. Thông tin cần điền",
+          "credentialsDescription": "Chọn nguồn dữ liệu và cách nhận biết đúng ô trên màn hình.",
+          "fieldReady": "Đã cấu hình",
+          "fieldMissing": "Chưa đủ thông tin",
+          "valueSource": "Lấy dữ liệu từ đâu?",
+          "sources": {
+            "accountUsername": "Tên đăng nhập của tài khoản gán cho phone",
+            "accountDisplayName": "Tên hiển thị của tài khoản",
+            "scenarioUsername": "Username do kịch bản cung cấp",
+            "securePassword": "Mật khẩu đã lưu an toàn",
+            "variable": "Biến: {name}"
+          },
+          "findFieldBy": "Nhận biết ô bằng",
+          "findFieldValue": "Giá trị cần tìm",
+          "targetModes": {
+            "resourceId": "Mã của ô",
+            "description": "Mô tả của ô",
+            "text": "Chữ hiển thị"
+          },
+          "placeholders": {
+            "username": "VD: email, username",
+            "password": "VD: password, mật khẩu"
+          },
+          "submitTitle": "3. Bấm nút đăng nhập",
+          "submitDescription": "Nhập các chữ có thể xuất hiện trên nút, cách nhau bằng dấu phẩy.",
+          "submitLabel": "Chữ trên nút",
+          "submitPlaceholder": "Đăng nhập, Login, Sign in",
+          "clearFirstDescription": "Tránh nối dữ liệu mới vào nội dung đã có trong ô.",
+          "summaryTitle": "Node sẽ thực hiện",
+          "summary": "Nếu chưa thấy “{loggedIn}” → điền tài khoản và mật khẩu → bấm “{submit}”.",
+          "summaryLoggedInFallback": "dấu hiệu đã đăng nhập",
+          "summarySubmitFallback": "nút đăng nhập",
+          "advancedTitle": "Cấu hình nâng cao",
+          "advancedDescription": "Dành cho trường hợp cần nhiều cách nhận diện hoặc tự xử lý popup. Các chỉnh sửa ở đây vẫn dùng chung cấu hình với phần bên trên."
+        },
         "options": {
           "none": "Không chọn",
           "any": "Bất kỳ"

@@ -248,6 +248,16 @@ export function patchLoginField(
   return patchLoginRecipe(step, { fields });
 }
 
+function hasCandidateSignal(candidate: LocatorCandidate): boolean {
+  return Boolean(
+    (candidate.by?.trim() && candidate.value?.trim()) ||
+      candidate.resource_id_contains?.trim() ||
+      candidate.description_contains?.trim() ||
+      candidate.text_near?.some((text) => text.trim()) ||
+      candidate.class_name?.trim()
+  );
+}
+
 export function patchLoginTarget(
   step: FlowStep,
   fieldName: 'username' | 'password',
@@ -257,7 +267,28 @@ export function patchLoginTarget(
   const recipe = ensureLoginRecipe(profile);
   const currentField = recipe.fields?.[fieldName];
   const locatorName = currentField?.locator?.trim() || `login_${fieldName}`;
-  const withTarget = patchLocator(step, locatorName, candidatePatch);
+  const locator = profile.semantic_locators?.[locatorName];
+  const normalizedPatch = Object.fromEntries(
+    Object.entries(candidatePatch).map(([key, value]) => [
+      key,
+      typeof value === 'string' && !value.trim() ? undefined : value
+    ])
+  ) as Partial<LocatorCandidate>;
+  const nextCandidate = {
+    ...firstCandidate(locator),
+    ...normalizedPatch
+  };
+
+  if (!hasCandidateSignal(nextCandidate)) {
+    const fields = { ...(recipe.fields ?? {}) };
+    delete fields[fieldName];
+    return withAppAutomationProfile(step, {
+      ...profile,
+      login_recipe: { ...recipe, fields }
+    });
+  }
+
+  const withTarget = patchLocator(step, locatorName, normalizedPatch);
   return patchLoginField(withTarget, fieldName, {
     locator: locatorName,
     value_from:
@@ -267,13 +298,7 @@ export function patchLoginTarget(
 }
 
 function hasLocatorSignal(locator?: SemanticLocator): boolean {
-  const candidate = firstCandidate(locator);
-  return Boolean(
-    (candidate.by?.trim() && candidate.value?.trim()) ||
-      candidate.resource_id_contains?.trim() ||
-      candidate.description_contains?.trim() ||
-      candidate.text_near?.some((text) => text.trim())
-  );
+  return Boolean(locator?.candidates?.some(hasCandidateSignal));
 }
 
 export function getLoginSetupStatus(step: FlowStep): LoginSetupStatus {

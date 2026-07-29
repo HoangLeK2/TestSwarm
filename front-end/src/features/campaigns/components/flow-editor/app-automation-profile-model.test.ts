@@ -177,3 +177,76 @@ test('editing the basic locator preserves advanced candidates', () => {
     ]
   );
 });
+
+test('login readiness inherits valid advanced locator candidates', () => {
+  const step: any = {
+    type: 'login_if_needed',
+    profile: {
+      package: 'com.example.app',
+      semantic_locators: {
+        username_field: {
+          candidates: [
+            { class_name: 'android.widget.EditText' },
+            { description_contains: 'Email address' }
+          ]
+        },
+        password_field: {
+          candidates: [{ description_contains: 'Password' }]
+        }
+      },
+      login_recipe: {
+        detect_logged_in: { any_text: ['Home'] },
+        fields: {
+          username: {
+            locator: 'username_field',
+            value_from: 'account.username'
+          },
+          password: {
+            locator: 'password_field',
+            value_from: 'secret.login_password'
+          }
+        },
+        submit: { tap_text_any: ['Login'] }
+      }
+    }
+  };
+
+  assert.deepEqual(getLoginSetupStatus(step), {
+    ready: true,
+    configuredFieldCount: 2,
+    missing: []
+  });
+});
+
+test('clearing a simple login target detaches the field without corrupting its locator', () => {
+  const step: any = {
+    type: 'login_if_needed',
+    profile: {
+      semantic_locators: {
+        username_field: {
+          candidates: [{ resource_id_contains: 'email' }]
+        }
+      },
+      login_recipe: {
+        detect_logged_in: { any_text: ['Home'] },
+        fields: {
+          username: {
+            locator: 'username_field',
+            value_from: 'account.username'
+          }
+        },
+        submit: { tap_text_any: ['Login'] }
+      }
+    }
+  };
+
+  const next = patchLoginTarget(step, 'username', {
+    resource_id_contains: ''
+  }) as any;
+
+  assert.equal(next.profile.login_recipe.fields.username, undefined);
+  assert.deepEqual(next.profile.semantic_locators.username_field.candidates, [
+    { resource_id_contains: 'email' }
+  ]);
+  assert.doesNotMatch(JSON.stringify(next), /\"resource_id_contains\":\"\"/);
+});

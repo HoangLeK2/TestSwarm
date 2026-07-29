@@ -54,6 +54,15 @@ type AppAutomationT = ReturnType<
 
 const LOGIN_FIELD_NAMES = ['username', 'password'] as const;
 
+const KNOWN_LOGIN_APPS = [
+  { package: 'com.facebook.katana', label: 'Facebook' },
+  { package: 'com.facebook.lite', label: 'Facebook Lite' },
+  { package: 'com.android.chrome', label: 'Chrome' },
+  { package: 'com.google.android.youtube', label: 'YouTube' },
+  { package: 'com.zhiliaoapp.musically', label: 'TikTok' },
+  { package: 'com.ss.android.ugc.trill', label: 'TikTok (Asia)' }
+] as const;
+
 const LOGIN_FIELD_LABEL_KEYS = {
   username: 'loginFields.username',
   password: 'loginFields.password'
@@ -317,13 +326,13 @@ function LoginEditor({
   const submitText = listToCsv(recipe.submit?.tap_text_any);
 
   const packageValue = profile.package ?? '';
-  const detectedPackagePreset =
-    packageValue === 'com.facebook.katana' ||
-    packageValue === 'com.facebook.lite'
-      ? packageValue
-      : packageValue
-        ? 'custom'
-        : '';
+  const detectedPackagePreset = KNOWN_LOGIN_APPS.some(
+    (app) => app.package === packageValue
+  )
+    ? packageValue
+    : packageValue
+      ? 'custom'
+      : '';
   const [customPackageMode, setCustomPackageMode] = useState(
     detectedPackagePreset === 'custom'
   );
@@ -410,8 +419,11 @@ function LoginEditor({
             }}
           >
             <option value=''>{t('loginUi.applicationPlaceholder')}</option>
-            <option value='com.facebook.katana'>Facebook</option>
-            <option value='com.facebook.lite'>Facebook Lite</option>
+            {KNOWN_LOGIN_APPS.map((app) => (
+              <option key={app.package} value={app.package}>
+                {app.label}
+              </option>
+            ))}
             <option value='custom'>{t('loginUi.customApplication')}</option>
           </select>
         </F>

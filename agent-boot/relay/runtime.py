@@ -94,12 +94,13 @@ def _env_float(name: str, default: float, *, lo: float = 0.0, hi: float = 3600.0
 
 # ── Tunables (env-overridable) ────────────────────────────────────────────────
 #
-# Defaults sized for ~30 phones on a developer Mac. Bump via env on bigger
-# farms; reduce on small ones to keep memory tight.
+# Pools are intentionally wider than the heavy ADB admission limit, but small
+# enough that a start storm cannot create dozens of blocked subprocess workers.
+# Scale phone count horizontally; tune only from measured queue/runtime stats.
 #
-ADB_POOL_SIZE       = _env_int("RELAY_ADB_POOL_SIZE", 24)
-U2_POOL_SIZE        = _env_int("RELAY_U2_POOL_SIZE", 24)
-SCRCPY_POOL_SIZE    = _env_int("RELAY_SCRCPY_POOL_SIZE", 12)
+ADB_POOL_SIZE       = _env_int("RELAY_ADB_POOL_SIZE", 12)
+U2_POOL_SIZE        = _env_int("RELAY_U2_POOL_SIZE", 12)
+SCRCPY_POOL_SIZE    = _env_int("RELAY_SCRCPY_POOL_SIZE", 3)
 GENERIC_POOL_SIZE   = _env_int("RELAY_GENERIC_POOL_SIZE", 8)
 # CPU pool: short, pure-Python work that blocks the event loop (json.dumps
 # of large XML payloads, lxml parsing). Dedicated so a CPU spike does not

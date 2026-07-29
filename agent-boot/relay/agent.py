@@ -31,6 +31,11 @@ from relay.adb           import (
     lock_rotation_after_shell_enabled,
     reconcile_usb_preferred_for_duplicate_devices,
 )
+from relay.adb_admission import (
+    AdbLane,
+    adb_admission_stats,
+    classify_adb_command,
+)
 from relay.mdns          import start_mdns_discovery
 from relay.bootstrap_lifecycle import BootstrapCoordinator, RelayRetryPolicy
 from relay.device_state  import DeviceRegistry, DeviceState
@@ -299,7 +304,7 @@ class RelayAgent:
         self._bootstrap_coordinator = BootstrapCoordinator(
             max_concurrency=max(
                 1,
-                _env_int("RELAY_BOOTSTRAP_CONCURRENCY", 4),
+                _env_int("RELAY_BOOTSTRAP_CONCURRENCY", 2),
             )
         )
 
@@ -394,6 +399,10 @@ class RelayAgent:
         register_stats_source(
             "a11y",
             lambda: {"serials": len(self._a11y_state)},
+        )
+        register_stats_source(
+            "adb_admission",
+            lambda: adb_admission_stats(reset=True),
         )
    
         def _send_queue_stats() -> dict[str, int]:
@@ -2647,7 +2656,15 @@ class RelayAgent:
             elif cmd_type == CMD_RESTART_SCRCPY:
                 output, rc = self._restart_scrcpy_sync(serial, timeout)
             else:
-                output, rc = _adb_shell(serial, cmd, timeout=timeout)
+                output, rc = _adb_shell(
+                    serial,
+                    cmd,
+                    timeout=timeout,
+                    lane=classify_adb_command(
+                        ("shell", cmd),
+                        default=AdbLane.INTERACTIVE,
+                    ),
+                )
                 if lock_rotation_after_shell_enabled():
                     lock_portrait_rotation(serial)
 

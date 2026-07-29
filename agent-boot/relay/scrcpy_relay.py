@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from relay.adb import _adb_command
+from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
 from relay.video_packet import VideoPacket
 
 logger = logging.getLogger("relay.scrcpy")
@@ -44,6 +45,21 @@ _SCRCPY_DEVICE_DIR = "/data/local/tmp/device-farm"
 _SCRCPY_PATH_ON_DEVICE = (
     f"{_SCRCPY_DEVICE_DIR}/scrcpy-server-{_BUNDLED_JAR_VERSION}.jar"
 )
+_SCRCPY_JAR_DEPLOY_CONDITION = threading.Condition()
+_SCRCPY_JAR_DEPLOYING: set[tuple[str, str]] = set()
+_SCRCPY_JAR_READY: set[tuple[str, str]] = set()
+
+
+def invalidate_scrcpy_server_jar(serial: str) -> None:
+    """Force the next start to verify the versioned JAR on one phone."""
+    serial = str(serial or "").strip()
+    if not serial:
+        return
+    with _SCRCPY_JAR_DEPLOY_CONDITION:
+        stale = [key for key in _SCRCPY_JAR_READY if key[0] == serial]
+        for key in stale:
+            _SCRCPY_JAR_READY.discard(key)
+
 
 def annexb_contains_idr(data: bytes) -> bool:
     """Return True if any Annex-B NAL unit is an IDR (type 5)."""
@@ -413,7 +429,20 @@ def _adb(*args: str, serial: Optional[str] = None, timeout: int = 15) -> tuple[s
     env.pop("MallocStackLogging", None)
     env.pop("MallocStackLoggingDirectory", None)
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+        with adb_admission(
+            serial=serial,
+            lane=classify_adb_command(
+                tuple(args),
+                default=AdbLane.STARTUP,
+            ),
+        ):
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
         return (r.stdout + r.stderr).decode("utf-8", errors="replace"), r.returncode
     except subprocess.TimeoutExpired:
         return f"timeout {timeout}s", -1
@@ -447,6 +476,10 @@ class ScrcpyRelaySession:
     ) -> None:
         self._serial         = serial
         self._jar_version    = _BUNDLED_JAR_VERSION
+        # A new session may follow a reboot or OEM cleanup of /data/local/tmp.
+        # Revalidate once per session, while retaining single-flight/cache reuse
+        # for reconnect attempts within the same session.
+        invalidate_scrcpy_server_jar(serial)
         self._max_fps        = max_fps or SCRCPY_DEFAULT_MAX_FPS
         self._max_width      = max_width or SCRCPY_DEFAULT_MAX_WIDTH
         # Touch/key control originates from the farm's `scrcpy_control` config.
@@ -849,9 +882,15 @@ class ScrcpyRelaySession:
                         self._serial, self._reconnect_count, _MAX_RECONNECTS, exc, delay,
                     )
                     self._close_sockets()
+                    server_running = self._is_server_running()
+                    if not server_running:
+                        # A purged/corrupt JAR commonly makes app_process exit
+                        # before the socket opens. Re-verify on the next start
+                        # instead of trusting the process-local deploy cache.
+                        invalidate_scrcpy_server_jar(self._serial)
 
                     # Every 3rd failure force-restart the server (catches hung scrcpy).
-                    if self._reconnect_count % 3 == 0 or not self._is_server_running():
+                    if self._reconnect_count % 3 == 0 or not server_running:
                         logger.info("[%s] restarting scrcpy-server (attempt %d)", self._serial, self._reconnect_count)
                         self._kill_server()
                         server_alive = False
@@ -913,9 +952,32 @@ class ScrcpyRelaySession:
         cannot be removed or overwritten by bootstrap bundle extraction, and
         temp+rename prevents a reconnect from observing a partial push.
         """
+        deployment_key = (self._serial, self._jar_version)
+        with _SCRCPY_JAR_DEPLOY_CONDITION:
+            while deployment_key in _SCRCPY_JAR_DEPLOYING:
+                _SCRCPY_JAR_DEPLOY_CONDITION.wait()
+            if deployment_key in _SCRCPY_JAR_READY:
+                return
+            _SCRCPY_JAR_DEPLOYING.add(deployment_key)
+
+        try:
+            self._verify_or_deploy_server_jar()
+        except BaseException:
+            with _SCRCPY_JAR_DEPLOY_CONDITION:
+                _SCRCPY_JAR_DEPLOYING.discard(deployment_key)
+                _SCRCPY_JAR_DEPLOY_CONDITION.notify_all()
+            raise
+        else:
+            with _SCRCPY_JAR_DEPLOY_CONDITION:
+                _SCRCPY_JAR_DEPLOYING.discard(deployment_key)
+                _SCRCPY_JAR_READY.add(deployment_key)
+                _SCRCPY_JAR_DEPLOY_CONDITION.notify_all()
+
+    def _verify_or_deploy_server_jar(self) -> None:
+        """Verify once, deploying atomically only on confirmed absence/mismatch."""
         expected_size = _BUNDLED_JAR.stat().st_size
         # `stat -c %s` returns size, or empty/error if file missing.
-        out, _rc = _adb(
+        out, stat_rc = _adb(
             "shell",
             f"stat -c '%s' {_SCRCPY_PATH_ON_DEVICE} 2>/dev/null",
             serial=self._serial,
@@ -928,8 +990,17 @@ class ScrcpyRelaySession:
         for token in out.split():
             if token.isdigit():
                 device_size = token
-        if device_size == str(expected_size):
+        if stat_rc == 0 and device_size == str(expected_size):
             return
+        confirmed_missing = stat_rc == 1 and not out.strip()
+        if stat_rc != 0 and not confirmed_missing:
+            raise RuntimeError(
+                f"verify scrcpy JAR failed (rc={stat_rc}): {out.strip()}"
+            )
+        if stat_rc == 0 and not device_size:
+            raise RuntimeError(
+                f"verify scrcpy JAR failed: unexpected stat output {out.strip()!r}"
+            )
         logger.info(
             "[%s] pushing scrcpy-server %s (device_size=%r expected=%d)",
             self._serial, self._jar_version, device_size, expected_size,
@@ -1085,12 +1156,13 @@ class ScrcpyRelaySession:
         env.pop("MallocStackLoggingDirectory", None)
         env.pop("MallocStackLoggingNoCompact", None)
 
-        self._server_proc = subprocess.Popen(
-            _adb_command("shell", server_cmd, serial=self._serial),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
+        with adb_admission(serial=self._serial, lane=AdbLane.STARTUP):
+            self._server_proc = subprocess.Popen(
+                _adb_command("shell", server_cmd, serial=self._serial),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
 
         # Log server output in background — critical for diagnosing encoder crashes.
         serial = self._serial

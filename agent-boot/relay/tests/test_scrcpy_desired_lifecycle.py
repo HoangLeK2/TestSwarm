@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from relay.agent import RelayAgent
+from relay.agent import (
+    SCRCPY_DEFAULT_BITRATE,
+    SCRCPY_DEFAULT_MAX_FPS,
+    SCRCPY_DEFAULT_MAX_WIDTH,
+    RelayAgent,
+)
 
 
 def _agent(monkeypatch) -> RelayAgent:
@@ -146,9 +151,9 @@ def test_scrcpy_start_without_profile_uses_fleet_defaults(monkeypatch):
     asyncio.run(run())
 
     cfg = agent._scrcpy_desired["serial-1"]["cfg"]
-    assert cfg["max_fps"] == 15
-    assert cfg["max_width"] == 540
-    assert cfg["bitrate"] == 800_000
-    assert mgr.starts[-1]["max_fps"] == 15
-    assert mgr.starts[-1]["max_width"] == 540
-    assert mgr.starts[-1]["bitrate"] == 800_000
+    assert cfg["max_fps"] == SCRCPY_DEFAULT_MAX_FPS
+    assert cfg["max_width"] == SCRCPY_DEFAULT_MAX_WIDTH
+    assert cfg["bitrate"] == SCRCPY_DEFAULT_BITRATE
+    assert mgr.starts[-1]["max_fps"] == SCRCPY_DEFAULT_MAX_FPS
+    assert mgr.starts[-1]["max_width"] == SCRCPY_DEFAULT_MAX_WIDTH
+    assert mgr.starts[-1]["bitrate"] == SCRCPY_DEFAULT_BITRATE

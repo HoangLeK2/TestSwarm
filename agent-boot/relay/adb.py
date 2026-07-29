@@ -24,6 +24,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
 from relay.device_state import DeviceRegistry
 
 logger = logging.getLogger("relay.adb")
@@ -109,6 +110,7 @@ def _run(
     *args: str,
     serial: Optional[str] = None,
     timeout: int = 30,
+    lane: AdbLane | None = None,
 ) -> tuple[str, int]:
     """
     Run `adb [-s serial] <args>` and return (stdout+stderr, returncode).
@@ -120,7 +122,21 @@ def _run(
     env.pop("MallocStackLogging", None)
     env.pop("MallocStackLoggingDirectory", None)
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+        with adb_admission(
+            serial=serial,
+            lane=(
+                lane
+                if lane is not None
+                else classify_adb_command(tuple(args))
+            ),
+        ):
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
         out = (result.stdout + result.stderr).decode("utf-8", errors="replace")
         return out, result.returncode
     except subprocess.TimeoutExpired:
@@ -252,14 +268,26 @@ def _resolve_device_lan_ip(serial: str) -> str | None:
     return None
 
 
-def _adb_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
+def _adb_shell(
+    serial: str,
+    cmd: str,
+    timeout: int = 30,
+    *,
+    lane: AdbLane | None = None,
+) -> tuple[str, int]:
     """Run shell command on device. Returns (output, exit_code)."""
     # Background commands (ending with '&') must NOT have '; echo __EXIT__$?'
     # appended — Android's /system/bin/sh rejects '&; echo...' as a syntax error.
     if cmd.rstrip().endswith("&"):
-        out, _ = _run("shell", cmd, serial=serial, timeout=timeout)
+        out, _ = _run("shell", cmd, serial=serial, timeout=timeout, lane=lane)
         return out.rstrip("\n"), 0
-    out, rc = _run("shell", f"{cmd}; echo __EXIT__$?", serial=serial, timeout=timeout)
+    out, rc = _run(
+        "shell",
+        f"{cmd}; echo __EXIT__$?",
+        serial=serial,
+        timeout=timeout,
+        lane=lane,
+    )
     if "__EXIT__" in out:
         output, rc_str = out.rsplit("__EXIT__", 1)
         try:
@@ -547,10 +575,18 @@ def _run_bytes(
     env.pop("MallocStackLogging", None)
     env.pop("MallocStackLoggingDirectory", None)
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=timeout, env=env,
-        )
+        with adb_admission(
+            serial=serial,
+            lane=classify_adb_command(tuple(args)),
+        ):
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
         return result.stdout, result.returncode
     except subprocess.TimeoutExpired:
         return b"", -1

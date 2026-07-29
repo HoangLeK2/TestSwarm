@@ -7,6 +7,7 @@ import threading
 import pytest
 
 import relay.agent as relay_agent_module
+from relay.adb_admission import AdbLane
 from relay.agent import CMD_ADB_CONNECT, CMD_BOOTSTRAP, CMD_SHELL, RelayAgent
 from relay.runtime import FairSendQueue
 
@@ -14,6 +15,80 @@ from relay.runtime import FairSendQueue
 async def _wait_event(event: threading.Event, timeout: float) -> bool:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, event.wait, timeout)
+
+
+def test_user_shell_command_uses_interactive_adb_lane(monkeypatch) -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="ws",
+    )
+    agent._registry.on_adb_event("dev-001", "device")
+    lanes: list[AdbLane | None] = []
+
+    def fake_shell(serial, cmd, timeout, *, lane=None):
+        assert serial == "dev-001"
+        assert cmd == "getprop ro.product.model"
+        assert timeout == 5
+        lanes.append(lane)
+        return "Samsung", 0
+
+    monkeypatch.setattr(relay_agent_module, "_adb_shell", fake_shell)
+    monkeypatch.setattr(
+        relay_agent_module,
+        "lock_rotation_after_shell_enabled",
+        lambda: False,
+    )
+
+    result = json.loads(
+        agent._execute_command(
+            "cmd-shell",
+            "dev-001",
+            "getprop ro.product.model",
+            5,
+            CMD_SHELL,
+        )
+    )
+
+    assert result["ok"] is True
+    assert lanes == [AdbLane.INTERACTIVE]
+
+
+def test_user_heavy_shell_command_does_not_bypass_admission(monkeypatch) -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="ws",
+    )
+    agent._registry.on_adb_event("dev-001", "device")
+    lanes: list[AdbLane | None] = []
+
+    def fake_shell(_serial, _cmd, timeout, *, lane=None):
+        assert timeout == 30
+        lanes.append(lane)
+        return "Success", 0
+
+    monkeypatch.setattr(relay_agent_module, "_adb_shell", fake_shell)
+    monkeypatch.setattr(
+        relay_agent_module,
+        "lock_rotation_after_shell_enabled",
+        lambda: False,
+    )
+
+    result = json.loads(
+        agent._execute_command(
+            "cmd-install",
+            "dev-001",
+            "pm install -r /data/local/tmp/app.apk",
+            30,
+            CMD_SHELL,
+        )
+    )
+
+    assert result["ok"] is True
+    assert lanes == [AdbLane.MAINTENANCE]
 
 
 @pytest.mark.asyncio

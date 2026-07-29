@@ -84,10 +84,10 @@ docker compose -f docker-compose.yml -f docker-compose.linux-usb.yml up -d --bui
 
 ```bash
 ./scripts/docker-save-image.sh
-# -> dist/agent-boot-image-0.1.1-amd64.tar.gz
-# -> dist/agent-boot-image-0.1.1-arm64.tar.gz
+# -> dist/agent-boot-image-0.1.2-amd64.tar.gz
+# -> dist/agent-boot-image-0.1.2-arm64.tar.gz
 
-docker load -i dist/agent-boot-image-0.1.1-amd64.tar.gz
+docker load -i dist/agent-boot-image-0.1.2-amd64.tar.gz
 ./scripts/docker-up.sh up -d
 ```
 
@@ -95,7 +95,7 @@ docker load -i dist/agent-boot-image-0.1.1-amd64.tar.gz
 
 ```bash
 ./scripts/package-docker-release-windows.sh
-# -> dist/agent-boot-docker-windows-0.1.1.zip
+# -> dist/agent-boot-docker-windows-0.1.2.zip
 ```
 
 Gói Windows gồm image **linux/amd64** cho Docker Desktop, scripts `.cmd`/`.ps1`,
@@ -105,7 +105,7 @@ Gói Windows gồm image **linux/amd64** cho Docker Desktop, scripts `.cmd`/`.ps
 
 ```bash
 ./scripts/package-docker-release.sh
-# -> dist/agent-boot-docker-0.1.1.tar.gz
+# -> dist/agent-boot-docker-0.1.2.tar.gz
 ```
 
 Gói gồm **image amd64 + arm64** + `docker-compose.yml` + scripts +
@@ -117,10 +117,10 @@ Khách giải nén → `./scripts/docker-load.sh` (tự chọn arch) → `./scri
 
 | File | Nội dung | Lệnh load |
 |------|----------|-----------|
-| `dist/agent-boot-docker-0.1.1.tar.gz` | Image + compose + scripts | `tar -xzf` → `docker-load.sh` |
-| `dist/agent-boot-0.1.1.tar.gz` | Source + Dockerfile | `tar -xzf` → `docker build` |
-| `dist/agent-boot-image-0.1.1-amd64.tar.gz` | Image PC/Linux | `docker load -i` |
-| `dist/agent-boot-image-0.1.1-arm64.tar.gz` | Image Mac M-series | `docker load -i` |
+| `dist/agent-boot-docker-0.1.2.tar.gz` | Image + compose + scripts | `tar -xzf` → `docker-load.sh` |
+| `dist/agent-boot-0.1.2.tar.gz` | Source + Dockerfile | `tar -xzf` → `docker build` |
+| `dist/agent-boot-image-0.1.2-amd64.tar.gz` | Image PC/Linux | `docker load -i` |
+| `dist/agent-boot-image-0.1.2-arm64.tar.gz` | Image Mac M-series | `docker load -i` |
 
 ADB server trên Mac host — dùng `./scripts/docker-up.sh` (tự bật `adb -a` khi cần).
 

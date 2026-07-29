@@ -5,8 +5,8 @@
 ### macOS / Linux
 
 ```bash
-tar -xzf agent-boot-docker-0.1.1.tar.gz
-cd agent-boot-docker-0.1.1
+tar -xzf agent-boot-docker-0.1.2.tar.gz
+cd agent-boot-docker-0.1.2
 
 ./scripts/docker-load.sh
 cp .env.example .env          # điền RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN, AGENT_BOOT_CONTENT_DATABASE_URL
@@ -16,13 +16,13 @@ cp .env.example .env          # điền RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN, A
 
 ### Windows (Docker Desktop, bundle universal)
 
-Phần này áp dụng cho `agent-boot-docker-0.1.1.zip`. Với gói Windows-only
-`agent-boot-docker-windows-0.1.1.zip`, làm theo `INSTALL.md` nằm ngay trong ZIP.
+Phần này áp dụng cho `agent-boot-docker-0.1.2.zip`. Với gói Windows-only
+`agent-boot-docker-windows-0.1.2.zip`, làm theo `INSTALL.md` nằm ngay trong ZIP.
 
 **Dùng file `.cmd`** (khuyến nghị — tránh lỗi `.ps1` mở Notepad khi double-click):
 
 ```bat
-cd agent-boot-docker-0.1.1
+cd agent-boot-docker-0.1.2
 scripts\docker-load.cmd
 copy .env.example .env
 notepad .env                    rem điền 3 giá trị bắt buộc bên dưới
@@ -33,8 +33,8 @@ scripts\docker-up.cmd logs -f
 Hoặc mở **PowerShell** (không double-click file `.ps1`):
 
 ```powershell
-Expand-Archive agent-boot-docker-0.1.1.zip -DestinationPath .
-cd agent-boot-docker-0.1.1
+Expand-Archive agent-boot-docker-0.1.2.zip -DestinationPath .
+cd agent-boot-docker-0.1.2
 powershell -ExecutionPolicy Bypass -File .\scripts\docker-load.ps1
 copy .env.example .env
 notepad .env

@@ -10,7 +10,7 @@ Gói **Windows only** (linux/amd64). Chạy trên PC Windows với **Docker Desk
 
 ## Cài nhanh
 
-Giải nén `agent-boot-docker-windows-0.1.1.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
+Giải nén `agent-boot-docker-windows-0.1.2.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
 
 ```bat
 scripts\docker-load.cmd

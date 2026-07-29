@@ -55,6 +55,57 @@ def test_scrcpy_session_missing_profile_uses_fleet_defaults() -> None:
         loop.close()
 
 
+def test_scrcpy_start_defers_jar_check_to_relay_thread(monkeypatch) -> None:
+    session = _make_session()
+    jar_checks: list[str] = []
+
+    class DeferredThread:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            # Do not execute the target: this test only verifies that start()
+            # stays non-blocking and leaves JAR verification to the relay loop.
+            pass
+
+    monkeypatch.setattr(
+        session,
+        "_ensure_server_jar_on_device",
+        lambda: jar_checks.append("checked"),
+    )
+    monkeypatch.setattr(scrcpy_mod.threading, "Thread", DeferredThread)
+
+    try:
+        session.start()
+        assert jar_checks == []
+    finally:
+        session._loop.close()
+
+
+def test_scrcpy_jar_path_is_versioned_and_push_is_atomic(monkeypatch) -> None:
+    session = _make_session()
+    calls: list[tuple[object, ...]] = []
+
+    def fake_adb(*args, **_kwargs):
+        calls.append(args)
+        if args and args[0] == "shell" and "stat -c" in args[1]:
+            return "", 1
+        return "", 0
+
+    monkeypatch.setattr(scrcpy_mod, "_adb", fake_adb)
+
+    try:
+        session._ensure_server_jar_on_device()
+    finally:
+        session._loop.close()
+
+    remote_path = scrcpy_mod._SCRCPY_PATH_ON_DEVICE
+    assert scrcpy_mod._BUNDLED_JAR_VERSION in remote_path
+    assert ("shell", "mkdir -p /data/local/tmp/device-farm") in calls
+    assert ("push", str(scrcpy_mod._BUNDLED_JAR), f"{remote_path}.tmp") in calls
+    assert ("shell", f"mv -f {remote_path}.tmp {remote_path}") in calls
+
+
 def test_adb_command_uses_remote_server_flags_from_socket(monkeypatch) -> None:
     _set_remote_adb_env(monkeypatch)
 

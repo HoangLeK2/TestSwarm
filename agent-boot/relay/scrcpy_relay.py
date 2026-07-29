@@ -32,13 +32,16 @@ from relay.adb import _adb_command
 
 logger = logging.getLogger("relay.scrcpy")
 
-_SCRCPY_PATH_ON_DEVICE = "/data/local/tmp/scrcpy-server"
 _CACHE_DIR = Path.home() / ".cache" / "device-farm"
 _PTS_CONFIG_MASK = 0x8000_0000_0000_0000
 # Bundled JAR — agent-boot owns the scrcpy-server binary, no need to receive
 # it from the farm server over gRPC.
 _BUNDLED_JAR = Path(__file__).parent / "scrcpy-server"
 _BUNDLED_JAR_VERSION = "3.3.4"
+_SCRCPY_DEVICE_DIR = "/data/local/tmp/device-farm"
+_SCRCPY_PATH_ON_DEVICE = (
+    f"{_SCRCPY_DEVICE_DIR}/scrcpy-server-{_BUNDLED_JAR_VERSION}.jar"
+)
 
 def _is_idr(data: bytes) -> bool:
     """Return True if the first NAL unit in Annex-B data is an IDR (type 5).
@@ -77,34 +80,37 @@ def _relay_enqueue(
     serial: when `q` is a FairSendQueue, frames are routed to the matching
     per-device lane so one phone's backlog can't starve another's frames.
     """
-    # Fan out to the FairSendQueue's per-device lane when available; otherwise
-    # behave like a plain asyncio.Queue.
+    # FairSendQueue exposes a dedicated lossy video lane. Older/plain queues
+    # keep the legacy enqueue path for compatibility.
+    has_video_api = hasattr(q, "put_video_nowait")
     has_serial_api = hasattr(q, "put_nowait_with_serial")
 
     def _put(item):
-        if has_serial_api:
+        if has_video_api and serial:
+            q.put_video_nowait(item, serial)
+        elif has_serial_api:
             q.put_nowait_with_serial(item, serial)
         else:
             q.put_nowait(item)
-
-    def _peek_lane():
-        # Drop-oldest needs to peek/pop the *same* lane that filled up.
-        # FairSendQueue exposes the internal per-device asyncio.Queue via
-        # `_per_dev`; fall back to the queue itself otherwise.
-        if has_serial_api and serial:
-            return q._per_dev.get(serial)  # noqa: SLF001 — single owner module
-        return q
 
     try:
         _put(frame)
     except asyncio.QueueFull:
         if not is_cfg and not is_key:
+            if has_video_api and serial and hasattr(q, "record_video_drop"):
+                q.record_video_drop(serial)
             if on_p_drop is not None:
                 on_p_drop()  # signal relay thread to request IDR
             return  # P-frame: drop, IDR will follow shortly
-        lane = _peek_lane()
-        if lane is None:
+        if has_video_api and serial:
+            if q.evict_oldest_video(serial):
+                try:
+                    _put(frame)
+                except asyncio.QueueFull:
+                    pass
             return
+        # Compatibility fallback: evict from the same legacy per-device lane.
+        lane = q._per_dev.get(serial) if has_serial_api and serial else q
         try:
             lane.get_nowait()   # evict oldest to make room for IDR/config
             _put(frame)
@@ -399,7 +405,7 @@ class ScrcpyRelaySession:
     # ── Public API ───────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """Non-blocking entry point: push JAR (once), then start relay loop thread."""
+        """Non-blocking entry point: validate/connect inside the relay thread."""
         # For TCP/WiFi devices ensure adb connection is established first.
         # USB devices (serial without ':') don't need this.
         if ":" in self._serial:
@@ -407,14 +413,6 @@ class ScrcpyRelaySession:
             if "connected" not in out.lower() and "already connected" not in out.lower():
                 raise RuntimeError(f"adb connect {self._serial} failed: {out.strip()}")
             logger.info("[%s] adb connected", self._serial)
-
-        # Ensure JAR is on device. Stamp file alone is not trustworthy:
-        # bootstrap.py's `rm -rf scrcpy-server` removes the JAR but leaves the
-        # stamp (different filename), and some OEMs (Vivo/Honor anti-tamper)
-        # silently purge binaries from /data/local/tmp while leaving zero-byte
-        # marker files intact. Verify the JAR itself + size match the bundled
-        # copy; otherwise re-push.
-        self._ensure_server_jar_on_device()
 
         self._stream_ready.clear()
         self._running = True
@@ -651,10 +649,9 @@ class ScrcpyRelaySession:
     def _ensure_server_jar_on_device(self) -> None:
         """Push scrcpy-server JAR if missing OR size doesn't match bundled copy.
 
-        Called both at start() AND before every _start_scrcpy_server() retry.
-        Retries are necessary because some OEMs (Vivo Android 16, Honor) wipe
-        binaries from /data/local/tmp asynchronously, and the previous logic
-        only pushed once at session start.
+        Called before every _start_scrcpy_server() attempt. The versioned path
+        cannot be removed or overwritten by bootstrap bundle extraction, and
+        temp+rename prevents a reconnect from observing a partial push.
         """
         expected_size = _BUNDLED_JAR.stat().st_size
         # `stat -c %s` returns size, or empty/error if file missing.
@@ -678,11 +675,28 @@ class ScrcpyRelaySession:
             self._serial, self._jar_version, device_size, expected_size,
         )
         out, rc = _adb(
-            "push", str(_BUNDLED_JAR), _SCRCPY_PATH_ON_DEVICE,
+            "shell",
+            f"mkdir -p {_SCRCPY_DEVICE_DIR}",
+            serial=self._serial,
+            timeout=5,
+        )
+        if rc != 0:
+            raise RuntimeError(f"create scrcpy directory failed: {out.strip()}")
+        temp_path = f"{_SCRCPY_PATH_ON_DEVICE}.tmp"
+        out, rc = _adb(
+            "push", str(_BUNDLED_JAR), temp_path,
             serial=self._serial, timeout=20,
         )
         if rc != 0:
             raise RuntimeError(f"adb push failed: {out.strip()}")
+        out, rc = _adb(
+            "shell",
+            f"mv -f {temp_path} {_SCRCPY_PATH_ON_DEVICE}",
+            serial=self._serial,
+            timeout=5,
+        )
+        if rc != 0:
+            raise RuntimeError(f"activate scrcpy JAR failed: {out.strip()}")
 
     def _start_scrcpy_server(self) -> None:
         """

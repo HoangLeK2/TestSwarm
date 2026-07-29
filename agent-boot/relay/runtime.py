@@ -100,6 +100,7 @@ U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 8)
 # kicks in per phone so one chatty device cannot drown the others. `control`
 # is generous because heartbeat/register messages must never drop.
 SEND_PER_DEVICE_MAX = _env_int("RELAY_SEND_PER_DEVICE_MAX", 10)
+SEND_VIDEO_PER_DEVICE_MAX = _env_int("RELAY_SEND_VIDEO_PER_DEVICE_MAX", 2)
 SEND_CONTROL_MAX    = _env_int("RELAY_SEND_CONTROL_MAX", 128)
 
 # How long bounded_put waits before declaring the send_queue dead. Long
@@ -399,20 +400,36 @@ _MISSING = object()
 
 
 class FairSendQueue:
-    """Round-robin per-device send queue with a priority control lane."""
+    """Priority control + reliable + lossy-video lanes with device fairness."""
 
     def __init__(
         self,
         *,
         per_device_max: int = 16,
         control_max: int = 128,
+        video_per_device_max: Optional[int] = None,
     ) -> None:
         self._per_device_max = max(1, per_device_max)
+        self._video_per_device_max = max(
+            1,
+            video_per_device_max
+            if video_per_device_max is not None
+            else per_device_max,
+        )
         self._control_max = max(1, control_max)
         self._control: asyncio.Queue = asyncio.Queue(maxsize=self._control_max)
         self._per_dev: dict[str, asyncio.Queue] = {}
+        self._video_per_dev: dict[str, asyncio.Queue] = {}
+        self._video_drops: dict[str, int] = {}
+        self._video_evictions: dict[str, int] = {}
+        self._reliable_items = 0
+        self._video_items = 0
         # deque acts as the round-robin cursor — O(1) rotate(-1) advances it.
         self._rr: deque[str] = deque()
+        self._video_rr: deque[str] = deque()
+        # Alternate reliable/video when both are busy. Reliable goes first,
+        # while video is guaranteed a turn under a continuous result stream.
+        self._prefer_video = False
         # Wakes the (single) consumer when any sub-queue becomes non-empty.
         self._wake: asyncio.Event = asyncio.Event()
 
@@ -428,12 +445,55 @@ class FairSendQueue:
     async def put_with_serial(self, item: Any, serial: Optional[str]) -> None:
         q = self._lane_for(serial)
         await q.put(item)
+        if serial:
+            self._reliable_items += 1
         self._wake.set()
 
     def put_nowait_with_serial(self, item: Any, serial: Optional[str]) -> None:
         q = self._lane_for(serial)
         q.put_nowait(item)
+        if serial:
+            self._reliable_items += 1
         self._wake.set()
+
+    def put_video_nowait(self, item: Any, serial: str) -> None:
+        """Lossy video enqueue, isolated from reliable per-device results."""
+        q = self._video_lane_for(serial)
+        q.put_nowait(item)
+        self._video_items += 1
+        self._wake.set()
+
+    def evict_oldest_video(self, serial: str) -> bool:
+        """Evict one video frame only; never touches a reliable result lane."""
+        q = self._video_per_dev.get(serial)
+        if q is None:
+            return False
+        try:
+            q.get_nowait()
+            self._video_items -= 1
+            self._video_evictions[serial] = (
+                self._video_evictions.get(serial, 0) + 1
+            )
+            return True
+        except asyncio.QueueEmpty:
+            return False
+
+    def record_video_drop(self, serial: str) -> None:
+        """Record a dropped delta frame for periodic fleet diagnostics."""
+        self._video_drops[serial] = self._video_drops.get(serial, 0) + 1
+
+    def video_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        """Aggregate video pressure without exposing phone identifiers in logs."""
+        affected = set(self._video_drops) | set(self._video_evictions)
+        stats = {
+            "drops": sum(self._video_drops.values()),
+            "evictions": sum(self._video_evictions.values()),
+            "affected_serials": len(affected),
+        }
+        if reset:
+            self._video_drops.clear()
+            self._video_evictions.clear()
+        return stats
 
     # ── consumer API ──────────────────────────────────────────────────────
 
@@ -457,14 +517,40 @@ class FairSendQueue:
         # 1) Control plane has absolute priority — never starved by frames.
         if not self._control.empty():
             return self._control.get_nowait()
-        # 2) Round-robin among per-device lanes.
-        n = len(self._rr)
+        # 2) Alternate reliable and video service when both are continuously
+        # busy. This keeps command results responsive without starving live
+        # video for farms where every phone is streaming.
+        reliable = (self._rr, self._per_dev, False)
+        video = (self._video_rr, self._video_per_dev, True)
+        lane_order = (video, reliable) if self._prefer_video else (reliable, video)
+        for rr, lanes, is_video in lane_order:
+            if is_video:
+                if self._video_items <= 0:
+                    continue
+            elif self._reliable_items <= 0:
+                continue
+            item = self._try_get_round_robin(rr, lanes)
+            if item is not _MISSING:
+                if is_video:
+                    self._video_items -= 1
+                else:
+                    self._reliable_items -= 1
+                self._prefer_video = not is_video
+                return item
+        return _MISSING
+
+    @staticmethod
+    def _try_get_round_robin(
+        rr: deque[str],
+        lanes: dict[str, asyncio.Queue],
+    ) -> Any:
+        n = len(rr)
         for _ in range(n):
             # Rotate first so we don't keep favouring the same phone after a
             # quiet pass — the cursor always advances on every get attempt.
-            self._rr.rotate(-1)
-            serial = self._rr[0]
-            q = self._per_dev.get(serial)
+            rr.rotate(-1)
+            serial = rr[0]
+            q = lanes.get(serial)
             if q is not None and not q.empty():
                 return q.get_nowait()
         return _MISSING
@@ -481,30 +567,51 @@ class FairSendQueue:
             self._rr.append(serial)
         return q
 
+    def _video_lane_for(self, serial: str) -> asyncio.Queue:
+        q = self._video_per_dev.get(serial)
+        if q is None:
+            q = asyncio.Queue(maxsize=self._video_per_device_max)
+            self._video_per_dev[serial] = q
+            self._video_rr.append(serial)
+        return q
+
     def qsize(self) -> int:
-        total = self._control.qsize()
-        for q in self._per_dev.values():
-            total += q.qsize()
-        return total
+        return self._control.qsize() + self._reliable_items + self._video_items
 
     @property
     def maxsize(self) -> int:
-        return self._control_max + self._per_device_max * max(1, len(self._per_dev))
+        reliable_capacity = self._per_device_max * max(1, len(self._per_dev))
+        video_capacity = self._video_per_device_max * max(
+            1,
+            len(self._video_per_dev),
+        )
+        return self._control_max + reliable_capacity + video_capacity
 
     def drop_serial(self, serial: str) -> int:
-        """Remove a device lane (called on disconnect). Returns drained count."""
-        q = self._per_dev.pop(serial, None)
+        """Remove reliable + video lanes for a disconnected device."""
+        n = self._drop_lane(serial, self._per_dev, self._rr)
+        self._reliable_items = max(0, self._reliable_items - n)
+        video_n = self._drop_lane(serial, self._video_per_dev, self._video_rr)
+        self._video_items = max(0, self._video_items - video_n)
+        return n + video_n
+
+    @staticmethod
+    def _drop_lane(
+        serial: str,
+        lanes: dict[str, asyncio.Queue],
+        rr: deque[str],
+    ) -> int:
+        q = lanes.pop(serial, None)
         try:
-            self._rr.remove(serial)
+            rr.remove(serial)
         except ValueError:
             pass
         if q is None:
             return 0
-        n = 0
+        n = q.qsize()
         while not q.empty():
             try:
                 q.get_nowait()
-                n += 1
             except asyncio.QueueEmpty:
                 break
         return n
@@ -514,6 +621,8 @@ class FairSendQueue:
         snap: dict[str, int] = {"_control": self._control.qsize()}
         for serial, q in self._per_dev.items():
             snap[serial] = q.qsize()
+        for serial, q in self._video_per_dev.items():
+            snap[f"video:{serial}"] = q.qsize()
         return snap
 
 

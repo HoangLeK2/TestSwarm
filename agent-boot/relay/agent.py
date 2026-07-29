@@ -42,6 +42,7 @@ from relay.u2_session_pool import U2SessionPool
 from relay.runtime         import (
     SEND_CONTROL_MAX,
     SEND_PER_DEVICE_MAX,
+    SEND_VIDEO_PER_DEVICE_MAX,
     FairSendQueue,
     LoopWatchdog,
     RuntimeStats,
@@ -405,12 +406,32 @@ class RelayAgent:
             except Exception:
                 return {"qsize": q.qsize()}
             ctrl = snap.pop("_control", 0)
-            return {
-                "qsize": sum(snap.values()) + ctrl,
-                "lanes": len(snap),
-                "ctrl": ctrl,
-                "max_lane": max(snap.values(), default=0),
+            video_lanes = {
+                key: value
+                for key, value in snap.items()
+                if key.startswith("video:")
             }
+            reliable_lanes = {
+                key: value
+                for key, value in snap.items()
+                if not key.startswith("video:")
+            }
+            stats = {
+                "qsize": sum(snap.values()) + ctrl,
+                "reliable_lanes": len(reliable_lanes),
+                "video_lanes": len(video_lanes),
+                "ctrl": ctrl,
+                "max_reliable": max(reliable_lanes.values(), default=0),
+                "max_video": max(video_lanes.values(), default=0),
+            }
+            if hasattr(q, "video_stats_snapshot"):
+                video_stats = q.video_stats_snapshot(reset=True)
+                stats.update({
+                    "video_drops": video_stats["drops"],
+                    "video_evictions": video_stats["evictions"],
+                    "video_affected": video_stats["affected_serials"],
+                })
+            return stats
         register_stats_source("send_q", _send_queue_stats)
 
         await self._scrcpy_mgr.start()
@@ -525,6 +546,7 @@ class RelayAgent:
         send_queue = FairSendQueue(
             per_device_max=SEND_PER_DEVICE_MAX,
             control_max=SEND_CONTROL_MAX,
+            video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
         )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
@@ -614,6 +636,7 @@ class RelayAgent:
         send_queue = FairSendQueue(
             per_device_max=SEND_PER_DEVICE_MAX,
             control_max=SEND_CONTROL_MAX,
+            video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
         )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
@@ -2463,7 +2486,12 @@ class RelayAgent:
                 "output": "",
                 "error": f"command queue full: serial={serial_key}",
             })
-            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+            await bounded_put(
+                send_queue,
+                result,
+                serial=cmd_serial,
+                label="cmd_result",
+            )
 
     async def _command_worker(
         self,
@@ -2493,7 +2521,12 @@ class RelayAgent:
                     int(msg.get("timeout", 30)),
                     cmd_type,
                 )
-            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+            await bounded_put(
+                send_queue,
+                result,
+                serial=cmd_serial,
+                label="cmd_result",
+            )
             if cmd_type == CMD_ADB_CONNECT:
                 try:
                     parsed = json.loads(result)

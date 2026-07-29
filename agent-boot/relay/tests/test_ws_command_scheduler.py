@@ -8,6 +8,7 @@ import pytest
 
 import relay.agent as relay_agent_module
 from relay.agent import CMD_ADB_CONNECT, CMD_BOOTSTRAP, CMD_SHELL, RelayAgent
+from relay.runtime import FairSendQueue
 
 
 async def _wait_event(event: threading.Event, timeout: float) -> bool:
@@ -82,6 +83,55 @@ async def test_ws_command_same_serial_keeps_order(monkeypatch):
     finally:
         release_first.set()
         agent._cancel_command_workers()
+
+
+@pytest.mark.asyncio
+async def test_command_result_waits_for_reliable_lane_capacity(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="ws",
+    )
+    send_q = FairSendQueue(per_device_max=1, video_per_device_max=1)
+    send_q.put_nowait_with_serial("older-result", "dev-001")
+    command_q: asyncio.Queue = asyncio.Queue()
+
+    monkeypatch.setattr(
+        agent,
+        "_execute_command",
+        lambda msg_id, *_args: json.dumps(
+            {
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": True,
+                "exit_code": 0,
+                "output": "",
+                "error": "",
+            }
+        ),
+    )
+
+    worker = asyncio.create_task(
+        agent._command_worker(command_q, send_q, asyncio.get_running_loop())
+    )
+    await command_q.put(
+        {
+            "msg_id": "cmd-reliable",
+            "serial": "dev-001",
+            "cmd": "true",
+            "timeout": 5,
+            "cmd_type": CMD_SHELL,
+        }
+    )
+    await asyncio.sleep(0)
+
+    assert await send_q.get() == "older-result"
+    result = json.loads(await asyncio.wait_for(send_q.get(), timeout=0.5))
+    assert result["msg_id"] == "cmd-reliable"
+
+    await command_q.put(None)
+    await worker
 
 
 @pytest.mark.asyncio

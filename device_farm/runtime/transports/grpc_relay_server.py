@@ -2,8 +2,9 @@
 grpc_relay_server.py — gRPC bidirectional relay server for agent-boot ↔ device_farm.
 
 Each agent-boot instance opens one gRPC bidirectional stream. All N phones on that
-agent-boot are multiplexed over this single stream using HTTP/2 per-stream flow control,
-preventing IDR frames from one phone blocking another (unlike the WebSocket FIFO approach).
+agent-boot are multiplexed over this single HTTP/2 stream. Per-phone fairness and
+backpressure isolation therefore happen in agent-boot's FairSendQueue; HTTP/2 does
+not provide per-phone flow-control isolation inside this RPC.
 
 Protocol (proto/relay.proto):
   agent-boot → device_farm : AgentMsg { video: VideoFrame | meta: bytes (JSON) }

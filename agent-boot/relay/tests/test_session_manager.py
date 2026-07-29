@@ -136,6 +136,61 @@ def test_concurrent_start_session_same_serial_coalesces(monkeypatch):
     asyncio.run(_run())
 
 
+def test_zero_max_sessions_means_unlimited(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
+    monkeypatch.setattr(sm, "MAX_SESSIONS", 0)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            for index in range(60):
+                await mgr.start_session(
+                    f"serial-{index}",
+                    12,
+                    540,
+                    True,
+                    27183 + index,
+                    queue,
+                    loop,
+                )
+            assert mgr.count == 60
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
+def test_positive_max_sessions_keeps_operator_ceiling(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
+    monkeypatch.setattr(sm, "MAX_SESSIONS", 2)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            for index in range(3):
+                await mgr.start_session(
+                    f"serial-{index}",
+                    12,
+                    540,
+                    True,
+                    27183 + index,
+                    queue,
+                    loop,
+                )
+            assert mgr.count == 2
+            assert mgr.get("serial-2") is None
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
 def test_stop_session_discards_idle_serial_lock(monkeypatch):
     monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
 

@@ -150,3 +150,59 @@ async def test_qsize_aggregates_all_lanes() -> None:
     q.put_nowait_with_serial("a2", "A")
     q.put_nowait_with_serial("b1", "B")
     assert q.qsize() == 4
+
+
+@pytest.mark.asyncio
+async def test_reliable_result_is_not_blocked_by_full_video_lane() -> None:
+    q = FairSendQueue(per_device_max=1, control_max=4)
+    q.put_video_nowait("frame-1", "A")
+
+    # Results and frames from the same phone must not share capacity.
+    q.put_nowait_with_serial("result-1", "A")
+
+    # Reliable per-device traffic is drained before lossy video.
+    assert await q.get() == "result-1"
+    assert await q.get() == "frame-1"
+
+
+@pytest.mark.asyncio
+async def test_drop_serial_clears_reliable_and_video_lanes() -> None:
+    q = FairSendQueue(per_device_max=4)
+    q.put_nowait_with_serial("result-1", "A")
+    q.put_video_nowait("frame-1", "A")
+    q.put_video_nowait("frame-2", "A")
+
+    assert q.drop_serial("A") == 3
+    assert q.qsize() == 0
+    assert "A" not in q.snapshot()
+    assert "video:A" not in q.snapshot()
+
+
+def test_video_lane_has_independent_low_latency_capacity() -> None:
+    q = FairSendQueue(per_device_max=16, video_per_device_max=2)
+    q.put_video_nowait("frame-1", "A")
+    q.put_video_nowait("frame-2", "A")
+
+    with pytest.raises(asyncio.QueueFull):
+        q.put_video_nowait("stale-frame", "A")
+
+    # Reliable results keep their larger burst capacity.
+    for index in range(16):
+        q.put_nowait_with_serial(f"result-{index}", "A")
+
+
+@pytest.mark.asyncio
+async def test_video_drain_skips_known_empty_reliable_lanes() -> None:
+    q = FairSendQueue(per_device_max=2, video_per_device_max=2)
+    q.put_nowait_with_serial("result", "A")
+    assert await q.get() == "result"
+    q.put_video_nowait("frame-1", "A")
+    assert await q.get() == "frame-1"
+
+    class PoisonEmptyLane:
+        def empty(self) -> bool:
+            raise AssertionError("empty reliable lanes must not be scanned")
+
+    q._per_dev["A"] = PoisonEmptyLane()
+    q.put_video_nowait("frame-2", "A")
+    assert await q.get() == "frame-2"

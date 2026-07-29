@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Callable, Dict, Optional
 
@@ -23,7 +24,12 @@ SESSION_TTL     = 60    # seconds — kill sessions that went stale (no frames) 
                         # Frame-timeout in scrcpy_relay._connect_and_stream (5s) normally
                         # catches stalls first; this sweep is the safety net.
 ZOMBIE_TIMEOUT  = 10    # seconds — relay thread must be alive within this after start
-MAX_SESSIONS    = 48    # max concurrent scrcpy sessions per relay agent
+try:
+    MAX_SESSIONS = max(0, int(os.getenv("SCRCPY_MAX_SESSIONS", "0")))
+except (TypeError, ValueError):
+    MAX_SESSIONS = 0
+# 0 means unlimited. Operators may set a per-agent ceiling when measured CPU,
+# bandwidth, or file-descriptor capacity requires one.
 CLEANUP_INTERVAL = 15   # seconds between cleanup sweeps (halved from 30 to match lower TTL)
 
 
@@ -121,7 +127,7 @@ class ScrcpySessionManager:
 
             await self._stop_session_unlocked(serial)
 
-            if len(self._sessions) >= MAX_SESSIONS:
+            if MAX_SESSIONS > 0 and len(self._sessions) >= MAX_SESSIONS:
                 logger.warning(
                     "max sessions (%d) reached — rejecting scrcpy for %s",
                     MAX_SESSIONS, serial,

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 _PTS_CONFIG_MASK = 0x8000_0000_0000_0000
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class VideoPacket:
     """One encoded scrcpy packet without a transport-specific envelope."""
 
@@ -20,7 +20,8 @@ class VideoPacket:
     pts_us: int
     width: int = 0
     height: int = 0
-    enqueued_ns: int = field(default_factory=time.monotonic_ns)
+    received_ns: int = field(default_factory=time.monotonic_ns)
+    enqueued_ns: int = 0
 
     def to_legacy_bytes(self) -> bytes:
         """Serialize the packet for the legacy WebSocket binary protocol."""

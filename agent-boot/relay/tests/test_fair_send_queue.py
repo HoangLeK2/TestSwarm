@@ -219,7 +219,7 @@ async def test_video_stats_report_queue_age_on_dequeue() -> None:
         is_config=False,
         is_key=True,
         pts_us=1,
-        enqueued_ns=time.monotonic_ns() - 50_000_000,
+        received_ns=time.monotonic_ns() - 50_000_000,
     )
     q.offer_video_nowait(
         packet,
@@ -227,9 +227,66 @@ async def test_video_stats_report_queue_age_on_dequeue() -> None:
         is_config=packet.is_config,
         is_key=packet.is_key,
     )
+    await asyncio.sleep(0.05)
 
     assert await q.get() is packet
     stats = q.video_stats_snapshot()
     assert stats["dequeued"] == 1
     assert stats["queue_age_p95_ms"] >= 40
     assert stats["queue_age_max_ms"] >= 40
+    assert stats["handoff_age_p95_ms"] >= 40
+
+
+@pytest.mark.asyncio
+async def test_video_capacity_one_is_raised_to_preserve_config_and_keyframe() -> None:
+    q = FairSendQueue(video_per_device_max=1)
+    for index in range(2):
+        q.offer_video_nowait(
+            f"delta-{index}",
+            "A",
+            is_config=False,
+            is_key=False,
+        )
+    assert q.offer_video_nowait(
+        "dropped-delta",
+        "A",
+        is_config=False,
+        is_key=False,
+    )
+    assert await q.get() == "delta-0"
+    assert await q.get() == "delta-1"
+
+    q.offer_video_nowait("config", "A", is_config=True, is_key=False)
+    q.offer_video_nowait("key", "A", is_config=False, is_key=True)
+
+    assert await q.get() == "config"
+    assert await q.get() == "key"
+
+
+@pytest.mark.asyncio
+async def test_queue_age_p95_does_not_collapse_to_single_extreme_max() -> None:
+    q = FairSendQueue(video_per_device_max=100)
+    now_ns = time.monotonic_ns()
+    ages_ms = [100] * 94 + [6_000] * 5 + [100_000]
+    for index, age_ms in enumerate(ages_ms):
+        packet = VideoPacket(
+            serial="A",
+            data=b"frame",
+            is_config=False,
+            is_key=True,
+            pts_us=index,
+        )
+        q.offer_video_nowait(
+            packet,
+            packet.serial,
+            is_config=False,
+            is_key=True,
+        )
+        packet.enqueued_ns = now_ns - age_ms * 1_000_000
+
+    for _ in ages_ms:
+        await q.get()
+
+    stats = q.video_stats_snapshot()
+    assert stats["queue_age_p95_ms"] == 10_000
+    assert stats["queue_age_max_ms"] >= 100_000

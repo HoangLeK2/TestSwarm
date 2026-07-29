@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -44,31 +45,25 @@ _SCRCPY_PATH_ON_DEVICE = (
     f"{_SCRCPY_DEVICE_DIR}/scrcpy-server-{_BUNDLED_JAR_VERSION}.jar"
 )
 
-def _is_idr(data: bytes) -> bool:
-    """Return True if the first NAL unit in Annex-B data is an IDR (type 5).
-
-    scrcpy sends exactly one NAL unit per packet, so checking the first
-    start code is both sufficient and O(1) — no full-frame scan needed.
-    """
-    n = len(data)
-    if n < 5:
-        return False
-    # 4-byte start code: 0x00 0x00 0x00 0x01
-    if data[0] == 0 and data[1] == 0 and data[2] == 0 and data[3] == 1:
-        return (data[4] & 0x1F) == 5
-    # 3-byte start code: 0x00 0x00 0x01
-    if n >= 4 and data[0] == 0 and data[1] == 0 and data[2] == 1:
-        return (data[3] & 0x1F) == 5
+def annexb_contains_idr(data: bytes) -> bool:
+    """Return True if any Annex-B NAL unit is an IDR (type 5)."""
+    for match in _SC_RE.finditer(data):
+        nal_start = match.end()
+        if nal_start < len(data) and (data[nal_start] & 0x1F) == 5:
+            return True
     return False
+
+
+def _is_idr(data: bytes) -> bool:
+    """Backward-compatible internal wrapper."""
+    return annexb_contains_idr(data)
 
 
 def _relay_enqueue(
     q: Any,
-    frame: Any,
-    is_cfg: bool,
-    is_key: bool,
+    frame: VideoPacket,
     on_p_drop=None,
-    serial: Optional[str] = None,
+    on_resync=None,
 ) -> None:
     """Module-level enqueue — avoids closure allocation per frame at 30fps.
 
@@ -76,9 +71,12 @@ def _relay_enqueue(
     GOP-aware strategy: after one P-frame drop, later deltas stay suppressed
     until a keyframe is admitted. IDR/config packets may evict old video only.
     on_p_drop is invoked once when a serial first enters recovery.
-    serial: when `q` is a FairSendQueue, frames are routed to the matching
-    per-device lane so one phone's backlog can't starve another's frames.
+    Packet routing and recovery facts come from the typed packet so callers
+    cannot accidentally pass contradictory serial/config/key arguments.
     """
+    serial = frame.serial
+    is_cfg = frame.is_config
+    is_key = frame.is_key
     # FairSendQueue exposes a dedicated lossy video lane. Older/plain queues
     # keep the legacy enqueue path for compatibility.
     offer_video = getattr(q, "offer_video_nowait", None)
@@ -91,6 +89,16 @@ def _relay_enqueue(
         )
         if needs_idr and on_p_drop is not None:
             on_p_drop()
+        if (
+            is_key
+            and on_resync is not None
+            and not getattr(
+                q,
+                "is_video_awaiting_keyframe",
+                lambda _serial: False,
+            )(serial)
+        ):
+            on_resync()
         return
 
     has_video_api = hasattr(q, "put_video_nowait")
@@ -106,6 +114,8 @@ def _relay_enqueue(
 
     try:
         _put(frame)
+        if is_key and on_resync is not None:
+            on_resync()
     except asyncio.QueueFull:
         if not is_cfg and not is_key:
             if has_video_api and serial and hasattr(q, "record_video_drop"):
@@ -117,6 +127,8 @@ def _relay_enqueue(
             if q.evict_oldest_video(serial):
                 try:
                     _put(frame)
+                    if is_key and on_resync is not None:
+                        on_resync()
                 except asyncio.QueueFull:
                     pass
             return
@@ -125,8 +137,20 @@ def _relay_enqueue(
         try:
             lane.get_nowait()   # evict oldest to make room for IDR/config
             _put(frame)
+            if is_key and on_resync is not None:
+                on_resync()
         except (asyncio.QueueEmpty, asyncio.QueueFull):
             pass
+
+
+def enqueue_video_packet(
+    queue: Any,
+    packet: VideoPacket,
+    on_drop=None,
+    on_resync=None,
+) -> None:
+    """Public transport adapter for one typed video packet."""
+    _relay_enqueue(queue, packet, on_drop, on_resync)
 
 
 # Retry budget: max _MAX_RECONNECTS failures per _RETRY_WINDOW seconds.
@@ -292,8 +316,60 @@ def _annexb_to_avcc(data: bytes) -> bytes:
 
     Returns data unchanged if the conversion produces no NAL units.
     """
-    parts = [struct.pack(">I", len(nal)) + nal for nal in _SC_RE.split(data) if nal]
-    return b"".join(parts) if parts else data
+    converted, _ = annexb_to_avcc_with_idr(data)
+    return converted
+
+
+def annexb_to_avcc_with_idr(data: bytes) -> tuple[bytes, bool]:
+    """Convert Annex-B once while classifying all NAL units for IDR."""
+    nals = [nal for nal in _SC_RE.split(data) if nal]
+    if not nals:
+        return data, False
+    return (
+        b"".join(struct.pack(">I", len(nal)) + nal for nal in nals),
+        any((nal[0] & 0x1F) == 5 for nal in nals),
+    )
+
+
+def _annexb_to_avcc_with_idr(data: bytes) -> tuple[bytes, bool]:
+    """Backward-compatible internal wrapper."""
+    return annexb_to_avcc_with_idr(data)
+
+
+def prepare_video_packet(
+    *,
+    serial: str,
+    annexb: bytes,
+    is_config: bool,
+    pts_us: int,
+    width: int = 0,
+    height: int = 0,
+    received_ns: int | None = None,
+    suppress_deltas: bool = False,
+) -> VideoPacket | None:
+    """Classify and convert one scrcpy packet before transport handoff."""
+    is_key = False
+    data = annexb
+    if not is_config:
+        if suppress_deltas:
+            is_key = annexb_contains_idr(annexb)
+            if not is_key:
+                return None
+        data, is_key = annexb_to_avcc_with_idr(annexb)
+    return VideoPacket(
+        serial=serial,
+        data=data,
+        is_config=is_config,
+        is_key=is_key,
+        pts_us=pts_us,
+        width=width if is_config else 0,
+        height=height if is_config else 0,
+        received_ns=(
+            time.monotonic_ns()
+            if received_ns is None
+            else received_ns
+        ),
+    )
 
 
 def _recvall(sock: socket.socket, n: int) -> bytes:
@@ -412,18 +488,22 @@ class ScrcpyRelaySession:
         # IDR immediately — caps decoder freeze at ~100ms vs 1s IDR interval.
         self._need_idr: bool = False
         self._last_idr_request_t: float = 0.0  # rate-limit to 1 IDR per 0.5s
+        self._downstream_recovery = threading.Event()
         # Approximate operational counters. The relay thread is the sole
         # producer; the asyncio stats logger reads/resets once per interval.
         self._stats_started_at: float = 0.0
         self._stats_frames_total: int = 0
         self._stats_idr_requests_total: int = 0
         self._stats_idr_recoveries_total: int = 0
-        self._stats_idr_recovery_max_ms: int = 0
+        self._stats_idr_recovery_samples_ms: list[int] = []
         self._stats_idr_pending_since: float = 0.0
+        self._stats_producer_suppressed_total: int = 0
+        self._stats_lock = threading.Lock()
         self._stats_snapshot_at: float = 0.0
         self._stats_snapshot_frames: int = 0
         self._stats_snapshot_idr_requests: int = 0
         self._stats_snapshot_idr_recoveries: int = 0
+        self._stats_snapshot_producer_suppressed: int = 0
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -477,17 +557,19 @@ class ScrcpyRelaySession:
             return
         self._send_control_raw(data)
 
-    def _send_control_raw(self, data: bytes) -> None:
+    def _send_control_raw(self, data: bytes) -> bool:
         """Send scrcpy control bytes to device (thread-safe, unfiltered)."""
         with self._ctrl_lock:
             sock = self._ctrl_sock
             if sock and self._running:
                 try:
                     sock.sendall(data)
+                    return True
                 except Exception as exc:
                     logger.debug("[%s] ctrl send: %s", self._serial, exc)
+        return False
 
-    def _request_idr(self) -> None:
+    def _request_idr(self, *, now: float | None = None) -> bool:
         """
         Ask scrcpy-server to emit an IDR keyframe NOW. Used by the streaming
         loop when frames stop arriving — forces decoder re-sync ~200ms instead
@@ -496,13 +578,28 @@ class ScrcpyRelaySession:
         Wire format: 1 byte message type (_SC_CTRL_RESET_VIDEO). Tied to the
         bundled scrcpy-server version — see _BUNDLED_JAR_VERSION.
         """
-        now = time.monotonic()
-        if self._stats_started_at <= 0.0:
-            self._stats_started_at = now
-        self._stats_idr_requests_total += 1
-        if self._stats_idr_pending_since <= 0.0:
-            self._stats_idr_pending_since = now
-        self._send_control_raw(bytes([_SC_CTRL_RESET_VIDEO]))
+        now = time.monotonic() if now is None else now
+        if not self._send_control_raw(bytes([_SC_CTRL_RESET_VIDEO])):
+            return False
+        self.record_idr_request(now=now)
+        return True
+
+    def record_idr_request(self, *, now: float) -> None:
+        """Record a successfully transmitted IDR request."""
+        with self._stats_lock:
+            if self._stats_started_at <= 0.0:
+                self._stats_started_at = now
+            self._stats_idr_requests_total += 1
+            if self._stats_idr_pending_since <= 0.0:
+                self._stats_idr_pending_since = now
+
+    def request_recovery_keyframe(self, *, now: float | None = None) -> bool:
+        """Request an immediate encoder keyframe and start recovery timing."""
+        requested_at = time.monotonic() if now is None else now
+        if not self._request_idr(now=requested_at):
+            return False
+        self._last_idr_request_t = requested_at
+        return True
 
     def _record_video_frame(
         self,
@@ -515,35 +612,72 @@ class ScrcpyRelaySession:
         if self._stats_started_at <= 0.0:
             self._stats_started_at = now
         self._stats_frames_total += 1
-        if is_key and self._stats_idr_pending_since > 0.0:
-            recovery_ms = max(
-                0,
-                round((now - self._stats_idr_pending_since) * 1_000),
-            )
-            self._stats_idr_recoveries_total += 1
-            self._stats_idr_recovery_max_ms = max(
-                self._stats_idr_recovery_max_ms,
-                recovery_ms,
-            )
-            self._stats_idr_pending_since = 0.0
+        if is_key:
+            with self._stats_lock:
+                if self._stats_idr_pending_since > 0.0:
+                    recovery_ms = max(
+                        0,
+                        round((now - self._stats_idr_pending_since) * 1_000),
+                    )
+                    self._stats_idr_recoveries_total += 1
+                    self._stats_idr_recovery_samples_ms.append(recovery_ms)
+                    self._stats_idr_pending_since = 0.0
 
-    def stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+    def record_video_frame(
+        self,
+        *,
+        is_key: bool,
+        now: float | None = None,
+    ) -> None:
+        """Record an encoded frame for windowed stream-health metrics."""
+        self._record_video_frame(is_key=is_key, now=now)
+
+    def stats_snapshot(
+        self,
+        *,
+        reset: bool = False,
+        now: float | None = None,
+    ) -> dict[str, int]:
         """Return approximate encoder throughput and IDR recovery counters."""
-        now = time.monotonic()
+        now = time.monotonic() if now is None else now
         window_started = self._stats_snapshot_at or self._stats_started_at
         elapsed = (
             max(0.001, now - window_started)
             if window_started > 0.0
             else 0.0
         )
-        frames = self._stats_frames_total - self._stats_snapshot_frames
-        idr_requests = (
-            self._stats_idr_requests_total
-            - self._stats_snapshot_idr_requests
+        frames_total = self._stats_frames_total
+        producer_suppressed_total = self._stats_producer_suppressed_total
+        frames = frames_total - self._stats_snapshot_frames
+        producer_suppressed = (
+            producer_suppressed_total
+            - self._stats_snapshot_producer_suppressed
         )
-        idr_recoveries = (
-            self._stats_idr_recoveries_total
-            - self._stats_snapshot_idr_recoveries
+        with self._stats_lock:
+            idr_requests_total = self._stats_idr_requests_total
+            idr_recoveries_total = self._stats_idr_recoveries_total
+            idr_requests = (
+                idr_requests_total - self._stats_snapshot_idr_requests
+            )
+            idr_recoveries = (
+                idr_recoveries_total - self._stats_snapshot_idr_recoveries
+            )
+            recovery_samples = tuple(self._stats_idr_recovery_samples_ms)
+            idr_pending = int(self._stats_idr_pending_since > 0.0)
+            if reset:
+                self._stats_snapshot_idr_requests = idr_requests_total
+                self._stats_snapshot_idr_recoveries = idr_recoveries_total
+                self._stats_idr_recovery_samples_ms.clear()
+        ordered_recoveries = sorted(recovery_samples)
+        recovery_p95 = (
+            ordered_recoveries[
+                min(
+                    len(ordered_recoveries) - 1,
+                    max(0, math.ceil(len(ordered_recoveries) * 0.95) - 1),
+                )
+            ]
+            if ordered_recoveries
+            else 0
         )
         stats = {
             "frames": frames,
@@ -554,16 +688,20 @@ class ScrcpyRelaySession:
             ),
             "idr_requests": idr_requests,
             "idr_recoveries": idr_recoveries,
-            "idr_recovery_max_ms": self._stats_idr_recovery_max_ms,
-            "idr_pending": int(self._stats_idr_pending_since > 0.0),
+            "idr_recovery_p95_ms": recovery_p95,
+            "idr_recovery_max_ms": max(ordered_recoveries, default=0),
+            "idr_pending": idr_pending,
+            "producer_suppressed": producer_suppressed,
+            "max_fps_cap_x100": self._max_fps * 100,
         }
         if reset:
             # Counters stay monotonic so a producer racing this snapshot cannot
             # be zeroed out and lost; only the observation baseline advances.
             self._stats_snapshot_at = now
-            self._stats_snapshot_frames = self._stats_frames_total
-            self._stats_snapshot_idr_requests = self._stats_idr_requests_total
-            self._stats_snapshot_idr_recoveries = self._stats_idr_recoveries_total
+            self._stats_snapshot_frames = frames_total
+            self._stats_snapshot_producer_suppressed = (
+                producer_suppressed_total
+            )
         return stats
 
     def _wake_display(self) -> None:
@@ -574,7 +712,38 @@ class ScrcpyRelaySession:
     def _mark_idr_needed(self) -> None:
         """Called from asyncio thread when a P-frame is dropped from send_queue.
         Relay thread reads this flag and requests an IDR keyframe immediately."""
+        self._downstream_recovery.set()
         self._need_idr = True
+
+    def notify_downstream_drop(self) -> None:
+        """Enter decoder recovery after a downstream delta drop."""
+        self._mark_idr_needed()
+
+    def _mark_downstream_resynced(self) -> None:
+        """Stop producer-side suppression after config/key reaches the lane."""
+        self._need_idr = False
+        self._downstream_recovery.clear()
+
+    def notify_downstream_resynced(self) -> None:
+        """Leave decoder recovery after a keyframe is admitted."""
+        self._mark_downstream_resynced()
+
+    @property
+    def recovery_pending(self) -> bool:
+        """Whether downstream decode recovery still needs a keyframe."""
+        return self._need_idr
+
+    def request_pending_idr_if_due(self, now: float) -> bool:
+        """Send one pending recovery request when its rate limit permits."""
+        if (
+            not self._need_idr
+            or now - self._last_idr_request_t < _IDR_REQUEST_MIN_GAP
+        ):
+            return False
+        if not self.request_recovery_keyframe(now=now):
+            raise RuntimeError("scrcpy IDR control unavailable")
+        self._need_idr = False
+        return True
 
     def is_alive(self) -> bool:
         """True while relay thread is running (not zombie)."""
@@ -1044,17 +1213,13 @@ class ScrcpyRelaySession:
                 except socket.timeout:
                     now = time.monotonic()
                     if saw_video_frame:
-                        if self._need_idr:
-                            self._need_idr = False
-                            if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
-                                self._last_idr_request_t = now
-                                if idr_wait_started <= 0.0:
-                                    idr_wait_started = now
-                                    idr_window_start = now
-                                    idr_request_count = 0
-                                idr_request_count += 1
-                                self._request_idr()
-                                logger.debug("[%s] IDR requested after downstream recovery signal", self._serial)
+                        if self.request_pending_idr_if_due(now):
+                            if idr_wait_started <= 0.0:
+                                idr_wait_started = now
+                                idr_window_start = now
+                                idr_request_count = 0
+                            idr_request_count += 1
+                            logger.debug("[%s] IDR requested after downstream recovery signal", self._serial)
                         if idr_wait_started > 0.0:
                             elapsed = now - idr_wait_started
                             if elapsed >= _FRAME_TIMEOUT:
@@ -1062,12 +1227,14 @@ class ScrcpyRelaySession:
                                     f"scrcpy frame timeout after IDR ({_FRAME_TIMEOUT:.1f}s) — encoder stalled"
                                 )
                             if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
-                                self._last_idr_request_t = now
                                 if (now - idr_window_start) > _IDR_REQUEST_WINDOW:
                                     idr_window_start = now
                                     idr_request_count = 0
+                                if not self.request_recovery_keyframe(now=now):
+                                    raise RuntimeError(
+                                        "scrcpy IDR control unavailable"
+                                    )
                                 idr_request_count += 1
-                                self._request_idr()
                                 logger.debug(
                                     "[%s] scrcpy: %.1fs without frame after IDR — retry %d",
                                     self._serial,
@@ -1088,8 +1255,10 @@ class ScrcpyRelaySession:
                         )
                     now = time.monotonic()
                     if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
-                        self._last_idr_request_t = now
-                        self._request_idr()
+                        if not self.request_recovery_keyframe(now=now):
+                            raise RuntimeError(
+                                "scrcpy IDR control unavailable"
+                            )
                         if idr_window_start <= 0 or (now - idr_window_start) > _IDR_REQUEST_WINDOW:
                             idr_window_start = now
                             idr_request_count = 0
@@ -1127,16 +1296,13 @@ class ScrcpyRelaySession:
             # request an IDR keyframe so the browser decoder recovers in ~100ms
             # rather than waiting up to 1s for the next natural IDR interval.
             if self._need_idr:
-                self._need_idr = False
                 now = time.monotonic()
-                if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
-                    self._last_idr_request_t = now
+                if self.request_pending_idr_if_due(now):
                     if idr_wait_started <= 0.0:
                         idr_wait_started = now
                         idr_window_start = now
                         idr_request_count = 0
                     idr_request_count += 1
-                    self._request_idr()
                     logger.debug("[%s] IDR requested after P-frame queue drop", self._serial)
 
             header = _read_header_or_idr()
@@ -1145,13 +1311,31 @@ class ScrcpyRelaySession:
                 data = _recvall(video_sock, size)
             except socket.timeout:
                 raise RuntimeError(f"scrcpy mid-frame timeout ({_IDR_REQUEST_AFTER}s) — encoder stalled mid-NAL")
+            received_ns = time.monotonic_ns()
 
             is_cfg = bool(pts_raw & _PTS_CONFIG_MASK)
-            is_key = (not is_cfg) and _is_idr(data)
+            frame = prepare_video_packet(
+                serial=serial,
+                annexb=data,
+                is_config=is_cfg,
+                pts_us=int(pts_raw & ~_PTS_CONFIG_MASK),
+                width=w,
+                height=h,
+                received_ns=received_ns,
+                suppress_deltas=self._downstream_recovery.is_set(),
+            )
 
             if not is_cfg:
                 saw_video_frame = True
                 last_good_frame = time.monotonic()
+                if frame is None:
+                    self.last_frame_time = last_good_frame
+                    self.record_video_frame(
+                        is_key=False,
+                        now=last_good_frame,
+                    )
+                    self._stats_producer_suppressed_total += 1
+                    continue
                 idr_wait_started = 0.0
                 # We got a real video frame again — clear the stall window so
                 # future bursts are measured independently. Config/SPS packets
@@ -1160,37 +1344,22 @@ class ScrcpyRelaySession:
                 idr_request_count = 0
 
                 self.last_frame_time = time.monotonic()
-                self._record_video_frame(is_key=is_key, now=last_good_frame)
+                self.record_video_frame(
+                    is_key=frame.is_key,
+                    now=last_good_frame,
+                )
 
-            # Convert video frames Annex-B → AVCC here in the relay thread so the
-            # farm's asyncio event loop never has to do the O(n) conversion at 30fps.
-            # Config frames (SPS/PPS) are left as Annex-B — farm handles them via
-            # annexb_to_avcc_record_maybe in _handle_config (rare, only at start).
-            if not is_cfg:
-                data = _annexb_to_avcc(data)
-
-            # Keep the hot path transport-neutral. gRPC consumes this packet
-            # directly without building and reparsing the legacy WS envelope.
-            frame = VideoPacket(
-                serial=serial,
-                data=data,
-                is_config=is_cfg,
-                is_key=is_key,
-                pts_us=int(pts_raw & ~_PTS_CONFIG_MASK),
-                width=w if is_cfg else 0,
-                height=h if is_cfg else 0,
-            )
+            if frame is None:
+                continue
 
             # Dispatch via module-level function. Pass _mark_idr_needed so the
             # asyncio thread can signal back when a P-frame is dropped.
             self._loop.call_soon_threadsafe(
-                _relay_enqueue,
+                enqueue_video_packet,
                 self._send_queue,
                 frame,
-                is_cfg,
-                is_key,
-                self._mark_idr_needed,
-                self._serial,
+                self.notify_downstream_drop,
+                self.notify_downstream_resynced,
             )
 
     def _connect_with_retry(self, host: str, port: int, timeout: float) -> socket.socket:

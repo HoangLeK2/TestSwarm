@@ -225,22 +225,46 @@ class ScrcpySessionManager:
             "sessions": len(self._sessions),
             "frames": 0,
             "fps_x100": 0,
+            "fps_min_x100": 0,
+            "fps_max_x100": 0,
+            "fps_active_sessions": 0,
+            "fps_min_active_x100": 0,
             "idr_requests": 0,
             "idr_recoveries": 0,
+            "worst_device_idr_recovery_p95_ms": 0,
             "idr_recovery_max_ms": 0,
             "idr_pending": 0,
+            "producer_suppressed": 0,
         }
+        observed_fps: list[int] = []
+        active_fps: list[int] = []
         for session in list(self._sessions.values()):
             snapshot = session.stats_snapshot(reset=reset)
             totals["frames"] += snapshot.get("frames", 0)
-            totals["fps_x100"] += snapshot.get("fps_x100", 0)
+            fps_x100 = snapshot.get("fps_x100", 0)
+            totals["fps_x100"] += fps_x100
+            observed_fps.append(fps_x100)
+            if snapshot.get("frames", 0) > 0:
+                active_fps.append(fps_x100)
             totals["idr_requests"] += snapshot.get("idr_requests", 0)
             totals["idr_recoveries"] += snapshot.get("idr_recoveries", 0)
+            totals["worst_device_idr_recovery_p95_ms"] = max(
+                totals["worst_device_idr_recovery_p95_ms"],
+                snapshot.get("idr_recovery_p95_ms", 0),
+            )
             totals["idr_recovery_max_ms"] = max(
                 totals["idr_recovery_max_ms"],
                 snapshot.get("idr_recovery_max_ms", 0),
             )
             totals["idr_pending"] += snapshot.get("idr_pending", 0)
+            totals["producer_suppressed"] += snapshot.get(
+                "producer_suppressed",
+                0,
+            )
+        totals["fps_min_x100"] = min(observed_fps, default=0)
+        totals["fps_max_x100"] = max(observed_fps, default=0)
+        totals["fps_active_sessions"] = len(active_fps)
+        totals["fps_min_active_x100"] = min(active_fps, default=0)
         return totals
 
     # ── Background cleanup ────────────────────────────────────────────────────

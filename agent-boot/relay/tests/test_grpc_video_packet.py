@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import asyncio
-
-import pytest
-
-from relay.grpc_client import GrpcRelayClient, _parse_binary_frame
+from relay.grpc_client import (
+    agent_message_from_item,
+    parse_binary_video_frame,
+)
 from relay.grpc_gen import relay_pb2
-from relay.runtime import FairSendQueue
 from relay.video_packet import VideoPacket
 
 
-@pytest.mark.asyncio
-async def test_grpc_generator_accepts_typed_video_without_legacy_repack(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queue = FairSendQueue(video_per_device_max=2)
+def test_grpc_adapter_accepts_typed_video_packet() -> None:
     packet = VideoPacket(
         serial="phone-A",
         data=b"\x00\x00\x00\x04test",
@@ -24,23 +18,9 @@ async def test_grpc_generator_accepts_typed_video_without_legacy_repack(
         width=720,
         height=1280,
     )
-    queue.put_video_nowait(packet, packet.serial)
+    message = agent_message_from_item(packet, relay_pb2)
 
-    def fail_legacy_parse(_data: bytes):
-        raise AssertionError("typed gRPC video must not parse a legacy binary envelope")
-
-    monkeypatch.setattr("relay.grpc_client._parse_binary_frame", fail_legacy_parse)
-    client = GrpcRelayClient(
-        server_addr="unused",
-        api_key=None,
-        agent_id="agent-A",
-        send_queue=queue,
-        loop=asyncio.get_running_loop(),
-    )
-    client._running = True
-
-    message = await anext(client._frame_generator(relay_pb2))
-
+    assert message is not None
     assert message.video.serial == "phone-A"
     assert message.video.data == packet.data
     assert message.video.is_key is True
@@ -58,7 +38,7 @@ def test_typed_video_packet_preserves_legacy_websocket_contract() -> None:
         height=1280,
     )
 
-    parsed = _parse_binary_frame(packet.to_legacy_bytes())
+    parsed = parse_binary_video_frame(packet.to_legacy_bytes())
 
     assert parsed == (
         "phone-A",

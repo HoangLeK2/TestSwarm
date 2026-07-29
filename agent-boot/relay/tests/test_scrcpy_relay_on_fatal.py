@@ -200,9 +200,10 @@ def test_idle_after_first_video_frame_does_not_auto_request_idr():
     times = iter([0.0, 1.0])
     idr_requests = 0
 
-    def fake_request_idr():
+    def fake_request_idr(**_kwargs):
         nonlocal idr_requests
         idr_requests += 1
+        return True
 
     with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
          patch.object(mod, "_recvall", side_effect=fake_recvall), \
@@ -215,48 +216,41 @@ def test_idle_after_first_video_frame_does_not_auto_request_idr():
     assert idr_requests == 0
 
 
-def test_stream_emits_typed_video_packet_to_transport_queue():
-    session = _make_session(lambda _serial, _reason: None)
-    session._enable_control_channel = False
-    session._running = True
-    queued: list[object] = []
-
-    class _ImmediateLoop:
-        def call_soon_threadsafe(self, callback, *args):
-            callback(*args)
-
-    session._loop = _ImmediateLoop()
-    session._send_queue = asyncio.Queue()
+def test_prepare_video_packet_emits_transport_neutral_typed_packet():
     video_data = b"\x00\x00\x00\x01\x65idr"
-    calls = iter(
-        [
-            b"\x00",
-            b"test-device".ljust(64, b"\x00"),
-            struct.pack(">III", 0, 720, 1280),
-            struct.pack(">QI", 123, len(video_data)),
-            video_data,
-            RuntimeError("stop"),
-        ]
+    packet = mod.prepare_video_packet(
+        serial="test-serial",
+        annexb=video_data,
+        is_config=False,
+        pts_us=123,
+        width=720,
+        height=1280,
     )
 
-    def fake_recvall(_sock, _n):
-        value = next(calls)
-        if isinstance(value, BaseException):
-            raise value
-        return value
-
-    with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
-         patch.object(mod, "_recvall", side_effect=fake_recvall), \
-         patch.object(select, "select", return_value=([_FakeSocket()], [], [])):
-        with pytest.raises(RuntimeError, match="stop"):
-            session._connect_and_stream()
-
-    queued.append(session._send_queue.get_nowait())
-    packet = queued[0]
     assert isinstance(packet, VideoPacket)
     assert packet.serial == "test-serial"
     assert packet.is_key is True
     assert packet.pts_us == 123
+
+
+def test_prepare_video_packet_detects_idr_after_aud():
+    video_data = (
+        b"\x00\x00\x00\x01\x09\xf0"
+        b"\x00\x00\x00\x01\x65idr"
+    )
+    packet = mod.prepare_video_packet(
+        serial="test-serial",
+        annexb=video_data,
+        is_config=False,
+        pts_us=123,
+    )
+
+    assert isinstance(packet, VideoPacket)
+    assert packet.is_key is True
+    assert packet.data == (
+        struct.pack(">I", 2) + b"\x09\xf0"
+        + struct.pack(">I", 4) + b"\x65idr"
+    )
 
 
 def test_idr_recovery_after_first_video_frame_times_out_if_no_frame_returns():
@@ -290,9 +284,10 @@ def test_idr_recovery_after_first_video_frame_times_out_if_no_frame_returns():
     times = iter([0.0, 1.0, 2.0, 3.0, 10.0])
     idr_requests = 0
 
-    def fake_request_idr():
+    def fake_request_idr(**_kwargs):
         nonlocal idr_requests
         idr_requests += 1
+        return True
 
     with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
          patch.object(mod, "_recvall", side_effect=fake_recvall), \
@@ -311,17 +306,53 @@ def test_stream_stats_measure_fps_and_idr_recovery_latency():
     session = _make_session(lambda _serial, _reason: None)
     session._running = True
 
-    with patch.object(session, "_send_control_raw"), \
-         patch.object(mod.time, "monotonic", side_effect=[10.0, 10.075, 10.100]):
-        session._request_idr()
-        session._record_video_frame(is_key=True)
-        stats = session.stats_snapshot(reset=True)
+    session.record_idr_request(now=10.0)
+    session.record_video_frame(is_key=True, now=10.075)
+    stats = session.stats_snapshot(reset=True, now=10.100)
 
     assert stats["frames"] == 1
     assert stats["fps_x100"] > 0
     assert stats["idr_requests"] == 1
     assert stats["idr_recoveries"] == 1
     assert stats["idr_recovery_max_ms"] == 75
+    assert stats["idr_recovery_p95_ms"] == 75
+
+    # Reset advances to the exact values observed above; events recorded
+    # afterward must appear in the next interval rather than being lost.
+    session.record_idr_request(now=11.0)
+    session.record_video_frame(is_key=True, now=11.050)
+    next_stats = session.stats_snapshot(reset=True, now=11.100)
+
+    assert next_stats["frames"] == 1
+    assert next_stats["idr_requests"] == 1
+    assert next_stats["idr_recoveries"] == 1
+    assert next_stats["idr_recovery_max_ms"] == 50
+    assert next_stats["idr_recovery_p95_ms"] == 50
+
+
+def test_mark_idr_needed_stays_pending_until_rate_limit_allows_send():
+    session = _make_session(lambda _serial, _reason: None)
+    session._running = True
+    session.notify_downstream_drop()
+
+    assert session.request_pending_idr_if_due(1.0) is False
+    assert session.recovery_pending is True
+    with pytest.raises(RuntimeError, match="IDR control unavailable"):
+        session.request_pending_idr_if_due(4.0)
+    assert session.recovery_pending is True
+
+
+def test_prepare_video_packet_suppresses_delta_during_recovery():
+    video_data = b"\x00\x00\x00\x01\x61delta"
+    packet = mod.prepare_video_packet(
+        serial="test-serial",
+        annexb=video_data,
+        is_config=False,
+        pts_us=1,
+        suppress_deltas=True,
+    )
+
+    assert packet is None
 
 
 def test_on_fatal_not_fired_on_keyboard_interrupt():

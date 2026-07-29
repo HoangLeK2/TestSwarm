@@ -62,7 +62,7 @@ def create_grpc_channel(
     return grpc_aio.secure_channel(addr, credentials, options=channel_options)
 
 
-def _parse_binary_frame(data: bytes):
+def parse_binary_video_frame(data: bytes):
     """Parse 0x53 binary frame → (serial, payload, is_config, is_key, pts_us, w, h).
 
     Returns None if the frame is malformed or not a video frame.
@@ -82,6 +82,47 @@ def _parse_binary_frame(data: bytes):
     is_key = bool(flags & 0x02)
     pts_us = int(pts_raw & ~_PTS_CONFIG_MASK)
     return serial, payload, is_config, is_key, pts_us, w, h
+
+
+def _parse_binary_frame(data: bytes):
+    """Backward-compatible internal alias for older callers."""
+    return parse_binary_video_frame(data)
+
+
+def agent_message_from_item(item, relay_pb2):
+    """Adapt one transport-neutral queue item to its gRPC message."""
+    if isinstance(item, str):
+        return relay_pb2.AgentMsg(meta=item.encode())
+
+    if isinstance(item, VideoPacket):
+        frame = relay_pb2.VideoFrame(
+            serial=item.serial,
+            data=item.data,
+            is_config=item.is_config,
+            is_key=item.is_key,
+            pts_us=item.pts_us,
+            width=item.width if item.is_config else 0,
+            height=item.height if item.is_config else 0,
+        )
+        return relay_pb2.AgentMsg(video=frame)
+
+    if isinstance(item, bytes):
+        parsed = parse_binary_video_frame(item)
+        if parsed is None:
+            return None
+        serial, payload, is_config, is_key, pts_us, width, height = parsed
+        frame = relay_pb2.VideoFrame(
+            serial=serial,
+            data=payload,
+            is_config=is_config,
+            is_key=is_key,
+            pts_us=pts_us,
+            width=width if is_config else 0,
+            height=height if is_config else 0,
+        )
+        return relay_pb2.AgentMsg(video=frame)
+
+    return None
 
 
 class GrpcRelayClient:
@@ -204,37 +245,6 @@ class GrpcRelayClient:
             if item is None:
                 return  # sentinel — clean shutdown
 
-            if isinstance(item, str):
-                # JSON message: register / heartbeat / result
-                yield relay_pb2.AgentMsg(meta=item.encode())
-                continue
-
-            if isinstance(item, VideoPacket):
-                vf = relay_pb2.VideoFrame(
-                    serial=item.serial,
-                    data=item.data,
-                    is_config=item.is_config,
-                    is_key=item.is_key,
-                    pts_us=item.pts_us,
-                    width=item.width if item.is_config else 0,
-                    height=item.height if item.is_config else 0,
-                )
-                yield relay_pb2.AgentMsg(video=vf)
-                continue
-
-            if isinstance(item, bytes):
-                parsed = _parse_binary_frame(item)
-                if parsed is None:
-                    # Unknown binary frame — skip
-                    continue
-                serial, payload, is_config, is_key, pts_us, w, h = parsed
-                vf = relay_pb2.VideoFrame(
-                    serial=serial,
-                    data=payload,
-                    is_config=is_config,
-                    is_key=is_key,
-                    pts_us=pts_us,
-                    width=w if is_config else 0,
-                    height=h if is_config else 0,
-                )
-                yield relay_pb2.AgentMsg(video=vf)
+            message = agent_message_from_item(item, relay_pb2)
+            if message is not None:
+                yield message

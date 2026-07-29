@@ -216,33 +216,63 @@ def test_stop_session_discards_idle_serial_lock(monkeypatch):
     asyncio.run(_run())
 
 
-def test_stats_snapshot_aggregates_stream_health_without_serial_labels():
-    class _StatsSession:
-        def __init__(self, frames: int, fps_x100: int, recovery_ms: int):
-            self._stats = {
+def test_stats_snapshot_aggregates_stream_health_without_serial_labels(
+    monkeypatch,
+):
+    class _StatsSession(_FakeSession):
+        def __init__(self, serial: str, **kwargs):
+            super().__init__(serial, **kwargs)
+            frames, fps_x100, recovery_ms = {
+                "phone-A": (10, 800, 75),
+                "phone-B": (12, 750, 120),
+            }[serial]
+            self.stats = {
                 "frames": frames,
                 "fps_x100": fps_x100,
                 "idr_requests": 2,
                 "idr_recoveries": 1,
+                "idr_recovery_p95_ms": recovery_ms,
                 "idr_recovery_max_ms": recovery_ms,
                 "idr_pending": 0,
             }
 
         def stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
-            return dict(self._stats)
+            return dict(self.stats)
 
-    mgr = sm.ScrcpySessionManager()
-    mgr._sessions = {
-        "phone-A": _StatsSession(10, 800, 75),
-        "phone-B": _StatsSession(12, 750, 120),
-    }
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _StatsSession)
 
-    assert mgr.stats_snapshot(reset=True) == {
-        "sessions": 2,
-        "frames": 22,
-        "fps_x100": 1550,
-        "idr_requests": 4,
-        "idr_recoveries": 2,
-        "idr_recovery_max_ms": 120,
-        "idr_pending": 0,
-    }
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            for index, serial in enumerate(("phone-A", "phone-B")):
+                await mgr.start_session(
+                    serial,
+                    12,
+                    540,
+                    True,
+                    27183 + index,
+                    queue,
+                    loop,
+                )
+            assert mgr.stats_snapshot(reset=True) == {
+                "sessions": 2,
+                "frames": 22,
+                "fps_x100": 1550,
+                "fps_min_x100": 750,
+                "fps_max_x100": 800,
+                "fps_active_sessions": 2,
+                "fps_min_active_x100": 750,
+                "idr_requests": 4,
+                "idr_recoveries": 2,
+                "worst_device_idr_recovery_p95_ms": 120,
+                "idr_recovery_max_ms": 120,
+                "idr_pending": 0,
+                "producer_suppressed": 0,
+            }
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())

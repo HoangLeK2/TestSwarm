@@ -14,7 +14,24 @@ from typing import Any, Optional
 
 logger = logging.getLogger("relay.runtime")
 
-_VIDEO_AGE_BUCKETS_MS = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_000, 2_000, 5_000)
+_VIDEO_AGE_BUCKETS_MS = (
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1_000,
+    2_000,
+    5_000,
+    10_000,
+    30_000,
+    60_000,
+)
 
 
 # ── JSON backend: orjson if available, stdlib fallback ───────────────────────
@@ -415,7 +432,7 @@ class FairSendQueue:
     ) -> None:
         self._per_device_max = max(1, per_device_max)
         self._video_per_device_max = max(
-            1,
+            2,
             video_per_device_max
             if video_per_device_max is not None
             else per_device_max,
@@ -433,6 +450,9 @@ class FairSendQueue:
         self._video_age_samples = 0
         self._video_age_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
         self._video_age_max_ms = 0
+        self._video_handoff_samples = 0
+        self._video_handoff_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
+        self._video_handoff_max_ms = 0
         self._reliable_items = 0
         self._video_items = 0
         # deque acts as the round-robin cursor — O(1) rotate(-1) advances it.
@@ -488,11 +508,19 @@ class FairSendQueue:
         receiver's current reference chain. Suppress them until a keyframe is
         admitted instead of wasting transport capacity on corrupt output.
         """
+        now_ns = time.monotonic_ns()
+        received_ns = getattr(item, "received_ns", None)
+        if isinstance(received_ns, int):
+            self._record_video_handoff(
+                max(0, math.ceil((now_ns - received_ns) / 1_000_000))
+            )
         awaiting_keyframe = serial in self._video_awaiting_keyframe
         if awaiting_keyframe and not is_config and not is_key:
             self.record_video_drop(serial, suppressed=True)
             return False
 
+        if hasattr(item, "enqueued_ns"):
+            item.enqueued_ns = now_ns
         try:
             self.put_video_nowait(item, serial)
         except asyncio.QueueFull:
@@ -514,6 +542,10 @@ class FairSendQueue:
                 self._video_resyncs += 1
             self._video_awaiting_keyframe.discard(serial)
         return False
+
+    def is_video_awaiting_keyframe(self, serial: str) -> bool:
+        """Return whether a lane is suppressing deltas until decoder resync."""
+        return serial in self._video_awaiting_keyframe
 
     def evict_oldest_video(self, serial: str) -> bool:
         """Evict one video frame only; never touches a reliable result lane."""
@@ -540,7 +572,12 @@ class FairSendQueue:
 
     def video_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
         """Aggregate video pressure without exposing phone identifiers in logs."""
-        affected = set(self._video_drops) | set(self._video_evictions)
+        affected = (
+            set(self._video_drops)
+            | set(self._video_evictions)
+            | set(self._video_suppressed)
+            | self._video_awaiting_keyframe
+        )
         stats = {
             "drops": sum(self._video_drops.values()),
             "evictions": sum(self._video_evictions.values()),
@@ -553,6 +590,10 @@ class FairSendQueue:
             "queue_age_p50_ms": self._video_age_percentile(0.50),
             "queue_age_p95_ms": self._video_age_percentile(0.95),
             "queue_age_max_ms": self._video_age_max_ms,
+            "handoff_age_samples": self._video_handoff_samples,
+            "handoff_age_p50_ms": self._video_handoff_percentile(0.50),
+            "handoff_age_p95_ms": self._video_handoff_percentile(0.95),
+            "handoff_age_max_ms": self._video_handoff_max_ms,
         }
         if reset:
             self._video_drops.clear()
@@ -563,12 +604,23 @@ class FairSendQueue:
             self._video_age_samples = 0
             self._video_age_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
             self._video_age_max_ms = 0
+            self._video_handoff_samples = 0
+            self._video_handoff_buckets = [0] * (
+                len(_VIDEO_AGE_BUCKETS_MS) + 1
+            )
+            self._video_handoff_max_ms = 0
         return stats
+
+    def _record_video_handoff(self, age_ms: int) -> None:
+        bucket = bisect.bisect_left(_VIDEO_AGE_BUCKETS_MS, age_ms)
+        self._video_handoff_buckets[bucket] += 1
+        self._video_handoff_samples += 1
+        self._video_handoff_max_ms = max(self._video_handoff_max_ms, age_ms)
 
     def _record_video_dequeue(self, item: Any) -> None:
         self._video_dequeued += 1
         enqueued_ns = getattr(item, "enqueued_ns", None)
-        if not isinstance(enqueued_ns, int):
+        if not isinstance(enqueued_ns, int) or enqueued_ns <= 0:
             return
         age_ms = max(0, math.ceil((time.monotonic_ns() - enqueued_ns) / 1_000_000))
         bucket = bisect.bisect_left(_VIDEO_AGE_BUCKETS_MS, age_ms)
@@ -577,18 +629,40 @@ class FairSendQueue:
         self._video_age_max_ms = max(self._video_age_max_ms, age_ms)
 
     def _video_age_percentile(self, percentile: float) -> int:
-        if self._video_age_samples <= 0:
+        return self._latency_percentile(
+            self._video_age_buckets,
+            self._video_age_samples,
+            self._video_age_max_ms,
+            percentile,
+        )
+
+    def _video_handoff_percentile(self, percentile: float) -> int:
+        return self._latency_percentile(
+            self._video_handoff_buckets,
+            self._video_handoff_samples,
+            self._video_handoff_max_ms,
+            percentile,
+        )
+
+    @staticmethod
+    def _latency_percentile(
+        buckets: list[int],
+        samples: int,
+        max_ms: int,
+        percentile: float,
+    ) -> int:
+        if samples <= 0:
             return 0
-        target = max(1, math.ceil(self._video_age_samples * percentile))
+        target = max(1, math.ceil(samples * percentile))
         seen = 0
-        for index, count in enumerate(self._video_age_buckets):
+        for index, count in enumerate(buckets):
             seen += count
             if seen < target:
                 continue
             if index < len(_VIDEO_AGE_BUCKETS_MS):
                 return _VIDEO_AGE_BUCKETS_MS[index]
-            return self._video_age_max_ms
-        return self._video_age_max_ms
+            return max_ms
+        return max_ms
 
     # ── consumer API ──────────────────────────────────────────────────────
 

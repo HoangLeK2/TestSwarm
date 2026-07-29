@@ -4,6 +4,7 @@ relay/grpc_client.py — GrpcRelayClient
 Drop-in replacement for the WebSocket connection in agent.py.
 Reads from the same send_queue as the WS sender — items are either:
   - str  : JSON message (register / heartbeat / result) → AgentMsg(meta=...)
+  - VideoPacket: typed scrcpy frame → AgentMsg(video=...) without legacy repack
   - bytes: binary blob in 0x53 frame format → AgentMsg(video=VideoFrame(...))
 
 ControlMsg objects received from the server are put into ctrl_q where
@@ -21,6 +22,8 @@ from typing import Optional
 
 import grpc
 from grpc import aio as grpc_aio
+
+from .video_packet import VideoPacket
 
 log = logging.getLogger("grpc_client")
 
@@ -186,7 +189,7 @@ class GrpcRelayClient:
         shared queue. If the RPC fails before consuming the generator, it
         cannot leak into a later attempt.
 
-        Items are str (JSON → meta) or bytes (0x53 binary → video).
+        Items are str (JSON → meta), typed VideoPacket, or legacy 0x53 bytes.
         Stops when self._running is False or a None sentinel is received.
         """
         if initial_meta is not None:
@@ -204,6 +207,19 @@ class GrpcRelayClient:
             if isinstance(item, str):
                 # JSON message: register / heartbeat / result
                 yield relay_pb2.AgentMsg(meta=item.encode())
+                continue
+
+            if isinstance(item, VideoPacket):
+                vf = relay_pb2.VideoFrame(
+                    serial=item.serial,
+                    data=item.data,
+                    is_config=item.is_config,
+                    is_key=item.is_key,
+                    pts_us=item.pts_us,
+                    width=item.width if item.is_config else 0,
+                    height=item.height if item.is_config else 0,
+                )
+                yield relay_pb2.AgentMsg(video=vf)
                 continue
 
             if isinstance(item, bytes):

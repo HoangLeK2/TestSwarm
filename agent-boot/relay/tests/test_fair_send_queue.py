@@ -12,6 +12,7 @@ Critical invariants we lock in here:
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -20,6 +21,7 @@ from relay.runtime import (
     bounded_put,
     bounded_put_nowait,
 )
+from relay.video_packet import VideoPacket
 
 
 @pytest.mark.asyncio
@@ -206,3 +208,28 @@ async def test_video_drain_skips_known_empty_reliable_lanes() -> None:
     q._per_dev["A"] = PoisonEmptyLane()
     q.put_video_nowait("frame-2", "A")
     assert await q.get() == "frame-2"
+
+
+@pytest.mark.asyncio
+async def test_video_stats_report_queue_age_on_dequeue() -> None:
+    q = FairSendQueue(video_per_device_max=2)
+    packet = VideoPacket(
+        serial="A",
+        data=b"frame",
+        is_config=False,
+        is_key=True,
+        pts_us=1,
+        enqueued_ns=time.monotonic_ns() - 50_000_000,
+    )
+    q.offer_video_nowait(
+        packet,
+        packet.serial,
+        is_config=packet.is_config,
+        is_key=packet.is_key,
+    )
+
+    assert await q.get() is packet
+    stats = q.video_stats_snapshot()
+    assert stats["dequeued"] == 1
+    assert stats["queue_age_p95_ms"] >= 40
+    assert stats["queue_age_max_ms"] >= 40

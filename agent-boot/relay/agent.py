@@ -16,10 +16,9 @@ import logging
 import os
 import random
 import socket
-import struct
 import threading
-import uuid
 import time
+import uuid
 from concurrent.futures import Future
 from typing import Any, Optional
 
@@ -39,6 +38,7 @@ from relay.device_watcher import AdbDeviceWatcher
 from relay.session_manager import ScrcpySessionManager
 from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
+from relay.video_packet import VideoPacket
 from relay.runtime         import (
     SEND_CONTROL_MAX,
     SEND_PER_DEVICE_MAX,
@@ -54,7 +54,6 @@ from relay.runtime         import (
     dumps,
     dumps_maybe_offload,
     extra_data_sem,
-    generic_executor,
     init_executors,
     init_semaphores,
     register_stats_source,
@@ -386,7 +385,7 @@ class RelayAgent:
         self._runtime_stats.start()
         register_stats_source(
             "scrcpy",
-            lambda: {"sessions": self._scrcpy_mgr.count},
+            lambda: self._scrcpy_mgr.stats_snapshot(reset=True),
         )
         register_stats_source(
             "devices",
@@ -426,11 +425,12 @@ class RelayAgent:
             }
             if hasattr(q, "video_stats_snapshot"):
                 video_stats = q.video_stats_snapshot(reset=True)
-                stats.update({
-                    "video_drops": video_stats["drops"],
-                    "video_evictions": video_stats["evictions"],
-                    "video_affected": video_stats["affected_serials"],
-                })
+                stats.update(
+                    {
+                        f"video_{key}": value
+                        for key, value in video_stats.items()
+                    }
+                )
             return stats
         register_stats_source("send_q", _send_queue_stats)
 
@@ -594,8 +594,8 @@ class RelayAgent:
                         item = await send_queue.get()
                         if item is None:
                             return
-                        if isinstance(item, bytes):
-                            await ws.send(item)
+                        if isinstance(item, VideoPacket):
+                            await ws.send(item.to_legacy_bytes())
                         else:
                             await ws.send(item)
                 except Exception as exc:

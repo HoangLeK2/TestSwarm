@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import logging
+import math
 import os
 import time
 from collections import deque
@@ -11,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger("relay.runtime")
+
+_VIDEO_AGE_BUCKETS_MS = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_000, 2_000, 5_000)
 
 
 # ── JSON backend: orjson if available, stdlib fallback ───────────────────────
@@ -422,6 +426,13 @@ class FairSendQueue:
         self._video_per_dev: dict[str, asyncio.Queue] = {}
         self._video_drops: dict[str, int] = {}
         self._video_evictions: dict[str, int] = {}
+        self._video_suppressed: dict[str, int] = {}
+        self._video_awaiting_keyframe: set[str] = set()
+        self._video_resyncs = 0
+        self._video_dequeued = 0
+        self._video_age_samples = 0
+        self._video_age_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
+        self._video_age_max_ms = 0
         self._reliable_items = 0
         self._video_items = 0
         # deque acts as the round-robin cursor — O(1) rotate(-1) advances it.
@@ -463,6 +474,47 @@ class FairSendQueue:
         self._video_items += 1
         self._wake.set()
 
+    def offer_video_nowait(
+        self,
+        item: Any,
+        serial: str,
+        *,
+        is_config: bool,
+        is_key: bool,
+    ) -> bool:
+        """Offer one H264 packet and return whether the producer should request IDR.
+
+        Once a delta frame is dropped, later deltas are not decodable from the
+        receiver's current reference chain. Suppress them until a keyframe is
+        admitted instead of wasting transport capacity on corrupt output.
+        """
+        awaiting_keyframe = serial in self._video_awaiting_keyframe
+        if awaiting_keyframe and not is_config and not is_key:
+            self.record_video_drop(serial, suppressed=True)
+            return False
+
+        try:
+            self.put_video_nowait(item, serial)
+        except asyncio.QueueFull:
+            if not is_config and not is_key:
+                self.record_video_drop(serial)
+                if awaiting_keyframe:
+                    return False
+                self._video_awaiting_keyframe.add(serial)
+                return True
+            if not self.evict_oldest_video(serial):
+                return False
+            try:
+                self.put_video_nowait(item, serial)
+            except asyncio.QueueFull:
+                return False
+
+        if is_key:
+            if awaiting_keyframe:
+                self._video_resyncs += 1
+            self._video_awaiting_keyframe.discard(serial)
+        return False
+
     def evict_oldest_video(self, serial: str) -> bool:
         """Evict one video frame only; never touches a reliable result lane."""
         q = self._video_per_dev.get(serial)
@@ -478,9 +530,13 @@ class FairSendQueue:
         except asyncio.QueueEmpty:
             return False
 
-    def record_video_drop(self, serial: str) -> None:
+    def record_video_drop(self, serial: str, *, suppressed: bool = False) -> None:
         """Record a dropped delta frame for periodic fleet diagnostics."""
         self._video_drops[serial] = self._video_drops.get(serial, 0) + 1
+        if suppressed:
+            self._video_suppressed[serial] = (
+                self._video_suppressed.get(serial, 0) + 1
+            )
 
     def video_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
         """Aggregate video pressure without exposing phone identifiers in logs."""
@@ -488,12 +544,51 @@ class FairSendQueue:
         stats = {
             "drops": sum(self._video_drops.values()),
             "evictions": sum(self._video_evictions.values()),
+            "suppressed_until_keyframe": sum(self._video_suppressed.values()),
+            "resyncs": self._video_resyncs,
+            "awaiting_keyframe": len(self._video_awaiting_keyframe),
             "affected_serials": len(affected),
+            "dequeued": self._video_dequeued,
+            "queue_age_samples": self._video_age_samples,
+            "queue_age_p50_ms": self._video_age_percentile(0.50),
+            "queue_age_p95_ms": self._video_age_percentile(0.95),
+            "queue_age_max_ms": self._video_age_max_ms,
         }
         if reset:
             self._video_drops.clear()
             self._video_evictions.clear()
+            self._video_suppressed.clear()
+            self._video_resyncs = 0
+            self._video_dequeued = 0
+            self._video_age_samples = 0
+            self._video_age_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
+            self._video_age_max_ms = 0
         return stats
+
+    def _record_video_dequeue(self, item: Any) -> None:
+        self._video_dequeued += 1
+        enqueued_ns = getattr(item, "enqueued_ns", None)
+        if not isinstance(enqueued_ns, int):
+            return
+        age_ms = max(0, math.ceil((time.monotonic_ns() - enqueued_ns) / 1_000_000))
+        bucket = bisect.bisect_left(_VIDEO_AGE_BUCKETS_MS, age_ms)
+        self._video_age_buckets[bucket] += 1
+        self._video_age_samples += 1
+        self._video_age_max_ms = max(self._video_age_max_ms, age_ms)
+
+    def _video_age_percentile(self, percentile: float) -> int:
+        if self._video_age_samples <= 0:
+            return 0
+        target = max(1, math.ceil(self._video_age_samples * percentile))
+        seen = 0
+        for index, count in enumerate(self._video_age_buckets):
+            seen += count
+            if seen < target:
+                continue
+            if index < len(_VIDEO_AGE_BUCKETS_MS):
+                return _VIDEO_AGE_BUCKETS_MS[index]
+            return self._video_age_max_ms
+        return self._video_age_max_ms
 
     # ── consumer API ──────────────────────────────────────────────────────
 
@@ -533,6 +628,7 @@ class FairSendQueue:
             if item is not _MISSING:
                 if is_video:
                     self._video_items -= 1
+                    self._record_video_dequeue(item)
                 else:
                     self._reliable_items -= 1
                 self._prefer_video = not is_video
@@ -593,6 +689,7 @@ class FairSendQueue:
         self._reliable_items = max(0, self._reliable_items - n)
         video_n = self._drop_lane(serial, self._video_per_dev, self._video_rr)
         self._video_items = max(0, self._video_items - video_n)
+        self._video_awaiting_keyframe.discard(serial)
         return n + video_n
 
     @staticmethod

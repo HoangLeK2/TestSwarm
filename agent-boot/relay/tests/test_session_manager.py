@@ -214,3 +214,35 @@ def test_stop_session_discards_idle_serial_lock(monkeypatch):
             await mgr.stop()
 
     asyncio.run(_run())
+
+
+def test_stats_snapshot_aggregates_stream_health_without_serial_labels():
+    class _StatsSession:
+        def __init__(self, frames: int, fps_x100: int, recovery_ms: int):
+            self._stats = {
+                "frames": frames,
+                "fps_x100": fps_x100,
+                "idr_requests": 2,
+                "idr_recoveries": 1,
+                "idr_recovery_max_ms": recovery_ms,
+                "idr_pending": 0,
+            }
+
+        def stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+            return dict(self._stats)
+
+    mgr = sm.ScrcpySessionManager()
+    mgr._sessions = {
+        "phone-A": _StatsSession(10, 800, 75),
+        "phone-B": _StatsSession(12, 750, 120),
+    }
+
+    assert mgr.stats_snapshot(reset=True) == {
+        "sessions": 2,
+        "frames": 22,
+        "fps_x100": 1550,
+        "idr_requests": 4,
+        "idr_recoveries": 2,
+        "idr_recovery_max_ms": 120,
+        "idr_pending": 0,
+    }

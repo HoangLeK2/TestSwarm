@@ -219,6 +219,30 @@ class ScrcpySessionManager:
     def count(self) -> int:
         return len(self._sessions)
 
+    def stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        """Aggregate stream health without emitting per-device labels."""
+        totals = {
+            "sessions": len(self._sessions),
+            "frames": 0,
+            "fps_x100": 0,
+            "idr_requests": 0,
+            "idr_recoveries": 0,
+            "idr_recovery_max_ms": 0,
+            "idr_pending": 0,
+        }
+        for session in list(self._sessions.values()):
+            snapshot = session.stats_snapshot(reset=reset)
+            totals["frames"] += snapshot.get("frames", 0)
+            totals["fps_x100"] += snapshot.get("fps_x100", 0)
+            totals["idr_requests"] += snapshot.get("idr_requests", 0)
+            totals["idr_recoveries"] += snapshot.get("idr_recoveries", 0)
+            totals["idr_recovery_max_ms"] = max(
+                totals["idr_recovery_max_ms"],
+                snapshot.get("idr_recovery_max_ms", 0),
+            )
+            totals["idr_pending"] += snapshot.get("idr_pending", 0)
+        return totals
+
     # ── Background cleanup ────────────────────────────────────────────────────
 
     async def _cleanup_loop(self) -> None:

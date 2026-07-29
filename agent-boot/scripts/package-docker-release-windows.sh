@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./scripts/package-docker-release-windows.sh
-#   ./scripts/package-docker-release-windows.sh 0.1.0
+#   ./scripts/package-docker-release-windows.sh 0.1.1
 #   REUSE_IMAGE=1 ./scripts/package-docker-release-windows.sh   # explicitly reuse existing amd64 tar
 #
 # Output:

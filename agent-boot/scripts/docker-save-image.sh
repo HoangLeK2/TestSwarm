@@ -3,8 +3,8 @@
 #
 # Usage:
 #   ./scripts/docker-save-image.sh
-#   ./scripts/docker-save-image.sh 0.1.0
-#   ./scripts/docker-save-image.sh 0.1.0 amd64   # single arch only
+#   ./scripts/docker-save-image.sh 0.1.1
+#   ./scripts/docker-save-image.sh 0.1.1 amd64   # single arch only
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

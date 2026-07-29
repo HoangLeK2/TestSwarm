@@ -80,35 +80,47 @@ docker compose logs -f
 docker compose -f docker-compose.yml -f docker-compose.linux-usb.yml up -d --build
 ```
 
-### Export image `.tar` (mang sang máy khác)
+### Export image `.tar.gz` (mang sang máy khác)
 
 ```bash
 ./scripts/docker-save-image.sh
-# -> dist/agent-boot-image-0.1.0.tar
+# -> dist/agent-boot-image-0.1.1-amd64.tar.gz
+# -> dist/agent-boot-image-0.1.1-arm64.tar.gz
 
-docker load -i dist/agent-boot-image-0.1.0.tar
+docker load -i dist/agent-boot-image-0.1.1-amd64.tar.gz
 ./scripts/docker-up.sh up -d
 ```
 
-### Gói ship cho khách (khuyến nghị)
+### Gói ship cho khách Windows (khuyến nghị)
+
+```bash
+./scripts/package-docker-release-windows.sh
+# -> dist/agent-boot-docker-windows-0.1.1.zip
+```
+
+Gói Windows gồm image **linux/amd64** cho Docker Desktop, scripts `.cmd`/`.ps1`,
+`docker-compose.yml`, hướng dẫn và `.env.example` an toàn để khách tự điền.
+
+### Gói universal macOS / Linux / Windows
 
 ```bash
 ./scripts/package-docker-release.sh
-# -> dist/agent-boot-docker-0.1.0.tar.gz
+# -> dist/agent-boot-docker-0.1.1.tar.gz
 ```
 
-Gói gồm: **image amd64 + arm64** + `docker-compose.yml` + scripts + `.env.example` (một file zip chạy mọi CPU).
+Gói gồm **image amd64 + arm64** + `docker-compose.yml` + scripts +
+`.env.example`; script cũng tạo ZIP nếu máy build có lệnh `zip`.
 
 Khách giải nén → `./scripts/docker-load.sh` (tự chọn arch) → `./scripts/docker-up.sh`.
 
-### Gói source `.tar.gz` vs image `.tar`
+### Gói source `.tar.gz` vs image `.tar.gz`
 
 | File | Nội dung | Lệnh load |
 |------|----------|-----------|
-| `dist/agent-boot-docker-0.1.0.tar.gz` | Image + compose + scripts | `tar -xzf` → `docker-load.sh` |
-| `dist/agent-boot-0.1.0.tar.gz` | Source + Dockerfile | `tar -xzf` → `docker build` |
-| `dist/agent-boot-image-0.1.0-amd64.tar` | Image PC/Linux | `docker load -i` |
-| `dist/agent-boot-image-0.1.0-arm64.tar` | Image Mac M-series | `docker load -i` |
+| `dist/agent-boot-docker-0.1.1.tar.gz` | Image + compose + scripts | `tar -xzf` → `docker-load.sh` |
+| `dist/agent-boot-0.1.1.tar.gz` | Source + Dockerfile | `tar -xzf` → `docker build` |
+| `dist/agent-boot-image-0.1.1-amd64.tar.gz` | Image PC/Linux | `docker load -i` |
+| `dist/agent-boot-image-0.1.1-arm64.tar.gz` | Image Mac M-series | `docker load -i` |
 
 ADB server trên Mac host — dùng `./scripts/docker-up.sh` (tự bật `adb -a` khi cần).
 

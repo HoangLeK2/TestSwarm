@@ -5,7 +5,7 @@ name: agent-boot
 
 services:
   agent-boot:
-    image: agent-boot:0.1.0
+    image: agent-boot:0.1.1
     container_name: agent-boot
     restart: unless-stopped
     env_file:

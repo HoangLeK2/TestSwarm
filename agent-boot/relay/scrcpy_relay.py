@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from relay.adb import _adb_command
-from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
+from relay.adb_admission import AdbLane, adb_admission
 from relay.video_packet import VideoPacket
 
 logger = logging.getLogger("relay.scrcpy")
@@ -431,10 +431,10 @@ def _adb(*args: str, serial: Optional[str] = None, timeout: int = 15) -> tuple[s
     try:
         with adb_admission(
             serial=serial,
-            lane=classify_adb_command(
-                tuple(args),
-                default=AdbLane.STARTUP,
-            ),
+            # Scrcpy is viewer-gated. Its short startup/recovery transaction
+            # must run ahead of background u2/STF bootstrap work, including
+            # the versioned JAR push.
+            lane=AdbLane.STARTUP,
         ):
             r = subprocess.run(
                 cmd,

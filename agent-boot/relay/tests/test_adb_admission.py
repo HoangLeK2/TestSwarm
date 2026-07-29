@@ -58,6 +58,7 @@ def test_interactive_work_uses_reserved_capacity_ahead_of_maintenance() -> None:
     active_started = threading.Barrier(3)
     release_first = threading.Event()
     release_rest = threading.Event()
+    release_interactive = threading.Event()
     queued_maintenance_started = threading.Event()
     interactive_started = threading.Event()
 
@@ -73,6 +74,7 @@ def test_interactive_work_uses_reserved_capacity_ahead_of_maintenance() -> None:
     def interactive() -> None:
         with controller.admit(serial="phone-d", lane=AdbLane.INTERACTIVE):
             interactive_started.set()
+            release_interactive.wait(timeout=1)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         active = [
@@ -87,10 +89,13 @@ def test_interactive_work_uses_reserved_capacity_ahead_of_maintenance() -> None:
         while controller.snapshot()["waiting"] < 2 and time.monotonic() < deadline:
             time.sleep(0.001)
 
-        release_first.set()
-        assert interactive_started.wait(timeout=0.2)
-        assert not queued_maintenance_started.is_set()
-        release_rest.set()
+        try:
+            release_first.set()
+            assert interactive_started.wait(timeout=0.2)
+            assert not queued_maintenance_started.is_set()
+        finally:
+            release_interactive.set()
+            release_rest.set()
         for future in [*active, setup]:
             future.result(timeout=1)
         control.result(timeout=1)

@@ -441,6 +441,8 @@ def test_relay_retry_policy_caps_before_large_attempt_exponentiation() -> None:
 async def test_auto_bootstrap_does_not_occupy_shared_adb_executor(
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", "0")
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", "0")
     agent = RelayAgent(
         server_url="localhost:50051",
         api_key="x",
@@ -464,6 +466,218 @@ async def test_auto_bootstrap_does_not_occupy_shared_adb_executor(
     try:
         await agent._auto_bootstrap_online_device("phone-1")
     finally:
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_auto_bootstrap_waits_until_viewer_scrcpy_stops(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", "0")
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", "1")
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_AUTO_BOOTSTRAP_VIEWER_POLL_SECONDS",
+        0.01,
+        raising=False,
+    )
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._scrcpy_desired["phone-1"] = {
+        "desired": True,
+        "manual_stop": False,
+    }
+    bootstrap_started = threading.Event()
+
+    def bootstrap(serial: str, timeout: int) -> tuple[str, int]:
+        assert serial == "phone-1"
+        bootstrap_started.set()
+        return "ready", 0
+
+    monkeypatch.setattr(relay_agent_module, "_auto_bootstrap_enabled", lambda: True)
+    monkeypatch.setattr(relay_agent_module, "_bootstrap_device", bootstrap)
+
+    task = asyncio.create_task(
+        agent._auto_bootstrap_online_device("phone-1"),
+    )
+    try:
+        await asyncio.sleep(0.03)
+        assert not bootstrap_started.is_set()
+        agent._scrcpy_desired["phone-1"]["desired"] = False
+        await asyncio.wait_for(task, timeout=0.5)
+        assert bootstrap_started.is_set()
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_explicit_bootstrap_bypasses_active_viewer_deferral(
+    monkeypatch,
+) -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._scrcpy_desired["phone-1"] = {
+        "desired": True,
+        "manual_stop": False,
+    }
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_bootstrap_device",
+        lambda serial, timeout: (f"ready:{serial}", 0),
+    )
+
+    try:
+        assert await asyncio.wait_for(
+            agent._await_bootstrap("phone-1", 180),
+            timeout=0.5,
+        ) == ("ready:phone-1", 0)
+    finally:
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_explicit_bootstrap_cancels_deferred_auto_bootstrap(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", "60")
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", "1")
+    monkeypatch.setattr(relay_agent_module, "_auto_bootstrap_enabled", lambda: True)
+    bootstrap_calls: list[str] = []
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_bootstrap_device",
+        lambda serial, timeout: bootstrap_calls.append(serial) or ("ready", 0),
+    )
+
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._send_heartbeat = AsyncMock()
+    agent._schedule_capability_probe = lambda *_args: None
+    send_queue: asyncio.Queue = asyncio.Queue()
+
+    try:
+        await agent._on_device_event("phone-1", "device", send_queue)
+        await asyncio.sleep(0)
+        background = agent._auto_bootstrap_tasks["phone-1"]
+        assert not background.done()
+
+        result = await agent._execute_bootstrap_command("cmd-1", "phone-1", 180)
+        await asyncio.sleep(0)
+
+        assert '"ok":true' in result
+        assert bootstrap_calls == ["phone-1"]
+        assert background.cancelled()
+        assert "phone-1" not in agent._auto_bootstrap_tasks
+    finally:
+        pending = list(getattr(agent, "_auto_bootstrap_tasks", {}).values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_offline_device_cancels_deferred_auto_bootstrap(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", "60")
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", "1")
+    monkeypatch.setattr(relay_agent_module, "_auto_bootstrap_enabled", lambda: True)
+    bootstrap_started = threading.Event()
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_bootstrap_device",
+        lambda _serial, _timeout: bootstrap_started.set() or ("ready", 0),
+    )
+
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._send_heartbeat = AsyncMock()
+    agent._schedule_capability_probe = lambda *_args: None
+    agent._scrcpy_mgr.stop_all_for_serial = AsyncMock()
+    send_queue: asyncio.Queue = asyncio.Queue()
+
+    try:
+        await agent._on_device_event("phone-1", "device", send_queue)
+        await asyncio.sleep(0)
+        task = agent._auto_bootstrap_tasks["phone-1"]
+        assert not task.done()
+
+        await agent._on_device_event("phone-1", "offline", send_queue)
+        await asyncio.sleep(0)
+
+        assert task.cancelled()
+        assert "phone-1" not in agent._auto_bootstrap_tasks
+        assert not bootstrap_started.is_set()
+    finally:
+        pending = list(getattr(agent, "_auto_bootstrap_tasks", {}).values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        agent._bootstrap_coordinator.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_auto_bootstrap_can_be_rescheduled_immediately(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", "0")
+    monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", "1")
+    monkeypatch.setattr(relay_agent_module, "_auto_bootstrap_enabled", lambda: True)
+    monkeypatch.setattr(
+        relay_agent_module,
+        "_AUTO_BOOTSTRAP_VIEWER_POLL_SECONDS",
+        0.01,
+        raising=False,
+    )
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._scrcpy_desired["phone-1"] = {
+        "desired": True,
+        "manual_stop": False,
+    }
+
+    try:
+        agent._schedule_auto_bootstrap("phone-1")
+        await asyncio.sleep(0)
+        previous = agent._auto_bootstrap_tasks["phone-1"]
+        assert not previous.done()
+
+        agent._cancel_auto_bootstrap("phone-1")
+        agent._schedule_auto_bootstrap("phone-1")
+        replacement = agent._auto_bootstrap_tasks["phone-1"]
+        await asyncio.sleep(0)
+
+        assert replacement is not previous
+        assert not replacement.done()
+    finally:
+        pending = list(getattr(agent, "_auto_bootstrap_tasks", {}).values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(previous, *pending, return_exceptions=True)
         agent._bootstrap_coordinator.shutdown(wait=True)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -447,6 +448,90 @@ def test_19_phone_scrcpy_storm_keeps_farm_control_available(monkeypatch) -> None
 
     assert max_active_setup == 3
     assert completed_setup == 19
+
+
+def test_viewer_scrcpy_push_runs_before_queued_bootstrap_push(
+    monkeypatch,
+) -> None:
+    controller = AdbAdmissionController(
+        max_concurrency=2,
+        reserved_interactive=0,
+        max_heavy=2,
+    )
+    monkeypatch.setattr(relay_adb, "adb_admission", controller.admit)
+    monkeypatch.setattr(scrcpy_mod, "adb_admission", controller.admit)
+
+    blockers_started = threading.Barrier(3)
+    release_first = threading.Event()
+    release_second = threading.Event()
+    release_work = threading.Event()
+    bootstrap_started = threading.Event()
+    scrcpy_started = threading.Event()
+
+    def fake_run(cmd, **_kwargs):
+        if "blocker-first" in cmd:
+            blockers_started.wait(timeout=1)
+            release_first.wait(timeout=2)
+        elif "blocker-second" in cmd:
+            blockers_started.wait(timeout=1)
+            release_second.wait(timeout=2)
+        elif "bootstrap.apk" in cmd:
+            bootstrap_started.set()
+            release_work.wait(timeout=2)
+        elif "scrcpy-server.jar" in cmd:
+            scrcpy_started.set()
+            release_work.wait(timeout=2)
+        return SimpleNamespace(stdout=b"ok", stderr=b"", returncode=0)
+
+    monkeypatch.setattr(relay_adb.subprocess, "run", fake_run)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        blockers = [
+            pool.submit(
+                relay_adb._run,
+                "shell",
+                "blocker-first",
+                serial="phone-blocker-1",
+                lane=AdbLane.DEFAULT,
+            ),
+            pool.submit(
+                relay_adb._run,
+                "shell",
+                "blocker-second",
+                serial="phone-blocker-2",
+                lane=AdbLane.DEFAULT,
+            ),
+        ]
+        blockers_started.wait(timeout=1)
+        bootstrap = pool.submit(
+            relay_adb._run,
+            "push",
+            "bootstrap.apk",
+            "/data/local/tmp/bootstrap.apk",
+            serial="phone-bootstrap",
+        )
+        viewer = pool.submit(
+            scrcpy_mod._adb,
+            "push",
+            "scrcpy-server.jar",
+            "/data/local/tmp/scrcpy-server.jar",
+            serial="phone-viewer",
+        )
+
+        deadline = time.monotonic() + 0.2
+        while controller.snapshot()["waiting"] < 2 and time.monotonic() < deadline:
+            time.sleep(0.001)
+
+        try:
+            release_first.set()
+            assert scrcpy_started.wait(timeout=0.2)
+            assert not bootstrap_started.is_set()
+        finally:
+            release_work.set()
+            release_second.set()
+
+        for future in [*blockers, bootstrap, viewer]:
+            assert future.result(timeout=1) == ("ok", 0)
 
 
 def test_scrcpy_adb_run_uses_remote_server_flags(monkeypatch) -> None:

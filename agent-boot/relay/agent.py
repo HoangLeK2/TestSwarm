@@ -106,6 +106,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 SEMAPHORE_WAIT_WARN_MS = _env_float("RELAY_SEMAPHORE_WAIT_WARN_MS", 250.0)
+_AUTO_BOOTSTRAP_VIEWER_POLL_SECONDS = 0.5
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -177,6 +178,23 @@ def _auto_bootstrap_enabled() -> bool:
     return os.getenv("AGENT_BOOT_AUTO_BOOTSTRAP", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
+
+
+def _auto_bootstrap_delay_seconds(serial: str) -> float:
+    """Background grace plus deterministic fleet spread for one phone."""
+    base = max(0.0, _env_float("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", 8.0))
+    if base <= 0:
+        return 0.0
+    serial_bytes = str(serial or "").encode("utf-8", errors="ignore")
+    bucket = sum(
+        (index + 1) * value
+        for index, value in enumerate(serial_bytes)
+    ) % 1000
+    return base + base * (bucket / 1000.0)
+
+
+def _defer_auto_bootstrap_while_scrcpy() -> bool:
+    return _env_bool("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", True)
 
 
 def load_or_create_relay_id() -> str:
@@ -301,6 +319,7 @@ class RelayAgent:
         self._atx_forward_cache: dict[str, tuple[str, int]] = {}
         self._atx_forward_lock = threading.Lock()
         self._bootstrap_inflight: set[str] = set()
+        self._auto_bootstrap_tasks: dict[str, asyncio.Task] = {}
         self._bootstrap_coordinator = BootstrapCoordinator(
             max_concurrency=max(
                 1,
@@ -519,6 +538,8 @@ class RelayAgent:
                     await asyncio.sleep(delay)
         finally:
             await self._supervisor.stop()
+            await _cancel_and_await(*list(self._auto_bootstrap_tasks.values()))
+            self._auto_bootstrap_tasks.clear()
             await _cancel_and_await(*list(self._u2_warm_tasks.values()))
             self._u2_warm_tasks.clear()
             self._u2_warm_inflight.clear()
@@ -864,6 +885,34 @@ class RelayAgent:
             return
         self._bootstrap_inflight.add(serial)
         try:
+            delay = _auto_bootstrap_delay_seconds(serial)
+            if delay > 0:
+                logger.info(
+                    "[%s] auto-bootstrap queued in %.1fs (background)",
+                    serial,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            deferred_logged = False
+            while (
+                _defer_auto_bootstrap_while_scrcpy()
+                and self._viewer_desires_scrcpy(serial)
+            ):
+                if not deferred_logged:
+                    logger.info(
+                        "[%s] auto-bootstrap deferred while scrcpy viewer is active",
+                        serial,
+                    )
+                    deferred_logged = True
+                await asyncio.sleep(_AUTO_BOOTSTRAP_VIEWER_POLL_SECONDS)
+            ctx = self._registry.get(serial)
+            if ctx is not None and not ctx.is_available:
+                logger.info(
+                    "[%s] auto-bootstrap skipped because device is %s",
+                    serial,
+                    ctx.state.value,
+                )
+                return
             logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
             output, rc = await self._await_bootstrap(serial, 180)
             if rc == 0:
@@ -875,6 +924,44 @@ class RelayAgent:
             logger.warning("[%s] auto-bootstrap error: %s", serial, exc)
         finally:
             self._bootstrap_inflight.discard(serial)
+
+    def _schedule_auto_bootstrap(self, serial: str) -> None:
+        current = self._auto_bootstrap_tasks.get(serial)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(
+            self._auto_bootstrap_online_device(serial),
+            name=f"auto-bootstrap-{serial}",
+        )
+        self._auto_bootstrap_tasks[serial] = task
+
+        def _done(done: asyncio.Task, *, key: str = serial) -> None:
+            if self._auto_bootstrap_tasks.get(key) is done:
+                self._auto_bootstrap_tasks.pop(key, None)
+
+        task.add_done_callback(_done)
+
+    def _cancel_auto_bootstrap(self, serial: str) -> None:
+        task = self._auto_bootstrap_tasks.pop(serial, None)
+        if (
+            task is not None
+            and not task.done()
+            and task is not asyncio.current_task()
+        ):
+            task.cancel()
+
+    def _viewer_desires_scrcpy(self, serial: str) -> bool:
+        for logical, state in self._scrcpy_desired.items():
+            if not state.get("desired") or state.get("manual_stop"):
+                continue
+            adb_serial = str(state.get("adb_serial") or "")
+            if serial in {
+                logical,
+                adb_serial,
+                self._scrcpy_device_serial(logical),
+            }:
+                return True
+        return False
 
     def _submit_bootstrap(
         self,
@@ -993,6 +1080,9 @@ class RelayAgent:
 
         logger.info("device %s → %s (retries=%d)", serial, ctx.state.value, ctx.retry_count)
 
+        if adb_state != "device":
+            self._cancel_auto_bootstrap(serial)
+
         # USB disappeared — allow WiFi/TCP to be used again
         if ":" not in serial and adb_state != "device":
             self._clear_tcp_suppress_for_usb_anchor(serial)
@@ -1015,10 +1105,7 @@ class RelayAgent:
         if ctx.state == DeviceState.ONLINE:
             self._schedule_u2_warm(serial, reason="device-online")
             if _auto_bootstrap_enabled():
-                asyncio.create_task(
-                    self._auto_bootstrap_online_device(serial),
-                    name=f"auto-bootstrap-{serial}",
-                )
+                self._schedule_auto_bootstrap(serial)
             loop = asyncio.get_running_loop()
             self._schedule_capability_probe([serial], send_queue, loop)
             if self._scrcpy_auto_resume_enabled:
@@ -2565,6 +2652,10 @@ class RelayAgent:
                 "output": "",
                 "error": f"serial {serial!r} not available (state={state_str})",
             })
+        # An explicit automation request supersedes any delayed background
+        # bootstrap for this phone. Otherwise the deferred task would repeat
+        # the same heavy ADB work after the viewer closes.
+        self._cancel_auto_bootstrap(serial)
         try:
             output, rc = await self._await_bootstrap(serial, max(timeout, 180))
             return dumps({
@@ -2945,6 +3036,8 @@ class RelayAgent:
             warm_task.cancel()
         self._u2_warm_inflight.discard(serial)
         self._clear_u2_warm_backoff(serial)
+
+        self._cancel_auto_bootstrap(serial)
 
         # Supervisor circuit breaker — let a re-plugged device start fresh.
         breakers = getattr(self._supervisor, "_breakers", None)

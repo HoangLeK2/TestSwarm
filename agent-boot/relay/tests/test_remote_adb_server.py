@@ -243,6 +243,31 @@ def test_expired_scrcpy_jar_cache_revalidates_device(monkeypatch) -> None:
     assert stat_calls == 2
 
 
+def test_invalidated_scrcpy_jar_cache_revalidates_within_ttl(monkeypatch) -> None:
+    session = _make_session()
+    expected_size = scrcpy_mod._BUNDLED_JAR.stat().st_size
+    stat_calls = 0
+
+    def fake_adb(*args, **_kwargs):
+        nonlocal stat_calls
+        if args[0] == "shell" and "stat -c" in args[1]:
+            stat_calls += 1
+            return str(expected_size), 0
+        return "", 0
+
+    monkeypatch.setattr(scrcpy_mod, "_adb", fake_adb)
+
+    try:
+        session._ensure_server_jar_on_device()
+        session._ensure_server_jar_on_device()
+        scrcpy_mod.invalidate_scrcpy_server_jar(session._serial)
+        session._ensure_server_jar_on_device()
+    finally:
+        session._loop.close()
+
+    assert stat_calls == 2
+
+
 def test_adb_command_uses_remote_server_flags_from_socket(monkeypatch) -> None:
     _set_remote_adb_env(monkeypatch)
 

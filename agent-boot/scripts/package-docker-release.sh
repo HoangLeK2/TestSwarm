@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./scripts/package-docker-release.sh
-#   ./scripts/package-docker-release.sh 0.1.2
+#   ./scripts/package-docker-release.sh 0.1.3
 #
 # Output:
 #   dist/agent-boot-docker-<version>.tar.gz

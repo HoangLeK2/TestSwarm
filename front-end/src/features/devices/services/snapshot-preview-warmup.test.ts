@@ -141,7 +141,7 @@ test('snapshot preview warmup uses lightweight scrcpy attach profile', async () 
   assert.match(payload.viewer_id ?? '', /^snapshot-preview:/);
   assert.deepEqual(payload, {
     viewer_id: payload.viewer_id,
-    enable_control: true,
+    enable_control: false,
     max_fps: 1,
     max_width: 360,
     bitrate: 100_000

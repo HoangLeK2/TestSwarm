@@ -136,6 +136,39 @@ def test_stop_during_server_start_does_not_leave_late_scrcpy_server():
     assert fatal_calls == []
 
 
+def test_handshake_requests_initial_idr_when_control_socket_is_ready():
+    session = _make_session(lambda _serial, _reason: None)
+    session._running = True
+    calls = iter(
+        [
+            b"\x00",
+            b"test-device".ljust(64, b"\x00"),
+            struct.pack(">III", 0, 720, 1280),
+            RuntimeError("stop"),
+        ]
+    )
+
+    def fake_recvall(_sock, _n):
+        value = next(calls)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    with patch.object(
+        session, "_connect_with_retry", return_value=_FakeSocket()
+    ), patch.object(
+        mod, "_recvall", side_effect=fake_recvall
+    ), patch.object(
+        select, "select", return_value=([_FakeSocket()], [], [])
+    ), patch.object(
+        session, "request_recovery_keyframe", return_value=True
+    ) as request_keyframe:
+        with pytest.raises(RuntimeError, match="stop"):
+            session._connect_and_stream()
+
+    request_keyframe.assert_called_once()
+
+
 def test_config_packets_do_not_reset_no_frame_watchdog():
     fatal_calls: list[tuple[str, str]] = []
     session = _make_session(lambda s, r: fatal_calls.append((s, r)))

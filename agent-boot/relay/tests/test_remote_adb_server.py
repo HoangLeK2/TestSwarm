@@ -186,7 +186,7 @@ def test_scrcpy_jar_deploy_is_single_flight_per_phone_and_version(
     assert push_calls == 1
 
 
-def test_new_scrcpy_session_revalidates_cached_jar(monkeypatch) -> None:
+def test_new_scrcpy_session_reuses_recent_jar_verification(monkeypatch) -> None:
     first = _make_session()
     expected_size = scrcpy_mod._BUNDLED_JAR.stat().st_size
     stat_calls = 0
@@ -209,6 +209,36 @@ def test_new_scrcpy_session_revalidates_cached_jar(monkeypatch) -> None:
             second._loop.close()
     finally:
         first._loop.close()
+
+    assert stat_calls == 1
+
+
+def test_expired_scrcpy_jar_cache_revalidates_device(monkeypatch) -> None:
+    session = _make_session()
+    expected_size = scrcpy_mod._BUNDLED_JAR.stat().st_size
+    stat_calls = 0
+
+    def fake_adb(*args, **_kwargs):
+        nonlocal stat_calls
+        if args[0] == "shell" and "stat -c" in args[1]:
+            stat_calls += 1
+            return str(expected_size), 0
+        return "", 0
+
+    monkeypatch.setattr(scrcpy_mod, "_adb", fake_adb)
+
+    try:
+        session._ensure_server_jar_on_device()
+        key = (session._serial, session._jar_version)
+        with scrcpy_mod._SCRCPY_JAR_DEPLOY_CONDITION:
+            scrcpy_mod._SCRCPY_JAR_READY[key] = (
+                time.monotonic()
+                - scrcpy_mod.SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS
+                - 1
+            )
+        session._ensure_server_jar_on_device()
+    finally:
+        session._loop.close()
 
     assert stat_calls == 2
 

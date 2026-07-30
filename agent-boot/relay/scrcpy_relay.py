@@ -47,7 +47,7 @@ _SCRCPY_PATH_ON_DEVICE = (
 )
 _SCRCPY_JAR_DEPLOY_CONDITION = threading.Condition()
 _SCRCPY_JAR_DEPLOYING: set[tuple[str, str]] = set()
-_SCRCPY_JAR_READY: set[tuple[str, str]] = set()
+_SCRCPY_JAR_READY: dict[tuple[str, str], float] = {}
 
 
 def invalidate_scrcpy_server_jar(serial: str) -> None:
@@ -58,7 +58,7 @@ def invalidate_scrcpy_server_jar(serial: str) -> None:
     with _SCRCPY_JAR_DEPLOY_CONDITION:
         stale = [key for key in _SCRCPY_JAR_READY if key[0] == serial]
         for key in stale:
-            _SCRCPY_JAR_READY.discard(key)
+            _SCRCPY_JAR_READY.pop(key, None)
 
 
 def annexb_contains_idr(data: bytes) -> bool:
@@ -235,6 +235,10 @@ def _env_int(name: str, default: int) -> int:
 SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 12))
 SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 480))
 SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 600_000))
+SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS = max(
+    0,
+    min(3600, _env_int("SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS", 300)),
+)
 
 
 def _per_serial_env(base: str, serial: str, fallback: str) -> str:
@@ -476,10 +480,6 @@ class ScrcpyRelaySession:
     ) -> None:
         self._serial         = serial
         self._jar_version    = _BUNDLED_JAR_VERSION
-        # A new session may follow a reboot or OEM cleanup of /data/local/tmp.
-        # Revalidate once per session, while retaining single-flight/cache reuse
-        # for reconnect attempts within the same session.
-        invalidate_scrcpy_server_jar(serial)
         self._max_fps        = max_fps or SCRCPY_DEFAULT_MAX_FPS
         self._max_width      = max_width or SCRCPY_DEFAULT_MAX_WIDTH
         # Touch/key control originates from the farm's `scrcpy_control` config.
@@ -948,15 +948,24 @@ class ScrcpyRelaySession:
     def _ensure_server_jar_on_device(self) -> None:
         """Push scrcpy-server JAR if missing OR size doesn't match bundled copy.
 
-        Called before every _start_scrcpy_server() attempt. The versioned path
-        cannot be removed or overwritten by bootstrap bundle extraction, and
-        temp+rename prevents a reconnect from observing a partial push.
+        Called before every _start_scrcpy_server() attempt. A short process-local
+        TTL avoids hammering the shared ADB server with one `stat` per dashboard
+        scroll/re-attach, while a failed start invalidates the cache and forces
+        revalidation. The versioned path cannot be removed or overwritten by
+        bootstrap bundle extraction, and temp+rename prevents a reconnect from
+        observing a partial push.
         """
         deployment_key = (self._serial, self._jar_version)
         with _SCRCPY_JAR_DEPLOY_CONDITION:
             while deployment_key in _SCRCPY_JAR_DEPLOYING:
                 _SCRCPY_JAR_DEPLOY_CONDITION.wait()
-            if deployment_key in _SCRCPY_JAR_READY:
+            verified_at = _SCRCPY_JAR_READY.get(deployment_key)
+            if (
+                verified_at is not None
+                and SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS > 0
+                and time.monotonic() - verified_at
+                < SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS
+            ):
                 return
             _SCRCPY_JAR_DEPLOYING.add(deployment_key)
 
@@ -970,7 +979,7 @@ class ScrcpyRelaySession:
         else:
             with _SCRCPY_JAR_DEPLOY_CONDITION:
                 _SCRCPY_JAR_DEPLOYING.discard(deployment_key)
-                _SCRCPY_JAR_READY.add(deployment_key)
+                _SCRCPY_JAR_READY[deployment_key] = time.monotonic()
                 _SCRCPY_JAR_DEPLOY_CONDITION.notify_all()
 
     def _verify_or_deploy_server_jar(self) -> None:
@@ -1257,6 +1266,16 @@ class ScrcpyRelaySession:
             self._device_height = h
         self._stream_ready.set()
         logger.info("[%s] handshake OK — %dx%d", self._serial, self._device_width, self._device_height)
+        # Browser requests can arrive before this new session has a control
+        # socket and are therefore best-effort no-ops. Request the bootstrap
+        # keyframe here, at the first point where the agent can deliver it,
+        # instead of waiting for the natural encoder IDR interval.
+        if self._enable_control_channel:
+            if self.request_recovery_keyframe(now=time.monotonic()):
+                logger.debug(
+                    "[%s] requested initial IDR after handshake",
+                    self._serial,
+                )
 
         # 4. Stream H264 packets → gRPC send_queue.
         serial   = self._serial

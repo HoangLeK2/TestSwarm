@@ -32,7 +32,7 @@ const SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT = (() => {
 })();
 
 const PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
-  enableControl: true,
+  enableControl: false,
   maxFps: (() => {
     const raw = Number(
       process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_SCRCPY_FPS ?? 1

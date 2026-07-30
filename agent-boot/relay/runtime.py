@@ -98,9 +98,9 @@ def _env_float(name: str, default: float, *, lo: float = 0.0, hi: float = 3600.0
 # enough that a start storm cannot create dozens of blocked subprocess workers.
 # Scale phone count horizontally; tune only from measured queue/runtime stats.
 #
-ADB_POOL_SIZE       = _env_int("RELAY_ADB_POOL_SIZE", 12)
-U2_POOL_SIZE        = _env_int("RELAY_U2_POOL_SIZE", 12)
-SCRCPY_POOL_SIZE    = _env_int("RELAY_SCRCPY_POOL_SIZE", 3)
+ADB_POOL_SIZE       = _env_int("RELAY_ADB_POOL_SIZE", 12, lo=4, hi=24)
+U2_POOL_SIZE        = _env_int("RELAY_U2_POOL_SIZE", 12, lo=4, hi=24)
+SCRCPY_POOL_SIZE    = _env_int("RELAY_SCRCPY_POOL_SIZE", 3, lo=1, hi=4)
 GENERIC_POOL_SIZE   = _env_int("RELAY_GENERIC_POOL_SIZE", 8)
 # CPU pool: short, pure-Python work that blocks the event loop (json.dumps
 # of large XML payloads, lxml parsing). Dedicated so a CPU spike does not

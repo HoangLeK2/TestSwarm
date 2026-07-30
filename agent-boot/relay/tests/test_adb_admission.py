@@ -1,14 +1,55 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from relay.adb_admission import (
     AdbAdmissionController,
     AdbLane,
     classify_adb_command,
 )
+
+
+def test_process_adb_admission_env_is_clamped() -> None:
+    agent_boot_root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": os.pathsep.join(
+                filter(
+                    None,
+                    [
+                        str(agent_boot_root),
+                        env.get("PYTHONPATH"),
+                    ],
+                )
+            ),
+            "RELAY_ADB_COMMAND_CONCURRENCY": "99",
+            "RELAY_ADB_INTERACTIVE_RESERVED": "99",
+            "RELAY_ADB_HEAVY_CONCURRENCY": "99",
+        }
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import relay.adb_admission as m; "
+                "assert m._CONTROLLER._max_concurrency == 24; "
+                "assert m._CONTROLLER._reserved_interactive == 8; "
+                "assert m._CONTROLLER._max_heavy == 4"
+            ),
+        ],
+        check=True,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
 
 
 def test_one_phone_is_serialized_without_blocking_another_phone() -> None:

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_ATTACH_CONCURRENCY = '2';
 process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_RELEASE_GRACE_MS = '20';
+process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT = '2';
 
 const farmApiModule = await import('@/lib/farm-api');
 
@@ -208,6 +209,45 @@ test('snapshot preview release grace does not block a new visible serial', async
 
   second.release();
   replacement.release();
+  await waitForReleaseGrace();
+});
+
+test('snapshot preview caps retained offscreen live previews', async () => {
+  postCalls.length = 0;
+
+  const first = warmup.acquireSnapshotPreviewWarmup('serial-retain-limit-a');
+  const second = warmup.acquireSnapshotPreviewWarmup('serial-retain-limit-b');
+  const third = warmup.acquireSnapshotPreviewWarmup('serial-retain-limit-c');
+  assert.ok(first);
+  assert.ok(second);
+  assert.ok(third);
+  await Promise.all([first.attached, second.attached, third.attached]);
+
+  first.release();
+  second.release();
+  third.release();
+  await flushMicrotasks();
+
+  assert.equal(warmup.getSnapshotPreviewRetainedIdleLimit(), 2);
+  assert.equal(warmup.getSnapshotPreviewWarmupActiveCount(), 2);
+  assert.ok(
+    postCalls.some((call) =>
+      call.url.includes('/devices/serial-retain-limit-a/scrcpy/detach')
+    )
+  );
+  assert.equal(
+    postCalls.some((call) =>
+      call.url.includes('/devices/serial-retain-limit-b/scrcpy/detach')
+    ),
+    false
+  );
+  assert.equal(
+    postCalls.some((call) =>
+      call.url.includes('/devices/serial-retain-limit-c/scrcpy/detach')
+    ),
+    false
+  );
+
   await waitForReleaseGrace();
 });
 

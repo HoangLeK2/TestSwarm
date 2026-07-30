@@ -16,10 +16,19 @@ const PREVIEW_ATTACH_CONCURRENCY = (() => {
 
 const SNAPSHOT_WARMUP_RELEASE_GRACE_MS = (() => {
   const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_RELEASE_GRACE_MS ?? 700
+    process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_RELEASE_GRACE_MS ??
+      12_000
   );
-  if (!Number.isFinite(raw)) return 700;
-  return Math.max(0, Math.min(10_000, Math.round(raw)));
+  if (!Number.isFinite(raw)) return 12_000;
+  return Math.max(0, Math.min(60_000, Math.round(raw)));
+})();
+
+const SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT = (() => {
+  const raw = Number(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT ?? 8
+  );
+  if (!Number.isFinite(raw)) return 8;
+  return Math.max(0, Math.min(64, Math.round(raw)));
 })();
 
 const PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
@@ -57,6 +66,7 @@ type WarmupEntry = {
   state: 'queued' | 'attaching' | 'settled';
   settled: boolean;
   releaseTimer: ReturnType<typeof setTimeout> | null;
+  releasedAt: number;
 };
 
 export type SnapshotPreviewWarmupHandle = {
@@ -74,6 +84,34 @@ function detachWarmupEntry(serial: string, entry: WarmupEntry) {
   void entry.attached.finally(() => {
     detachScrcpyStream(serial, entry.viewerId).catch(() => {});
   });
+}
+
+function evictWarmupEntry(serial: string, entry: WarmupEntry) {
+  if (entry.releaseTimer) {
+    clearTimeout(entry.releaseTimer);
+    entry.releaseTimer = null;
+  }
+  finalizeUnusedWarmup(serial, entry);
+}
+
+function trimRetainedIdleWarmups() {
+  if (SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT <= 0) {
+    for (const [serial, entry] of activeWarmups) {
+      if (entry.refs <= 0 && entry.state === 'settled') {
+        evictWarmupEntry(serial, entry);
+      }
+    }
+    return;
+  }
+
+  const retained = Array.from(activeWarmups.entries())
+    .filter(([, entry]) => entry.refs <= 0 && entry.state === 'settled')
+    .sort(([, a], [, b]) => a.releasedAt - b.releasedAt);
+  const overflow = retained.length - SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT;
+  if (overflow <= 0) return;
+  for (const [serial, entry] of retained.slice(0, overflow)) {
+    evictWarmupEntry(serial, entry);
+  }
 }
 
 function finalizeUnusedWarmup(serial: string, entry: WarmupEntry) {
@@ -176,6 +214,10 @@ export function getSnapshotPreviewAttachingCount(): number {
   return attachingWarmups;
 }
 
+export function getSnapshotPreviewRetainedIdleLimit(): number {
+  return SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT;
+}
+
 export function acquireSnapshotPreviewWarmup(
   serial: string
 ): SnapshotPreviewWarmupHandle | null {
@@ -201,7 +243,8 @@ export function acquireSnapshotPreviewWarmup(
       resolveAttached,
       state: 'queued',
       settled: false,
-      releaseTimer: null
+      releaseTimer: null,
+      releasedAt: 0
     };
     entry = newEntry;
     activeWarmups.set(serial, entry);
@@ -212,6 +255,7 @@ export function acquireSnapshotPreviewWarmup(
     clearTimeout(entry.releaseTimer);
     entry.releaseTimer = null;
   }
+  entry.releasedAt = 0;
   entry.refs += 1;
   let released = false;
 
@@ -240,6 +284,8 @@ export function acquireSnapshotPreviewWarmup(
         detachWarmupEntry(serial, current);
         return;
       }
+      current.releasedAt =
+        typeof performance !== 'undefined' ? performance.now() : Date.now();
       current.releaseTimer = setTimeout(() => {
         const retained = activeWarmups.get(serial);
         if (!retained || retained.viewerId !== current.viewerId) return;
@@ -247,6 +293,7 @@ export function acquireSnapshotPreviewWarmup(
         if (retained.refs > 0) return;
         finalizeUnusedWarmup(serial, retained);
       }, SNAPSHOT_WARMUP_RELEASE_GRACE_MS);
+      trimRetainedIdleWarmups();
     }
   };
 

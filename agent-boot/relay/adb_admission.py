@@ -14,12 +14,21 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 
-def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+def _env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int = 0,
+    maximum: int | None = None,
+) -> int:
     try:
         value = int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
-    return max(minimum, value)
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 class AdbLane(IntEnum):
@@ -237,13 +246,19 @@ class AdbAdmissionController:
 
 
 _CONTROLLER = AdbAdmissionController(
-    max_concurrency=_env_int("RELAY_ADB_COMMAND_CONCURRENCY", 12, minimum=1),
+    max_concurrency=_env_int(
+        "RELAY_ADB_COMMAND_CONCURRENCY",
+        12,
+        minimum=1,
+        maximum=24,
+    ),
     reserved_interactive=_env_int(
         "RELAY_ADB_INTERACTIVE_RESERVED",
         2,
         minimum=0,
+        maximum=8,
     ),
-    max_heavy=_env_int("RELAY_ADB_HEAVY_CONCURRENCY", 3, minimum=1),
+    max_heavy=_env_int("RELAY_ADB_HEAVY_CONCURRENCY", 3, minimum=1, maximum=4),
 )
 
 

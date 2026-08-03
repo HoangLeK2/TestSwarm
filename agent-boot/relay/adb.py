@@ -16,14 +16,18 @@ import hashlib
 import logging
 import os as _os
 import re
+import shlex
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
 from relay.device_state import DeviceRegistry
 
 logger = logging.getLogger("relay.adb")
@@ -105,29 +109,194 @@ _U2_ADB_KEYBOARD_IME = f"{_U2_PKG}/.AdbKeyboard"
 _U2_RUNNER   = "androidx.test.runner.AndroidJUnitRunner"
 _U2_STUB_CLASS = "com.github.uiautomator.stub.Stub"
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = _os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+_CAPABILITY_CACHE_TTL_SECONDS = max(
+    0,
+    min(3600, _env_int("AGENT_BOOT_CAPABILITY_CACHE_TTL_SECONDS", 300)),
+)
+_PACKAGE_STATE_CACHE_TTL_SECONDS = max(
+    0,
+    min(3600, _env_int("AGENT_BOOT_PACKAGE_CACHE_TTL_SECONDS", 900)),
+)
+_LAN_IP_CACHE_TTL_SECONDS = max(
+    0,
+    min(600, _env_int("AGENT_BOOT_LAN_IP_CACHE_TTL_SECONDS", 60)),
+)
+
+
+@dataclass(frozen=True)
+class _PackageState:
+    installed: bool
+    apk_path: str = ""
+    sha256: str = ""
+
+
+_ADB_CACHE_LOCK = threading.RLock()
+_CAPABILITY_CACHE: dict[str, tuple[float, dict]] = {}
+_PACKAGE_STATE_CACHE: dict[tuple[str, str], tuple[float, _PackageState]] = {}
+_LAN_IP_CACHE: dict[str, tuple[float, str]] = {}
+_LOCAL_SHA256_CACHE: dict[tuple[str, int, int], str] = {}
+_ATX_FORWARD_CACHE: dict[str, tuple[str, int]] = {}
+_ATX_FORWARD_FAIL_COUNT: dict[str, int] = {}
+_ATX_FORWARD_LAST_ERROR: dict[str, str] = {}
+_ATX_FORWARD_CREATE_RETRY_AFTER: dict[str, float] = {}
+_ATX_FORWARD_SERIAL_LOCKS: dict[str, threading.Lock] = {}
+_ADB_COMMAND_STATS: dict[str, int] = {}
+_ATX_FORWARD_RECONCILE_NEXT_AT = 0.0
+_ATX_FORWARD_FAILURES_BEFORE_RECREATE = max(
+    1,
+    min(10, _env_int("AGENT_BOOT_ATX_FORWARD_FAILURES_BEFORE_RECREATE", 2)),
+)
+_ATX_FORWARD_RECONCILE_INTERVAL_SECONDS = max(
+    0,
+    min(600, _env_int("AGENT_BOOT_ATX_FORWARD_RECONCILE_INTERVAL_SECONDS", 30)),
+)
+_ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS = max(
+    0,
+    min(60, _env_int("AGENT_BOOT_ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS", 2)),
+)
+
+
+def _atx_forward_serial_lock(serial: str) -> threading.Lock:
+    with _ADB_CACHE_LOCK:
+        lock = _ATX_FORWARD_SERIAL_LOCKS.get(serial)
+        if lock is None:
+            lock = threading.Lock()
+            _ATX_FORWARD_SERIAL_LOCKS[serial] = lock
+        return lock
+
+
+def _adb_command_stat_key(args: tuple[str, ...]) -> str:
+    command = str(args[0]).strip().lower() if args else "unknown"
+    if command == "shell":
+        return "shell"
+    if command == "exec-out":
+        return "exec_out"
+    if command in {"push", "install", "install-multiple", "uninstall"}:
+        return command.replace("-", "_")
+    if command in {"forward", "reverse"}:
+        subcommand = str(args[1]).strip().lower() if len(args) > 1 else ""
+        if subcommand == "--list":
+            return f"{command}_list"
+        if subcommand == "--remove":
+            return f"{command}_remove"
+        return command
+    if command in {"devices", "connect", "disconnect"}:
+        return command
+    return "other"
+
+
+def _record_adb_command_stat(
+    args: tuple[str, ...],
+    *,
+    lane: AdbLane,
+    rc: int | None,
+    timed_out: bool = False,
+) -> None:
+    key = _adb_command_stat_key(args)
+    lane_name = AdbLane(lane).name.lower()
+    with _ADB_CACHE_LOCK:
+        _ADB_COMMAND_STATS[f"cmd_{key}"] = _ADB_COMMAND_STATS.get(f"cmd_{key}", 0) + 1
+        _ADB_COMMAND_STATS[f"lane_{lane_name}"] = (
+            _ADB_COMMAND_STATS.get(f"lane_{lane_name}", 0) + 1
+        )
+        if timed_out:
+            _ADB_COMMAND_STATS["timeout"] = _ADB_COMMAND_STATS.get("timeout", 0) + 1
+        elif rc not in (0, None):
+            _ADB_COMMAND_STATS["failed"] = _ADB_COMMAND_STATS.get("failed", 0) + 1
+
+
+def adb_command_stats(*, reset: bool = False) -> dict[str, int]:
+    with _ADB_CACHE_LOCK:
+        stats = dict(_ADB_COMMAND_STATS)
+        if reset:
+            _ADB_COMMAND_STATS.clear()
+        return stats
+
+
+def invalidate_adb_device_cache(
+    serial: str,
+    *,
+    packages: Optional[list[str]] = None,
+    capabilities: bool = True,
+    lan_ip: bool = True,
+) -> None:
+    """Invalidate process-local ADB probe caches for one phone."""
+    serial = str(serial or "").strip()
+    if not serial:
+        return
+    with _ADB_CACHE_LOCK:
+        if capabilities:
+            _CAPABILITY_CACHE.pop(serial, None)
+        if lan_ip:
+            _LAN_IP_CACHE.pop(serial, None)
+        endpoint = _ATX_FORWARD_CACHE.pop(serial, None)
+        _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
+        _ATX_FORWARD_LAST_ERROR.pop(serial, None)
+        _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+        if packages is None:
+            stale = [key for key in _PACKAGE_STATE_CACHE if key[0] == serial]
+        else:
+            stale = [(serial, package) for package in packages]
+        for key in stale:
+            _PACKAGE_STATE_CACHE.pop(key, None)
+    if endpoint is not None:
+        _run("forward", "--remove", f"tcp:{endpoint[1]}", serial=serial, timeout=5)
+
 def _run(
     *args: str,
     serial: Optional[str] = None,
     timeout: int = 30,
+    lane: AdbLane | None = None,
 ) -> tuple[str, int]:
     """
     Run `adb [-s serial] <args>` and return (stdout+stderr, returncode).
     Never raises — all exceptions become ("error", -1) pairs.
     """
     cmd = _adb_command(*args, serial=serial)
+    classified_lane = lane if lane is not None else classify_adb_command(tuple(args))
     # Suppress macOS MallocStackLogging spam in subprocess output
     env = _os.environ.copy()
     env.pop("MallocStackLogging", None)
     env.pop("MallocStackLoggingDirectory", None)
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+        with adb_admission(
+            serial=serial,
+            lane=classified_lane,
+        ):
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
         out = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+        _record_adb_command_stat(tuple(args), lane=classified_lane, rc=result.returncode)
         return out, result.returncode
     except subprocess.TimeoutExpired:
+        _record_adb_command_stat(
+            tuple(args),
+            lane=classified_lane,
+            rc=None,
+            timed_out=True,
+        )
         return f"adb timeout after {timeout}s", -1
     except FileNotFoundError:
+        _record_adb_command_stat(tuple(args), lane=classified_lane, rc=-1)
         return f"adb binary not found at {_ADB!r}", -1
     except Exception as exc:
+        _record_adb_command_stat(tuple(args), lane=classified_lane, rc=-1)
         return str(exc), -1
 
 
@@ -236,10 +405,18 @@ def _resolve_device_lan_ip(serial: str) -> str | None:
         host = serial.rsplit(":", 1)[0].strip()
         if _looks_like_ipv4(host):
             return host
+    now = time.monotonic()
+    if _LAN_IP_CACHE_TTL_SECONDS > 0:
+        with _ADB_CACHE_LOCK:
+            cached = _LAN_IP_CACHE.get(serial)
+            if cached and now - cached[0] < _LAN_IP_CACHE_TTL_SECONDS:
+                return cached[1] or None
     for prop in ("dhcp.wlan0.ipaddress", "dhcp.wlan1.ipaddress"):
         out, _ = _adb_shell(serial, f"getprop {prop}", timeout=4)
         ip = out.strip()
         if _looks_like_ipv4(ip):
+            with _ADB_CACHE_LOCK:
+                _LAN_IP_CACHE[serial] = (time.monotonic(), ip)
             return ip
     out, _ = _adb_shell(
         serial,
@@ -248,18 +425,34 @@ def _resolve_device_lan_ip(serial: str) -> str | None:
     )
     m = re.search(r"\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})\b", out)
     if m and _looks_like_ipv4(m.group(1)):
+        with _ADB_CACHE_LOCK:
+            _LAN_IP_CACHE[serial] = (time.monotonic(), m.group(1))
         return m.group(1)
+    with _ADB_CACHE_LOCK:
+        _LAN_IP_CACHE[serial] = (time.monotonic(), "")
     return None
 
 
-def _adb_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
+def _adb_shell(
+    serial: str,
+    cmd: str,
+    timeout: int = 30,
+    *,
+    lane: AdbLane | None = None,
+) -> tuple[str, int]:
     """Run shell command on device. Returns (output, exit_code)."""
     # Background commands (ending with '&') must NOT have '; echo __EXIT__$?'
     # appended — Android's /system/bin/sh rejects '&; echo...' as a syntax error.
     if cmd.rstrip().endswith("&"):
-        out, _ = _run("shell", cmd, serial=serial, timeout=timeout)
+        out, _ = _run("shell", cmd, serial=serial, timeout=timeout, lane=lane)
         return out.rstrip("\n"), 0
-    out, rc = _run("shell", f"{cmd}; echo __EXIT__$?", serial=serial, timeout=timeout)
+    out, rc = _run(
+        "shell",
+        f"{cmd}; echo __EXIT__$?",
+        serial=serial,
+        timeout=timeout,
+        lane=lane,
+    )
     if "__EXIT__" in out:
         output, rc_str = out.rsplit("__EXIT__", 1)
         try:
@@ -310,30 +503,180 @@ def _parse_adb_forward_port(output: str) -> int:
     return 0
 
 
+def _parse_atx_forward_list(output: str) -> dict[str, tuple[str, int]]:
+    forwards: dict[str, tuple[str, int]] = {}
+    for raw_line in (output or "").splitlines():
+        parts = raw_line.split()
+        if len(parts) < 3:
+            continue
+        serial, local, remote = parts[0], parts[1], parts[2]
+        if not local.startswith("tcp:") or remote != "tcp:7912":
+            continue
+        port_raw = local.removeprefix("tcp:")
+        if not port_raw.isdigit():
+            continue
+        forwards[serial] = (_atx_forward_host(), int(port_raw))
+    return forwards
+
+
+def reconcile_atx_forward_cache(serials: Optional[set[str]] = None) -> dict[str, tuple[str, int]]:
+    """Refresh the process cache from `adb forward --list`.
+
+    This does not remove unknown host forwards. Its job is to reuse existing
+    tcp:7912 forwards and avoid allocating duplicates after transient cache
+    loss or hot reloads.
+    """
+    out, rc = _run("forward", "--list", timeout=5)
+    if rc != 0:
+        logger.debug("adb forward --list failed during atx reconcile: %s", out[:200])
+        return {}
+    discovered = _parse_atx_forward_list(out)
+    wanted = {s for s in (serials or set()) if s}
+    with _ADB_CACHE_LOCK:
+        if wanted:
+            for serial in wanted:
+                if serial in discovered:
+                    _ATX_FORWARD_CACHE[serial] = discovered[serial]
+                else:
+                    _ATX_FORWARD_CACHE.pop(serial, None)
+                    _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
+                    _ATX_FORWARD_LAST_ERROR.pop(serial, None)
+                    _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+        else:
+            _ATX_FORWARD_CACHE.clear()
+            _ATX_FORWARD_CACHE.update(discovered)
+            stale = [serial for serial in _ATX_FORWARD_FAIL_COUNT if serial not in discovered]
+            for serial in stale:
+                _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
+                _ATX_FORWARD_LAST_ERROR.pop(serial, None)
+                _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+        return dict(_ATX_FORWARD_CACHE)
+
+
+def _maybe_reconcile_atx_forward_cache(serial: str) -> None:
+    global _ATX_FORWARD_RECONCILE_NEXT_AT
+    if _ATX_FORWARD_RECONCILE_INTERVAL_SECONDS <= 0:
+        return
+    now = time.monotonic()
+    with _ADB_CACHE_LOCK:
+        if now < _ATX_FORWARD_RECONCILE_NEXT_AT:
+            return
+        _ATX_FORWARD_RECONCILE_NEXT_AT = now + _ATX_FORWARD_RECONCILE_INTERVAL_SECONDS
+    reconcile_atx_forward_cache({serial})
+
+
+def _clear_atx_forward(serial: str) -> None:
+    if not serial:
+        return
+    with _ADB_CACHE_LOCK:
+        endpoint = _ATX_FORWARD_CACHE.pop(serial, None)
+        _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
+        _ATX_FORWARD_LAST_ERROR.pop(serial, None)
+        _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+    if endpoint is not None:
+        _run("forward", "--remove", f"tcp:{endpoint[1]}", serial=serial, timeout=5)
+
+
+def _atx_forward_create_retry_error(serial: str) -> str | None:
+    now = time.monotonic()
+    with _ADB_CACHE_LOCK:
+        retry_after = _ATX_FORWARD_CREATE_RETRY_AFTER.get(serial)
+        if retry_after is None:
+            return None
+        if now >= retry_after:
+            _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+            return None
+        return _ATX_FORWARD_LAST_ERROR.get(serial, "adb forward creation cooling down")
+
+
+def _record_atx_forward_create_failure(serial: str, error: str) -> None:
+    with _ADB_CACHE_LOCK:
+        _ATX_FORWARD_LAST_ERROR[serial] = error
+        if _ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS > 0:
+            _ATX_FORWARD_CREATE_RETRY_AFTER[serial] = (
+                time.monotonic() + _ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS
+            )
+        else:
+            _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+
+
+def _ensure_atx_forward_endpoint(serial: str) -> tuple[str, int] | None:
+    if not serial or ":" in serial:
+        return None
+    with _ADB_CACHE_LOCK:
+        cached = _ATX_FORWARD_CACHE.get(serial)
+        if cached is not None:
+            return cached
+    if _atx_forward_create_retry_error(serial) is not None:
+        return None
+    _maybe_reconcile_atx_forward_cache(serial)
+    serial_lock = _atx_forward_serial_lock(serial)
+    with serial_lock:
+        with _ADB_CACHE_LOCK:
+            cached = _ATX_FORWARD_CACHE.get(serial)
+            if cached is not None:
+                return cached
+        if _atx_forward_create_retry_error(serial) is not None:
+            return None
+        out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
+        if rc != 0:
+            _record_atx_forward_create_failure(
+                serial,
+                f"adb forward failed: {(out or '').strip()}",
+            )
+            return None
+        port = _parse_adb_forward_port(out)
+        if port <= 0:
+            _record_atx_forward_create_failure(
+                serial,
+                f"adb forward returned no port: {(out or '').strip()}",
+            )
+            return None
+        endpoint = (_atx_forward_host(), port)
+        with _ADB_CACHE_LOCK:
+            _ATX_FORWARD_CACHE[serial] = endpoint
+            _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
+            _ATX_FORWARD_LAST_ERROR.pop(serial, None)
+            _ATX_FORWARD_CREATE_RETRY_AFTER.pop(serial, None)
+        return endpoint
+
+
+def _record_atx_forward_ping_success(serial: str) -> None:
+    with _ADB_CACHE_LOCK:
+        _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
+
+
+def _record_atx_forward_ping_failure(serial: str) -> int:
+    with _ADB_CACHE_LOCK:
+        count = _ATX_FORWARD_FAIL_COUNT.get(serial, 0) + 1
+        _ATX_FORWARD_FAIL_COUNT[serial] = count
+        return count
+
+
 def _atx_http_ping_via_adb_forward(serial: str, timeout: float = 2.0) -> tuple[bool, str]:
     if not serial or ":" in serial:
         return False, "adb forward unavailable for tcp serial"
-    out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
-    if rc != 0:
-        return False, f"adb forward failed: {(out or '').strip()}"
-    port = _parse_adb_forward_port(out)
-    if port <= 0:
-        return False, f"adb forward returned no port: {(out or '').strip()}"
-    host = _atx_forward_host()
+    endpoint = _ensure_atx_forward_endpoint(serial)
+    if endpoint is None:
+        with _ADB_CACHE_LOCK:
+            error = _ATX_FORWARD_LAST_ERROR.get(serial, "adb forward failed")
+        return False, error
+    host, port = endpoint
     url = f"http://{host}:{port}/ping"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             body = resp.read(128).decode("utf-8", errors="replace").strip()
             if 200 <= int(resp.status) < 300:
+                _record_atx_forward_ping_success(serial)
                 return True, body or f"HTTP {resp.status} via adb-forward"
             return False, f"HTTP {resp.status} via adb-forward: {body}"
     except urllib.error.HTTPError as exc:
         body = exc.read(128).decode("utf-8", errors="replace") if exc.fp else ""
         return False, f"HTTP {exc.code} via adb-forward: {body.strip()}"
     except Exception as exc:
+        if _record_atx_forward_ping_failure(serial) >= _ATX_FORWARD_FAILURES_BEFORE_RECREATE:
+            _clear_atx_forward(serial)
         return False, f"adb-forward ping failed: {exc}"
-    finally:
-        _run("forward", "--remove", f"tcp:{port}", serial=serial, timeout=5)
 
 
 def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -> tuple[bool, str]:
@@ -372,11 +715,26 @@ def _wait_for_u2_port_state(
     return _device_port_listening(serial, 9008) is listening
 
 
+def _run_u2_recovery_cleanup(serial: str, *, stop_atx: bool) -> None:
+    commands: list[str] = []
+    if stop_atx:
+        commands.append("/data/local/tmp/atx-agent server --stop 2>/dev/null || true")
+    commands.extend(
+        [
+            f"am force-stop {_U2_TEST_PKG}",
+            f"am force-stop {_U2_PKG}",
+            "pkill -9 -f '[u]iautomator' 2>/dev/null || true",
+        ]
+    )
+    if stop_atx:
+        commands.append("pkill -9 -f 'atx-agent' 2>/dev/null || true")
+    script = "\n".join(f"({cmd}) >/dev/null 2>&1 || true" for cmd in commands)
+    _adb_shell(serial, script, timeout=12)
+
+
 def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
     _apply_u2_stability_settings(serial)
-    _adb_shell(serial, f"am force-stop {_U2_TEST_PKG}", timeout=10)
-    _adb_shell(serial, f"am force-stop {_U2_PKG}", timeout=10)
-    _adb_shell(serial, "pkill -9 -f '[u]iautomator' 2>/dev/null || true", timeout=5)
+    _run_u2_recovery_cleanup(serial, stop_atx=False)
     _wait_for_u2_port_state(serial, listening=False, timeout=3.0)
 
     atx_ok, _ = _atx_http_ping(serial, timeout=1.5)
@@ -413,11 +771,7 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
     """
     _apply_u2_stability_settings(serial)
     # Kill zombie u2 first — a stuck u2 process is the #1 reason atx freezes.
-    _adb_shell(serial, "/data/local/tmp/atx-agent server --stop 2>/dev/null || true", timeout=5)
-    _adb_shell(serial, f"am force-stop {_U2_TEST_PKG}", timeout=10)
-    _adb_shell(serial, f"am force-stop {_U2_PKG}", timeout=10)
-    _adb_shell(serial, "pkill -9 -f 'uiautomator' 2>/dev/null || true", timeout=5)
-    _adb_shell(serial, "pkill -9 -f 'atx-agent' 2>/dev/null || true", timeout=5)
+    _run_u2_recovery_cleanup(serial, stop_atx=True)
     time.sleep(0.5)
     # Restart atx-agent as a background daemon.
     _adb_shell(
@@ -496,9 +850,15 @@ def _apply_u2_stability_settings(serial: str) -> None:
         f"appops set {_STF_PKG} RUN_IN_BACKGROUND allow 2>/dev/null || true",
         f"appops set {_STF_PKG} RUN_ANY_IN_BACKGROUND allow 2>/dev/null || true",
     ]
-    for cmd in commands:
-        _adb_shell(serial, cmd, timeout=5)
-    lock_portrait_rotation(serial)
+    if _lock_rotation_enabled():
+        commands.extend(
+            [
+                "settings put system accelerometer_rotation 0",
+                "settings put system user_rotation 0",
+            ]
+        )
+    script = "\n".join(f"({cmd}) >/dev/null 2>&1 || true" for cmd in commands)
+    _adb_shell(serial, script, timeout=12)
     ok, msg = ensure_u2_input_ime(serial)
     if ok:
         logger.info("[%s] u2 AdbKeyboard IME: %s", serial, msg)
@@ -519,21 +879,39 @@ def ensure_u2_input_ime(serial: str) -> tuple[bool, str]:
     live typing and scenarios do not fall back to setText or clipboard paste.
     Idempotent — safe on every bootstrap.
     """
-    if not _pkg_installed(serial, _U2_PKG):
+    pkg = shlex.quote(_U2_PKG)
+    ime = shlex.quote(_U2_ADB_KEYBOARD_IME)
+    script = f"""
+emit() {{ printf '__DF__%s=%s\\n' "$1" "$2"; }}
+pkg_ok=0
+if pm path {pkg} >/dev/null 2>&1; then pkg_ok=1; fi
+emit pkg "$pkg_ok"
+ime_found=0
+if ime list -s -a 2>/dev/null | grep -Fqx {ime}; then ime_found=1; fi
+emit ime "$ime_found"
+current="$(settings get secure default_input_method 2>/dev/null)"
+emit current "$current"
+if [ "$pkg_ok" = "1" ] && [ "$ime_found" = "1" ] && [ "$current" != {ime} ]; then
+  ime enable {ime} >/dev/null 2>&1 || true
+  ime set {ime} >/dev/null 2>&1 || true
+  settings put secure default_input_method {ime} >/dev/null 2>&1 || true
+  current="$(settings get secure default_input_method 2>/dev/null)"
+fi
+emit final "$current"
+"""
+    out, _ = _adb_shell(serial, script, timeout=10)
+    values = _parse_probe_kv(out)
+    if values.get("pkg") != "1":
         return False, "u2 package not installed"
-    if _U2_ADB_KEYBOARD_IME not in _list_input_methods(serial):
+    if values.get("ime") != "1":
         return False, f"{_U2_ADB_KEYBOARD_IME} not registered (reinstall u2 APK?)"
-    current_out, _ = _adb_shell(serial, "settings get secure default_input_method", timeout=5)
-    current = current_out.strip()
+    current = (values.get("current") or "").strip()
     if current == _U2_ADB_KEYBOARD_IME:
         return True, "already default"
-    _adb_shell(serial, f"ime enable {_U2_ADB_KEYBOARD_IME}", timeout=5)
-    _adb_shell(serial, f"ime set {_U2_ADB_KEYBOARD_IME}", timeout=5)
-    _adb_shell(serial, f"settings put secure default_input_method {_U2_ADB_KEYBOARD_IME}", timeout=5)
-    current_out, _ = _adb_shell(serial, "settings get secure default_input_method", timeout=5)
-    if current_out.strip() == _U2_ADB_KEYBOARD_IME:
+    final = (values.get("final") or "").strip()
+    if final == _U2_ADB_KEYBOARD_IME:
         return True, "enabled"
-    return False, f"default still {current_out.strip()!r}"
+    return False, f"default still {final!r}"
 
 
 def _run_bytes(
@@ -547,10 +925,18 @@ def _run_bytes(
     env.pop("MallocStackLogging", None)
     env.pop("MallocStackLoggingDirectory", None)
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=timeout, env=env,
-        )
+        with adb_admission(
+            serial=serial,
+            lane=classify_adb_command(tuple(args)),
+        ):
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
         return result.stdout, result.returncode
     except subprocess.TimeoutExpired:
         return b"", -1
@@ -558,95 +944,157 @@ def _run_bytes(
         return b"", -1
 
 
+def _first_nonempty(*values: str) -> str:
+    for value in values:
+        value = (value or "").strip()
+        if value and value.lower() not in {"null", "unknown", "<unknown>"}:
+            return value
+    return ""
+
+
+def _parse_probe_kv(output: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        if not line.startswith("__DF__") or "=" not in line:
+            continue
+        key, value = line[len("__DF__"):].split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _probe_capabilities_uncached(serial: str) -> dict:
+    script = r"""
+emit() { printf '__DF__%s=%s\n' "$1" "$2"; }
+gp() { getprop "$1" 2>/dev/null; }
+emit sdk "$(gp ro.build.version.sdk)"
+emit android_version "$(gp ro.build.version.release)"
+emit abi "$(gp ro.product.cpu.abi)"
+emit brand "$(gp ro.product.brand)"
+emit model "$(gp ro.product.model)"
+emit marketname "$(gp ro.product.marketname)"
+emit marketing_name "$(gp ro.config.marketing_name)"
+emit vendor_marketname "$(gp ro.product.vendor.marketname)"
+emit global_device_name "$(settings get global device_name 2>/dev/null)"
+emit bluetooth_name "$(settings get secure bluetooth_name 2>/dev/null)"
+emit persist_device_name "$(gp persist.sys.device_name)"
+emit hardware_serial "$(gp ro.boot.serialno)"
+emit ro_serialno "$(gp ro.serialno)"
+emit build_fingerprint "$(gp ro.build.fingerprint)"
+emit boot_id "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+wm_size="$(wm size 2>/dev/null | sed -n 's/.*Physical size: //p' | head -n1)"
+emit wm_size "$wm_size"
+mem_kb="$(awk '/MemTotal/ {print $2; exit}' /proc/meminfo 2>/dev/null)"
+emit mem_kb "$mem_kb"
+ip_line="$(ip -o -4 addr show wlan0 2>/dev/null | head -n1)"
+if [ -z "$ip_line" ]; then ip_line="$(ip -o -4 addr show 2>/dev/null | head -n1)"; fi
+emit ip_line "$ip_line"
+if cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -iq ':1EE8'
+then emit atx_agent 1
+else emit atx_agent 0
+fi
+if pm path com.github.uiautomator >/dev/null 2>&1; then emit u2 1; else emit u2 0; fi
+if pm path jp.co.cyberagent.stf >/dev/null 2>&1; then emit stf 1; else emit stf 0; fi
+"""
+    out, _ = _adb_shell(serial, script, timeout=10)
+    values = _parse_probe_kv(out)
+
+    screen_width = 0
+    screen_height = 0
+    wm_size = values.get("wm_size", "")
+    if "x" in wm_size:
+        try:
+            w_raw, h_raw = wm_size.strip().split("x", 1)
+            screen_width = int(w_raw)
+            screen_height = int(h_raw)
+        except Exception:
+            screen_width = 0
+            screen_height = 0
+
+    ram_gb = 0
+    try:
+        ram_gb = round(int(values.get("mem_kb") or "0") / 1024 / 1024)
+    except Exception:
+        ram_gb = 0
+
+    wifi_ip = ""
+    wifi_cidr = ""
+    ip_line = values.get("ip_line", "")
+    for match in re.finditer(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", ip_line):
+        ip = match.group(1)
+        prefix = match.group(2)
+        if not ip.startswith("127."):
+            wifi_ip = ip
+            wifi_cidr = f"{ip}/{prefix}"
+            break
+
+    brand = (values.get("brand") or "").lower()
+    model = values.get("model") or ""
+    marketing_name = _first_nonempty(
+        values.get("marketname", ""),
+        values.get("marketing_name", ""),
+        values.get("vendor_marketname", ""),
+    )
+    device_name = _first_nonempty(
+        values.get("global_device_name", ""),
+        values.get("bluetooth_name", ""),
+        values.get("persist_device_name", ""),
+        marketing_name,
+        model,
+    )
+    hw_serial = _first_nonempty(
+        values.get("hardware_serial", ""),
+        values.get("ro_serialno", ""),
+    )
+    return {
+        "sdk": values.get("sdk", ""),
+        "android_version": values.get("android_version", ""),
+        "abi": values.get("abi", ""),
+        "brand": brand,
+        "model": model,
+        "device_name": device_name,
+        "marketing_name": marketing_name,
+        "display_name": _first_nonempty(
+            device_name,
+            marketing_name,
+            " ".join(p for p in [brand, model] if p),
+        ),
+        "wlan_ip": wifi_ip,
+        "wlan_cidr": wifi_cidr,
+        "screen_width": screen_width,
+        "screen_height": screen_height,
+        "ram_gb": ram_gb,
+        "atx_agent": values.get("atx_agent") == "1",
+        "u2": values.get("u2") == "1",
+        "stf": values.get("stf") == "1",
+        "tags": [],  # populated by user config / env vars
+        "hardware_serial": hw_serial,
+        "build_fingerprint": values.get("build_fingerprint", ""),
+        "boot_id": values.get("boot_id", ""),
+    }
+
+
 def _probe_capabilities(serial: str) -> dict:
     """
     Probe rich device capabilities once when device first comes ONLINE.
     Includes android_version, brand, ram_gb, screen dims for device pool matching.
     """
-    def shell(cmd: str) -> str:
-        out, _ = _adb_shell(serial, cmd, timeout=5)
-        return out.strip()
+    now = time.monotonic()
+    if _CAPABILITY_CACHE_TTL_SECONDS > 0:
+        with _ADB_CACHE_LOCK:
+            cached = _CAPABILITY_CACHE.get(serial)
+            if cached and now - cached[0] < _CAPABILITY_CACHE_TTL_SECONDS:
+                return dict(cached[1])
 
-    def pkg_installed(pkg: str) -> bool:
-        return "package:" in shell(f"pm path {pkg}")
-
-    def port_open(port: int) -> bool:
-        hex_port = format(port, "04X")
-        return bool(shell(
-            f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null"
-            f" | grep -i ':{hex_port}' | head -1 || true"
-        ))
-
-    def screen_dims() -> tuple[int, int]:
-        for line in shell("wm size").splitlines():
-            if "Physical size" in line and "x" in line:
-                try:
-                    w, h = line.split(":")[-1].strip().split("x")
-                    return int(w), int(h)
-                except Exception:
-                    pass
-        return 0, 0
-
-    def ram_gb() -> int:
-        raw = shell("cat /proc/meminfo | grep MemTotal")
-        try:
-            return round(int(raw.split()[1]) / 1024 / 1024)
-        except Exception:
-            return 0
-
-    def first_nonempty(*values: str) -> str:
-        for value in values:
-            value = (value or "").strip()
-            if value and value.lower() not in {"null", "unknown", "<unknown>"}:
-                return value
-        return ""
-
-    def wlan_addr() -> tuple[str, str]:
-        raw = shell("ip -o -4 addr show wlan0 2>/dev/null || ip -o -4 addr show 2>/dev/null")
-        for match in re.finditer(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", raw):
-            ip = match.group(1)
-            prefix = match.group(2)
-            if not ip.startswith("127."):
-                return ip, f"{ip}/{prefix}"
-        return "", ""
-
-    w, h = screen_dims()
-    brand = shell("getprop ro.product.brand").lower()
-    model = shell("getprop ro.product.model")
-    marketing_name = first_nonempty(
-        shell("getprop ro.product.marketname"),
-        shell("getprop ro.config.marketing_name"),
-        shell("getprop ro.product.vendor.marketname"),
-    )
-    device_name = first_nonempty(
-        shell("settings get global device_name"),
-        shell("settings get secure bluetooth_name"),
-        shell("getprop persist.sys.device_name"),
-        marketing_name,
-        model,
-    )
-    wifi_ip, wifi_cidr = wlan_addr()
-    hw_serial = shell("getprop ro.boot.serialno").strip() or shell("getprop ro.serialno").strip()
-    return {
-        "sdk":             shell("getprop ro.build.version.sdk"),
-        "android_version": shell("getprop ro.build.version.release"),
-        "abi":             shell("getprop ro.product.cpu.abi"),
-        "brand":           brand,
-        "model":           model,
-        "device_name":     device_name,
-        "marketing_name":  marketing_name,
-        "display_name":    first_nonempty(device_name, marketing_name, " ".join(p for p in [brand, model] if p)),
-        "wlan_ip":         wifi_ip,
-        "wlan_cidr":       wifi_cidr,
-        "screen_width":    w,
-        "screen_height":   h,
-        "ram_gb":          ram_gb(),
-        "atx_agent":       port_open(7912),
-        "u2":              pkg_installed("com.github.uiautomator"),
-        "stf":             pkg_installed("jp.co.cyberagent.stf"),
-        "tags":            [],  # populated by user config / env vars
-        "hardware_serial": hw_serial,
-    }
+    caps = _probe_capabilities_uncached(serial)
+    if _CAPABILITY_CACHE_TTL_SECONDS > 0:
+        with _ADB_CACHE_LOCK:
+            _CAPABILITY_CACHE[serial] = (time.monotonic(), dict(caps))
+            if caps.get("wlan_ip"):
+                _LAN_IP_CACHE[serial] = (
+                    time.monotonic(),
+                    str(caps.get("wlan_ip") or ""),
+                )
+    return caps
 
 
 def _screencap(serial: str, timeout: int = 30) -> tuple[str, int]:
@@ -698,7 +1146,10 @@ def _push_atx_agent(serial: str, abi: str) -> tuple[str, int]:
 
 def _install_u2_apks(serial: str) -> tuple[str, int]:
     """Push and install uiautomator2 APKs onto the device."""
-    force_install = _os.getenv("AGENT_BOOT_FORCE_U2_INSTALL", "").strip().lower() in {"1", "true", "yes", "on"}
+    force_install = _os.getenv(
+        "AGENT_BOOT_FORCE_U2_INSTALL",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     installed_main = _pkg_installed(serial, _U2_PKG)
     installed_test = _pkg_installed(serial, _U2_TEST_PKG)
 
@@ -715,7 +1166,11 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
             break
 
     main_matches = _installed_apk_matches(serial, _U2_PKG, main_apk) if installed_main else False
-    test_matches = _installed_apk_matches(serial, _U2_TEST_PKG, test_apk) if installed_test else False
+    test_matches = (
+        _installed_apk_matches(serial, _U2_TEST_PKG, test_apk)
+        if installed_test
+        else False
+    )
     pair_mismatch = main_matches is False or test_matches is False
     if installed_main and installed_test and not force_install and not pair_mismatch:
         if main_matches is True and test_matches is True:
@@ -735,6 +1190,7 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
     reinstall_pair = force_install or pair_mismatch
     if reinstall_pair or not installed_main:
         logger.info("[%s] installing u2 main APK from %s", serial, main_apk)
+        invalidate_adb_device_cache(serial, packages=[_U2_PKG], capabilities=False, lan_ip=False)
         out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
                        serial=serial, timeout=120)
         if rc != 0:
@@ -742,11 +1198,21 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
         out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
     if reinstall_pair or not installed_test:
         logger.info("[%s] installing u2 test APK from %s", serial, test_apk)
+        invalidate_adb_device_cache(
+            serial,
+            packages=[_U2_TEST_PKG],
+            capabilities=False,
+            lan_ip=False,
+        )
         out, rc = _run("push", str(test_apk), "/data/local/tmp/u2-test.apk",
                        serial=serial, timeout=120)
         if rc != 0:
             return f"push u2 test APK failed: {out}", -1
-        out_t, rc_t = _adb_shell(serial, "pm install -r -t /data/local/tmp/u2-test.apk", timeout=120)
+        out_t, rc_t = _adb_shell(
+            serial,
+            "pm install -r -t /data/local/tmp/u2-test.apk",
+            timeout=120,
+        )
 
     combined = f"{out_m}\n{out_t}"
     if (
@@ -756,6 +1222,12 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
     ):
         _adb_shell(serial, f"pm uninstall {_U2_TEST_PKG} 2>/dev/null || true", timeout=30)
         _adb_shell(serial, f"pm uninstall {_U2_PKG} 2>/dev/null || true", timeout=30)
+        invalidate_adb_device_cache(
+            serial,
+            packages=[_U2_PKG, _U2_TEST_PKG],
+            capabilities=False,
+            lan_ip=False,
+        )
         out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
                        serial=serial, timeout=120)
         if rc != 0:
@@ -765,39 +1237,135 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
         if rc != 0:
             return f"push u2 test APK failed after uninstall: {out}", -1
         out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
-        out_t, rc_t = _adb_shell(serial, "pm install -r -t /data/local/tmp/u2-test.apk", timeout=120)
+        out_t, rc_t = _adb_shell(
+            serial,
+            "pm install -r -t /data/local/tmp/u2-test.apk",
+            timeout=120,
+        )
 
     _adb_shell(serial, "rm -f /data/local/tmp/u2-main.apk /data/local/tmp/u2-test.apk", timeout=10)
 
     if "Success" not in out_m or "Success" not in out_t:
         return f"u2 install failed: main={out_m!r} test={out_t!r}", -1
+    invalidate_adb_device_cache(
+        serial,
+        packages=[_U2_PKG, _U2_TEST_PKG],
+        capabilities=True,
+        lan_ip=False,
+    )
     if installed_main or installed_test:
         return "u2 APKs already installed; installed missing package(s)", 0
     return "u2 APKs installed", 0
 
 
+def _parse_package_state_output(output: str) -> dict[str, _PackageState]:
+    states: dict[str, _PackageState] = {}
+    for line in output.splitlines():
+        if not line.startswith("__DFPKG__"):
+            continue
+        fields = line[len("__DFPKG__"):].split("\t")
+        if len(fields) < 3:
+            continue
+        package = fields[0].strip()
+        apk_path = fields[1].strip()
+        sha = fields[2].strip().lower()
+        states[package] = _PackageState(
+            installed=bool(apk_path),
+            apk_path=apk_path,
+            sha256=sha if re.fullmatch(r"[0-9a-f]{64}", sha) else "",
+        )
+    return states
+
+
+def _query_package_states(
+    serial: str,
+    packages: list[str],
+) -> dict[str, _PackageState]:
+    if not packages:
+        return {}
+    lines = [
+        "hash_apk() { "
+        "sha256sum \"$1\" 2>/dev/null "
+        "|| toybox sha256sum \"$1\" 2>/dev/null "
+        "|| true; }",
+    ]
+    for package in packages:
+        quoted = shlex.quote(package)
+        lines.append(
+            "pkg={pkg}; "
+            "apk=$(pm path \"$pkg\" 2>/dev/null | head -n1 | sed 's/^package://'); "
+            "sha=\"\"; "
+            "if [ -n \"$apk\" ]; then "
+            "sha=$(hash_apk \"$apk\" | awk '{{print $1; exit}}'); "
+            "fi; "
+            "printf '__DFPKG__%s\\t%s\\t%s\\n' \"$pkg\" \"$apk\" \"$sha\"".format(
+                pkg=quoted,
+            )
+        )
+    out, _ = _adb_shell(serial, "\n".join(lines), timeout=15)
+    states = _parse_package_state_output(out)
+    return {
+        package: states.get(package, _PackageState(installed=False))
+        for package in packages
+    }
+
+
+def _installed_package_states(
+    serial: str,
+    packages: list[str],
+) -> dict[str, _PackageState]:
+    now = time.monotonic()
+    unique_packages = list(dict.fromkeys(packages))
+    if _PACKAGE_STATE_CACHE_TTL_SECONDS > 0:
+        with _ADB_CACHE_LOCK:
+            cached: dict[str, _PackageState] = {}
+            missing: list[str] = []
+            for package in unique_packages:
+                item = _PACKAGE_STATE_CACHE.get((serial, package))
+                if item and now - item[0] < _PACKAGE_STATE_CACHE_TTL_SECONDS:
+                    cached[package] = item[1]
+                else:
+                    missing.append(package)
+        if not missing:
+            return cached
+    else:
+        cached = {}
+        missing = unique_packages
+
+    queried = _query_package_states(serial, missing)
+    if _PACKAGE_STATE_CACHE_TTL_SECONDS > 0:
+        with _ADB_CACHE_LOCK:
+            timestamp = time.monotonic()
+            for package, state in queried.items():
+                _PACKAGE_STATE_CACHE[(serial, package)] = (timestamp, state)
+    cached.update(queried)
+    return cached
+
+
 def _pkg_installed(serial: str, package: str) -> bool:
-    out, _ = _adb_shell(serial, f"pm path {package} 2>/dev/null || true", timeout=5)
-    return "package:" in out
+    return _installed_package_states(serial, [package])[package].installed
 
 
 def _sha256_file(path: Path) -> str:
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    with _ADB_CACHE_LOCK:
+        cached = _LOCAL_SHA256_CACHE.get(key)
+        if cached:
+            return cached
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    with _ADB_CACHE_LOCK:
+        _LOCAL_SHA256_CACHE[key] = value
+    return value
 
 
 def _installed_pkg_sha256(serial: str, package: str) -> Optional[str]:
-    out, _ = _adb_shell(
-        serial,
-        "apk=$(pm path {package} 2>/dev/null | head -n1 | sed 's/^package://'); "
-        'if [ -n "$apk" ]; then sha256sum "$apk" 2>/dev/null || toybox sha256sum "$apk" 2>/dev/null; fi'.format(package=package),
-        timeout=10,
-    )
-    match = re.search(r"\b([0-9a-fA-F]{64})\b", out)
-    return match.group(1).lower() if match else None
+    state = _installed_package_states(serial, [package])[package]
+    return state.sha256 or None
 
 
 def _installed_apk_matches(serial: str, package: str, local_apk: Optional[Path]) -> Optional[bool]:
@@ -827,9 +1395,11 @@ def _install_stf_apk(serial: str) -> tuple[str, int]:
         )
 
     logger.info("[%s] installing STFService APK from %s", serial, apk_path)
+    invalidate_adb_device_cache(serial, packages=[_STF_PKG], capabilities=False, lan_ip=False)
     out, rc = _run("install", "-r", str(apk_path), serial=serial, timeout=180)
     if rc != 0 or "Success" not in out:
         return f"STFService install failed: {out}", -1
+    invalidate_adb_device_cache(serial, packages=[_STF_PKG], capabilities=True, lan_ip=False)
     return "STFService installed", 0
 
 

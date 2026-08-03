@@ -5,6 +5,8 @@ before the DB REST router (so `/api/devices/live` is not swallowed by `/api/devi
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -430,10 +432,10 @@ async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
         return
 
     redis_client = redis_store.client() if redis_store.enabled() else None
-    for d in devices:
+    async def _enrich_one(d: dict) -> None:
         serial = str(d.get("serial") or "").strip()
         if not serial:
-            continue
+            return
         scenario_active = _cap_int(d.get("scenario_active"), 0)
         if redis_client is not None:
             try:
@@ -450,6 +452,8 @@ async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
             )
         except Exception:
             d["manual_takeover_active"] = bool(d.get("manual_takeover_active"))
+
+    await asyncio.gather(*(_enrich_one(d) for d in devices))
 
 
 def build_public_router(
@@ -586,13 +590,13 @@ def build_public_router(
         if st is not None:
             out["streaming_mode"] = getattr(st, "mode", "periodic")
             out["streaming_auto_attach_scrcpy"] = bool(
-                getattr(st, "auto_attach_scrcpy_on_connect", True)
+                getattr(st, "auto_attach_scrcpy_on_connect", False)
             )
             out["streaming_dashboard_preview_mjpeg"] = bool(
                 getattr(st, "dashboard_grid_preview_mjpeg", True)
             )
             out["streaming_auto_attach_scrcpy_on_relay_online"] = bool(
-                getattr(st, "auto_attach_scrcpy_on_relay_online", True)
+                getattr(st, "auto_attach_scrcpy_on_relay_online", False)
             )
         dev = getattr(config, "device", None)
         if dev is not None:

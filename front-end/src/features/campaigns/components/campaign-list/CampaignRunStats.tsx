@@ -2,10 +2,12 @@
 
 import {
   AlertTriangle,
+  Activity,
   CheckCircle2,
   Clock,
   Loader2,
   Smartphone,
+  Timer,
   XCircle
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -30,6 +32,21 @@ type ExecutionSummary = {
   running: number;
   pending: number;
   error: number;
+  latest_dispatch_id?: string | null;
+  latest_dispatch_target_count?: number;
+  latest_dispatch_finished_count?: number;
+  latest_dispatch_running_count?: number;
+  latest_dispatch_pending_count?: number;
+  latest_dispatch_failed_count?: number;
+  latest_dispatch_workflow_started_count?: number;
+  latest_dispatch_fallback_count?: number;
+  latest_dispatch_created_at?: string | null;
+  latest_dispatch_first_started_at?: string | null;
+  latest_dispatch_latest_finished_at?: string | null;
+  latest_dispatch_elapsed_ms?: number | null;
+  latest_dispatch_terminal_ms?: number | null;
+  latest_dispatch_to_first_start_ms?: number | null;
+  latest_dispatch_to_start_p95_ms?: number | null;
 };
 
 function StatChip({
@@ -146,6 +163,24 @@ function StatRow({
   );
 }
 
+function formatDurationMs(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value < 10_000) return `${(value / 1000).toFixed(1)}s`;
+  return `${Math.round(value / 1000)}s`;
+}
+
+function TimingRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className='flex items-center justify-between gap-3 py-1'>
+      <span className='text-xs text-muted-foreground'>{label}</span>
+      <span className='text-right text-xs font-semibold tabular-nums text-foreground'>
+        {value}
+      </span>
+    </div>
+  );
+}
+
 function RunStatsPopoverBody({
   s,
   total
@@ -156,6 +191,14 @@ function RunStatsPopoverBody({
   const t = useTranslations('campaignsFeature.list');
   const finished = s.passed + s.failed;
   const successRate = total > 0 ? Math.round((s.passed / total) * 100) : 0;
+  const latestTarget = s.latest_dispatch_target_count ?? 0;
+  const latestFinished = s.latest_dispatch_finished_count ?? 0;
+  const latestRunning = s.latest_dispatch_running_count ?? 0;
+  const latestPending = s.latest_dispatch_pending_count ?? 0;
+  const latestWorkflows = s.latest_dispatch_workflow_started_count ?? 0;
+  const showLatestDispatch = latestTarget > 0;
+  const latestElapsed =
+    s.latest_dispatch_terminal_ms ?? s.latest_dispatch_elapsed_ms;
 
   return (
     <div className='flex flex-col gap-3'>
@@ -224,6 +267,48 @@ function RunStatsPopoverBody({
           {t('runStatsFinished', { finished, total })}
         </p>
       )}
+
+      {showLatestDispatch && (
+        <div className='divide-y divide-border/60 rounded-md border border-border/60 bg-muted/20 px-2.5'>
+          <div className='flex items-center gap-2 py-1.5 text-xs font-semibold text-foreground'>
+            <Activity
+              className='size-3.5 text-blue-600 dark:text-blue-400'
+              aria-hidden
+            />
+            {t('runStatsLatestDispatch')}
+          </div>
+          <TimingRow
+            label={t('runStatsLatestDevices')}
+            value={`${latestFinished}/${latestTarget}`}
+          />
+          <TimingRow
+            label={t('runStatsLatestActive')}
+            value={`${latestRunning + latestPending}`}
+          />
+          <TimingRow
+            label={t('runStatsLatestWorkflows')}
+            value={`${latestWorkflows}/${latestTarget}`}
+          />
+          <TimingRow
+            label={t('runStatsDispatchFirstStart')}
+            value={formatDurationMs(s.latest_dispatch_to_first_start_ms)}
+          />
+          <TimingRow
+            label={t('runStatsDispatchStartP95')}
+            value={formatDurationMs(s.latest_dispatch_to_start_p95_ms)}
+          />
+          <TimingRow
+            label={t('runStatsLatestElapsed')}
+            value={formatDurationMs(latestElapsed)}
+          />
+          {(s.latest_dispatch_fallback_count ?? 0) > 0 && (
+            <TimingRow
+              label={t('runStatsFallback')}
+              value={`${s.latest_dispatch_fallback_count}`}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -254,6 +339,7 @@ export function CampaignRunStats({
   const total =
     s.total_devices || s.passed + s.failed + s.running + s.pending + s.error;
   const inFlight = s.running + s.pending;
+  const latestDispatchP95 = s.latest_dispatch_to_start_p95_ms;
 
   return (
     <Popover>
@@ -276,9 +362,15 @@ export function CampaignRunStats({
               <Loader2 className='size-2.5 animate-spin' aria-hidden />
             </span>
           )}
+          {latestDispatchP95 != null && (
+            <span className='hidden items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground ring-1 ring-border/60 xl:inline-flex'>
+              <Timer className='size-3' aria-hidden />
+              {formatDurationMs(latestDispatchP95)}
+            </span>
+          )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align='start' className='w-64 p-3'>
+      <PopoverContent align='start' className='w-72 p-3'>
         <RunStatsPopoverBody s={s} total={total} />
       </PopoverContent>
     </Popover>

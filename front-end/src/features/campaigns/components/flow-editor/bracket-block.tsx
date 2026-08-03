@@ -821,6 +821,7 @@ export function BracketBlock({
           pickingCondition &&
             'shadow-[0_0_0_1px_rgba(245,158,11,0.35)] ring-2 ring-amber-500/80'
         )}
+        style={{ contain: 'layout paint style' }}
       >
         {/* Header */}
         <div

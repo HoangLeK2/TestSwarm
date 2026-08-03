@@ -89,6 +89,9 @@ async def emit_step_finished(
         "message": step_result.get("message"),
         "reason_code": step_result.get("reason_code"),
     }
+    for key in ("failure_class", "retry_hint", "operator_summary"):
+        if step_result.get(key) is not None:
+            payload[key] = step_result.get(key)
     for key in (
         "output",
         "exit_code",

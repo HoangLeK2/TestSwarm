@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from common.totp import generate_totp
 from services.app_automation_locator import (
     LocatorResolution,
     build_hierarchy_snapshot,
@@ -26,6 +27,10 @@ _ACCOUNT_REF_TO_VAR = {
     "account.username": "__ACCOUNT_USERNAME__",
     "account.display_name": "__ACCOUNT_DISPLAY_NAME__",
     "account.platform": "__ACCOUNT_PLATFORM__",
+    "account.password": "__ACCOUNT_PASSWORD__",
+    "account.email": "__ACCOUNT_EMAIL__",
+    "account.totp_code": "__ACCOUNT_TOTP_CODE__",
+    "account.auth_code": "__ACCOUNT_TOTP_CODE__",
 }
 
 
@@ -43,7 +48,15 @@ def _load_profile(sc: ScenarioContext, step: Dict[str, Any]) -> AppAutomationPro
 
 def _value_from_ref(sc: ScenarioContext, value_from: str, idx: int) -> str:
     ref = str(value_from or "").strip()
-    if ref in _ACCOUNT_REF_TO_VAR:
+    if ref in {"account.totp_code", "account.auth_code"}:
+        secret = sc.var_ctx.resolve("${__ACCOUNT_TOTP_SECRET__}", step_index=idx)
+        if secret is not None and str(secret) != "${__ACCOUNT_TOTP_SECRET__}" and str(secret).strip():
+            try:
+                return generate_totp(str(secret))
+            except Exception:
+                return ""
+        var_name = "__ACCOUNT_TOTP_CODE__"
+    elif ref in _ACCOUNT_REF_TO_VAR:
         var_name = _ACCOUNT_REF_TO_VAR[ref]
     elif ref.startswith(("variables.", "scenario.", "secret.")):
         var_name = ref.split(".", 1)[1]
@@ -168,6 +181,17 @@ def _input_named_locator(
     resolution = _resolve_named_locator(sc, profile, locator_name, xml, snapshot)
     if not resolution.matched:
         raise RuntimeError(f"input locator {locator_name!r} failed: {resolution.reason}")
+    return _input_resolved_locator(sc, step, idx, locator_name, resolution, text)
+
+
+def _input_resolved_locator(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    locator_name: str,
+    resolution: LocatorResolution,
+    text: str,
+) -> Dict[str, Any]:
     if resolution.selector:
         input_step = {
             "type": "input_selector",
@@ -189,6 +213,39 @@ def _input_named_locator(
             u2.clear_text()
         u2.send_keys(text)
     return _resolution_trace(resolution)
+
+
+def _field_required(field: Any) -> bool:
+    return bool(getattr(field, "required", True))
+
+
+def _input_login_field_if_present(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    profile: AppAutomationProfile,
+    field_name: str,
+    field: Any,
+    xml: str,
+    snapshot: Any,
+) -> tuple[bool, Dict[str, Any]]:
+    resolution = _resolve_named_locator(sc, profile, field.locator, xml, snapshot)
+    if not resolution.matched:
+        trace = _resolution_trace(resolution)
+        trace["skipped"] = not _field_required(field)
+        if not _field_required(field):
+            return False, trace
+        raise RuntimeError(f"input locator {field.locator!r} failed: {resolution.reason}")
+
+    try:
+        value = _value_from_ref(sc, field.value_from, idx)
+    except ValueError as exc:
+        if field_name in {"auth_code", "totp_code", "two_factor_code"}:
+            raise ValueError(f"AUTH_CODE_REQUIRED: {exc}") from exc
+        raise
+    if field_name in {"auth_code", "totp_code", "two_factor_code"} and not str(value).strip():
+        raise ValueError("AUTH_CODE_REQUIRED: auth code value is empty")
+    return True, _input_resolved_locator(sc, step, idx, field.locator, resolution, value)
 
 
 def _click_submit(
@@ -280,11 +337,30 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             )
             xml, snapshot = _current_snapshot(sc)
         submit_trace = _click_submit(sc, step, profile, recipe.submit, xml, snapshot)
+        post_submit_traces: Dict[str, Any] = {}
+        post_submit_trace = None
+        post_submit_fields = getattr(recipe, "post_submit_fields", {}) or {}
+        if post_submit_fields:
+            xml, snapshot = _current_snapshot(sc)
+            entered_post_submit = False
+            for field_name, field in post_submit_fields.items():
+                entered, trace = _input_login_field_if_present(
+                    sc, step, idx, profile, field_name, field, xml, snapshot
+                )
+                post_submit_traces[field_name] = trace
+                if entered:
+                    entered_post_submit = True
+                    xml, snapshot = _current_snapshot(sc)
+            post_submit = getattr(recipe, "post_submit", None) or recipe.submit
+            if entered_post_submit and post_submit is not None:
+                post_submit_trace = _click_submit(sc, step, profile, post_submit, xml, snapshot)
         result.update({
             "message": "login_if_needed: submitted login",
             "login_state": "submitted",
             "locator_trace": traces,
             "submit_trace": submit_trace,
+            "post_submit_locator_trace": post_submit_traces,
+            "post_submit_trace": post_submit_trace,
         })
     except Exception as exc:
         result["ok"] = False

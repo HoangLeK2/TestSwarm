@@ -267,7 +267,13 @@ async def bulk_import_json(body: BulkImportBody, db: DB, user: CurrentUser):
 async def bulk_import_csv(
     db: DB,
     user: CurrentUser,
-    file: UploadFile = File(..., description="CSV file with columns: platform, username, password, display_name, tags, notes"),
+    file: UploadFile = File(
+        ...,
+        description=(
+            "CSV file with columns: platform, username, password, display_name, "
+            "tags, notes, email, totp_secret, cookies, token"
+        ),
+    ),
 ):
     """
     Stream-import accounts from a CSV file upload.
@@ -276,7 +282,8 @@ async def bulk_import_csv(
     batches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING —
     so memory usage stays flat regardless of file size.
 
-    Expected CSV columns: platform, username, password, display_name, tags, notes
+    Expected CSV columns: platform, username, password, display_name, tags, notes,
+    email, totp_secret, cookies, token
     """
     if not file.content_type or "text" not in file.content_type:
         # Allow text/csv, text/plain, application/octet-stream (browser quirks).
@@ -348,7 +355,9 @@ async def bulk_import_csv(
                     row = dict(zip(header, [f.strip() for f in fields]))
                     prepared = _prepare_account_row(row, user.id)
                     if prepared:
-                        plain_pw = (row.get("password") or "").strip()
+                        plain_pw = (
+                            row.get("password") or row.get("password_plain") or ""
+                        ).strip()
                         prepared["password_encrypted"] = encrypt_password(plain_pw) if plain_pw else None
                         batch.append(prepared)
                         total += 1

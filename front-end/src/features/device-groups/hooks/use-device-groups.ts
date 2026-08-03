@@ -10,9 +10,14 @@ const KEYS = {
   list: ['device-groups'] as const,
   detail: (id: string) => ['device-groups', id] as const
 };
+const DEVICE_GROUPS_STALE_MS = 30_000;
 
 export function useDeviceGroups() {
-  return useQuery({ queryKey: KEYS.list, queryFn: deviceGroupsApi.list });
+  return useQuery({
+    queryKey: KEYS.list,
+    queryFn: deviceGroupsApi.list,
+    staleTime: DEVICE_GROUPS_STALE_MS
+  });
 }
 
 export function useDeviceGroup(

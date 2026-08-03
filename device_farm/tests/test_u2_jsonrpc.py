@@ -83,7 +83,7 @@ class TestBatchRelaySession(unittest.TestCase):
             pass
 
         class _Manager:
-            def u2_batch(self, serial, actions, timeout=30.0):
+            def u2_batch(self, serial, actions, timeout=30.0, **kwargs):
                 return {}
 
         with patch("asyncio.run_coroutine_threadsafe", return_value=_Future()):
@@ -95,6 +95,79 @@ class TestBatchRelaySession(unittest.TestCase):
         self.assertEqual(ctx.exception.stopped_at, 1)
         self.assertEqual(ctx.exception.results[0]["ok"], True)
         self.assertEqual(ctx.exception.results[1]["error"], "tap failed")
+
+    def test_batch_forwards_priority_and_deadline(self):
+        calls = []
+
+        class _Future:
+            def result(self, timeout=None):
+                return {"ok": True, "results": [{"op": "dump_hierarchy", "ok": True}]}
+
+        class _Loop:
+            pass
+
+        class _Manager:
+            def u2_batch(self, serial, actions, timeout=30.0, **kwargs):
+                calls.append((serial, actions, timeout, kwargs))
+                return {}
+
+        with patch("asyncio.run_coroutine_threadsafe", return_value=_Future()):
+            session = _BatchRelaySession(_Manager(), "SN001", _Loop())
+            result = session.batch(
+                [{"op": "dump_hierarchy"}],
+                timeout=3.0,
+                priority="visible",
+                deadline_ms=120,
+            )
+
+        self.assertEqual(result, [{"op": "dump_hierarchy", "ok": True}])
+        self.assertEqual(calls, [(
+            "SN001",
+            [{"op": "dump_hierarchy"}],
+            3.0,
+            {
+                "cancel_event": None,
+                "priority": "visible",
+                "deadline_ms": 120,
+            },
+        )])
+
+    def test_flow_forwards_priority_and_deadline(self):
+        calls = []
+
+        class _Future:
+            def result(self, timeout=None):
+                return {"ok": True, "value": {"found": True}}
+
+        class _Loop:
+            pass
+
+        class _Manager:
+            def u2_flow(self, serial, name, params, timeout=30.0, **kwargs):
+                calls.append((serial, name, params, timeout, kwargs))
+                return {}
+
+        with patch("asyncio.run_coroutine_threadsafe", return_value=_Future()):
+            session = _BatchRelaySession(_Manager(), "SN001", _Loop())
+            result = session.flow(
+                "swipe_until_found",
+                {"selector": {"text": "OK"}},
+                timeout=3.0,
+                priority="visible",
+                deadline_ms=120,
+            )
+
+        self.assertEqual(result, {"found": True})
+        self.assertEqual(calls, [(
+            "SN001",
+            "swipe_until_found",
+            {"selector": {"text": "OK"}},
+            3.0,
+            {
+                "priority": "visible",
+                "deadline_ms": 120,
+            },
+        )])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

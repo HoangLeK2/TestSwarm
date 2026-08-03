@@ -56,6 +56,7 @@ class CampaignSourcePoolIn(BaseModel):
     platform: str = Field(min_length=1, max_length=32)
     entity_type: str = Field(min_length=1, max_length=32)
     search: Optional[str] = Field(default=None, max_length=500)
+    output_prefix: Optional[str] = Field(default=None, max_length=32)
     statuses: list[str] = Field(
         default_factory=lambda: ["candidate", "active", "available"],
         min_length=1,
@@ -85,8 +86,6 @@ class CampaignDispatchIn(BaseModel):
             raise ValueError(
                 "source_pool and target.external_entity_ids are mutually exclusive"
             )
-        if self.allocation_snapshot and self.source_pool is None:
-            raise ValueError("allocation_snapshot requires source_pool")
         return self
 
 

@@ -2,15 +2,37 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import logging
+import math
 import os
 import time
+import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger("relay.runtime")
+
+_VIDEO_AGE_BUCKETS_MS = (
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1_000,
+    2_000,
+    5_000,
+    10_000,
+    30_000,
+    60_000,
+)
 
 
 # ── JSON backend: orjson if available, stdlib fallback ───────────────────────
@@ -73,12 +95,14 @@ def _env_float(name: str, default: float, *, lo: float = 0.0, hi: float = 3600.0
 
 # ── Tunables (env-overridable) ────────────────────────────────────────────────
 #
-# Defaults sized for ~30 phones on a developer Mac. Bump via env on bigger
-# farms; reduce on small ones to keep memory tight.
+# Pools are intentionally wider than the heavy ADB admission limit. They provide
+# headroom for blocked subprocesses and bursty 20-40 phone farms; real pressure
+# on the shared host ADB server is controlled by relay.adb_admission.
+# Scale phone count horizontally; tune only from measured queue/runtime stats.
 #
-ADB_POOL_SIZE       = _env_int("RELAY_ADB_POOL_SIZE", 24)
-U2_POOL_SIZE        = _env_int("RELAY_U2_POOL_SIZE", 24)
-SCRCPY_POOL_SIZE    = _env_int("RELAY_SCRCPY_POOL_SIZE", 12)
+ADB_POOL_SIZE       = _env_int("RELAY_ADB_POOL_SIZE", 12, lo=1, hi=64)
+U2_POOL_SIZE        = _env_int("RELAY_U2_POOL_SIZE", 12, lo=1, hi=64)
+SCRCPY_POOL_SIZE    = _env_int("RELAY_SCRCPY_POOL_SIZE", 3, lo=1, hi=16)
 GENERIC_POOL_SIZE   = _env_int("RELAY_GENERIC_POOL_SIZE", 8)
 # CPU pool: short, pure-Python work that blocks the event loop (json.dumps
 # of large XML payloads, lxml parsing). Dedicated so a CPU spike does not
@@ -92,15 +116,31 @@ CPU_POOL_SIZE       = _env_int("RELAY_CPU_POOL_SIZE", 4)
 # wasting executor round-trips on GIL-bound work.
 JSON_OFFLOAD_BYTES  = _env_int("RELAY_JSON_OFFLOAD_BYTES", 8 * 1024, hi=16 * 1024 * 1024)
 
-EXTRA_DATA_CONCURRENCY = _env_int("RELAY_EXTRA_DATA_CONCURRENCY", 4)
-U2_BATCH_CONCURRENCY   = _env_int("RELAY_U2_BATCH_CONCURRENCY", 8)
-U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 8)
+# Campaign extraction is per-phone work. Keeping this at 4–8 makes 40–100
+# phone crawls queue behind a tiny global lane even when ADB admission is
+# healthy. ADB pressure is still bounded separately by relay.adb_admission.
+EXTRA_DATA_CONCURRENCY = _env_int("RELAY_EXTRA_DATA_CONCURRENCY", 64, lo=1, hi=128)
+U2_BATCH_CONCURRENCY   = _env_int("RELAY_U2_BATCH_CONCURRENCY", 64, lo=1, hi=128)
+U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 64, lo=1, hi=128)
 
 # FairSendQueue lane sizes. `per_device` is intentionally small — backpressure
 # kicks in per phone so one chatty device cannot drown the others. `control`
 # is generous because heartbeat/register messages must never drop.
 SEND_PER_DEVICE_MAX = _env_int("RELAY_SEND_PER_DEVICE_MAX", 10)
+SEND_VIDEO_PER_DEVICE_MAX = _env_int("RELAY_SEND_VIDEO_PER_DEVICE_MAX", 2)
 SEND_CONTROL_MAX    = _env_int("RELAY_SEND_CONTROL_MAX", 128)
+SEND_VIDEO_STALE_MS = _env_int(
+    "RELAY_SEND_VIDEO_STALE_MS",
+    200,
+    lo=0,
+    hi=10_000,
+)
+GRPC_VIDEO_STREAM_SHARDS = _env_int(
+    "RELAY_GRPC_VIDEO_STREAM_SHARDS",
+    8,
+    lo=0,
+    hi=16,
+)
 
 # How long bounded_put waits before declaring the send_queue dead. Long
 # enough to absorb a transient gRPC flush, short enough that one stuck
@@ -399,20 +439,52 @@ _MISSING = object()
 
 
 class FairSendQueue:
-    """Round-robin per-device send queue with a priority control lane."""
+    """Priority control + reliable + lossy-video lanes with device fairness."""
 
     def __init__(
         self,
         *,
         per_device_max: int = 16,
         control_max: int = 128,
+        video_per_device_max: Optional[int] = None,
+        video_stale_ms: Optional[int] = None,
     ) -> None:
         self._per_device_max = max(1, per_device_max)
+        self._video_per_device_max = max(
+            2,
+            video_per_device_max
+            if video_per_device_max is not None
+            else per_device_max,
+        )
         self._control_max = max(1, control_max)
         self._control: asyncio.Queue = asyncio.Queue(maxsize=self._control_max)
         self._per_dev: dict[str, asyncio.Queue] = {}
+        self._video_per_dev: dict[str, asyncio.Queue] = {}
+        self._video_drops: dict[str, int] = {}
+        self._video_evictions: dict[str, int] = {}
+        self._video_suppressed: dict[str, int] = {}
+        self._video_stale_drops: dict[str, int] = {}
+        self._video_drop_callbacks: dict[str, Any] = {}
+        self._video_awaiting_keyframe: set[str] = set()
+        self._video_resyncs = 0
+        self._video_dequeued = 0
+        self._video_age_samples = 0
+        self._video_age_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
+        self._video_age_max_ms = 0
+        self._video_handoff_samples = 0
+        self._video_handoff_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
+        self._video_handoff_max_ms = 0
+        self._reliable_items = 0
+        self._video_items = 0
         # deque acts as the round-robin cursor — O(1) rotate(-1) advances it.
         self._rr: deque[str] = deque()
+        self._video_rr: deque[str] = deque()
+        # Alternate reliable/video when both are busy. Reliable goes first,
+        # while video is guaranteed a turn under a continuous result stream.
+        self._prefer_video = False
+        self._video_stale_ms = (
+            SEND_VIDEO_STALE_MS if video_stale_ms is None else max(0, video_stale_ms)
+        )
         # Wakes the (single) consumer when any sub-queue becomes non-empty.
         self._wake: asyncio.Event = asyncio.Event()
 
@@ -428,12 +500,199 @@ class FairSendQueue:
     async def put_with_serial(self, item: Any, serial: Optional[str]) -> None:
         q = self._lane_for(serial)
         await q.put(item)
+        if serial:
+            self._reliable_items += 1
         self._wake.set()
 
     def put_nowait_with_serial(self, item: Any, serial: Optional[str]) -> None:
         q = self._lane_for(serial)
         q.put_nowait(item)
+        if serial:
+            self._reliable_items += 1
         self._wake.set()
+
+    def put_video_nowait(self, item: Any, serial: str) -> None:
+        """Lossy video enqueue, isolated from reliable per-device results."""
+        q = self._video_lane_for(serial)
+        q.put_nowait(item)
+        self._video_items += 1
+        self._wake.set()
+
+    def offer_video_nowait(
+        self,
+        item: Any,
+        serial: str,
+        *,
+        is_config: bool,
+        is_key: bool,
+        on_drop=None,
+    ) -> bool:
+        """Offer one H264 packet and return whether the producer should request IDR.
+
+        Once a delta frame is dropped, later deltas are not decodable from the
+        receiver's current reference chain. Suppress them until a keyframe is
+        admitted instead of wasting transport capacity on corrupt output.
+        """
+        now_ns = time.monotonic_ns()
+        if on_drop is not None:
+            self._video_drop_callbacks[serial] = on_drop
+        received_ns = getattr(item, "received_ns", None)
+        if isinstance(received_ns, int):
+            self._record_video_handoff(
+                max(0, math.ceil((now_ns - received_ns) / 1_000_000))
+            )
+        awaiting_keyframe = serial in self._video_awaiting_keyframe
+        if awaiting_keyframe and not is_config and not is_key:
+            self.record_video_drop(serial, suppressed=True)
+            return False
+
+        if hasattr(item, "enqueued_ns"):
+            item.enqueued_ns = now_ns
+        try:
+            self.put_video_nowait(item, serial)
+        except asyncio.QueueFull:
+            if not is_config and not is_key:
+                self.record_video_drop(serial)
+                if awaiting_keyframe:
+                    return False
+                self._video_awaiting_keyframe.add(serial)
+                return True
+            if not self.evict_oldest_video(serial):
+                return False
+            try:
+                self.put_video_nowait(item, serial)
+            except asyncio.QueueFull:
+                return False
+
+        if is_key:
+            if awaiting_keyframe:
+                self._video_resyncs += 1
+            self._video_awaiting_keyframe.discard(serial)
+        return False
+
+    def is_video_awaiting_keyframe(self, serial: str) -> bool:
+        """Return whether a lane is suppressing deltas until decoder resync."""
+        return serial in self._video_awaiting_keyframe
+
+    def evict_oldest_video(self, serial: str) -> bool:
+        """Evict one video frame only; never touches a reliable result lane."""
+        q = self._video_per_dev.get(serial)
+        if q is None:
+            return False
+        try:
+            q.get_nowait()
+            self._video_items -= 1
+            self._video_evictions[serial] = (
+                self._video_evictions.get(serial, 0) + 1
+            )
+            return True
+        except asyncio.QueueEmpty:
+            return False
+
+    def record_video_drop(self, serial: str, *, suppressed: bool = False) -> None:
+        """Record a dropped delta frame for periodic fleet diagnostics."""
+        self._video_drops[serial] = self._video_drops.get(serial, 0) + 1
+        if suppressed:
+            self._video_suppressed[serial] = (
+                self._video_suppressed.get(serial, 0) + 1
+            )
+
+    def video_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        """Aggregate video pressure without exposing phone identifiers in logs."""
+        affected = (
+            set(self._video_drops)
+            | set(self._video_evictions)
+            | set(self._video_suppressed)
+            | set(self._video_stale_drops)
+            | self._video_awaiting_keyframe
+        )
+        stats = {
+            "drops": sum(self._video_drops.values()),
+            "evictions": sum(self._video_evictions.values()),
+            "suppressed_until_keyframe": sum(self._video_suppressed.values()),
+            "stale_drops": sum(self._video_stale_drops.values()),
+            "resyncs": self._video_resyncs,
+            "awaiting_keyframe": len(self._video_awaiting_keyframe),
+            "affected_serials": len(affected),
+            "dequeued": self._video_dequeued,
+            "queue_age_samples": self._video_age_samples,
+            "queue_age_p50_ms": self._video_age_percentile(0.50),
+            "queue_age_p95_ms": self._video_age_percentile(0.95),
+            "queue_age_max_ms": self._video_age_max_ms,
+            "handoff_age_samples": self._video_handoff_samples,
+            "handoff_age_p50_ms": self._video_handoff_percentile(0.50),
+            "handoff_age_p95_ms": self._video_handoff_percentile(0.95),
+            "handoff_age_max_ms": self._video_handoff_max_ms,
+        }
+        if reset:
+            self._video_drops.clear()
+            self._video_evictions.clear()
+            self._video_suppressed.clear()
+            self._video_stale_drops.clear()
+            self._video_resyncs = 0
+            self._video_dequeued = 0
+            self._video_age_samples = 0
+            self._video_age_buckets = [0] * (len(_VIDEO_AGE_BUCKETS_MS) + 1)
+            self._video_age_max_ms = 0
+            self._video_handoff_samples = 0
+            self._video_handoff_buckets = [0] * (
+                len(_VIDEO_AGE_BUCKETS_MS) + 1
+            )
+            self._video_handoff_max_ms = 0
+        return stats
+
+    def _record_video_handoff(self, age_ms: int) -> None:
+        bucket = bisect.bisect_left(_VIDEO_AGE_BUCKETS_MS, age_ms)
+        self._video_handoff_buckets[bucket] += 1
+        self._video_handoff_samples += 1
+        self._video_handoff_max_ms = max(self._video_handoff_max_ms, age_ms)
+
+    def _record_video_dequeue(self, item: Any) -> None:
+        self._video_dequeued += 1
+        enqueued_ns = getattr(item, "enqueued_ns", None)
+        if not isinstance(enqueued_ns, int) or enqueued_ns <= 0:
+            return
+        age_ms = max(0, math.ceil((time.monotonic_ns() - enqueued_ns) / 1_000_000))
+        bucket = bisect.bisect_left(_VIDEO_AGE_BUCKETS_MS, age_ms)
+        self._video_age_buckets[bucket] += 1
+        self._video_age_samples += 1
+        self._video_age_max_ms = max(self._video_age_max_ms, age_ms)
+
+    def _video_age_percentile(self, percentile: float) -> int:
+        return self._latency_percentile(
+            self._video_age_buckets,
+            self._video_age_samples,
+            self._video_age_max_ms,
+            percentile,
+        )
+
+    def _video_handoff_percentile(self, percentile: float) -> int:
+        return self._latency_percentile(
+            self._video_handoff_buckets,
+            self._video_handoff_samples,
+            self._video_handoff_max_ms,
+            percentile,
+        )
+
+    @staticmethod
+    def _latency_percentile(
+        buckets: list[int],
+        samples: int,
+        max_ms: int,
+        percentile: float,
+    ) -> int:
+        if samples <= 0:
+            return 0
+        target = max(1, math.ceil(samples * percentile))
+        seen = 0
+        for index, count in enumerate(buckets):
+            seen += count
+            if seen < target:
+                continue
+            if index < len(_VIDEO_AGE_BUCKETS_MS):
+                return _VIDEO_AGE_BUCKETS_MS[index]
+            return max_ms
+        return max_ms
 
     # ── consumer API ──────────────────────────────────────────────────────
 
@@ -454,17 +713,86 @@ class FairSendQueue:
             await self._wake.wait()
 
     def _try_get_one(self) -> Any:
-        # 1) Control plane has absolute priority — never starved by frames.
-        if not self._control.empty():
-            return self._control.get_nowait()
-        # 2) Round-robin among per-device lanes.
-        n = len(self._rr)
+        while True:
+            dropped_stale = False
+            # 1) Control plane has absolute priority — never starved by frames.
+            if not self._control.empty():
+                return self._control.get_nowait()
+            # 2) Alternate reliable and video service when both are continuously
+            # busy. This keeps command results responsive without starving live
+            # video for farms where every phone is streaming.
+            reliable = (self._rr, self._per_dev, False)
+            video = (self._video_rr, self._video_per_dev, True)
+            lane_order = (video, reliable) if self._prefer_video else (reliable, video)
+            for rr, lanes, is_video in lane_order:
+                if is_video:
+                    if self._video_items <= 0:
+                        continue
+                elif self._reliable_items <= 0:
+                    continue
+                item = self._try_get_round_robin(rr, lanes)
+                if item is not _MISSING:
+                    if is_video:
+                        self._video_items -= 1
+                        self._record_video_dequeue(item)
+                        if self._drop_stale_video_delta(item):
+                            dropped_stale = True
+                            break
+                        if bool(getattr(item, "is_key", False)):
+                            self._video_awaiting_keyframe.discard(
+                                str(getattr(item, "serial", "") or "")
+                            )
+                    else:
+                        self._reliable_items -= 1
+                    self._prefer_video = not is_video
+                    return item
+            if not dropped_stale:
+                return _MISSING
+
+    def _drop_stale_video_delta(self, item: Any) -> bool:
+        """Drop old non-key video before gRPC sends it to the browser.
+
+        Live H.264 should be latest-frame-wins. Once a queued delta frame is too
+        old, forwarding it only increases visible latency and may poison the
+        decoder reference chain. Config and keyframes remain reliable.
+        """
+        if self._video_stale_ms <= 0:
+            return False
+        if bool(getattr(item, "is_config", False)) or bool(getattr(item, "is_key", False)):
+            return False
+        enqueued_ns = getattr(item, "enqueued_ns", None)
+        if not isinstance(enqueued_ns, int) or enqueued_ns <= 0:
+            return False
+        age_ms = max(0, math.ceil((time.monotonic_ns() - enqueued_ns) / 1_000_000))
+        if age_ms <= self._video_stale_ms:
+            return False
+        serial = str(getattr(item, "serial", "") or "")
+        if serial:
+            self.record_video_drop(serial)
+            self._video_stale_drops[serial] = (
+                self._video_stale_drops.get(serial, 0) + 1
+            )
+            self._video_awaiting_keyframe.add(serial)
+            callback = self._video_drop_callbacks.get(serial)
+            if callback is not None:
+                try:
+                    callback()
+                except Exception:
+                    logger.debug("video stale-drop callback failed", exc_info=True)
+        return True
+
+    @staticmethod
+    def _try_get_round_robin(
+        rr: deque[str],
+        lanes: dict[str, asyncio.Queue],
+    ) -> Any:
+        n = len(rr)
         for _ in range(n):
             # Rotate first so we don't keep favouring the same phone after a
             # quiet pass — the cursor always advances on every get attempt.
-            self._rr.rotate(-1)
-            serial = self._rr[0]
-            q = self._per_dev.get(serial)
+            rr.rotate(-1)
+            serial = rr[0]
+            q = lanes.get(serial)
             if q is not None and not q.empty():
                 return q.get_nowait()
         return _MISSING
@@ -481,30 +809,52 @@ class FairSendQueue:
             self._rr.append(serial)
         return q
 
+    def _video_lane_for(self, serial: str) -> asyncio.Queue:
+        q = self._video_per_dev.get(serial)
+        if q is None:
+            q = asyncio.Queue(maxsize=self._video_per_device_max)
+            self._video_per_dev[serial] = q
+            self._video_rr.append(serial)
+        return q
+
     def qsize(self) -> int:
-        total = self._control.qsize()
-        for q in self._per_dev.values():
-            total += q.qsize()
-        return total
+        return self._control.qsize() + self._reliable_items + self._video_items
 
     @property
     def maxsize(self) -> int:
-        return self._control_max + self._per_device_max * max(1, len(self._per_dev))
+        reliable_capacity = self._per_device_max * max(1, len(self._per_dev))
+        video_capacity = self._video_per_device_max * max(
+            1,
+            len(self._video_per_dev),
+        )
+        return self._control_max + reliable_capacity + video_capacity
 
     def drop_serial(self, serial: str) -> int:
-        """Remove a device lane (called on disconnect). Returns drained count."""
-        q = self._per_dev.pop(serial, None)
+        """Remove reliable + video lanes for a disconnected device."""
+        n = self._drop_lane(serial, self._per_dev, self._rr)
+        self._reliable_items = max(0, self._reliable_items - n)
+        video_n = self._drop_lane(serial, self._video_per_dev, self._video_rr)
+        self._video_items = max(0, self._video_items - video_n)
+        self._video_awaiting_keyframe.discard(serial)
+        return n + video_n
+
+    @staticmethod
+    def _drop_lane(
+        serial: str,
+        lanes: dict[str, asyncio.Queue],
+        rr: deque[str],
+    ) -> int:
+        q = lanes.pop(serial, None)
         try:
-            self._rr.remove(serial)
+            rr.remove(serial)
         except ValueError:
             pass
         if q is None:
             return 0
-        n = 0
+        n = q.qsize()
         while not q.empty():
             try:
                 q.get_nowait()
-                n += 1
             except asyncio.QueueEmpty:
                 break
         return n
@@ -514,7 +864,149 @@ class FairSendQueue:
         snap: dict[str, int] = {"_control": self._control.qsize()}
         for serial, q in self._per_dev.items():
             snap[serial] = q.qsize()
+        for serial, q in self._video_per_dev.items():
+            snap[f"video:{serial}"] = q.qsize()
         return snap
+
+
+class MultiStreamSendQueue:
+    """Reliable/meta queue plus physically separate video shard queues.
+
+    The public producer API intentionally mirrors FairSendQueue so scrcpy
+    producers and result producers do not need to know whether transport is a
+    single gRPC stream or multiple physical video streams.
+    """
+
+    def __init__(
+        self,
+        *,
+        video_shards: int,
+        per_device_max: int = 16,
+        control_max: int = 128,
+        video_per_device_max: Optional[int] = None,
+        video_stale_ms: Optional[int] = None,
+    ) -> None:
+        self._reliable = FairSendQueue(
+            per_device_max=per_device_max,
+            control_max=control_max,
+            video_per_device_max=video_per_device_max,
+            video_stale_ms=video_stale_ms,
+        )
+        self._video_shards = [
+            FairSendQueue(
+                per_device_max=1,
+                control_max=1,
+                video_per_device_max=video_per_device_max,
+                video_stale_ms=video_stale_ms,
+            )
+            for _ in range(max(1, video_shards))
+        ]
+
+    # Reliable/meta lane used by the primary RelayService.Stream.
+    async def put(self, item: Any) -> None:
+        await self._reliable.put(item)
+
+    def put_nowait(self, item: Any) -> None:
+        self._reliable.put_nowait(item)
+
+    async def put_with_serial(self, item: Any, serial: Optional[str]) -> None:
+        await self._reliable.put_with_serial(item, serial)
+
+    def put_nowait_with_serial(self, item: Any, serial: Optional[str]) -> None:
+        self._reliable.put_nowait_with_serial(item, serial)
+
+    async def get(self) -> Any:
+        return await self._reliable.get()
+
+    # Lossy video lane routed to physical video shards.
+    def put_video_nowait(self, item: Any, serial: str) -> None:
+        self._video_queue_for(serial).put_video_nowait(item, serial)
+
+    def offer_video_nowait(
+        self,
+        item: Any,
+        serial: str,
+        *,
+        is_config: bool,
+        is_key: bool,
+        on_drop=None,
+    ) -> bool:
+        return self._video_queue_for(serial).offer_video_nowait(
+            item,
+            serial,
+            is_config=is_config,
+            is_key=is_key,
+            on_drop=on_drop,
+        )
+
+    def is_video_awaiting_keyframe(self, serial: str) -> bool:
+        return self._video_queue_for(serial).is_video_awaiting_keyframe(serial)
+
+    def record_video_drop(self, serial: str, *, suppressed: bool = False) -> None:
+        self._video_queue_for(serial).record_video_drop(serial, suppressed=suppressed)
+
+    def evict_oldest_video(self, serial: str) -> bool:
+        return self._video_queue_for(serial).evict_oldest_video(serial)
+
+    def video_shard_count(self) -> int:
+        return len(self._video_shards)
+
+    def video_shard_queue(self, index: int) -> FairSendQueue:
+        return self._video_shards[index]
+
+    def _video_queue_for(self, serial: str) -> FairSendQueue:
+        if not serial:
+            return self._video_shards[0]
+        index = zlib.crc32(serial.encode("utf-8", errors="replace")) % len(
+            self._video_shards
+        )
+        return self._video_shards[index]
+
+    def video_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        totals: dict[str, int] = {}
+        max_keys = {
+            "queue_age_p50_ms",
+            "queue_age_p95_ms",
+            "queue_age_max_ms",
+            "handoff_age_p50_ms",
+            "handoff_age_p95_ms",
+            "handoff_age_max_ms",
+        }
+        for index, queue in enumerate(self._video_shards):
+            shard_stats = queue.video_stats_snapshot(reset=reset)
+            for key, value in shard_stats.items():
+                if key in max_keys:
+                    totals[key] = max(totals.get(key, 0), int(value))
+                else:
+                    totals[key] = totals.get(key, 0) + int(value)
+            totals[f"shard_{index}_qsize"] = queue.qsize()
+        totals["shards"] = len(self._video_shards)
+        return totals
+
+    def drop_serial(self, serial: str) -> int:
+        dropped = self._reliable.drop_serial(serial)
+        for queue in self._video_shards:
+            dropped += queue.drop_serial(serial)
+        return dropped
+
+    def snapshot(self) -> dict[str, int]:
+        snap = self._reliable.snapshot()
+        for index, queue in enumerate(self._video_shards):
+            for key, value in queue.snapshot().items():
+                if key == "_control":
+                    snap[f"video_shard:{index}:_control"] = value
+                elif key.startswith("video:"):
+                    snap[f"video_shard:{index}:{key.removeprefix('video:')}"] = value
+                else:
+                    snap[f"video_shard:{index}:reliable:{key}"] = value
+        return snap
+
+    def qsize(self) -> int:
+        return self._reliable.qsize() + sum(q.qsize() for q in self._video_shards)
+
+    @property
+    def maxsize(self) -> int:
+        return self._reliable.maxsize + sum(q.maxsize for q in self._video_shards)
 
 
 # ── Task registry ─────────────────────────────────────────────────────────────

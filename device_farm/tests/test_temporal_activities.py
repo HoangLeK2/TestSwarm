@@ -21,6 +21,7 @@ import pytest
 
 from temporal.activities import (
     _SERIAL_RE,
+    _generate_totp,
     _validate_serial,
     _xml_has_element,
     DeviceActivities,
@@ -36,6 +37,12 @@ from temporal.shared import (
 
 
 # ── Mock infrastructure ──────────────────────────────────────────────────────
+
+
+def test_generate_totp_matches_rfc6238_sha1_vector():
+    secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+    assert _generate_totp(secret, now=59, digits=8) == "94287082"
 
 
 class MockU2:

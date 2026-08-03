@@ -70,6 +70,41 @@ const BUILTINS = [
   },
   { name: '${__STEP_INDEX__}', descKey: 'builtins.stepIndex', group: 'system' },
   {
+    name: '${GROUP_NAME}',
+    descKey: 'builtins.groupName',
+    group: 'sourcePool'
+  },
+  {
+    name: '${GROUP_URL}',
+    descKey: 'builtins.groupUrl',
+    group: 'sourcePool'
+  },
+  {
+    name: '${GROUP_SEARCH_QUERY}',
+    descKey: 'builtins.groupSearchQuery',
+    group: 'sourcePool'
+  },
+  {
+    name: '${GROUP_SELECTOR_BY}',
+    descKey: 'builtins.groupSelectorBy',
+    group: 'sourcePool'
+  },
+  {
+    name: '${GROUP_SELECTOR_VALUE}',
+    descKey: 'builtins.groupSelectorValue',
+    group: 'sourcePool'
+  },
+  {
+    name: '${GROUP_FALLBACK_SELECTOR_BY}',
+    descKey: 'builtins.groupFallbackSelectorBy',
+    group: 'sourcePool'
+  },
+  {
+    name: '${GROUP_FALLBACK_SELECTOR_VALUE}',
+    descKey: 'builtins.groupFallbackSelectorValue',
+    group: 'sourcePool'
+  },
+  {
     name: '${__ACCOUNT_ID__}',
     descKey: 'builtins.accountId',
     group: 'account'
@@ -98,6 +133,7 @@ const BUILTINS = [
 
 const SYSTEM_BUILTINS = BUILTINS.filter((b) => b.group === 'system');
 const ACCOUNT_BUILTINS = BUILTINS.filter((b) => b.group === 'account');
+const SOURCE_POOL_BUILTINS = BUILTINS.filter((b) => b.group === 'sourcePool');
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
   return Object.entries(normalizeScenarioVariables(vars)).map(
@@ -608,6 +644,19 @@ export function VariableEditor({
                 />
                 <p className='text-[10px] text-muted-foreground'>
                   {t('systemAccountHint')}
+                </p>
+                <p className='pt-2 text-xs font-semibold text-foreground'>
+                  {t('sourcePoolVariablesTitle')}
+                </p>
+                <BuiltinGroup
+                  title={t('sourcePoolVariablesSubtitle')}
+                  items={SOURCE_POOL_BUILTINS}
+                  copiedKey={copiedKey}
+                  onCopy={copyBuiltin}
+                  t={t}
+                />
+                <p className='text-[10px] text-muted-foreground'>
+                  {t('sourcePoolVariablesHint')}
                 </p>
               </PopoverContent>
             </Popover>

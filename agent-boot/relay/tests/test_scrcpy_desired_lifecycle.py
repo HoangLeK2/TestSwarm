@@ -2,7 +2,18 @@ from __future__ import annotations
 
 import asyncio
 
-from relay.agent import RelayAgent
+from relay.agent import (
+    SCRCPY_DEFAULT_BITRATE,
+    SCRCPY_DEFAULT_MAX_FPS,
+    SCRCPY_DEFAULT_MAX_WIDTH,
+    SCRCPY_DEGRADED_BITRATE,
+    SCRCPY_DEGRADED_MAX_FPS,
+    SCRCPY_DEGRADED_MAX_WIDTH,
+    SCRCPY_FOCUSED_BITRATE,
+    SCRCPY_FOCUSED_MAX_FPS,
+    SCRCPY_FOCUSED_MAX_WIDTH,
+    RelayAgent,
+)
 
 
 def _agent(monkeypatch) -> RelayAgent:
@@ -146,9 +157,182 @@ def test_scrcpy_start_without_profile_uses_fleet_defaults(monkeypatch):
     asyncio.run(run())
 
     cfg = agent._scrcpy_desired["serial-1"]["cfg"]
-    assert cfg["max_fps"] == 15
-    assert cfg["max_width"] == 540
-    assert cfg["bitrate"] == 800_000
-    assert mgr.starts[-1]["max_fps"] == 15
-    assert mgr.starts[-1]["max_width"] == 540
-    assert mgr.starts[-1]["bitrate"] == 800_000
+    assert cfg["profile"] == "visible"
+    assert cfg["max_fps"] == SCRCPY_DEFAULT_MAX_FPS
+    assert cfg["max_width"] == SCRCPY_DEFAULT_MAX_WIDTH
+    assert cfg["bitrate"] == SCRCPY_DEFAULT_BITRATE
+    assert mgr.starts[-1]["max_fps"] == SCRCPY_DEFAULT_MAX_FPS
+    assert mgr.starts[-1]["max_width"] == SCRCPY_DEFAULT_MAX_WIDTH
+    assert mgr.starts[-1]["bitrate"] == SCRCPY_DEFAULT_BITRATE
+
+
+def test_scrcpy_start_focused_profile_uses_focused_limits(monkeypatch):
+    agent = _agent(monkeypatch)
+
+    class _FakeScrcpyManager:
+        def __init__(self) -> None:
+            self.starts: list[dict] = []
+
+        async def start_session(self, **kwargs) -> None:
+            self.starts.append(kwargs)
+
+        def get(self, serial: str):
+            return object() if serial == "serial-1" else None
+
+    mgr = _FakeScrcpyManager()
+    agent._scrcpy_mgr = mgr
+
+    async def run() -> None:
+        await agent._handle_server_msg(
+            {
+                "type": "scrcpy_start",
+                "serial": "serial-1",
+                "profile": "focused",
+            },
+            asyncio.Queue(),
+            asyncio.get_running_loop(),
+        )
+
+    asyncio.run(run())
+
+    cfg = agent._scrcpy_desired["serial-1"]["cfg"]
+    assert cfg["profile"] == "focused"
+    assert cfg["max_fps"] == SCRCPY_FOCUSED_MAX_FPS
+    assert cfg["max_width"] == SCRCPY_FOCUSED_MAX_WIDTH
+    assert cfg["bitrate"] == SCRCPY_FOCUSED_BITRATE
+    assert mgr.starts[-1]["max_fps"] == SCRCPY_FOCUSED_MAX_FPS
+    assert mgr.starts[-1]["max_width"] == SCRCPY_FOCUSED_MAX_WIDTH
+    assert mgr.starts[-1]["bitrate"] == SCRCPY_FOCUSED_BITRATE
+
+
+def test_abnormal_scrcpy_stop_downgrades_next_start(monkeypatch):
+    agent = _agent(monkeypatch)
+    agent._scrcpy_desired = {
+        "serial-1": {
+            "desired": True,
+            "manual_stop": False,
+            "cfg": {
+                "profile": "focused",
+                "max_fps": SCRCPY_FOCUSED_MAX_FPS,
+                "max_width": SCRCPY_FOCUSED_MAX_WIDTH,
+                "enable_control": True,
+                "port": 27183,
+                "bitrate": SCRCPY_FOCUSED_BITRATE,
+                "low_latency": False,
+            },
+        }
+    }
+
+    class _FakeScrcpyManager:
+        def __init__(self) -> None:
+            self.starts: list[dict] = []
+
+        async def start_session(self, **kwargs) -> None:
+            self.starts.append(kwargs)
+
+        def get(self, serial: str):
+            return object() if serial == "serial-1" else None
+
+    mgr = _FakeScrcpyManager()
+    agent._scrcpy_mgr = mgr
+
+    agent._on_session_stopped("serial-1", "runtime_error")
+
+    async def run() -> None:
+        await agent._start_desired_scrcpy(
+            "serial-1",
+            asyncio.Queue(),
+            asyncio.get_running_loop(),
+        )
+
+    asyncio.run(run())
+
+    cfg = agent._scrcpy_desired["serial-1"]["cfg"]
+    assert cfg["profile"] == "degraded"
+    assert cfg["max_fps"] == SCRCPY_DEGRADED_MAX_FPS
+    assert cfg["max_width"] == SCRCPY_DEGRADED_MAX_WIDTH
+    assert cfg["bitrate"] == SCRCPY_DEGRADED_BITRATE
+    assert mgr.starts[-1]["max_fps"] == SCRCPY_DEGRADED_MAX_FPS
+    assert mgr.starts[-1]["max_width"] == SCRCPY_DEGRADED_MAX_WIDTH
+    assert mgr.starts[-1]["bitrate"] == SCRCPY_DEGRADED_BITRATE
+
+
+def test_scrcpy_health_signal_downgrades_next_start(monkeypatch):
+    agent = _agent(monkeypatch)
+    agent._scrcpy_desired = {
+        "serial-1": {
+            "desired": True,
+            "manual_stop": False,
+            "cfg": {
+                "profile": "focused",
+                "max_fps": SCRCPY_FOCUSED_MAX_FPS,
+                "max_width": SCRCPY_FOCUSED_MAX_WIDTH,
+                "enable_control": True,
+                "port": 27183,
+                "bitrate": SCRCPY_FOCUSED_BITRATE,
+                "low_latency": False,
+            },
+        }
+    }
+
+    class _FakeScrcpyManager:
+        def __init__(self) -> None:
+            self.starts: list[dict] = []
+
+        async def start_session(self, **kwargs) -> None:
+            self.starts.append(kwargs)
+
+        def get(self, serial: str):
+            return object() if serial == "serial-1" else None
+
+    mgr = _FakeScrcpyManager()
+    agent._scrcpy_mgr = mgr
+
+    agent._on_session_health("serial-1", "capture_reset_storm")
+
+    async def run() -> None:
+        await agent._start_desired_scrcpy(
+            "serial-1",
+            asyncio.Queue(),
+            asyncio.get_running_loop(),
+        )
+
+    asyncio.run(run())
+
+    assert agent._scrcpy_profile_stats["encoder_health_signals"] == 1
+    assert agent._scrcpy_desired["serial-1"]["cfg"]["profile"] == "degraded"
+    assert mgr.starts[-1]["max_fps"] == SCRCPY_DEGRADED_MAX_FPS
+    assert mgr.starts[-1]["max_width"] == SCRCPY_DEGRADED_MAX_WIDTH
+    assert mgr.starts[-1]["bitrate"] == SCRCPY_DEGRADED_BITRATE
+
+
+def test_scrcpy_stop_preserves_idle_reason_for_agent_warm_session(monkeypatch):
+    agent = _agent(monkeypatch)
+
+    class _FakeScrcpyManager:
+        def __init__(self) -> None:
+            self.stops: list[tuple[str, str]] = []
+
+        async def stop_session(self, serial: str, reason: str = "manual_stop") -> None:
+            self.stops.append((serial, reason))
+
+    mgr = _FakeScrcpyManager()
+    agent._scrcpy_mgr = mgr
+
+    async def run() -> None:
+        await agent._handle_server_msg(
+            {
+                "type": "scrcpy_stop",
+                "serial": "serial-1",
+                "reason": "unsubscribe_frames:idle_no_viewers",
+            },
+            asyncio.Queue(),
+            asyncio.get_running_loop(),
+        )
+
+    asyncio.run(run())
+
+    assert mgr.stops == [("serial-1", "unsubscribe_frames:idle_no_viewers")]
+    assert agent._scrcpy_desired["serial-1"]["last_stop_reason"] == (
+        "unsubscribe_frames:idle_no_viewers"
+    )

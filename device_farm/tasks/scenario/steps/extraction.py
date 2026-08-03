@@ -113,6 +113,11 @@ _ACTIVE_COMMENT_PARENT_CTX_KEYS = (
 )
 _CONSUMED_POST_ANCHORS_CTX_KEY = "_fb_consumed_post_anchors"
 _MAX_CONSUMED_POST_ANCHORS = 100
+_POST_OPEN_CONTEXT_ALIASES = {
+    "open_post_tap_settle_s": "post_open_tap_settle_s",
+    "open_post_max_attempts": "post_open_max_attempts",
+    "open_post_scan_window": "post_open_scan_window",
+}
 
 
 def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -162,6 +167,61 @@ def _remember_consumed_comment_parent(ctx: Dict[str, Any]) -> None:
     bucket.append(cleaned)
     if len(bucket) > _MAX_CONSUMED_POST_ANCHORS:
         del bucket[:-_MAX_CONSUMED_POST_ANCHORS]
+
+
+def _remember_consumed_post_anchor(ctx: Dict[str, Any], anchor: Dict[str, Any]) -> bool:
+    cleaned = _clean_comment_parent_anchor(anchor)
+    parent_hash = str(anchor.get("parent_id") or "").strip()
+    if parent_hash and "parent_id" not in cleaned:
+        cleaned["parent_id"] = parent_hash
+    if not cleaned:
+        return False
+    bucket = ctx.setdefault(_CONSUMED_POST_ANCHORS_CTX_KEY, [])
+    if not isinstance(bucket, list):
+        bucket = []
+        ctx[_CONSUMED_POST_ANCHORS_CTX_KEY] = bucket
+    identity = _anchor_identity(cleaned)
+    for existing in bucket:
+        if isinstance(existing, dict) and _anchor_identity(existing) == identity:
+            return True
+    bucket.append(cleaned)
+    if len(bucket) > _MAX_CONSUMED_POST_ANCHORS:
+        del bucket[:-_MAX_CONSUMED_POST_ANCHORS]
+    return True
+
+
+def _remember_consumed_post_anchors_from_diagnostic(
+    ctx: Dict[str, Any],
+    diagnostic: Dict[str, Any],
+    *,
+    include_attempted: bool = True,
+) -> int:
+    remembered = 0
+    candidates: list[Any] = []
+    if include_attempted:
+        attempted = diagnostic.get("attempted_open_post_anchors")
+        if isinstance(attempted, list):
+            candidates.extend(attempted)
+    opened = diagnostic.get("opened_post")
+    if isinstance(opened, dict):
+        candidates.append(opened)
+    for candidate in candidates:
+        if isinstance(candidate, dict) and _remember_consumed_post_anchor(ctx, candidate):
+            remembered += 1
+    return remembered
+
+
+def _count_attempted_post_open_anchors(diagnostic: Dict[str, Any]) -> int:
+    attempted = diagnostic.get("attempted_open_post_anchors")
+    if not isinstance(attempted, list):
+        return 0
+    return sum(1 for anchor in attempted if isinstance(anchor, dict) and anchor)
+
+
+def _normalize_post_open_context_aliases(context: Dict[str, Any]) -> None:
+    for legacy_key, canonical_key in _POST_OPEN_CONTEXT_ALIASES.items():
+        if legacy_key in context and canonical_key not in context:
+            context[canonical_key] = context[legacy_key]
 
 
 def _build_fb_comment_session(
@@ -306,6 +366,24 @@ _BALANCED_FB_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "comment_stop_if_no_new",
     "stop_if_no_new",
     "no_new_threshold",
+    "comment_large_target_fast_scroll",
+    "comment_large_target_swipes_per_dump",
+    "comment_large_target_scroll_distance",
+    "comment_large_target_duration_ms",
+    "comment_target_budget",
+    "comment_target_comments_per_swipe",
+    "comment_target_budget_unknown_count",
+    "comment_hard_budget",
+    "lock_comment_crawl_profile",
+    "comment_crawl_mode",
+    "comment_scroll_mode",
+    "comment_auto_coverage",
+    "comment_anchor_probe_count",
+    "comment_anchor_min_overlap",
+    "comment_coverage_scroll_distance",
+    "comment_coverage_min_distance",
+    "comment_coverage_gap_backoff",
+    "comment_coverage_tail_no_new_threshold",
     "hierarchy_compressed",
     "hierarchy_dump_timeout_s",
 )
@@ -858,6 +936,24 @@ def request_edge_extra_data(
         "min_comment_scan_passes",
         "comment_max_snapshots",
         "comment_xml_max_bytes",
+        "comment_large_target_fast_scroll",
+        "comment_large_target_swipes_per_dump",
+        "comment_large_target_scroll_distance",
+        "comment_large_target_duration_ms",
+        "comment_target_budget",
+        "comment_target_comments_per_swipe",
+        "comment_target_budget_unknown_count",
+        "comment_hard_budget",
+        "lock_comment_crawl_profile",
+        "comment_crawl_mode",
+        "comment_scroll_mode",
+        "comment_auto_coverage",
+        "comment_anchor_probe_count",
+        "comment_anchor_min_overlap",
+        "comment_coverage_scroll_distance",
+        "comment_coverage_min_distance",
+        "comment_coverage_gap_backoff",
+        "comment_coverage_tail_no_new_threshold",
         "hierarchy_compressed",
         "hierarchy_dump_timeout_s",
         "expand_see_more_max_passes",
@@ -876,6 +972,12 @@ def request_edge_extra_data(
         "open_post_press_back_after_extract",
         "open_post_tap_settle_s",
         "open_post_max_attempts",
+        "open_post_scan_window",
+        "post_open_tap_settle_s",
+        "post_open_max_attempts",
+        "post_open_verify_retries",
+        "post_open_verify_retry_pause_s",
+        "post_open_scan_window",
         "open_post_verify",
         "open_post_reuse_current_detail",
         "require_open_post_detail",
@@ -912,6 +1014,7 @@ def request_edge_extra_data(
             context.setdefault("expand_see_more_fast", True)
             context.setdefault("expand_completion_retries", 1)
             context.setdefault("expand_see_more_wall_s", 18)
+    _normalize_post_open_context_aliases(context)
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
@@ -930,13 +1033,51 @@ def request_edge_extra_data(
             result["edge_extra_summary"] = summary
             result["cancelled"] = True
             return True
+        error_text = str(summary.get("error") or "unknown")
+        diagnostic = summary.get("diagnostic") if isinstance(summary.get("diagnostic"), dict) else {}
+        if (
+            strategy == "fb_posts"
+            and error_text.startswith("post_open_required:")
+            and "_loop_iter" in ctx
+        ):
+            reason_code = error_text.removeprefix("post_open_required:")
+            attempted_count = _count_attempted_post_open_anchors(diagnostic)
+            retryable_open_failure = reason_code in {
+                "post_open_verify_failed",
+                "comment_sheet_without_opened_post",
+            }
+            remembered = _remember_consumed_post_anchors_from_diagnostic(
+                ctx,
+                diagnostic,
+                include_attempted=not retryable_open_failure,
+            )
+            if remembered <= 0 and attempted_count <= 0:
+                ctx["_break"] = True
+            result["extracted"] = 0
+            result["duplicate_count"] = 0
+            result["skipped"] = True
+            result["reason_code"] = reason_code
+            result["post_open_attempted_anchor_count"] = attempted_count
+            result["post_open_retryable_failure"] = retryable_open_failure
+            result["message"] = f"edge extra_data fb_posts skipped: {error_text}"
+            result["edge_extra_summary"] = summary
+            log.info(
+                "[%s] %s remembered_open_post_anchors=%d attempted_open_post_anchors=%d retryable=%s break=%s",
+                serial,
+                result["message"],
+                remembered,
+                attempted_count,
+                retryable_open_failure,
+                bool(ctx.get("_break")),
+            )
+            return True
         log.warning("[%s] edge extra_data failed: %s", serial, summary.get("error") or summary)
         result["ok"] = False
         from services.campaign.dlq_message import summarize_edge_extra_error
 
         result["message"] = (
             f"edge extra_data failed: "
-            f"{summarize_edge_extra_error(summary.get('error') or 'unknown')}"
+            f"{summarize_edge_extra_error(error_text)}"
         )
         result["edge_extra_summary"] = summary
         return True
@@ -1006,6 +1147,39 @@ def request_edge_extra_data(
         and result["reason_code"]
         in {"post_detail_incomplete", "post_detail_target_not_reconciled"}
     ):
+        opened_post = diagnostic.get("opened_post")
+        has_opened_post_anchor = isinstance(opened_post, dict) and bool(opened_post)
+        if "_loop_iter" in ctx or has_opened_post_anchor:
+            remembered = _remember_consumed_post_anchors_from_diagnostic(
+                ctx,
+                diagnostic,
+                include_attempted=True,
+            )
+            if "_loop_iter" in ctx and remembered <= 0:
+                ctx["_break"] = True
+            if remembered <= 0 and not has_opened_post_anchor:
+                result["ok"] = False
+                result["message"] = (
+                    "edge extra_data fb_posts incomplete: "
+                    f"{result['reason_code']}"
+                )
+                log.warning("[%s] %s", serial, result["message"])
+                return True
+            result["skipped"] = True
+            result["post_open_consumed_anchor_count"] = remembered
+            result["post_open_retryable_failure"] = False
+            result["message"] = (
+                "edge extra_data fb_posts skipped: "
+                f"{result['reason_code']}"
+            )
+            log.info(
+                "[%s] %s remembered_open_post_anchors=%d break=%s",
+                serial,
+                result["message"],
+                remembered,
+                bool(ctx.get("_break")),
+            )
+            return True
         result["ok"] = False
         result["message"] = (
             "edge extra_data fb_posts incomplete: "
@@ -1024,6 +1198,14 @@ def request_edge_extra_data(
         stopped_reason = str(
             diagnostic.get("comment_scroll_stopped_reason") or "target_not_reached"
         )
+        if returned > 0:
+            result["partial"] = True
+            result["message"] = (
+                f"edge extra_data fb_comments partial: {returned}/{target} "
+                f"comments ({stopped_reason})"
+            )
+            log.info("[%s] %s", serial, result["message"])
+            return True
         result["ok"] = False
         result["message"] = (
             f"edge extra_data fb_comments incomplete: {returned}/{target} "

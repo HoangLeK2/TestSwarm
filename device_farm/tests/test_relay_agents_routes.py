@@ -132,6 +132,35 @@ async def test_bootstrap_all_route_skips_pending_serials():
 
 
 @pytest.mark.asyncio
+async def test_register_relay_device_schedules_bootstrap_after_claim():
+    from unittest.mock import patch
+
+    from api.routes.relay_agents import _schedule_bootstrap_for_registered_relay_device
+
+    called: list[str] = []
+
+    class FakeControl:
+        async def bootstrap(self, serial: str, timeout: float = 180.0) -> dict:
+            called.append(serial)
+            return {"ok": True, "exit_code": 0, "output": "ready", "error": ""}
+
+    with patch("api.routes.relay_agents._get_ctrl_optional", return_value=FakeControl()):
+        assert _schedule_bootstrap_for_registered_relay_device("dev-registered")
+        await asyncio.sleep(0)
+
+    assert called == ["dev-registered"]
+
+
+def test_register_relay_device_bootstrap_skip_without_control_servicer():
+    from unittest.mock import patch
+
+    from api.routes.relay_agents import _schedule_bootstrap_for_registered_relay_device
+
+    with patch("api.routes.relay_agents._get_ctrl_optional", return_value=None):
+        assert not _schedule_bootstrap_for_registered_relay_device("dev-registered")
+
+
+@pytest.mark.asyncio
 async def test_list_relay_agents_dedupes_same_hostname_rows():
     from unittest.mock import AsyncMock, MagicMock, patch
     from datetime import datetime, timezone

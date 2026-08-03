@@ -99,6 +99,7 @@ export type ActionType =
   | 'take_screenshot'
   | 'set_clipboard'
   | 'extract'
+  | 'use_source_pool'
   | 'save_extraction'
   | 'fb_find_comment_button'
   | 'fb_tap_comment_target'
@@ -144,6 +145,7 @@ export function getStepIcon(type: string): LucideIcon {
     case 'loop':
       return RefreshCw;
     case 'extract':
+    case 'use_source_pool':
     case 'extract_text_hierarchy':
     case 'extract_text_ocr':
     case 'extract_text_ai':
@@ -855,6 +857,16 @@ export function createDefaultStep(
         platform: 'facebook',
         content_type: 'fb_post',
         dedupe_field: 'post_key'
+      };
+    case 'use_source_pool':
+      return {
+        ...base,
+        type: 'use_source_pool',
+        platform: 'facebook',
+        entity_type: 'group',
+        output_prefix: 'GROUP',
+        statuses: ['candidate', 'active', 'available'],
+        allocation_policy: 'one_per_device'
       };
     // Shortcut — creates an `extract` step preset for FB comments. Mirrors the
     // split Facebook comment templates; users can still tweak fields later.

@@ -319,6 +319,35 @@ def _get_ctrl():
     return svc
 
 
+def _schedule_bootstrap_for_registered_relay_device(serial: str) -> bool:
+    """Fire-and-forget bootstrap after a user claims/registers a relay serial."""
+    serial = (serial or "").strip()
+    if not serial:
+        return False
+    ctrl = _get_ctrl_optional()
+    if ctrl is None:
+        log.info("relay bootstrap on register skipped serial=%s reason=no-control-servicer", serial)
+        return False
+
+    async def _run() -> None:
+        try:
+            result = await ctrl.bootstrap(serial, timeout=180.0)
+            log.info(
+                "relay bootstrap on register %s for %s",
+                "ok" if result.get("ok") else "failed",
+                serial,
+            )
+        except Exception as exc:
+            log.warning("relay bootstrap on register error serial=%s: %s", serial, exc)
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        log.info("relay bootstrap on register skipped serial=%s reason=no-event-loop", serial)
+        return False
+    return True
+
+
 def _device_to_out(d, *, relay_id: str | None = None) -> DeviceOut:
     return DeviceOut(
         id=d.id,
@@ -761,6 +790,7 @@ async def register_relay_device(
     device = await repo.get_device_by_serial(db, str(getattr(existing, "serial", "") or serial))
     if not device:
         raise HTTPException(status_code=500, detail="device registration failed")
+    _schedule_bootstrap_for_registered_relay_device(serial)
     return _device_to_out(device, relay_id=relay_id)
 
 

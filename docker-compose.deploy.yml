@@ -137,14 +137,16 @@ services:
       RELAY_PORT: ${RELAY_PORT:-50051}
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-8}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-2}
+      # Web/API pool: 12 persistent + 3 burst connections.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-12}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-3}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-5}
       # Keep total activity DB demand bounded independently of activity slots.
       DB_ACTIVITY_POOL_SIZE: ${DB_ACTIVITY_POOL_SIZE:-4}
       DB_ACTIVITY_MAX_OVERFLOW: ${DB_ACTIVITY_MAX_OVERFLOW:-0}
       DB_ACTIVITY_POOL_TIMEOUT: ${DB_ACTIVITY_POOL_TIMEOUT:-30}
-      DB_CONNECTION_LIMIT: ${DB_CONNECTION_LIMIT:-0}
+      # Required in production so an unsafe aggregate pool budget fails fast.
+      DB_CONNECTION_LIMIT: ${DB_CONNECTION_LIMIT:?Set DB_CONNECTION_LIMIT to PostgreSQL max_connections}
       DB_CONNECTION_RESERVE: ${DB_CONNECTION_RESERVE:-15}
       TEMPORAL_DB_MAX_CONNECTIONS: ${TEMPORAL_DB_MAX_CONNECTIONS:-40}
       METRICS_ENABLED: ${METRICS_ENABLED:-0}

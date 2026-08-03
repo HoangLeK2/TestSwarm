@@ -34,7 +34,7 @@ def _offline_dismiss_minutes() -> int:
 
 
 def _dispatch_fanout_concurrency_limit() -> int:
-    raw = os.environ.get("CAMPAIGN_DISPATCH_FANOUT_CONCURRENCY", "50")
+    raw = os.environ.get("CAMPAIGN_DISPATCH_FANOUT_CONCURRENCY", "100")
     try:
         return max(1, min(500, int(raw)))
     except ValueError:

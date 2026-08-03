@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from api.schemas.scenario import ScenarioModel
 from common.scenario_schema import validate_scenario
 from common.variable_resolver import VariableContext
+import tasks.scenario.steps.app_automation as app_automation_steps
 from tasks.scenario.steps.app_automation import (
     handle_assert_app_state,
     handle_fill_form,
@@ -19,6 +20,19 @@ _XML = """
   <node text="Password" class="android.widget.TextView" bounds="[40,220][240,270]" />
   <node text="" resource-id="com.example:id/password" class="android.widget.EditText" bounds="[260,210][900,290]" />
   <node text="Login" class="android.widget.Button" bounds="[300,360][700,440]" />
+</hierarchy>
+"""
+
+_XML_WITH_AUTH_CODE = """
+<hierarchy>
+  <node text="Username" class="android.widget.TextView" bounds="[40,100][240,150]" />
+  <node text="" resource-id="com.example:id/username" class="android.widget.EditText" bounds="[260,90][900,170]" />
+  <node text="Password" class="android.widget.TextView" bounds="[40,220][240,270]" />
+  <node text="" resource-id="com.example:id/password" class="android.widget.EditText" bounds="[260,210][900,290]" />
+  <node text="Login" class="android.widget.Button" bounds="[300,360][700,440]" />
+  <node text="Authentication code" class="android.widget.TextView" bounds="[40,500][340,550]" />
+  <node text="" resource-id="com.example:id/approvals_code" class="android.widget.EditText" bounds="[260,490][900,570]" />
+  <node text="Continue" class="android.widget.Button" bounds="[300,640][700,720]" />
 </hierarchy>
 """
 
@@ -48,6 +62,28 @@ def _profile() -> dict:
             }
         },
     }
+
+
+def _account_profile() -> dict:
+    profile = _profile()
+    profile["login_recipe"]["fields"]["password"]["value_from"] = "account.password"
+    return profile
+
+
+def _auth_code_profile() -> dict:
+    profile = _account_profile()
+    profile["semantic_locators"]["auth_code_field"] = {
+        "candidates": [{"resource_id_contains": "approvals_code"}]
+    }
+    profile["login_recipe"]["post_submit_fields"] = {
+        "auth_code": {
+            "locator": "auth_code_field",
+            "value_from": "account.totp_code",
+            "required": False,
+        }
+    }
+    profile["login_recipe"]["post_submit"] = {"tap_text_any": ["Continue"]}
+    return profile
 
 
 class FakeU2:
@@ -100,7 +136,11 @@ def _sc(xml: str = _XML):
         scenario={"app_automation_profile": _profile()},
         var_ctx=VariableContext(
             scenario_vars={"username": "form-user", "login_password": "secret-pw"},
-            campaign_vars={"__ACCOUNT_USERNAME__": "account-user"},
+            campaign_vars={
+                "__ACCOUNT_USERNAME__": "account-user",
+                "__ACCOUNT_PASSWORD__": "account-pw",
+                "__ACCOUNT_TOTP_CODE__": "123456",
+            },
             device_serial="SERIAL1",
         ),
         w=1080,
@@ -158,6 +198,50 @@ def test_login_if_needed_skips_when_logged_in_text_visible():
     assert result["ok"] is True
     assert result["login_state"] == "already_logged_in"
     assert sc.device.u2.sent == []
+
+
+def test_login_if_needed_inputs_account_password_source():
+    sc = _sc()
+    sc.scenario = {"app_automation_profile": _account_profile()}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(sc, {"type": "login_if_needed"}, 0, result)
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+
+
+def test_login_if_needed_fills_optional_post_submit_auth_code_when_visible():
+    sc = _sc(_XML_WITH_AUTH_CODE)
+    sc.scenario = {"app_automation_profile": _auth_code_profile()}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(sc, {"type": "login_if_needed"}, 0, result)
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "123456"]
+    assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
+    assert any("Continue" in clicked for clicked in sc.device.u2.clicked)
+
+
+def test_login_if_needed_generates_totp_from_activity_local_secret(monkeypatch):
+    monkeypatch.setattr(app_automation_steps, "generate_totp", lambda secret: f"totp-{secret}")
+    sc = _sc(_XML_WITH_AUTH_CODE)
+    sc.var_ctx = VariableContext(
+        scenario_vars={"__ACCOUNT_PASSWORD__": "account-pw", "__ACCOUNT_TOTP_SECRET__": "SECRET1"},
+        campaign_vars={
+            "__ACCOUNT_USERNAME__": "account-user",
+            "__ACCOUNT_TOTP_CODE__": "stale-code",
+        },
+        device_serial="SERIAL1",
+    )
+    sc.scenario = {"app_automation_profile": _auth_code_profile()}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(sc, {"type": "login_if_needed"}, 0, result)
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "totp-SECRET1"]
 
 
 def test_fill_form_inputs_values_and_submits():

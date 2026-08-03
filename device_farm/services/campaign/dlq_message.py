@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.execution_step import ExecutionStep
+from services.campaign.failure_classification import classify_campaign_failure
 
 _DEFAULT_DLQ_MESSAGE = (
     "Execution failed without a recorded error message "
@@ -21,22 +22,12 @@ _DIRECT_U2_TRANSIENT_MARKERS = (
     "504 gateway",
 )
 
-_U2_TRANSIENT_MARKERS = (
-    *_DIRECT_U2_TRANSIENT_MARKERS,
-    "uiautomator",
-    "uiautomation",
-    "already registered",
-    "uiautomation not connected",
-    "illegalstateexception",
-)
-
-
 def summarize_edge_extra_error(error: object) -> str:
     """Collapse noisy UiAutomator stack traces into a short operator code."""
     text = str(error or "").strip() or "unknown"
-    lowered = text.lower()
-    if any(marker in lowered for marker in _U2_TRANSIENT_MARKERS):
-        return "u2_transient_error"
+    classified = classify_campaign_failure(message=text)
+    if classified.failure_class == "u2_transient":
+        return classified.operator_summary
     if len(text) > 240:
         first = text.splitlines()[0].strip()
         if len(first) > 240:
@@ -74,7 +65,12 @@ def sanitize_operator_dlq_text(text: str | None) -> str | None:
     if not text:
         return text
     msg = str(text).strip()
-    if not msg or not _is_u2_transient_extra_data_error(msg):
+    classified = classify_campaign_failure(message=msg)
+    if (
+        not msg
+        or classified.failure_class != "u2_transient"
+        or not _is_u2_transient_extra_data_error(msg)
+    ):
         return msg
     if "edge extra_data failed:" not in msg:
         prefix = _direct_u2_transient_prefix(msg)

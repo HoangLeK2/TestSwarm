@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-AGENT_BOOT_VERSION="${AGENT_BOOT_VERSION:-0.1.0}"
+AGENT_BOOT_VERSION="${AGENT_BOOT_VERSION:-0.1.3}"
 IMAGE="agent-boot:${AGENT_BOOT_VERSION}"
 ADB_PORT="${ADB_PORT:-5037}"
 

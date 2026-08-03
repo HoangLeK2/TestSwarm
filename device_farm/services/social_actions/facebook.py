@@ -35,7 +35,7 @@ def _parse_bounds(value: str | None) -> Bounds | None:
 
 def _matches(label: str, aliases: frozenset[str]) -> bool:
     return label in aliases or any(
-        label.startswith(f"{alias},") or label.startswith(f"{alias} ·")
+        label.startswith((f"{alias},", f"{alias} ·"))
         for alias in aliases
     )
 
@@ -103,6 +103,31 @@ _LIKE_ACTIVE = frozenset(
         "da thich",
     }
 )
+_COMMENT_AVAILABLE = frozenset({"comment", "binh luan"})
+_COMMENT_OPEN = frozenset(
+    {
+        "write a comment",
+        "comment as",
+        "viet binh luan",
+        "viet binh luan cong khai",
+        "binh luan cong khai",
+    }
+)
+_SHARE_AVAILABLE = frozenset({"share", "chia se"})
+_SHARE_OPEN = frozenset(
+    {
+        "share now",
+        "share to your story",
+        "write post",
+        "copy link",
+        "send in messenger",
+        "chia se ngay",
+        "chia se len tin cua ban",
+        "viet bai",
+        "sao chep lien ket",
+        "gui bang messenger",
+    }
+)
 _FRIEND_AVAILABLE = frozenset({"add friend", "them ban be"})
 _FRIEND_PENDING = frozenset(
     {
@@ -145,18 +170,32 @@ class FacebookSocialActionAdapter:
             if _is_near(node.bounds, near_bounds)
         ]
         if action_type == "content_interaction":
-            if action != "like":
-                raise UnsupportedSocialAction(
-                    f"facebook content_interaction does not support action={action!r}"
+            if action == "like":
+                return self._observe(
+                    nodes,
+                    active=_LIKE_ACTIVE,
+                    pending=frozenset(),
+                    available=_LIKE_AVAILABLE,
+                    active_state="liked",
+                    pending_state="",
+                    selected_available_state="liked",
                 )
-            return self._observe(
-                nodes,
-                active=_LIKE_ACTIVE,
-                pending=frozenset(),
-                available=_LIKE_AVAILABLE,
-                active_state="liked",
-                pending_state="",
-                selected_available_state="liked",
+            if action == "comment":
+                return self._observe_open_panel(
+                    nodes,
+                    active=_COMMENT_OPEN,
+                    available=_COMMENT_AVAILABLE,
+                    active_state="comment_opened",
+                )
+            if action == "share":
+                return self._observe_open_panel(
+                    nodes,
+                    active=_SHARE_OPEN,
+                    available=_SHARE_AVAILABLE,
+                    active_state="share_opened",
+                )
+            raise UnsupportedSocialAction(
+                f"facebook content_interaction does not support action={action!r}"
             )
         if action_type == "connection_request":
             if action != "request":
@@ -247,6 +286,52 @@ class FacebookSocialActionAdapter:
                 satisfied=True,
             )
 
+        if available_matches:
+            return SocialActionObservation(state="target_without_bounds")
+        return SocialActionObservation(state="not_found")
+
+    @staticmethod
+    def _observe_open_panel(
+        nodes: list[_UiNode],
+        *,
+        active: frozenset[str],
+        available: frozenset[str],
+        active_state: str,
+    ) -> SocialActionObservation:
+        active_matches: list[tuple[_UiNode, str]] = []
+        available_matches: list[tuple[_UiNode, str]] = []
+        for node in nodes:
+            for label in node.labels:
+                if _matches(label, active):
+                    active_matches.append((node, label))
+                    break
+                if _matches(label, available):
+                    available_matches.append((node, label))
+                    break
+
+        if active_matches:
+            node, label = active_matches[0]
+            return SocialActionObservation(
+                state=active_state,
+                target_bounds=node.bounds,
+                matched_label=label,
+                satisfied=True,
+            )
+
+        actionable = [
+            (node, label)
+            for node, label in available_matches
+            if node.bounds is not None
+        ]
+        if len(actionable) > 1:
+            return SocialActionObservation(state="ambiguous")
+        if len(actionable) == 1:
+            node, label = actionable[0]
+            return SocialActionObservation(
+                state="available",
+                target_bounds=node.bounds,
+                matched_label=label,
+            )
         if available_matches:
             return SocialActionObservation(state="target_without_bounds")
         return SocialActionObservation(state="not_found")

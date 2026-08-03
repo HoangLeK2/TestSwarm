@@ -150,18 +150,41 @@ def _resolve_relay_serial(device: Any, fallback_serial: str) -> str:
 
 
 @register_step("launch_app")
-def handle_launch_app(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+def handle_launch_app(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    result: Dict[str, Any],
+) -> None:
     pkg, component = parse_step_package(step)
     if not pkg:
         result["ok"] = False
         result["message"] = "launch_app: empty package/component"
         return
+    raw_fallbacks = (
+        step.get("package_fallbacks") or step.get("packageFallbacks") or []
+    )
+    if isinstance(raw_fallbacks, str):
+        package_fallbacks = [raw_fallbacks]
+    elif isinstance(raw_fallbacks, (list, tuple, set)):
+        package_fallbacks = [str(value) for value in raw_fallbacks]
+    else:
+        package_fallbacks = []
+    raw_adb_fallback = step.get("adb_fallback", step.get("adbFallback", True))
+    adb_fallback = str(raw_adb_fallback).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     try:
         sc.device.launch_app(
             pkg,
             component=component or None,
             stop_before=bool(step.get("stop_before") or step.get("stop")),
             use_monkey=bool(step.get("use_monkey")),
+            package_fallbacks=package_fallbacks,
+            adb_fallback=adb_fallback,
         )
         if _cancelled(sc):
             _mark_cancelled(result, "launch_app: cancelled by user")
@@ -541,6 +564,8 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
                     "max_swipes": max_swipes,
                     "step_ratio": float(step.get("scroll_step_ratio", 0.4) or 0.4),
                     "duration": float(step.get("scroll_duration_s", 0.12) or 0.12),
+                    "width": sc.w,
+                    "height": sc.h,
                 },
                 timeout=float(step.get("scroll_to_timeout_s", max(5.0, max_swipes * 0.35)) or 5.0),
             )

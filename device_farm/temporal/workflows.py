@@ -687,6 +687,12 @@ class ScenarioStepsWorkflow:
         self._error_message = ""  # last error message while paused_on_error
         self._resume_generation = 0
         self._cancel_generation = 0
+        self._total_steps = 0
+        self._current_step = 0
+        self._current_step_type = ""
+        self._current_step_started_at = None
+        self._current_message = ""
+        self._running_step = False
 
     @workflow.signal
     async def pause(self) -> None:
@@ -732,9 +738,55 @@ class ScenarioStepsWorkflow:
             "cancel_generation": self._cancel_generation,
         }
 
+    @workflow.query
+    def get_live_progress(self) -> dict:
+        elapsed_ms = 0
+        if self._running_step and self._current_step_started_at is not None:
+            elapsed_ms = int(
+                (workflow.now() - self._current_step_started_at).total_seconds() * 1000
+            )
+        status = WorkflowStatus.RUNNING.value
+        if self._cancelled:
+            status = WorkflowStatus.CANCELLED.value
+        elif self._paused_on_error:
+            status = WorkflowStatus.PAUSED_ON_ERROR.value
+        elif self._paused:
+            status = WorkflowStatus.PAUSED.value
+        return {
+            "status": status,
+            "current_step": self._current_step,
+            "total_steps": self._total_steps,
+            "current_step_type": self._current_step_type,
+            "current_step_started_at": (
+                self._current_step_started_at.isoformat()
+                if self._current_step_started_at is not None
+                else None
+            ),
+            "current_step_elapsed_ms": elapsed_ms,
+            "running_step": self._running_step,
+            "message": self._error_message or self._current_message,
+        }
+
     async def _wait_if_paused(self) -> None:
         if self._paused and not self._cancelled:
             await workflow.wait_condition(lambda: not self._paused or self._cancelled)
+
+    def _mark_step_started(self, step_index: int, step_type: str, message: str = "") -> None:
+        self._current_step = max(0, step_index)
+        self._current_step_type = step_type
+        self._current_step_started_at = workflow.now()
+        self._current_message = message
+        self._running_step = True
+
+    def _mark_step_finished(self, entry: dict[str, Any]) -> None:
+        try:
+            idx = int(entry.get("index", self._current_step))
+        except Exception:
+            idx = self._current_step
+        self._current_step = max(self._current_step, idx + 1)
+        self._current_step_type = str(entry.get("type") or self._current_step_type)
+        self._current_message = str(entry.get("message") or "")
+        self._running_step = False
 
     @staticmethod
     def _step_result_dict(sr: StepResult, step_index: int) -> dict[str, Any]:
@@ -949,11 +1001,14 @@ class ScenarioStepsWorkflow:
         # preserve the results of already-completed steps.
         step_results: list[dict[str, Any]] = list(inp.accumulated_results)
         steps_executed = len(step_results)
+        self._total_steps = max(len(inp.steps), steps_executed + len(inp.steps))
+        self._current_step = max(self._current_step, steps_executed)
         break_requested = False
 
         def _append(entry: dict) -> None:
             step_results.append(entry)
             self._step_log.append({**entry, "depth": inp.depth})
+            self._mark_step_finished(entry)
 
         def _with_persist_metrics(message: str | None, details: dict[str, Any] | None) -> str:
             """Make persistence counters visible even when UI ignores details."""
@@ -1006,6 +1061,13 @@ class ScenarioStepsWorkflow:
             n = len(_pending_steps)
             orig_steps = list(_pending_steps)      # snapshot before clear
             orig_indices = list(_pending_indices)  # snapshot before clear
+            if orig_steps and orig_indices:
+                first_step = orig_steps[0]
+                self._mark_step_started(
+                    orig_indices[0],
+                    str(first_step.get("type") or ""),
+                    f"running batch {len(orig_steps)} step(s)",
+                )
             try:
                 batch_result: DeviceActionBatchResult = await workflow.execute_activity(
                     "execute_device_action_batch",
@@ -1169,6 +1231,7 @@ class ScenarioStepsWorkflow:
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")
+            self._mark_step_started(idx, str(step_type or ""))
 
             # ── Flush pending batch before any control-flow step ─────────────
             # Leaf steps accumulate in _pending_steps; control-flow types force

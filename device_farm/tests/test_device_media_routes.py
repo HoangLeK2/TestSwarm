@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+import api.routes.device_media as device_media
 from api.routes.device_media import build_device_media_router
 
 
@@ -60,6 +63,20 @@ class _SnapshotDevice:
     def capture_screenshot(self, **_kwargs):
         self.captures += 1
         return b"fresh-frame"
+
+
+class _BlockingCaptureDevice(_SnapshotDevice):
+    def __init__(self) -> None:
+        super().__init__(cached=b"stale-frame")
+        self._last_jpeg_frame_time = time.monotonic() - 30
+        self.capture_started = threading.Event()
+        self.release_capture = threading.Event()
+
+    def capture_screenshot(self, **_kwargs):
+        self.captures += 1
+        self.capture_started.set()
+        self.release_capture.wait(timeout=2)
+        return b"late-frame"
 
 
 def test_media_router_exposes_only_api_media_paths():
@@ -152,6 +169,59 @@ async def test_screenshot_refreshes_stale_cache_once():
     assert body == b"fresh-frame"
     assert device.captures == 1
     assert device.take_screenshot() == b"fresh-frame"
+
+
+@pytest.mark.anyio
+async def test_screenshot_returns_stale_frame_when_fresh_capture_times_out(
+    monkeypatch,
+):
+    monkeypatch.setenv("DEVICE_FARM_SCREENSHOT_CAPTURE_TIMEOUT_S", "0.05")
+    device = _BlockingCaptureDevice()
+    router = build_device_media_router(_Manager(device))
+    route = next(
+        r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}"
+    )
+
+    started_at = time.monotonic()
+    response = await route.endpoint("serial-1", fresh=False, max_age_ms=500)
+    elapsed = time.monotonic() - started_at
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    device.release_capture.set()
+    assert response.status_code == 200
+    assert body == b"stale-frame"
+    assert elapsed < 0.5
+    assert device.captures == 1
+
+
+@pytest.mark.anyio
+async def test_screenshot_timeouts_do_not_fill_the_default_executor(
+    monkeypatch,
+):
+    monkeypatch.setenv("DEVICE_FARM_SCREENSHOT_CAPTURE_TIMEOUT_S", "0.05")
+    capture_pool = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="test-screenshot-capture",
+    )
+    monkeypatch.setattr(device_media, "_SCREENSHOT_CAPTURE_POOL", capture_pool)
+    device = _BlockingCaptureDevice()
+    router = build_device_media_router(_Manager(device))
+    route = next(
+        r for r in router.routes if getattr(r, "path", "") == "/api/screenshot/{serial}"
+    )
+
+    try:
+        responses = await asyncio.gather(
+            *[
+                route.endpoint("serial-1", fresh=False, max_age_ms=500)
+                for _ in range(8)
+            ]
+        )
+        assert all(response.status_code == 200 for response in responses)
+        assert device.captures == 1
+    finally:
+        device.release_capture.set()
+        capture_pool.shutdown(wait=True, cancel_futures=True)
 
 
 @pytest.mark.anyio

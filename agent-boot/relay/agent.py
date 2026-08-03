@@ -16,10 +16,9 @@ import logging
 import os
 import random
 import socket
-import struct
 import threading
-import uuid
 import time
+import uuid
 from concurrent.futures import Future
 from typing import Any, Optional
 
@@ -28,22 +27,33 @@ from relay.adb           import (
     _restart_u2, _restart_atx, _probe_capabilities,
     _resolve_device_lan_ip, _run,
     _screencap, _bootstrap_device,
+    adb_command_stats,
     lock_portrait_rotation,
     lock_rotation_after_shell_enabled,
     reconcile_usb_preferred_for_duplicate_devices,
+)
+from relay.adb_admission import (
+    AdbLane,
+    adb_admission_stats,
+    classify_adb_command,
 )
 from relay.mdns          import start_mdns_discovery
 from relay.bootstrap_lifecycle import BootstrapCoordinator, RelayRetryPolicy
 from relay.device_state  import DeviceRegistry, DeviceState
 from relay.device_watcher import AdbDeviceWatcher
+from relay.recovery_coordinator import RecoveryCoordinator
 from relay.session_manager import ScrcpySessionManager
 from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
+from relay.video_packet import VideoPacket
 from relay.runtime         import (
     SEND_CONTROL_MAX,
     SEND_PER_DEVICE_MAX,
+    SEND_VIDEO_PER_DEVICE_MAX,
+    GRPC_VIDEO_STREAM_SHARDS,
     FairSendQueue,
     LoopWatchdog,
+    MultiStreamSendQueue,
     RuntimeStats,
     TaskRegistry,
     adb_executor,
@@ -53,7 +63,6 @@ from relay.runtime         import (
     dumps,
     dumps_maybe_offload,
     extra_data_sem,
-    generic_executor,
     init_executors,
     init_semaphores,
     register_stats_source,
@@ -101,6 +110,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 SEMAPHORE_WAIT_WARN_MS = _env_float("RELAY_SEMAPHORE_WAIT_WARN_MS", 250.0)
+_AUTO_BOOTSTRAP_VIEWER_POLL_SECONDS = 0.5
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -132,6 +142,25 @@ def _atx_forward_host() -> str:
     return "127.0.0.1"
 
 
+def _remote_adb_server_configured() -> bool:
+    sock = os.getenv("ADB_SERVER_SOCKET", "").strip()
+    if sock.startswith("tcp:"):
+        rest = sock[4:]
+        host = rest.rsplit(":", 1)[0].strip() if ":" in rest else rest.strip()
+        return bool(host and host not in {"127.0.0.1", "localhost"})
+    adb_host = os.getenv("ADB_HOST", "").strip()
+    return bool(adb_host and adb_host not in {"127.0.0.1", "localhost"})
+
+
+def _u2_forward_mode() -> str:
+    raw = os.getenv("AGENT_BOOT_U2_FORWARD_MODE", "auto").strip().lower()
+    if raw in {"always", "force", "forward", "forward_only"}:
+        return "always"
+    if raw in {"never", "off", "direct", "lan", "lan_first"}:
+        return "never"
+    return "auto"
+
+
 def _looks_like_hierarchy_xml(body: str) -> bool:
     s = (body or "").strip()
     if not s or "<hierarchy" not in s:
@@ -151,6 +180,94 @@ RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
 SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 12))
 SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 480))
 SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 600_000))
+SCRCPY_ADAPTIVE_PROFILE_ENABLED = _env_bool("SCRCPY_ADAPTIVE_PROFILE_ENABLED", True)
+SCRCPY_VISIBLE_MAX_FPS = max(
+    1,
+    _env_int("SCRCPY_VISIBLE_MAX_FPS", min(SCRCPY_DEFAULT_MAX_FPS, 12)),
+)
+SCRCPY_VISIBLE_MAX_WIDTH = max(
+    160,
+    _env_int("SCRCPY_VISIBLE_MAX_WIDTH", min(SCRCPY_DEFAULT_MAX_WIDTH, 540)),
+)
+SCRCPY_VISIBLE_BITRATE = max(
+    80_000,
+    _env_int("SCRCPY_VISIBLE_BITRATE", min(SCRCPY_DEFAULT_BITRATE, 1_200_000)),
+)
+SCRCPY_FOCUSED_MAX_FPS = max(
+    1,
+    _env_int("SCRCPY_FOCUSED_MAX_FPS", max(SCRCPY_DEFAULT_MAX_FPS, 15)),
+)
+SCRCPY_FOCUSED_MAX_WIDTH = max(
+    160,
+    _env_int("SCRCPY_FOCUSED_MAX_WIDTH", max(SCRCPY_DEFAULT_MAX_WIDTH, 720)),
+)
+SCRCPY_FOCUSED_BITRATE = max(
+    80_000,
+    _env_int("SCRCPY_FOCUSED_BITRATE", max(SCRCPY_DEFAULT_BITRATE, 1_500_000)),
+)
+SCRCPY_DEGRADED_MAX_FPS = max(
+    1,
+    _env_int("SCRCPY_DEGRADED_MAX_FPS", min(SCRCPY_DEFAULT_MAX_FPS, 8)),
+)
+SCRCPY_DEGRADED_MAX_WIDTH = max(
+    160,
+    _env_int("SCRCPY_DEGRADED_MAX_WIDTH", min(SCRCPY_DEFAULT_MAX_WIDTH, 360)),
+)
+SCRCPY_DEGRADED_BITRATE = max(
+    80_000,
+    _env_int("SCRCPY_DEGRADED_BITRATE", min(SCRCPY_DEFAULT_BITRATE, 450_000)),
+)
+SCRCPY_ENCODER_DEGRADE_TTL_S = max(
+    0.0,
+    _env_float("SCRCPY_ENCODER_DEGRADE_TTL_S", 300.0),
+)
+
+_SCRCPY_PROFILE_LIMITS = {
+    "visible": {
+        "max_fps": SCRCPY_VISIBLE_MAX_FPS,
+        "max_width": SCRCPY_VISIBLE_MAX_WIDTH,
+        "bitrate": SCRCPY_VISIBLE_BITRATE,
+    },
+    "focused": {
+        "max_fps": SCRCPY_FOCUSED_MAX_FPS,
+        "max_width": SCRCPY_FOCUSED_MAX_WIDTH,
+        "bitrate": SCRCPY_FOCUSED_BITRATE,
+    },
+    "degraded": {
+        "max_fps": SCRCPY_DEGRADED_MAX_FPS,
+        "max_width": SCRCPY_DEGRADED_MAX_WIDTH,
+        "bitrate": SCRCPY_DEGRADED_BITRATE,
+    },
+}
+
+
+def _positive_int(value: Any, default: int, minimum: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed <= 0:
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _scrcpy_profile_name(msg: dict[str, Any]) -> str:
+    raw = (
+        msg.get("profile")
+        or msg.get("stream_profile")
+        or msg.get("quality")
+        or msg.get("view_mode")
+        or msg.get("mode")
+        or ""
+    )
+    profile = str(raw).strip().lower()
+    if bool(msg.get("focused", False)):
+        profile = "focused"
+    if profile in {"focus", "focused", "control", "control_screen", "full", "high"}:
+        return "focused"
+    if profile in {"low", "degraded", "thumbnail", "thumb", "background"}:
+        return "degraded"
+    return "visible"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _AGENT_BOOT_ROOT = os.path.dirname(_HERE)
@@ -172,6 +289,37 @@ def _auto_bootstrap_enabled() -> bool:
     return os.getenv("AGENT_BOOT_AUTO_BOOTSTRAP", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
+
+
+def _auto_bootstrap_delay_seconds(serial: str) -> float:
+    """Background grace plus deterministic fleet spread for one phone."""
+    base = max(0.0, _env_float("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", 8.0))
+    if base <= 0:
+        return 0.0
+    serial_bytes = str(serial or "").encode("utf-8", errors="ignore")
+    bucket = sum(
+        (index + 1) * value
+        for index, value in enumerate(serial_bytes)
+    ) % 1000
+    return base + base * (bucket / 1000.0)
+
+
+def _defer_auto_bootstrap_while_scrcpy() -> bool:
+    return _env_bool("RELAY_AUTO_BOOTSTRAP_DEFER_WHILE_SCRCPY", True)
+
+
+def _device_online_auto_bootstrap_decision() -> tuple[bool, str]:
+    """Device discovery must not install phone-side assets.
+
+    Register/pair/backend bootstrap is the explicit seam that installs
+    STFService/u2/atx. Keeping discovery lightweight prevents unregistered
+    phones from monopolizing the shared host ADB server.
+    """
+    return False, "registration-required"
+
+
+def _u2_warm_allowed_reason(reason: str) -> bool:
+    return reason in {"explicit-bootstrap"}
 
 
 def load_or_create_relay_id() -> str:
@@ -263,10 +411,23 @@ class RelayAgent:
             self._grpc_root_cert_file = ""
 
         self._registry   = DeviceRegistry()
-        self._scrcpy_mgr = ScrcpySessionManager(on_session_stopped=self._on_session_stopped)
+        self._scrcpy_mgr = ScrcpySessionManager(
+            on_session_stopped=self._on_session_stopped,
+            on_session_health=self._on_session_health,
+        )
         self._supervisor = RelaySupervisor(self)
         self._scrcpy_desired: dict[str, dict[str, Any]] = {}
-        self._active_send_queue: Optional[FairSendQueue] = None
+        self._scrcpy_encoder_unhealthy_until: dict[str, float] = {}
+        self._scrcpy_profile_stats: dict[str, int] = {
+            "visible_starts": 0,
+            "focused_starts": 0,
+            "degraded_starts": 0,
+            "clamped_starts": 0,
+            "auto_downgrades": 0,
+            "encoder_unhealthy_marks": 0,
+            "encoder_health_signals": 0,
+        }
+        self._active_send_queue: Optional[FairSendQueue | MultiStreamSendQueue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
         # Viewer-gated default: do not auto-start scrcpy for every online device.
         self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "false").lower() in ("1", "true", "yes", "on")
@@ -281,6 +442,11 @@ class RelayAgent:
         self._u2_warm_retry_base_s = _env_float("U2_WARM_RETRY_BASE_S", 5.0)
         self._u2_warm_retry_max_s = _env_float("U2_WARM_RETRY_MAX_S", 60.0)
         self._u2_warm_on_heartbeat = _env_bool("AGENT_BOOT_U2_WARM_ON_HEARTBEAT", False)
+        self._adb_connect_inflight: set[str] = set()
+        self._adb_connect_fail_count: dict[str, int] = {}
+        self._adb_connect_retry_after: dict[str, float] = {}
+        self._adb_connect_retry_base_s = _env_float("ADB_CONNECT_RETRY_BASE_S", 2.0)
+        self._adb_connect_retry_max_s = _env_float("ADB_CONNECT_RETRY_MAX_S", 30.0)
         self._extra_ingest = extra_ingest
         # A11y control-plane workers
         self._a11y_max_queue = int(os.getenv("A11Y_MAX_QUEUE_PER_DEVICE", "100"))
@@ -294,13 +460,88 @@ class RelayAgent:
         self._atx_lan_host_cache: dict[str, str] = {}
         # USB serial -> (host, forwarded port) when phone WLAN is unreachable.
         self._atx_forward_cache: dict[str, tuple[str, int]] = {}
+        # USB serial -> u2 route preference ("lan" or "forward").
+        self._atx_u2_route_cache: dict[str, str] = {}
+        self._atx_lan_probe_next_at: dict[str, float] = {}
+        self._atx_lan_probe_inflight: set[str] = set()
+        self._atx_forward_fail_count: dict[str, int] = {}
+        self._atx_forward_create_retry_after: dict[str, float] = {}
+        self._atx_forward_create_last_error: dict[str, str] = {}
+        self._atx_forward_serial_locks: dict[str, threading.Lock] = {}
+        self._atx_forward_create_limit = max(
+            1,
+            _env_int("AGENT_BOOT_U2_FORWARD_CREATE_CONCURRENCY", 8),
+        )
+        self._atx_forward_create_sem = threading.BoundedSemaphore(
+            self._atx_forward_create_limit
+        )
+        self._atx_forward_create_inflight = 0
+        self._atx_forward_create_peak = 0
+        self._atx_forward_create_wait_samples_ms: list[int] = []
+        self._atx_forward_stats: dict[str, int] = {
+            "created": 0,
+            "create_failed": 0,
+            "create_cooldown_skip": 0,
+            "create_joined": 0,
+            "create_throttled": 0,
+            "reused": 0,
+            "removed": 0,
+            "forward_first": 0,
+            "lan_first": 0,
+            "lan_fallback": 0,
+            "request_failed": 0,
+            "same_forward_retry": 0,
+            "recreated_after_failures": 0,
+            "route_lan_used": 0,
+            "route_lan_failed": 0,
+            "route_forward_used": 0,
+            "lan_probe_started": 0,
+            "lan_probe_ok": 0,
+            "lan_probe_failed": 0,
+            "lan_promoted": 0,
+        }
         self._atx_forward_lock = threading.Lock()
+        self._atx_forward_failures_before_recreate = max(
+            1,
+            _env_int("AGENT_BOOT_U2_FORWARD_FAILURES_BEFORE_RECREATE", 2),
+        )
+        self._atx_forward_create_failure_cooldown_s = max(
+            0.0,
+            _env_float("AGENT_BOOT_U2_FORWARD_CREATE_FAILURE_COOLDOWN_S", 2.0),
+        )
+        self._atx_lan_probe_interval_s = max(
+            0.0,
+            _env_float("AGENT_BOOT_U2_LAN_PROBE_INTERVAL_S", 30.0),
+        )
+        self._atx_lan_probe_timeout_s = max(
+            0.05,
+            _env_float("AGENT_BOOT_U2_LAN_PROBE_TIMEOUT_S", 0.25),
+        )
         self._bootstrap_inflight: set[str] = set()
+        self._auto_bootstrap_tasks: dict[str, asyncio.Task] = {}
         self._bootstrap_coordinator = BootstrapCoordinator(
             max_concurrency=max(
                 1,
-                _env_int("RELAY_BOOTSTRAP_CONCURRENCY", 4),
+                _env_int("RELAY_BOOTSTRAP_CONCURRENCY", 2),
             )
+        )
+        self._recovery_coordinator = RecoveryCoordinator(
+            max_concurrency=max(
+                1,
+                _env_int("RELAY_RECOVERY_CONCURRENCY", 8),
+            ),
+            breaker_failures=max(
+                1,
+                _env_int("RELAY_RECOVERY_BREAKER_FAILURES", 3),
+            ),
+            breaker_base_s=max(
+                0.0,
+                _env_float("RELAY_RECOVERY_BREAKER_BASE_S", 5.0),
+            ),
+            breaker_max_s=max(
+                0.0,
+                _env_float("RELAY_RECOVERY_BREAKER_MAX_S", 60.0),
+            ),
         )
 
         # Runtime: bounded executors + task registry + watchdog.
@@ -365,6 +606,140 @@ class RelayAgent:
                 used_ports.add(port)
             state["cfg"] = cfg
 
+    def _scrcpy_profile_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        now = time.monotonic()
+        expired = [
+            serial
+            for serial, until in self._scrcpy_encoder_unhealthy_until.items()
+            if until <= now
+        ]
+        for serial in expired:
+            self._scrcpy_encoder_unhealthy_until.pop(serial, None)
+        stats = dict(self._scrcpy_profile_stats)
+        stats["encoder_unhealthy_serials"] = len(self._scrcpy_encoder_unhealthy_until)
+        if reset:
+            for key in self._scrcpy_profile_stats:
+                self._scrcpy_profile_stats[key] = 0
+        return stats
+
+    def _mark_scrcpy_encoder_unhealthy(self, *serials: str, reason: str) -> None:
+        if SCRCPY_ENCODER_DEGRADE_TTL_S <= 0.0:
+            return
+        until = time.monotonic() + SCRCPY_ENCODER_DEGRADE_TTL_S
+        marked = False
+        for serial in serials:
+            serial = str(serial or "").strip()
+            if not serial:
+                continue
+            self._scrcpy_encoder_unhealthy_until[serial] = until
+            marked = True
+        if marked:
+            self._scrcpy_profile_stats["encoder_unhealthy_marks"] += 1
+            logger.info(
+                "scrcpy encoder marked unhealthy serials=%s reason=%s degrade_ttl=%.0fs",
+                ",".join(sorted({str(s) for s in serials if s})),
+                reason,
+                SCRCPY_ENCODER_DEGRADE_TTL_S,
+            )
+
+    def _on_session_health(self, adb_serial: str, reason: str) -> None:
+        health_reasons = {"capture_reset_storm", "stream_error_storm"}
+        if reason not in health_reasons:
+            return
+        logical = self._logical_serial_for_adb(adb_serial)
+        self._scrcpy_profile_stats["encoder_health_signals"] += 1
+        self._mark_scrcpy_encoder_unhealthy(logical, adb_serial, reason=reason)
+
+    def _is_scrcpy_encoder_unhealthy(self, *serials: str) -> bool:
+        now = time.monotonic()
+        unhealthy = False
+        for serial in serials:
+            serial = str(serial or "").strip()
+            if not serial:
+                continue
+            until = self._scrcpy_encoder_unhealthy_until.get(serial, 0.0)
+            if until <= 0.0:
+                continue
+            if until <= now:
+                self._scrcpy_encoder_unhealthy_until.pop(serial, None)
+                continue
+            unhealthy = True
+        return unhealthy
+
+    def _scrcpy_cfg_from_start_msg(self, msg: dict[str, Any], *, adb_serial: str) -> dict[str, Any]:
+        profile = _scrcpy_profile_name(msg)
+        requested_profile = profile
+        serial = str(msg.get("serial", "") or "")
+
+        if (
+            SCRCPY_ADAPTIVE_PROFILE_ENABLED
+            and self._is_scrcpy_encoder_unhealthy(serial, adb_serial)
+            and profile != "degraded"
+        ):
+            profile = "degraded"
+            self._scrcpy_profile_stats["auto_downgrades"] += 1
+
+        if SCRCPY_ADAPTIVE_PROFILE_ENABLED:
+            limits = _SCRCPY_PROFILE_LIMITS[profile]
+            default_fps = int(limits["max_fps"])
+            default_width = int(limits["max_width"])
+            default_bitrate = int(limits["bitrate"])
+        else:
+            limits = {
+                "max_fps": SCRCPY_DEFAULT_MAX_FPS,
+                "max_width": SCRCPY_DEFAULT_MAX_WIDTH,
+                "bitrate": SCRCPY_DEFAULT_BITRATE,
+            }
+            default_fps = SCRCPY_DEFAULT_MAX_FPS
+            default_width = SCRCPY_DEFAULT_MAX_WIDTH
+            default_bitrate = SCRCPY_DEFAULT_BITRATE
+
+        requested_fps = _positive_int(
+            msg.get("max_fps"),
+            default_fps,
+            minimum=1,
+        )
+        requested_width = _positive_int(
+            msg.get("max_width"),
+            default_width,
+            minimum=160,
+        )
+        requested_bitrate = _positive_int(
+            msg.get("bitrate"),
+            default_bitrate,
+            minimum=80_000,
+        )
+
+        if SCRCPY_ADAPTIVE_PROFILE_ENABLED:
+            max_fps = min(requested_fps, int(limits["max_fps"]))
+            max_width = min(requested_width, int(limits["max_width"]))
+            bitrate = min(requested_bitrate, int(limits["bitrate"]))
+        else:
+            max_fps = requested_fps
+            max_width = requested_width
+            bitrate = requested_bitrate
+
+        clamped = (
+            max_fps != requested_fps
+            or max_width != requested_width
+            or bitrate != requested_bitrate
+            or profile != requested_profile
+        )
+        self._scrcpy_profile_stats[f"{profile}_starts"] += 1
+        if clamped:
+            self._scrcpy_profile_stats["clamped_starts"] += 1
+
+        return {
+            "profile": profile,
+            "requested_profile": requested_profile,
+            "max_fps": max_fps,
+            "max_width": max_width,
+            "enable_control": bool(msg.get("control", True)),
+            "port": _positive_int(msg.get("port"), 27183, minimum=1),
+            "bitrate": bitrate,
+            "low_latency": bool(msg.get("low_latency", False)),
+        }
+
     async def run(self) -> None:
         zc = start_mdns_discovery()
 
@@ -385,7 +760,11 @@ class RelayAgent:
         self._runtime_stats.start()
         register_stats_source(
             "scrcpy",
-            lambda: {"sessions": self._scrcpy_mgr.count},
+            lambda: self._scrcpy_mgr.stats_snapshot(reset=True),
+        )
+        register_stats_source(
+            "scrcpy_profile",
+            lambda: self._scrcpy_profile_stats_snapshot(reset=True),
         )
         register_stats_source(
             "devices",
@@ -394,6 +773,22 @@ class RelayAgent:
         register_stats_source(
             "a11y",
             lambda: {"serials": len(self._a11y_state)},
+        )
+        register_stats_source(
+            "adb_admission",
+            lambda: adb_admission_stats(reset=True),
+        )
+        register_stats_source(
+            "adb_cmd",
+            lambda: adb_command_stats(reset=True),
+        )
+        register_stats_source(
+            "recovery",
+            lambda: self._recovery_coordinator.stats_snapshot(reset=True),
+        )
+        register_stats_source(
+            "u2_forward",
+            lambda: self._u2_forward_stats_snapshot(reset=True),
         )
    
         def _send_queue_stats() -> dict[str, int]:
@@ -405,12 +800,34 @@ class RelayAgent:
             except Exception:
                 return {"qsize": q.qsize()}
             ctrl = snap.pop("_control", 0)
-            return {
-                "qsize": sum(snap.values()) + ctrl,
-                "lanes": len(snap),
-                "ctrl": ctrl,
-                "max_lane": max(snap.values(), default=0),
+            video_lanes = {
+                key: value
+                for key, value in snap.items()
+                if key.startswith("video:") or key.startswith("video_shard:")
             }
+            reliable_lanes = {
+                key: value
+                for key, value in snap.items()
+                if not key.startswith("video:")
+                and not key.startswith("video_shard:")
+            }
+            stats = {
+                "qsize": sum(snap.values()) + ctrl,
+                "reliable_lanes": len(reliable_lanes),
+                "video_lanes": len(video_lanes),
+                "ctrl": ctrl,
+                "max_reliable": max(reliable_lanes.values(), default=0),
+                "max_video": max(video_lanes.values(), default=0),
+            }
+            if hasattr(q, "video_stats_snapshot"):
+                video_stats = q.video_stats_snapshot(reset=True)
+                stats.update(
+                    {
+                        f"video_{key}": value
+                        for key, value in video_stats.items()
+                    }
+                )
+            return stats
         register_stats_source("send_q", _send_queue_stats)
 
         await self._scrcpy_mgr.start()
@@ -428,8 +845,12 @@ class RelayAgent:
                 http_rpc=self._u2_jsonrpc_sync,
             )
             register_stats_source(
+                "u2exec",
+                lambda: self._u2_executor.stats_snapshot(reset=True) if self._u2_executor else {},
+            )
+            register_stats_source(
                 "u2pool",
-                lambda: {"sessions": len(self._u2_pool._sessions)} if self._u2_pool else {},
+                lambda: self._u2_pool.stats_snapshot(reset=True) if self._u2_pool else {},
             )
             logger.info("u2 batch/flow enabled (U2_BATCH_ENABLED=true)")
 
@@ -489,6 +910,8 @@ class RelayAgent:
                     await asyncio.sleep(delay)
         finally:
             await self._supervisor.stop()
+            await _cancel_and_await(*list(self._auto_bootstrap_tasks.values()))
+            self._auto_bootstrap_tasks.clear()
             await _cancel_and_await(*list(self._u2_warm_tasks.values()))
             self._u2_warm_tasks.clear()
             self._u2_warm_inflight.clear()
@@ -503,6 +926,7 @@ class RelayAgent:
             if self._runtime_stats:
                 await self._runtime_stats.stop()
             self._bootstrap_coordinator.shutdown(wait=False)
+            self._recovery_coordinator.shutdown(wait=False)
             shutdown_executors(wait=False)
             if zc:
                 zc.close()
@@ -525,6 +949,7 @@ class RelayAgent:
         send_queue = FairSendQueue(
             per_device_max=SEND_PER_DEVICE_MAX,
             control_max=SEND_CONTROL_MAX,
+            video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
         )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
@@ -572,8 +997,8 @@ class RelayAgent:
                         item = await send_queue.get()
                         if item is None:
                             return
-                        if isinstance(item, bytes):
-                            await ws.send(item)
+                        if isinstance(item, VideoPacket):
+                            await ws.send(item.to_legacy_bytes())
                         else:
                             await ws.send(item)
                 except Exception as exc:
@@ -608,18 +1033,33 @@ class RelayAgent:
         from relay.grpc_client import GrpcRelayClient, create_grpc_channel
         from relay.control_client import AgentControlClient
 
-        # FairSendQueue: same per-device fairness story as the WS path. The
-        # gRPC frame generator consumes via `await send_queue.get()`, which
-        # transparently interleaves frames + JSON results from the right lane.
-        send_queue = FairSendQueue(
-            per_device_max=SEND_PER_DEVICE_MAX,
-            control_max=SEND_CONTROL_MAX,
-        )
+        video_stream_shards = GRPC_VIDEO_STREAM_SHARDS
+        if video_stream_shards > 0:
+            send_queue = MultiStreamSendQueue(
+                video_shards=video_stream_shards,
+                per_device_max=SEND_PER_DEVICE_MAX,
+                control_max=SEND_CONTROL_MAX,
+                video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
+            )
+        else:
+            # FairSendQueue: same per-device fairness story as the WS path. The
+            # gRPC frame generator consumes via `await send_queue.get()`, which
+            # transparently interleaves frames + JSON results from the right lane.
+            send_queue = FairSendQueue(
+                per_device_max=SEND_PER_DEVICE_MAX,
+                control_max=SEND_CONTROL_MAX,
+                video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
+            )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
 
-        logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
+        logger.info(
+            "gRPC connecting → %s (relay_id=%s video_stream_shards=%d)",
+            self._grpc_addr,
+            self._relay_id,
+            video_stream_shards,
+        )
 
         # Keep the long-lived campaign control channel independent from the
         # replaceable video channel. grpc.aio may surface scrcpy reset/cancel
@@ -682,12 +1122,80 @@ class RelayAgent:
                             ctrl_msg.data,
                         )
 
+            async def _run_video_shard(shard_index: int) -> None:
+                shard_queue = send_queue.video_shard_queue(shard_index)
+                shard_retry = RelayRetryPolicy(startup_window_s=float("inf"))
+                shard_attempt = 0
+                while True:
+                    client: GrpcRelayClient | None = None
+                    consume_task: asyncio.Task | None = None
+                    stream_started_at = loop.time()
+                    failure: Exception | None = None
+                    try:
+                        async with create_grpc_channel(
+                            self._grpc_addr,
+                            tls_enabled=self._grpc_tls_enabled,
+                            root_cert_file=self._grpc_root_cert_file,
+                        ) as stream_channel:
+                            client = GrpcRelayClient(
+                                server_addr=self._grpc_addr,
+                                api_key=self._api_key,
+                                agent_id=f"{self._relay_id}:video:{shard_index}",
+                                send_queue=shard_queue,
+                                loop=loop,
+                                channel=stream_channel,
+                                tls_enabled=self._grpc_tls_enabled,
+                                root_cert_file=self._grpc_root_cert_file,
+                            )
+                            consume_task = asyncio.create_task(
+                                _consume_ctrl(client),
+                                name=f"grpc-video-shard-{shard_index}-ctrl-consumer",
+                            )
+                            await client._stream_once(stream_channel)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        failure = exc
+                    finally:
+                        if client is not None:
+                            client.stop()
+                        await _cancel_and_await(consume_task)
+
+                    stream_uptime = loop.time() - stream_started_at
+                    if stream_uptime >= 10.0:
+                        shard_attempt = 0
+                    shard_attempt += 1
+                    delay = shard_retry.delay(
+                        attempt=shard_attempt,
+                        startup_elapsed=0.0,
+                        jitter_ratio=random.random(),
+                    )
+                    log_fn = logger.info if failure is None else logger.warning
+                    log_fn(
+                        "gRPC video shard stream %d %s after %.1fs; retry in %.1fs%s",
+                        shard_index,
+                        "closed cleanly" if failure is None else "failed",
+                        stream_uptime,
+                        delay,
+                        "" if failure is None else f": {failure}",
+                    )
+                    await asyncio.sleep(delay)
+
             # A stable video session followed by one transient failure should
             # retry from the minimum delay, not retain an attempt count from
             # hours earlier. Video retries cap at 2s; campaign control remains
             # alive on control_channel throughout.
             video_retry = RelayRetryPolicy(startup_window_s=float("inf"))
             video_attempt = 0
+            video_shard_tasks: list[asyncio.Task] = []
+            if isinstance(send_queue, MultiStreamSendQueue):
+                video_shard_tasks = [
+                    asyncio.create_task(
+                        _run_video_shard(index),
+                        name=f"grpc-video-shard-{index}",
+                    )
+                    for index in range(send_queue.video_shard_count())
+                ]
             try:
                 while True:
                     client: GrpcRelayClient | None = None
@@ -739,14 +1247,14 @@ class RelayAgent:
                     )
                     if failure is None:
                         logger.info(
-                            "gRPC video stream closed cleanly after %.1fs; "
+                            "gRPC reliable stream closed cleanly after %.1fs; "
                             "control remains online — retry in %.1fs",
                             stream_uptime,
                             delay,
                         )
                     else:
                         logger.warning(
-                            "gRPC video stream failed (attempt %d, uptime %.1fs): %s; "
+                            "gRPC reliable stream failed (attempt %d, uptime %.1fs): %s; "
                             "control remains online — retry in %.1fs",
                             video_attempt,
                             stream_uptime,
@@ -762,6 +1270,7 @@ class RelayAgent:
                     hb_task,
                     consume_task,
                     ctrl_task,
+                    *video_shard_tasks,
                 )
                 await self._shutdown_stream_helpers()
                 if self._active_send_queue is send_queue:
@@ -832,6 +1341,34 @@ class RelayAgent:
             return
         self._bootstrap_inflight.add(serial)
         try:
+            delay = _auto_bootstrap_delay_seconds(serial)
+            if delay > 0:
+                logger.info(
+                    "[%s] auto-bootstrap queued in %.1fs (background)",
+                    serial,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            deferred_logged = False
+            while (
+                _defer_auto_bootstrap_while_scrcpy()
+                and self._viewer_desires_scrcpy(serial)
+            ):
+                if not deferred_logged:
+                    logger.info(
+                        "[%s] auto-bootstrap deferred while scrcpy viewer is active",
+                        serial,
+                    )
+                    deferred_logged = True
+                await asyncio.sleep(_AUTO_BOOTSTRAP_VIEWER_POLL_SECONDS)
+            ctx = self._registry.get(serial)
+            if ctx is not None and not ctx.is_available:
+                logger.info(
+                    "[%s] auto-bootstrap skipped because device is %s",
+                    serial,
+                    ctx.state.value,
+                )
+                return
             logger.info("[%s] auto-bootstrap starting (AGENT_BOOT_AUTO_BOOTSTRAP)", serial)
             output, rc = await self._await_bootstrap(serial, 180)
             if rc == 0:
@@ -843,6 +1380,44 @@ class RelayAgent:
             logger.warning("[%s] auto-bootstrap error: %s", serial, exc)
         finally:
             self._bootstrap_inflight.discard(serial)
+
+    def _schedule_auto_bootstrap(self, serial: str) -> None:
+        current = self._auto_bootstrap_tasks.get(serial)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(
+            self._auto_bootstrap_online_device(serial),
+            name=f"auto-bootstrap-{serial}",
+        )
+        self._auto_bootstrap_tasks[serial] = task
+
+        def _done(done: asyncio.Task, *, key: str = serial) -> None:
+            if self._auto_bootstrap_tasks.get(key) is done:
+                self._auto_bootstrap_tasks.pop(key, None)
+
+        task.add_done_callback(_done)
+
+    def _cancel_auto_bootstrap(self, serial: str) -> None:
+        task = self._auto_bootstrap_tasks.pop(serial, None)
+        if (
+            task is not None
+            and not task.done()
+            and task is not asyncio.current_task()
+        ):
+            task.cancel()
+
+    def _viewer_desires_scrcpy(self, serial: str) -> bool:
+        for logical, state in self._scrcpy_desired.items():
+            if not state.get("desired") or state.get("manual_stop"):
+                continue
+            adb_serial = str(state.get("adb_serial") or "")
+            if serial in {
+                logical,
+                adb_serial,
+                self._scrcpy_device_serial(logical),
+            }:
+                return True
+        return False
 
     def _submit_bootstrap(
         self,
@@ -888,8 +1463,43 @@ class RelayAgent:
             reason,
         )
 
+    def _clear_adb_connect_backoff(self, serial: str) -> None:
+        self._adb_connect_fail_count.pop(serial, None)
+        self._adb_connect_retry_after.pop(serial, None)
+
+    def _record_adb_connect_failed(self, serial: str, output: str) -> None:
+        count = self._adb_connect_fail_count.get(serial, 0) + 1
+        self._adb_connect_fail_count[serial] = count
+        delay = min(
+            self._adb_connect_retry_max_s,
+            self._adb_connect_retry_base_s * (2 ** (count - 1)),
+        )
+        delay *= 1.0 + 0.2 * random.random()
+        self._adb_connect_retry_after[serial] = asyncio.get_running_loop().time() + delay
+        logger.debug(
+            "adb connect retry delayed %.1fs for %s after failure #%d — %s",
+            delay,
+            serial,
+            count,
+            output.strip(),
+        )
+
+    def _adb_connect_backoff_active(self, serial: str) -> bool:
+        retry_after = self._adb_connect_retry_after.get(serial, 0.0)
+        if retry_after <= 0.0:
+            return False
+        remaining = retry_after - asyncio.get_running_loop().time()
+        if remaining > 0:
+            logger.debug("skip adb connect %s retry_after=%.1fs", serial, remaining)
+            return True
+        self._adb_connect_retry_after.pop(serial, None)
+        return False
+
     def _schedule_u2_warm(self, serial: str, *, reason: str) -> None:
         if not self._u2_pool or not serial:
+            return
+        if not _u2_warm_allowed_reason(reason):
+            logger.debug("[%s] u2 warm skipped (%s)", serial, reason)
             return
         mark_keep_warm = getattr(self._u2_pool, "mark_keep_warm", None)
         if callable(mark_keep_warm) and mark_keep_warm(serial, True):
@@ -961,6 +1571,9 @@ class RelayAgent:
 
         logger.info("device %s → %s (retries=%d)", serial, ctx.state.value, ctx.retry_count)
 
+        if adb_state != "device":
+            self._cancel_auto_bootstrap(serial)
+
         # USB disappeared — allow WiFi/TCP to be used again
         if ":" not in serial and adb_state != "device":
             self._clear_tcp_suppress_for_usb_anchor(serial)
@@ -981,12 +1594,12 @@ class RelayAgent:
             self._cleanup_serial_state(serial)
 
         if ctx.state == DeviceState.ONLINE:
-            self._schedule_u2_warm(serial, reason="device-online")
-            if _auto_bootstrap_enabled():
-                asyncio.create_task(
-                    self._auto_bootstrap_online_device(serial),
-                    name=f"auto-bootstrap-{serial}",
-                )
+            self._clear_adb_connect_backoff(serial)
+            allowed, reason = _device_online_auto_bootstrap_decision()
+            if _auto_bootstrap_enabled() and not allowed:
+                logger.info("[%s] auto-bootstrap skipped reason=%s", serial, reason)
+            elif allowed:
+                self._schedule_auto_bootstrap(serial)
             loop = asyncio.get_running_loop()
             self._schedule_capability_probe([serial], send_queue, loop)
             if self._scrcpy_auto_resume_enabled:
@@ -1007,13 +1620,28 @@ class RelayAgent:
                     )
                 else:
                     self._tcp_suppressed_for_usb.pop(serial, None)
+            if not skip and (
+                serial in self._adb_connect_inflight
+                or self._adb_connect_backoff_active(serial)
+            ):
+                skip = True
             if not skip:
                 loop = asyncio.get_running_loop()
-                output, rc = await loop.run_in_executor(adb_executor(), _adb_connect, serial)
-                if rc == 0:
-                    logger.info("auto-reconnected %s — %s", serial, output)
-                else:
-                    logger.debug("reconnect failed %s — %s", serial, output)
+                self._adb_connect_inflight.add(serial)
+                try:
+                    output, rc = await loop.run_in_executor(
+                        adb_executor(),
+                        _adb_connect,
+                        serial,
+                    )
+                    if rc == 0:
+                        self._clear_adb_connect_backoff(serial)
+                        logger.info("auto-reconnected %s — %s", serial, output)
+                    else:
+                        self._record_adb_connect_failed(serial, output)
+                        logger.debug("reconnect failed %s — %s", serial, output)
+                finally:
+                    self._adb_connect_inflight.discard(serial)
 
         await self._send_heartbeat(send_queue)
 
@@ -1301,18 +1929,12 @@ class RelayAgent:
             restart_task = state.get("restart_task")
             if restart_task and not restart_task.done():
                 restart_task.cancel()
+            cfg = self._scrcpy_cfg_from_start_msg(msg, adb_serial=adb_s)
             state.update({
                 "desired": True,
                 "manual_stop": False,
                 "last_stop_reason": "",
-                "cfg": {
-                    "max_fps": int(msg.get("max_fps") or SCRCPY_DEFAULT_MAX_FPS),
-                    "max_width": int(msg.get("max_width") or SCRCPY_DEFAULT_MAX_WIDTH),
-                    "enable_control": bool(msg.get("control", True)),
-                    "port": int(msg.get("port") or 27183),
-                    "bitrate": int(msg.get("bitrate") or SCRCPY_DEFAULT_BITRATE),
-                    "low_latency": bool(msg.get("low_latency", False)),
-                },
+                "cfg": cfg,
                 "adb_serial": adb_s,
                 "retry_count": 0,
                 "retry_window_start": 0.0,
@@ -1324,6 +1946,7 @@ class RelayAgent:
 
         elif mtype == "scrcpy_stop":
             req = str(msg.get("serial", "") or "")
+            reason = str(msg.get("reason") or "manual_stop")
             adb_s = self._scrcpy_logical_to_adb.pop(req, req)
             state = self._scrcpy_desired.get(req) or {}
             restart_task = state.get("restart_task")
@@ -1332,13 +1955,13 @@ class RelayAgent:
             state.update({
                 "desired": False,
                 "manual_stop": True,
-                "last_stop_reason": "manual_stop",
+                "last_stop_reason": reason,
                 "restart_task": None,
             })
             self._scrcpy_desired[req] = state
-            await self._scrcpy_mgr.stop_session(adb_s, reason="manual_stop")
+            await self._scrcpy_mgr.stop_session(adb_s, reason=reason)
             if adb_s != req:
-                await self._scrcpy_mgr.stop_session(req, reason="manual_stop")
+                await self._scrcpy_mgr.stop_session(req, reason=reason)
 
         elif mtype == "u2_request":
             self._stream_tasks.add(
@@ -1799,8 +2422,14 @@ class RelayAgent:
         body         = msg.get("body", "")
         content_type = msg.get("content_type", "")
         timeout      = max(1.0, float(msg.get("timeout", 30)))
+        priority     = msg.get("priority") or (
+            "visible" if msg.get("visible") or msg.get("focused") else None
+        )
+        deadline_ms  = msg.get("deadline_ms") or msg.get("timeout_ms")
 
         ui_executor = self._u2_executor
+        can_admit = ui_executor is not None and ui_executor.__class__.__name__ == "U2Executor"
+        is_hierarchy_request = method == "GET" and str(path).startswith("/dump/hierarchy")
         mutates_ui = (
             ui_executor is not None
             and method == "POST"
@@ -1811,17 +2440,42 @@ class RelayAgent:
 
         loop   = asyncio.get_running_loop()
         try:
-            future = loop.run_in_executor(
-                u2_executor_pool(),
-                self._do_u2_http,
-                serial,
-                method,
-                path,
-                body,
-                content_type,
-                timeout,
-            )
-            result = await _await_executor_completion(future)
+            if is_hierarchy_request and can_admit:
+                ui_executor.record_hierarchy_request(priority)
+
+            async def _run_request() -> dict:
+                future = loop.run_in_executor(
+                    u2_executor_pool(),
+                    self._do_u2_http,
+                    serial,
+                    method,
+                    path,
+                    body,
+                    content_type,
+                    timeout,
+                )
+                return await _await_executor_completion(future)
+
+            if can_admit:
+                async with ui_executor._admit(
+                    serial=str(serial),
+                    priority=priority,
+                    deadline_ms=deadline_ms,
+                ):
+                    result = await _run_request()
+            else:
+                result = await _run_request()
+            if is_hierarchy_request and can_admit:
+                ui_executor.record_hierarchy_result(priority, ok=bool(result.get("ok")))
+        except TimeoutError as exc:
+            if is_hierarchy_request and can_admit:
+                ui_executor.record_hierarchy_result(priority, ok=False)
+            result = {
+                "ok": False,
+                "status": 0,
+                "body": str(exc),
+                "content_type": "",
+            }
         finally:
             if mutates_ui:
                 ui_executor.end_ui_mutation(str(serial))
@@ -1857,26 +2511,253 @@ class RelayAgent:
         )
         return serial
 
+    def _prefer_atx_forward(self, serial: str) -> bool:
+        if not serial or ":" in serial:
+            return False
+        mode = _u2_forward_mode()
+        if mode == "always":
+            return True
+        if mode == "never":
+            return False
+        return _remote_adb_server_configured()
+
+    def _bump_atx_forward_stat(self, key: str, amount: int = 1) -> None:
+        with self._atx_forward_lock:
+            self._atx_forward_stats[key] = self._atx_forward_stats.get(key, 0) + amount
+
+    def _u2_forward_stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        with self._atx_forward_lock:
+            stats = dict(self._atx_forward_stats)
+            samples = list(self._atx_forward_create_wait_samples_ms)
+            stats["cached"] = len(self._atx_forward_cache)
+            stats["create_cooldown_serials"] = sum(
+                1
+                for retry_after in self._atx_forward_create_retry_after.values()
+                if retry_after > time.monotonic()
+            )
+            stats["failing_serials"] = sum(
+                1 for count in self._atx_forward_fail_count.values() if count > 0
+            )
+            stats["lan_routes"] = sum(
+                1 for route in self._atx_u2_route_cache.values() if route == "lan"
+            )
+            stats["forward_routes"] = sum(
+                1 for route in self._atx_u2_route_cache.values() if route == "forward"
+            )
+            stats["lan_probe_inflight"] = len(self._atx_lan_probe_inflight)
+            stats["create_limit"] = self._atx_forward_create_limit
+            stats["create_inflight"] = self._atx_forward_create_inflight
+            stats["create_peak_inflight"] = self._atx_forward_create_peak
+            stats["create_wait_samples"] = len(samples)
+            stats["create_wait_max_ms"] = max(samples, default=0)
+            if samples:
+                ordered = sorted(samples)
+                stats["create_wait_p95_ms"] = ordered[
+                    min(len(ordered) - 1, int(len(ordered) * 0.95))
+                ]
+            else:
+                stats["create_wait_p95_ms"] = 0
+            if reset:
+                for key in list(self._atx_forward_stats):
+                    self._atx_forward_stats[key] = 0
+                self._atx_forward_create_wait_samples_ms.clear()
+                self._atx_forward_create_peak = self._atx_forward_create_inflight
+            return stats
+
+    def _known_atx_lan_host(self, serial: str) -> str:
+        if not serial:
+            return ""
+        if ":" in serial:
+            return serial.rsplit(":", 1)[0]
+        for tcp_s, usb_s in self._tcp_suppressed_for_usb.items():
+            if usb_s == serial and ":" in tcp_s:
+                return tcp_s.rsplit(":", 1)[0]
+        cached = self._atx_lan_host_cache.get(serial)
+        if cached and ":" not in cached and cached != serial:
+            return cached
+        return ""
+
+    def _cached_atx_u2_route(self, serial: str) -> str:
+        if not serial or ":" in serial:
+            return "lan"
+        with self._atx_forward_lock:
+            return self._atx_u2_route_cache.get(serial, "")
+
+    def _set_atx_u2_route(self, serial: str, route: str) -> None:
+        if not serial or ":" in serial:
+            return
+        if route not in {"lan", "forward", ""}:
+            return
+        with self._atx_forward_lock:
+            if route:
+                self._atx_u2_route_cache[serial] = route
+            else:
+                self._atx_u2_route_cache.pop(serial, None)
+
+    def _atx_forward_serial_lock_for(self, serial: str) -> threading.Lock:
+        with self._atx_forward_lock:
+            lock = self._atx_forward_serial_locks.get(serial)
+            if lock is None:
+                lock = threading.Lock()
+                self._atx_forward_serial_locks[serial] = lock
+            return lock
+
+    def _record_atx_forward_success(self, serial: str) -> None:
+        if not serial:
+            return
+        with self._atx_forward_lock:
+            self._atx_forward_fail_count.pop(serial, None)
+            self._atx_forward_create_retry_after.pop(serial, None)
+            self._atx_forward_create_last_error.pop(serial, None)
+
+    def _record_atx_forward_failure(self, serial: str) -> int:
+        if not serial:
+            return 0
+        with self._atx_forward_lock:
+            count = self._atx_forward_fail_count.get(serial, 0) + 1
+            self._atx_forward_fail_count[serial] = count
+            self._atx_forward_stats["request_failed"] = (
+                self._atx_forward_stats.get("request_failed", 0) + 1
+            )
+            return count
+
     def _cached_atx_forward_endpoint(self, serial: str) -> tuple[str, int] | None:
         if not serial or ":" in serial:
             return None
         with self._atx_forward_lock:
             return self._atx_forward_cache.get(serial)
 
-    def _clear_atx_forward(self, serial: str) -> None:
-        if not serial:
-            return
-        with self._atx_forward_lock:
-            endpoint = self._atx_forward_cache.pop(serial, None)
-        if endpoint is None:
-            return
-        host, port = endpoint
+    def _drop_atx_forward_http_pool(self, host: str, port: int) -> None:
         try:
             from relay.http_pool import default_pool
             default_pool().drop_host(host, port)
         except Exception:
             pass
+
+    def _clear_atx_forward(self, serial: str) -> None:
+        if not serial:
+            return
+        with self._atx_forward_lock:
+            endpoint = self._atx_forward_cache.pop(serial, None)
+            self._atx_forward_create_retry_after.pop(serial, None)
+            self._atx_forward_create_last_error.pop(serial, None)
+        if endpoint is None:
+            return
+        host, port = endpoint
+        self._drop_atx_forward_http_pool(host, port)
         _run("forward", "--remove", f"tcp:{port}", serial=serial, timeout=5)
+        with self._atx_forward_lock:
+            self._atx_forward_fail_count.pop(serial, None)
+            self._atx_forward_stats["removed"] = (
+                self._atx_forward_stats.get("removed", 0) + 1
+            )
+            if serial not in self._atx_forward_cache:
+                self._atx_forward_serial_locks.pop(serial, None)
+
+    def _atx_forward_create_retry_error(self, serial: str) -> str | None:
+        now = time.monotonic()
+        with self._atx_forward_lock:
+            retry_after = self._atx_forward_create_retry_after.get(serial)
+            if retry_after is None:
+                return None
+            if now >= retry_after:
+                self._atx_forward_create_retry_after.pop(serial, None)
+                self._atx_forward_create_last_error.pop(serial, None)
+                return None
+            self._atx_forward_stats["create_cooldown_skip"] = (
+                self._atx_forward_stats.get("create_cooldown_skip", 0) + 1
+            )
+            return self._atx_forward_create_last_error.get(
+                serial,
+                "adb-forward creation cooling down",
+            )
+
+    def _record_atx_forward_create_failure(self, serial: str, error: str) -> None:
+        with self._atx_forward_lock:
+            self._atx_forward_stats["create_failed"] = (
+                self._atx_forward_stats.get("create_failed", 0) + 1
+            )
+            self._atx_forward_create_last_error[serial] = error
+            if self._atx_forward_create_failure_cooldown_s > 0.0:
+                self._atx_forward_create_retry_after[serial] = (
+                    time.monotonic() + self._atx_forward_create_failure_cooldown_s
+                )
+            else:
+                self._atx_forward_create_retry_after.pop(serial, None)
+
+    def _probe_atx_lan_route_once(self, serial: str) -> bool:
+        lan_host = self._known_atx_lan_host(serial)
+        if not lan_host:
+            return False
+        try:
+            result = self._u2_http_request(
+                lan_host,
+                7912,
+                "GET",
+                "/ping",
+                "",
+                "application/json",
+                self._atx_lan_probe_timeout_s,
+            )
+            if not result.get("ok"):
+                raise RuntimeError(f"HTTP {result.get('status')}: {result.get('body')}")
+        except Exception as exc:
+            self._bump_atx_forward_stat("lan_probe_failed")
+            logger.debug(
+                "u2 LAN route probe failed serial=%s http://%s:7912/ping: %s",
+                serial,
+                lan_host,
+                exc,
+            )
+            return False
+
+        previous_route = self._cached_atx_u2_route(serial)
+        self._set_atx_u2_route(serial, "lan")
+        self._bump_atx_forward_stat("lan_probe_ok")
+        if previous_route != "lan":
+            self._bump_atx_forward_stat("lan_promoted")
+            logger.info(
+                "u2 route promoted to LAN serial=%s endpoint=%s:7912",
+                serial,
+                lan_host,
+            )
+        self._clear_atx_forward(serial)
+        return True
+
+    def _schedule_atx_lan_route_probe(self, serial: str) -> None:
+        if (
+            not serial
+            or ":" in serial
+            or self._atx_lan_probe_interval_s <= 0.0
+            or not self._known_atx_lan_host(serial)
+        ):
+            return
+        now = time.monotonic()
+        with self._atx_forward_lock:
+            if serial in self._atx_lan_probe_inflight:
+                return
+            next_at = self._atx_lan_probe_next_at.get(serial, 0.0)
+            if now < next_at:
+                return
+            self._atx_lan_probe_next_at[serial] = now + self._atx_lan_probe_interval_s
+            self._atx_lan_probe_inflight.add(serial)
+            self._atx_forward_stats["lan_probe_started"] = (
+                self._atx_forward_stats.get("lan_probe_started", 0) + 1
+            )
+
+        def _run_probe() -> None:
+            try:
+                self._probe_atx_lan_route_once(serial)
+            finally:
+                with self._atx_forward_lock:
+                    self._atx_lan_probe_inflight.discard(serial)
+
+        thread = threading.Thread(
+            target=_run_probe,
+            name=f"u2-lan-probe-{serial}",
+            daemon=True,
+        )
+        thread.start()
 
     def _ensure_atx_forward_endpoint(self, serial: str) -> tuple[str, int] | None:
         """Forward host tcp:N to device tcp:7912 for USB devices.
@@ -1890,12 +2771,49 @@ class RelayAgent:
             cached = self._atx_forward_cache.get(serial)
             if cached is not None:
                 return cached
-            out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
+        if self._atx_forward_create_retry_error(serial) is not None:
+            return None
+        serial_lock = self._atx_forward_serial_lock_for(serial)
+        with serial_lock:
+            with self._atx_forward_lock:
+                cached = self._atx_forward_cache.get(serial)
+                if cached is not None:
+                    self._atx_forward_stats["create_joined"] = (
+                        self._atx_forward_stats.get("create_joined", 0) + 1
+                    )
+                    return cached
+            if self._atx_forward_create_retry_error(serial) is not None:
+                return None
+            wait_started = time.perf_counter()
+            self._atx_forward_create_sem.acquire()
+            wait_ms = int((time.perf_counter() - wait_started) * 1000.0)
+            try:
+                with self._atx_forward_lock:
+                    self._atx_forward_create_wait_samples_ms.append(wait_ms)
+                    if wait_ms > 0:
+                        self._atx_forward_stats["create_throttled"] = (
+                            self._atx_forward_stats.get("create_throttled", 0) + 1
+                        )
+                    self._atx_forward_create_inflight += 1
+                    self._atx_forward_create_peak = max(
+                        self._atx_forward_create_peak,
+                        self._atx_forward_create_inflight,
+                    )
+                out, rc = _run("forward", "tcp:0", "tcp:7912", serial=serial, timeout=10)
+            finally:
+                with self._atx_forward_lock:
+                    self._atx_forward_create_inflight = max(
+                        0,
+                        self._atx_forward_create_inflight - 1,
+                    )
+                self._atx_forward_create_sem.release()
             if rc != 0:
+                error = (out or "").strip()[:200]
+                self._record_atx_forward_create_failure(serial, error)
                 logger.warning(
                     "u2 atx adb-forward failed serial=%s: %s",
                     serial,
-                    (out or "").strip()[:200],
+                    error,
                 )
                 return None
             port = 0
@@ -1904,14 +2822,23 @@ class RelayAgent:
                     port = int(token)
                     break
             if port <= 0:
+                error = (out or "").strip()[:200]
+                self._record_atx_forward_create_failure(serial, error)
                 logger.warning(
                     "u2 atx adb-forward returned no port serial=%s output=%r",
                     serial,
-                    (out or "").strip()[:200],
+                    error,
                 )
                 return None
             endpoint = (_atx_forward_host(), port)
-            self._atx_forward_cache[serial] = endpoint
+            with self._atx_forward_lock:
+                self._atx_forward_cache[serial] = endpoint
+                self._atx_forward_fail_count.pop(serial, None)
+                self._atx_forward_create_retry_after.pop(serial, None)
+                self._atx_forward_create_last_error.pop(serial, None)
+                self._atx_forward_stats["created"] = (
+                    self._atx_forward_stats.get("created", 0) + 1
+                )
             logger.info(
                 "u2 atx adb-forward active serial=%s endpoint=%s:%s -> tcp:7912",
                 serial,
@@ -1972,18 +2899,122 @@ class RelayAgent:
         per call on WiFi-attached phones.
         """
         forward_endpoint = self._cached_atx_forward_endpoint(serial)
-        host, port = forward_endpoint or (self._atx_http_host(serial), 7912)
+        prefer_forward = self._prefer_atx_forward(serial)
+        route = self._cached_atx_u2_route(serial)
+        using_forward = False
+        using_lan_route = False
+        if route == "lan":
+            self._bump_atx_forward_stat("route_lan_used")
+            host = self._known_atx_lan_host(serial) or self._atx_http_host(serial)
+            port = 7912
+            using_lan_route = True
+        elif forward_endpoint is not None:
+            self._bump_atx_forward_stat("reused")
+            self._bump_atx_forward_stat("route_forward_used")
+            host, port = forward_endpoint
+            using_forward = True
+        elif prefer_forward:
+            self._bump_atx_forward_stat("forward_first")
+            forward_endpoint = self._ensure_atx_forward_endpoint(serial)
+            if forward_endpoint is not None:
+                host, port = forward_endpoint
+                using_forward = True
+                self._set_atx_u2_route(serial, "forward")
+            else:
+                host, port = self._atx_http_host(serial), 7912
+                using_lan_route = True
+        else:
+            self._bump_atx_forward_stat("lan_first")
+            host, port = self._atx_http_host(serial), 7912
+            using_lan_route = True
 
         try:
-            return self._u2_http_request(host, port, method, path, body, content_type, timeout)
+            result = self._u2_http_request(
+                host,
+                port,
+                method,
+                path,
+                body,
+                content_type,
+                timeout,
+            )
+            if using_forward:
+                self._record_atx_forward_success(serial)
+                self._set_atx_u2_route(serial, "forward")
+                self._schedule_atx_lan_route_probe(serial)
+            elif using_lan_route and result.get("ok"):
+                self._set_atx_u2_route(serial, "lan")
+            return result
         except Exception as exc:
+            if using_forward and forward_endpoint is not None:
+                failure_count = self._record_atx_forward_failure(serial)
+                if failure_count < self._atx_forward_failures_before_recreate:
+                    self._drop_atx_forward_http_pool(host, port)
+                    self._bump_atx_forward_stat("same_forward_retry")
+                    try:
+                        result = self._u2_http_request(
+                            host,
+                            port,
+                            method,
+                            path,
+                            body,
+                            content_type,
+                            timeout,
+                        )
+                        self._record_atx_forward_success(serial)
+                        self._set_atx_u2_route(serial, "forward")
+                        self._schedule_atx_lan_route_probe(serial)
+                        return result
+                    except Exception as retry_exc:
+                        logger.debug(
+                            "u2 HTTP adb-forward transient error kept "
+                            "serial=%s failure=%d/%d http://%s:%s%s: %s",
+                            serial,
+                            failure_count,
+                            self._atx_forward_failures_before_recreate,
+                            host,
+                            port,
+                            path,
+                            retry_exc,
+                        )
+                        exc = retry_exc
+                else:
+                    self._bump_atx_forward_stat("recreated_after_failures")
+                    self._clear_atx_forward(serial)
+            elif not using_forward:
+                if using_lan_route:
+                    self._set_atx_u2_route(serial, "")
+                    self._bump_atx_forward_stat("route_lan_failed")
+                self._bump_atx_forward_stat("lan_fallback")
+
+            if using_forward and forward_endpoint is not None:
+                # Keep the current forward until the failure threshold is
+                # reached. A single HTTP timeout often means atx/u2 is busy,
+                # not that the adb forward rule is stale.
+                if self._cached_atx_forward_endpoint(serial) == forward_endpoint:
+                    logger.debug(
+                        "u2 HTTP error kept adb-forward serial=%s "
+                        "http://%s:%s%s: %s",
+                        serial,
+                        host,
+                        port,
+                        path,
+                        exc,
+                    )
+                    return {
+                        "ok":           False,
+                        "status":       0,
+                        "body":         str(exc),
+                        "content_type": "",
+                    }
+
             if forward_endpoint is not None:
                 self._clear_atx_forward(serial)
             endpoint = self._ensure_atx_forward_endpoint(serial)
             if endpoint is not None:
                 fwd_host, fwd_port = endpoint
                 try:
-                    return self._u2_http_request(
+                    result = self._u2_http_request(
                         fwd_host,
                         fwd_port,
                         method,
@@ -1992,8 +3023,16 @@ class RelayAgent:
                         content_type,
                         timeout,
                     )
+                    self._record_atx_forward_success(serial)
+                    self._set_atx_u2_route(serial, "forward")
+                    self._schedule_atx_lan_route_probe(serial)
+                    return result
                 except Exception as fwd_exc:
-                    self._clear_atx_forward(serial)
+                    failure_count = self._record_atx_forward_failure(serial)
+                    if failure_count >= self._atx_forward_failures_before_recreate:
+                        self._clear_atx_forward(serial)
+                    else:
+                        self._drop_atx_forward_http_pool(fwd_host, fwd_port)
                     logger.debug(
                         "u2 HTTP adb-forward error %s http://%s:%s%s: %s",
                         method,
@@ -2016,7 +3055,7 @@ class RelayAgent:
         serial: str,
         payload: dict[str, Any],
         timeout: float,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, Any]:
         res = self._do_u2_http(
             serial,
             "POST",
@@ -2069,6 +3108,9 @@ class RelayAgent:
                 actions=actions,
                 early_exit=bool(msg.get("early_exit", True)),
                 cancel_event=cancel_event,
+                priority=msg.get("priority")
+                or ("visible" if msg.get("visible") or msg.get("focused") else None),
+                deadline_ms=msg.get("deadline_ms") or msg.get("timeout_ms"),
             )
         result.setdefault("total_ms", round((time.perf_counter() - started) * 1000, 1))
         result["type"] = "u2_batch_result"
@@ -2129,7 +3171,7 @@ class RelayAgent:
                         "application/json",
                         timeout,
                     )
-                    ok, error = self._parse_u2_touch_rpc_result(res)
+                    ok, error, _rpc_result = self._parse_u2_touch_rpc_result(res)
                 except Exception as exc:
                     ok, error = False, str(exc)
                 entry: dict[str, Any] = {"op": op, "ok": ok}
@@ -2188,22 +3230,22 @@ class RelayAgent:
         return op, payload, timeout
 
     @staticmethod
-    def _parse_u2_touch_rpc_result(res: dict) -> tuple[bool, str]:
+    def _parse_u2_touch_rpc_result(res: dict) -> tuple[bool, str, Any]:
         if not bool(res.get("ok")):
             status = int(res.get("status", 0) or 0)
             if status:
-                return False, f"JSON-RPC HTTP {status}"
-            return False, str(res.get("body") or "JSON-RPC request failed")
+                return False, f"JSON-RPC HTTP {status}", None
+            return False, str(res.get("body") or "JSON-RPC request failed"), None
         raw = str(res.get("body") or "")
         if not raw.strip():
-            return False, "JSON-RPC empty response"
+            return False, "JSON-RPC empty response", None
         try:
             data = json.loads(raw)
         except Exception:
-            return False, f"JSON-RPC invalid response: {raw[:120]!r}"
+            return False, f"JSON-RPC invalid response: {raw[:120]!r}", None
         if "error" in data:
-            return False, f"JSON-RPC error: {data['error']}"
-        return True, ""
+            return False, f"JSON-RPC error: {data['error']}", None
+        return True, "", data.get("result")
 
     async def _handle_u2_flow(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a named high-level u2 flow and return result."""
@@ -2215,6 +3257,9 @@ class RelayAgent:
                 serial=serial,
                 flow=msg.get("flow", ""),
                 params=msg.get("params") or {},
+                priority=msg.get("priority")
+                or ("visible" if msg.get("visible") or msg.get("focused") else None),
+                deadline_ms=msg.get("deadline_ms") or msg.get("timeout_ms"),
             )
         result["type"] = "u2_flow_result"
         result["id"] = msg.get("id", "")
@@ -2463,7 +3508,12 @@ class RelayAgent:
                 "output": "",
                 "error": f"command queue full: serial={serial_key}",
             })
-            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+            await bounded_put(
+                send_queue,
+                result,
+                serial=cmd_serial,
+                label="cmd_result",
+            )
 
     async def _command_worker(
         self,
@@ -2483,6 +3533,13 @@ class RelayAgent:
                     cmd_serial,
                     int(msg.get("timeout", 30)),
                 )
+            elif cmd_type in {CMD_RESTART_U2, CMD_RESTART_ATX}:
+                result = await self._execute_recovery_command(
+                    msg.get("msg_id", ""),
+                    cmd_serial,
+                    int(msg.get("timeout", 30)),
+                    cmd_type,
+                )
             else:
                 result = await loop.run_in_executor(
                     adb_executor(),
@@ -2493,7 +3550,12 @@ class RelayAgent:
                     int(msg.get("timeout", 30)),
                     cmd_type,
                 )
-            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
+            await bounded_put(
+                send_queue,
+                result,
+                serial=cmd_serial,
+                label="cmd_result",
+            )
             if cmd_type == CMD_ADB_CONNECT:
                 try:
                     parsed = json.loads(result)
@@ -2523,8 +3585,65 @@ class RelayAgent:
                 "output": "",
                 "error": f"serial {serial!r} not available (state={state_str})",
             })
+        # An explicit automation request supersedes any delayed background
+        # bootstrap for this phone. Otherwise the deferred task would repeat
+        # the same heavy ADB work after the viewer closes.
+        self._cancel_auto_bootstrap(serial)
         try:
             output, rc = await self._await_bootstrap(serial, max(timeout, 180))
+            if rc == 0:
+                self._schedule_u2_warm(serial, reason="explicit-bootstrap")
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": rc == 0,
+                "exit_code": rc,
+                "output": output,
+                "error": "" if rc == 0 else output,
+            })
+        except Exception as exc:
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": str(exc),
+            })
+
+    async def _execute_recovery_command(
+        self,
+        msg_id: str,
+        serial: str,
+        timeout: int,
+        cmd_type: int,
+    ) -> str:
+        ctx = self._registry.get(serial)
+        if ctx is None or not ctx.is_available:
+            state_str = ctx.state.value if ctx else "unknown"
+            return dumps({
+                "type": "result",
+                "msg_id": msg_id,
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": f"serial {serial!r} not available (state={state_str})",
+            })
+
+        if cmd_type == CMD_RESTART_U2:
+            kind = "restart_u2"
+            operation = lambda: _restart_u2(serial, timeout=timeout)
+        elif cmd_type == CMD_RESTART_ATX:
+            kind = "restart_atx"
+            operation = lambda: _restart_atx(serial, timeout=timeout)
+        else:
+            raise RuntimeError(f"unsupported recovery command type: {cmd_type}")
+
+        try:
+            wrapped = asyncio.wrap_future(
+                self._recovery_coordinator.submit(serial, kind, operation)
+            )
+            output, rc = await asyncio.shield(wrapped)
             return dumps({
                 "type": "result",
                 "msg_id": msg_id,
@@ -2614,7 +3733,15 @@ class RelayAgent:
             elif cmd_type == CMD_RESTART_SCRCPY:
                 output, rc = self._restart_scrcpy_sync(serial, timeout)
             else:
-                output, rc = _adb_shell(serial, cmd, timeout=timeout)
+                output, rc = _adb_shell(
+                    serial,
+                    cmd,
+                    timeout=timeout,
+                    lane=classify_adb_command(
+                        ("shell", cmd),
+                        default=AdbLane.INTERACTIVE,
+                    ),
+                )
                 if lock_rotation_after_shell_enabled():
                     lock_portrait_rotation(serial)
 
@@ -2643,6 +3770,8 @@ class RelayAgent:
         # back up. Restarting from the stop callback would race the reconnect.
         abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
         logical = self._logical_serial_for_adb(adb_serial)
+        if reason in abnormal_reasons:
+            self._mark_scrcpy_encoder_unhealthy(logical, adb_serial, reason=reason)
         state = self._scrcpy_desired.get(logical)
         if not state:
             return
@@ -2724,6 +3853,39 @@ class RelayAgent:
         state["adb_serial"] = adb_serial
         if adb_serial != logical_serial:
             self._scrcpy_logical_to_adb[logical_serial] = adb_serial
+        if (
+            SCRCPY_ADAPTIVE_PROFILE_ENABLED
+            and self._is_scrcpy_encoder_unhealthy(logical_serial, adb_serial)
+            and str(cfg.get("profile") or "visible") != "degraded"
+        ):
+            limits = _SCRCPY_PROFILE_LIMITS["degraded"]
+            cfg = dict(cfg)
+            cfg["profile"] = "degraded"
+            cfg["max_fps"] = min(
+                int(cfg.get("max_fps") or SCRCPY_DEFAULT_MAX_FPS),
+                int(limits["max_fps"]),
+            )
+            cfg["max_width"] = min(
+                int(cfg.get("max_width") or SCRCPY_DEFAULT_MAX_WIDTH),
+                int(limits["max_width"]),
+            )
+            cfg["bitrate"] = min(
+                int(cfg.get("bitrate") or SCRCPY_DEFAULT_BITRATE),
+                int(limits["bitrate"]),
+            )
+            state["cfg"] = cfg
+            self._scrcpy_profile_stats["degraded_starts"] += 1
+            self._scrcpy_profile_stats["clamped_starts"] += 1
+            self._scrcpy_profile_stats["auto_downgrades"] += 1
+        logger.info(
+            "scrcpy start cfg serial=%s logical=%s profile=%s fps=%s width=%s bitrate=%s",
+            adb_serial,
+            logical_serial,
+            cfg.get("profile", "visible"),
+            cfg.get("max_fps"),
+            cfg.get("max_width"),
+            cfg.get("bitrate"),
+        )
 
         await self._scrcpy_mgr.start_session(
             serial=adb_serial,
@@ -2896,6 +4058,8 @@ class RelayAgent:
         self._u2_warm_inflight.discard(serial)
         self._clear_u2_warm_backoff(serial)
 
+        self._cancel_auto_bootstrap(serial)
+
         # Supervisor circuit breaker — let a re-plugged device start fresh.
         breakers = getattr(self._supervisor, "_breakers", None)
         if isinstance(breakers, dict):
@@ -2912,6 +4076,10 @@ class RelayAgent:
 
         # ATX cache + logical serial map can grow with phone churn.
         host = self._atx_lan_host_cache.pop(serial, None)
+        with self._atx_forward_lock:
+            self._atx_u2_route_cache.pop(serial, None)
+            self._atx_lan_probe_next_at.pop(serial, None)
+            self._atx_lan_probe_inflight.discard(serial)
         self._clear_atx_forward(serial)
         mapped_keys = [k for k, v in self._scrcpy_logical_to_adb.items() if v == serial]
         for k in mapped_keys:

@@ -138,7 +138,9 @@ async def list_executions(
     if since is not None:
         q = q.where(Execution.created_at >= since)
 
-    total_result = await db.execute(select(func.count()).select_from(q.subquery()))
+    total_result = await db.execute(
+        select(func.count()).select_from(q.order_by(None).subquery())
+    )
     total = total_result.scalar_one()
 
     items_result = await db.execute(q.offset(offset).limit(limit))
@@ -451,6 +453,16 @@ async def campaign_run_stats(db: AsyncSession, campaign_id: str) -> dict:
     )
     total_content = content_count_result.scalar_one()
 
+    recent_executions_result = await db.execute(
+        select(Execution)
+        .where(Execution.campaign_id == campaign_id)
+        .order_by(Execution.created_at.desc())
+        .limit(1000)
+    )
+    latest_dispatch_timing = _latest_campaign_dispatch_timing(
+        list(recent_executions_result.scalars().all())
+    )
+
     total_runs = sum(counts.values())
     return {
         "total_devices": total_runs,
@@ -460,6 +472,111 @@ async def campaign_run_stats(db: AsyncSession, campaign_id: str) -> dict:
         "pending": counts.get("pending", 0),
         "error": counts.get("error", 0),
         "total_content_items": total_content,
+        **latest_dispatch_timing,
+    }
+
+
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    if start.tzinfo is None and end.tzinfo is not None:
+        end = end.replace(tzinfo=None)
+    elif start.tzinfo is not None and end.tzinfo is None:
+        end = end.replace(tzinfo=start.tzinfo)
+    return max(0.0, (end - start).total_seconds() * 1000.0)
+
+
+def _percentile_float(values: list[float], p: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    pos = max(0.0, min(1.0, p)) * (len(ordered) - 1)
+    idx = int(pos)
+    frac = pos - idx
+    if idx >= len(ordered) - 1:
+        return ordered[-1]
+    return ordered[idx] + (ordered[idx + 1] - ordered[idx]) * frac
+
+
+def _latest_campaign_dispatch_timing(executions: list[Execution]) -> dict:
+    if not executions:
+        return {}
+
+    newest = executions[0]
+    newest_meta = newest.meta or {}
+    latest_dispatch_id = newest_meta.get("dispatch_id")
+    if latest_dispatch_id:
+        latest_rows = [
+            row
+            for row in executions
+            if (row.meta or {}).get("dispatch_id") == latest_dispatch_id
+        ]
+    else:
+        latest_rows = [newest]
+
+    if not latest_rows:
+        return {}
+
+    terminal_statuses = {"completed", "failed", "cancelled", "dlq_closed"}
+    created_values = [row.created_at for row in latest_rows if row.created_at]
+    started_values = [row.started_at for row in latest_rows if row.started_at]
+    finished_values = [row.finished_at for row in latest_rows if row.finished_at]
+    first_created_at = min(created_values) if created_values else None
+    first_started_at = min(started_values) if started_values else None
+    latest_finished_at = max(finished_values) if finished_values else None
+    terminal_count = sum(1 for row in latest_rows if row.status in terminal_statuses)
+    running_count = sum(1 for row in latest_rows if row.status in {"running", "paused"})
+    pending_count = sum(1 for row in latest_rows if row.status == "pending")
+    failed_count = sum(1 for row in latest_rows if row.status == "failed")
+    workflow_started_count = sum(
+        1 for row in latest_rows if (row.meta or {}).get("workflow_id")
+    )
+    fallback_count = sum(
+        1 for row in latest_rows if (row.meta or {}).get("dispatch_source") == "fallback"
+    )
+    dispatch_to_start_ms = [
+        duration
+        for row in latest_rows
+        if (
+            duration := _duration_ms(row.created_at, row.started_at)
+        )
+        is not None
+    ]
+    terminal_at = (
+        latest_finished_at
+        if terminal_count == len(latest_rows) and latest_finished_at
+        else None
+    )
+    elapsed_end = terminal_at or datetime.now(timezone.utc)
+
+    return {
+        "latest_dispatch_id": str(latest_dispatch_id) if latest_dispatch_id else None,
+        "latest_dispatch_target_count": len(latest_rows),
+        "latest_dispatch_finished_count": terminal_count,
+        "latest_dispatch_running_count": running_count,
+        "latest_dispatch_pending_count": pending_count,
+        "latest_dispatch_failed_count": failed_count,
+        "latest_dispatch_workflow_started_count": workflow_started_count,
+        "latest_dispatch_fallback_count": fallback_count,
+        "latest_dispatch_created_at": _iso(first_created_at),
+        "latest_dispatch_first_started_at": _iso(first_started_at),
+        "latest_dispatch_latest_finished_at": _iso(latest_finished_at),
+        "latest_dispatch_elapsed_ms": _duration_ms(first_created_at, elapsed_end),
+        "latest_dispatch_terminal_ms": _duration_ms(first_created_at, terminal_at),
+        "latest_dispatch_to_first_start_ms": _duration_ms(
+            first_created_at,
+            first_started_at,
+        ),
+        "latest_dispatch_to_start_p95_ms": _percentile_float(
+            dispatch_to_start_ms,
+            0.95,
+        ),
     }
 
 

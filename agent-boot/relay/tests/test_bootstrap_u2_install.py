@@ -1,7 +1,21 @@
 from __future__ import annotations
 
+import subprocess
+
 import bootstrap
+import pytest
 from relay import adb as relay_adb
+
+
+@pytest.fixture(autouse=True)
+def _reset_relay_adb_forward_cache() -> None:
+    relay_adb._ATX_FORWARD_CACHE.clear()
+    relay_adb._ATX_FORWARD_FAIL_COUNT.clear()
+    relay_adb._ATX_FORWARD_LAST_ERROR.clear()
+    relay_adb._ATX_FORWARD_CREATE_RETRY_AFTER.clear()
+    relay_adb._ATX_FORWARD_SERIAL_LOCKS.clear()
+    relay_adb._ADB_COMMAND_STATS.clear()
+    relay_adb._ATX_FORWARD_RECONCILE_NEXT_AT = 0.0
 
 
 class _FakeUrlopenResponse:
@@ -144,10 +158,10 @@ def test_atx_http_ping_falls_back_to_adb_forward_when_lan_times_out(monkeypatch)
 
     def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
         adb_calls.append((args, serial, timeout))
+        if args == ("forward", "--list"):
+            return "", 0
         if args == ("forward", "tcp:0", "tcp:7912"):
             return "43210\r\n", 0
-        if args == ("forward", "--remove", "tcp:43210"):
-            return "", 0
         raise AssertionError(f"unexpected adb call: {args!r}")
 
     def fake_urlopen(url: str, timeout: float):
@@ -171,8 +185,8 @@ def test_atx_http_ping_falls_back_to_adb_forward_when_lan_times_out(monkeypatch)
         "http://host.docker.internal:43210/ping",
     ]
     assert adb_calls == [
+        (("forward", "--list"), None, 5),
         (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
-        (("forward", "--remove", "tcp:43210"), "usb-serial", 5),
     ]
 
 
@@ -182,10 +196,10 @@ def test_atx_http_ping_uses_adb_forward_when_lan_ip_unavailable(monkeypatch) -> 
 
     def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
         adb_calls.append((args, serial, timeout))
+        if args == ("forward", "--list"):
+            return "", 0
         if args == ("forward", "tcp:0", "tcp:7912"):
             return "43210\n", 0
-        if args == ("forward", "--remove", "tcp:43210"):
-            return "", 0
         raise AssertionError(f"unexpected adb call: {args!r}")
 
     def fake_urlopen(url: str, timeout: float):
@@ -202,8 +216,41 @@ def test_atx_http_ping_uses_adb_forward_when_lan_ip_unavailable(monkeypatch) -> 
     assert msg == "pong"
     assert urls == ["http://127.0.0.1:43210/ping"]
     assert adb_calls == [
+        (("forward", "--list"), None, 5),
         (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
-        (("forward", "--remove", "tcp:43210"), "usb-serial", 5),
+    ]
+
+
+def test_atx_http_ping_reuses_persistent_adb_forward(monkeypatch) -> None:
+    adb_calls: list[tuple[tuple[str, ...], str | None, int]] = []
+    urls: list[str] = []
+
+    def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
+        adb_calls.append((args, serial, timeout))
+        if args == ("forward", "--list"):
+            return "", 0
+        if args == ("forward", "tcp:0", "tcp:7912"):
+            return "43210\n", 0
+        raise AssertionError(f"unexpected adb call: {args!r}")
+
+    def fake_urlopen(url: str, timeout: float):
+        urls.append(url)
+        return _FakeUrlopenResponse()
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(relay_adb, "_run", fake_run)
+    monkeypatch.setattr(relay_adb.urllib.request, "urlopen", fake_urlopen)
+
+    assert relay_adb._atx_http_ping("usb-serial")[0] is True
+    assert relay_adb._atx_http_ping("usb-serial")[0] is True
+
+    assert urls == [
+        "http://127.0.0.1:43210/ping",
+        "http://127.0.0.1:43210/ping",
+    ]
+    assert adb_calls == [
+        (("forward", "--list"), None, 5),
+        (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
     ]
 
 
@@ -219,6 +266,46 @@ def test_atx_http_ping_reports_forward_failure(monkeypatch) -> None:
 
     assert ok is False
     assert msg == "adb forward failed: cannot bind"
+
+
+def test_atx_http_ping_cools_down_repeated_forward_create_failures(monkeypatch) -> None:
+    now = 100.0
+    adb_calls: list[tuple[tuple[str, ...], str | None, int]] = []
+
+    def fake_monotonic() -> float:
+        return now
+
+    def fake_run(*args: str, serial: str | None = None, timeout: int = 30):
+        adb_calls.append((args, serial, timeout))
+        if args == ("forward", "--list"):
+            return "", 0
+        if args == ("forward", "tcp:0", "tcp:7912"):
+            return "cannot bind", 1
+        raise AssertionError(f"unexpected adb call: {args!r}")
+
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(relay_adb, "_run", fake_run)
+    monkeypatch.setattr(relay_adb.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(relay_adb, "_ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS", 5.0)
+
+    ok, msg = relay_adb._atx_http_ping("usb-serial")
+    assert ok is False
+    assert msg == "adb forward failed: cannot bind"
+
+    ok, msg = relay_adb._atx_http_ping("usb-serial")
+    assert ok is False
+    assert msg == "adb forward failed: cannot bind"
+
+    now = 106.0
+    ok, msg = relay_adb._atx_http_ping("usb-serial")
+    assert ok is False
+    assert msg == "adb forward failed: cannot bind"
+
+    assert adb_calls == [
+        (("forward", "--list"), None, 5),
+        (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
+        (("forward", "tcp:0", "tcp:7912"), "usb-serial", 10),
+    ]
 
 
 def test_atx_http_ping_does_not_forward_tcp_serial(monkeypatch) -> None:
@@ -239,28 +326,91 @@ def test_atx_http_ping_does_not_forward_tcp_serial(monkeypatch) -> None:
     assert calls == []
 
 
+def test_apply_u2_stability_settings_batches_adb_shell(monkeypatch) -> None:
+    shell_calls: list[str] = []
+
+    def fake_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
+        shell_calls.append(cmd)
+        return "", 0
+
+    monkeypatch.setattr(relay_adb, "_adb_shell", fake_shell)
+    monkeypatch.setattr(relay_adb, "ensure_u2_input_ime", lambda serial: (True, "ok"))
+
+    relay_adb._apply_u2_stability_settings("serial-1")
+
+    assert len(shell_calls) == 1
+    assert "stay_on_while_plugged_in" in shell_calls[0]
+    assert "accelerometer_rotation" in shell_calls[0]
+
+
+def test_run_u2_recovery_cleanup_batches_shell(monkeypatch) -> None:
+    shell_calls: list[tuple[str, int]] = []
+
+    def fake_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
+        shell_calls.append((cmd, timeout))
+        return "", 0
+
+    monkeypatch.setattr(relay_adb, "_adb_shell", fake_shell)
+
+    relay_adb._run_u2_recovery_cleanup("serial-1", stop_atx=True)
+
+    assert len(shell_calls) == 1
+    script, timeout = shell_calls[0]
+    assert timeout == 12
+    assert "atx-agent server --stop" in script
+    assert f"am force-stop {relay_adb._U2_TEST_PKG}" in script
+    assert f"am force-stop {relay_adb._U2_PKG}" in script
+    assert "pkill -9 -f" in script
+
+
+def test_adb_command_stats_records_command_types(monkeypatch) -> None:
+    def fake_subprocess_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=["adb"],
+            returncode=0,
+            stdout=b"ok\n",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(relay_adb.subprocess, "run", fake_subprocess_run)
+
+    relay_adb._run("shell", "true", serial="serial-1")
+    relay_adb._run("forward", "tcp:0", "tcp:7912", serial="serial-1")
+
+    stats = relay_adb.adb_command_stats(reset=True)
+
+    assert stats["cmd_shell"] == 1
+    assert stats["cmd_forward"] == 1
+    assert stats["lane_default"] == 1
+    assert stats["lane_startup"] == 1
+    assert relay_adb.adb_command_stats() == {}
+
+
 def test_ensure_u2_input_ime_pins_adb_keyboard(monkeypatch) -> None:
     calls: list[str] = []
 
     def fake_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
         calls.append(cmd)
-        if cmd == "ime list -s -a":
-            return relay_adb._U2_ADB_KEYBOARD_IME, 0
-        if cmd == "settings get secure default_input_method":
-            if len([c for c in calls if c == "settings get secure default_input_method"]) == 1:
-                return "com.google.android.inputmethod.latin/.LatinIME", 0
-            return relay_adb._U2_ADB_KEYBOARD_IME, 0
-        return "", 0
+        return (
+            "__DF__pkg=1\n"
+            "__DF__ime=1\n"
+            "__DF__current=com.google.android.inputmethod.latin/.LatinIME\n"
+            f"__DF__final={relay_adb._U2_ADB_KEYBOARD_IME}\n",
+            0,
+        )
 
-    monkeypatch.setattr(relay_adb, "_pkg_installed", lambda serial, package: package == relay_adb._U2_PKG)
     monkeypatch.setattr(relay_adb, "_adb_shell", fake_shell)
 
     ok, msg = relay_adb.ensure_u2_input_ime("serial-1")
 
     assert ok is True
     assert msg == "enabled"
-    assert f"ime enable {relay_adb._U2_ADB_KEYBOARD_IME}" in calls
-    assert f"settings put secure default_input_method {relay_adb._U2_ADB_KEYBOARD_IME}" in calls
+    assert len(calls) == 1
+    assert f"ime enable {relay_adb._U2_ADB_KEYBOARD_IME}" in calls[0]
+    assert (
+        f"settings put secure default_input_method {relay_adb._U2_ADB_KEYBOARD_IME}"
+        in calls[0]
+    )
 
 
 def test_ensure_u2_input_ime_skips_when_already_default(monkeypatch) -> None:
@@ -268,20 +418,21 @@ def test_ensure_u2_input_ime_skips_when_already_default(monkeypatch) -> None:
 
     def fake_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
         calls.append(cmd)
-        if cmd == "ime list -s -a":
-            return relay_adb._U2_ADB_KEYBOARD_IME, 0
-        if cmd == "settings get secure default_input_method":
-            return relay_adb._U2_ADB_KEYBOARD_IME, 0
-        return "", 0
+        return (
+            "__DF__pkg=1\n"
+            "__DF__ime=1\n"
+            f"__DF__current={relay_adb._U2_ADB_KEYBOARD_IME}\n"
+            f"__DF__final={relay_adb._U2_ADB_KEYBOARD_IME}\n",
+            0,
+        )
 
-    monkeypatch.setattr(relay_adb, "_pkg_installed", lambda serial, package: True)
     monkeypatch.setattr(relay_adb, "_adb_shell", fake_shell)
 
     ok, msg = relay_adb.ensure_u2_input_ime("serial-1")
 
     assert ok is True
     assert msg == "already default"
-    assert not any(cmd.startswith("ime enable") for cmd in calls)
+    assert len(calls) == 1
 
 
 def test_relay_bootstrap_u2_install_skips_when_packages_exist_without_local_hash(monkeypatch, tmp_path) -> None:

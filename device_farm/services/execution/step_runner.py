@@ -6,6 +6,7 @@ import threading
 import time
 from typing import Any, Dict, TYPE_CHECKING
 
+from services.campaign.failure_classification import annotate_step_failure
 from services.execution.retry_policy import (
     compute_wait_ms,
     emit_retry_metrics,
@@ -21,23 +22,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_U2_TRANSIENT_REASON = "u2_transient_error"
 _U2_TRANSIENT_AUTO_ATTEMPTS = 3
 _U2_TRANSIENT_BACKOFF_MS = 2500
 _U2_TRANSIENT_BACKOFF_CAP_MS = 10_000
-_U2_TRANSIENT_MARKERS = (
-    _U2_TRANSIENT_REASON,
-    "json-rpc http 502",
-    "json-rpc http 503",
-    "json-rpc http 504",
-    "502 bad gateway",
-    "504 gateway",
-    "uiautomator not connected",
-    "uiautomator not running",
-    "uiautomation not connected",
-    "instrumentation process is not running",
-    "uiautomationservice already registered",
-)
 
 
 def _cancel_event(sc: "ScenarioContext") -> Any:
@@ -107,22 +94,11 @@ def _recovery_timeout_ms(sc: "ScenarioContext", step: Dict[str, Any], idx: int) 
         return 0
 
 
-def _looks_like_u2_transient(step_result: Dict[str, Any]) -> bool:
-    text = " ".join(
-        str(step_result.get(key) or "")
-        for key in ("reason_code", "message", "failed_message")
-    ).lower()
-    return any(marker in text for marker in _U2_TRANSIENT_MARKERS)
-
-
 def _mark_u2_transient(step_result: Dict[str, Any]) -> bool:
     if step_result.get("ok", True):
         return False
-    if not _looks_like_u2_transient(step_result):
-        return False
-    step_result["reason_code"] = _U2_TRANSIENT_REASON
-    step_result["retryable"] = True
-    return True
+    annotate_step_failure(step_result, step_type=str(step_result.get("type") or ""))
+    return step_result.get("failure_class") == "u2_transient"
 
 
 def _u2_transient_wait_ms(attempt: int) -> int:
@@ -258,6 +234,8 @@ def execute_step_with_retry(
             merged["message"] = f"{t}: {sfe}"
             log.warning(f"[{sc.serial}] step#{idx + 1}: {sfe}")
 
+        if not merged.get("ok", True):
+            annotate_step_failure(merged, step_type=str(t or ""))
         u2_transient = _mark_u2_transient(merged)
         if u2_transient and not u2_transient_recovery_started:
             _trigger_u2_transient_recovery(sc)

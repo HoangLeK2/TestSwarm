@@ -98,7 +98,7 @@ export function StepCard({
   return (
     <div
       className={cn(
-        'group cursor-pointer rounded-lg border border-l-[3px] border-border/70 bg-card shadow-sm transition-all',
+        'group cursor-pointer rounded-lg border border-l-[3px] border-border/70 bg-card shadow-sm transition-[background-color,border-color,box-shadow]',
         colorCls,
         selected && 'bg-accent/25 ring-2 ring-primary/35',
         isPickTarget &&
@@ -106,6 +106,7 @@ export function StepCard({
         coordPickActive &&
           'shadow-[0_0_0_1px_rgba(14,165,233,0.35)] ring-2 ring-sky-500/75'
       )}
+      style={{ contain: 'layout paint style' }}
       onClick={onClick}
     >
       {isPickTarget && (

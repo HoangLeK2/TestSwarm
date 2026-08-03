@@ -15,6 +15,7 @@ class _FakeRelayConn:
         self.relay_id = "relay-1"
         self.serials = {"serial-1"}
         self.u2_requests: list[tuple[str, str, str, dict, str, float]] = []
+        self.u2_request_options: list[tuple[str | int | None, int | float | None]] = []
         self.json_requests: list[dict] = []
         self.json_messages: list[dict] = []
         self.after_u2_request = None
@@ -28,10 +29,14 @@ class _FakeRelayConn:
         body: str = "",
         content_type: str = "application/json",
         timeout: float = 30.0,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> dict:
+        parsed_body = json.loads(body) if body else {}
         self.u2_requests.append(
-            (serial, method, path, json.loads(body), content_type, timeout)
+            (serial, method, path, parsed_body, content_type, timeout)
         )
+        self.u2_request_options.append((priority, deadline_ms))
         if self.after_u2_request is not None:
             self.after_u2_request()
         return {
@@ -100,6 +105,34 @@ async def test_u2_batch_coordinate_touch_uses_u2_http_fast_path():
 
 
 @pytest.mark.asyncio
+async def test_u2_http_forwards_priority_and_deadline_to_agent_request():
+    conn = _FakeRelayConn()
+    manager = _manager_with_conn(conn)
+
+    result = await manager.u2_http(
+        "serial-1",
+        "GET",
+        "/dump/hierarchy?compressed=1",
+        timeout=1.5,
+        priority="visible",
+        deadline_ms=1500,
+    )
+
+    assert result["ok"] is True
+    assert conn.u2_requests == [
+        (
+            "serial-1",
+            "GET",
+            "/dump/hierarchy?compressed=1",
+            {},
+            "application/json",
+            1.5,
+        )
+    ]
+    assert conn.u2_request_options == [("visible", 1500)]
+
+
+@pytest.mark.asyncio
 async def test_u2_batch_waits_for_a_transient_relay_reconnect_before_sending():
     manager = AdbRelayManager()
     manager._sync_relay_to_redis = AsyncMock()
@@ -120,6 +153,31 @@ async def test_u2_batch_waits_for_a_transient_relay_reconnect_before_sending():
     result = await asyncio.wait_for(batch_task, timeout=0.5)
     assert result["ok"] is True
     assert len(conn.u2_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_u2_flow_waits_for_a_transient_relay_reconnect_before_sending():
+    manager = AdbRelayManager()
+    manager._sync_relay_to_redis = AsyncMock()
+    conn = _FakeRelayConn()
+
+    flow_task = asyncio.create_task(
+        manager.u2_flow(
+            "serial-1",
+            "swipe_until_found",
+            {"selector": {"text": "OK"}},
+            timeout=1.5,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert not flow_task.done()
+    await manager.register(conn)  # type: ignore[arg-type]
+
+    result = await asyncio.wait_for(flow_task, timeout=0.5)
+    assert result["ok"] is True
+    assert len(conn.json_requests) == 1
+    assert conn.json_requests[0]["type"] == "u2_flow"
 
 
 @pytest.mark.asyncio
@@ -155,12 +213,39 @@ async def test_u2_batch_non_touch_action_uses_agent_batch_path():
         "serial-1",
         [{"op": "dump_hierarchy", "timeout": 4.0}],
         timeout=4.0,
+        priority="visible",
+        deadline_ms=120,
     )
 
     assert conn.u2_requests == []
     assert len(conn.json_requests) == 1
     assert conn.json_requests[0]["type"] == "u2_batch"
     assert conn.json_requests[0]["actions"] == [{"op": "dump_hierarchy", "timeout": 4.0}]
+    assert conn.json_requests[0]["priority"] == "visible"
+    assert conn.json_requests[0]["deadline_ms"] == 120
+
+
+@pytest.mark.asyncio
+async def test_u2_flow_forwards_priority_and_deadline_to_agent():
+    conn = _FakeRelayConn()
+    manager = _manager_with_conn(conn)
+
+    await manager.u2_flow(
+        "serial-1",
+        "swipe_until_found",
+        {"selector": {"text": "OK"}},
+        timeout=4.0,
+        priority="visible",
+        deadline_ms=150,
+    )
+
+    assert conn.u2_requests == []
+    assert len(conn.json_requests) == 1
+    assert conn.json_requests[0]["type"] == "u2_flow"
+    assert conn.json_requests[0]["flow"] == "swipe_until_found"
+    assert conn.json_requests[0]["params"] == {"selector": {"text": "OK"}}
+    assert conn.json_requests[0]["priority"] == "visible"
+    assert conn.json_requests[0]["deadline_ms"] == 150
 
 
 @pytest.mark.asyncio

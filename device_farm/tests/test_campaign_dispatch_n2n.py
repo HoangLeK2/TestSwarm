@@ -426,8 +426,8 @@ async def test_dispatch_large_device_counts_start_workflows_within_latency_budge
     add_devices_to_execution.assert_awaited_once()
     assert add_devices_to_execution.await_args.args[2] == [d.id for d in devices]
     assert start_account_usage.await_count == device_count
-    assert 1 < max_active_workflows <= 50
-    assert 1 < max_active_account_starts <= 50
+    assert 1 < max_active_workflows <= 100
+    assert 1 < max_active_account_starts <= 100
     assert elapsed_ms <= budget_ms, (
         f"{device_count}-device scenario dispatch took {elapsed_ms:.2f}ms, "
         f"above budget {budget_ms:.2f}ms"

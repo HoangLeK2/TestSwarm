@@ -60,6 +60,7 @@ from services.campaign.dlq_message import (
     last_failed_step_for_execution,
     pick_richer_message,
 )
+from services.campaign.failure_classification import classify_campaign_failure
 
 
 def uses_epic04_replay(execution: Any) -> bool:
@@ -125,6 +126,10 @@ async def open_dlq_for_failed_execution(
         failed_step_id = failed_step_id or step_id_from_row
     resolved_error = coalesce_dlq_text(error_msg, failure_reason)
     resolved_reason = pick_richer_message(failure_reason, resolved_error) or resolved_error
+    failure_classification = classify_campaign_failure(
+        step_results[-1] if step_results else None,
+        message=resolved_reason,
+    )
     artifact_refs = _artifact_refs_from_steps(step_results)
     now = datetime.now(timezone.utc)
     execution_org_id = str(getattr(execution, "org_id", None) or "").strip()
@@ -167,6 +172,9 @@ async def open_dlq_for_failed_execution(
                 "device_serial": device_serial,
                 "failed_step_id": failed_step_id,
                 "failure_reason": failure_reason,
+                "failure_class": failure_classification.failure_class,
+                "retry_hint": failure_classification.retry_hint,
+                "operator_summary": failure_classification.operator_summary,
                 "artifact_refs": artifact_refs,
             },
         )
@@ -184,6 +192,9 @@ async def open_dlq_for_failed_execution(
                 "dlq_id": entry.id,
                 "device_serial": device_serial,
                 "failure_reason": failure_reason,
+                "failure_class": failure_classification.failure_class,
+                "retry_hint": failure_classification.retry_hint,
+                "operator_summary": failure_classification.operator_summary,
                 "artifact_refs": artifact_refs,
             },
         )

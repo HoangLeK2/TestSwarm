@@ -23,6 +23,7 @@ import pytest
 
 from core.config import Config
 from runtime.core.device_client import DeviceClient
+from runtime.stream_telemetry import stream_telemetry
 from runtime.transports.scrcpy_receiver import (
     PTS_CONFIG_MASK,
     RelayScrcpyReceiver,
@@ -207,6 +208,18 @@ class TestRelayJpegDemand:
 
 
 class TestH264RelayTelemetry:
+    def test_device_client_h264_video_records_fanout_telemetry(self):
+        stream_telemetry.reset()
+        device = _make_device_client()
+
+        device.on_agent_h264_video(b"keyframe", is_key=True, pts_us=1)
+
+        snapshot = stream_telemetry.snapshot(reset=True)
+        assert snapshot["fanout_frames"] == 1
+        assert snapshot["fanout_keyframes"] == 1
+        assert snapshot["fanout_no_subscriber"] == 1
+        assert snapshot["fanout_max_frame_bytes"] > len(b"keyframe")
+
     def test_first_frame_info_identifies_keyframe(self, caplog):
         device = _make_device_client()
         # A JPEG fallback frame may arrive before the first relay H264 packet.

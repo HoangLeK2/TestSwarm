@@ -83,8 +83,8 @@ if _connection_budget.limit is not None:
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=max(1, _env_int("DB_POOL_SIZE", 8)),
-    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 2)),
+    pool_size=max(1, _env_int("DB_POOL_SIZE", 12)),
+    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 3)),
     pool_timeout=max(1, _env_int("DB_POOL_TIMEOUT", 5)),
     pool_pre_ping=True,
     pool_recycle=300,

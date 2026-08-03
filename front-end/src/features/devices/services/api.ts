@@ -3,6 +3,9 @@ import { tokenStorage } from '@/lib/token-storage';
 import type { Device, DeviceEvent, Task } from '../types';
 import {
   type FetchHierarchyOptions,
+  buildHierarchyBackoffKey,
+  buildHierarchyRequestKey,
+  buildHierarchyUrl,
   HIERARCHY_FAILURE_COOLDOWN_MS,
   HIERARCHY_REQUEST_TIMEOUT_MS,
   shouldBackoffHierarchyError,
@@ -161,14 +164,15 @@ export async function fetchHierarchy(
   refresh = false,
   options?: FetchHierarchyOptions
 ): Promise<string> {
-  const key = serial;
+  const key = buildHierarchyRequestKey(serial, refresh, options);
+  const backoffKey = buildHierarchyBackoffKey(serial, options);
   const now = Date.now();
   // A failing hierarchy dump can block backend relay/u2 for seconds. Background
   // callers back off so bootstrap/interaction pulses do not starve screen
   // streaming while uiautomator2 is recovering. Manual refresh bypasses this.
   if (
     shouldRespectHierarchyBackoff(options) &&
-    (hierarchyFailureUntil.get(key) ?? 0) > now
+    (hierarchyFailureUntil.get(backoffKey) ?? 0) > now
   )
     return '';
   const reuseInFlight = shouldReuseHierarchyInFlight(options);
@@ -186,20 +190,18 @@ export async function fetchHierarchy(
     } catch {
       /* module not available — fall through */
     }
-    const url = refresh
-      ? `/devices/${encodeURIComponent(serial)}/hierarchy?refresh=1`
-      : `/devices/${encodeURIComponent(serial)}/hierarchy`;
+    const url = buildHierarchyUrl(serial, refresh, options);
     try {
       const { data } = await farmApi.get<string>(url, {
         responseType: 'text',
         timeout: HIERARCHY_REQUEST_TIMEOUT_MS
       });
-      hierarchyFailureUntil.delete(key);
+      hierarchyFailureUntil.delete(backoffKey);
       return typeof data === 'string' ? data : '';
     } catch (err: unknown) {
       if (shouldBackoffHierarchyError(err)) {
         hierarchyFailureUntil.set(
-          key,
+          backoffKey,
           Date.now() + HIERARCHY_FAILURE_COOLDOWN_MS
         );
         return '';

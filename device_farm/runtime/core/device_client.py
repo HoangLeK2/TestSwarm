@@ -34,12 +34,13 @@ import time
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 import re
 import xml.etree.ElementTree as ET
 from runtime.xml_utils import parse_xml, trim_hierarchy_xml as _trim_xml, XML_PARSE_ERRORS
 
 from core.config import Config
+from runtime.stream_telemetry import stream_telemetry
 from runtime.transports.scrcpy_control import ScrcpyControl
 from runtime.transports.scrcpy_receiver import ScrcpyReceiver
 from runtime.transports.stf_client import (
@@ -685,6 +686,7 @@ class DeviceClient:
             return
         if not self._loop:
             return
+        fanout_started = time.perf_counter()
         width = max(0, min(w or self.screen_width, 0xFFFF))
         height = max(0, min(h or self.screen_height, 0xFFFF))
         flags = 0x01 if changed else 0x00
@@ -714,6 +716,12 @@ class DeviceClient:
         else:
             for q in queues:
                 loop.call_soon_threadsafe(_sync_put, q, msg)
+        stream_telemetry.record_fanout(
+            subscribers=len(queues),
+            frame_bytes=len(msg),
+            elapsed_ms=(time.perf_counter() - fanout_started) * 1000.0,
+            is_config=True,
+        )
 
     def on_agent_h264_video(self, avcc_data: bytes, is_key: bool, pts_us: int) -> None:
         """Relay H264 AVCC video frame to browser as binary 0x11 frame.
@@ -721,6 +729,7 @@ class DeviceClient:
         """
         if not self._loop:
             return
+        fanout_started = time.perf_counter()
         # Mark that scrcpy has started delivering — APK JPEG fallback will stop now.
         first_h264_frame = self._h264_fps_t0 == 0.0
         self._last_frame_time = time.monotonic()
@@ -783,6 +792,12 @@ class DeviceClient:
         else:
             for q in queues:
                 loop.call_soon_threadsafe(_sync_put, q, msg)
+        stream_telemetry.record_fanout(
+            subscribers=len(queues),
+            frame_bytes=len(msg),
+            elapsed_ms=(time.perf_counter() - fanout_started) * 1000.0,
+            is_key=is_key,
+        )
 
     def on_agent_status(self, payload: Dict[str, Any]) -> None:
         if "brand" in payload:
@@ -1067,7 +1082,13 @@ class DeviceClient:
 
             touch_timeout = max(0.5, min(float(timeout), 6.0))
             fut = asyncio.run_coroutine_threadsafe(
-                relay.u2_batch(actual, actions, timeout=touch_timeout),
+                relay.u2_batch(
+                    actual,
+                    actions,
+                    timeout=touch_timeout,
+                    priority="visible",
+                    deadline_ms=int(touch_timeout * 1000),
+                ),
                 self._loop,
             )
             res = fut.result(timeout=touch_timeout + 0.5)
@@ -1853,8 +1874,10 @@ class DeviceClient:
         *,
         stop_before: bool = False,
         use_monkey: bool = False,
+        package_fallbacks: Sequence[str] | None = None,
+        adb_fallback: bool = True,
     ) -> None:
-        """Launch app reliably: prefer ADB relay, then U2, then agent intent."""
+        """Launch app reliably: prefer U2 batch, then ADB relay, then local U2/agent."""
         pkg = (package or "").strip()
         comp = (component or "").strip()
         if pkg and "/" in pkg and not comp:
@@ -1863,41 +1886,54 @@ class DeviceClient:
             pkg = pkg.split("/", 1)[0].strip()
         if not pkg and not comp:
             return
-        if self._batch_enabled() and pkg:
+        package_candidates: List[str] = []
+        for candidate in [pkg, *(package_fallbacks or [])]:
+            cleaned = str(candidate or "").strip()
+            if cleaned and "/" not in cleaned and cleaned not in package_candidates:
+                package_candidates.append(cleaned)
+        if not package_candidates and pkg:
+            package_candidates = [pkg]
+
+        if self._batch_enabled() and package_candidates:
             try:
-                start_action: Dict[str, Any] = {
-                    "op": "app_start",
-                    "package": pkg,
-                    "stop_before": stop_before,
-                    "use_monkey": use_monkey,
-                }
-                if comp and "/" in comp:
-                    activity = comp.split("/", 1)[1].strip()
-                    if activity:
-                        start_action["activity"] = activity
-                results = self.u2_batch(
-                    [
-                        start_action,
-                        {
-                            "op": "app_wait",
-                            "package": pkg,
-                            "front": True,
-                            "timeout": 8.0,
-                        },
-                    ],
-                    timeout=15.0,
-                )
-                app_wait = results[-1] if results else {}
-                if app_wait.get("ok") and int(app_wait.get("value") or 0) > 0:
-                    self._log(
-                        f"launch_app route=agent_boot_u2_batch pkg={pkg} component={comp or '-'}"
+                for candidate_pkg in package_candidates:
+                    start_action: Dict[str, Any] = {
+                        "op": "app_start",
+                        "package": candidate_pkg,
+                        "stop_before": stop_before,
+                        "use_monkey": use_monkey,
+                    }
+                    candidate_comp = comp if candidate_pkg == pkg else ""
+                    if candidate_comp and "/" in candidate_comp:
+                        activity = candidate_comp.split("/", 1)[1].strip()
+                        if activity:
+                            start_action["activity"] = activity
+                    results = self.u2_batch(
+                        [
+                            start_action,
+                            {
+                                "op": "app_wait",
+                                "package": candidate_pkg,
+                                "front": True,
+                                "timeout": 8.0,
+                            },
+                        ],
+                        timeout=15.0,
+                        priority="visible",
+                        deadline_ms=3000,
                     )
-                    return
-                self._log(
-                    f"launch_app via u2_batch did not reach foreground: pkg={pkg} "
-                    f"component={comp or '-'}",
-                    level=logging.WARNING,
-                )
+                    app_wait = results[-1] if results else {}
+                    if app_wait.get("ok") and int(app_wait.get("value") or 0) > 0:
+                        self._log(
+                            "launch_app route=agent_boot_u2_batch "
+                            f"pkg={candidate_pkg} component={candidate_comp or '-'}"
+                        )
+                        return
+                    self._log(
+                        "launch_app via u2_batch did not reach foreground: "
+                        f"pkg={candidate_pkg} component={candidate_comp or '-'}",
+                        level=logging.WARNING,
+                    )
             except Exception as exc:
                 self._log(
                     f"launch_app via u2_batch failed: {exc}",
@@ -1908,12 +1944,12 @@ class DeviceClient:
                 self.stop_app(pkg)
             except Exception as exc:
                 self._log(f"launch_app stop_before failed: {exc}", level=logging.DEBUG)
-        # Path 1 (preferred): direct ADB shell via gRPC relay.
+        # Path 2: direct ADB shell via gRPC relay.
         # This is deterministic and independent from APK process privileges.
         try:
             from runtime.transports.adb_relay_server import get_relay_manager
             relay = get_relay_manager()
-            if relay and self._loop:
+            if adb_fallback and relay and self._loop:
                 serial_candidates: List[str] = []
                 for s in (self._resolve_relay_serial(), self._adb_serial, self.serial):
                     ss = (s or "").strip()
@@ -1921,27 +1957,6 @@ class DeviceClient:
                         serial_candidates.append(ss)
                 if not serial_candidates:
                     serial_candidates = [self.serial]
-                launch_cmds: List[str] = []
-                if use_monkey and pkg:
-                    launch_cmds.append(
-                        f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1"
-                    )
-                elif comp and "/" in comp:
-                    launch_cmds.append(f"am start -W -n {comp}")
-                elif pkg:
-                    launch_cmds.append(
-                        "am start -W"
-                        " -a android.intent.action.MAIN"
-                        " -c android.intent.category.LAUNCHER"
-                        f" -p {pkg}"
-                    )
-                    if not use_monkey:
-                        launch_cmds.append(
-                            "monkey"
-                            f" -p {pkg}"
-                            " -c android.intent.category.LAUNCHER"
-                            " 1"
-                        )
 
                 def _looks_failed(out: str | None) -> bool:
                     text = (out or "").strip().lower()
@@ -1958,61 +1973,93 @@ class DeviceClient:
                     )
                     return any(marker in text for marker in failure_markers)
 
-                total = len(serial_candidates) * len(launch_cmds)
+                total = (
+                    len(serial_candidates)
+                    * len(package_candidates)
+                    * (1 if use_monkey else 2)
+                )
                 attempt = 0
                 for target_serial in serial_candidates:
                     if not relay.relay_for_serial(target_serial):
                         continue
-                    for cmd in launch_cmds:
-                        attempt += 1
-                        fut = asyncio.run_coroutine_threadsafe(
-                            relay.adb_shell(target_serial, cmd, timeout=20.0),
-                            self._loop,
-                        )
-                        out = fut.result(timeout=25.0)
-                        if _looks_failed(out):
+                    for candidate_pkg in package_candidates:
+                        candidate_comp = comp if candidate_pkg == pkg else ""
+                        launch_cmds: List[str] = []
+                        if use_monkey and candidate_pkg:
+                            launch_cmds.append(
+                                f"monkey -p {candidate_pkg} -c android.intent.category.LAUNCHER 1"
+                            )
+                        elif candidate_comp and "/" in candidate_comp:
+                            launch_cmds.append(f"am start -W -n {candidate_comp}")
+                        elif candidate_pkg:
+                            launch_cmds.append(
+                                "am start -W"
+                                " -a android.intent.action.MAIN"
+                                " -c android.intent.category.LAUNCHER"
+                                f" -p {candidate_pkg}"
+                            )
+                            if not use_monkey:
+                                launch_cmds.append(
+                                    "monkey"
+                                    f" -p {candidate_pkg}"
+                                    " -c android.intent.category.LAUNCHER"
+                                    " 1"
+                                )
+                        for cmd in launch_cmds:
+                            attempt += 1
+                            fut = asyncio.run_coroutine_threadsafe(
+                                relay.adb_shell(target_serial, cmd, timeout=20.0),
+                                self._loop,
+                            )
+                            out = fut.result(timeout=25.0)
+                            if _looks_failed(out):
+                                self._log(
+                                    (
+                                        "launch_app via adb relay attempt "
+                                        f"{attempt}/{total} failed: "
+                                        f"serial={target_serial} pkg={candidate_pkg} "
+                                        f"component={candidate_comp or '-'} cmd={cmd} out={out or '-'}"
+                                    ),
+                                    level=logging.WARNING,
+                                )
+                                continue
                             self._log(
                                 (
-                                    f"launch_app via adb relay attempt {attempt}/{total} failed: "
-                                    f"serial={target_serial} pkg={pkg} component={comp or '-'} "
-                                    f"cmd={cmd} out={out or '-'}"
-                                ),
-                                level=logging.WARNING,
+                                    "launch_app via adb relay success: "
+                                    f"serial={target_serial} "
+                                    f"pkg={candidate_pkg} component={candidate_comp or '-'} cmd={cmd}"
+                                )
                             )
-                            continue
-                        self._log(
-                            (
-                                f"launch_app via adb relay success: serial={target_serial} "
-                                f"pkg={pkg} component={comp or '-'} cmd={cmd}"
-                            )
-                        )
-                        return
+                            return
         except Exception as exc:
             self._log(f"launch_app via adb relay failed: {exc}", level=logging.WARNING)
-        # Path 1 (preferred): launch via u2/adb because we can target explicit activity
+        # Path 3: launch via local u2/adb because we can target explicit activity
         # and verify foreground package deterministically.
         with self._u2_lock:
             u2 = self._u2
-        if u2 is not None and pkg:
-            try:
-                activity: str | None = None
-                if comp and "/" in comp:
-                    activity = comp.split("/", 1)[1].strip() or None
-                u2.app_start(
-                    pkg,
-                    activity=activity,
-                    stop=stop_before,
-                    use_monkey=use_monkey,
-                )
-                if not u2.app_wait(pkg, timeout=5.0):
-                    self._log(
-                        f"launch_app via u2 did not reach foreground: pkg={pkg} component={comp or '-'}",
-                        level=logging.WARNING,
+        if u2 is not None and package_candidates:
+            for candidate_pkg in package_candidates:
+                try:
+                    activity: str | None = None
+                    candidate_comp = comp if candidate_pkg == pkg else ""
+                    if candidate_comp and "/" in candidate_comp:
+                        activity = candidate_comp.split("/", 1)[1].strip() or None
+                    u2.app_start(
+                        candidate_pkg,
+                        activity=activity,
+                        stop=stop_before,
+                        use_monkey=use_monkey,
                     )
-                else:
-                    return
-            except Exception as exc:
-                self._log(f"launch_app via u2 failed: {exc}", level=logging.WARNING)
+                    if not u2.app_wait(candidate_pkg, timeout=5.0):
+                        self._log(
+                            "launch_app via u2 did not reach foreground: "
+                            f"pkg={candidate_pkg} component={candidate_comp or '-'}",
+                            level=logging.WARNING,
+                        )
+                    else:
+                        return
+                except Exception as exc:
+                    self._log(f"launch_app via u2 failed: {exc}", level=logging.WARNING)
         # WsAgent mode: use the Java intent approach (getLaunchIntentForPackage +
         # queryIntentActivities fallback).  Do NOT use am start via shell here —
         # Runtime.exec() from app UID (non-shell) is blocked by assertPackageMatchesCallingUid
@@ -2198,7 +2245,12 @@ class DeviceClient:
         if not self._batch_enabled():
             return False
         try:
-            results = self.u2_batch([{"op": "open_url", "url": url}], timeout=10.0)
+            results = self.u2_batch(
+                [{"op": "open_url", "url": url}],
+                timeout=10.0,
+                priority="visible",
+                deadline_ms=2000,
+            )
             if results and results[0].get("ok"):
                 self._log(f"open_url route=agent_boot_u2_batch url={url[:120]}")
                 return True
@@ -2464,9 +2516,20 @@ class DeviceClient:
             self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
         return xml
 
-    def _hierarchy_via_u2_batch(self, timeout: float = 2.5) -> Optional[str]:
+    def _hierarchy_via_u2_batch(
+        self,
+        timeout: float = 2.5,
+        *,
+        force_refresh: bool = False,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
+    ) -> Optional[str]:
         """Fallback hierarchy through agent-boot u2_batch when a11y is unavailable."""
-        xml = self._hierarchy_via_relay_http_dump(timeout=timeout)
+        xml = self._hierarchy_via_relay_http_dump(
+            timeout=timeout,
+            priority=priority,
+            deadline_ms=deadline_ms,
+        )
         if xml:
             return xml
         if not self._batch_enabled():
@@ -2476,8 +2539,15 @@ class DeviceClient:
             "compressed": self._U2_HIERARCHY_COMPRESSED,
             "timeout": self._U2_HIERARCHY_TIMEOUT,
         }
+        if force_refresh:
+            action["force_fresh_xml"] = True
         try:
-            results = self.u2_batch([action], timeout=max(1.0, float(timeout)))
+            results = self.u2_batch(
+                [action],
+                timeout=max(1.0, float(timeout)),
+                priority=priority,
+                deadline_ms=deadline_ms,
+            )
         except Exception as exc:
             self._log(f"u2_batch dump_hierarchy failed: {exc}", level=logging.WARNING)
             return None
@@ -2499,7 +2569,13 @@ class DeviceClient:
         self._hierarchy_last_u2_failure_kind = ""
         return xml_norm
 
-    def _hierarchy_via_relay_http_dump(self, timeout: float = 2.5) -> Optional[str]:
+    def _hierarchy_via_relay_http_dump(
+        self,
+        timeout: float = 2.5,
+        *,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
+    ) -> Optional[str]:
         """Fast hierarchy fallback: direct atx-agent HTTP dump through relay."""
         if self._loop is None:
             return None
@@ -2524,6 +2600,8 @@ class DeviceClient:
                     "",
                     "application/json",
                     http_timeout,
+                    priority=priority,
+                    deadline_ms=deadline_ms,
                 ),
                 self._loop,
             )
@@ -2626,7 +2704,13 @@ class DeviceClient:
             )
             self._recover_u2_ws_mode()
 
-    def hierarchy_xml(self, force_refresh: bool = False) -> Optional[str]:
+    def hierarchy_xml(
+        self,
+        force_refresh: bool = False,
+        *,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
+    ) -> Optional[str]:
         """
         Dump UI hierarchy XML. Cached 2s for polling.
 
@@ -2644,10 +2728,6 @@ class DeviceClient:
                 level=logging.DEBUG,
             )
             return None
-        if force_refresh and self._hierarchy_cache is not None:
-            ts, xml = self._hierarchy_cache
-            if now - ts < self._HIERARCHY_FORCE_DEBOUNCE_S and xml:
-                return xml
         if not force_refresh and self._hierarchy_cache is not None:
             ts, xml = self._hierarchy_cache
             if now - ts < self._hierarchy_cache_ttl and xml:
@@ -2704,7 +2784,12 @@ class DeviceClient:
             # Fallback: agent-boot u2_batch. A11y is intentionally skipped
             # here because it is unreliable on this fleet and adds seconds of
             # dead wait when the accessibility service is not bound.
-            xml = self._hierarchy_via_u2_batch(timeout=self._U2_HIERARCHY_TIMEOUT)
+            xml = self._hierarchy_via_u2_batch(
+                timeout=self._U2_HIERARCHY_TIMEOUT,
+                force_refresh=force_refresh,
+                priority=priority,
+                deadline_ms=deadline_ms,
+            )
             if xml and not self._is_empty_hierarchy(xml):
                 return xml
 
@@ -2764,7 +2849,6 @@ class DeviceClient:
     _U2_HIERARCHY_TIMEOUT    = max(1.0, _env_float("U2_HIERARCHY_TIMEOUT", 2.5))
     _A11Y_HIERARCHY_TIMEOUT  = max(1.0, _env_float("A11Y_HIERARCHY_TIMEOUT", 4.0))
     _HIERARCHY_LOCK_WAIT_S   = 0.15  # seconds; fail fast when another dump is running
-    _HIERARCHY_FORCE_DEBOUNCE_S = 0.35  # seconds; collapse refresh storms
     _HIERARCHY_STALE_CACHE_TTL_S = 20.0  # soften transient relay/u2/a11y outages
     _HIERARCHY_FAILURE_BACKOFF_S = 2.5  # collapse repeated 503 polling during recovery
 
@@ -2829,7 +2913,14 @@ class DeviceClient:
         """Call after tap_selector etc. so next hierarchy_xml() fetches fresh."""
         self._hierarchy_cache = None
 
-    def hit_test_selector(self, x: int, y: int) -> Optional[Dict[str, str]]:
+    def hit_test_selector(
+        self,
+        x: int,
+        y: int,
+        *,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
+    ) -> Optional[Dict[str, str]]:
         """
         Infer stable selector at pixel (x, y) from current UI XML.
 
@@ -2842,9 +2933,17 @@ class DeviceClient:
              > non-unique rid → xpath with clickable + instance
              > class name (non-container) | xpath pinned by class + bounds.
         """
-        xml = self.hierarchy_xml(force_refresh=False)
+        xml = self.hierarchy_xml(
+            force_refresh=False,
+            priority=priority,
+            deadline_ms=deadline_ms,
+        )
         if not xml:
-            xml = self.hierarchy_xml(force_refresh=True)
+            xml = self.hierarchy_xml(
+                force_refresh=True,
+                priority=priority,
+                deadline_ms=deadline_ms,
+            )
         if not xml:
             return None
 
@@ -3850,16 +3949,37 @@ class DeviceClient:
         actions: list,
         timeout: float = 30.0,
         cancel_event: Optional[threading.Event] = None,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> list:
         """Pipeline N primitive u2 ops in a single RPC. Raises if not enabled."""
         if not self._batch_enabled():
             raise RuntimeError("u2 batch not available for this device")
-        return self._u2_batch.batch(actions, timeout=timeout, cancel_event=cancel_event)
+        return self._u2_batch.batch(
+            actions,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            priority=priority,
+            deadline_ms=deadline_ms,
+        )
 
-    def u2_flow(self, name: str, params: dict, timeout: float = 30.0) -> dict:
+    def u2_flow(
+        self,
+        name: str,
+        params: dict,
+        timeout: float = 30.0,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
+    ) -> dict:
         """Run a high-level u2 flow, preferring agent-boot batch/flow relay."""
         if self._batch_enabled() and callable(getattr(self._u2_batch, "flow", None)):
-            return self._u2_batch.flow(name, params, timeout=timeout)
+            return self._u2_batch.flow(
+                name,
+                params,
+                timeout=timeout,
+                priority=priority,
+                deadline_ms=deadline_ms,
+            )
         with self._u2_lock:
             u2 = self._u2
         flow = getattr(u2, "flow", None)
@@ -4721,6 +4841,13 @@ class DeviceClient:
                         )
                         self._mark_recovery_end("atx_restarted_via_agent_boot", relay_serial=actual_serial)
                     else:
+                        if not relay.relay_for_serial(actual_serial):
+                            self._log(
+                                f"atx-agent restart skipped recovery poll for {actual_serial} "
+                                f"— relay disconnected",
+                                level=logging.WARNING,
+                            )
+                            return
                         self._log(
                             f"atx-agent restart via agent-boot failed for {actual_serial} "
                             f"— starting recovery poll",
@@ -4921,6 +5048,7 @@ class DeviceClient:
     def publish_frame(self, jpeg_bytes: bytes) -> None:
         if not self._loop:
             return
+        fanout_started = time.perf_counter()
         if LOW_BW_MODE:
             self._frame_seq += 1
             if self._frame_seq % LOW_BW_FRAME_SKIP != 0:
@@ -4941,6 +5069,11 @@ class DeviceClient:
             # call_soon_threadsafe is cheaper than run_coroutine_threadsafe:
             # no Future/Task allocation, just schedules a callback directly.
             loop.call_soon_threadsafe(_sync_put, q, msg)
+        stream_telemetry.record_fanout(
+            subscribers=len(queues),
+            frame_bytes=len(msg),
+            elapsed_ms=(time.perf_counter() - fanout_started) * 1000.0,
+        )
 
     async def wait_for_stream_update(self, last_version: int) -> None:
         await self._latest_stream.wait_for_update(last_version)

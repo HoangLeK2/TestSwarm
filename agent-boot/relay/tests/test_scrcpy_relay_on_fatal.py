@@ -16,9 +16,10 @@ import pytest
 
 import relay.scrcpy_relay as mod
 from relay.scrcpy_relay import ScrcpyRelaySession
+from relay.video_packet import VideoPacket
 
 
-def _make_session(on_fatal) -> ScrcpyRelaySession:
+def _make_session(on_fatal, on_health=None) -> ScrcpyRelaySession:
     loop = asyncio.new_event_loop()
     return ScrcpyRelaySession(
         serial="test-serial",
@@ -29,6 +30,7 @@ def _make_session(on_fatal) -> ScrcpyRelaySession:
         send_queue=asyncio.Queue(),
         loop=loop,
         on_fatal=on_fatal,
+        on_health=on_health,
     )
 
 
@@ -93,6 +95,43 @@ def test_streaming_health_requires_handshake_and_clears_with_sockets():
     assert session.is_streaming() is False
 
 
+def test_capture_reset_storm_emits_health_once(monkeypatch):
+    health_calls: list[tuple[str, str]] = []
+    session = _make_session(
+        lambda _serial, _reason: None,
+        on_health=lambda serial, reason: health_calls.append((serial, reason)),
+    )
+    monkeypatch.setattr(mod, "SCRCPY_CAPTURE_RESET_STORM_WINDOW_S", 30)
+    monkeypatch.setattr(mod, "SCRCPY_CAPTURE_RESET_STORM_MAX", 3)
+
+    session._record_capture_reset()
+    session._record_capture_reset()
+    assert health_calls == []
+
+    session._record_capture_reset()
+    session._record_capture_reset()
+
+    assert health_calls == [("test-serial", "capture_reset_storm")]
+
+
+def test_stream_error_storm_emits_health_once(monkeypatch):
+    health_calls: list[tuple[str, str]] = []
+    session = _make_session(
+        lambda _serial, _reason: None,
+        on_health=lambda serial, reason: health_calls.append((serial, reason)),
+    )
+    monkeypatch.setattr(mod, "SCRCPY_STREAM_ERROR_STORM_WINDOW_S", 60)
+    monkeypatch.setattr(mod, "SCRCPY_STREAM_ERROR_STORM_MAX", 2)
+
+    session._record_stream_error()
+    assert health_calls == []
+
+    session._record_stream_error()
+    session._record_stream_error()
+
+    assert health_calls == [("test-serial", "stream_error_storm")]
+
+
 def test_stop_during_server_start_does_not_leave_late_scrcpy_server():
     """A stop racing _start_scrcpy_server must not let the old thread keep streaming."""
     fatal_calls: list[tuple[str, str]] = []
@@ -135,6 +174,39 @@ def test_stop_during_server_start_does_not_leave_late_scrcpy_server():
     assert fatal_calls == []
 
 
+def test_handshake_requests_initial_idr_when_control_socket_is_ready():
+    session = _make_session(lambda _serial, _reason: None)
+    session._running = True
+    calls = iter(
+        [
+            b"\x00",
+            b"test-device".ljust(64, b"\x00"),
+            struct.pack(">III", 0, 720, 1280),
+            RuntimeError("stop"),
+        ]
+    )
+
+    def fake_recvall(_sock, _n):
+        value = next(calls)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    with patch.object(
+        session, "_connect_with_retry", return_value=_FakeSocket()
+    ), patch.object(
+        mod, "_recvall", side_effect=fake_recvall
+    ), patch.object(
+        select, "select", return_value=([_FakeSocket()], [], [])
+    ), patch.object(
+        session, "request_recovery_keyframe", return_value=True
+    ) as request_keyframe:
+        with pytest.raises(RuntimeError, match="stop"):
+            session._connect_and_stream()
+
+    request_keyframe.assert_called_once()
+
+
 def test_config_packets_do_not_reset_no_frame_watchdog():
     fatal_calls: list[tuple[str, str]] = []
     session = _make_session(lambda s, r: fatal_calls.append((s, r)))
@@ -159,12 +231,12 @@ def test_config_packets_do_not_reset_no_frame_watchdog():
             raise value
         return value
 
-    times = iter([0.0, 21.0])
+    times = iter([0.0, 0.0, 0.0, 21.0])
 
     with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
          patch.object(mod, "_recvall", side_effect=fake_recvall), \
          patch.object(select, "select", return_value=([_FakeSocket()], [], [])), \
-         patch.object(mod.time, "monotonic", side_effect=lambda: next(times)), \
+         patch.object(mod.time, "monotonic", side_effect=lambda: next(times, 21.0)), \
          patch.object(mod, "_FRAME_TIMEOUT", 20.0):
         with pytest.raises(RuntimeError, match="frame timeout"):
             session._connect_and_stream()
@@ -199,9 +271,10 @@ def test_idle_after_first_video_frame_does_not_auto_request_idr():
     times = iter([0.0, 1.0])
     idr_requests = 0
 
-    def fake_request_idr():
+    def fake_request_idr(**_kwargs):
         nonlocal idr_requests
         idr_requests += 1
+        return True
 
     with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
          patch.object(mod, "_recvall", side_effect=fake_recvall), \
@@ -212,6 +285,43 @@ def test_idle_after_first_video_frame_does_not_auto_request_idr():
             session._connect_and_stream()
 
     assert idr_requests == 0
+
+
+def test_prepare_video_packet_emits_transport_neutral_typed_packet():
+    video_data = b"\x00\x00\x00\x01\x65idr"
+    packet = mod.prepare_video_packet(
+        serial="test-serial",
+        annexb=video_data,
+        is_config=False,
+        pts_us=123,
+        width=720,
+        height=1280,
+    )
+
+    assert isinstance(packet, VideoPacket)
+    assert packet.serial == "test-serial"
+    assert packet.is_key is True
+    assert packet.pts_us == 123
+
+
+def test_prepare_video_packet_detects_idr_after_aud():
+    video_data = (
+        b"\x00\x00\x00\x01\x09\xf0"
+        b"\x00\x00\x00\x01\x65idr"
+    )
+    packet = mod.prepare_video_packet(
+        serial="test-serial",
+        annexb=video_data,
+        is_config=False,
+        pts_us=123,
+    )
+
+    assert isinstance(packet, VideoPacket)
+    assert packet.is_key is True
+    assert packet.data == (
+        struct.pack(">I", 2) + b"\x09\xf0"
+        + struct.pack(">I", 4) + b"\x65idr"
+    )
 
 
 def test_idr_recovery_after_first_video_frame_times_out_if_no_frame_returns():
@@ -242,17 +352,18 @@ def test_idr_recovery_after_first_video_frame_times_out_if_no_frame_returns():
             raise value
         return value
 
-    times = iter([0.0, 1.0, 2.0, 3.0, 10.0])
+    times = iter([0.0, 1.0, 2.0, 3.0, 10.0, 16.0])
     idr_requests = 0
 
-    def fake_request_idr():
+    def fake_request_idr(**_kwargs):
         nonlocal idr_requests
         idr_requests += 1
+        return True
 
     with patch.object(session, "_connect_with_retry", return_value=_FakeSocket()), \
          patch.object(mod, "_recvall", side_effect=fake_recvall), \
          patch.object(select, "select", return_value=([_FakeSocket()], [], [])), \
-         patch.object(mod.time, "monotonic", side_effect=lambda: next(times, 9.0)), \
+         patch.object(mod.time, "monotonic", side_effect=lambda: next(times, 16.0)), \
          patch.object(mod, "_FRAME_TIMEOUT", 5.0), \
          patch.object(mod, "_IDR_REQUEST_MIN_GAP", 1.0), \
          patch.object(session, "_request_idr", side_effect=fake_request_idr):
@@ -260,6 +371,59 @@ def test_idr_recovery_after_first_video_frame_times_out_if_no_frame_returns():
             session._connect_and_stream()
 
     assert idr_requests >= 1
+
+
+def test_stream_stats_measure_fps_and_idr_recovery_latency():
+    session = _make_session(lambda _serial, _reason: None)
+    session._running = True
+
+    session.record_idr_request(now=10.0)
+    session.record_video_frame(is_key=True, now=10.075)
+    stats = session.stats_snapshot(reset=True, now=10.100)
+
+    assert stats["frames"] == 1
+    assert stats["fps_x100"] > 0
+    assert stats["idr_requests"] == 1
+    assert stats["idr_recoveries"] == 1
+    assert stats["idr_recovery_max_ms"] == 75
+    assert stats["idr_recovery_p95_ms"] == 75
+
+    # Reset advances to the exact values observed above; events recorded
+    # afterward must appear in the next interval rather than being lost.
+    session.record_idr_request(now=11.0)
+    session.record_video_frame(is_key=True, now=11.050)
+    next_stats = session.stats_snapshot(reset=True, now=11.100)
+
+    assert next_stats["frames"] == 1
+    assert next_stats["idr_requests"] == 1
+    assert next_stats["idr_recoveries"] == 1
+    assert next_stats["idr_recovery_max_ms"] == 50
+    assert next_stats["idr_recovery_p95_ms"] == 50
+
+
+def test_mark_idr_needed_stays_pending_until_rate_limit_allows_send():
+    session = _make_session(lambda _serial, _reason: None)
+    session._running = True
+    session.notify_downstream_drop()
+
+    assert session.request_pending_idr_if_due(1.0) is False
+    assert session.recovery_pending is True
+    with pytest.raises(RuntimeError, match="IDR control unavailable"):
+        session.request_pending_idr_if_due(4.0)
+    assert session.recovery_pending is True
+
+
+def test_prepare_video_packet_suppresses_delta_during_recovery():
+    video_data = b"\x00\x00\x00\x01\x61delta"
+    packet = mod.prepare_video_packet(
+        serial="test-serial",
+        annexb=video_data,
+        is_config=False,
+        pts_us=1,
+        suppress_deltas=True,
+    )
+
+    assert packet is None
 
 
 def test_on_fatal_not_fired_on_keyboard_interrupt():

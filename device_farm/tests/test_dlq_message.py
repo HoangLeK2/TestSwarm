@@ -75,3 +75,21 @@ def test_sanitize_operator_dlq_text_collapses_direct_json_rpc_502():
         "run_scenario: sub-scenario 'abc' failed — "
         "loop: iteration 2 failed — u2_transient_error"
     )
+
+
+def test_failure_from_step_results_preserves_classified_metadata_message():
+    step_id, reason = failure_from_step_results(
+        [
+            {
+                "ok": False,
+                "index": 4,
+                "failure_class": "device_lost",
+                "reason_code": "device_lost",
+                "message": "device offline",
+            }
+        ],
+        None,
+    )
+
+    assert step_id == "4"
+    assert reason == "device offline"

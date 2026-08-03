@@ -468,6 +468,8 @@ def _parse_fb_post_snapshots(
         "frame_posts_returned": frame_posts_returned,
         "posts_returned": len(deduped),
     }
+    if opened and isinstance(opened, dict):
+        diagnostic.setdefault("opened_post", opened)
     return deduped, diagnostic
 
 

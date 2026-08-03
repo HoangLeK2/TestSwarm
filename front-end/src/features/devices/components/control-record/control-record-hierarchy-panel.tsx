@@ -238,8 +238,12 @@ export function ControlRecordHierarchyPanel({
         <button
           type='button'
           onClick={onToggleCollapsed}
-          className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+          className={cn(
+            'relative z-10 flex shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+            collapsed ? 'w-7' : 'w-4'
+          )}
           title={collapsed ? t('expandHierarchy') : t('collapseHierarchy')}
+          aria-label={collapsed ? t('expandHierarchy') : t('collapseHierarchy')}
         >
           {collapsed ? (
             <ChevronRight className='size-3' />

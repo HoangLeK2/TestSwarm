@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from relay import u2_session_pool as u2_pool_mod
 from relay.u2_session_pool import U2SessionPool, SESSION_TTL_SECONDS
 
 
@@ -38,6 +39,26 @@ async def test_get_session_connects_once(pool):
         assert d1 is dev
         assert d2 is dev
         fn.assert_called_once()
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_stats_snapshot_reports_alive_probe_and_heartbeat_coverage(pool):
+    p, _fn, _dev = pool
+    await p.start()
+    try:
+        await p.get_session("192.168.1.10:5555")
+        entry = p._sessions["192.168.1.10:5555"]
+
+        assert await p._is_alive(entry) is True
+
+        stats = p.stats_snapshot(reset=False)
+        assert stats["alive_probes"] >= 1
+        assert stats["alive_probe_p95_ms"] >= 0
+        assert stats["heartbeat_coverage_percent"] > 0
+        assert "reset_uiautomator_success" in stats
+        assert "reconnect_fallbacks" in stats
     finally:
         await p.stop()
 
@@ -202,13 +223,77 @@ async def test_dead_session_reconnects(event_loop):
 
 
 @pytest.mark.asyncio
-async def test_connect_timeout_raises(event_loop):
+async def test_direct_http_health_skips_device_side_reset(event_loop):
+    """If ATX HTTP just worked, avoid reset_uiautomator storm on stale u2 session."""
+    stale_dev = MagicMock()
+    stale_dev.alive = False
+    stale_dev.reset_uiautomator = MagicMock()
+
+    fresh_dev = MagicMock()
+    fresh_dev.alive = True
+
+    connect_fn = MagicMock(side_effect=[stale_dev, fresh_dev])
+    p = U2SessionPool(loop=event_loop, connect_fn=connect_fn)
+    await p.start()
+    try:
+        p.mark_direct_http_healthy("dev-001")
+
+        dev = await p.get_session("dev-001")
+
+        assert dev is fresh_dev
+        stale_dev.reset_uiautomator.assert_not_called()
+        assert connect_fn.call_count == 2
+        stats = p.stats_snapshot(reset=False)
+        assert stats["direct_http_health_marks"] == 1
+        assert stats["reset_uiautomator_http_healthy_skips"] == 1
+        assert stats["reconnects"] == 1
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_reset_uiautomator_cooldown_skips_repeated_resets(event_loop, monkeypatch):
+    """Repeated stale sessions should reconnect locally without hammering u2 reset."""
+    monkeypatch.setattr(u2_pool_mod, "RESET_UIAUTOMATOR_COOLDOWN_SECONDS", 60.0)
+
+    first_dev = MagicMock()
+    first_dev.alive = False
+    first_dev.reset_uiautomator = MagicMock(side_effect=RuntimeError("reset failed"))
+
+    second_dev = MagicMock()
+    second_dev.alive = False
+    second_dev.reset_uiautomator = MagicMock()
+
+    third_dev = MagicMock()
+    third_dev.alive = True
+
+    connect_fn = MagicMock(side_effect=[first_dev, second_dev, third_dev])
+    p = U2SessionPool(loop=event_loop, connect_fn=connect_fn)
+    await p.start()
+    try:
+        entry = await p._connect("dev-001")
+
+        await p._reconnect(entry)
+        await p._reconnect(entry)
+
+        first_dev.reset_uiautomator.assert_called_once()
+        second_dev.reset_uiautomator.assert_not_called()
+        assert connect_fn.call_count == 3
+        stats = p.stats_snapshot(reset=False)
+        assert stats["reset_uiautomator_failures"] == 1
+        assert stats["reset_uiautomator_cooldown_skips"] == 1
+        assert stats["reconnects"] == 2
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_raises(event_loop, monkeypatch):
     """connect_fn that hangs should raise via asyncio.wait_for."""
-    async def slow_connect(host):
-        await asyncio.sleep(100)
+    monkeypatch.setattr(u2_pool_mod, "CONNECT_TIMEOUT_SECONDS", 0.01)
 
     def blocking_slow(host):
-        time.sleep(100)
+        time.sleep(0.2)
 
     p = U2SessionPool(loop=event_loop, connect_fn=blocking_slow)
     await p.start()
@@ -295,5 +380,150 @@ async def test_reap_loop_keeps_idle_warm_session(event_loop):
         async with p._global_lock:
             assert "192.168.1.10:5555" in p._sessions
             assert p._sessions["192.168.1.10:5555"].keep_warm is True
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_keep_warm_session_expires_after_warm_ttl(event_loop, monkeypatch):
+    """Warm sessions must not live forever and consume u2/HTTP resources."""
+    monkeypatch.setattr(u2_pool_mod, "REAP_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(u2_pool_mod, "KEEP_WARM_TTL_SECONDS", 0.2)
+
+    dev = MagicMock()
+    dev.alive = True
+    p = U2SessionPool(loop=event_loop, connect_fn=MagicMock(return_value=dev))
+    await p.start()
+    try:
+        await p.warm_session("dev-001")
+        p._sessions["dev-001"].keep_warm_since = time.monotonic() - 10
+        p._sessions["dev-001"].last_used = time.monotonic() - 10
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and "dev-001" in p._sessions:
+            await asyncio.sleep(0.01)
+
+        assert "dev-001" not in p._sessions
+        stats = p.stats_snapshot(reset=False)
+        assert stats["keep_warm_expired"] >= 1
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_keep_warm_ttl_preserves_recently_used_session(event_loop, monkeypatch):
+    """Warm TTL is idle-time based; active sessions must not be evicted."""
+    monkeypatch.setattr(u2_pool_mod, "REAP_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(u2_pool_mod, "KEEP_WARM_TTL_SECONDS", 0.2)
+
+    dev = MagicMock()
+    dev.alive = True
+    p = U2SessionPool(loop=event_loop, connect_fn=MagicMock(return_value=dev))
+    await p.start()
+    try:
+        await p.warm_session("dev-001")
+        p._sessions["dev-001"].keep_warm_since = time.monotonic() - 10
+        p._sessions["dev-001"].last_used = time.monotonic()
+
+        await asyncio.sleep(0.05)
+
+        assert "dev-001" in p._sessions
+        stats = p.stats_snapshot(reset=False)
+        assert stats["keep_warm_expired"] == 0
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_keep_warm_lru_cap_evicts_oldest_sessions(event_loop, monkeypatch):
+    """Only the most recently useful warm sessions stay pinned."""
+    monkeypatch.setattr(u2_pool_mod, "REAP_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(u2_pool_mod, "KEEP_WARM_TTL_SECONDS", 0.0)
+    monkeypatch.setattr(u2_pool_mod, "KEEP_WARM_MAX_SESSIONS", 2)
+
+    def connect_fn(_host):
+        dev = MagicMock()
+        dev.alive = True
+        return dev
+
+    p = U2SessionPool(loop=event_loop, connect_fn=connect_fn)
+    await p.start()
+    try:
+        for index, serial in enumerate(["dev-001", "dev-002", "dev-003"]):
+            await p.warm_session(serial)
+            p._sessions[serial].last_used = time.monotonic() - (10 - index)
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and len(p._sessions) > 2:
+            await asyncio.sleep(0.01)
+
+        assert "dev-001" not in p._sessions
+        assert set(p._sessions) == {"dev-002", "dev-003"}
+        stats = p.stats_snapshot(reset=False)
+        assert stats["keep_warm_lru_evictions"] >= 1
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_budget_limits_alive_probes_per_tick(event_loop, monkeypatch):
+    """A large pool should be probed over several ticks instead of all at once."""
+    monkeypatch.setattr(u2_pool_mod, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(u2_pool_mod, "HEARTBEAT_MAX_PROBES_PER_TICK", 2)
+    monkeypatch.setattr(u2_pool_mod, "HEARTBEAT_SKIP_RECENT_SECONDS", 0.0)
+
+    def connect_fn(_host):
+        dev = MagicMock()
+        dev.alive = True
+        return dev
+
+    p = U2SessionPool(loop=event_loop, connect_fn=connect_fn)
+    await p.start()
+    try:
+        for index in range(5):
+            await p.warm_session(f"dev-{index:03d}")
+            p._sessions[f"dev-{index:03d}"].last_used = time.monotonic() - 10
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            stats = p.stats_snapshot(reset=False)
+            if stats["heartbeat_ticks"] >= 1 and stats["heartbeat_probes"] >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        stats = p.stats_snapshot(reset=False)
+        assert stats["heartbeat_probe_budget"] == 2
+        assert stats["heartbeat_budget_skips"] >= 3
+        assert stats["heartbeat_probes"] <= stats["heartbeat_ticks"] * 2
+    finally:
+        await p.stop()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_skips_recent_session_without_alive_probe(event_loop, monkeypatch):
+    """Recently used sessions should not pay a background .alive probe."""
+    monkeypatch.setattr(u2_pool_mod, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(u2_pool_mod, "HEARTBEAT_MAX_PROBES_PER_TICK", 8)
+    monkeypatch.setattr(u2_pool_mod, "HEARTBEAT_SKIP_RECENT_SECONDS", 60.0)
+
+    dev = MagicMock()
+    dev.alive = True
+    p = U2SessionPool(loop=event_loop, connect_fn=MagicMock(return_value=dev))
+    await p.start()
+    try:
+        await p.warm_session("dev-001")
+        p.stats_snapshot(reset=True)
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            stats = p.stats_snapshot(reset=False)
+            if stats["heartbeat_ticks"] >= 1:
+                break
+            await asyncio.sleep(0.01)
+
+        stats = p.stats_snapshot(reset=False)
+        assert stats["heartbeat_recent_skips"] >= 1
+        assert stats["heartbeat_probes"] == 0
+        assert stats["alive_probes"] == 0
     finally:
         await p.stop()

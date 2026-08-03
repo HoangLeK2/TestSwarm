@@ -10,7 +10,7 @@ Gói **Windows only** (linux/amd64). Chạy trên PC Windows với **Docker Desk
 
 ## Cài nhanh
 
-Giải nén `agent-boot-docker-windows-0.1.0.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
+Giải nén `agent-boot-docker-windows-0.1.3.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
 
 ```bat
 scripts\docker-load.cmd
@@ -91,7 +91,10 @@ docker compose down
 
 ## Bootstrap APK
 
-Container chạy **relay** (`--relay-only`). Farm gửi lệnh bootstrap khi máy online (hoặc *Bootstrap all* trên UI). Image có sẵn `/app/assets/apks/` (STF + u2).
+Container chạy **relay** (`--relay-only`). Khi mới cắm phone, agent-boot chỉ
+report serial lên backend; không tự push STF/u2/atx cho phone chưa đăng ký.
+Farm gửi lệnh bootstrap sau khi user đăng ký phone, hoặc khi user bấm
+*Bootstrap all* trên UI. Image có sẵn `/app/assets/apks/` (STF + u2).
 
 ```bat
 docker compose logs -f agent-boot

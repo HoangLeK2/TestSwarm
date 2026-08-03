@@ -128,3 +128,35 @@ def test_parse_comments_on_sheet_excludes_parent_post_body_anchor() -> None:
     assert diag["reason_code"] == "ok"
     bodies = [r for r in rows if r.get("_type") != "post_stats"]
     assert [r.get("text") for r in bodies] == ["Comment thật trong bài"]
+
+
+def test_parse_comments_on_sheet_stops_before_related_groups() -> None:
+    xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        clickable="true" content-desc="Quay lại" bounds="[0,80][120,160]" />
+  <node package="com.facebook.katana" text="Phù hợp nhất" bounds="[40,450][400,500]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,400][1080,2200]">
+    <node bounds="[0,720][1080,900]">
+      <node text="Nguyễn A" bounds="[180,740][300,780]" />
+      <node text="Comment thật trong bài" bounds="[180,790][1000,850]" />
+    </node>
+    <node bounds="[0,980][1080,1040]">
+      <node text="Nhóm liên quan" bounds="[40,1000][420,1040]" />
+    </node>
+    <node bounds="[0,1070][1080,1180]">
+      <node text="DevOps VietNam" bounds="[180,1080][520,1120]" />
+      <node text="104K thành viên" bounds="[180,1130][520,1170]" />
+    </node>
+    <node bounds="[0,1200][1080,1310]">
+      <node text="Spring Boot Việt Nam" bounds="[180,1210][620,1250]" />
+      <node text="65K thành viên" bounds="[180,1260][520,1300]" />
+    </node>
+  </node>
+  <node package="com.facebook.katana" text="Viết bình luận…" bounds="[40,2280][1040,2340]" />
+</hierarchy>"""
+    rows, diag = parse_fb_comments_from_xml_with_diagnostic(xml, parent_post_id="p1")
+    assert diag["reason_code"] == "ok"
+    bodies = [r for r in rows if r.get("_type") != "post_stats"]
+    assert [r.get("text") for r in bodies] == ["Comment thật trong bài"]

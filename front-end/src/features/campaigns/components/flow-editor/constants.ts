@@ -39,6 +39,7 @@ export const STEP_COLORS: Record<string, string> = {
   set_variable: 'border-l-purple-500',
   set_var: 'border-l-purple-500',
   loop: 'border-l-teal-500',
+  use_source_pool: 'border-l-teal-600',
   extract: 'border-l-fuchsia-500',
   save_extraction: 'border-l-fuchsia-600',
   fb_find_comment_button: 'border-l-sky-500',
@@ -254,6 +255,7 @@ export const INSERT_MENU_DEF = [
   {
     groupKey: 'dataCollection' as const,
     items: [
+      'use_source_pool',
       'extract',
       'save_extraction',
       'extract_text_hierarchy',
@@ -733,6 +735,10 @@ export function getStepDisplay(
       };
     case 'run_scenario':
       return { target: step.scenario_name || step.scenario_id || '' };
+    case 'use_source_pool':
+      return {
+        target: `${step.platform ?? 'facebook'} / ${step.entity_type ?? 'group'}`
+      };
     case 'if':
       return {
         target: Object.keys(step.condition ?? {}).join(', ') || 'condition'

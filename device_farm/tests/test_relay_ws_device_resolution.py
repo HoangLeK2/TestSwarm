@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from runtime.core.device_client import DeviceState
 from web.server import (
     _find_ws_device_for_relay_serial,
+    _relay_auto_attach_scrcpy_on_relay_online,
     _relay_capabilities_status_payload,
     _relay_should_attach_scrcpy_on_online,
 )
@@ -110,3 +111,21 @@ def test_relay_online_reattaches_when_auto_disabled_but_viewer_is_active(monkeyp
     assert _relay_should_attach_scrcpy_on_online("phone-A", auto_attach=False) is True
     assert _relay_should_attach_scrcpy_on_online("phone-B", auto_attach=False) is False
     assert _relay_should_attach_scrcpy_on_online("phone-B", auto_attach=True) is True
+
+
+def test_relay_online_auto_attach_defaults_to_disabled():
+    assert _relay_auto_attach_scrcpy_on_relay_online(SimpleNamespace()) is False
+    assert (
+        _relay_auto_attach_scrcpy_on_relay_online(
+            SimpleNamespace(streaming=SimpleNamespace())
+        )
+        is False
+    )
+    assert (
+        _relay_auto_attach_scrcpy_on_relay_online(
+            SimpleNamespace(
+                streaming=SimpleNamespace(auto_attach_scrcpy_on_relay_online=True)
+            )
+        )
+        is True
+    )

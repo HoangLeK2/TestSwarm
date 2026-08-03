@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import os
 import time
+from collections import deque
 from concurrent.futures import Executor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -28,15 +30,67 @@ from typing import Any, AsyncIterator, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-SESSION_TTL_SECONDS       = 300.0
-REAP_INTERVAL_SECONDS     = 30.0
-CONNECT_TIMEOUT_SECONDS   = 8.0
-ALIVE_TIMEOUT_SECONDS     = 3.0    # hard cap on .alive / .running() probes
-HEARTBEAT_INTERVAL_SECONDS = 10.0  # how often the pool sweeps live sessions
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning("u2-pool: invalid %s=%r; using %.3f", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("u2-pool: invalid %s=%r; using %d", name, raw, default)
+        return default
+
+
+SESSION_TTL_SECONDS = max(1.0, _env_float("U2_SESSION_TTL_SECONDS", 300.0))
+REAP_INTERVAL_SECONDS = max(1.0, _env_float("U2_REAP_INTERVAL_SECONDS", 30.0))
+CONNECT_TIMEOUT_SECONDS = max(1.0, _env_float("U2_CONNECT_TIMEOUT_SECONDS", 8.0))
+ALIVE_TIMEOUT_SECONDS = max(0.1, _env_float("U2_ALIVE_TIMEOUT_SECONDS", 3.0))
+HEARTBEAT_INTERVAL_SECONDS = max(1.0, _env_float("U2_HEARTBEAT_INTERVAL_SECONDS", 10.0))
 # Keep warm between rapid extra_data / tap round-trips (scrcpy can briefly kill u2d).
-HEARTBEAT_GRACE_AFTER_USE_SECONDS = 45.0
+HEARTBEAT_GRACE_AFTER_USE_SECONDS = max(
+    0.0,
+    _env_float("U2_HEARTBEAT_GRACE_AFTER_USE_SECONDS", 45.0),
+)
 # Skip .alive probe when session was used recently (avoids 3s timeout + reconnect storm).
-PREPARE_SKIP_ALIVE_SECONDS = 12.0
+PREPARE_SKIP_ALIVE_SECONDS = max(0.0, _env_float("U2_PREPARE_SKIP_ALIVE_SECONDS", 12.0))
+KEEP_WARM_TTL_SECONDS = max(0.0, _env_float("U2_KEEP_WARM_TTL_SECONDS", 120.0))
+KEEP_WARM_MAX_SESSIONS = max(0, _env_int("U2_KEEP_WARM_MAX_SESSIONS", 12))
+HEARTBEAT_MAX_PROBES_PER_TICK = max(
+    0,
+    _env_int("U2_HEARTBEAT_MAX_PROBES_PER_TICK", 8),
+)
+HEARTBEAT_SKIP_RECENT_SECONDS = max(
+    0.0,
+    _env_float("U2_HEARTBEAT_SKIP_RECENT_SECONDS", HEARTBEAT_GRACE_AFTER_USE_SECONDS),
+)
+HEARTBEAT_RECONNECT_RECENT = _env_bool("U2_HEARTBEAT_RECONNECT_RECENT", False)
+DIRECT_HTTP_HEALTH_TTL_SECONDS = max(
+    0.0,
+    _env_float("U2_DIRECT_HTTP_HEALTH_TTL_SECONDS", 30.0),
+)
+RESET_UIAUTOMATOR_COOLDOWN_SECONDS = max(
+    0.0,
+    _env_float("U2_RESET_UIAUTOMATOR_COOLDOWN_SECONDS", 30.0),
+)
 
 # When extra_data collect holds the per-serial lock, nested run_locked must not re-enter.
 _active_session: contextvars.ContextVar[tuple[str, "_Entry"] | None] = contextvars.ContextVar(
@@ -73,6 +127,7 @@ class _Entry:
     serial: str = ""
     generation: int = 0
     keep_warm: bool = False
+    keep_warm_since: float = 0.0
 
 
 class U2SessionPool:
@@ -92,6 +147,99 @@ class U2SessionPool:
         self._reaper_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._generation = 0
+        self._heartbeat_cursor = 0
+        self._direct_http_healthy_at: dict[str, float] = {}
+        self._reset_cooldown_until: dict[str, float] = {}
+        self._stats: dict[str, int] = {
+            "connects": 0,
+            "reconnects": 0,
+            "evictions": 0,
+            "alive_probes": 0,
+            "alive_timeouts": 0,
+            "alive_failures": 0,
+            "heartbeat_ticks": 0,
+            "heartbeat_probes": 0,
+            "heartbeat_budget_skips": 0,
+            "heartbeat_recent_skips": 0,
+            "heartbeat_locked_skips": 0,
+            "heartbeat_evictions": 0,
+            "heartbeat_reconnects": 0,
+            "direct_http_health_marks": 0,
+            "reset_uiautomator_success": 0,
+            "reset_uiautomator_failures": 0,
+            "reset_uiautomator_skips": 0,
+            "reset_uiautomator_http_healthy_skips": 0,
+            "reset_uiautomator_cooldown_skips": 0,
+            "reconnect_fallbacks": 0,
+            "keep_warm_expired": 0,
+            "keep_warm_lru_evictions": 0,
+            "warm_reuses": 0,
+            "prepare_recent_skips": 0,
+        }
+        self._prepare_samples_ms: deque[int] = deque(maxlen=512)
+        self._lock_wait_samples_ms: deque[int] = deque(maxlen=512)
+        self._exec_samples_ms: deque[int] = deque(maxlen=512)
+        self._alive_probe_samples_ms: deque[int] = deque(maxlen=512)
+        self._heartbeat_tick_samples_ms: deque[int] = deque(maxlen=256)
+
+    def _bump(self, key: str, amount: int = 1) -> None:
+        self._stats[key] = self._stats.get(key, 0) + amount
+
+    @staticmethod
+    def _p95(samples: deque[int]) -> int:
+        if not samples:
+            return 0
+        values = sorted(samples)
+        index = min(len(values) - 1, int(len(values) * 0.95))
+        return values[index]
+
+    def stats_snapshot(self, *, reset: bool = False) -> dict[str, int]:
+        """Return pool churn/timing metrics for runtime stats."""
+        keep_warm_count = sum(1 for entry in self._sessions.values() if entry.keep_warm)
+        stats = dict(self._stats)
+        stats.update(
+            {
+                "sessions": len(self._sessions),
+                "keep_warm": keep_warm_count,
+                "heartbeat_probe_budget": HEARTBEAT_MAX_PROBES_PER_TICK,
+                "keep_warm_max_sessions": KEEP_WARM_MAX_SESSIONS,
+                "direct_http_healthy_serials": sum(
+                    1 for seen_at in self._direct_http_healthy_at.values()
+                    if self._direct_http_health_recent(seen_at)
+                ),
+                "reset_cooldown_serials": sum(
+                    1 for until in self._reset_cooldown_until.values()
+                    if until > time.monotonic()
+                ),
+                "prepare_p95_ms": self._p95(self._prepare_samples_ms),
+                "lock_wait_p95_ms": self._p95(self._lock_wait_samples_ms),
+                "exec_p95_ms": self._p95(self._exec_samples_ms),
+                "alive_probe_p95_ms": self._p95(self._alive_probe_samples_ms),
+                "heartbeat_tick_p95_ms": self._p95(self._heartbeat_tick_samples_ms),
+                "heartbeat_coverage_percent": int(
+                    min(100, HEARTBEAT_MAX_PROBES_PER_TICK * 100 / max(1, len(self._sessions)))
+                ),
+            }
+        )
+        if reset:
+            for key in list(self._stats):
+                self._stats[key] = 0
+            self._prepare_samples_ms.clear()
+            self._lock_wait_samples_ms.clear()
+            self._exec_samples_ms.clear()
+            self._alive_probe_samples_ms.clear()
+            self._heartbeat_tick_samples_ms.clear()
+        return stats
+
+    def mark_direct_http_healthy(self, serial: str) -> None:
+        """Record that ATX direct HTTP just worked for a serial.
+
+        If this is fresh, a stale uiautomator2 Python session should not trigger
+        a device-side reset storm. A plain reconnect is enough to refresh the
+        local session object.
+        """
+        self._direct_http_healthy_at[serial] = time.monotonic()
+        self._bump("direct_http_health_marks")
 
     def _resolve_executor(self) -> Optional[Executor]:
         """Lazy import of runtime pool so tests can pass `executor=None`."""
@@ -138,6 +286,11 @@ class U2SessionPool:
         entry = self._sessions.get(serial)
         if entry is None:
             return False
+        if enabled and not entry.keep_warm:
+            entry.keep_warm_since = time.monotonic()
+            self._bump("warm_reuses")
+        if not enabled:
+            entry.keep_warm_since = 0.0
         entry.keep_warm = enabled
         return True
 
@@ -161,11 +314,16 @@ class U2SessionPool:
         else:
             async with entry.lock:
                 if keep_warm:
+                    if not entry.keep_warm:
+                        entry.keep_warm_since = time.monotonic()
+                        self._bump("warm_reuses")
                     entry.keep_warm = True
                 recently_used = (
                     time.monotonic() - entry.last_used < PREPARE_SKIP_ALIVE_SECONDS
                 )
-                if not recently_used and not await self._is_alive(entry):
+                if recently_used:
+                    self._bump("prepare_recent_skips")
+                elif not await self._is_alive(entry):
                     await self._reconnect(entry)
                 entry.last_used = time.monotonic()
         return entry
@@ -212,9 +370,11 @@ class U2SessionPool:
         prepare_started = time.perf_counter()
         entry = await self._prepare_entry(serial)
         prepare_ms = (time.perf_counter() - prepare_started) * 1000.0
+        self._prepare_samples_ms.append(int(prepare_ms))
         lock_wait_started = time.perf_counter()
         async with entry.lock:
             lock_wait_ms = (time.perf_counter() - lock_wait_started) * 1000.0
+            self._lock_wait_samples_ms.append(int(lock_wait_ms))
             entry.last_used = time.monotonic()
             exec_started = time.perf_counter()
             try:
@@ -222,6 +382,7 @@ class U2SessionPool:
                 return await _await_executor_completion(future)
             finally:
                 exec_ms = (time.perf_counter() - exec_started) * 1000.0
+                self._exec_samples_ms.append(int(exec_ms))
                 total_ms = (time.perf_counter() - started) * 1000.0
                 if total_ms >= 1000.0:
                     logger.info(
@@ -236,7 +397,10 @@ class U2SessionPool:
     async def evict(self, serial: str) -> None:
         async with self._global_lock:
             entry = self._sessions.pop(serial, None)
+            self._direct_http_healthy_at.pop(serial, None)
+            self._reset_cooldown_until.pop(serial, None)
         if entry:
+            self._bump("evictions")
             self._close_blocking(entry)
             logger.info("u2-pool: evicted serial=%s", serial)
 
@@ -256,6 +420,29 @@ class U2SessionPool:
             logger.error("u2-pool: uiautomator2 not installed — pool disabled")
             raise
 
+    def _direct_http_health_recent(self, seen_at: float) -> bool:
+        return (
+            DIRECT_HTTP_HEALTH_TTL_SECONDS > 0
+            and time.monotonic() - seen_at <= DIRECT_HTTP_HEALTH_TTL_SECONDS
+        )
+
+    def _should_attempt_reset(self, serial: str) -> bool:
+        seen_at = self._direct_http_healthy_at.get(serial)
+        if seen_at is not None and self._direct_http_health_recent(seen_at):
+            self._bump("reset_uiautomator_skips")
+            self._bump("reset_uiautomator_http_healthy_skips")
+            return False
+        until = self._reset_cooldown_until.get(serial, 0.0)
+        if until > time.monotonic():
+            self._bump("reset_uiautomator_skips")
+            self._bump("reset_uiautomator_cooldown_skips")
+            return False
+        if RESET_UIAUTOMATOR_COOLDOWN_SECONDS > 0:
+            self._reset_cooldown_until[serial] = (
+                time.monotonic() + RESET_UIAUTOMATOR_COOLDOWN_SECONDS
+            )
+        return True
+
     async def _connect(self, serial: str, *, keep_warm: bool = False) -> _Entry:
         fn = self._get_connect_fn()
         host = serial.rsplit(":", 1)[0] if ":" in serial else serial
@@ -269,6 +456,7 @@ class U2SessionPool:
             serial=serial,
             generation=self._next_generation(),
             keep_warm=keep_warm,
+            keep_warm_since=time.monotonic() if keep_warm else 0.0,
         )
         async with self._global_lock:
             if serial not in self._sessions:
@@ -277,7 +465,11 @@ class U2SessionPool:
                 self._close_blocking(entry)
                 entry = self._sessions[serial]
                 if keep_warm:
+                    if not entry.keep_warm:
+                        entry.keep_warm_since = time.monotonic()
+                        self._bump("warm_reuses")
                     entry.keep_warm = True
+        self._bump("connects")
         logger.info("u2-pool: connected serial=%s", serial)
         return entry
 
@@ -290,7 +482,7 @@ class U2SessionPool:
         dev = entry.device
         ex = self._resolve_executor()
         reset_fn = getattr(dev, "reset_uiautomator", None)
-        if callable(reset_fn):
+        if callable(reset_fn) and self._should_attempt_reset(entry.serial):
             try:
                 await asyncio.wait_for(
                     self._loop.run_in_executor(ex, reset_fn),
@@ -298,14 +490,17 @@ class U2SessionPool:
                 )
                 if await self._is_alive(entry):
                     entry.generation = self._next_generation()
+                    self._bump("reset_uiautomator_success")
                     logger.info("u2-pool: reset_uiautomator succeeded serial=%s", entry.serial)
                     return
             except Exception as exc:
+                self._bump("reset_uiautomator_failures")
                 logger.warning(
                     "u2-pool: reset_uiautomator failed serial=%s err=%s — falling back to reconnect",
                     entry.serial, exc,
                 )
 
+        self._bump("reconnect_fallbacks")
         self._close_blocking(entry)
         fn = self._get_connect_fn()
         host = entry.serial.rsplit(":", 1)[0] if ":" in entry.serial else entry.serial
@@ -314,6 +509,7 @@ class U2SessionPool:
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
         entry.generation = self._next_generation()
+        self._bump("reconnects")
         logger.info("u2-pool: reconnected serial=%s", entry.serial)
 
     async def _is_alive(self, entry: _Entry) -> bool:
@@ -322,8 +518,10 @@ class U2SessionPool:
         `.alive` block until TCP keepalive trips (minutes); wrapping in
         wait_for keeps us from hanging the caller.
         """
+        started = time.perf_counter()
         try:
-            return bool(
+            self._bump("alive_probes")
+            alive = bool(
                 await asyncio.wait_for(
                     self._loop.run_in_executor(
                         self._resolve_executor(), lambda: entry.device.alive
@@ -331,13 +529,25 @@ class U2SessionPool:
                     timeout=ALIVE_TIMEOUT_SECONDS,
                 )
             )
+            self._alive_probe_samples_ms.append(
+                int((time.perf_counter() - started) * 1000.0)
+            )
+            return alive
         except asyncio.TimeoutError:
+            self._alive_probe_samples_ms.append(
+                int((time.perf_counter() - started) * 1000.0)
+            )
+            self._bump("alive_timeouts")
             logger.debug(
                 "u2-pool: .alive probe timed out after %.1fs serial=%s — treating as dead",
                 ALIVE_TIMEOUT_SECONDS, entry.serial,
             )
             return False
         except Exception as exc:
+            self._alive_probe_samples_ms.append(
+                int((time.perf_counter() - started) * 1000.0)
+            )
+            self._bump("alive_failures")
             logger.debug("u2-pool: ping failed serial=%s err=%s", entry.serial, exc)
             return False
 
@@ -353,14 +563,39 @@ class U2SessionPool:
             try:
                 await asyncio.sleep(REAP_INTERVAL_SECONDS)
                 now = time.monotonic()
-                stale: list[str] = []
+                stale: list[tuple[str, str]] = []
                 async with self._global_lock:
                     for s, e in self._sessions.items():
                         if e.keep_warm:
+                            warm_anchor = max(e.keep_warm_since, e.last_used)
+                            if (
+                                KEEP_WARM_TTL_SECONDS > 0
+                                and warm_anchor > 0
+                                and now - warm_anchor > KEEP_WARM_TTL_SECONDS
+                            ):
+                                stale.append((s, "keep_warm_expired"))
                             continue
                         if now - e.last_used > SESSION_TTL_SECONDS:
-                            stale.append(s)
-                for s in stale:
+                            stale.append((s, "session_ttl"))
+
+                    if KEEP_WARM_MAX_SESSIONS > 0:
+                        stale_serials = {serial for serial, _ in stale}
+                        warm_entries = [
+                            (s, e)
+                            for s, e in self._sessions.items()
+                            if e.keep_warm and s not in stale_serials
+                        ]
+                        overflow = len(warm_entries) - KEEP_WARM_MAX_SESSIONS
+                        if overflow > 0:
+                            warm_entries.sort(key=lambda item: item[1].last_used)
+                            for s, _ in warm_entries[:overflow]:
+                                stale.append((s, "keep_warm_lru"))
+
+                for s, reason in stale:
+                    if reason == "keep_warm_expired":
+                        self._bump("keep_warm_expired")
+                    elif reason == "keep_warm_lru":
+                        self._bump("keep_warm_lru_evictions")
                     await self.evict(s)
             except asyncio.CancelledError:
                 return
@@ -380,22 +615,43 @@ class U2SessionPool:
         while True:
             try:
                 await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+                tick_started = time.perf_counter()
                 async with self._global_lock:
                     entries = list(self._sessions.items())
-                for serial, entry in entries:
+                total_entries = len(entries)
+                if total_entries:
+                    start = self._heartbeat_cursor % total_entries
+                    ordered = entries[start:] + entries[:start]
+                    budget = HEARTBEAT_MAX_PROBES_PER_TICK
+                    if budget > 0 and total_entries > budget:
+                        self._heartbeat_cursor = (start + budget) % total_entries
+                        self._bump("heartbeat_budget_skips", total_entries - budget)
+                        ordered = ordered[:budget]
+                    else:
+                        self._heartbeat_cursor = 0
+                else:
+                    ordered = []
+                self._bump("heartbeat_ticks")
+                for serial, entry in ordered:
                     probed_generation = entry.generation
                     # Skip sessions currently in use — the in-line probe at
                     # get_session() will catch dead ones.
                     if entry.lock.locked():
+                        self._bump("heartbeat_locked_skips")
                         continue
+                    if time.monotonic() - entry.last_used < HEARTBEAT_SKIP_RECENT_SECONDS:
+                        self._bump("heartbeat_recent_skips")
+                        continue
+                    self._bump("heartbeat_probes")
                     if not await self._is_alive(entry):
                         recently_used = (
                             time.monotonic() - entry.last_used
                             < HEARTBEAT_GRACE_AFTER_USE_SECONDS
                         )
-                        if recently_used:
+                        if recently_used and HEARTBEAT_RECONNECT_RECENT:
                             try:
                                 await self._reconnect(entry)
+                                self._bump("heartbeat_reconnects")
                             except Exception as exc:
                                 logger.debug(
                                     "u2-pool: heartbeat reconnect failed serial=%s err=%s",
@@ -413,10 +669,15 @@ class U2SessionPool:
                             current = self._sessions.get(serial)
                             if current is entry and entry.generation == probed_generation:
                                 self._sessions.pop(serial, None)
+                                self._bump("evictions")
+                                self._bump("heartbeat_evictions")
                                 self._close_blocking(entry)
                                 logger.info(
                                     "u2-pool: heartbeat evicted dead session serial=%s", serial,
                                 )
+                self._heartbeat_tick_samples_ms.append(
+                    int((time.perf_counter() - tick_started) * 1000.0)
+                )
             except asyncio.CancelledError:
                 return
             except Exception as exc:

@@ -72,6 +72,8 @@ def test_normalize_extract_step_applies_fb_posts_open_post_default() -> None:
     )
     assert step.get("open_post_before_extract") is True
     assert step.get("open_post_press_back_after_extract") is False
+    assert step.get("post_open_verify_retries") == 1
+    assert step.get("post_open_verify_retry_pause_s") == 0.18
 
 
 def test_normalize_alias_for_parent_id_var() -> None:
@@ -150,6 +152,24 @@ def test_scenario_model_accepts_split_fb_comment_steps() -> None:
                     {"type": "extract", "strategy": "fb_comments"},
                 ],
             }
+        ],
+    }
+
+    assert ScenarioModel.validate_dict(scenario) == []
+
+
+def test_scenario_model_accepts_use_source_pool_step() -> None:
+    scenario = {
+        "steps": [
+            {
+                "type": "use_source_pool",
+                "platform": "facebook",
+                "entity_type": "group",
+                "search": "OpenClaw",
+                "output_prefix": "GROUP",
+                "statuses": ["candidate", "active"],
+            },
+            {"type": "extract", "strategy": "fb_posts"},
         ],
     }
 

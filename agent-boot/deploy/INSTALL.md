@@ -5,23 +5,27 @@
 ### macOS / Linux
 
 ```bash
-tar -xzf agent-boot-docker-0.1.0.tar.gz
-cd agent-boot-docker-0.1.0
+tar -xzf agent-boot-docker-0.1.3.tar.gz
+cd agent-boot-docker-0.1.3
 
 ./scripts/docker-load.sh
-cp .env.example .env          # sửa RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN (TLS cert đã có sẵn trong image)
+cp .env.example .env          # điền RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN, AGENT_BOOT_CONTENT_DATABASE_URL
 ./scripts/docker-up.sh up -d    # bật ADB host + docker compose up -d
 ./scripts/docker-up.sh logs -f  # xem log relay
 ```
 
-### Windows (Docker Desktop)
+### Windows (Docker Desktop, bundle universal)
+
+Phần này áp dụng cho `agent-boot-docker-0.1.3.zip`. Với gói Windows-only
+`agent-boot-docker-windows-0.1.3.zip`, làm theo `INSTALL.md` nằm ngay trong ZIP.
 
 **Dùng file `.cmd`** (khuyến nghị — tránh lỗi `.ps1` mở Notepad khi double-click):
 
 ```bat
-cd agent-boot-docker-0.1.0
+cd agent-boot-docker-0.1.3
 scripts\docker-load.cmd
-copy .env.example .env          rem sửa RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN
+copy .env.example .env
+notepad .env                    rem điền 3 giá trị bắt buộc bên dưới
 scripts\docker-up.cmd up -d
 scripts\docker-up.cmd logs -f
 ```
@@ -29,12 +33,17 @@ scripts\docker-up.cmd logs -f
 Hoặc mở **PowerShell** (không double-click file `.ps1`):
 
 ```powershell
-Expand-Archive agent-boot-docker-0.1.0.zip -DestinationPath .
-cd agent-boot-docker-0.1.0
+Expand-Archive agent-boot-docker-0.1.3.zip -DestinationPath .
+cd agent-boot-docker-0.1.3
 powershell -ExecutionPolicy Bypass -File .\scripts\docker-load.ps1
 copy .env.example .env
+notepad .env
 powershell -ExecutionPolicy Bypass -File .\scripts\docker-up.ps1 up -d
 ```
+
+Trong `.env`, bắt buộc điền `RELAY_API_KEY`, `RELAY_ENROLLMENT_TOKEN` và
+`AGENT_BOOT_CONTENT_DATABASE_URL`. Script khởi động sẽ từ chối chạy nếu một
+trong ba giá trị này còn trống. TLS cert đã có sẵn trong image.
 
 > **Vì sao `.ps1` mở Notepad?** Windows mặc định gắn `.ps1` với trình soạn thảo văn bản. Phải chạy qua `docker-load.cmd` hoặc gọi `powershell -File ...` từ terminal.
 

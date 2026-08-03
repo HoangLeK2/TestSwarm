@@ -12,7 +12,6 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { ROUTES } from '@/config/routes';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
-import { DeviceStepsSheet } from './device-step-monitor';
 import { useDeviceFarm } from '../hooks/use-device-farm';
 import { Badge } from '@/components/ui/badge';
 import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
@@ -32,7 +31,7 @@ import {
 const DEFAULT_GRID_PAGE_SIZE = (() => {
   const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PAGE_SIZE ?? 10);
   if (!Number.isFinite(raw)) return 10;
-  return Math.max(1, Math.min(50, Math.round(raw)));
+  return Math.max(10, Math.min(50, Math.round(raw)));
 })();
 
 function findScrollableParent(element: HTMLElement): HTMLElement {
@@ -50,9 +49,12 @@ export function DeviceFarm() {
   const tEmpty = useTranslations('coreEmptyState');
   const tHeader = useTranslations('devicesFarm.header');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
-  const [stepsSerial, setStepsSerial] = useState<string | null>(null);
 
-  const { devices, tasks, wsConnected, error } = useDeviceFarm({
+  const { devices, wsConnected, error } = useDeviceFarm({
+    liveRefreshMs: 15_000,
+    loadTasks: false,
+    loadRegisteredDevices: false,
+    refreshRegisteredOnFocus: false,
     liveSnapshotAuthoritative: true
   });
 
@@ -135,21 +137,8 @@ export function DeviceFarm() {
     overscan: 1,
     scrollMargin,
     enabled: scrollElement !== null && rowCount > 0,
-    useFlushSync: false,
-    directDomUpdates: true
+    useFlushSync: false
   });
-
-  const activeTaskCount = (Array.isArray(tasks) ? tasks : []).filter((task) =>
-    ['PENDING', 'RUNNING', 'REQUEUED'].includes(task.status)
-  ).length;
-
-  const openStepsMonitor = useCallback((serial: string) => {
-    setStepsSerial(serial);
-  }, []);
-
-  const handleStepsOpenChange = useCallback((open: boolean) => {
-    if (!open) setStepsSerial(null);
-  }, []);
 
   return (
     <div className='space-y-4'>
@@ -173,13 +162,6 @@ export function DeviceFarm() {
               {tHeader('devicesRegistered', { count: devices.length })}
             </Badge>
           ) : null}
-          <Badge
-            id='stat-tasks'
-            variant={activeTaskCount > 0 ? 'default' : 'outline'}
-            className='text-[10px]'
-          >
-            {tHeader('tasks', { count: activeTaskCount })}
-          </Badge>
         </div>
       </div>
 
@@ -225,7 +207,10 @@ export function DeviceFarm() {
       ) : (
         <>
           <section ref={virtualGridRef} className='w-full'>
-            <div ref={rowVirtualizer.containerRef} className='relative w-full'>
+            <div
+              className='relative w-full'
+              style={{ height: rowVirtualizer.getTotalSize() }}
+            >
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                 const { start, end } = getDeviceGridRowBounds(
                   virtualRow.index,
@@ -240,15 +225,12 @@ export function DeviceFarm() {
                     className='absolute left-0 top-0 grid w-full justify-start gap-4'
                     style={{
                       gridTemplateColumns: `repeat(${end - start}, minmax(0, min(100%, ${DEVICE_GRID_TILE_WIDTH_PX}px)))`,
+                      transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                       contain: 'layout paint'
                     }}
                   >
                     {pageDevices.slice(start, end).map((device) => (
-                      <DeviceTilePreview
-                        key={device.serial}
-                        device={device}
-                        onOpenSteps={openStepsMonitor}
-                      />
+                      <DeviceTilePreview key={device.serial} device={device} />
                     ))}
                   </div>
                 );
@@ -261,6 +243,7 @@ export function DeviceFarm() {
               pageIndex={pageIndex}
               pageCount={pageCount}
               pageSize={pageSize}
+              pageSizeOptions={[10, 20, 30, 40, 50]}
               onPageIndexChange={setPageIndex}
               onPageSizeChange={(nextPageSize) => {
                 setPageSize(nextPageSize);
@@ -270,14 +253,6 @@ export function DeviceFarm() {
           </footer>
         </>
       )}
-
-      {stepsSerial ? (
-        <DeviceStepsSheet
-          serial={stepsSerial}
-          open
-          onOpenChange={handleStepsOpenChange}
-        />
-      ) : null}
 
       <ConnectDeviceDialog
         open={connectDialogOpen}

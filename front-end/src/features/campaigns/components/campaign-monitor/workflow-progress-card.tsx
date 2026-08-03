@@ -275,6 +275,10 @@ export function WorkflowProgressCard({
         : 0;
   const stepType = prog?.current_step_type ?? '';
   const message = prog?.message ?? '';
+  const runningElapsedMs =
+    prog?.running_step === true ? (prog.current_step_elapsed_ms ?? 0) : 0;
+  const runningElapsedLabel =
+    runningElapsedMs > 0 ? `${Math.floor(runningElapsedMs / 1000)}s` : '';
   const loopIter =
     prog?.loop_iteration != null && prog.loop_iteration >= 0
       ? prog.loop_iteration
@@ -415,6 +419,14 @@ export function WorkflowProgressCard({
             {loopIter !== null && (
               <span className='text-[9px]'>
                 {t('monitorWfLoopRound', { n: loopIter + 1 })}
+              </span>
+            )}
+            {runningElapsedLabel && (
+              <span
+                className='rounded bg-muted px-1.5 py-0.5 font-mono text-[9px]'
+                title={prog?.current_step_started_at ?? undefined}
+              >
+                {runningElapsedLabel}
               </span>
             )}
             {message && (

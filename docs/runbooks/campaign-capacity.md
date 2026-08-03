@@ -22,11 +22,11 @@ The local compose defaults are:
 
 | Component | Calculation | Maximum |
 |---|---:|---:|
-| Web process | `8 + 2` | 10 |
+| Web process | `12 + 3` | 15 |
 | Activity workers | `7 * (4 + 0)` | 28 |
 | Temporal allowance | configured budget | 40 |
 | Recovery reserve | configured budget | 15 |
-| Total budgeted | | 93 / 100 |
+| Total budgeted | | 98 / 100 |
 
 Seven workers at 20 concurrent activities provide 140 slots: 120 target slots
 and 20 slots of headroom. Four database connections per worker remove the
@@ -34,7 +34,7 @@ measured two-connection activity bottleneck while retaining a 15-connection
 recovery reserve. Do not raise the activity pool above four in this shared
 database topology without reviewing the full connection budget. Production
 must set `DB_CONNECTION_LIMIT` to its real database limit. A value of `0` is
-advisory-only and should be used only while rolling out the validation.
+advisory-only and must not be used in production.
 
 ## Configuration
 
@@ -70,8 +70,8 @@ cd device_farm
   --server localhost:7233 \
   --worker-count 7 \
   --activities-per-worker 20 \
-  --db-pool-size 8 \
-  --db-max-overflow 2 \
+  --db-pool-size 12 \
+  --db-max-overflow 3 \
   --db-activity-pool-size 4 \
   --db-activity-max-overflow 0 \
   --json-output /tmp/temporal-capacity-120.json

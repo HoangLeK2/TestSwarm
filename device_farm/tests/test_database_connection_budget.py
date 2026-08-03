@@ -12,18 +12,18 @@ def test_connection_budget_accepts_safe_120_phone_configuration():
             "DB_CONNECTION_RESERVE": "15",
             "TEMPORAL_DB_MAX_CONNECTIONS": "40",
             "TEMPORAL_WORKER_COUNT": "7",
-            "DB_POOL_SIZE": "8",
-            "DB_MAX_OVERFLOW": "2",
+            "DB_POOL_SIZE": "12",
+            "DB_MAX_OVERFLOW": "3",
             "DB_ACTIVITY_POOL_SIZE": "4",
             "DB_ACTIVITY_MAX_OVERFLOW": "0",
         }
     )
 
-    assert budget.web_max == 10
+    assert budget.web_max == 15
     assert budget.activity_max == 28
-    assert budget.configured_demand == 78
-    assert budget.total_with_reserve == 93
-    assert budget.headroom == 7
+    assert budget.configured_demand == 83
+    assert budget.total_with_reserve == 98
+    assert budget.headroom == 2
 
 
 def test_connection_budget_defaults_match_recommended_pool_sizes():
@@ -37,9 +37,9 @@ def test_connection_budget_defaults_match_recommended_pool_sizes():
         }
     )
 
-    assert budget.web_max == 10
+    assert budget.web_max == 15
     assert budget.activity_max == 28
-    assert budget.total_with_reserve == 93
+    assert budget.total_with_reserve == 98
 
 
 def test_connection_budget_rejects_configuration_that_can_exhaust_postgres():

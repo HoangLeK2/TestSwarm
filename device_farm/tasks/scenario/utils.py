@@ -190,6 +190,34 @@ def _selector_is_volatile(
     return False
 
 
+def _selector_fallback_wait_timeout(
+    by: Optional[str],
+    value: Optional[str],
+    fallback_rx: Optional[float],
+    fallback_ry: Optional[float],
+    implicit_wait_timeout: float,
+) -> float:
+    """Shorten wait for known high-churn metadata selectors with explicit fallback."""
+    if fallback_rx is None or fallback_ry is None:
+        return implicit_wait_timeout
+    norm_by = str(by or "").replace("_", "-").strip().lower()
+    if norm_by not in {"description", "content-desc", "accessibility id", "text"}:
+        return implicit_wait_timeout
+    lowered = str(value or "").strip().lower()
+    high_churn_group_metadata = (
+        ("công khai" in lowered or "public" in lowered)
+        and (
+            "thành viên" in lowered
+            or "member" in lowered
+            or "bài viết/ngày" in lowered
+            or "posts/day" in lowered
+        )
+    )
+    if high_churn_group_metadata:
+        return min(implicit_wait_timeout, 0.35)
+    return implicit_wait_timeout
+
+
 def _node_matches_selector(node: Any, by: str, value: str) -> bool:
     if by == "text":
         return (node.get("text") or "") == value
@@ -707,12 +735,19 @@ def _execute_tap(
         and _current_selector_match_count(device, effective_by, effective_value, spec) == 1
     )
     use_selector_phase = has_selector and not selector_volatile
+    selector_wait_timeout = _selector_fallback_wait_timeout(
+        effective_by,
+        effective_value,
+        fallback_rx,
+        fallback_ry,
+        implicit_wait_timeout,
+    )
     if use_selector_phase and spec:
         def _phase_spec():
             return phase_selector(
                 u2, effective_by, effective_value,
                 fallback_rx, fallback_ry,
-                implicit_wait_timeout, implicit_wait_poll,
+                selector_wait_timeout, implicit_wait_poll,
                 w, h,
                 find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
                     u, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, spec=spec, device=device,
@@ -724,7 +759,7 @@ def _execute_tap(
         phases.append(lambda: phase_selector(
             u2, effective_by, effective_value,
             fallback_rx, fallback_ry,
-            implicit_wait_timeout, implicit_wait_poll,
+            selector_wait_timeout, implicit_wait_poll,
             w, h,
             find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
                 u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, device=device,
@@ -750,7 +785,11 @@ def _execute_tap(
             screenshot_anchor=screenshot_anchor,
         ))
 
-    if not has_selector and fallback_rx is not None and fallback_ry is not None:
+    if (
+        fallback_rx is not None
+        and fallback_ry is not None
+        and not selector_volatile
+    ):
         phases.append(lambda: phase_ratio(
             device, fallback_rx, fallback_ry, w, h,
             selector_tried=has_selector,

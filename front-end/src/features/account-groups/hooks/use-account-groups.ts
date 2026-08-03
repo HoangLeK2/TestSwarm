@@ -9,6 +9,7 @@ import {
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 
 export const ACCOUNT_GROUPS_LIST_KEY = ['account-groups'] as const;
+const ACCOUNT_GROUPS_STALE_MS = 30_000;
 
 export function accountGroupsListQueryKey(
   orgId: string | null | undefined,
@@ -32,6 +33,7 @@ export function useAccountGroups(
   return useQuery({
     queryKey: accountGroupsListQueryKey(orgId, query),
     queryFn: () => accountGroupsApi.list(query),
+    staleTime: ACCOUNT_GROUPS_STALE_MS,
     enabled: Boolean(orgId) && (options?.enabled ?? true)
   });
 }

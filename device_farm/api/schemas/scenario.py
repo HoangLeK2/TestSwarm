@@ -608,6 +608,20 @@ class RunScenarioStep(StepBase):
             raise ValueError("run_scenario requires scenario_id or scenario_name")
         return self
 
+
+class UseSourcePoolStep(StepBase):
+    type: Literal["use_source_pool"]
+    platform: str = Field("facebook", min_length=1, max_length=64)
+    entity_type: str = Field("group", min_length=1, max_length=64)
+    search: Optional[str] = None
+    output_prefix: Optional[str] = Field("GROUP", max_length=32)
+    statuses: List[str] = Field(
+        default_factory=lambda: ["candidate", "active", "available"],
+        min_length=1,
+        max_length=10,
+    )
+    allocation_policy: Literal["one_per_device"] = "one_per_device"
+
 # ── Extraction steps ──
 
 class ExtractStep(StepBase):
@@ -817,6 +831,7 @@ StepModel = Annotated[
         Annotated[LoopStep, Tag("loop")],
         Annotated[BreakIfStep, Tag("break_if")],
         Annotated[RunScenarioStep, Tag("run_scenario")],
+        Annotated[UseSourcePoolStep, Tag("use_source_pool")],
         Annotated[ExtractStep, Tag("extract")],
         Annotated[ExtractTextHierarchyStep, Tag("extract_text_hierarchy")],
         Annotated[ExtractTextOcrStep, Tag("extract_text_ocr")],

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import grpc
 import pytest
 
+from runtime.stream_telemetry import stream_telemetry
 from runtime.transports.grpc_gen import relay_pb2
 from runtime.transports.grpc_relay_server import RelayServicer
 from tests.perf_assertions import (
@@ -169,6 +170,29 @@ async def test_grpc_stream_n_to_n_load_local_mock():
     assert len(rm.serial_updates) == agent_count
     # each stream should have written at least the synthetic ping control frame
     assert all(len(c.writes) >= 1 for c in contexts)
+
+
+@pytest.mark.asyncio
+async def test_grpc_video_stream_records_backend_telemetry():
+    stream_telemetry.reset()
+    rm = _FakeRelayManager()
+    svc = RelayServicer(rm, api_key="k-secret")
+    ctx = _FakeContext(
+        [
+            ("x-relay-api-key", "k-secret"),
+            ("x-agent-id", "relay-main:video:0"),
+        ]
+    )
+
+    await svc.Stream(_iter_msgs([_video_msg("SN001", 1), _video_msg("SN001", 2)]), ctx)
+
+    snapshot = stream_telemetry.snapshot(reset=True)
+    assert len(rm.video_frames) == 2
+    assert snapshot["grpc_video_frames"] == 2
+    assert snapshot["grpc_video_bytes"] == 8
+    assert snapshot["grpc_video_keyframes"] == 2
+    assert snapshot["grpc_video_agents"] == 1
+    assert snapshot["grpc_video_shard_agents"] == 1
 
 
 @pytest.mark.asyncio

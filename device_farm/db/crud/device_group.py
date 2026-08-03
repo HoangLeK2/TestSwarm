@@ -209,6 +209,21 @@ async def count_group_members(db: AsyncSession, group_id: str) -> int:
     return result.scalar_one() or 0
 
 
+async def count_group_members_map(
+    db: AsyncSession,
+    group_ids: list[str],
+) -> dict[str, int]:
+    ids = [group_id for group_id in dict.fromkeys(group_ids) if group_id]
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(DeviceGroupMember.group_id, func.count().label("cnt"))
+        .where(DeviceGroupMember.group_id.in_(ids))
+        .group_by(DeviceGroupMember.group_id)
+    )
+    return {str(group_id): int(cnt or 0) for group_id, cnt in result.all()}
+
+
 # ── Device tags ───────────────────────────────────────────────────────────────
 
 

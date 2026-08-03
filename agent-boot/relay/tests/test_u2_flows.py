@@ -84,6 +84,63 @@ async def test_find_click_wait_clicked_not_gone(executor_with_device):
     assert v["gone"] is False
 
 
+@pytest.mark.asyncio
+async def test_find_click_wait_uses_http_flow_without_u2_lock(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    xmls = [
+        """<?xml version='1.0'?>
+        <hierarchy>
+          <node text="OK" resource-id="com.app:id/ok" bounds="[100,200][200,260]" />
+        </hierarchy>
+        """,
+        "<?xml version='1.0'?><hierarchy />",
+    ]
+    dump_calls = 0
+    rpc_calls: list[dict] = []
+
+    def http_dump(_serial: str, _timeout: float, _compressed: bool) -> str:
+        nonlocal dump_calls
+        dump_calls += 1
+        return xmls[min(dump_calls - 1, len(xmls) - 1)]
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str]:
+        rpc_calls.append(payload)
+        return True, ""
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=http_dump,
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "find_click_wait",
+        {
+            "selector": {"resourceId": "com.app:id/ok"},
+            "click_timeout": 0.1,
+            "gone_timeout": 0.1,
+        },
+        priority="visible",
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "clicked": True, "gone": True}
+    assert rpc_calls == [
+        {"jsonrpc": "2.0", "method": "click", "id": 1, "params": [150, 230]}
+    ]
+    assert dump_calls == 2
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_fastpaths"] == 1
+    assert stats["http_flow_hits"] == 1
+    assert stats["http_flow_polls"] == 2
+    assert stats["http_direct_actions"] == 1
+
+
 # ── wait_and_click ────────────────────────────────────────────────────────────
 
 
@@ -117,6 +174,48 @@ async def test_wait_and_click_not_found(executor_with_device):
 
     assert result["value"]["found"] is False
     sel.click.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wait_and_click_uses_http_flow_without_u2_lock(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+    xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="Continue" resource-id="com.app:id/continue" bounds="[20,40][120,90]" />
+    </hierarchy>
+    """
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str]:
+        rpc_calls.append(payload)
+        return True, ""
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda _s, _t, _c: xml,
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "wait_and_click",
+        {"selector": {"resourceId": "com.app:id/continue"}, "wait_timeout": 0.1},
+        priority="visible",
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "clicked": True}
+    assert rpc_calls == [
+        {"jsonrpc": "2.0", "method": "click", "id": 1, "params": [70, 65]}
+    ]
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_fastpaths"] == 1
+    assert stats["http_flow_hits"] == 1
+    assert stats["http_flow_polls"] == 1
 
 
 # ── find_get_text ─────────────────────────────────────────────────────────────
@@ -228,6 +327,185 @@ async def test_swipe_until_found_zero_swipes(executor_with_device):
     assert result["value"]["found"] is True
     assert result["value"]["swipes"] == 0
     dev.swipe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_uses_http_flow_without_u2_lock(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+    exists_results = [False, False, True]
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        if payload["method"] == "exist":
+            return True, "", exists_results.pop(0)
+        return True, "", True
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("exists RPC should avoid XML dump"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {"resourceId": "com.app:id/target"},
+            "max_swipes": 5,
+            "width": 1080,
+            "height": 1920,
+        },
+        priority="visible",
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "swipes": 2}
+    assert [call["method"] for call in rpc_calls] == [
+        "exist",
+        "swipe",
+        "exist",
+        "swipe",
+        "exist",
+    ]
+    assert rpc_calls[0]["params"][0]["resourceId"] == "com.app:id/target"
+    assert rpc_calls[1] == {
+        "jsonrpc": "2.0",
+        "method": "swipe",
+        "id": 1,
+        "params": [540, 1536, 540, 384, 4],
+    }
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_fastpaths"] == 1
+    assert stats["http_flow_hits"] == 1
+    assert stats["http_flow_polls"] == 3
+    assert stats["http_flow_swipes"] == 2
+    assert stats["http_direct_actions"] == 2
+    assert stats["http_exists_rpcs"] == 3
+    assert stats["http_exists_hits"] == 1
+    assert stats["http_exists_misses"] == 2
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_accepts_simple_spec(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        return True, "", True
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("simple spec should use exists RPC"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {
+                "spec": {
+                    "by": "description",
+                    "value": "Bình luận",
+                    "conditions": {"packageName": "com.facebook.katana"},
+                }
+            },
+            "max_swipes": 5,
+            "width": 1080,
+            "height": 1920,
+        },
+        priority="visible",
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "swipes": 0}
+    assert [call["method"] for call in rpc_calls] == ["exist"]
+    assert rpc_calls[0]["params"][0]["description"] == "Bình luận"
+    assert rpc_calls[0]["params"][0]["packageName"] == "com.facebook.katana"
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_exists_rpcs"] == 1
+    assert stats["http_exists_hits"] == 1
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_exhausts(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        return True, "", False
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("exists RPC should avoid XML dump"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {"text": "Missing"},
+            "max_swipes": 3,
+            "window_size": [1080, 1920],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": False, "swipes": 3}
+    assert [call["method"] for call in rpc_calls] == [
+        "exist",
+        "swipe",
+        "exist",
+        "swipe",
+        "exist",
+        "swipe",
+        "exist",
+    ]
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_misses"] == 1
+    assert stats["http_flow_swipes"] == 3
+    assert stats["http_exists_misses"] == 4
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_falls_back_without_window_size(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    exc._http_dump = lambda _s, _t, _c: "<?xml version='1.0'?><hierarchy />"
+    exc._http_rpc = lambda _s, _p, _t: (True, "")
+    sel = MagicMock()
+    type(sel).exists = property(lambda self: True)
+    dev.return_value = sel
+    dev.window_size.return_value = (1080, 1920)
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {"selector": {"text": "Target"}, "max_swipes": 1},
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "swipes": 0}
+    dev.window_size.assert_called_once()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_fallbacks"] == 1
 
 
 # ── input_and_confirm ─────────────────────────────────────────────────────────

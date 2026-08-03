@@ -824,8 +824,55 @@ def test_verified_single_post_detail_rejects_unrelated_body() -> None:
     assert diagnostic["reason_code"] == "post_detail_target_not_reconciled"
 
 
+def test_verified_single_post_detail_keeps_partial_opened_parent() -> None:
+    from relay.extra_data.parsers.facebook.post_reconciliation import (
+        reconcile_fb_post_frames,
+    )
+
+    feed_post = {
+        "_pid": "feed-pid",
+        "post_key": "feed-key",
+        "stable_post_id": "feed-stable",
+        "author": "OrangeGuava6933",
+        "timestamp": "23 Th7•Chia sẻ với: Nhóm công khai",
+        "text": "Các anh em cho mình hỏi Mình thiết lập zalo cá nhân làm bot… xem thêm",
+        "source_index": 0,
+    }
+    detail_post = {
+        **feed_post,
+        "_pid": "detail-pid",
+        "post_key": "detail-key",
+        "stable_post_id": "detail-stable",
+        "source_index": 1,
+    }
+
+    rows, diagnostic = reconcile_fb_post_frames(
+        [[feed_post], [detail_post]],
+        opened_post={
+            "pid": feed_post["_pid"],
+            "post_key": feed_post["post_key"],
+            "stable_post_id": feed_post["stable_post_id"],
+            "author": feed_post["author"],
+            "timestamp": feed_post["timestamp"],
+            "text_prefix": feed_post["text"],
+        },
+        opened_state="ok",
+    )
+
+    assert diagnostic["reason_code"] == "post_detail_partial"
+    assert diagnostic["post_detail_partial"] is True
+    assert len(rows) == 1
+    assert rows[0]["post_detail_partial"] is True
+    assert {
+        "_pid": "feed-pid",
+        "post_key": "feed-key",
+        "stable_post_id": "feed-stable",
+        "source_index": 0,
+    } in rows[0]["_source_variants"]
+
+
 @pytest.mark.asyncio
-async def test_process_payload_rejects_opened_post_when_detail_is_still_truncated(
+async def test_process_payload_keeps_partial_parent_when_opened_detail_is_truncated(
     monkeypatch,
 ) -> None:
     server = ExtraDataIngestServer()
@@ -897,11 +944,14 @@ async def test_process_payload_rejects_opened_post_when_detail_is_still_truncate
     )
 
     assert result["ok"] is True
-    assert result["parsed_count"] == 0
-    assert result["inserted_count"] == 0
-    assert result["diagnostic"]["reason_code"] == "post_detail_incomplete"
-    assert inserted == []
-    assert "active_parent_post" not in result
+    assert result["parsed_count"] == 1
+    assert result["inserted_count"] == 1
+    assert result["diagnostic"]["reason_code"] == "post_detail_partial"
+    assert result["diagnostic"]["post_detail_partial"] is True
+    assert len(inserted) == 1
+    assert inserted[0]["author"] == "Quoc Modoro"
+    assert result["active_parent_post"]["pid"] == truncated_post["_pid"]
+    assert result["active_parent_post"]["source"] == "post_detail"
 
 
 @pytest.mark.asyncio

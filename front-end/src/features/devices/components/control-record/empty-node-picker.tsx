@@ -96,10 +96,10 @@ function StepSection({
       </header>
       <div
         className={cn(
-          'grid gap-1.5',
+          'grid gap-1.5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr))]',
           dense
-            ? 'grid-cols-2 p-2 sm:grid-cols-3 xl:grid-cols-4'
-            : 'grid-cols-2 gap-2 p-3 sm:grid-cols-3'
+            ? 'p-2 xl:[grid-template-columns:repeat(auto-fit,minmax(min(100%,136px),1fr))]'
+            : 'gap-2 p-3 sm:[grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr))]'
         )}
       >
         {section.items.map((item) => (
@@ -269,7 +269,7 @@ export function EmptyNodePicker({
           'w-full space-y-3',
           dense
             ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
-            : 'max-w-2xl space-y-5'
+            : 'max-w-[min(100%,980px)] space-y-5'
         )}
       >
         <div

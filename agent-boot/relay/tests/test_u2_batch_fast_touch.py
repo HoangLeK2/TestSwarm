@@ -26,6 +26,21 @@ class _FakeDevice:
         raise AssertionError("u2 HTTP swipe batch must not call Python u2 swipe")
 
 
+def test_parse_u2_touch_rpc_result_preserves_result() -> None:
+    ok, error, result = RelayAgent._parse_u2_touch_rpc_result(
+        {
+            "ok": True,
+            "status": 200,
+            "body": json.dumps({"jsonrpc": "2.0", "id": 1, "result": False}),
+            "content_type": "application/json",
+        }
+    )
+
+    assert ok is True
+    assert error == ""
+    assert result is False
+
+
 @pytest.mark.asyncio
 async def test_u2_batch_coordinate_touch_uses_http_fast_path(monkeypatch):
     agent = RelayAgent(
@@ -132,6 +147,50 @@ async def test_u2_request_jsonrpc_post_marks_ui_mutation(monkeypatch):
     agent._u2_executor.end_ui_mutation.assert_called_once_with(
         "10AE7S00HD002JK"
     )
+
+
+@pytest.mark.asyncio
+async def test_u2_request_hierarchy_uses_visible_admission_metrics(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+    agent._u2_executor = U2Executor(
+        _FakePool(),
+        asyncio.get_running_loop(),
+    )
+    monkeypatch.setattr(
+        agent,
+        "_do_u2_http",
+        lambda *_args: {
+            "ok": True,
+            "status": 200,
+            "body": '<?xml version="1.0"?><hierarchy><node /></hierarchy>',
+            "content_type": "application/xml",
+        },
+    )
+
+    send_q: asyncio.Queue = asyncio.Queue()
+    await agent._handle_u2_request(
+        {
+            "msg_id": "request-1",
+            "serial": "10AE7S00HD002JK",
+            "method": "GET",
+            "path": "/dump/hierarchy?compressed=1",
+            "priority": "visible",
+            "deadline_ms": 1500,
+        },
+        send_q,
+    )
+
+    stats = agent._u2_executor.stats_snapshot(reset=False)
+    assert stats["visible_admitted"] == 1
+    assert stats["background_admitted"] == 0
+    assert stats["hierarchy_visible_requests"] == 1
+    assert stats["hierarchy_visible_success"] == 1
+    assert stats["hierarchy_background_requests"] == 0
 
 
 @pytest.mark.asyncio

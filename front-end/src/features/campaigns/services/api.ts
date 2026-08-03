@@ -64,6 +64,7 @@ export type CampaignDispatchIn = GeneratedCampaignDispatchIn & {
     platform: string;
     entity_type: string;
     search?: string | null;
+    output_prefix?: string | null;
     statuses?: string[];
   } | null;
   allocation_snapshot?: Array<{
@@ -283,6 +284,21 @@ export const campaignsApi = {
         pending: number;
         error: number;
         total_content_items: number;
+        latest_dispatch_id?: string | null;
+        latest_dispatch_target_count?: number;
+        latest_dispatch_finished_count?: number;
+        latest_dispatch_running_count?: number;
+        latest_dispatch_pending_count?: number;
+        latest_dispatch_failed_count?: number;
+        latest_dispatch_workflow_started_count?: number;
+        latest_dispatch_fallback_count?: number;
+        latest_dispatch_created_at?: string | null;
+        latest_dispatch_first_started_at?: string | null;
+        latest_dispatch_latest_finished_at?: string | null;
+        latest_dispatch_elapsed_ms?: number | null;
+        latest_dispatch_terminal_ms?: number | null;
+        latest_dispatch_to_first_start_ms?: number | null;
+        latest_dispatch_to_start_p95_ms?: number | null;
       }>(`/campaigns/${encodeURIComponent(id)}/run-stats`)
       .then((r) => r.data),
   patchEntity: (id: string, data: CampaignEntityUpdate) =>

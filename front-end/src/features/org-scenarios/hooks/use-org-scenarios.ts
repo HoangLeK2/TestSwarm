@@ -34,21 +34,27 @@ const KEYS = {
   templateDetail: (id: string) => ['scenario-templates', id] as const,
   body: (id: string) => ['org-scenarios', id, 'body'] as const
 };
+const CATALOG_STALE_MS = 30_000;
 
 export function useOrgScenarios(query?: {
   include_archived?: boolean;
   tag?: string;
+  enabled?: boolean;
 }) {
+  const { enabled = true, ...params } = query ?? {};
   return useQuery({
-    queryKey: [...KEYS.list, query] as const,
-    queryFn: () => orgScenariosApi.list(query)
+    queryKey: [...KEYS.list, params] as const,
+    queryFn: () => orgScenariosApi.list(params),
+    staleTime: CATALOG_STALE_MS,
+    enabled
   });
 }
 
 export function useScenarioTemplatesCatalog() {
   return useQuery({
     queryKey: KEYS.templates,
-    queryFn: () => scenarioTemplatesApi.list()
+    queryFn: () => scenarioTemplatesApi.list(),
+    staleTime: CATALOG_STALE_MS
   });
 }
 

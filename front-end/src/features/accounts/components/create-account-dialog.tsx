@@ -25,6 +25,8 @@ type FormData = {
   platform: string;
   username: string;
   password?: string;
+  email?: string;
+  totp_secret?: string;
   display_name?: string;
   tags?: string;
   notes?: string;
@@ -38,6 +40,8 @@ export function CreateAccountDialog() {
     }),
     username: z.string().min(1, t('usernameRequired')),
     password: z.string().optional(),
+    email: z.string().optional(),
+    totp_secret: z.string().optional(),
     display_name: z.string().optional(),
     tags: z.string().optional(),
     notes: z.string().optional()
@@ -52,12 +56,26 @@ export function CreateAccountDialog() {
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const onSubmit = (data: FormData) => {
-    mutate(data, {
-      onSuccess: () => {
-        reset();
-        setOpen(false);
+    const { email, totp_secret, ...account } = data;
+    const normalizedEmail = email?.trim();
+    const normalizedTotpSecret = totp_secret?.replace(/\s+/g, '').trim();
+    const account_metadata: Record<string, string> = {};
+    if (normalizedEmail) account_metadata.email = normalizedEmail;
+    if (normalizedTotpSecret)
+      account_metadata.totp_secret = normalizedTotpSecret;
+
+    mutate(
+      {
+        ...account,
+        account_metadata
+      },
+      {
+        onSuccess: () => {
+          reset();
+          setOpen(false);
+        }
       }
-    });
+    );
   };
 
   return (
@@ -120,6 +138,23 @@ export function CreateAccountDialog() {
               <Input
                 placeholder={t('displayNamePlaceholder')}
                 {...register('display_name')}
+              />
+            </div>
+          </div>
+          <div className='grid grid-cols-2 gap-4'>
+            <div className='space-y-1'>
+              <Label>{t('emailLabel')}</Label>
+              <Input
+                placeholder={t('emailPlaceholder')}
+                {...register('email')}
+              />
+            </div>
+            <div className='space-y-1'>
+              <Label>{t('totpSecretLabel')}</Label>
+              <Input
+                autoComplete='off'
+                placeholder={t('totpSecretPlaceholder')}
+                {...register('totp_secret')}
               />
             </div>
           </div>

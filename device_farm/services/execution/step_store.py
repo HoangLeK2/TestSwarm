@@ -25,6 +25,9 @@ _ARTIFACT_HEAVY_KEYS = frozenset({
 _ERROR_DETAIL_KEYS = (
     "message",
     "reason_code",
+    "failure_class",
+    "retry_hint",
+    "operator_summary",
     "retryable",
     "edge_extra_summary",
     "edge_filter_summary",

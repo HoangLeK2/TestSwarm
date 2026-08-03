@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from api.schemas.scenario import ScenarioModel
 
 
@@ -13,6 +12,18 @@ from api.schemas.scenario import ScenarioModel
             "platform": "facebook",
             "action": "like",
             "save_as": "LIKE_RESULT",
+        },
+        {
+            "type": "content_interaction",
+            "platform": "facebook",
+            "action": "comment",
+            "save_as": "COMMENT_RESULT",
+        },
+        {
+            "type": "content_interaction",
+            "platform": "facebook",
+            "action": "share",
+            "save_as": "SHARE_RESULT",
         },
         {
             "type": "connection_request",

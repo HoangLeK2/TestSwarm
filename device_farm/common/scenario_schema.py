@@ -48,6 +48,7 @@ SCENARIO_STEP_TYPES = [
     "community_membership",
     "random_pick",
     "run_scenario",
+    "use_source_pool",
     "extract",
     "loop",
     "break_if",
@@ -152,12 +153,12 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     "content_interaction": {
         "required": [],
         "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
-        "description": "Interact with content on the current screen through a platform adapter.",
+        "description": "Interact with content on the current screen through a platform adapter. Facebook actions: like, comment, share.",
     },
     "connection_request": {
         "required": [],
         "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
-        "description": "Send an idempotent connection request on the current profile screen.",
+        "description": "Send an idempotent connection request on the current profile screen; multiple visible targets are rejected.",
     },
     "community_membership": {
         "required": [],
@@ -438,6 +439,22 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "variables: dict override variables cho sub-scenario (optional). "
             "Yêu cầu một trong hai: scenario_id hoặc scenario_name. "
             "Circular reference và max depth (10) được tự động bảo vệ."
+        ),
+    },
+    "use_source_pool": {
+        "required": [],
+        "optional": [
+            "platform",
+            "entity_type",
+            "search",
+            "output_prefix",
+            "statuses",
+            "allocation_policy",
+        ],
+        "description": (
+            "Khai báo nguồn dữ liệu dùng cho campaign dispatch. "
+            "Mặc định dùng external_entities facebook/group đã cào; "
+            "mỗi device nhận một nguồn qua biến TARGET_* và alias theo output_prefix."
         ),
     },
     "extract": {

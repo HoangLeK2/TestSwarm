@@ -41,7 +41,9 @@ function normalizeWsUrl(raw: string, fallbackScheme: 'ws' | 'wss') {
   }
 }
 
-function buildDeviceFarmWsUrl(options: { sessionIdSuffix?: string } = {}): string {
+function buildDeviceFarmWsUrl(
+  options: { sessionIdSuffix?: string } = {}
+): string {
   const isSecure =
     typeof location !== 'undefined' && location.protocol === 'https:';
   const scheme = isSecure ? 'wss' : 'ws';
@@ -527,19 +529,22 @@ function scheduleMediaSocketIdleClose(entry: MediaSocketEntry): void {
   if (entry.idleCloseTimer !== undefined) {
     clearTimeout(entry.idleCloseTimer);
   }
-  entry.idleCloseTimer = setTimeout(() => {
-    entry.idleCloseTimer = undefined;
-    if (entry.listeners.size > 0) return;
-    sendMediaJson(entry, { type: 'unwatch_serial', serial: entry.serial });
-    try {
-      entry.socket?.close();
-    } catch {
-      // ignore close failure
-    }
-    entry.socket = null;
-    entry.watched = false;
-    mediaSocketsBySerial.delete(entry.serial);
-  }, Math.max(0, MEDIA_WS_IDLE_CLOSE_MS));
+  entry.idleCloseTimer = setTimeout(
+    () => {
+      entry.idleCloseTimer = undefined;
+      if (entry.listeners.size > 0) return;
+      sendMediaJson(entry, { type: 'unwatch_serial', serial: entry.serial });
+      try {
+        entry.socket?.close();
+      } catch {
+        // ignore close failure
+      }
+      entry.socket = null;
+      entry.watched = false;
+      mediaSocketsBySerial.delete(entry.serial);
+    },
+    Math.max(0, MEDIA_WS_IDLE_CLOSE_MS)
+  );
 }
 
 function subscribeMediaBinaryFrames(

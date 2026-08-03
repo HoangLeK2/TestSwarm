@@ -1069,9 +1069,7 @@ export function StepDetailPanel({
                   <F label='Hành động'>
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
-                      value={
-                        step.action ?? defaultSocialAction(step.type)
-                      }
+                      value={step.action ?? defaultSocialAction(step.type)}
                       onChange={(e) => update({ action: e.target.value })}
                     >
                       {getSocialActionOptions(step.type).map((option) => (
@@ -2456,7 +2454,7 @@ export function StepDetailPanel({
                   </F>
                   <F label='Prefix biến xuất ra'>
                     <Input
-                      className='h-8 text-xs font-mono'
+                      className='h-8 font-mono text-xs'
                       value={step.output_prefix ?? 'GROUP'}
                       onChange={(e) =>
                         update({ output_prefix: e.target.value || undefined })
@@ -2471,8 +2469,9 @@ export function StepDetailPanel({
                           .trim()
                           .toUpperCase() || 'GROUP';
                       const safePrefix =
-                        prefix.replace(/[^A-Z0-9_]/g, '_').replace(/^_+|_+$/g, '') ||
-                        'GROUP';
+                        prefix
+                          .replace(/[^A-Z0-9_]/g, '_')
+                          .replace(/^_+|_+$/g, '') || 'GROUP';
                       return `\${${safePrefix}_NAME} · \${${safePrefix}_URL} · \${${safePrefix}_SEARCH_QUERY} · \${${safePrefix}_SELECTOR_VALUE}`;
                     })()}
                   </div>

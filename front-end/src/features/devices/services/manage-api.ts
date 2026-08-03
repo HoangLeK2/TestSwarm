@@ -113,12 +113,10 @@ export const devicesApi = {
       return r.data;
     }),
   register: (body?: { name?: string; description?: string }) =>
-    farmApi
-      .post<DeviceOut>('/devices/register', body ?? {})
-      .then((r) => {
-        clearDeviceListCache();
-        return r.data;
-      }),
+    farmApi.post<DeviceOut>('/devices/register', body ?? {}).then((r) => {
+      clearDeviceListCache();
+      return r.data;
+    }),
   sessions: (deviceId: string) =>
     farmApi
       .get<SessionOut[]>(`/devices/${deviceId}/sessions`)

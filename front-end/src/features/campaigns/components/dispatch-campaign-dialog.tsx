@@ -354,7 +354,11 @@ export function DispatchCampaignDialog({
     if (!sourcePoolFromScenario || !sourcePoolFromScenarioKey) {
       return sourcePoolOptions;
     }
-    if (sourcePoolOptions.some((option) => option.key === sourcePoolFromScenarioKey)) {
+    if (
+      sourcePoolOptions.some(
+        (option) => option.key === sourcePoolFromScenarioKey
+      )
+    ) {
       return sourcePoolOptions;
     }
     return [
@@ -440,11 +444,7 @@ export function DispatchCampaignDialog({
         entity_type: entity?.entity_type ?? assignment.entity_type
       };
     });
-  }, [
-    sourceAssignmentOverrides,
-    sourceEntityById,
-    sourcePreview?.assignments
-  ]);
+  }, [sourceAssignmentOverrides, sourceEntityById, sourcePreview?.assignments]);
   const duplicateSourceEntityIds = useMemo(() => {
     const counts = new Map<string, number>();
     for (const assignment of effectiveSourceAssignments) {

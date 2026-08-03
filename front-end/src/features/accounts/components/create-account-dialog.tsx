@@ -61,7 +61,8 @@ export function CreateAccountDialog() {
     const normalizedTotpSecret = totp_secret?.replace(/\s+/g, '').trim();
     const account_metadata: Record<string, string> = {};
     if (normalizedEmail) account_metadata.email = normalizedEmail;
-    if (normalizedTotpSecret) account_metadata.totp_secret = normalizedTotpSecret;
+    if (normalizedTotpSecret)
+      account_metadata.totp_secret = normalizedTotpSecret;
 
     mutate(
       {

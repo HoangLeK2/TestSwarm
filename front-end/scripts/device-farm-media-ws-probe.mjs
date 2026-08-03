@@ -163,8 +163,7 @@ async function seedAuthIfConfigured(client) {
     user = await meResponse.json();
   }
 
-  const expiresAt =
-    Date.now() + Number(tokenData.expires_in ?? 3600) * 1000;
+  const expiresAt = Date.now() + Number(tokenData.expires_in ?? 3600) * 1000;
   await evaluate(
     client,
     `(() => {

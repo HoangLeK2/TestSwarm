@@ -230,10 +230,7 @@ export function DeviceFarm() {
                     }}
                   >
                     {pageDevices.slice(start, end).map((device) => (
-                      <DeviceTilePreview
-                        key={device.serial}
-                        device={device}
-                      />
+                      <DeviceTilePreview key={device.serial} device={device} />
                     ))}
                   </div>
                 );

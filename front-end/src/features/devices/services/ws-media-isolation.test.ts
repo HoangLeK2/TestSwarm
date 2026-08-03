@@ -76,9 +76,7 @@ class FakeWebSocket {
 
 function h264KeyFrame(serial: string): ArrayBuffer {
   const serialBytes = new TextEncoder().encode(serial);
-  const payload = new Uint8Array([
-    0x00, 0x00, 0x00, 0x02, 0x65, 0xaa
-  ]);
+  const payload = new Uint8Array([0x00, 0x00, 0x00, 0x02, 0x65, 0xaa]);
   const out = new Uint8Array(2 + serialBytes.length + 4 + 9 + payload.length);
   let offset = 0;
   out[offset++] = 0x11;

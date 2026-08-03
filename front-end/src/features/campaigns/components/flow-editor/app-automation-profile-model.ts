@@ -309,9 +309,7 @@ export function patchLoginTarget(
 
   if (!hasCandidateSignal(nextCandidate)) {
     const fields = {
-      ...((isPostSubmitField
-        ? recipe.post_submit_fields
-        : recipe.fields) ?? {})
+      ...((isPostSubmitField ? recipe.post_submit_fields : recipe.fields) ?? {})
     };
     delete fields[fieldName];
     const recipePatch = isPostSubmitField

@@ -1,5 +1,6 @@
 'use client';
 
+import type { CSSProperties } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
@@ -24,9 +25,11 @@ export function SortableFlowRow({
     isDragging
   } = useSortable({ id });
 
-  const style = {
+  const style: CSSProperties = {
+    contain: 'layout paint style',
     transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined
+    transition: transition ?? undefined,
+    willChange: isDragging ? 'transform' : undefined
   };
 
   const dragHandle = (

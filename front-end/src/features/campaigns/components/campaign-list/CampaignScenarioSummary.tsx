@@ -28,7 +28,9 @@ export function CampaignScenarioSummary({
     campaign.id,
     dialogOpen && !campaign.scenario_refs?.length
   );
-  const { data: orgScenarios = [] } = useOrgScenarios();
+  const { data: orgScenarios = [] } = useOrgScenarios({
+    enabled: dialogOpen
+  });
   const entityRefs =
     campaign.scenario_refs ??
     (detail && isCampaignEntityOut(detail) ? detail.scenario_refs : []) ??

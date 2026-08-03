@@ -44,6 +44,8 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
                 idr_response_ms=args.idr_response_ms,
                 command_interval_s=args.command_interval_s,
                 consumer_delay_ms=args.consumer_delay_ms,
+                visible_phones=args.visible_phones or None,
+                video_shards=args.video_shards,
             ),
             noisy_fps_multiplier=args.noisy_fps_multiplier,
             max_normal_phone_p95_delta_ms=args.isolation_p95_delta_ms,
@@ -96,6 +98,18 @@ def main() -> int:
     parser.add_argument("--idr-response-ms", type=float, default=100.0)
     parser.add_argument("--command-interval-s", type=float, default=0.25)
     parser.add_argument("--consumer-delay-ms", type=float, default=0.0)
+    parser.add_argument(
+        "--visible-phones",
+        type=int,
+        default=0,
+        help="phones with active H264 video; 0 means every phone streams video",
+    )
+    parser.add_argument(
+        "--video-shards",
+        type=int,
+        default=8,
+        help="physical video shard queues/streams; 0 forces legacy shared queue",
+    )
     parser.add_argument("--noisy-fps-multiplier", type=float, default=8.0)
     parser.add_argument("--handoff-p95-ms", type=float, default=10.0)
     parser.add_argument("--queue-age-p95-ms", type=float, default=50.0)

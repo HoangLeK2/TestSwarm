@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 import time
 import xml.etree.ElementTree as ET
-from typing import Any, Dict
+from typing import Any
 
 from services.social_actions import get_social_action_adapter
 from services.social_actions.contract import (
     SocialActionObservation,
     UnsupportedSocialAction,
 )
+
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.steps import register_step
 
@@ -22,6 +23,7 @@ _DEFAULT_ACTIONS = {
     "connection_request": "request",
     "community_membership": "join",
 }
+_GLOBAL_VERIFY_CONTENT_ACTIONS = frozenset({"comment", "share"})
 
 
 def _cancelled(sc: ScenarioContext) -> bool:
@@ -93,7 +95,7 @@ def _poll_observation(
             return None
 
 
-def _public_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+def _public_payload(result: dict[str, Any]) -> dict[str, Any]:
     return {
         key: result[key]
         for key in (
@@ -110,8 +112,8 @@ def _public_payload(result: Dict[str, Any]) -> Dict[str, Any]:
 
 def _save_result(
     sc: ScenarioContext,
-    step: Dict[str, Any],
-    result: Dict[str, Any],
+    step: dict[str, Any],
+    result: dict[str, Any],
 ) -> None:
     save_as = str(step.get("save_as") or "").strip()
     if not save_as:
@@ -122,10 +124,24 @@ def _save_result(
     result["save_as"] = save_as
 
 
+def _verification_bounds(
+    *,
+    action_type: str,
+    action: str,
+    target_bounds: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    if (
+        action_type == "content_interaction"
+        and action in _GLOBAL_VERIFY_CONTENT_ACTIONS
+    ):
+        return None
+    return target_bounds
+
+
 def _fail(
     sc: ScenarioContext,
-    step: Dict[str, Any],
-    result: Dict[str, Any],
+    step: dict[str, Any],
+    result: dict[str, Any],
     *,
     outcome: str,
     message: str,
@@ -143,9 +159,9 @@ def _fail(
 )
 def handle_social_action(
     sc: ScenarioContext,
-    step: Dict[str, Any],
+    step: dict[str, Any],
     idx: int,
-    result: Dict[str, Any],
+    result: dict[str, Any],
 ) -> None:
     """Act only on the current screen and verify the resulting UI state."""
 
@@ -294,7 +310,11 @@ def handle_social_action(
             timeout=verify_timeout,
             poll=poll,
             require_satisfied=True,
-            near_bounds=before.target_bounds,
+            near_bounds=_verification_bounds(
+                action_type=action_type,
+                action=action,
+                target_bounds=before.target_bounds,
+            ),
         )
     except (ET.ParseError, OSError, RuntimeError, ValueError) as exc:
         _fail(

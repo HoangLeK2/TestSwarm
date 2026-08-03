@@ -31,6 +31,7 @@ import {
   GripVertical,
   Camera,
   Clipboard,
+  Users,
   type LucideProps
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -79,6 +80,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   drag: GripVertical,
   take_screenshot: Camera,
   set_clipboard: Clipboard,
+  use_source_pool: Users,
   extract_text_hierarchy: Search,
   extract_text_ocr: Search,
   extract_text_ai: Search,
@@ -130,6 +132,7 @@ const COLOR_MAP: Record<string, string> = {
   drag: 'text-blue-600',
   take_screenshot: 'text-violet-500',
   set_clipboard: 'text-teal-500',
+  use_source_pool: 'text-teal-600',
   set_variable: 'text-purple-500',
   set_var: 'text-purple-500',
   repeat: 'text-orange-500',

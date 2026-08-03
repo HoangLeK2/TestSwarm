@@ -295,18 +295,15 @@ def reconcile_fb_post_frames(
             continue
         content_detail_posts.append((index, post))
     if not content_detail_posts and opened_state == "comment_sheet":
-        if _post_text_is_truncated(feed_target.get("text")):
-            return [], {
-                "reason_code": "post_detail_incomplete",
-                "reconciled_post_count": 0,
-                "detail_chrome_dropped": chrome_dropped,
-                "comment_sheet_feed_fallback": False,
-            }
+        partial = _post_text_is_truncated(feed_target.get("text"))
+        if partial:
+            feed_target["post_detail_partial"] = True
         return [feed_target], {
-            "reason_code": "ok",
+            "reason_code": "post_detail_partial" if partial else "ok",
             "reconciled_post_count": 0,
             "detail_chrome_dropped": chrome_dropped,
             "comment_sheet_feed_fallback": True,
+            "post_detail_partial": partial,
             "discarded_unopened_posts": max(0, len(feed_posts) - 1),
         }
     if not content_detail_posts:
@@ -333,10 +330,12 @@ def reconcile_fb_post_frames(
         canonical.get("text"),
         feed_preview=feed_target.get("text"),
     ):
-        return [], {
-            "reason_code": "post_detail_incomplete",
+        canonical["post_detail_partial"] = True
+        return [canonical], {
+            "reason_code": "post_detail_partial",
             "reconciled_post_count": 1,
             "detail_chrome_dropped": chrome_dropped,
+            "post_detail_partial": True,
             "discarded_unopened_posts": max(
                 0,
                 len(filtered_feed_posts) + len(content_detail_posts) - 2,

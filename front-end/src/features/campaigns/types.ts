@@ -268,6 +268,9 @@ export type WorkflowProgress = {
   message: string;
   device_serial: string;
   error_message?: string | null;
+  current_step_started_at?: string | null;
+  current_step_elapsed_ms?: number;
+  running_step?: boolean;
 };
 
 export type StepLogEntry = {

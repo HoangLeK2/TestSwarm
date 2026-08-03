@@ -91,6 +91,7 @@ class AdbAdmissionController:
         *,
         max_concurrency: int,
         reserved_interactive: int,
+        reserved_startup: int = 0,
         max_heavy: int,
     ) -> None:
         if max_concurrency < 1:
@@ -101,6 +102,10 @@ class AdbAdmissionController:
             max_concurrency - 1,
         )
         self._max_heavy = min(max(1, max_heavy), max_concurrency)
+        self._reserved_startup = min(
+            max(0, reserved_startup),
+            max(0, self._max_heavy - 1),
+        )
         self._condition = threading.Condition()
         self._sequence = itertools.count()
         self._waiters: list[_Ticket] = []
@@ -108,6 +113,7 @@ class AdbAdmissionController:
         self._active = 0
         self._active_noninteractive = 0
         self._active_heavy = 0
+        self._active_startup = 0
         self._max_active = 0
         self._completed = 0
         self._queue_wait_ms: deque[int] = deque(maxlen=4096)
@@ -133,6 +139,8 @@ class AdbAdmissionController:
                 self._active_noninteractive += 1
             if lane.heavy:
                 self._active_heavy += 1
+            if lane == AdbLane.STARTUP:
+                self._active_startup += 1
             self._max_active = max(self._max_active, self._active)
             self._queue_wait_ms.append(
                 max(0, round((time.monotonic() - ticket.enqueued_at) * 1_000))
@@ -148,6 +156,8 @@ class AdbAdmissionController:
                     self._active_noninteractive -= 1
                 if lane.heavy:
                     self._active_heavy -= 1
+                if lane == AdbLane.STARTUP:
+                    self._active_startup -= 1
                 self._completed += 1
                 self._condition.notify_all()
 
@@ -182,26 +192,42 @@ class AdbAdmissionController:
             return False
         if ticket.lane.heavy and self._active_heavy >= self._max_heavy:
             return False
+        if (
+            ticket.lane == AdbLane.MAINTENANCE
+            and self._reserved_startup > 0
+            and self._has_waiting_lane(lane=AdbLane.STARTUP)
+        ):
+            active_maintenance = self._active_heavy - self._active_startup
+            if active_maintenance >= self._max_heavy - self._reserved_startup:
+                return False
         if self._max_concurrency == 1:
             return True
 
         active_interactive = self._active - self._active_noninteractive
         if ticket.lane == AdbLane.INTERACTIVE:
             return not (
-                self._has_waiting_lane(interactive=False)
+                self._has_waiting_interactive(False)
                 and active_interactive >= self._max_concurrency - 1
             )
         return not (
-            self._has_waiting_lane(interactive=True)
+            self._has_waiting_interactive(True)
             and self._active_noninteractive
             >= self._max_concurrency - self._reserved_interactive
         )
 
-    def _has_waiting_lane(self, *, interactive: bool) -> bool:
+    def _has_waiting_interactive(self, interactive: bool) -> bool:
         return any(
             self._is_serial_head(candidate)
             and candidate.serial not in self._active_serials
             and (candidate.lane == AdbLane.INTERACTIVE) is interactive
+            for candidate in self._waiters
+        )
+
+    def _has_waiting_lane(self, *, lane: AdbLane) -> bool:
+        return any(
+            self._is_serial_head(candidate)
+            and candidate.serial not in self._active_serials
+            and candidate.lane == lane
             for candidate in self._waiters
         )
 
@@ -230,6 +256,7 @@ class AdbAdmissionController:
             result = {
                 "active": self._active,
                 "active_heavy": self._active_heavy,
+                "active_startup": self._active_startup,
                 "waiting": len(self._waiters),
                 "completed": self._completed,
                 "max_active": self._max_active,
@@ -250,7 +277,7 @@ _CONTROLLER = AdbAdmissionController(
         "RELAY_ADB_COMMAND_CONCURRENCY",
         12,
         minimum=1,
-        maximum=24,
+        maximum=32,
     ),
     reserved_interactive=_env_int(
         "RELAY_ADB_INTERACTIVE_RESERVED",
@@ -258,7 +285,13 @@ _CONTROLLER = AdbAdmissionController(
         minimum=0,
         maximum=8,
     ),
-    max_heavy=_env_int("RELAY_ADB_HEAVY_CONCURRENCY", 3, minimum=1, maximum=4),
+    reserved_startup=_env_int(
+        "RELAY_ADB_STARTUP_RESERVED",
+        2,
+        minimum=0,
+        maximum=8,
+    ),
+    max_heavy=_env_int("RELAY_ADB_HEAVY_CONCURRENCY", 3, minimum=1, maximum=6),
 )
 
 

@@ -6,7 +6,10 @@ privacy affordance, geometric fallback) — not tied to specific badge labels
 """
 from __future__ import annotations
 
+import copy
+import hashlib
 import re
+from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .comment_pipeline import (
@@ -63,6 +66,11 @@ _TAP_KIND_RANK = {
 
 # Body/photo taps open lightbox or "see more" — not post detail for extraction.
 _UNSAFE_POST_OPEN_TAP_KINDS = frozenset({"post_media", "post_body"})
+_POST_OPEN_RESOLVE_CACHE_MAX = 128
+_POST_OPEN_RESOLVE_CACHE: OrderedDict[
+    Tuple[Any, ...],
+    Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]],
+] = OrderedDict()
 
 _AVATAR_HINTS = (
     "ảnh đại diện",
@@ -1844,6 +1852,91 @@ def _discover_post_open_scan_elements(root) -> List[Tuple[int, Any]]:
     return [(0, root)]
 
 
+def _prioritize_post_open_scan_elements(
+    scan: List[Tuple[int, Any]],
+    *,
+    center_y_ratio: float,
+    screen_h: int,
+) -> List[Tuple[int, Any]]:
+    from .parser import _parse_bounds
+
+    if len(scan) <= 1 or screen_h <= 0:
+        return scan
+    target_y = int(screen_h * center_y_ratio)
+
+    def _distance(entry: Tuple[int, Any]) -> Tuple[int, int]:
+        index, element = entry
+        bounds = _parse_bounds(element)
+        if not bounds:
+            return (10_000_000, index)
+        _x1, y1, _x2, y2 = bounds
+        center_y = (y1 + y2) // 2
+        return (abs(center_y - target_y), index)
+
+    return sorted(scan, key=_distance)
+
+
+def _open_post_anchor_cache_key(anchor: Dict[str, Any]) -> Tuple[str, ...]:
+    values: list[str] = []
+    for key in ("pid", "_pid", "post_key", "stable_post_id", "fb_post_id", "author", "timestamp", "text_prefix"):
+        value = str(anchor.get(key) or "").strip().casefold()
+        if value:
+            values.append(f"{key}:{value[:120]}")
+    return tuple(values)
+
+
+def _open_post_resolve_cache_key(
+    xml: str,
+    *,
+    center_y_ratio: float,
+    max_candidates: int,
+    max_scan_elements: int | None,
+    locked_post_key: str | None,
+    exclude_post_anchors: Iterable[Dict[str, Any]] | None,
+    band_low: float,
+    band_high: float,
+) -> Tuple[Any, ...]:
+    anchors = tuple(
+        sorted(
+            _open_post_anchor_cache_key(anchor)
+            for anchor in (exclude_post_anchors or [])
+            if isinstance(anchor, dict)
+        )
+    )
+    return (
+        len(xml),
+        hashlib.sha1(xml.encode("utf-8")).hexdigest(),
+        round(float(center_y_ratio), 3),
+        int(max_candidates),
+        int(max_scan_elements or 0),
+        str(locked_post_key or ""),
+        round(float(band_low), 3),
+        round(float(band_high), 3),
+        anchors,
+    )
+
+
+def _clone_post_open_resolution(
+    value: Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]],
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    top, alternates = value
+    return (
+        copy.deepcopy(top) if top is not None else None,
+        copy.deepcopy(alternates),
+    )
+
+
+def _cache_post_open_resolution(
+    key: Tuple[Any, ...],
+    value: Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]],
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    _POST_OPEN_RESOLVE_CACHE[key] = _clone_post_open_resolution(value)
+    _POST_OPEN_RESOLVE_CACHE.move_to_end(key)
+    while len(_POST_OPEN_RESOLVE_CACHE) > _POST_OPEN_RESOLVE_CACHE_MAX:
+        _POST_OPEN_RESOLVE_CACHE.popitem(last=False)
+    return value
+
+
 def _post_open_candidate_passes_filter(
     cand: Dict[str, Any],
     *,
@@ -1942,6 +2035,7 @@ def resolve_post_open_targets_from_xml(
     *,
     center_y_ratio: float = 0.5,
     max_candidates: int = 5,
+    max_scan_elements: int | None = 12,
     locked_post_key: str | None = None,
     exclude_post_anchors: Iterable[Dict[str, Any]] | None = None,
     band_low: float = 0.05,
@@ -1951,12 +2045,27 @@ def resolve_post_open_targets_from_xml(
     from .parser import _infer_screen_size, _parse_xml
     from .ui_expansion import profile_tab_strip_min_tap_y
 
+    cache_key = _open_post_resolve_cache_key(
+        xml,
+        center_y_ratio=center_y_ratio,
+        max_candidates=max_candidates,
+        max_scan_elements=max_scan_elements,
+        locked_post_key=locked_post_key,
+        exclude_post_anchors=exclude_post_anchors,
+        band_low=band_low,
+        band_high=band_high,
+    )
+    cached = _POST_OPEN_RESOLVE_CACHE.get(cache_key)
+    if cached is not None:
+        _POST_OPEN_RESOLVE_CACHE.move_to_end(cache_key)
+        return _clone_post_open_resolution(cached)
+
     root = _parse_xml(xml)
     if root is None:
-        return None, []
+        return _cache_post_open_resolution(cache_key, (None, []))
 
     if hierarchy_is_fb_post_detail_from_xml(xml):
-        return None, []
+        return _cache_post_open_resolution(cache_key, (None, []))
 
     screen_w, screen_h = _infer_screen_size(root)
     if screen_h <= 0:
@@ -1965,42 +2074,58 @@ def resolve_post_open_targets_from_xml(
         screen_w = 1080
     profile_tab_min_y = profile_tab_strip_min_tap_y(root)
 
-    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
     scan = _discover_post_open_scan_elements(root)
+    scan = _prioritize_post_open_scan_elements(
+        scan,
+        center_y_ratio=center_y_ratio,
+        screen_h=screen_h,
+    )
 
     scored: List[Dict[str, Any]] = []
     excluded_anchors = [
         anchor for anchor in (exclude_post_anchors or []) if isinstance(anchor, dict)
     ]
-    for feed_item_index, element in scan:
-        cand = _build_post_open_candidate(
-            element,
-            feed_item_index=feed_item_index,
-            profile_tab_min_y=profile_tab_min_y,
-            screen_w=screen_w,
-        )
-        if cand is None:
-            continue
-        if excluded_anchors and _candidate_matches_excluded_anchor(
-            cand.get("post") or {},
-            excluded_anchors,
-        ):
-            continue
-        if not _post_open_candidate_passes_filter(cand, screen_h=screen_h, band_low=band_low, band_high=band_high):
-            continue
-        cand.update(
-            _score_post_open_candidate(
-                cand,
-                screen_h=screen_h,
+    scan_limit = 0
+    if not locked_post_key and max_scan_elements is not None:
+        scan_limit = max(0, int(max_scan_elements))
+    if scan_limit > 0:
+        scan_limit = max(scan_limit, int(max_candidates) + len(excluded_anchors) + 3)
+    bounded_scan = scan[:scan_limit] if scan_limit > 0 else scan
+
+    def _score_scan(entries: List[Tuple[int, Any]]) -> None:
+        for feed_item_index, element in entries:
+            cand = _build_post_open_candidate(
+                element,
+                feed_item_index=feed_item_index,
+                profile_tab_min_y=profile_tab_min_y,
                 screen_w=screen_w,
-                center_y_ratio=center_y_ratio,
-                locked_post_key=locked_post_key,
             )
-        )
-        scored.append(cand)
+            if cand is None:
+                continue
+            if excluded_anchors and _candidate_matches_excluded_anchor(
+                cand.get("post") or {},
+                excluded_anchors,
+            ):
+                continue
+            if not _post_open_candidate_passes_filter(cand, screen_h=screen_h, band_low=band_low, band_high=band_high):
+                continue
+            cand.update(
+                _score_post_open_candidate(
+                    cand,
+                    screen_h=screen_h,
+                    screen_w=screen_w,
+                    center_y_ratio=center_y_ratio,
+                    locked_post_key=locked_post_key,
+                )
+            )
+            scored.append(cand)
+
+    _score_scan(bounded_scan)
+    if not scored and bounded_scan is not scan:
+        _score_scan(scan[scan_limit:])
 
     if not scored:
-        return None, []
+        return _cache_post_open_resolution(cache_key, (None, []))
 
     def _tie_key(c: Dict[str, Any]) -> Tuple[float, int, float]:
         post = c.get("post") or {}
@@ -2041,7 +2166,7 @@ def resolve_post_open_targets_from_xml(
         }
         for c in ranked[1:]
     ]
-    return target, alternates
+    return _cache_post_open_resolution(cache_key, (target, alternates))
 
 
 __all__ = [

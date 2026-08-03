@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import date, datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -14,8 +14,52 @@ from db.models.enums import AccountState
 
 _BULK_BATCH_SIZE = 500  # rows per INSERT batch
 
+_ACCOUNT_METADATA_ALIASES = {
+    "email": "email",
+    "login_email": "email",
+    "account_email": "email",
+    "totp_secret": "totp_secret",
+    "two_factor_secret": "totp_secret",
+    "authenticator_secret": "totp_secret",
+    "otp_secret": "totp_secret",
+    "2fa_secret": "totp_secret",
+    "cookies": "cookies",
+    "cookie": "cookies",
+    "token": "token",
+}
+
 
 # ── Account CRUD ───────────────────────────────────────────────────────────────
+
+
+def _clean_metadata_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _metadata_from_import_row(row: dict) -> dict:
+    metadata: dict[str, Any] = {}
+    for source_key in ("metadata", "account_metadata"):
+        raw = row.get(source_key)
+        if isinstance(raw, dict):
+            metadata.update(
+                {
+                    str(key): _clean_metadata_value(value)
+                    for key, value in raw.items()
+                    if _clean_metadata_value(value) not in (None, "")
+                }
+            )
+
+    for source_key, target_key in _ACCOUNT_METADATA_ALIASES.items():
+        value = _clean_metadata_value(row.get(source_key))
+        if value in (None, ""):
+            continue
+        if target_key == "totp_secret" and isinstance(value, str):
+            value = value.replace(" ", "")
+        metadata[target_key] = value
+
+    return metadata
 
 
 async def create_account(
@@ -225,7 +269,7 @@ def _prepare_account_row(row: dict, user_id: Optional[str]) -> Optional[dict]:
         "notes": (row.get("notes") or "").strip(),
         "tags": (row.get("tags") or "").strip(),
         "user_id": user_id,
-        "metadata": {},
+        "metadata": _metadata_from_import_row(row),
         "status": "active",
         "state": "active",
         "total_usage_minutes": 0.0,

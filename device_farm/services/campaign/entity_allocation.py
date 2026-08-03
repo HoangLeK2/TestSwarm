@@ -52,6 +52,7 @@ class SourcePoolSpec:
     entity_type: str
     search: str | None = None
     statuses: tuple[str, ...] = DEFAULT_POOL_STATUSES
+    output_prefix: str | None = None
 
 
 def plan_one_per_device(

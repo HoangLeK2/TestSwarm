@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
 import secrets
 from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.exc import InterfaceError, InternalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import AuthContext, policy
@@ -25,18 +28,71 @@ from tenancy.context import set_current_org_id
 from tenancy.resolve import get_user_default_org_id
 
 _ORG_HEADER = "x-organization-id"
+_REQUEST_WRITE_ATTEMPTED = "_device_farm_request_write_attempted"
 
 _bearer = HTTPBearer(auto_error=False)
+log = logging.getLogger(__name__)
+
+
+def _mark_request_flush(sync_session, *_args) -> None:
+    sync_session.info[_REQUEST_WRITE_ATTEMPTED] = True
+
+
+def _mark_request_execute(orm_execute_state) -> None:
+    if not orm_execute_state.is_select:
+        orm_execute_state.session.info[_REQUEST_WRITE_ATTEMPTED] = True
+
+
+def _install_request_write_tracking(session: AsyncSession) -> None:
+    sync_session = session.sync_session
+    sync_session.info[_REQUEST_WRITE_ATTEMPTED] = False
+    event.listen(sync_session, "before_flush", _mark_request_flush)
+    event.listen(sync_session, "do_orm_execute", _mark_request_execute)
+
+
+def _remove_request_write_tracking(session: AsyncSession) -> None:
+    sync_session = session.sync_session
+    with contextlib.suppress(Exception):
+        event.remove(sync_session, "before_flush", _mark_request_flush)
+    with contextlib.suppress(Exception):
+        event.remove(sync_session, "do_orm_execute", _mark_request_execute)
+
+
+def _is_closed_connection_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "underlying connection is closed" in message
+
+
+def _can_ignore_read_only_commit_error(
+    session: AsyncSession,
+    exc: BaseException,
+) -> bool:
+    write_attempted = bool(
+        session.sync_session.info.get(_REQUEST_WRITE_ATTEMPTED, True)
+    )
+    return not write_attempted and _is_closed_connection_error(exc)
 
 
 async def _get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
+        _install_request_write_tracking(session)
         try:
             yield session
-            await session.commit()
+            try:
+                await session.commit()
+            except (InterfaceError, InternalError) as exc:
+                if not _can_ignore_read_only_commit_error(session, exc):
+                    raise
+                log.warning(
+                    "DB commit skipped for closed read-only connection: %s",
+                    exc,
+                )
         except Exception:
-            await session.rollback()
+            with contextlib.suppress(Exception):
+                await session.rollback()
             raise
+        finally:
+            _remove_request_write_tracking(session)
 
 
 DB = Annotated[AsyncSession, Depends(_get_db)]

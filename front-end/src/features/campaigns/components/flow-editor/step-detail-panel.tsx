@@ -33,6 +33,10 @@ import {
   StepPanelToggle,
   StepRetryPolicySection
 } from './step-panel-primitives';
+import {
+  defaultSocialAction,
+  getSocialActionOptions
+} from './social-action-options';
 
 interface Props {
   step: FlowStep;
@@ -114,6 +118,16 @@ const BUILTIN_VARIABLE_TOKENS = [
   '${__ACCOUNT_PLATFORM__}'
 ] as const;
 
+const SOURCE_POOL_VARIABLE_TOKENS = [
+  '${GROUP_NAME}',
+  '${GROUP_URL}',
+  '${GROUP_SEARCH_QUERY}',
+  '${GROUP_SELECTOR_BY}',
+  '${GROUP_SELECTOR_VALUE}',
+  '${GROUP_FALLBACK_SELECTOR_BY}',
+  '${GROUP_FALLBACK_SELECTOR_VALUE}'
+] as const;
+
 function insertToken(raw: string, token: string): string {
   const current = raw ?? '';
   if (!current.trim()) return token;
@@ -159,6 +173,13 @@ function VariableInsertSelect({
       )}
       <optgroup label={t('variableInsert.builtinVariables')}>
         {BUILTIN_VARIABLE_TOKENS.map((token) => (
+          <option key={token} value={token}>
+            {token}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label={t('variableInsert.sourcePoolVariables')}>
+        {SOURCE_POOL_VARIABLE_TOKENS.map((token) => (
           <option key={token} value={token}>
             {token}
           </option>
@@ -1032,8 +1053,9 @@ export function StepDetailPanel({
                 <>
                   <StepPanelHint>
                     Node chỉ thao tác trên màn hình hiện tại, không tự tìm kiếm,
-                    mở profile/group hoặc bấm Back. Kết quả được xác minh trước
-                    khi bước hoàn tất.
+                    mở profile/group hoặc bấm Back. Gửi kết bạn chỉ chạy khi có
+                    đúng một target; màn hình search có nhiều nút sẽ bị chặn.
+                    Kết quả được xác minh trước khi bước hoàn tất.
                   </StepPanelHint>
                   <F label='Nền tảng'>
                     <select
@@ -1048,24 +1070,15 @@ export function StepDetailPanel({
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={
-                        step.action ??
-                        (step.type === 'content_interaction'
-                          ? 'like'
-                          : step.type === 'connection_request'
-                            ? 'request'
-                            : 'join')
+                        step.action ?? defaultSocialAction(step.type)
                       }
                       onChange={(e) => update({ action: e.target.value })}
                     >
-                      {step.type === 'content_interaction' && (
-                        <option value='like'>Thích bài viết</option>
-                      )}
-                      {step.type === 'connection_request' && (
-                        <option value='request'>Gửi lời mời kết bạn</option>
-                      )}
-                      {step.type === 'community_membership' && (
-                        <option value='join'>Tham gia nhóm</option>
-                      )}
+                      {getSocialActionOptions(step.type).map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
                   </F>
                   <div className='grid grid-cols-3 gap-2'>
@@ -2403,6 +2416,67 @@ export function StepDetailPanel({
                     placeholder='Văn bản cần copy'
                   />
                 </F>
+              )}
+
+              {step.type === 'use_source_pool' && (
+                <div className='space-y-3'>
+                  <StepPanelHint>
+                    Node này dùng catalog nguồn đã cào để phân bổ một nguồn cho
+                    mỗi device trước khi chạy campaign.
+                  </StepPanelHint>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <F label='Platform'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={step.platform ?? 'facebook'}
+                        onChange={(e) =>
+                          update({ platform: e.target.value || 'facebook' })
+                        }
+                      />
+                    </F>
+                    <F label='Loại nguồn'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={step.entity_type ?? 'group'}
+                        onChange={(e) =>
+                          update({ entity_type: e.target.value || 'group' })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <F label='Lọc theo tên nguồn'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={step.search ?? ''}
+                      onChange={(e) =>
+                        update({ search: e.target.value || undefined })
+                      }
+                      placeholder='VD: Claude VN'
+                    />
+                  </F>
+                  <F label='Prefix biến xuất ra'>
+                    <Input
+                      className='h-8 text-xs font-mono'
+                      value={step.output_prefix ?? 'GROUP'}
+                      onChange={(e) =>
+                        update({ output_prefix: e.target.value || undefined })
+                      }
+                      placeholder='GROUP'
+                    />
+                  </F>
+                  <div className='rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-5 text-muted-foreground'>
+                    {(() => {
+                      const prefix =
+                        String(step.output_prefix || 'GROUP')
+                          .trim()
+                          .toUpperCase() || 'GROUP';
+                      const safePrefix =
+                        prefix.replace(/[^A-Z0-9_]/g, '_').replace(/^_+|_+$/g, '') ||
+                        'GROUP';
+                      return `\${${safePrefix}_NAME} · \${${safePrefix}_URL} · \${${safePrefix}_SEARCH_QUERY} · \${${safePrefix}_SELECTOR_VALUE}`;
+                    })()}
+                  </div>
+                </div>
               )}
 
               {step.type === 'run_scenario' && (

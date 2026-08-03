@@ -256,7 +256,9 @@ docker compose down
 `docker-compose.deploy.yml` is for an environment where Postgres is managed
 outside this Compose file. Edit `.env` so `DB_HOST`, `DB_PORT`, `DB_NAME`,
 `DB_USER`, and `DB_PASSWORD` point to that database. Also point `REDIS_URL` to an
-external Redis instance or leave it blank to use in-memory state only.
+external Redis instance or leave it blank to use in-memory state only. Set
+`DB_CONNECTION_LIMIT` to the real PostgreSQL `max_connections`; deploy Compose
+fails fast when this value is missing.
 
 ```bash
 cp .env.example .env

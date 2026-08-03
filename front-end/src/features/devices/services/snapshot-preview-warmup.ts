@@ -96,7 +96,7 @@ function evictWarmupEntry(serial: string, entry: WarmupEntry) {
 
 function trimRetainedIdleWarmups() {
   if (SNAPSHOT_WARMUP_RETAINED_IDLE_LIMIT <= 0) {
-    for (const [serial, entry] of activeWarmups) {
+    for (const [serial, entry] of Array.from(activeWarmups.entries())) {
       if (entry.refs <= 0 && entry.state === 'settled') {
         evictWarmupEntry(serial, entry);
       }

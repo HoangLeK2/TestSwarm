@@ -31,6 +31,7 @@ def test_process_adb_admission_env_is_clamped() -> None:
             ),
             "RELAY_ADB_COMMAND_CONCURRENCY": "99",
             "RELAY_ADB_INTERACTIVE_RESERVED": "99",
+            "RELAY_ADB_STARTUP_RESERVED": "99",
             "RELAY_ADB_HEAVY_CONCURRENCY": "99",
         }
     )
@@ -40,9 +41,47 @@ def test_process_adb_admission_env_is_clamped() -> None:
             "-c",
             (
                 "import relay.adb_admission as m; "
-                "assert m._CONTROLLER._max_concurrency == 24; "
+                "assert m._CONTROLLER._max_concurrency == 32; "
                 "assert m._CONTROLLER._reserved_interactive == 8; "
-                "assert m._CONTROLLER._max_heavy == 4"
+                "assert m._CONTROLLER._reserved_startup == 5; "
+                "assert m._CONTROLLER._max_heavy == 6"
+            ),
+        ],
+        check=True,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_process_runtime_executor_env_allows_high_headroom() -> None:
+    agent_boot_root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": os.pathsep.join(
+                filter(
+                    None,
+                    [
+                        str(agent_boot_root),
+                        env.get("PYTHONPATH"),
+                    ],
+                )
+            ),
+            "RELAY_ADB_POOL_SIZE": "99",
+            "RELAY_U2_POOL_SIZE": "99",
+            "RELAY_SCRCPY_POOL_SIZE": "99",
+        }
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import relay.runtime as m; "
+                "assert m.ADB_POOL_SIZE == 64; "
+                "assert m.U2_POOL_SIZE == 64; "
+                "assert m.SCRCPY_POOL_SIZE == 16"
             ),
         ],
         check=True,
@@ -317,6 +356,67 @@ def test_heavy_setup_is_bounded_across_many_phones() -> None:
 
     assert max_started == 2
     assert third_started.is_set()
+
+
+def test_startup_work_reserves_heavy_capacity_ahead_of_maintenance() -> None:
+    controller = AdbAdmissionController(
+        max_concurrency=4,
+        reserved_interactive=1,
+        reserved_startup=1,
+        max_heavy=2,
+    )
+    active_started = threading.Barrier(3)
+    release_first = threading.Event()
+    release_second = threading.Event()
+    release_rest = threading.Event()
+    maintenance_started = threading.Event()
+    startup_started = threading.Event()
+    order: list[str] = []
+    order_lock = threading.Lock()
+
+    def active_maintenance(serial: str, release: threading.Event) -> None:
+        with controller.admit(serial=serial, lane=AdbLane.MAINTENANCE):
+            active_started.wait(timeout=1)
+            release.wait(timeout=1)
+
+    def queued_maintenance() -> None:
+        with controller.admit(serial="phone-c", lane=AdbLane.MAINTENANCE):
+            with order_lock:
+                order.append("maintenance")
+            maintenance_started.set()
+            release_rest.wait(timeout=1)
+
+    def queued_startup() -> None:
+        with controller.admit(serial="phone-d", lane=AdbLane.STARTUP):
+            with order_lock:
+                order.append("startup")
+            startup_started.set()
+            release_rest.wait(timeout=1)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        active = [
+            pool.submit(active_maintenance, "phone-a", release_first),
+            pool.submit(active_maintenance, "phone-b", release_second),
+        ]
+        active_started.wait(timeout=1)
+        background = pool.submit(queued_maintenance)
+        visible = pool.submit(queued_startup)
+
+        deadline = time.monotonic() + 0.2
+        while controller.snapshot()["waiting"] < 2 and time.monotonic() < deadline:
+            time.sleep(0.001)
+
+        release_first.set()
+        assert startup_started.wait(timeout=0.2)
+        release_rest.set()
+        release_second.set()
+        for future in active:
+            future.result(timeout=1)
+        background.result(timeout=1)
+        visible.result(timeout=1)
+
+    assert maintenance_started.is_set()
+    assert order[0] == "startup"
 
 
 def test_mock_19_phone_start_storm_keeps_control_available() -> None:

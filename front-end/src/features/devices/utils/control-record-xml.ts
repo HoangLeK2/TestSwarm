@@ -1,4 +1,5 @@
 import { fetchHierarchy } from '../services/api';
+import type { FetchHierarchyOptions } from '../lib/hierarchy-request';
 import {
   findSelectorInXml,
   inferForegroundPackage,
@@ -105,13 +106,14 @@ export async function pollUntilUiChange(
   serial: string,
   oldHash: number,
   intervalMs = 700,
-  timeoutMs = 2800
+  timeoutMs = 2800,
+  options?: FetchHierarchyOptions
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await new Promise<void>((r) => setTimeout(r, intervalMs));
     try {
-      const xml = (await fetchHierarchy(serial, true))?.trim() ?? '';
+      const xml = (await fetchHierarchy(serial, true, options))?.trim() ?? '';
       if (xml && hashXml(xml) !== oldHash) return xml;
     } catch {
       /* ignore */

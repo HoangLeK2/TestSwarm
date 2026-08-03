@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from sqlalchemy import insert, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud import campaign_entity as campaign_repo
@@ -18,9 +18,19 @@ from db.crud.execution import (
     get_execution,
     upsert_execution_result,
 )
+from db.models.activity import ActivityLog
 from db.models.campaign import Campaign
 from db.models.device import Device
-from db.models.enums import CampaignStatus, DeviceReserveOwnerType, ExecutionStatus
+from db.models.device_fsm import DeviceFsmSnapshot, DeviceStateTransition
+from db.models.device_reserve_session import DeviceReserveSession
+from db.models.enums import (
+    CampaignStatus,
+    DeviceFsmEvent,
+    DeviceFsmState,
+    DeviceRegistryStatus,
+    DeviceReserveOwnerType,
+    ExecutionStatus,
+)
 from db.models.execution import Execution, ExecutionDevice, ExecutionResult
 from db.models.external_entity import ExecutionEntityAssignment, ExternalEntity
 from services.campaign.constants import MAX_DISPATCH_TARGETS
@@ -38,6 +48,8 @@ from services.campaign.entity_allocation import (
     plan_from_source_pool,
     plan_one_per_device,
 )
+from services.campaign.scenario_sources import build_campaign_scenario_registry
+from services.campaign.source_pool_steps import source_pool_from_scenario_registry
 from services.campaign.account_resolver import (
     AccountBindingError,
     ResolvedDeviceAccount,
@@ -50,7 +62,16 @@ from services.campaign.override_resolver import (
     validate_per_device_overrides_size,
 )
 from services.device_reserve.exceptions import DeviceBusyError, DeviceSessionError
-from services.device_reserve.service import claim_device_session, release_device_session
+from services.device_reserve.service import (
+    DEFAULT_TTL_SEC,
+    claim_device_session,
+    release_device_session,
+)
+from services.device_state.events import (
+    DeviceStateChangedEvent,
+    publish_device_state_changed,
+)
+from web.metrics import fsm_transition_count
 from web.metrics import (
     campaign_dispatch_claim_fail_count,
     campaign_dispatch_duration_seconds,
@@ -60,7 +81,7 @@ from web.metrics import (
 log = logging.getLogger(__name__)
 
 DispatchStrategy = Literal["parallel", "sequential"]
-DISPATCH_PERSIST_CHUNK_SIZE = 25
+DISPATCH_PERSIST_CHUNK_SIZE = 100
 
 
 def _external_entity_snapshot(entity: ExternalEntity) -> dict[str, Any]:
@@ -78,12 +99,38 @@ def _external_entity_snapshot(entity: ExternalEntity) -> dict[str, Any]:
     }
 
 
+def _normalize_output_prefix(raw: str | None) -> str:
+    prefix = "".join(
+        char if char.isascii() and (char.isalnum() or char == "_") else "_"
+        for char in str(raw or "").strip().upper()
+    ).strip("_")
+    return prefix[:32]
+
+
+def _prefixed_entity_vars(prefix: str, entity: ExternalEntity) -> dict[str, Any]:
+    if not prefix:
+        return {}
+    return {
+        f"{prefix}_ENTITY_ID": entity.id,
+        f"{prefix}_PLATFORM": entity.platform,
+        f"{prefix}_ENTITY_TYPE": entity.entity_type,
+        f"{prefix}_EXTERNAL_ID": entity.external_id or "",
+        f"{prefix}_URL": entity.canonical_url or "",
+        f"{prefix}_NAME": entity.display_name,
+    }
+
+
 def _with_external_entity_vars(
     effective_vars: dict[str, Any],
     entity: ExternalEntity | None,
+    *,
+    source_pool: SourcePoolSpec | None = None,
 ) -> dict[str, Any]:
     if entity is None:
         return effective_vars
+    output_prefix = _normalize_output_prefix(
+        source_pool.output_prefix if source_pool is not None else None
+    )
     target_vars = {
         **effective_vars,
         "TARGET_ENTITY_ID": entity.id,
@@ -92,6 +139,7 @@ def _with_external_entity_vars(
         "TARGET_EXTERNAL_ID": entity.external_id or "",
         "TARGET_URL": entity.canonical_url or "",
         "TARGET_NAME": entity.display_name,
+        **_prefixed_entity_vars(output_prefix, entity),
     }
     if entity.platform != "facebook" or entity.entity_type != "group":
         return target_vars
@@ -117,6 +165,25 @@ def _with_external_entity_vars(
         else {}
     )
     name = entity.display_name
+    prefixed_group_vars = (
+        {
+            f"{output_prefix}_SEARCH_QUERY": str(locator.get("search_query") or name),
+            f"{output_prefix}_SELECTOR_BY": str(
+                selector.get("by") or "descriptionStartsWith"
+            ),
+            f"{output_prefix}_SELECTOR_VALUE": str(
+                selector.get("value") or f"{name},"
+            ),
+            f"{output_prefix}_FALLBACK_SELECTOR_BY": str(
+                fallback_selector.get("by") or "descriptionContains"
+            ),
+            f"{output_prefix}_FALLBACK_SELECTOR_VALUE": str(
+                fallback_selector.get("value") or name
+            ),
+        }
+        if output_prefix
+        else {}
+    )
     return {
         **target_vars,
         "GROUP_NAME": name,
@@ -133,6 +200,7 @@ def _with_external_entity_vars(
             fallback_selector.get("value") or name
         ),
         "TARGET_LOCATOR": locator,
+        **prefixed_group_vars,
     }
 
 
@@ -228,6 +296,19 @@ class _PreparedFanOutExecution:
     result_values: dict[str, Any]
     assignment_values: dict[str, Any] | None
     view: FanOutExecutionView
+
+
+@dataclass(frozen=True, slots=True)
+class _CampaignClaimRequest:
+    device_id: str
+    execution_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _CampaignClaimResult:
+    session_id: str | None = None
+    failure_reason: str | None = None
+    claim_error: str | None = None
 
 
 async def _plan_entity_assignments(
@@ -344,6 +425,24 @@ async def _plan_entity_assignments(
         ) from exc
 
 
+async def _derive_source_pool_from_scenarios(
+    db: AsyncSession,
+    *,
+    campaign: Campaign,
+    org_id: str,
+    scenario_refs: list[dict[str, Any]],
+) -> SourcePoolSpec | None:
+    if not scenario_refs:
+        return None
+    registry = await build_campaign_scenario_registry(
+        db,
+        campaign=campaign,
+        org_id=org_id,
+        scenario_refs=scenario_refs,
+    )
+    return source_pool_from_scenario_registry(registry)
+
+
 class CampaignDispatcher:
     """Resolve targets, validate devices, snapshot membership, and fan-out executions."""
 
@@ -433,13 +532,23 @@ class CampaignDispatcher:
                 code="EMPTY_DISPATCH_TARGET",
             )
 
+        scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
+        effective_source_pool = source_pool
+        if effective_source_pool is None and not external_entity_ids:
+            effective_source_pool = await _derive_source_pool_from_scenarios(
+                db,
+                campaign=campaign,
+                org_id=org_id,
+                scenario_refs=scenario_refs,
+            )
+
         allocation = await _plan_entity_assignments(
             db,
             org_id=org_id,
             device_ids=[entry.device_id for entry in valid_entries],
             device_group_ids=device_group_ids,
             external_entity_ids=external_entity_ids,
-            source_pool=source_pool,
+            source_pool=effective_source_pool,
             allocation_snapshot=allocation_snapshot,
             allocation_policy=allocation_policy,
             lock_sources=True,
@@ -471,7 +580,6 @@ class CampaignDispatcher:
         device_map = devices_by_id if devices_by_id is not None else validation.devices_by_id
         dispatch_id = str(uuid.uuid4())
         campaign_dispatch_targets_count.inc(len(valid_entries))
-        scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
         if not scenario_refs:
             raise CampaignDispatchError(
                 "Campaign has no scenarios. Link an org scenario or add steps in the flow editor.",
@@ -498,9 +606,40 @@ class CampaignDispatcher:
             if dispatch_strategy == "parallel"
             else claim_now
         )
+        execution_id_by_device: dict[str, str] = {}
+        bulk_claims_by_device: dict[str, _CampaignClaimResult] = {}
+        if dispatch_strategy == "parallel" and ordered_claims:
+            execution_id_by_device = {
+                entry.device_id: str(uuid.uuid4()) for entry in ordered_claims
+            }
+            claimable_entries = [
+                entry
+                for entry in ordered_claims
+                if not (
+                    account_by_device.get(entry.device_id)
+                    and account_by_device[entry.device_id].unavailable
+                )
+            ]
+            bulk_claims_by_device = await self._claim_campaign_devices_batch(
+                db,
+                campaign=campaign,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                dispatch_id=dispatch_id,
+                claims=[
+                    _CampaignClaimRequest(
+                        device_id=entry.device_id,
+                        execution_id=execution_id_by_device[entry.device_id],
+                    )
+                    for entry in claimable_entries
+                ],
+            )
         prepared_by_device: dict[str, _PreparedFanOutExecution] = {}
 
         for offset in range(0, len(ordered_claims), DISPATCH_PERSIST_CHUNK_SIZE):
+            claim_slice = ordered_claims[
+                offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
+            ]
             prepared_batch = [
                 await self._create_device_execution(
                     db,
@@ -514,12 +653,27 @@ class CampaignDispatcher:
                     device_map=device_map,
                     claim_device=True,
                     device_index=device_index_by_id[entry.device_id],
+                    execution_id=execution_id_by_device.get(entry.device_id),
+                    claim_session_id=(
+                        bulk_claims_by_device.get(entry.device_id).session_id
+                        if entry.device_id in bulk_claims_by_device
+                        else None
+                    ),
+                    claim_failure_reason=(
+                        bulk_claims_by_device.get(entry.device_id).failure_reason
+                        if entry.device_id in bulk_claims_by_device
+                        else None
+                    ),
+                    claim_error=(
+                        bulk_claims_by_device.get(entry.device_id).claim_error
+                        if entry.device_id in bulk_claims_by_device
+                        else None
+                    ),
                     resolved_account=account_by_device.get(entry.device_id),
                     external_entity=entity_by_device.get(entry.device_id),
+                    source_pool=effective_source_pool,
                 )
-                for entry in ordered_claims[
-                    offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
-                ]
+                for entry in claim_slice
             ]
             await self._persist_execution_batch(db, prepared_batch)
             prepared_by_device.update(
@@ -537,6 +691,7 @@ class CampaignDispatcher:
                     device_index=device_index_by_id[entry.device_id],
                     resolved_account=account_by_device.get(entry.device_id),
                     external_entity=entity_by_device.get(entry.device_id),
+                    source_pool=effective_source_pool,
                 )
                 for entry in queue_later[
                     offset : offset + DISPATCH_PERSIST_CHUNK_SIZE
@@ -614,6 +769,170 @@ class CampaignDispatcher:
         )
 
     @staticmethod
+    async def _claim_campaign_devices_batch(
+        db: AsyncSession,
+        *,
+        campaign: Campaign,
+        org_id: str,
+        actor_user_id: str,
+        dispatch_id: str,
+        claims: list[_CampaignClaimRequest],
+    ) -> dict[str, _CampaignClaimResult]:
+        if not claims:
+            return {}
+
+        device_ids = [claim.device_id for claim in claims]
+        locked_devices = (
+            await db.scalars(
+                select(Device)
+                .where(Device.id.in_(device_ids))
+                .order_by(Device.id)
+                .with_for_update()
+            )
+        ).all()
+        devices_by_id = {device.id: device for device in locked_devices}
+
+        active_sessions = (
+            await db.scalars(
+                select(DeviceReserveSession)
+                .where(
+                    DeviceReserveSession.device_id.in_(device_ids),
+                    DeviceReserveSession.released_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).all()
+        active_by_device = {session.device_id: session for session in active_sessions}
+
+        state_rows = (
+            await db.scalars(
+                select(DeviceFsmSnapshot)
+                .where(DeviceFsmSnapshot.device_id.in_(device_ids))
+                .with_for_update()
+            )
+        ).all()
+        states_by_device = {state.device_id: state for state in state_rows}
+
+        now = datetime.now(timezone.utc)
+        owner_type = DeviceReserveOwnerType.CAMPAIGN.value
+        owner_id = (campaign.id or actor_user_id or "").strip()
+        results: dict[str, _CampaignClaimResult] = {}
+        publish_events: list[DeviceStateChangedEvent] = []
+
+        for claim in claims:
+            device = devices_by_id.get(claim.device_id)
+            active = active_by_device.get(claim.device_id)
+            state = states_by_device.get(claim.device_id)
+            if device is None or device.org_id != org_id:
+                results[claim.device_id] = _CampaignClaimResult(
+                    failure_reason="device_claim_failed",
+                    claim_error="SESSION_NOT_FOUND",
+                )
+                continue
+            if (
+                getattr(device, "status", DeviceRegistryStatus.PAIRED.value)
+                == DeviceRegistryStatus.UNPAIRED.value
+            ):
+                results[claim.device_id] = _CampaignClaimResult(
+                    failure_reason="device_claim_failed",
+                    claim_error="DEVICE_UNPAIRED",
+                )
+                continue
+            if active is not None:
+                results[claim.device_id] = _CampaignClaimResult(
+                    failure_reason="device_claim_failed",
+                    claim_error="DEVICE_BUSY",
+                )
+                continue
+            if state is None or state.state != DeviceFsmState.ONLINE.value:
+                results[claim.device_id] = _CampaignClaimResult(
+                    failure_reason="device_claim_failed",
+                    claim_error="DEVICE_NOT_AVAILABLE",
+                )
+                continue
+
+            session_id = str(uuid.uuid4())
+            event_id = str(uuid.uuid4())
+            payload = {
+                "owner_type": owner_type,
+                "owner_id": owner_id,
+                "session_id": session_id,
+            }
+            db.add(
+                DeviceReserveSession(
+                    id=session_id,
+                    device_id=claim.device_id,
+                    org_id=org_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    claimed_at=now,
+                    last_heartbeat=now,
+                    ttl_sec=DEFAULT_TTL_SEC,
+                    ctx={
+                        "dispatch_id": dispatch_id,
+                        "execution_id": claim.execution_id,
+                    },
+                    created_by_user_id=actor_user_id,
+                )
+            )
+            state.state = DeviceFsmState.BUSY.value
+            state.updated_at = now
+            state.last_event_id = event_id
+            state.session_id = session_id
+            db.add(
+                DeviceStateTransition(
+                    device_id=claim.device_id,
+                    from_state=DeviceFsmState.ONLINE.value,
+                    to_state=DeviceFsmState.BUSY.value,
+                    event=DeviceFsmEvent.SESSION_CLAIM.value,
+                    source="claim",
+                    event_id=event_id,
+                    timestamp=now,
+                    payload=payload,
+                )
+            )
+            db.add(
+                ActivityLog(
+                    action="session.claimed",
+                    entity_type="device",
+                    entity_id=claim.device_id,
+                    user_id=actor_user_id,
+                    org_id=org_id,
+                    outcome="success",
+                    details={
+                        "session_id": session_id,
+                        "owner_type": owner_type,
+                        "owner_id": owner_id,
+                        "ttl_sec": DEFAULT_TTL_SEC,
+                    },
+                )
+            )
+            results[claim.device_id] = _CampaignClaimResult(session_id=session_id)
+            publish_events.append(
+                DeviceStateChangedEvent(
+                    device_id=claim.device_id,
+                    from_state=DeviceFsmState.ONLINE.value,
+                    to_state=DeviceFsmState.BUSY.value,
+                    event=DeviceFsmEvent.SESSION_CLAIM.value,
+                    source="claim",
+                    event_id=event_id,
+                    session_id=session_id,
+                    payload=payload,
+                )
+            )
+
+        for event in publish_events:
+            publish_device_state_changed(event)
+            try:
+                fsm_transition_count.labels(
+                    from_state=event.from_state,
+                    to_state=event.to_state,
+                ).inc()
+            except Exception:
+                pass
+        return results
+
+    @staticmethod
     async def _persist_execution_batch(
         db: AsyncSession,
         prepared_batch: list[_PreparedFanOutExecution],
@@ -664,8 +983,13 @@ class CampaignDispatcher:
         device_map: dict[str, Device],
         claim_device: bool,
         device_index: int,
+        execution_id: str | None = None,
+        claim_session_id: str | None = None,
+        claim_failure_reason: str | None = None,
+        claim_error: str | None = None,
         resolved_account: ResolvedDeviceAccount | None = None,
         external_entity: ExternalEntity | None = None,
+        source_pool: SourcePoolSpec | None = None,
     ) -> _PreparedFanOutExecution:
         effective_vars = merge_effective_vars(
             campaign_vars=campaign.variables,
@@ -675,12 +999,16 @@ class CampaignDispatcher:
         account_vars = (resolved_account.account_vars if resolved_account else {}) or {}
         if account_vars:
             effective_vars = {**effective_vars, **account_vars}
-        effective_vars = _with_external_entity_vars(effective_vars, external_entity)
+        effective_vars = _with_external_entity_vars(
+            effective_vars,
+            external_entity,
+            source_pool=source_pool,
+        )
 
         device = device_map.get(entry.device_id)
         device_serial = device.serial if device else ""
         account_id = resolved_account.account_id if resolved_account else None
-        execution_id = str(uuid.uuid4())
+        execution_id = execution_id or str(uuid.uuid4())
         created_at = datetime.now(timezone.utc)
         execution_values: dict[str, Any] = {
             "id": execution_id,
@@ -716,7 +1044,7 @@ class CampaignDispatcher:
             "finished_at": None,
         }
 
-        claim_session_id: str | None = None
+        active_claim_session_id = claim_session_id
         failure_reason: str | None = None
         status = (
             ExecutionStatus.RUNNING.value
@@ -760,27 +1088,17 @@ class CampaignDispatcher:
             )
 
         if claim_device:
-            try:
-                claim = await claim_device_session(
-                    db,
-                    device_id=entry.device_id,
-                    org_id=org_id,
-                    actor_user_id=actor_user_id,
-                    owner_type=DeviceReserveOwnerType.CAMPAIGN.value,
-                    owner_id=campaign.id,
-                    ctx={"dispatch_id": dispatch_id, "execution_id": execution_id},
-                )
-                claim_session_id = claim.session_id
+            if active_claim_session_id:
                 started_at = datetime.now(timezone.utc)
                 execution_values["device_config"] = {
                     **execution_values["device_config"],
-                    "claim_session_id": claim_session_id,
+                    "claim_session_id": active_claim_session_id,
                 }
                 execution_values["status"] = ExecutionStatus.RUNNING.value
                 execution_values["started_at"] = started_at
-            except (DeviceBusyError, DeviceSessionError) as exc:
+            elif claim_failure_reason:
                 campaign_dispatch_claim_fail_count.inc()
-                failure_reason = "device_claim_failed"
+                failure_reason = claim_failure_reason
                 status = ExecutionStatus.FAILED.value
                 finished_at = datetime.now(timezone.utc)
                 execution_values["status"] = status
@@ -789,9 +1107,45 @@ class CampaignDispatcher:
                     **execution_values["device_config"],
                     "failure_reason": failure_reason,
                 }
-                if isinstance(exc, DeviceSessionError):
-                    cfg["claim_error"] = exc.code
+                if claim_error:
+                    cfg["claim_error"] = claim_error
                 execution_values["device_config"] = cfg
+            else:
+                try:
+                    claim = await claim_device_session(
+                        db,
+                        device_id=entry.device_id,
+                        org_id=org_id,
+                        actor_user_id=actor_user_id,
+                        owner_type=DeviceReserveOwnerType.CAMPAIGN.value,
+                        owner_id=campaign.id,
+                        ctx={
+                            "dispatch_id": dispatch_id,
+                            "execution_id": execution_id,
+                        },
+                    )
+                    active_claim_session_id = claim.session_id
+                    started_at = datetime.now(timezone.utc)
+                    execution_values["device_config"] = {
+                        **execution_values["device_config"],
+                        "claim_session_id": active_claim_session_id,
+                    }
+                    execution_values["status"] = ExecutionStatus.RUNNING.value
+                    execution_values["started_at"] = started_at
+                except (DeviceBusyError, DeviceSessionError) as exc:
+                    campaign_dispatch_claim_fail_count.inc()
+                    failure_reason = "device_claim_failed"
+                    status = ExecutionStatus.FAILED.value
+                    finished_at = datetime.now(timezone.utc)
+                    execution_values["status"] = status
+                    execution_values["finished_at"] = finished_at
+                    cfg = {
+                        **execution_values["device_config"],
+                        "failure_reason": failure_reason,
+                    }
+                    if isinstance(exc, DeviceSessionError):
+                        cfg["claim_error"] = exc.code
+                    execution_values["device_config"] = cfg
 
         return self._prepared_execution(
             execution_values=execution_values,
@@ -813,7 +1167,7 @@ class CampaignDispatcher:
                 effective_vars=effective_vars,
                 account_id=account_id,
                 failure_reason=failure_reason,
-                claim_session_id=claim_session_id,
+                claim_session_id=active_claim_session_id,
                 external_entity_id=external_entity.id if external_entity else None,
             ),
             assignment_values=_assignment_values(
@@ -837,6 +1191,7 @@ class CampaignDispatcher:
         device_index: int,
         resolved_account: ResolvedDeviceAccount | None = None,
         external_entity: ExternalEntity | None = None,
+        source_pool: SourcePoolSpec | None = None,
     ) -> _PreparedFanOutExecution:
         effective_vars = merge_effective_vars(
             campaign_vars=campaign.variables,
@@ -846,7 +1201,11 @@ class CampaignDispatcher:
         account_vars = (resolved_account.account_vars if resolved_account else {}) or {}
         if account_vars:
             effective_vars = {**effective_vars, **account_vars}
-        effective_vars = _with_external_entity_vars(effective_vars, external_entity)
+        effective_vars = _with_external_entity_vars(
+            effective_vars,
+            external_entity,
+            source_pool=source_pool,
+        )
         account_id = resolved_account.account_id if resolved_account else None
         execution_id = str(uuid.uuid4())
         execution_values: dict[str, Any] = {
@@ -1212,6 +1571,16 @@ async def preview_campaign_dispatch(
             code="EMPTY_DISPATCH_TARGET",
         )
 
+    scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
+    effective_source_pool = source_pool
+    if effective_source_pool is None and not external_entity_ids:
+        effective_source_pool = await _derive_source_pool_from_scenarios(
+            db,
+            campaign=campaign,
+            org_id=org_id,
+            scenario_refs=scenario_refs,
+        )
+
     device_ids_ordered = [entry.device_id for entry in valid_entries]
     allocation = await _plan_entity_assignments(
         db,
@@ -1219,7 +1588,7 @@ async def preview_campaign_dispatch(
         device_ids=device_ids_ordered,
         device_group_ids=device_group_ids,
         external_entity_ids=external_entity_ids,
-        source_pool=source_pool,
+        source_pool=effective_source_pool,
         allocation_snapshot=allocation_snapshot,
         allocation_policy=allocation_policy,
         lock_sources=False,
@@ -1312,16 +1681,24 @@ async def release_execution_device_claim(
     if not device_id:
         return
     try:
-        await release_device_session(
+        released = await _release_execution_device_claim_fast(
             db,
             device_id=device_id,
-            session_id=session_id,
+            session_id=str(session_id),
             org_id=org_id,
             actor_user_id=actor_user_id,
-            is_admin=True,
-            reason="execution_terminal",
-            audit_action="session.released.execution_terminal",
         )
+        if not released:
+            await release_device_session(
+                db,
+                device_id=device_id,
+                session_id=session_id,
+                org_id=org_id,
+                actor_user_id=actor_user_id,
+                is_admin=True,
+                reason="execution_terminal",
+                audit_action="session.released.execution_terminal",
+            )
     except Exception:
         log.warning(
             "release_execution_device_claim failed execution=%s device=%s",
@@ -1329,6 +1706,101 @@ async def release_execution_device_claim(
             device_id,
             exc_info=True,
         )
+
+
+async def _release_execution_device_claim_fast(
+    db: AsyncSession,
+    *,
+    device_id: str,
+    session_id: str,
+    org_id: str,
+    actor_user_id: str,
+) -> bool:
+    session = await db.scalar(
+        select(DeviceReserveSession)
+        .where(
+            DeviceReserveSession.id == session_id,
+            DeviceReserveSession.device_id == device_id,
+            DeviceReserveSession.org_id == org_id,
+        )
+        .with_for_update()
+    )
+    if session is None:
+        return False
+    if session.released_at is not None:
+        return True
+
+    now = datetime.now(timezone.utc)
+    reason = "execution_terminal"
+    session.released_at = now
+    session.release_reason = reason
+
+    state = await db.scalar(
+        select(DeviceFsmSnapshot)
+        .where(DeviceFsmSnapshot.device_id == device_id)
+        .with_for_update()
+    )
+    event: DeviceStateChangedEvent | None = None
+    if state is not None and state.state == DeviceFsmState.BUSY.value:
+        previous_session_id = state.session_id
+        if not previous_session_id or previous_session_id == session_id:
+            event_id = str(uuid.uuid4())
+            payload = {"release_reason": reason, "session_id": session_id}
+            state.state = DeviceFsmState.ONLINE.value
+            state.updated_at = now
+            state.last_event_id = event_id
+            state.session_id = None
+            state.reconnecting_since = None
+            db.add(
+                DeviceStateTransition(
+                    device_id=device_id,
+                    from_state=DeviceFsmState.BUSY.value,
+                    to_state=DeviceFsmState.ONLINE.value,
+                    event=DeviceFsmEvent.SESSION_RELEASED.value,
+                    source="claim",
+                    event_id=event_id,
+                    timestamp=now,
+                    payload=payload,
+                )
+            )
+            event = DeviceStateChangedEvent(
+                device_id=device_id,
+                from_state=DeviceFsmState.BUSY.value,
+                to_state=DeviceFsmState.ONLINE.value,
+                event=DeviceFsmEvent.SESSION_RELEASED.value,
+                source="claim",
+                event_id=event_id,
+                session_id=None,
+                payload=payload,
+            )
+
+    db.add(
+        ActivityLog(
+            action="session.released.execution_terminal",
+            entity_type="device",
+            entity_id=device_id,
+            user_id=actor_user_id,
+            org_id=org_id,
+            outcome="success",
+            details={
+                "session_id": session_id,
+                "release_reason": reason,
+                "owner_type": session.owner_type,
+                "owner_id": session.owner_id,
+            },
+        )
+    )
+    await db.flush()
+    if event is not None:
+        publish_device_state_changed(event)
+        try:
+            fsm_transition_count.labels(
+                from_state=event.from_state,
+                to_state=event.to_state,
+            ).inc()
+        except Exception:
+            pass
+    return True
 
 
 async def finish_fan_out_execution(

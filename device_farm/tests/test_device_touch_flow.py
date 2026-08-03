@@ -37,13 +37,21 @@ class TestU2FlowWrapper:
         d._u2_batch.flow.return_value = {"found": True, "swipes": 2}
         d._u2 = MagicMock()
 
-        result = d.u2_flow("swipe_until_found", {"selector": {"text": "OK"}}, timeout=7.0)
+        result = d.u2_flow(
+            "swipe_until_found",
+            {"selector": {"text": "OK"}},
+            timeout=7.0,
+            priority="visible",
+            deadline_ms=250,
+        )
 
         assert result == {"found": True, "swipes": 2}
         d._u2_batch.flow.assert_called_once_with(
             "swipe_until_found",
             {"selector": {"text": "OK"}},
             timeout=7.0,
+            priority="visible",
+            deadline_ms=250,
         )
         d._u2.flow.assert_not_called()
 
@@ -95,10 +103,19 @@ class TestTapFallbackFlow:
             def resolve_serial(self, serial):
                 return "172.16.0.83:5555"
 
-            async def u2_batch(self, serial, actions, timeout=30.0):
+            async def u2_batch(
+                self,
+                serial,
+                actions,
+                timeout=30.0,
+                priority=None,
+                deadline_ms=None,
+            ):
                 self.serial = serial
                 self.actions = actions
                 self.timeout = timeout
+                self.priority = priority
+                self.deadline_ms = deadline_ms
                 return {"ok": True, "results": [{"op": "click", "ok": True}]}
 
         relay = _Relay()
@@ -121,6 +138,8 @@ class TestTapFallbackFlow:
         assert relay.serial == "172.16.0.83:5555"
         assert relay.actions == [{"op": "click", "x": 100, "y": 200}]
         assert relay.timeout <= 2.0
+        assert relay.priority == "visible"
+        assert relay.deadline_ms == 1500
         d._agent_send.assert_not_called()
 
     def test_tap_prefers_legacy_relay_proxy_before_relay_u2_batch(self):
@@ -140,7 +159,7 @@ class TestTapFallbackFlow:
             def resolve_serial(self, serial):
                 return "172.16.0.83:5555"
 
-            async def u2_batch(self, serial, actions, timeout=30.0):
+            async def u2_batch(self, serial, actions, timeout=30.0, **kwargs):
                 self.actions = actions
                 return {"ok": True, "results": [{"op": "click", "ok": True}]}
 
@@ -184,7 +203,7 @@ class TestTapFallbackFlow:
             def resolve_serial(self, serial):
                 return "172.16.0.83:5555"
 
-            async def u2_batch(self, serial, actions, timeout=30.0):
+            async def u2_batch(self, serial, actions, timeout=30.0, **kwargs):
                 self.actions = actions
                 return {"ok": True, "results": [{"op": "click", "ok": True}]}
 
@@ -255,7 +274,7 @@ class TestSwipeFallbackFlow:
             def resolve_serial(self, serial):
                 return "172.16.0.83:5555"
 
-            async def u2_batch(self, serial, actions, timeout=30.0):
+            async def u2_batch(self, serial, actions, timeout=30.0, **kwargs):
                 self.actions = actions
                 return {"ok": True, "results": [{"op": "swipe", "ok": True}]}
 

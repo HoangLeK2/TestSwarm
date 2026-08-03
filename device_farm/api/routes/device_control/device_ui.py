@@ -14,6 +14,7 @@ from runtime.core import DeviceManager
 from runtime.xml_utils import XML_PARSE_ERRORS, parse_xml
 
 _LOG = logging.getLogger(__name__)
+_VISIBLE_HIERARCHY_DEADLINE_MS = 1500
 _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 _SYSTEM_UI_PACKAGE_PREFIXES = (
     "com.android.systemui",
@@ -130,14 +131,29 @@ def _select_node_selector(
 def build_device_ui_router(manager: DeviceManager) -> APIRouter:
     router = APIRouter()
 
+    def _visible_hierarchy_options(priority: str | None) -> dict:
+        if (priority or "").lower() != "visible":
+            return {"priority": None, "deadline_ms": None}
+        return {
+            "priority": "visible",
+            "deadline_ms": _VISIBLE_HIERARCHY_DEADLINE_MS,
+        }
+
     @router.get("/devices/{serial}/hierarchy")
-    async def api_hierarchy(serial: str, refresh: bool = False):
+    async def api_hierarchy(
+        serial: str, refresh: bool = False, priority: str = "background"
+    ):
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         loop = asyncio.get_running_loop()
+        hierarchy_options = _visible_hierarchy_options(priority)
         xml_str = await loop.run_in_executor(
-            None, lambda: device.hierarchy_xml(force_refresh=refresh)
+            None,
+            lambda: device.hierarchy_xml(
+                force_refresh=refresh,
+                **hierarchy_options,
+            ),
         )
         if not xml_str:
             return JSONResponse(
@@ -153,7 +169,12 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         loop = asyncio.get_running_loop()
         xml_str = await loop.run_in_executor(
-            None, lambda: device.hierarchy_xml(force_refresh=refresh)
+            None,
+            lambda: device.hierarchy_xml(
+                force_refresh=refresh,
+                priority="visible",
+                deadline_ms=_VISIBLE_HIERARCHY_DEADLINE_MS,
+            ),
         )
         if not xml_str:
             return JSONResponse(
@@ -309,7 +330,15 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
             px, py = body.x, body.y
 
         loop = asyncio.get_running_loop()
-        sel = await loop.run_in_executor(None, device.hit_test_selector, px, py)
+        sel = await loop.run_in_executor(
+            None,
+            lambda: device.hit_test_selector(
+                px,
+                py,
+                priority="visible",
+                deadline_ms=_VISIBLE_HIERARCHY_DEADLINE_MS,
+            ),
+        )
         _LOG.info(
             "hit_test serial=%s rx=%s ry=%s → px=%s py=%s → sel=%s  u2=%s  sw=%s sh=%s  cache=%s",
             serial, body.rx, body.ry, px, py, sel,

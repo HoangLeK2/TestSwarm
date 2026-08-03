@@ -181,6 +181,23 @@ class TestXpathWaitTimeout:
 class TestDeviceClientHierarchyCoalescing:
     """Concurrent force refreshes should not fan out into repeated u2 XML dumps."""
 
+    def test_force_refresh_bypasses_recent_hierarchy_cache(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._hierarchy_cache = (time.time(), "<hierarchy><node text=\"OLD\" /></hierarchy>")
+        d.ensure_u2_healthy = lambda: True  # type: ignore[method-assign]
+
+        class _FreshU2:
+            def page_source(self, timeout=None, compressed=False):
+                return "<hierarchy><node text=\"NEW\" /></hierarchy>"
+
+        d._u2 = _FreshU2()
+
+        xml = d.hierarchy_xml(force_refresh=True)
+
+        assert xml is not None
+        assert "NEW" in xml
+        assert "OLD" not in xml
+
     def test_concurrent_force_refresh_waits_for_single_u2_dump(self):
         d = DeviceClient(serial="logical-serial", index=0, config=Config())
         started = threading.Event()
@@ -306,9 +323,11 @@ class TestDeviceClientHierarchyRecoveryPolicy:
         class _Batch:
             def __init__(self):
                 self.actions: list[list[dict]] = []
+                self.kwargs: list[dict] = []
 
-            def batch(self, actions, timeout=30.0, cancel_event=None):
+            def batch(self, actions, timeout=30.0, cancel_event=None, **kwargs):
                 self.actions.append(actions)
+                self.kwargs.append(kwargs)
                 return [{
                     "op": "dump_hierarchy",
                     "ok": True,
@@ -333,10 +352,49 @@ class TestDeviceClientHierarchyRecoveryPolicy:
             "op": "dump_hierarchy",
             "compressed": True,
             "timeout": d._U2_HIERARCHY_TIMEOUT,
+            "force_fresh_xml": True,
         }]]
+        assert batch.kwargs == [{"priority": None, "deadline_ms": None}]
         d._a11y_query.assert_not_called()
         d._recover_u2_ws_mode.assert_not_called()
         d._request_u2_start_services.assert_not_called()
+
+    def test_hierarchy_u2_batch_fallback_forwards_priority_and_deadline(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._agent_send = lambda msg: None
+        d.ensure_u2_healthy = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        d._recover_u2_ws_mode = Mock()  # type: ignore[method-assign]
+        d._request_u2_start_services = Mock()  # type: ignore[method-assign]
+
+        class _HardFailedHierarchyU2:
+            def page_source(self, timeout=None, compressed=False):
+                raise RuntimeError("signal: killed")
+
+        class _Batch:
+            def __init__(self):
+                self.kwargs: list[dict] = []
+
+            def batch(self, actions, timeout=30.0, cancel_event=None, **kwargs):
+                self.kwargs.append(kwargs)
+                return [{
+                    "op": "dump_hierarchy",
+                    "ok": True,
+                    "value": "<hierarchy><node text=\"OK\" /></hierarchy>",
+                }]
+
+        batch = _Batch()
+        d._u2 = _HardFailedHierarchyU2()
+        d._u2_batch = batch
+
+        xml = d.hierarchy_xml(
+            force_refresh=True,
+            priority="visible",
+            deadline_ms=1500,
+        )
+
+        assert xml is not None
+        assert batch.kwargs == [{"priority": "visible", "deadline_ms": 1500}]
 
     def test_hierarchy_prefers_direct_relay_http_dump_before_u2_batch(self):
         d = DeviceClient(serial="logical-serial", index=0, config=Config())
@@ -363,7 +421,17 @@ class TestDeviceClientHierarchyRecoveryPolicy:
             def relay_for_serial(self, serial):
                 return object()
 
-            async def u2_http(self, serial, method, path, body="", content_type="application/json", timeout=30.0):
+            async def u2_http(
+                self,
+                serial,
+                method,
+                path,
+                body="",
+                content_type="application/json",
+                timeout=30.0,
+                priority=None,
+                deadline_ms=None,
+            ):
                 self.calls.append((serial, method, path, timeout))
                 return {
                     "ok": True,
@@ -654,6 +722,36 @@ class TestDeviceClientU2Recovery:
         d._trigger_u2_restart_async.assert_called_once_with("172.16.0.83")
         d._trigger_atx_restart_async.assert_not_called()
 
+    def test_atx_restart_failure_skips_recovery_poll_when_relay_disconnected(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._adb_serial = "172.16.0.83:5555"
+        d._loop = object()
+        relay = _FakeRelay(["172.16.0.83:5555"])
+
+        async def restart_atx(serial, timeout=30.0):
+            relay._serials.clear()
+            return False
+
+        relay.restart_atx = restart_atx
+
+        def run_now(coro, _loop):
+            asyncio.run(coro)
+            return SimpleNamespace()
+
+        with patch(
+            "runtime.transports.adb_relay_server.get_relay_manager",
+            return_value=relay,
+        ):
+            with patch(
+                "runtime.core.device_client.asyncio.run_coroutine_threadsafe",
+                side_effect=run_now,
+            ):
+                with patch("runtime.core.device_client.threading.Thread") as thread_cls:
+                    d._trigger_atx_restart_async("172.16.0.83")
+
+        thread_cls.assert_not_called()
+
     def test_u2_touch_failure_triggers_async_recovery_in_atx_mode(self):
         d = DeviceClient(serial="logical-serial", index=0, config=Config())
         d._u2_host = "172.16.0.83"
@@ -684,6 +782,8 @@ class TestDeviceClientOpenUrl:
             [{"op": "open_url", "url": "https://example.com/path?q=1"}],
             timeout=10.0,
             cancel_event=None,
+            priority="visible",
+            deadline_ms=2000,
         )
 
     def test_open_url_falls_back_to_adb_relay_when_u2_batch_unavailable(self):
@@ -760,6 +860,8 @@ class TestDeviceClientLaunchApp:
             ],
             timeout=15.0,
             cancel_event=None,
+            priority="visible",
+            deadline_ms=3000,
         )
         relay.adb_shell.assert_not_called()
         d._agent_send.assert_not_called()
@@ -790,6 +892,68 @@ class TestDeviceClientLaunchApp:
         d._u2_batch.batch.assert_called_once()
         relay.adb_shell.assert_called_once()
         d._agent_send.assert_not_called()
+
+    def test_launch_app_tries_package_fallbacks_with_u2_batch_before_adb(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._loop = object()
+        d._agent_send = Mock()
+        d._u2_batch = Mock()
+        d._u2_batch.batch.side_effect = [
+            [
+                {"op": "app_start", "ok": True},
+                {"op": "app_wait", "ok": False, "value": 0},
+            ],
+            [
+                {"op": "app_start", "ok": True},
+                {"op": "app_wait", "ok": True, "value": 321},
+            ],
+        ]
+        relay = _FakeRelay(["logical-serial"])
+        relay.adb_shell = Mock()
+
+        with patch(
+            "runtime.transports.adb_relay_server.get_relay_manager",
+            return_value=relay,
+        ):
+            d.launch_app(
+                "com.zhiliaoapp.musically",
+                package_fallbacks=["com.ss.android.ugc.trill"],
+            )
+
+        assert d._u2_batch.batch.call_count == 2
+        first_actions = d._u2_batch.batch.call_args_list[0].args[0]
+        second_actions = d._u2_batch.batch.call_args_list[1].args[0]
+        assert first_actions[0]["package"] == "com.zhiliaoapp.musically"
+        assert first_actions[1]["package"] == "com.zhiliaoapp.musically"
+        assert second_actions[0]["package"] == "com.ss.android.ugc.trill"
+        assert second_actions[1]["package"] == "com.ss.android.ugc.trill"
+        relay.adb_shell.assert_not_called()
+        d._agent_send.assert_not_called()
+
+    def test_launch_app_can_skip_adb_fallback_after_u2_batch_failure(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._loop = object()
+        d._agent_send = Mock()
+        d._u2_batch = Mock()
+        d._u2_batch.batch.side_effect = RuntimeError("u2 unavailable")
+        relay = _FakeRelay(["logical-serial"])
+        relay.adb_shell = Mock()
+
+        with patch(
+            "runtime.transports.adb_relay_server.get_relay_manager",
+            return_value=relay,
+        ):
+            d.launch_app("com.facebook.katana", adb_fallback=False)
+
+        d._u2_batch.batch.assert_called_once()
+        relay.adb_shell.assert_not_called()
+        d._agent_send.assert_called_once_with(
+            {
+                "type": "launch_app",
+                "package": "com.facebook.katana",
+                "serial": "logical-serial",
+            }
+        )
 
 
 class TestWatchdogAtxProbe:

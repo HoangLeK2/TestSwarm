@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 from uuid import uuid4
 
 # Shared, bounded executor for relay "attach scrcpy" events. Previous code
@@ -64,6 +65,34 @@ class _RelayBootstrapGate:
     def release(self, serial: str) -> None:
         self._inflight.discard(str(serial or "").strip())
 
+
+def _relay_discovery_bootstrap_decision() -> tuple[bool, str]:
+    """Relay discovery never performs heavy bootstrap work.
+
+    Discovery must only publish that a phone exists. Installing STF/u2/atx
+    assets is an explicit register/pair/bootstrap action, otherwise 40 newly
+    plugged phones can monopolize the shared ADB server before a user chooses
+    which phones to use.
+    """
+    return False, "discovery-gated"
+
+
+async def _run_relay_bootstrap_bounded(
+    relay_manager,
+    slots: asyncio.Semaphore,
+    serial: str,
+    device,
+    bind_relay_u2,
+) -> bool | None:
+    async with slots:
+        if relay_manager.relay_for_serial(serial) is None:
+            return None
+        ok = await relay_manager.bootstrap(serial)
+        caps = relay_manager.get_capabilities(serial) or {}
+        bind_relay_u2(device, serial, caps=caps)
+        return ok
+
+
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -78,11 +107,98 @@ from db.database import init_db
 from runtime.core import DeviceManager, TaskQueue
 from runtime.lifecycle import LifecycleManager, LifecyclePhase
 from common.session_lock import SessionLockStore
-from .ws import WebSocketManager, DeviceAgentSession, authenticate_ws, heartbeat
+from .ws import (
+    WebSocketManager,
+    DeviceAgentSession,
+    authenticate_ws,
+    heartbeat,
+    _relay_scrcpy_auto_attach_allowed_for_serial,
+)
 from .ws_lifecycle import DeviceLifecycleWsManager
 
 log = logging.getLogger(__name__)
 api_trace_log = importlib.import_module("structlog").get_logger("api_trace")
+STREAM_GUARDRAIL_WARN_INTERVAL_S = max(
+    1.0,
+    float(os.getenv("DEVICE_FARM_STREAM_GUARDRAIL_WARN_INTERVAL_S", "15")),
+)
+STREAM_GUARDRAIL_WS_WAIT_P95_WARN_MS = max(
+    1.0,
+    float(os.getenv("DEVICE_FARM_STREAM_GUARDRAIL_WS_WAIT_P95_WARN_MS", "5")),
+)
+STREAM_GUARDRAIL_WS_DROPS_WARN = max(
+    1,
+    int(os.getenv("DEVICE_FARM_STREAM_GUARDRAIL_WS_DROPS_WARN", "1")),
+)
+_last_stream_guardrail_warning_at = 0.0
+
+
+def _stream_guardrail_status(
+    *,
+    stream_telemetry: dict,
+    websocket_streams: dict,
+) -> dict:
+    """Summarize stream isolation/backpressure health for operator scans."""
+    violations: list[str] = []
+    max_streams_per_connection = int(
+        websocket_streams.get("max_media_streams_per_connection") or 0
+    )
+    shared_connections = int(
+        websocket_streams.get("shared_media_ws_connections") or 0
+    )
+    ws_dropped = int(stream_telemetry.get("ws_dropped") or 0)
+    ws_wait_p95_ms = float(stream_telemetry.get("ws_send_wait_p95_ms") or 0.0)
+
+    if shared_connections > 0 or max_streams_per_connection > 1:
+        violations.append("shared_media_ws")
+    if ws_dropped >= STREAM_GUARDRAIL_WS_DROPS_WARN:
+        violations.append("ws_drops")
+    if ws_wait_p95_ms > STREAM_GUARDRAIL_WS_WAIT_P95_WARN_MS:
+        violations.append("ws_send_wait_p95")
+
+    return {
+        "ok": not violations,
+        "violations": violations,
+        "thresholds": {
+            "ws_send_wait_p95_warn_ms": STREAM_GUARDRAIL_WS_WAIT_P95_WARN_MS,
+            "ws_drops_warn": STREAM_GUARDRAIL_WS_DROPS_WARN,
+        },
+        "observed": {
+            "max_media_streams_per_connection": max_streams_per_connection,
+            "shared_media_ws_connections": shared_connections,
+            "ws_dropped": ws_dropped,
+            "ws_send_wait_p95_ms": ws_wait_p95_ms,
+            "top_dropped_serials": websocket_streams.get("top_dropped_serials")
+            or [],
+        },
+    }
+
+
+def _warn_stream_guardrail_if_needed(
+    *,
+    stream_guardrail: dict,
+    now: float | None = None,
+) -> None:
+    """Throttle stream guardrail warnings to keep `/api/relay/status` safe."""
+    global _last_stream_guardrail_warning_at
+    if stream_guardrail.get("ok") is True:
+        return
+    now = time.monotonic() if now is None else now
+    if (now - _last_stream_guardrail_warning_at) < STREAM_GUARDRAIL_WARN_INTERVAL_S:
+        return
+    _last_stream_guardrail_warning_at = now
+    observed = stream_guardrail.get("observed") or {}
+    log.warning(
+        "stream guardrail violation: violations=%s max_streams_per_connection=%s "
+        "shared_connections=%s ws_dropped=%s ws_send_wait_p95_ms=%s "
+        "top_dropped_serials=%s",
+        stream_guardrail.get("violations") or [],
+        observed.get("max_media_streams_per_connection"),
+        observed.get("shared_media_ws_connections"),
+        observed.get("ws_dropped"),
+        observed.get("ws_send_wait_p95_ms"),
+        observed.get("top_dropped_serials"),
+    )
 
 
 def _relay_device_ip(serial: str) -> str:
@@ -169,6 +285,11 @@ def _relay_should_attach_scrcpy_on_online(device_serial: str, *, auto_attach: bo
     return bool(auto_attach or _relay_has_active_scrcpy_viewers(device_serial))
 
 
+def _relay_auto_attach_scrcpy_on_relay_online(config_ref) -> bool:
+    streaming = getattr(config_ref, "streaming", None)
+    return bool(getattr(streaming, "auto_attach_scrcpy_on_relay_online", False))
+
+
 def _mark_relay_scrcpy_offline(device, relay_serial: str) -> bool:
     marker = getattr(device, "mark_scrcpy_relay_offline", None)
     if marker is None:
@@ -181,6 +302,33 @@ def _mark_relay_scrcpy_offline(device, relay_serial: str) -> bool:
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
+
+    _SENSITIVE_QUERY_KEYS = frozenset(
+        {
+            "access_token",
+            "api_key",
+            "device_control_key",
+            "key",
+            "pair",
+            "password",
+            "refresh_token",
+            "secret",
+            "token",
+        }
+    )
+
+    @classmethod
+    def _safe_query(cls, request: Request) -> str:
+        pairs = [
+            (
+                key,
+                "<REDACTED>"
+                if key.strip().lower().replace("-", "_") in cls._SENSITIVE_QUERY_KEYS
+                else value,
+            )
+            for key, value in request.query_params.multi_items()
+        ]
+        return urlencode(pairs)
 
     async def dispatch(self, request: Request, call_next):
         client = request.client
@@ -199,7 +347,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             method=request.method,
             path=path,
             client=addr,
-            query=str(request.url.query or ""),
+            query=self._safe_query(request),
         )
         try:
             response = await call_next(request)
@@ -786,55 +934,30 @@ def create_app(
                 _manager_ref   = manager
                 _config_ref    = config
                 _relay_bootstrap_gate = _RelayBootstrapGate()
+                try:
+                    _relay_bootstrap_limit = int(
+                        os.getenv("DEVICE_FARM_RELAY_BOOTSTRAP_CONCURRENCY", "4")
+                    )
+                except Exception:
+                    _relay_bootstrap_limit = 4
+                _relay_bootstrap_slots = asyncio.Semaphore(
+                    max(1, min(16, _relay_bootstrap_limit))
+                )
 
-                def _relay_db_allows_scrcpy(serial_check: str) -> bool:
-                    if not _config_ref.database.enabled:
-                        return True
-                    ml = getattr(_app.state, "main_loop", None)
-                    if ml is None:
-                        return True
-                    from db import crud as _repo
-                    from db.database import AsyncSessionLocal
-
-                    async def _q() -> bool:
-                        async with AsyncSessionLocal() as db:
-                            return await _repo.relay_scrcpy_auto_attach_allowed(db, serial_check)
-
-                    try:
-                        running = asyncio.get_running_loop()
-                    except RuntimeError:
-                        running = None
-                    if running is ml:
-                        
-                        log.debug(
-                            "relay_scrcpy DB pref: skip blocking lookup (same event loop); "
-                            "default allow serial=%s",
-                            serial_check,
-                        )
-                        return True
-                    try:
-                        # Startup (Temporal, migrations) can stall the event loop; 5s was
-                        # too tight and caused spurious timeouts + duplicate attach churn.
-                        return asyncio.run_coroutine_threadsafe(_q(), ml).result(timeout=15.0)
-                    except TimeoutError as exc:
-                        log.warning(
-                            "relay_scrcpy DB pref lookup timed out (15s) for %s: %r",
-                            serial_check,
-                            exc,
-                        )
-                        return True
-                    except Exception as exc:
-                        log.warning(
-                            "relay_scrcpy DB pref lookup failed for %s: %r",
-                            serial_check,
-                            exc,
-                        )
-                        return True
+                async def _relay_db_allows_scrcpy(serial_check: str) -> bool:
+                    return await _relay_scrcpy_auto_attach_allowed_for_serial(
+                        serial_check,
+                        db_enabled=bool(_config_ref.database.enabled),
+                    )
 
                 def _schedule_relay_fsm(coro) -> None:
                     ml = getattr(_app.state, "main_loop", None)
                     if ml is None:
                         log.debug("relay FSM schedule skipped: main_loop unset")
+                        try:
+                            coro.close()
+                        except Exception:
+                            pass
                         return
                     try:
                         running = asyncio.get_running_loop()
@@ -847,6 +970,46 @@ def create_app(
                             asyncio.run_coroutine_threadsafe(coro, ml)
                     except Exception as exc:
                         log.warning("relay FSM schedule failed: %s", exc)
+                        try:
+                            coro.close()
+                        except Exception:
+                            pass
+
+                async def _attach_relay_scrcpy_if_allowed(
+                    *,
+                    device,
+                    relay_serial: str,
+                    db_serial: str,
+                    auto_attach: bool,
+                    log_label: str,
+                ) -> None:
+                    if _relay_mgr_ref and _relay_mgr_ref.relay_for_serial(relay_serial) is None:
+                        log.info(
+                            "%s %s — skip scrcpy attach: relay disconnected",
+                            log_label,
+                            relay_serial,
+                        )
+                        return
+                    if not await _relay_db_allows_scrcpy(db_serial):
+                        log.info(
+                            "%s %s — skip scrcpy attach (not registered/allowed for %s)",
+                            log_label,
+                            relay_serial,
+                            db_serial,
+                        )
+                        return
+                    _RELAY_ATTACH_POOL.submit(
+                        device.attach_scrcpy_stream,
+                        relay_serial,
+                        None,
+                        _config_ref.device.scrcpy_control,
+                    )
+                    log.info(
+                        "%s %s — attach scrcpy (%s)",
+                        log_label,
+                        relay_serial,
+                        "auto_attach" if auto_attach else "active_viewer",
+                    )
 
                 async def _run_relay_fsm_online(
                     relay_serial: str,
@@ -966,14 +1129,24 @@ def create_app(
                     if _relay_mgr_ref is None or device is None:
                         return
                     try:
-                        ok = await _relay_mgr_ref.bootstrap(serial)
+                        ok = await _run_relay_bootstrap_bounded(
+                            _relay_mgr_ref,
+                            _relay_bootstrap_slots,
+                            serial,
+                            device,
+                            _bind_relay_u2,
+                        )
+                        if ok is None:
+                            log.info(
+                                "relay bootstrap skipped for %s: relay disconnected",
+                                serial,
+                            )
+                            return
                         log.info(
                             "relay bootstrap %s for %s",
                             "ok" if ok else "failed",
                             serial,
                         )
-                        caps = _relay_mgr_ref.get_capabilities(serial) or {}
-                        _bind_relay_u2(device, serial, caps=caps)
                     except Exception as exc:
                         log.warning("relay bootstrap error serial=%s: %s", serial, exc)
                     finally:
@@ -981,6 +1154,14 @@ def create_app(
 
                 def _schedule_relay_bootstrap(serial: str, device, *, is_new: bool) -> None:
                     if _relay_mgr_ref is None or device is None:
+                        return
+                    allowed, discovery_reason = _relay_discovery_bootstrap_decision()
+                    if not allowed:
+                        log.info(
+                            "relay bootstrap skipped serial=%s reason=%s",
+                            serial,
+                            discovery_reason,
+                        )
                         return
                     caps = _relay_mgr_ref.get_capabilities(serial) or {}
                     queued, reason = _relay_bootstrap_gate.acquire(
@@ -1031,33 +1212,25 @@ def create_app(
                             except Exception:
                                 pass
                         ws_device.set_event_loop(asyncio.get_event_loop())
-                        _st = getattr(_config_ref, "streaming", None)
-                        _relay_auto = bool(
-                            getattr(_st, "auto_attach_scrcpy_on_relay_online", True)
+                        _relay_auto = _relay_auto_attach_scrcpy_on_relay_online(
+                            _config_ref
                         )
                         _should_attach = _relay_should_attach_scrcpy_on_online(
                             ws_device.serial,
                             auto_attach=_relay_auto,
                         )
-                        if _should_attach and _relay_db_allows_scrcpy(ws_device.serial):
-                            _RELAY_ATTACH_POOL.submit(
-                                ws_device.attach_scrcpy_stream,
-                                serial,
-                                None,
-                                _config_ref.device.scrcpy_control,
-                            )
-                            log.info(
-                                "relay device online %s — reattaching scrcpy for WS device %s (%s)",
-                                serial,
-                                ws_device.serial,
-                                "auto_attach" if _relay_auto else "active_viewer",
-                            )
-                        elif _should_attach:
-                            log.info(
-                                "relay device online %s — skip scrcpy reattach "
-                                "(relay_scrcpy_enabled=false in DB for %s)",
-                                serial,
-                                ws_device.serial,
+                        if _should_attach:
+                            _schedule_relay_fsm(
+                                _attach_relay_scrcpy_if_allowed(
+                                    device=ws_device,
+                                    relay_serial=serial,
+                                    db_serial=ws_device.serial,
+                                    auto_attach=_relay_auto,
+                                    log_label=(
+                                        "relay device online reattach for WS device "
+                                        f"{ws_device.serial}"
+                                    ),
+                                )
                             )
                         else:
                             log.info(
@@ -1080,29 +1253,22 @@ def create_app(
                     _schedule_relay_bootstrap(serial, device, is_new=is_new)
                     if is_new:
                         ws_manager.subscribe_device(device)
-                    _st2 = getattr(_config_ref, "streaming", None)
-                    _relay_auto2 = bool(getattr(_st2, "auto_attach_scrcpy_on_relay_online", True))
+                    _relay_auto2 = _relay_auto_attach_scrcpy_on_relay_online(
+                        _config_ref
+                    )
                     _should_attach2 = _relay_should_attach_scrcpy_on_online(
                         serial,
                         auto_attach=_relay_auto2,
                     )
-                    if _should_attach2 and _relay_db_allows_scrcpy(serial):
-                        _RELAY_ATTACH_POOL.submit(
-                            device.attach_scrcpy_stream,
-                            serial,
-                            None,
-                            _config_ref.device.scrcpy_control,
-                        )
-                        log.info(
-                            "relay device online → attach scrcpy: %s (%s)",
-                            serial,
-                            "auto_attach" if _relay_auto2 else "active_viewer",
-                        )
-                    elif _should_attach2:
-                        log.info(
-                            "relay device online → skip auto-attach scrcpy "
-                            "(relay_scrcpy_enabled=false in DB): %s",
-                            serial,
+                    if _should_attach2:
+                        _schedule_relay_fsm(
+                            _attach_relay_scrcpy_if_allowed(
+                                device=device,
+                                relay_serial=serial,
+                                db_serial=serial,
+                                auto_attach=_relay_auto2,
+                                log_label="relay device online",
+                            )
                         )
                     else:
                         log.info(
@@ -1398,10 +1564,22 @@ def create_app(
             mgr = get_relay_manager()
             if mgr is None:
                 return {"relay_enabled": False}
+            from runtime.stream_telemetry import stream_telemetry
+
+            stream_stats = stream_telemetry.snapshot(reset=False)
+            websocket_streams = ws_manager.stream_runtime_status()
+            stream_guardrail = _stream_guardrail_status(
+                stream_telemetry=stream_stats,
+                websocket_streams=websocket_streams,
+            )
+            _warn_stream_guardrail_if_needed(stream_guardrail=stream_guardrail)
             return {
                 "relay_enabled": True,
                 "agents": mgr.registered_relays(),
                 "devices": mgr.list_devices(),
+                "stream_telemetry": stream_stats,
+                "websocket_streams": websocket_streams,
+                "stream_guardrail": stream_guardrail,
             }
         except Exception as exc:
             return {"relay_enabled": False, "error": str(exc)}

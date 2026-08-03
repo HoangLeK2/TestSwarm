@@ -531,10 +531,12 @@ def build_campaign_fleet_router(
             from db.crud.execution import list_running_executions_for_campaign
 
             execution_context_by_wf: dict[str, dict] = {}
+            execution_status_by_wf: dict[str, str] = {}
             campaign_name_cache: dict[str, str | None] = {}
             for ex in await list_running_executions_for_campaign(db, campaign_id):
                 wf_id = (ex.meta or {}).get("workflow_id")
                 if wf_id:
+                    execution_status_by_wf[str(wf_id)] = str(getattr(ex, "status", "") or "")
                     execution_context_by_wf[str(wf_id)] = (
                         await _workflow_context_from_execution(
                             db,
@@ -559,7 +561,8 @@ def build_campaign_fleet_router(
 
             async def _one(row: tuple[str, str, str, datetime | None]) -> dict:
                 wf_id, run_id, temporal_st, start_time = row
-                ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
+                execution_status = execution_status_by_wf.get(wf_id)
+                ui_st = "PAUSED" if execution_status == "paused" else temporal_st
                 return {
                     "workflow_id": wf_id,
                     "run_id": run_id,
@@ -721,12 +724,19 @@ def build_campaign_fleet_router(
 
             status = progress.status
             error_message: str | None = None
+            child_progress: dict | None = None
 
             # When parent shows RUNNING, check if child is paused on error
             if status == "running":
                 child_id = f"{workflow_id}:steps"
                 try:
                     child_handle = client.get_workflow_handle(child_id)
+                    try:
+                        child_progress = await child_handle.query(
+                            ScenarioStepsWorkflow.get_live_progress
+                        )
+                    except Exception:
+                        child_progress = None
                     error_info = await child_handle.query(ScenarioStepsWorkflow.get_error_info)
                     if error_info.get("paused_on_error"):
                         status = "paused_on_error"
@@ -734,16 +744,36 @@ def build_campaign_fleet_router(
                 except Exception:
                     pass  # child not started yet or not queryable
 
+            effective_current_step = progress.current_step
+            effective_total_steps = progress.total_steps
+            effective_step_type = progress.current_step_type
+            effective_message = progress.message
+            current_step_started_at = None
+            current_step_elapsed_ms = 0
+            running_step = False
+            if child_progress:
+                status = child_progress.get("status") or status
+                effective_current_step = int(child_progress.get("current_step") or 0)
+                effective_total_steps = int(child_progress.get("total_steps") or 0) or progress.total_steps
+                effective_step_type = str(child_progress.get("current_step_type") or "")
+                effective_message = str(child_progress.get("message") or "")
+                current_step_started_at = child_progress.get("current_step_started_at")
+                current_step_elapsed_ms = int(child_progress.get("current_step_elapsed_ms") or 0)
+                running_step = bool(child_progress.get("running_step"))
+
             return {
                 "workflow_id": workflow_id,
                 "status": status,
-                "current_step": progress.current_step,
-                "total_steps": progress.total_steps,
-                "current_step_type": progress.current_step_type,
+                "current_step": effective_current_step,
+                "total_steps": effective_total_steps,
+                "current_step_type": effective_step_type,
                 "loop_iteration": progress.loop_iteration,
-                "message": error_message or progress.message,
+                "message": error_message or effective_message,
                 "device_serial": progress.device_serial,
                 "error_message": error_message,
+                "current_step_started_at": current_step_started_at,
+                "current_step_elapsed_ms": current_step_elapsed_ms,
+                "running_step": running_step,
             }
         except Exception as exc:
             return JSONResponse(

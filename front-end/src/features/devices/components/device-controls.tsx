@@ -260,6 +260,21 @@ function DeviceControlsRail({
           ) : null}
         </div>
 
+        {liveInput ? (
+          <div className={cn(railSectionClass, 'py-1')}>
+            <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
+            <RailIconButton
+              label={tLive('label')}
+              hint={tLive('railHint')}
+              active={liveInput.open}
+              disabled={liveInput.disabled}
+              onClick={() => liveInput.onOpenChange(!liveInput.open)}
+            >
+              <Keyboard className={iconClass} aria-hidden />
+            </RailIconButton>
+          </div>
+        ) : null}
+
         <div className={cn(railSectionClass, 'pt-1')}>
           <div className='mb-0.5 h-px w-7 shrink-0 bg-white/10' aria-hidden />
           <RailIconButton label={t('home')} onClick={() => onKey('home')}>
@@ -299,21 +314,6 @@ function DeviceControlsRail({
             <Power className={iconClass} aria-hidden />
           </RailIconButton>
         </div>
-
-        {liveInput ? (
-          <div className={cn(railSectionClass, 'py-1')}>
-            <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
-            <RailIconButton
-              label={tLive('label')}
-              hint={tLive('railHint')}
-              active={liveInput.open}
-              disabled={liveInput.disabled}
-              onClick={() => liveInput.onOpenChange(!liveInput.open)}
-            >
-              <Keyboard className={iconClass} aria-hidden />
-            </RailIconButton>
-          </div>
-        ) : null}
 
         {deviceOps ? (
           <div className={cn(railSectionClass, 'py-1')}>

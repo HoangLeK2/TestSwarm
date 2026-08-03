@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from temporalio import activity
 
+from common.totp import account_metadata_value, generate_totp
 from temporal.trace import activity_log_context, trace_log
 from temporal.shared import (
     DeviceActionBatchInput,
@@ -42,6 +43,10 @@ from services.scenario_step_contract import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _generate_totp(secret: str, *, now: int | None = None, digits: int = 6, period: int = 30) -> str:
+    return generate_totp(secret, now=now, digits=digits, period=period)
 
 _SERIAL_RE = re.compile(r"^[\w.:_-]{1,128}$")
 
@@ -89,6 +94,55 @@ def _finalize_is_cancelled(
                 for key in ("message", "failed_message", "reason_code")
             )
     return any("cancelled" in text.lower() or "canceled" in text.lower() for text in texts)
+
+
+def _checkpoint_next_step_from_results(step_results: list[dict[str, Any]]) -> int:
+    next_step = 0
+    for entry in step_results:
+        if not isinstance(entry, dict) or not bool(entry.get("ok", True)):
+            continue
+        try:
+            idx = int(entry.get("index", -1))
+        except Exception:
+            continue
+        next_step = max(next_step, idx + 1)
+    return next_step
+
+
+async def _advance_execution_checkpoint(
+    execution_id: str | None,
+    step_results: list[dict[str, Any]],
+) -> None:
+    """Best-effort, advance-only checkpoint for long Temporal campaign runs."""
+    if not execution_id:
+        return
+    next_step = _checkpoint_next_step_from_results(step_results)
+    if next_step <= 0:
+        return
+    try:
+        from sqlalchemy import update
+        from db.database import activity_session
+        from db.models.execution import Execution
+
+        async with activity_session() as db:
+            stmt = (
+                update(Execution)
+                .where(Execution.id == execution_id)
+                .where(
+                    (Execution.checkpoint_step.is_(None))
+                    | (Execution.checkpoint_step < next_step)
+                )
+                .values(checkpoint_step=next_step)
+            )
+            await db.execute(stmt)
+            await db.commit()
+    except Exception as exc:
+        log.debug(
+            "checkpoint advance failed execution=%s next_step=%s: %s",
+            execution_id,
+            next_step,
+            exc,
+        )
 
 
 def _ignored_step_warnings_from_results(
@@ -768,6 +822,8 @@ class DeviceActivities:
         # account_id -> decrypted password; populated lazily, never evicted
         # (passwords don't change mid-campaign; Worker restarts clear the cache).
         self._cred_cache: dict[str, str] = {}
+        # account_id -> non-history login vars, fetched once per Worker.
+        self._account_login_vars_cache: dict[str, dict[str, Any]] = {}
         # Prevents duplicate DB fetches when two coroutines miss the cache
         # simultaneously for the same account_id.
         self._cred_lock: asyncio.Lock = asyncio.Lock()
@@ -810,6 +866,58 @@ class DeviceActivities:
                 pwd = decrypt_password(account.password_encrypted)
             self._cred_cache[account_id] = pwd
             return pwd
+
+    async def _resolve_account_login_vars(
+        self,
+        account_id: str,
+        *,
+        execution_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if account_id in self._account_login_vars_cache:
+            cached = dict(self._account_login_vars_cache[account_id])
+            return cached
+
+        async with self._cred_lock:
+            if account_id in self._account_login_vars_cache:
+                return dict(self._account_login_vars_cache[account_id])
+
+            from db.database import activity_session
+            from db.crud.account import get_account, lookup_account_org_id
+            from common.crypto import decrypt_password
+            from services.execution.event_publisher import resolve_execution_org_id
+            from tenancy.context import tenant_context
+
+            org_id = ""
+            async with activity_session() as acct_db:
+                if execution_id:
+                    org_id = await resolve_execution_org_id(acct_db, execution_id)
+                if not org_id:
+                    org_id = (await lookup_account_org_id(acct_db, account_id)) or ""
+                with tenant_context(org_id or None):
+                    account = await get_account(acct_db, account_id)
+                if account is None:
+                    return None
+
+                metadata = account.account_metadata or {}
+                password = decrypt_password(account.password_encrypted)
+                email = account_metadata_value(metadata, "email", "login_email", "account_email")
+                totp_secret = account_metadata_value(
+                    metadata,
+                    "totp_secret",
+                    "two_factor_secret",
+                    "authenticator_secret",
+                    "otp_secret",
+                    "2fa_secret",
+                )
+
+            cached = {
+                "__ACCOUNT_PASSWORD__": password,
+                "__ACCOUNT_EMAIL__": email,
+                "__ACCOUNT_TOTP_SECRET__": totp_secret,
+            }
+            self._cred_cache[account_id] = password
+            self._account_login_vars_cache[account_id] = cached
+            return dict(cached)
 
     @activity.defn
     async def heartbeat_campaign_device_claim(self, inp: dict[str, Any]) -> int:
@@ -869,10 +977,10 @@ class DeviceActivities:
             credential_vars: dict[str, Any] = {}
             acct_id = resolved_campaign_vars.get("__ACCOUNT_ID__") or inp.variables.get("__ACCOUNT_ID__")
             if acct_id:
-                pwd = await self._resolve_password(
+                login_vars = await self._resolve_account_login_vars(
                     acct_id, execution_id=inp.execution_id,
                 )
-                if pwd is None:
+                if login_vars is None:
                     return StepResult(
                         index=idx, step_type=step_type, ok=False,
                         message=(
@@ -880,7 +988,7 @@ class DeviceActivities:
                             "Check that the account still exists in the database."
                         ),
                     )
-                credential_vars["__ACCOUNT_PASSWORD__"] = pwd
+                credential_vars.update(login_vars)
 
             var_ctx = VariableContext(
                 # Merge credentials into scenario_vars (activity-scoped) so the
@@ -934,6 +1042,7 @@ class DeviceActivities:
                     if k not in ("index", "type", "ok", "message")
                 }
 
+                await _advance_execution_checkpoint(inp.execution_id, [sr])
                 return StepResult(
                     index=idx,
                     step_type=step_type,
@@ -944,11 +1053,18 @@ class DeviceActivities:
                 )
 
             # No step results — check overall success
+            fallback_sr = {
+                "index": idx,
+                "type": step_type,
+                "ok": result.get("success", False),
+                "message": result.get("failed_message") or "",
+            }
+            await _advance_execution_checkpoint(inp.execution_id, [fallback_sr])
             return StepResult(
                 index=idx,
                 step_type=step_type,
-                ok=result.get("success", False),
-                message=result.get("failed_message") or "",
+                ok=fallback_sr["ok"],
+                message=fallback_sr["message"],
                 details={
                     "duration_ms": activity_step_duration_ms,
                     "activity_duration_ms": activity_step_duration_ms,
@@ -995,14 +1111,18 @@ class DeviceActivities:
         results: list[dict[str, Any]] = []
         first_failure_index = -1
 
+        async def _finish(**kwargs: Any) -> DeviceActionBatchResult:
+            await _advance_execution_checkpoint(execution_id, results)
+            return DeviceActionBatchResult(**kwargs)
+
         # Resolve credentials once for the whole batch.
         credential_vars: dict[str, Any] = {}
         acct_id = inp.campaign_vars.get("__ACCOUNT_ID__") or inp.variables.get("__ACCOUNT_ID__")
         if acct_id:
-            pwd = await self._resolve_password(
+            login_vars = await self._resolve_account_login_vars(
                 acct_id, execution_id=execution_id,
             )
-            if pwd is None:
+            if login_vars is None:
                 return DeviceActionBatchResult(
                     results=[{
                         "index": inp.step_indices[0] if inp.step_indices else 0,
@@ -1012,7 +1132,7 @@ class DeviceActivities:
                     }],
                     first_failure_index=0,
                 )
-            credential_vars["__ACCOUNT_PASSWORD__"] = pwd
+            credential_vars.update(login_vars)
 
         var_ctx = VariableContext(
             scenario_vars={**inp.variables, **credential_vars},
@@ -1030,14 +1150,14 @@ class DeviceActivities:
         while batch_pos < len(inp.steps):
             _safe_activity_heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
             if activity.is_cancelled():
-                return DeviceActionBatchResult(
+                return await _finish(
                     results=results,
                     first_failure_index=-1,
                     cancelled_mid_batch=True,
                     context=batch_context,
                 )
             if await flag_probe.cancelled():
-                return DeviceActionBatchResult(
+                return await _finish(
                     results=results,
                     first_failure_index=-1,
                     cancelled_mid_batch=True,
@@ -1046,7 +1166,7 @@ class DeviceActivities:
             with contextlib.suppress(Exception):
                 device.ensure_u2_healthy(ping_timeout=2.0)
             if await flag_probe.paused():
-                return DeviceActionBatchResult(
+                return await _finish(
                     results=results,
                     first_failure_index=-1,
                     paused_mid_batch=True,
@@ -1142,21 +1262,21 @@ class DeviceActivities:
                     if first_failure_index != -1:
                         break
                     if cancel_event.is_set() and await flag_probe.paused(force=True):
-                        return DeviceActionBatchResult(
+                        return await _finish(
                             results=results,
                             first_failure_index=-1,
                             paused_mid_batch=True,
                             context=batch_context,
                         )
                     if cancel_event.is_set() or await flag_probe.cancelled(force=cancel_event.is_set()):
-                        return DeviceActionBatchResult(
+                        return await _finish(
                             results=results,
                             first_failure_index=-1,
                             cancelled_mid_batch=True,
                             context=batch_context,
                         )
                     if await flag_probe.paused():
-                        return DeviceActionBatchResult(
+                        return await _finish(
                             results=results,
                             first_failure_index=-1,
                             paused_mid_batch=True,
@@ -1210,20 +1330,20 @@ class DeviceActivities:
                             )
                             results.append(entry)
                         if await flag_probe.paused(force=True):
-                            return DeviceActionBatchResult(
+                            return await _finish(
                                 results=results,
                                 first_failure_index=-1,
                                 paused_mid_batch=True,
                                 context=batch_context,
                             )
                         if await flag_probe.cancelled(force=True):
-                            return DeviceActionBatchResult(
+                            return await _finish(
                                 results=results,
                                 first_failure_index=-1,
                                 cancelled_mid_batch=True,
                                 context=batch_context,
                             )
-                        return DeviceActionBatchResult(
+                        return await _finish(
                             results=results,
                             first_failure_index=-1,
                             cancelled_mid_batch=True,
@@ -1234,7 +1354,7 @@ class DeviceActivities:
                             "[%s] batch activity cooperatively cancelled at step#%d (%s) pos=%d/%d",
                             inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
                         )
-                        return DeviceActionBatchResult(
+                        return await _finish(
                             results=results,
                             first_failure_index=-1,
                             cancelled_mid_batch=True,
@@ -1383,7 +1503,7 @@ class DeviceActivities:
                         phase="finished",
                         event_context_cache=event_context_cache,
                     )
-                    return DeviceActionBatchResult(
+                    return await _finish(
                         results=results,
                         first_failure_index=-1,
                         cancelled_mid_batch=True,
@@ -1426,7 +1546,7 @@ class DeviceActivities:
                         "[%s] batch activity cooperatively cancelled at step#%d (%s) pos=%d/%d",
                         inp.device_serial, step_idx, step_type, batch_pos, len(inp.steps),
                     )
-                    return DeviceActionBatchResult(
+                    return await _finish(
                         results=results,
                         first_failure_index=-1,
                         cancelled_mid_batch=True,
@@ -1442,7 +1562,7 @@ class DeviceActivities:
                 break
             batch_pos += 1
 
-        return DeviceActionBatchResult(
+        return await _finish(
             results=results,
             first_failure_index=first_failure_index,
             context=batch_context,

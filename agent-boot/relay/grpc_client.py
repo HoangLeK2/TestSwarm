@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import struct
+import time
 from typing import Optional
 
 import grpc
@@ -30,6 +32,45 @@ log = logging.getLogger("grpc_client")
 # Matches scrcpy_relay.py binary frame format
 _PTS_CONFIG_MASK = 0x8000_0000_0000_0000
 
+
+def _env_int(name: str, default: int, *, lo: int = 1, hi: int = 128 * 1024 * 1024) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+    return max(lo, min(hi, value))
+
+
+_GRPC_MAX_MESSAGE_BYTES = _env_int(
+    "RELAY_GRPC_MAX_MESSAGE_BYTES",
+    4 * 1024 * 1024,
+    lo=1024 * 1024,
+)
+_GRPC_MAX_VIDEO_FRAME_BYTES = _env_int(
+    "RELAY_GRPC_MAX_VIDEO_FRAME_BYTES",
+    max(512 * 1024, _GRPC_MAX_MESSAGE_BYTES - 128 * 1024),
+    lo=128 * 1024,
+    hi=_GRPC_MAX_MESSAGE_BYTES,
+)
+_GRPC_LARGE_VIDEO_FRAME_WARN_BYTES = _env_int(
+    "RELAY_GRPC_LARGE_VIDEO_FRAME_WARN_BYTES",
+    min(_GRPC_MAX_VIDEO_FRAME_BYTES, 1024 * 1024),
+    lo=64 * 1024,
+    hi=_GRPC_MAX_VIDEO_FRAME_BYTES,
+)
+_GRPC_VIDEO_STATS_INTERVAL_S = _env_int(
+    "RELAY_GRPC_VIDEO_STATS_INTERVAL_S",
+    30,
+    lo=5,
+    hi=3600,
+)
+_GRPC_VIDEO_WRITE_WAIT_WARN_MS = _env_int(
+    "RELAY_GRPC_VIDEO_WRITE_WAIT_WARN_MS",
+    50,
+    lo=1,
+    hi=60_000,
+)
+
 _GRPC_CHANNEL_OPTIONS = [
     ("grpc.keepalive_time_ms",               10_000),
     ("grpc.keepalive_timeout_ms",              5_000),
@@ -38,8 +79,8 @@ _GRPC_CHANNEL_OPTIONS = [
     ("grpc.http2.min_time_between_pings_ms",   5_000),
     ("grpc.initial_reconnect_backoff_ms",      1_000),
     ("grpc.max_reconnect_backoff_ms",         30_000),
-    ("grpc.max_send_message_length",    4 * 1024 * 1024),
-    ("grpc.max_receive_message_length", 4 * 1024 * 1024),
+    ("grpc.max_send_message_length",    _GRPC_MAX_MESSAGE_BYTES),
+    ("grpc.max_receive_message_length", _GRPC_MAX_MESSAGE_BYTES),
 ]
 
 
@@ -125,6 +166,92 @@ def agent_message_from_item(item, relay_pb2):
     return None
 
 
+class _GrpcVideoSendStats:
+    def __init__(self) -> None:
+        self.sent = 0
+        self.sent_bytes = 0
+        self.large = 0
+        self.dropped_oversize = 0
+        self.dropped_bytes = 0
+        self.max_bytes = 0
+        self.write_wait_samples = 0
+        self.write_wait_warn = 0
+        self.write_wait_total_ms = 0
+        self.write_wait_max_ms = 0
+        self.last_log = time.monotonic()
+
+    def record_sent(self, size: int) -> None:
+        self.sent += 1
+        self.sent_bytes += size
+        self.max_bytes = max(self.max_bytes, size)
+        if size >= _GRPC_LARGE_VIDEO_FRAME_WARN_BYTES:
+            self.large += 1
+
+    def record_drop(self, size: int) -> None:
+        self.dropped_oversize += 1
+        self.dropped_bytes += size
+        self.max_bytes = max(self.max_bytes, size)
+
+    def record_write_wait(self, wait_ms: int) -> None:
+        self.write_wait_samples += 1
+        self.write_wait_total_ms += max(0, wait_ms)
+        self.write_wait_max_ms = max(self.write_wait_max_ms, wait_ms)
+        if wait_ms >= _GRPC_VIDEO_WRITE_WAIT_WARN_MS:
+            self.write_wait_warn += 1
+
+    def log_if_due(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self.last_log < _GRPC_VIDEO_STATS_INTERVAL_S:
+            return
+        if not (
+            self.sent
+            or self.large
+            or self.dropped_oversize
+            or self.max_bytes
+            or self.write_wait_warn
+        ):
+            self.last_log = now
+            return
+        log_fn = (
+            log.warning
+            if self.dropped_oversize or self.large or self.write_wait_warn
+            else log.debug
+        )
+        avg_wait_ms = (
+            round(self.write_wait_total_ms / self.write_wait_samples)
+            if self.write_wait_samples
+            else 0
+        )
+        log_fn(
+            "gRPC video send stats sent=%d bytes=%d large=%d "
+            "dropped_oversize=%d dropped_bytes=%d max_frame_bytes=%d "
+            "limit=%d write_wait_samples=%d write_wait_avg_ms=%d "
+            "write_wait_max_ms=%d write_wait_warn=%d",
+            self.sent,
+            self.sent_bytes,
+            self.large,
+            self.dropped_oversize,
+            self.dropped_bytes,
+            self.max_bytes,
+            _GRPC_MAX_VIDEO_FRAME_BYTES,
+            self.write_wait_samples,
+            avg_wait_ms,
+            self.write_wait_max_ms,
+            self.write_wait_warn,
+        )
+        self.sent = 0
+        self.sent_bytes = 0
+        self.large = 0
+        self.dropped_oversize = 0
+        self.dropped_bytes = 0
+        self.max_bytes = 0
+        self.write_wait_samples = 0
+        self.write_wait_warn = 0
+        self.write_wait_total_ms = 0
+        self.write_wait_max_ms = 0
+        self.last_log = now
+
+
 class GrpcRelayClient:
     """
     gRPC bidirectional relay client.
@@ -145,6 +272,7 @@ class GrpcRelayClient:
         channel=None,
         tls_enabled: bool = False,
         root_cert_file: str = "",
+        max_video_frame_bytes: int | None = None,
     ) -> None:
         self._addr = server_addr          # "host:50051"
         self._api_key = api_key or ""
@@ -154,6 +282,11 @@ class GrpcRelayClient:
         self._shared_channel = channel    # pre-created channel shared with control stream
         self._tls_enabled = tls_enabled
         self._root_cert_file = root_cert_file
+        self._max_video_frame_bytes = (
+            _GRPC_MAX_VIDEO_FRAME_BYTES
+            if max_video_frame_bytes is None
+            else max(1, max_video_frame_bytes)
+        )
         self.ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=256)
         self._running = False
 
@@ -236,15 +369,33 @@ class GrpcRelayClient:
         if initial_meta is not None:
             yield relay_pb2.AgentMsg(meta=initial_meta.encode())
 
+        stats = _GrpcVideoSendStats()
         while self._running:
             try:
                 item = await asyncio.wait_for(self._send_queue.get(), timeout=5.0)
             except asyncio.TimeoutError:
+                stats.log_if_due()
                 continue  # keep the stream alive (keepalive handled by gRPC)
 
             if item is None:
+                stats.log_if_due(force=True)
                 return  # sentinel — clean shutdown
 
             message = agent_message_from_item(item, relay_pb2)
-            if message is not None:
-                yield message
+            if message is None:
+                continue
+            is_video = message.WhichOneof("payload") == "video"
+            if is_video:
+                size = len(message.video.data)
+                if size > self._max_video_frame_bytes:
+                    stats.record_drop(size)
+                    stats.log_if_due(force=True)
+                    continue
+                stats.record_sent(size)
+                stats.log_if_due()
+                yielded_at = time.monotonic()
+            yield message
+            if is_video:
+                stats.record_write_wait(
+                    max(0, round((time.monotonic() - yielded_at) * 1_000))
+                )

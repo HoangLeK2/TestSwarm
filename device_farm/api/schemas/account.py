@@ -130,6 +130,11 @@ class BulkImportRow(BaseModel):
     display_name: str = ""
     tags: str = ""
     notes: str = ""
+    email: Optional[str] = None
+    totp_secret: Optional[str] = None
+    cookies: Optional[str] = None
+    token: Optional[str] = None
+    account_metadata: Dict[str, Any] = {}
 
     @field_validator("platform")
     @classmethod

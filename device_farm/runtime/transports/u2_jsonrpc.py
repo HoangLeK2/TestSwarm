@@ -186,17 +186,18 @@ class _BatchRelaySession:
         actions: list[dict],
         timeout: float = 30.0,
         cancel_event: Any | None = None,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> list[dict]:
         import asyncio
-        if cancel_event is None:
-            coro = self._mgr.u2_batch(self._serial, actions, timeout=timeout)
-        else:
-            coro = self._mgr.u2_batch(
-                self._serial,
-                actions,
-                timeout=timeout,
-                cancel_event=cancel_event,
-            )
+        coro = self._mgr.u2_batch(
+            self._serial,
+            actions,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            priority=priority,
+            deadline_ms=deadline_ms,
+        )
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
         res = fut.result(timeout=timeout + 15.0)
         if not res.get("ok"):
@@ -208,10 +209,24 @@ class _BatchRelaySession:
             )
         return res.get("results") or []
 
-    def flow(self, name: str, params: dict, timeout: float = 30.0) -> dict:
+    def flow(
+        self,
+        name: str,
+        params: dict,
+        timeout: float = 30.0,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
+    ) -> dict:
         import asyncio
         fut = asyncio.run_coroutine_threadsafe(
-            self._mgr.u2_flow(self._serial, name, params, timeout=timeout),
+            self._mgr.u2_flow(
+                self._serial,
+                name,
+                params,
+                timeout=timeout,
+                priority=priority,
+                deadline_ms=deadline_ms,
+            ),
             self._loop,
         )
         res = fut.result(timeout=timeout + 15.0)

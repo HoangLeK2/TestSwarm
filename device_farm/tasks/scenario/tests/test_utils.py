@@ -249,6 +249,73 @@ class TestExecuteTapDiagnostics:
         device.tap.assert_called_once_with(950, 1450)
         assert bounds == {"left": 850, "top": 1400, "right": 1050, "bottom": 1500}
 
+    def test_stable_selector_missing_match_uses_recorded_fallback_position(self):
+        class FakeU2:
+            def find_element(self, by, value, timeout=None):
+                assert by == "description"
+                assert value == "Công khai · 98K thành viên · 5 bài viết/ngày"
+                return None
+
+            def find_element_with_bounds(self, by, value):
+                return None
+
+        device = MagicMock()
+        device.serial = "SER-1"
+        device.screen_width = 1080
+        device.screen_height = 1920
+        device.u2 = FakeU2()
+        device._batch_enabled.return_value = False
+        device.hierarchy_xml.return_value = "<hierarchy />"
+
+        ok, message, bounds = _execute_tap(
+            device,
+            by="description",
+            value="Công khai · 98K thành viên · 5 bài viết/ngày",
+            fallback_rx=0.6,
+            fallback_ry=0.246,
+            implicit_wait_timeout=0.01,
+            implicit_wait_poll=0.01,
+        )
+
+        assert ok is True
+        assert "method=fallback_position" in message
+        assert bounds is not None
+        device.tap.assert_called_once_with(648, 472)
+
+    def test_high_churn_group_metadata_fallback_does_not_wait_full_selector_timeout(self):
+        class FakeU2:
+            def find_element(self, by, value, timeout=None):
+                assert timeout <= 0.35
+                return None
+
+            def find_element_with_bounds(self, by, value):
+                return None
+
+        device = MagicMock()
+        device.serial = "SER-1"
+        device.screen_width = 1080
+        device.screen_height = 1920
+        device.u2 = FakeU2()
+        device._batch_enabled.return_value = False
+        device.hierarchy_xml.return_value = "<hierarchy />"
+
+        started = time.monotonic()
+        ok, message, _bounds = _execute_tap(
+            device,
+            by="description",
+            value="Công khai · 98K thành viên · 5 bài viết/ngày",
+            fallback_rx=0.6,
+            fallback_ry=0.246,
+            implicit_wait_timeout=3.0,
+            implicit_wait_poll=0.05,
+        )
+        elapsed = time.monotonic() - started
+
+        assert ok is True
+        assert "method=fallback_position" in message
+        assert elapsed < 1.2
+        device.tap.assert_called_once_with(648, 472)
+
     def test_volatile_bounds_xpath_missing_match_fails_closed_without_position_tap(self):
         class FakeU2:
             def find_element(self, by, value, timeout=None):

@@ -8,6 +8,7 @@ import time
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.sql.elements import TextClause
 
 import api.routes.device_control.scrcpy as scrcpy_routes
 from api.routes.device_control.scrcpy import build_scrcpy_router
@@ -94,6 +95,7 @@ def _build_app(
     serial: str = "serial-1",
     *,
     detach_grace_s: float = 0,
+    preview_detach_grace_s: float = 0,
     viewer_lease_ttl_s: float = 0,
 ) -> FastAPI:
     app = FastAPI()
@@ -102,7 +104,52 @@ def _build_app(
             _FakeManager(device, serial=serial),
             db_enabled=False,
             scrcpy_detach_grace_s=detach_grace_s,
+            scrcpy_preview_detach_grace_s=preview_detach_grace_s,
             scrcpy_viewer_lease_ttl_s=viewer_lease_ttl_s,
+        ),
+        prefix="/api",
+    )
+    return app
+
+
+class _FakeRegistrationResult:
+    def __init__(self, found: bool) -> None:
+        self.found = found
+
+    def first(self):
+        return ("device-id",) if self.found else None
+
+
+class _FakeRegistrationDb:
+    def __init__(self, found: bool) -> None:
+        self.found = found
+
+    async def execute(self, _stmt, _params=None):
+        assert isinstance(_stmt, TextClause)
+        return _FakeRegistrationResult(self.found)
+
+
+class _FakeRegistrationSession:
+    def __init__(self, found: bool) -> None:
+        self.found = found
+
+    async def __aenter__(self) -> _FakeRegistrationDb:
+        return _FakeRegistrationDb(self.found)
+
+    async def __aexit__(self, *_exc) -> bool:
+        return False
+
+
+def _build_registration_gated_app(
+    device: _FakeScrcpyDevice,
+    serial: str,
+) -> FastAPI:
+    app = FastAPI()
+    app.include_router(
+        build_scrcpy_router(
+            _FakeManager(device, serial=serial),
+            db_enabled=True,
+            scrcpy_detach_grace_s=0,
         ),
         prefix="/api",
     )
@@ -161,6 +208,53 @@ def test_stream_generation_reset_uses_same_lock_as_subscribe() -> None:
     frame_q: asyncio.Queue[bytes] = asyncio.Queue()
     assert reset_finished.is_set()
     assert device.subscribe_frames(frame_q) == (None, None)
+
+
+@pytest.mark.anyio
+async def test_scrcpy_attach_rejects_unregistered_relay_device(monkeypatch) -> None:
+    serial = "runtime-only-serial"
+    device = _FakeScrcpyDevice()
+    app = _build_registration_gated_app(device, serial=serial)
+    monkeypatch.setattr(
+        scrcpy_routes,
+        "AsyncSessionLocal",
+        lambda: _FakeRegistrationSession(found=False),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        attach = await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={"device_ip": "10.0.0.10", "viewer_id": "control"},
+        )
+
+    assert attach.status_code == 403
+    assert attach.json()["status"] == "registration_required"
+    assert device.attach_calls == 0
+
+
+@pytest.mark.anyio
+async def test_scrcpy_attach_allows_registered_relay_device(monkeypatch) -> None:
+    serial = "registered-serial"
+    device = _FakeScrcpyDevice()
+    app = _build_registration_gated_app(device, serial=serial)
+    monkeypatch.setattr(
+        scrcpy_routes,
+        "AsyncSessionLocal",
+        lambda: _FakeRegistrationSession(found=True),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        attach = await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={"device_ip": "10.0.0.10", "viewer_id": "control"},
+        )
+
+    assert attach.status_code == 200
+    assert device.attach_calls == 1
 
 
 @pytest.mark.anyio
@@ -972,6 +1066,59 @@ async def test_last_preview_viewer_detaches_without_encoder_grace() -> None:
 
 
 @pytest.mark.anyio
+async def test_preview_detach_grace_is_cancelled_by_fast_reattach() -> None:
+    scrcpy_routes.scrcpy_lifecycle_stats(reset=True)
+    device = _FakeScrcpyDevice()
+    app = _build_app(
+        device,
+        serial="serial-preview-grace",
+        detach_grace_s=60,
+        preview_detach_grace_s=0.05,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/api/devices/serial-preview-grace/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "snapshot-preview:first",
+                "max_fps": 1,
+                "max_width": 360,
+                "bitrate": 100_000,
+            },
+        )
+        detach = await client.post(
+            "/api/devices/serial-preview-grace/scrcpy/detach",
+            json={"viewer_id": "snapshot-preview:first"},
+        )
+        reattach = await client.post(
+            "/api/devices/serial-preview-grace/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "snapshot-preview:second",
+                "max_fps": 1,
+                "max_width": 360,
+                "bitrate": 100_000,
+            },
+        )
+        await asyncio.sleep(0.08)
+
+    assert detach.status_code == 200
+    assert detach.json()["active_viewers"] == 0
+    assert detach.json()["stop_scheduled"] is True
+    assert reattach.status_code == 200
+    assert reattach.json()["active_viewers"] == 1
+    assert device.attach_calls == 1
+    assert device.detach_calls == 0
+    stats = scrcpy_routes.scrcpy_lifecycle_stats(reset=True)
+    assert stats["preview_stop_scheduled"] == 1
+    assert stats["preview_stop_cancelled_by_attach"] == 1
+    assert stats.get("preview_stop_completed_after_grace", 0) == 0
+
+
+@pytest.mark.anyio
 async def test_low_fps_preview_does_not_downgrade_active_control_viewer() -> None:
     device = _FakeScrcpyDevice()
     app = _build_app(device, serial="serial-control-keeps-profile")
@@ -1122,16 +1269,109 @@ async def test_control_detach_reapplies_remaining_preview_profile() -> None:
             "/api/devices/serial-control-to-preview/scrcpy/detach",
             json={"viewer_id": "device-screen:test"},
         )
+        await asyncio.sleep(0.05)
 
     assert control.status_code == 200
     assert preview.status_code == 200
     assert detach_control.status_code == 200
     assert detach_control.json()["active_viewers"] == 1
+    assert detach_control.json()["profile_reapply_scheduled"] is True
     assert device.attach_calls == 2
     assert device.last_attach_options == {
         "max_fps": 1,
         "max_width": 360,
         "bitrate": 100000,
+    }
+
+
+@pytest.mark.anyio
+async def test_control_detach_schedules_blocking_preview_reapply() -> None:
+    serial = "serial-control-to-preview-blocking"
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial=serial)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        control = await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "device-screen:test",
+                "max_fps": 8,
+                "max_width": 540,
+                "bitrate": 900000,
+            },
+        )
+        preview = await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "snapshot-preview:test",
+                "max_fps": 1,
+                "max_width": 360,
+                "bitrate": 100000,
+            },
+        )
+        device.block_attach = True
+        started_at = time.monotonic()
+        detach_control = await client.post(
+            f"/api/devices/{serial}/scrcpy/detach",
+            json={"viewer_id": "device-screen:test"},
+        )
+        elapsed = time.monotonic() - started_at
+
+    device.allow_attach.set()
+    assert control.status_code == 200
+    assert preview.status_code == 200
+    assert detach_control.status_code == 200
+    assert detach_control.json()["active_viewers"] == 1
+    assert detach_control.json()["profile_reapply_scheduled"] is True
+    assert elapsed < 0.5
+
+
+@pytest.mark.anyio
+async def test_control_detach_reapplies_remaining_lower_control_profile() -> None:
+    serial = "serial-control-to-control"
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, serial=serial)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "control-screen:low",
+                "max_fps": 4,
+                "max_width": 360,
+                "bitrate": 200000,
+            },
+        )
+        await client.post(
+            f"/api/devices/{serial}/scrcpy/attach",
+            json={
+                "device_ip": "10.0.0.10",
+                "viewer_id": "device-screen:high",
+                "max_fps": 10,
+                "max_width": 540,
+                "bitrate": 900000,
+            },
+        )
+        detach = await client.post(
+            f"/api/devices/{serial}/scrcpy/detach",
+            json={"viewer_id": "device-screen:high"},
+        )
+        await asyncio.sleep(0.05)
+
+    assert detach.status_code == 200
+    assert detach.json()["profile_reapply_scheduled"] is True
+    assert device.attach_calls == 3
+    assert device.last_attach_options == {
+        "max_fps": 4,
+        "max_width": 360,
+        "bitrate": 200000,
     }
 
 

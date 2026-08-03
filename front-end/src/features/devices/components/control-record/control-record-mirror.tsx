@@ -49,7 +49,7 @@ const CONTROL_RECORD_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
   enableControl: true,
   maxFps: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_FPS',
-    10,
+    15,
     4,
     15
   ),
@@ -139,7 +139,7 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
       ? 236
       : mirrorSize === 'multiCompact'
         ? 252
-        : 262;
+        : 286;
   const compactPadding = mirrorSize !== 'default';
   const compactOverlay = mirrorSize !== 'default';
 

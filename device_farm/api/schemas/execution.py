@@ -139,6 +139,21 @@ class SummaryOut(BaseModel):
     pending: int
     error: int
     total_content_items: int
+    latest_dispatch_id: Optional[str] = None
+    latest_dispatch_target_count: int = 0
+    latest_dispatch_finished_count: int = 0
+    latest_dispatch_running_count: int = 0
+    latest_dispatch_pending_count: int = 0
+    latest_dispatch_failed_count: int = 0
+    latest_dispatch_workflow_started_count: int = 0
+    latest_dispatch_fallback_count: int = 0
+    latest_dispatch_created_at: Optional[datetime] = None
+    latest_dispatch_first_started_at: Optional[datetime] = None
+    latest_dispatch_latest_finished_at: Optional[datetime] = None
+    latest_dispatch_elapsed_ms: Optional[float] = None
+    latest_dispatch_terminal_ms: Optional[float] = None
+    latest_dispatch_to_first_start_ms: Optional[float] = None
+    latest_dispatch_to_start_p95_ms: Optional[float] = None
 
 
 class ExecutionStepOut(BaseModel):

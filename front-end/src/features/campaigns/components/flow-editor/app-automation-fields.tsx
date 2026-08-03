@@ -27,6 +27,7 @@ import {
   patchFormRecipe,
   patchLocator,
   patchLoginField,
+  patchPostSubmitLoginField,
   patchLoginRecipe,
   patchLoginTarget,
   patchPopupWatcher,
@@ -53,6 +54,10 @@ type AppAutomationT = ReturnType<
 >;
 
 const LOGIN_FIELD_NAMES = ['username', 'password'] as const;
+const POST_SUBMIT_LOGIN_FIELD_NAMES = ['auth_code'] as const;
+type LoginTargetField =
+  | (typeof LOGIN_FIELD_NAMES)[number]
+  | (typeof POST_SUBMIT_LOGIN_FIELD_NAMES)[number];
 
 const KNOWN_LOGIN_APPS = [
   { package: 'com.facebook.katana', label: 'Facebook' },
@@ -65,11 +70,61 @@ const KNOWN_LOGIN_APPS = [
 
 const LOGIN_FIELD_LABEL_KEYS = {
   username: 'loginFields.username',
-  password: 'loginFields.password'
+  password: 'loginFields.password',
+  auth_code: 'loginFields.authCode'
 } as const;
+
+const LOGIN_FIELD_DEFAULT_VALUE_FROM = {
+  username: 'account.username',
+  password: 'account.password',
+  auth_code: 'account.totp_code'
+} as const;
+
+const LOGIN_FIELD_VALUE_REF_QUICK_PICKS = {
+  username: [
+    'account.username',
+    'account.email',
+    'account.display_name',
+    'scenario.username'
+  ],
+  password: ['account.password', 'secret.login_password'],
+  auth_code: ['account.totp_code', 'variables.auth_code', 'scenario.auth_code']
+} as const satisfies Record<LoginTargetField, readonly string[]>;
 
 function commit(update: Props['update'], next: FlowStep) {
   update(next as Partial<FlowStep>);
+}
+
+function ValueRefQuickPicks({
+  refs,
+  selected,
+  onPick
+}: {
+  refs: readonly string[];
+  selected: string;
+  onPick: (ref: string) => void;
+}) {
+  const uniqueRefs = Array.from(new Set(refs.filter(Boolean)));
+  if (uniqueRefs.length === 0) return null;
+  return (
+    <div className='mt-2 flex flex-wrap gap-1.5'>
+      {uniqueRefs.map((ref) => {
+        const active = ref === selected;
+        return (
+          <Button
+            key={ref}
+            type='button'
+            size='sm'
+            variant={active ? 'default' : 'outline'}
+            className='h-7 max-w-full px-2 font-mono text-[11px]'
+            onClick={() => onPick(ref)}
+          >
+            <span className='truncate'>{ref}</span>
+          </Button>
+        );
+      })}
+    </div>
+  );
 }
 
 function MiniSection({
@@ -105,8 +160,12 @@ function ValueRefSelect({
     'account.username',
     'account.display_name',
     'account.platform',
+    'account.password',
+    'account.email',
+    'account.totp_code',
     'secret.login_password',
     'scenario.username',
+    'scenario.auth_code',
     ...variableOptions
   ];
   return (
@@ -324,6 +383,7 @@ function LoginEditor({
   const status = getLoginSetupStatus(step);
   const loggedInText = listToCsv(recipe.detect_logged_in?.any_text);
   const submitText = listToCsv(recipe.submit?.tap_text_any);
+  const postSubmitText = listToCsv(recipe.post_submit?.tap_text_any);
 
   const packageValue = profile.package ?? '';
   const detectedPackagePreset = KNOWN_LOGIN_APPS.some(
@@ -351,7 +411,7 @@ function LoginEditor({
       : detectedPackagePreset;
 
   const patchTargetValue = (
-    fieldName: (typeof LOGIN_FIELD_NAMES)[number],
+    fieldName: LoginTargetField,
     mode: 'resource-id' | 'description' | 'text',
     value: string
   ) => {
@@ -499,10 +559,12 @@ function LoginEditor({
                   (candidate.by === 'resource-id' ? candidate.value : '') ??
                   '');
           const fieldReady = !status.missing.includes(fieldName);
-          const defaultValueFrom =
-            fieldName === 'password'
-              ? 'secret.login_password'
-              : 'account.username';
+          const defaultValueFrom = LOGIN_FIELD_DEFAULT_VALUE_FROM[fieldName];
+          const selectedValueFrom = field?.value_from ?? defaultValueFrom;
+          const quickPickRefs = [
+            ...LOGIN_FIELD_VALUE_REF_QUICK_PICKS[fieldName],
+            ...availableVariables.map((name) => `variables.${name}`)
+          ];
 
           return (
             <div
@@ -527,7 +589,7 @@ function LoginEditor({
               <F label={t('loginUi.valueSource')}>
                 <select
                   className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
-                  value={field?.value_from ?? defaultValueFrom}
+                  value={selectedValueFrom}
                   onChange={(e) =>
                     commit(
                       update,
@@ -542,6 +604,9 @@ function LoginEditor({
                       <option value='account.username'>
                         {t('loginUi.sources.accountUsername')}
                       </option>
+                      <option value='account.email'>
+                        {t('loginUi.sources.accountEmail')}
+                      </option>
                       <option value='account.display_name'>
                         {t('loginUi.sources.accountDisplayName')}
                       </option>
@@ -550,9 +615,14 @@ function LoginEditor({
                       </option>
                     </>
                   ) : (
-                    <option value='secret.login_password'>
-                      {t('loginUi.sources.securePassword')}
-                    </option>
+                    <>
+                      <option value='account.password'>
+                        {t('loginUi.sources.accountPassword')}
+                      </option>
+                      <option value='secret.login_password'>
+                        {t('loginUi.sources.securePassword')}
+                      </option>
+                    </>
                   )}
                   {availableVariables.map((name) => (
                     <option key={name} value={`variables.${name}`}>
@@ -560,6 +630,18 @@ function LoginEditor({
                     </option>
                   ))}
                 </select>
+                <ValueRefQuickPicks
+                  refs={quickPickRefs}
+                  selected={selectedValueFrom}
+                  onPick={(ref) =>
+                    commit(
+                      update,
+                      patchLoginField(step, fieldName, {
+                        value_from: ref
+                      })
+                    )
+                  }
+                />
               </F>
 
               <div className='grid gap-2 sm:grid-cols-[0.8fr_1.2fr]'>
@@ -639,6 +721,161 @@ function LoginEditor({
           onCheckedChange={(checked) => update({ clear_first: checked })}
         />
       </div>
+
+      {POST_SUBMIT_LOGIN_FIELD_NAMES.map((fieldName) => {
+        const field = recipe.post_submit_fields?.[fieldName];
+        const locator = field?.locator
+          ? profile.semantic_locators?.[field.locator]
+          : undefined;
+        const candidate = firstCandidate(locator);
+        const targetMode =
+          candidate.description_contains != null ||
+          candidate.by === 'description'
+            ? 'description'
+            : candidate.by === 'text'
+              ? 'text'
+              : 'resource-id';
+        const targetValue =
+          targetMode === 'description'
+            ? (candidate.description_contains ??
+              (candidate.by === 'description' ? candidate.value : '') ??
+              '')
+            : targetMode === 'text'
+              ? (candidate.value ?? '')
+              : (candidate.resource_id_contains ??
+                (candidate.by === 'resource-id' ? candidate.value : '') ??
+                '');
+        const fieldReady = Boolean(field?.value_from && targetValue);
+        const defaultValueFrom = LOGIN_FIELD_DEFAULT_VALUE_FROM[fieldName];
+        const selectedValueFrom = field?.value_from ?? defaultValueFrom;
+        const quickPickRefs = [
+          ...LOGIN_FIELD_VALUE_REF_QUICK_PICKS[fieldName],
+          ...availableVariables.map((name) => `variables.${name}`)
+        ];
+
+        return (
+          <div
+            key={fieldName}
+            className='space-y-3 rounded-lg border border-dashed border-border/70 bg-background/70 p-3'
+          >
+            <div className='flex items-start justify-between gap-2'>
+              <div>
+                <div className='text-xs font-semibold'>
+                  {t('loginUi.authCodeTitle')}
+                </div>
+                <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+                  {t('loginUi.authCodeDescription')}
+                </p>
+              </div>
+              <span
+                className={`shrink-0 text-[10px] font-medium ${
+                  fieldReady ? 'text-emerald-600' : 'text-muted-foreground'
+                }`}
+              >
+                {fieldReady
+                  ? t('loginUi.fieldReady')
+                  : t('loginUi.optionalField')}
+              </span>
+            </div>
+
+            <F label={t('loginUi.valueSource')}>
+              <select
+                className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                value={selectedValueFrom}
+                onChange={(e) =>
+                  commit(
+                    update,
+                    patchPostSubmitLoginField(step, fieldName, {
+                      value_from: e.target.value,
+                      required: false
+                    })
+                  )
+                }
+              >
+                <option value='account.totp_code'>
+                  {t('loginUi.sources.accountTotpCode')}
+                </option>
+                <option value='variables.auth_code'>
+                  {t('loginUi.sources.authCodeVariable')}
+                </option>
+                <option value='scenario.auth_code'>
+                  {t('loginUi.sources.authCodeScenario')}
+                </option>
+                {availableVariables.map((name) => (
+                  <option key={name} value={`variables.${name}`}>
+                    {t('loginUi.sources.variable', { name })}
+                  </option>
+                ))}
+              </select>
+              <ValueRefQuickPicks
+                refs={quickPickRefs}
+                selected={selectedValueFrom}
+                onPick={(ref) =>
+                  commit(
+                    update,
+                    patchPostSubmitLoginField(step, fieldName, {
+                      value_from: ref,
+                      required: false
+                    })
+                  )
+                }
+              />
+            </F>
+
+            <div className='grid gap-2 sm:grid-cols-[0.8fr_1.2fr]'>
+              <F label={t('loginUi.findFieldBy')}>
+                <select
+                  className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+                  value={targetMode}
+                  onChange={(e) =>
+                    patchTargetValue(
+                      fieldName,
+                      e.target.value as 'resource-id' | 'description' | 'text',
+                      targetValue
+                    )
+                  }
+                >
+                  <option value='resource-id'>
+                    {t('loginUi.targetModes.resourceId')}
+                  </option>
+                  <option value='description'>
+                    {t('loginUi.targetModes.description')}
+                  </option>
+                  <option value='text'>{t('loginUi.targetModes.text')}</option>
+                </select>
+              </F>
+              <F label={t('loginUi.findFieldValue')}>
+                <Input
+                  className='h-9 text-xs'
+                  value={targetValue}
+                  placeholder={t(`loginUi.placeholders.${fieldName}`)}
+                  onChange={(e) =>
+                    patchTargetValue(fieldName, targetMode, e.target.value)
+                  }
+                />
+              </F>
+            </div>
+
+            <F label={t('loginUi.authCodeSubmitLabel')}>
+              <Input
+                className='h-9 text-xs'
+                value={postSubmitText}
+                placeholder={t('loginUi.authCodeSubmitPlaceholder')}
+                onChange={(e) =>
+                  commit(
+                    update,
+                    patchLoginRecipe(step, {
+                      post_submit: {
+                        tap_text_any: csvToList(e.target.value)
+                      }
+                    })
+                  )
+                }
+              />
+            </F>
+          </div>
+        );
+      })}
 
       <div className='rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 py-2.5'>
         <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>

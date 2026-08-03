@@ -1293,7 +1293,33 @@ def _run_scenario_task_legacy(
                 step_result["message"] = msg
             else:
                 try:
-                    device.launch_app(pkg, component=component or None)
+                    raw_fallbacks = (
+                        step.get("package_fallbacks")
+                        or step.get("packageFallbacks")
+                        or []
+                    )
+                    if isinstance(raw_fallbacks, str):
+                        package_fallbacks = [raw_fallbacks]
+                    elif isinstance(raw_fallbacks, (list, tuple, set)):
+                        package_fallbacks = [str(value) for value in raw_fallbacks]
+                    else:
+                        package_fallbacks = []
+                    raw_adb_fallback = step.get(
+                        "adb_fallback",
+                        step.get("adbFallback", True),
+                    )
+                    adb_fallback = str(raw_adb_fallback).strip().lower() not in {
+                        "0",
+                        "false",
+                        "no",
+                        "off",
+                    }
+                    device.launch_app(
+                        pkg,
+                        component=component or None,
+                        package_fallbacks=package_fallbacks,
+                        adb_fallback=adb_fallback,
+                    )
                     # Fixed wait — app startup is variable; scenario should include an
                     # explicit wait_element step after launch_app for reliable sync.
                     launch_wait = float(step.get("wait_after", 2.0) or 2.0)

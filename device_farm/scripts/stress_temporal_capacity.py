@@ -551,8 +551,8 @@ def main() -> int:
         type=int,
         default=_env_int("DB_ACTIVITY_MAX_OVERFLOW", 0),
     )
-    parser.add_argument("--db-pool-size", type=int, default=_env_int("DB_POOL_SIZE", 8))
-    parser.add_argument("--db-max-overflow", type=int, default=_env_int("DB_MAX_OVERFLOW", 2))
+    parser.add_argument("--db-pool-size", type=int, default=_env_int("DB_POOL_SIZE", 12))
+    parser.add_argument("--db-max-overflow", type=int, default=_env_int("DB_MAX_OVERFLOW", 3))
     parser.add_argument(
         "--slot-delay-ms",
         type=int,

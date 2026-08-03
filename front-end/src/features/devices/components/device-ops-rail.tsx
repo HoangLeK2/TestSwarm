@@ -1,7 +1,22 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode
+} from 'react';
 import { Trash2 } from 'lucide-react';
+import {
+  IconApps,
+  IconBrandFacebookFilled,
+  IconBrandGoogleFilled,
+  IconBrandInstagramFilled,
+  IconBrandThreads,
+  IconBrandTiktokFilled
+} from '@tabler/icons-react';
 import { useTranslations } from 'next-intl';
 import { SCENARIO_VAR_TOKENS } from '@/features/campaigns/i18n/scenario-var-tokens';
 import { toast } from 'sonner';
@@ -19,6 +34,12 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import {
   createDefaultStep,
@@ -45,8 +66,57 @@ export type DeviceOpsConfig = {
 };
 
 type OpKind = 'adb_shell' | 'install_apk' | 'clear_app';
+type QuickLaunchKey =
+  | 'facebook'
+  | 'tiktok'
+  | 'google'
+  | 'instagram'
+  | 'threads';
 
 const RAIL_OPS: OpKind[] = ['adb_shell', 'install_apk', 'clear_app'];
+const QUICK_LAUNCH_APPS: Array<{
+  key: QuickLaunchKey;
+  packageName: string;
+  packageFallbacks?: string[];
+  Icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+}> = [
+  {
+    key: 'facebook',
+    packageName: 'com.facebook.katana',
+    packageFallbacks: ['com.facebook.lite'],
+    Icon: IconBrandFacebookFilled
+  },
+  {
+    key: 'tiktok',
+    packageName: 'com.ss.android.ugc.trill',
+    packageFallbacks: [
+      'com.zhiliaoapp.musically',
+      'com.zhiliaoapp.musically.go',
+      'com.ss.android.ugc.aweme'
+    ],
+    Icon: IconBrandTiktokFilled
+  },
+  {
+    key: 'google',
+    packageName: 'com.google.android.googlequicksearchbox',
+    packageFallbacks: [
+      'com.android.chrome',
+      'com.google.android.apps.searchlite'
+    ],
+    Icon: IconBrandGoogleFilled
+  },
+  {
+    key: 'instagram',
+    packageName: 'com.instagram.android',
+    packageFallbacks: ['com.instagram.lite'],
+    Icon: IconBrandInstagramFilled
+  },
+  {
+    key: 'threads',
+    packageName: 'com.instagram.barcelona',
+    Icon: IconBrandThreads
+  }
+];
 
 const RAIL_HINT_KEY: Record<
   OpKind,
@@ -119,6 +189,9 @@ export function DeviceOpsRailSection({
   const [open, setOpen] = useState<OpKind | null>(null);
   const [draft, setDraft] = useState<FlowStep | null>(null);
   const [running, setRunning] = useState(false);
+  const [quickLaunching, setQuickLaunching] = useState<QuickLaunchKey | null>(
+    null
+  );
   const shellApiRef = useRef<{ clear: () => void } | null>(null);
 
   const defaultPkg = config?.defaultPackage?.trim() ?? '';
@@ -198,6 +271,27 @@ export function DeviceOpsRailSection({
     }
   }, [config, draft, close, tRun]);
 
+  const launchQuickApp = useCallback(
+    async (app: (typeof QUICK_LAUNCH_APPS)[number]) => {
+      if (!config || config.disabled || quickLaunching) return;
+      setQuickLaunching(app.key);
+      try {
+        await config.onRunStep({
+          type: 'launch_app',
+          package: app.packageName,
+          package_fallbacks: app.packageFallbacks ?? [],
+          wait_after: 1
+        });
+        toast.success(tRail('quickLaunchSubmitted', { app: tRail(app.key) }));
+      } catch (e) {
+        toast.error(String(e));
+      } finally {
+        setQuickLaunching(null);
+      }
+    },
+    [config, quickLaunching, tRail]
+  );
+
   const labels = useMemo(
     () =>
       Object.fromEntries(
@@ -213,6 +307,58 @@ export function DeviceOpsRailSection({
 
   return (
     <>
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                type='button'
+                aria-label={tRail('quickLaunch')}
+                disabled={config.disabled || quickLaunching != null}
+                className={cn(
+                  'mx-auto flex size-9 shrink-0 items-center justify-center rounded-full transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+                  config.disabled || quickLaunching != null
+                    ? 'cursor-not-allowed text-zinc-600'
+                    : 'text-zinc-300 hover:bg-white/15 hover:text-white'
+                )}
+              >
+                <IconApps className={iconClass} aria-hidden />
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side='left' className='text-xs'>
+            {tRail('quickLaunchHint')}
+          </TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent side='left' align='start' className='w-48'>
+          {QUICK_LAUNCH_APPS.map((app) => {
+            const Icon = app.Icon;
+            return (
+              <DropdownMenuItem
+                key={app.key}
+                disabled={config.disabled || quickLaunching != null}
+                onSelect={() => {
+                  void launchQuickApp(app);
+                }}
+                className='gap-2.5'
+              >
+                <Icon
+                  className={cn(
+                    'size-4.5 shrink-0',
+                    quickLaunching === app.key
+                      ? 'text-primary'
+                      : 'text-muted-foreground'
+                  )}
+                  aria-hidden
+                />
+                <span>{tRail(app.key)}</span>
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       {RAIL_OPS.map((kind) => (
         <RailIconButton
           key={kind}

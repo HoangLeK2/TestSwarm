@@ -18,6 +18,7 @@ import pytest
 
 from relay.runtime import (
     FairSendQueue,
+    MultiStreamSendQueue,
     bounded_put,
     bounded_put_nowait,
 )
@@ -290,3 +291,149 @@ async def test_queue_age_p95_does_not_collapse_to_single_extreme_max() -> None:
     stats = q.video_stats_snapshot()
     assert stats["queue_age_p95_ms"] == 10_000
     assert stats["queue_age_max_ms"] >= 100_000
+
+
+@pytest.mark.asyncio
+async def test_stale_delta_is_dropped_on_dequeue_and_requests_idr() -> None:
+    q = FairSendQueue(video_per_device_max=4, video_stale_ms=10)
+    idr_requests: list[str] = []
+    stale_delta = VideoPacket(
+        serial="A",
+        data=b"stale-delta",
+        is_config=False,
+        is_key=False,
+        pts_us=1,
+    )
+    keyframe = VideoPacket(
+        serial="A",
+        data=b"keyframe",
+        is_config=False,
+        is_key=True,
+        pts_us=2,
+    )
+
+    q.offer_video_nowait(
+        stale_delta,
+        "A",
+        is_config=False,
+        is_key=False,
+        on_drop=lambda: idr_requests.append("A"),
+    )
+    await asyncio.sleep(0.02)
+    q.offer_video_nowait(
+        keyframe,
+        "A",
+        is_config=False,
+        is_key=True,
+        on_drop=lambda: idr_requests.append("A"),
+    )
+
+    assert await q.get() is keyframe
+    assert idr_requests == ["A"]
+    stats = q.video_stats_snapshot()
+    assert stats["stale_drops"] == 1
+    assert stats["drops"] == 1
+    assert stats["awaiting_keyframe"] == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_stream_queue_keeps_reliable_and_video_physical_lanes_separate() -> None:
+    q = MultiStreamSendQueue(
+        video_shards=4,
+        per_device_max=2,
+        video_per_device_max=2,
+    )
+    q.put_nowait("control")
+    q.put_nowait_with_serial("result-A", "A")
+    q.offer_video_nowait(
+        VideoPacket(
+            serial="A",
+            data=b"frame-A",
+            is_config=False,
+            is_key=True,
+            pts_us=1,
+        ),
+        "A",
+        is_config=False,
+        is_key=True,
+    )
+
+    assert await q.get() == "control"
+    assert await q.get() == "result-A"
+
+    shard_items = []
+    for index in range(q.video_shard_count()):
+        shard = q.video_shard_queue(index)
+        if shard.qsize():
+            shard_items.append(await shard.get())
+
+    assert [item.data for item in shard_items] == [b"frame-A"]
+    assert q.qsize() == 0
+
+
+def test_multi_stream_drop_serial_clears_reliable_and_video_shard() -> None:
+    q = MultiStreamSendQueue(
+        video_shards=4,
+        per_device_max=2,
+        video_per_device_max=2,
+    )
+    q.put_nowait_with_serial("result-A", "A")
+    q.offer_video_nowait(
+        VideoPacket(
+            serial="A",
+            data=b"frame-A",
+            is_config=False,
+            is_key=True,
+            pts_us=1,
+        ),
+        "A",
+        is_config=False,
+        is_key=True,
+    )
+
+    assert q.drop_serial("A") == 2
+    assert q.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_stream_video_stats_use_max_latency_not_sum() -> None:
+    q = MultiStreamSendQueue(
+        video_shards=2,
+        video_per_device_max=8,
+        video_stale_ms=0,
+    )
+    now_ns = time.monotonic_ns()
+    packets = [
+        VideoPacket(
+            serial="A",
+            data=b"frame-A",
+            is_config=False,
+            is_key=True,
+            pts_us=1,
+        ),
+        VideoPacket(
+            serial="B",
+            data=b"frame-B",
+            is_config=False,
+            is_key=True,
+            pts_us=2,
+        ),
+    ]
+    for index, packet in enumerate(packets):
+        shard = q.video_shard_queue(index)
+        shard.offer_video_nowait(
+            packet,
+            packet.serial,
+            is_config=False,
+            is_key=True,
+        )
+        packet.enqueued_ns = now_ns - 100 * 1_000_000
+
+    for shard_index in range(q.video_shard_count()):
+        shard = q.video_shard_queue(shard_index)
+        while shard.qsize():
+            await shard.get()
+
+    stats = q.video_stats_snapshot()
+    assert stats["dequeued"] == 2
+    assert stats["queue_age_p95_ms"] == 128

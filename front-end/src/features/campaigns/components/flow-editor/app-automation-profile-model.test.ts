@@ -11,6 +11,7 @@ import {
   patchFormField,
   patchLocator,
   patchLoginField,
+  patchPostSubmitLoginField,
   patchLoginRecipe,
   patchLoginTarget
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
@@ -141,8 +142,62 @@ test('login setup status only reports ready from persisted valid config', () => 
   );
   assert.equal(
     configuredStep.profile.login_recipe.fields.password.value_from,
-    'secret.login_password'
+    'account.password'
   );
+});
+
+test('login model configures optional post-submit auth code without affecting readiness', () => {
+  let step: any = {
+    type: 'login_if_needed',
+    profile: {
+      package: 'com.example.app',
+      semantic_locators: {
+        username_field: { candidates: [{ resource_id_contains: 'email' }] },
+        password_field: { candidates: [{ resource_id_contains: 'password' }] }
+      },
+      login_recipe: {
+        detect_logged_in: { any_text: ['Home'] },
+        fields: {
+          username: {
+            locator: 'username_field',
+            value_from: 'account.username'
+          },
+          password: {
+            locator: 'password_field',
+            value_from: 'account.password'
+          }
+        },
+        submit: { tap_text_any: ['Login'] }
+      }
+    }
+  };
+
+  step = patchLoginTarget(step, 'auth_code', {
+    resource_id_contains: 'approvals_code'
+  }) as any;
+  step = patchPostSubmitLoginField(step, 'auth_code', {
+    value_from: 'account.totp_code',
+    required: false
+  }) as any;
+
+  assert.deepEqual(getLoginSetupStatus(step), {
+    ready: true,
+    configuredFieldCount: 2,
+    missing: []
+  });
+  assert.equal(
+    step.profile.login_recipe.post_submit_fields.auth_code.value_from,
+    'account.totp_code'
+  );
+  assert.equal(
+    step.profile.login_recipe.post_submit_fields.auth_code.required,
+    false
+  );
+  assert.deepEqual(step.profile.login_recipe.post_submit.tap_text_any, [
+    'Continue',
+    'Next',
+    'Tiếp tục'
+  ]);
 });
 
 test('editing the basic locator preserves advanced candidates', () => {

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import web.ws as ws_module
 from web.ws import WebSocketManager
 from runtime.core.device_client import LatestFrameStore
+from runtime.stream_telemetry import stream_telemetry
 
 
 def _h264_cfg(serial: str) -> bytes:
@@ -143,6 +144,27 @@ class _CountingScrcpyControl:
     def request_idr(self) -> bool:
         self.idr_requests += 1
         return True
+
+
+class _DisconnectedOnAcceptWebSocket:
+    async def accept(self) -> None:
+        raise RuntimeError(
+            "Expected ASGI message 'websocket.send' or 'websocket.close', "
+            "but got 'websocket.accept'"
+        )
+
+
+@pytest.mark.anyio
+async def test_ws_connect_ignores_client_disconnect_before_accept() -> None:
+    ws_manager = WebSocketManager(
+        _FakeManager([]),
+        db_enabled=False,
+        read_only=False,
+    )
+
+    await ws_manager.connect(_DisconnectedOnAcceptWebSocket())
+
+    assert ws_manager._connections == {}
 
 
 def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
@@ -302,6 +324,100 @@ async def test_device_sender_healthy_stats_are_debug_only(monkeypatch, caplog):
         if "[WS device sender]" in record.getMessage()
     ]
     assert [record.levelno for record in matching] == [logging.DEBUG]
+
+
+@pytest.mark.asyncio
+async def test_device_sender_records_ws_send_telemetry():
+    stream_telemetry.reset()
+    dev = _FakeDevice(serial="SN_WS_TELEMETRY")
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
+    ws = _CollectingWebSocket()
+    task = asyncio.create_task(ws_manager._device_sender(ws, dev, asyncio.Lock()))
+
+    try:
+        for _ in range(20):
+            if dev._q is not None and len(ws.sent) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        assert dev._q is not None
+
+        dev._q.put_nowait(_h264_key(dev.serial))
+        for _ in range(20):
+            if len(ws.sent) >= 3:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    snapshot = stream_telemetry.snapshot(reset=True)
+    assert snapshot["ws_sent"] >= 1
+    assert snapshot["ws_dropped"] == 0
+    assert snapshot["ws_send_wait_p95_ms"] >= 0
+    assert snapshot["ws_send_p95_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_stream_runtime_status_tracks_media_sender_per_connection():
+    dev = _FakeDevice(serial="SN_WS_STATUS")
+    ws_manager = WebSocketManager(_FakeManager([dev]), db_enabled=False, read_only=False)
+    ws = _CollectingWebSocket()
+    conn_id = "conn-media-1"
+    task = asyncio.create_task(
+        ws_manager._device_sender(
+            ws,
+            dev,
+            asyncio.Lock(),
+            conn_id=conn_id,
+        )
+    )
+    setattr(task, "_device_serial", dev.serial)
+    setattr(task, "_connection_id", conn_id)
+    ws_manager._conn_sender_groups[conn_id] = [task]
+    ws_manager._conn_sessions[conn_id] = "session-media-1"
+
+    try:
+        for _ in range(20):
+            if dev._q is not None and len(ws.sent) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        assert dev._q is not None
+
+        status = ws_manager.stream_runtime_status()
+        assert status["media_ws_active"] == 1
+        assert status["media_streams_active"] == 1
+        assert status["max_media_streams_per_connection"] == 1
+        assert status["shared_media_ws_connections"] == 0
+        assert status["dedicated_media_ws_ok"] is True
+        assert status["media_ws_per_connection"] == [
+            {
+                "conn_id": conn_id,
+                "session_id": "session-media-1",
+                "stream_count": 1,
+                "serials": [dev.serial],
+            }
+        ]
+
+        dev._q.put_nowait(_h264_key(dev.serial))
+        for _ in range(20):
+            if len(ws.sent) >= 3:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    stopped_status = ws_manager.stream_runtime_status()
+    assert stopped_status["media_ws_active"] == 0
+    assert stopped_status["sender_started_total"] == 1
+    assert stopped_status["sender_stopped_total"] == 1
+    assert stopped_status["sender_sent_total"] >= 1
+    assert stopped_status["top_sent_serials"][0] == {
+        "serial": dev.serial,
+        "count": stopped_status["sender_sent_total"],
+    }
 
 
 @pytest.mark.asyncio

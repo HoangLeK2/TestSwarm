@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.exc import InterfaceError, InternalError
+from sqlalchemy.orm import Session
 
 import api.deps as deps
 from api.auth.context import AuthContext
@@ -24,6 +27,34 @@ class FakeDb:
 class FakeEnforcer:
     def enforce(self, *_args) -> bool:
         return True
+
+
+def test_request_session_write_tracking_catches_core_sql_writes() -> None:
+    engine = create_engine("sqlite://")
+    sync_session = Session(engine)
+    db = SimpleNamespace(sync_session=sync_session)
+    deps._install_request_write_tracking(db)
+    closed_error = InterfaceError(
+        "COMMIT",
+        {},
+        RuntimeError("the underlying connection is closed"),
+    )
+    concurrent_error = InternalError(
+        "COMMIT",
+        {},
+        RuntimeError("cannot switch to state 15; another operation is in progress"),
+    )
+    try:
+        sync_session.execute(select(1))
+        assert deps._can_ignore_read_only_commit_error(db, closed_error) is True
+        assert deps._can_ignore_read_only_commit_error(db, concurrent_error) is False
+
+        sync_session.execute(text("create table tracked_write (id integer)"))
+        assert deps._can_ignore_read_only_commit_error(db, closed_error) is False
+    finally:
+        deps._remove_request_write_tracking(db)
+        sync_session.close()
+        engine.dispose()
 
 
 def _request() -> SimpleNamespace:

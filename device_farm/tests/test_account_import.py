@@ -116,6 +116,42 @@ def test_prepare_metadata_key_is_empty_dict():
     assert result["metadata"] == {}
 
 
+def test_prepare_metadata_from_login_fields():
+    row = {
+        "platform": "facebook",
+        "username": "ida",
+        "email": " ida@example.com ",
+        "totp_secret": " JBSW Y3DPE HPK3PXP ",
+        "cookies": "c_user=1;xs=2",
+        "token": "EAAB",
+    }
+    result = _prepare_account_row(row, user_id="u1")
+    assert result is not None
+    assert result["metadata"] == {
+        "email": "ida@example.com",
+        "totp_secret": "JBSWY3DPEHPK3PXP",
+        "cookies": "c_user=1;xs=2",
+        "token": "EAAB",
+    }
+
+
+def test_prepare_metadata_aliases_are_normalised():
+    row = {
+        "platform": "facebook",
+        "username": "jane",
+        "account_metadata": {"email": "old@example.com", "label": "vip"},
+        "login_email": "jane@example.com",
+        "authenticator_secret": "abcd",
+    }
+    result = _prepare_account_row(row, user_id="u1")
+    assert result is not None
+    assert result["metadata"] == {
+        "email": "jane@example.com",
+        "label": "vip",
+        "totp_secret": "abcd",
+    }
+
+
 # ── bulk_create_accounts ───────────────────────────────────────────────────────
 
 

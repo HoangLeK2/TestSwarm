@@ -31,12 +31,15 @@ export type LoginRecipe = {
   detect_logged_in?: { any_text?: string[] };
   fields?: Record<string, LoginField>;
   submit?: LoginSubmit;
+  post_submit_fields?: Record<string, LoginField>;
+  post_submit?: LoginSubmit;
 };
 
 export type LoginField = {
   locator?: string;
   value_from?: string;
   input_method?: string;
+  required?: boolean;
 };
 
 export type LoginSubmit = {
@@ -248,6 +251,28 @@ export function patchLoginField(
   return patchLoginRecipe(step, { fields });
 }
 
+export function patchPostSubmitLoginField(
+  step: FlowStep,
+  fieldName: string,
+  patch: Partial<LoginField>
+): FlowStep {
+  const profile = appAutomationProfile(step);
+  const recipe = ensureLoginRecipe(profile);
+  const fields = { ...(recipe.post_submit_fields ?? {}) };
+  fields[fieldName] = {
+    input_method: 'set_text',
+    required: false,
+    ...(fields[fieldName] ?? {}),
+    ...patch
+  };
+  return patchLoginRecipe(step, {
+    post_submit_fields: fields,
+    post_submit: recipe.post_submit ?? {
+      tap_text_any: ['Continue', 'Next', 'Tiếp tục']
+    }
+  });
+}
+
 function hasCandidateSignal(candidate: LocatorCandidate): boolean {
   return Boolean(
     (candidate.by?.trim() && candidate.value?.trim()) ||
@@ -260,12 +285,15 @@ function hasCandidateSignal(candidate: LocatorCandidate): boolean {
 
 export function patchLoginTarget(
   step: FlowStep,
-  fieldName: 'username' | 'password',
+  fieldName: 'username' | 'password' | 'auth_code',
   candidatePatch: Partial<LocatorCandidate>
 ): FlowStep {
   const profile = appAutomationProfile(step);
   const recipe = ensureLoginRecipe(profile);
-  const currentField = recipe.fields?.[fieldName];
+  const isPostSubmitField = fieldName === 'auth_code';
+  const currentField = isPostSubmitField
+    ? recipe.post_submit_fields?.[fieldName]
+    : recipe.fields?.[fieldName];
   const locatorName = currentField?.locator?.trim() || `login_${fieldName}`;
   const locator = profile.semantic_locators?.[locatorName];
   const normalizedPatch = Object.fromEntries(
@@ -280,20 +308,35 @@ export function patchLoginTarget(
   };
 
   if (!hasCandidateSignal(nextCandidate)) {
-    const fields = { ...(recipe.fields ?? {}) };
+    const fields = {
+      ...((isPostSubmitField
+        ? recipe.post_submit_fields
+        : recipe.fields) ?? {})
+    };
     delete fields[fieldName];
+    const recipePatch = isPostSubmitField
+      ? { ...recipe, post_submit_fields: fields }
+      : { ...recipe, fields };
     return withAppAutomationProfile(step, {
       ...profile,
-      login_recipe: { ...recipe, fields }
+      login_recipe: recipePatch
     });
   }
 
   const withTarget = patchLocator(step, locatorName, normalizedPatch);
-  return patchLoginField(withTarget, fieldName, {
+  const patchField = isPostSubmitField
+    ? patchPostSubmitLoginField
+    : patchLoginField;
+  return patchField(withTarget, fieldName, {
     locator: locatorName,
     value_from:
       currentField?.value_from ||
-      (fieldName === 'password' ? 'secret.login_password' : 'account.username')
+      (fieldName === 'password'
+        ? 'account.password'
+        : fieldName === 'auth_code'
+          ? 'account.totp_code'
+          : 'account.username'),
+    required: fieldName === 'auth_code' ? false : currentField?.required
   });
 }
 

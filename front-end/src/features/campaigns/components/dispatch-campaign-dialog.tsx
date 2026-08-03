@@ -58,10 +58,57 @@ function deviceLabel(d: CampaignDeviceOut) {
   return d.name?.trim() || d.serial || '—';
 }
 
+function findSourcePoolStep(steps: unknown): FlowSourcePoolStep | null {
+  if (!Array.isArray(steps)) return null;
+  for (const step of steps) {
+    if (!step || typeof step !== 'object') continue;
+    const row = step as Record<string, unknown>;
+    if (row.type === 'use_source_pool') {
+      return {
+        platform: String(row.platform || 'facebook'),
+        entityType: String(row.entity_type || 'group'),
+        search: typeof row.search === 'string' ? row.search : '',
+        outputPrefix:
+          typeof row.output_prefix === 'string' ? row.output_prefix : 'GROUP'
+      };
+    }
+    for (const key of ['steps', 'then', 'else']) {
+      const nested = findSourcePoolStep(row[key]);
+      if (nested) return nested;
+    }
+    if (Array.isArray(row.branches)) {
+      for (const branch of row.branches) {
+        const nested = findSourcePoolStep(
+          branch && typeof branch === 'object'
+            ? (branch as Record<string, unknown>).steps
+            : null
+        );
+        if (nested) return nested;
+      }
+    }
+  }
+  return null;
+}
+
+type FlowSourcePoolStep = {
+  platform: string;
+  entityType: string;
+  search: string;
+  outputPrefix: string;
+};
+
+type SourceEntityOption = {
+  id: string;
+  platform: string;
+  entity_type: string;
+  display_name: string;
+};
+
 export type DispatchScenarioItem = {
   id: string;
   name: string;
   variables?: Record<string, unknown>;
+  steps?: unknown[];
 };
 
 export function DispatchCampaignDialog({
@@ -99,11 +146,15 @@ export function DispatchCampaignDialog({
   const [sourcePoolEnabled, setSourcePoolEnabled] = useState(false);
   const [sourcePoolKey, setSourcePoolKey] = useState('');
   const [sourceSearch, setSourceSearch] = useState('');
+  const [sourceOutputPrefix, setSourceOutputPrefix] = useState('');
   const [sourcePreview, setSourcePreview] =
     useState<CampaignDispatchPreviewOut | null>(null);
   const [sourcePreviewKey, setSourcePreviewKey] = useState('');
   const [sourcePreviewError, setSourcePreviewError] = useState('');
   const [sourcePreviewLoading, setSourcePreviewLoading] = useState(false);
+  const [sourceAssignmentOverrides, setSourceAssignmentOverrides] = useState<
+    Record<string, string>
+  >({});
   const [strategy, setStrategy] = useState<'parallel' | 'sequential'>(
     'parallel'
   );
@@ -131,6 +182,16 @@ export function DispatchCampaignDialog({
   );
   const firstDeviceId = devices[0]?.id ?? '';
   const firstScenarioId = scenarios[0]?.id ?? '';
+  const sourcePoolFromScenario = useMemo(() => {
+    for (const scenario of scenarios) {
+      const sourcePool = findSourcePoolStep(scenario.steps);
+      if (sourcePool) return sourcePool;
+    }
+    return null;
+  }, [scenarios]);
+  const sourcePoolFromScenarioKey = sourcePoolFromScenario
+    ? `${sourcePoolFromScenario.platform.trim().toLowerCase()}::${sourcePoolFromScenario.entityType.trim().toLowerCase()}`
+    : '';
   const activeDevice = useMemo(
     () => devices.find((d) => d.id === activeDeviceId) ?? devices[0],
     [activeDeviceId, devices]
@@ -203,11 +264,12 @@ export function DispatchCampaignDialog({
           );
           setExternalEntities(available);
           const options = listSourcePoolOptions(available);
-          setSourcePoolKey((current) =>
-            options.some((option) => option.key === current)
+          setSourcePoolKey((current) => {
+            if (sourcePoolFromScenarioKey) return sourcePoolFromScenarioKey;
+            return options.some((option) => option.key === current)
               ? current
-              : options[0]?.key || ''
-          );
+              : options[0]?.key || '';
+          });
         }
       })
       .catch(() => {
@@ -216,18 +278,21 @@ export function DispatchCampaignDialog({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, sourcePoolFromScenarioKey]);
 
   useEffect(() => {
     if (!open) return;
     setSelectedIds(new Set(allDeviceIds));
     setGroupIds(new Set());
-    setSourcePoolEnabled(false);
-    setSourceSearch('');
+    setSourcePoolEnabled(Boolean(sourcePoolFromScenario));
+    setSourcePoolKey(sourcePoolFromScenarioKey);
+    setSourceSearch(sourcePoolFromScenario?.search ?? '');
+    setSourceOutputPrefix(sourcePoolFromScenario?.outputPrefix ?? '');
     setSourcePreview(null);
     setSourcePreviewKey('');
     setSourcePreviewError('');
     setSourcePreviewLoading(false);
+    setSourceAssignmentOverrides({});
     setStrategy('parallel');
     setActiveDeviceId(firstDeviceId);
     setActiveScenarioId(firstScenarioId);
@@ -241,7 +306,9 @@ export function DispatchCampaignDialog({
     firstScenarioId,
     open,
     campaignId,
-    scenarioSignature
+    scenarioSignature,
+    sourcePoolFromScenario,
+    sourcePoolFromScenarioKey
   ]);
 
   useEffect(() => {
@@ -283,10 +350,29 @@ export function DispatchCampaignDialog({
     () => listSourcePoolOptions(externalEntities),
     [externalEntities]
   );
+  const sourcePoolMenuOptions = useMemo(() => {
+    if (!sourcePoolFromScenario || !sourcePoolFromScenarioKey) {
+      return sourcePoolOptions;
+    }
+    if (sourcePoolOptions.some((option) => option.key === sourcePoolFromScenarioKey)) {
+      return sourcePoolOptions;
+    }
+    return [
+      {
+        key: sourcePoolFromScenarioKey,
+        platform: sourcePoolFromScenario.platform.trim().toLowerCase(),
+        entityType: sourcePoolFromScenario.entityType.trim().toLowerCase(),
+        count: 0
+      },
+      ...sourcePoolOptions
+    ];
+  }, [sourcePoolFromScenario, sourcePoolFromScenarioKey, sourcePoolOptions]);
   const selectedSourcePool = useMemo(
     () =>
-      sourcePoolKey ? buildSourcePoolInput(sourcePoolKey, sourceSearch) : null,
-    [sourcePoolKey, sourceSearch]
+      sourcePoolKey
+        ? buildSourcePoolInput(sourcePoolKey, sourceSearch, sourceOutputPrefix)
+        : null,
+    [sourceOutputPrefix, sourcePoolKey, sourceSearch]
   );
   const currentSourcePreviewKey = useMemo(
     () =>
@@ -300,6 +386,80 @@ export function DispatchCampaignDialog({
   const sourcePreviewCurrent =
     !sourcePoolEnabled ||
     (sourcePreview != null && sourcePreviewKey === currentSourcePreviewKey);
+  const sourceEntityOptions = useMemo(() => {
+    if (!selectedSourcePool) return [];
+    const search = (selectedSourcePool.search ?? '').trim().toLowerCase();
+    const options: SourceEntityOption[] = externalEntities
+      .filter((entity) => {
+        if (
+          entity.platform.trim().toLowerCase() !==
+            selectedSourcePool.platform.trim().toLowerCase() ||
+          entity.entity_type.trim().toLowerCase() !==
+            selectedSourcePool.entity_type.trim().toLowerCase()
+        ) {
+          return false;
+        }
+        if (!search) return true;
+        return entity.display_name.trim().toLowerCase().includes(search);
+      })
+      .map((entity) => ({
+        id: entity.id,
+        platform: entity.platform,
+        entity_type: entity.entity_type,
+        display_name: entity.display_name
+      }));
+    const byId = new Map(options.map((entity) => [entity.id, entity]));
+    for (const assignment of sourcePreview?.assignments ?? []) {
+      if (byId.has(assignment.external_entity_id)) continue;
+      byId.set(assignment.external_entity_id, {
+        id: assignment.external_entity_id,
+        platform: assignment.platform,
+        entity_type: assignment.entity_type,
+        display_name: assignment.display_name
+      });
+    }
+    return Array.from(byId.values()).sort((left, right) =>
+      left.display_name.localeCompare(right.display_name)
+    );
+  }, [externalEntities, selectedSourcePool, sourcePreview?.assignments]);
+  const sourceEntityById = useMemo(
+    () => new Map(sourceEntityOptions.map((entity) => [entity.id, entity])),
+    [sourceEntityOptions]
+  );
+  const effectiveSourceAssignments = useMemo(() => {
+    return (sourcePreview?.assignments ?? []).map((assignment) => {
+      const externalEntityId =
+        sourceAssignmentOverrides[assignment.device_id] ||
+        assignment.external_entity_id;
+      const entity = sourceEntityById.get(externalEntityId);
+      return {
+        ...assignment,
+        external_entity_id: externalEntityId,
+        display_name: entity?.display_name ?? assignment.display_name,
+        platform: entity?.platform ?? assignment.platform,
+        entity_type: entity?.entity_type ?? assignment.entity_type
+      };
+    });
+  }, [
+    sourceAssignmentOverrides,
+    sourceEntityById,
+    sourcePreview?.assignments
+  ]);
+  const duplicateSourceEntityIds = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const assignment of effectiveSourceAssignments) {
+      counts.set(
+        assignment.external_entity_id,
+        (counts.get(assignment.external_entity_id) ?? 0) + 1
+      );
+    }
+    return new Set(
+      Array.from(counts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([entityId]) => entityId)
+    );
+  }, [effectiveSourceAssignments]);
+  const hasDuplicateSourceAssignment = duplicateSourceEntityIds.size > 0;
 
   const parseMsgs = useMemo(
     () => ({
@@ -448,7 +608,7 @@ export function DispatchCampaignDialog({
             sourcePreviewCurrent &&
             sourcePreview
               ? {
-                  allocation_snapshot: (sourcePreview.assignments ?? []).map(
+                  allocation_snapshot: effectiveSourceAssignments.map(
                     (assignment) => ({
                       device_id: assignment.device_id,
                       external_entity_id: assignment.external_entity_id
@@ -476,6 +636,7 @@ export function DispatchCampaignDialog({
       );
       setSourcePreview(preview);
       setSourcePreviewKey(currentSourcePreviewKey);
+      setSourceAssignmentOverrides({});
     } catch (err) {
       setSourcePreview(null);
       setSourcePreviewKey('');
@@ -488,6 +649,7 @@ export function DispatchCampaignDialog({
   const handleSubmit = async () => {
     if (!(await saveDirtyDrafts())) return;
     if (!sourcePreviewCurrent) return;
+    if (hasDuplicateSourceAssignment) return;
     onConfirm(buildDispatchBody());
   };
 
@@ -657,7 +819,7 @@ export function DispatchCampaignDialog({
                 </div>
               )}
 
-              {sourcePoolOptions.length > 0 && (
+              {sourcePoolMenuOptions.length > 0 && (
                 <div className='space-y-2'>
                   <label className='flex cursor-pointer items-center gap-2 text-xs font-medium'>
                     <Checkbox
@@ -667,6 +829,7 @@ export function DispatchCampaignDialog({
                         setSourcePreview(null);
                         setSourcePreviewKey('');
                         setSourcePreviewError('');
+                        setSourceAssignmentOverrides({});
                       }}
                     />
                     {t('sourcePoolEnabled')}
@@ -681,13 +844,14 @@ export function DispatchCampaignDialog({
                         onValueChange={(value) => {
                           setSourcePoolKey(value);
                           setSourcePreviewError('');
+                          setSourceAssignmentOverrides({});
                         }}
                       >
                         <SelectTrigger className='h-8 text-xs'>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {sourcePoolOptions.map((option) => (
+                          {sourcePoolMenuOptions.map((option) => (
                             <SelectItem key={option.key} value={option.key}>
                               {option.platform} / {option.entityType} (
                               {option.count})
@@ -700,6 +864,7 @@ export function DispatchCampaignDialog({
                         onChange={(event) => {
                           setSourceSearch(event.target.value);
                           setSourcePreviewError('');
+                          setSourceAssignmentOverrides({});
                         }}
                         placeholder={t('sourceSearchPlaceholder')}
                         className='h-8 text-xs'
@@ -732,27 +897,73 @@ export function DispatchCampaignDialog({
                         </p>
                       ) : null}
                       {sourcePreviewCurrent && sourcePreview ? (
-                        <div className='max-h-32 space-y-1 overflow-y-auto rounded bg-muted/40 p-2'>
+                        <div className='max-h-56 space-y-2 overflow-y-auto rounded bg-muted/40 p-2'>
                           <p className='text-[11px] font-medium'>
                             {t('previewSummary', {
-                              assigned: sourcePreview.assignments?.length ?? 0,
+                              assigned: effectiveSourceAssignments.length,
                               available: sourcePreview.available_source_count
                             })}
                           </p>
-                          {(sourcePreview.assignments ?? []).map(
-                            (assignment) => {
-                              return (
-                                <p
-                                  key={assignment.device_id}
-                                  className='truncate text-[11px] text-muted-foreground'
+                          {hasDuplicateSourceAssignment ? (
+                            <p className='text-[11px] text-destructive'>
+                              {t('duplicateSourceAssignment')}
+                            </p>
+                          ) : null}
+                          {effectiveSourceAssignments.map((assignment) => {
+                            const selectedByOtherDevice = new Set(
+                              effectiveSourceAssignments
+                                .filter(
+                                  (row) =>
+                                    row.device_id !== assignment.device_id
+                                )
+                                .map((row) => row.external_entity_id)
+                            );
+                            return (
+                              <div
+                                key={assignment.device_id}
+                                className='grid gap-1 rounded border bg-background/70 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,1.4fr)] sm:items-center'
+                              >
+                                <div className='min-w-0 text-[11px]'>
+                                  <p className='truncate font-medium'>
+                                    {assignment.device_serial ??
+                                      assignment.device_id}
+                                  </p>
+                                  {assignment.device_name ? (
+                                    <p className='truncate text-muted-foreground'>
+                                      {assignment.device_name}
+                                    </p>
+                                  ) : null}
+                                </div>
+                                <Select
+                                  value={assignment.external_entity_id}
+                                  onValueChange={(value) => {
+                                    setSourceAssignmentOverrides((prev) => ({
+                                      ...prev,
+                                      [assignment.device_id]: value
+                                    }));
+                                    setSourcePreviewError('');
+                                  }}
                                 >
-                                  {assignment.device_serial ??
-                                    assignment.device_id}{' '}
-                                  → {assignment.display_name}
-                                </p>
-                              );
-                            }
-                          )}
+                                  <SelectTrigger className='h-8 min-w-0 text-xs'>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {sourceEntityOptions.map((entity) => (
+                                      <SelectItem
+                                        key={entity.id}
+                                        value={entity.id}
+                                        disabled={selectedByOtherDevice.has(
+                                          entity.id
+                                        )}
+                                      >
+                                        {entity.display_name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : sourcePreview && !sourcePreviewCurrent ? (
                         <p className='text-[11px] text-amber-600'>
@@ -829,6 +1040,7 @@ export function DispatchCampaignDialog({
               isSaving ||
               !hasTarget ||
               !sourcePreviewCurrent ||
+              hasDuplicateSourceAssignment ||
               !!currentJsonError
             }
             onClick={() => void handleSubmit()}

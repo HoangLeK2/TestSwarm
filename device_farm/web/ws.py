@@ -22,11 +22,13 @@ from db import crud as repo
 from db.crud.user import get_user_org_id
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
+from runtime.stream_telemetry import stream_telemetry
 from services.multi_control import MultiControlCoordinator
 from tenancy.background import (
     ensure_device_org_id,
     list_device_serials_for_user,
     lookup_device_by_key,
+    lookup_device_by_serial,
 )
 from tenancy.context import tenant_context
 
@@ -42,7 +44,7 @@ STREAM_STALE_DELTA_DROP_MS = max(
 )
 STREAM_WS_LOCK_WAIT_MS = max(
     1.0,
-    float(os.environ.get("STREAM_WS_LOCK_WAIT_MS", "60.0")),
+    float(os.environ.get("STREAM_WS_LOCK_WAIT_MS", "8.0")),
 )
 STREAM_WS_SEND_TIMEOUT_MS = max(
     50.0,
@@ -65,6 +67,44 @@ STREAM_VIEWER_IDR_MIN_INTERVAL_S = max(
     float(os.environ.get("STREAM_VIEWER_IDR_MIN_INTERVAL_S", "0.5")),
 )
 STREAM_STATS_LOG_INTERVAL_S = 5.0
+
+
+async def _relay_scrcpy_auto_attach_allowed_for_serial(
+    serial: str,
+    *,
+    db_enabled: bool,
+) -> bool:
+    """Return whether WS auto-attach may start scrcpy for a registered device.
+
+    This path runs during agent/device connect, exactly when the backend is most
+    likely to receive a 20-40 phone burst. Fail closed on DB errors or missing
+    registration so a saturated DB pool does not trigger even more scrcpy work.
+    Explicit viewer attach routes remain available for user-initiated streams.
+    """
+    if not db_enabled:
+        return True
+    try:
+        async with AsyncSessionLocal() as db:
+            device_ref = await lookup_device_by_serial(db, serial)
+            if device_ref is None:
+                return False
+            work_org = getattr(device_ref, "org_id", None)
+            if not work_org and getattr(device_ref, "user_id", None):
+                work_org = await get_user_org_id(db, device_ref.user_id)
+            if not work_org:
+                return False
+            with tenant_context(work_org):
+                return await repo.relay_scrcpy_auto_attach_allowed(
+                    db,
+                    device_ref.serial,
+                )
+    except Exception as exc:
+        log.warning(
+            "relay_scrcpy DB check failed for %s; skip auto-attach: %s",
+            serial,
+            exc,
+        )
+        return False
 
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -242,6 +282,12 @@ class WebSocketManager:
         self._viewer_idr_request_at: Dict[str, float] = {}
         self._session_to_conn: Dict[str, str] = {}
         self._conn_sessions: Dict[str, Optional[str]] = {}
+        self._stream_sender_started_total = 0
+        self._stream_sender_stopped_total = 0
+        self._stream_sender_sent_total = 0
+        self._stream_sender_dropped_total = 0
+        self._stream_sender_sent_by_serial: Dict[str, int] = {}
+        self._stream_sender_dropped_by_serial: Dict[str, int] = {}
         self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
         self._lock = asyncio.Lock()
         self._db_enabled = db_enabled
@@ -249,6 +295,95 @@ class WebSocketManager:
         # WS frames, so the gate must live inside the receive loop.
         self._read_only = bool(read_only)
         self._multi_control = MultiControlCoordinator(manager)
+
+    def _record_stream_sender_started(self, serial: str) -> None:
+        self._stream_sender_started_total += 1
+
+    def _record_stream_sender_stopped(self, serial: str) -> None:
+        self._stream_sender_stopped_total += 1
+
+    def _record_stream_sender_sent(self, serial: str) -> None:
+        self._stream_sender_sent_total += 1
+        self._stream_sender_sent_by_serial[serial] = (
+            self._stream_sender_sent_by_serial.get(serial, 0) + 1
+        )
+
+    def _record_stream_sender_dropped(self, serial: str) -> None:
+        self._stream_sender_dropped_total += 1
+        self._stream_sender_dropped_by_serial[serial] = (
+            self._stream_sender_dropped_by_serial.get(serial, 0) + 1
+        )
+
+    @staticmethod
+    def _top_stream_serials(counters: Dict[str, int], *, limit: int = 5) -> list[dict]:
+        return [
+            {"serial": serial, "count": count}
+            for serial, count in sorted(
+                counters.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:limit]
+        ]
+
+    def stream_runtime_status(self) -> dict:
+        """Return low-overhead WS media sender status for relay debugging."""
+        active_by_connection: dict[str, list[str]] = {}
+        media_ws_per_connection: list[dict] = []
+        active_streams = 0
+        shared_media_ws_connections = 0
+        max_media_streams_per_connection = 0
+
+        for conn_id, tasks in list(self._conn_sender_groups.items()):
+            serials = sorted(
+                {
+                    str(getattr(task, "_device_serial", ""))
+                    for task in tasks
+                    if not task.done() and getattr(task, "_device_serial", "")
+                }
+            )
+            if not serials:
+                continue
+            stream_count = len(serials)
+            active_by_connection[conn_id] = serials
+            media_ws_per_connection.append(
+                {
+                    "conn_id": conn_id,
+                    "session_id": self._conn_sessions.get(conn_id) or "",
+                    "stream_count": stream_count,
+                    "serials": serials,
+                }
+            )
+            active_streams += stream_count
+            max_media_streams_per_connection = max(
+                max_media_streams_per_connection,
+                stream_count,
+            )
+            if stream_count > 1:
+                shared_media_ws_connections += 1
+
+        media_ws_active = len(media_ws_per_connection)
+        return {
+            "connections": len(self._connections),
+            "media_ws_active": media_ws_active,
+            "media_streams_active": active_streams,
+            "media_ws_per_connection": media_ws_per_connection,
+            "active_by_connection": active_by_connection,
+            "max_media_streams_per_connection": max_media_streams_per_connection,
+            "shared_media_ws_connections": shared_media_ws_connections,
+            "dedicated_media_ws_ok": (
+                media_ws_active == 0 or max_media_streams_per_connection <= 1
+            ),
+            "sender_started_total": self._stream_sender_started_total,
+            "sender_stopped_total": self._stream_sender_stopped_total,
+            "sender_sent_total": self._stream_sender_sent_total,
+            "sender_dropped_total": self._stream_sender_dropped_total,
+            "top_sent_serials": self._top_stream_serials(
+                self._stream_sender_sent_by_serial
+            ),
+            "top_dropped_serials": self._top_stream_serials(
+                self._stream_sender_dropped_by_serial
+            ),
+        }
 
     def bind_event_recorder(self, recorder) -> None:
         """Subscribe to EventRecorder to broadcast device_event messages to all frontends."""
@@ -313,7 +448,11 @@ class WebSocketManager:
         org_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> None:
-        await ws.accept()
+        try:
+            await ws.accept()
+        except RuntimeError as exc:
+            log.info("WS accept skipped for disconnected client: %s", exc)
+            return
         conn_id = str(uuid.uuid4())
         # ctrl_q: JSON status/control — maxsize=16 (small msgs, generous headroom)
         ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=16)
@@ -626,9 +765,12 @@ class WebSocketManager:
         ws: WebSocket,
         device,
         ws_send_lock: asyncio.Lock,
+        *,
+        conn_id: str = "",
     ) -> None:
         """Per-device sender for H264 binary frames on one websocket connection."""
         frame_q: asyncio.Queue = asyncio.Queue(maxsize=8)
+        serial = str(getattr(device, "serial", "unknown"))
 
         def _request_idr_recover(*, force: bool = False) -> None:
             recv = getattr(device, "_scrcpy_receiver", None)
@@ -671,7 +813,7 @@ class WebSocketManager:
                 log_fn = log.warning if dropped_total else log.debug
                 log_fn(
                     "[WS device sender] serial=%s sent=%d dropped=%d",
-                    getattr(device, "serial", "unknown"),
+                    serial,
                     sent_total,
                     dropped_total,
                 )
@@ -680,6 +822,7 @@ class WebSocketManager:
             last_stats_ts = now
 
         try:
+            self._record_stream_sender_started(serial)
             # Viewer refcount: drives DeviceClient auto-start/auto-stop.
             bootstrap = None
             try:
@@ -733,26 +876,43 @@ class WebSocketManager:
                 if is_key:
                     saw_key_sent = True
 
+                wait_started = time.perf_counter()
                 try:
                     await asyncio.wait_for(
                         ws_send_lock.acquire(),
                         timeout=STREAM_WS_LOCK_WAIT_MS / 1000.0,
                     )
+                    wait_ms = (time.perf_counter() - wait_started) * 1000.0
                 except asyncio.TimeoutError:
                     dropped_total += 1
+                    self._record_stream_sender_dropped(serial)
+                    stream_telemetry.record_ws_send(
+                        wait_ms=STREAM_WS_LOCK_WAIT_MS,
+                        dropped=True,
+                    )
                     _request_idr_recover()
                     _log_sender_stats_if_due(time.monotonic())
                     continue
                 try:
+                    send_started = time.perf_counter()
                     await asyncio.wait_for(
                         ws.send_bytes(frame),
                         timeout=STREAM_WS_SEND_TIMEOUT_MS / 1000.0,
                     )
+                    send_ms = (time.perf_counter() - send_started) * 1000.0
                 except asyncio.TimeoutError:
+                    self._record_stream_sender_dropped(serial)
+                    stream_telemetry.record_ws_send(
+                        wait_ms=wait_ms,
+                        send_ms=STREAM_WS_SEND_TIMEOUT_MS,
+                        dropped=True,
+                    )
                     _request_idr_recover()
                     raise
                 finally:
                     ws_send_lock.release()
+                stream_telemetry.record_ws_send(wait_ms=wait_ms, send_ms=send_ms)
+                self._record_stream_sender_sent(serial)
 
                 sent_total += 1
                 await asyncio.sleep(0)
@@ -761,8 +921,9 @@ class WebSocketManager:
         finally:
             log.info(
                 "watch_serial: stopped video sender for %s",
-                getattr(device, "serial", "unknown"),
+                serial,
             )
+            self._record_stream_sender_stopped(serial)
             try:
                 device.unsubscribe_frames(frame_q)
             except Exception:
@@ -854,10 +1015,12 @@ class WebSocketManager:
                                 ws=ws,
                                 device=device,
                                 ws_send_lock=ws_send_lock,
+                                conn_id=conn_id,
                             ),
                             name=f"ws-device-sender-{conn_id}-{serial}",
                         )
                         setattr(task, "_device_serial", serial)
+                        setattr(task, "_connection_id", conn_id)
                         group.append(task)
                         self._conn_sender_groups[conn_id] = group
                         log.info("watch_serial: started video sender for %s", serial)
@@ -1676,23 +1839,15 @@ class DeviceAgentSession:
                 _streaming = self._config.streaming
                 if (
                     _streaming.mode == "continuous"
-                    and getattr(_streaming, "auto_attach_scrcpy_on_connect", True)
+                    and getattr(_streaming, "auto_attach_scrcpy_on_connect", False)
                 ):
-                    allow_attach = True
-                    if self._ws_manager._db_enabled:
-                        try:
-                            async with AsyncSessionLocal() as db:
-                                allow_attach = await repo.relay_scrcpy_auto_attach_allowed(db, serial)
-                        except Exception as exc:
-                            log.warning(
-                                "relay_scrcpy DB check failed for %s: %s",
-                                serial,
-                                exc,
-                            )
-                            allow_attach = True
+                    allow_attach = await _relay_scrcpy_auto_attach_allowed_for_serial(
+                        serial,
+                        db_enabled=self._ws_manager._db_enabled,
+                    )
                     if not allow_attach:
                         log.info(
-                            "Skip auto-attach scrcpy (relay_scrcpy_enabled=false in DB): %s",
+                            "Skip auto-attach scrcpy (not registered/allowed): %s",
                             serial,
                         )
                         # H264 binary frames embed the DeviceClient.serial that owns the

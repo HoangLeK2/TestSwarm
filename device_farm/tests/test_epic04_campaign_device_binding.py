@@ -15,10 +15,13 @@ from sqlalchemy import event, func, select, update
 
 from db.crud import campaign_entity as campaign_repo
 from db.crud.device import create_device
+from db.crud.execution import campaign_run_stats
 from db.crud.device_group import add_devices_to_group, create_group
 from db.crud.device_reserve_session import get_active_session
+from db.models.activity import ActivityLog
 from db.models.campaign import CampaignTarget
 from db.models.enums import CampaignStatus, DeviceFsmEvent
+from db.models.device_fsm import DeviceFsmSnapshot, DeviceStateTransition
 from db.models.execution import Execution, ExecutionDevice, ExecutionResult
 from db.models.external_entity import ExecutionEntityAssignment
 from db.crud.external_entity import upsert_external_entity
@@ -26,6 +29,7 @@ from services.campaign.dispatcher import (
     FanOutExecutionView,
     FanOutResult,
     dispatch_campaign,
+    finish_fan_out_execution,
 )
 from services.campaign.execution_runtime import start_execution_runtime
 from services.campaign.override_resolver import merge_effective_vars
@@ -73,6 +77,30 @@ async def _create_campaign(client, *, name: str = "FanOutCampaign", **extra) -> 
     return resp.json()["id"]
 
 
+async def _create_campaign_with_steps(client, *, name: str, steps: list[dict]) -> str:
+    created = await client.post(
+        "/api/scenarios",
+        json={"name": f"{name}-scenario", "kind": "sequence"},
+    )
+    assert created.status_code == 201, created.text
+    scenario_id = created.json()["id"]
+    body = await client.post(
+        f"/api/scenarios/{scenario_id}/body",
+        json={"steps": steps},
+    )
+    assert body.status_code == 200, body.text
+    resp = await client.post(
+        "/api/campaigns",
+        json={
+            "name": name,
+            "scenario_refs": [{"scenario_id": scenario_id}],
+            "vars": {"kw": "global"},
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
 async def _online_device(session_factory, *, org_id: str = ORG_A, serial: str) -> str:
     set_current_org_id(org_id)
     svc = DeviceStateService()
@@ -108,6 +136,144 @@ async def _device_group(session_factory, device_ids: list[str], *, org_id: str =
             await add_devices_to_group(db, group.id, device_ids, org_id=org_id)
         await db.commit()
         return group.id
+
+
+@pytest.mark.asyncio
+async def test_campaign_run_stats_includes_latest_dispatch_timing(session_factory):
+    await _seed_orgs(session_factory)
+    set_current_org_id(ORG_A)
+    started = datetime(2026, 8, 2, 0, 0, 0, tzinfo=timezone.utc)
+    async with session_factory() as db:
+        campaign = await campaign_repo.create_campaign_entity(
+            db,
+            org_id=ORG_A,
+            name="StatsTiming",
+            created_by=USER_OWNER,
+        )
+        older_device = await create_device(
+            db,
+            "STATS-OLD",
+            user_id=USER_OWNER,
+            org_id=ORG_A,
+        )
+        first_device = await create_device(
+            db,
+            "STATS-1",
+            user_id=USER_OWNER,
+            org_id=ORG_A,
+        )
+        second_device = await create_device(
+            db,
+            "STATS-2",
+            user_id=USER_OWNER,
+            org_id=ORG_A,
+        )
+        db.add_all(
+            [
+                Execution(
+                    id="stats-old-exec",
+                    run_type="campaign_device",
+                    kind="campaign",
+                    status="completed",
+                    org_id=ORG_A,
+                    campaign_id=campaign.id,
+                    device_config={},
+                    loop_config={},
+                    error_config={},
+                    meta={"dispatch_id": "older"},
+                    user_id=USER_OWNER,
+                    created_at=started - timedelta(seconds=10),
+                    started_at=started - timedelta(seconds=9),
+                    finished_at=started - timedelta(seconds=8),
+                ),
+                Execution(
+                    id="stats-exec-1",
+                    run_type="campaign_device",
+                    kind="campaign",
+                    status="completed",
+                    org_id=ORG_A,
+                    campaign_id=campaign.id,
+                    device_config={},
+                    loop_config={},
+                    error_config={},
+                    meta={
+                        "dispatch_id": "latest",
+                        "workflow_id": "exec_stats-exec-1",
+                        "dispatch_source": "temporal",
+                    },
+                    user_id=USER_OWNER,
+                    created_at=started,
+                    started_at=started + timedelta(milliseconds=100),
+                    finished_at=started + timedelta(seconds=2),
+                ),
+                Execution(
+                    id="stats-exec-2",
+                    run_type="campaign_device",
+                    kind="campaign",
+                    status="running",
+                    org_id=ORG_A,
+                    campaign_id=campaign.id,
+                    device_config={},
+                    loop_config={},
+                    error_config={},
+                    meta={
+                        "dispatch_id": "latest",
+                        "workflow_id": "exec_stats-exec-2",
+                        "dispatch_source": "fallback",
+                    },
+                    user_id=USER_OWNER,
+                    created_at=started + timedelta(milliseconds=20),
+                    started_at=started + timedelta(milliseconds=220),
+                    finished_at=None,
+                ),
+            ]
+        )
+        db.add_all(
+            [
+                ExecutionResult(
+                    id="stats-old-result",
+                    org_id=ORG_A,
+                    execution_id="stats-old-exec",
+                    device_id=older_device.id,
+                    status="passed",
+                ),
+                ExecutionResult(
+                    id="stats-result-1",
+                    org_id=ORG_A,
+                    execution_id="stats-exec-1",
+                    device_id=first_device.id,
+                    status="passed",
+                ),
+                ExecutionResult(
+                    id="stats-result-2",
+                    org_id=ORG_A,
+                    execution_id="stats-exec-2",
+                    device_id=second_device.id,
+                    status="running",
+                ),
+            ]
+        )
+        await db.commit()
+
+        stats = await campaign_run_stats(db, campaign.id)
+
+    from api.schemas.execution import SummaryOut
+
+    summary = SummaryOut(**stats)
+    assert stats["total_devices"] == 3
+    assert summary.latest_dispatch_id == "latest"
+    assert stats["passed"] == 2
+    assert stats["running"] == 1
+    assert stats["latest_dispatch_id"] == "latest"
+    assert stats["latest_dispatch_target_count"] == 2
+    assert stats["latest_dispatch_finished_count"] == 1
+    assert stats["latest_dispatch_running_count"] == 1
+    assert stats["latest_dispatch_workflow_started_count"] == 2
+    assert stats["latest_dispatch_fallback_count"] == 1
+    assert stats["latest_dispatch_to_first_start_ms"] == 100.0
+    assert stats["latest_dispatch_to_start_p95_ms"] == pytest.approx(195.0)
+    assert stats["latest_dispatch_terminal_ms"] is None
+    assert stats["latest_dispatch_elapsed_ms"] is not None
 
 
 @pytest.mark.asyncio
@@ -424,6 +590,105 @@ async def test_preview_and_dispatch_allocate_one_source_per_device_from_org_pool
     assert [
         row["external_entity_id"] for row in next_preview.json()["assignments"]
     ] == [late_two.id, late_one.id]
+
+
+@pytest.mark.asyncio
+async def test_use_source_pool_step_drives_preview_and_dispatch(session_factory):
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="NODE-POOL-D1")
+    d2 = await _online_device(session_factory, serial="NODE-POOL-D2")
+
+    set_current_org_id(ORG_A)
+    async with session_factory() as db:
+        first, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Node Group One",
+            external_id="node-group-1",
+            observed_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        )
+        second, _ = await upsert_external_entity(
+            db,
+            org_id=ORG_A,
+            platform="facebook",
+            entity_type="group",
+            display_name="Node Group Two",
+            external_id="node-group-2",
+            observed_at=datetime(2026, 7, 26, tzinfo=timezone.utc),
+        )
+        await db.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        campaign_id = await _create_campaign_with_steps(
+            client,
+            name="SourcePoolNode",
+            steps=[
+                {
+                    "id": "use-source-pool",
+                    "type": "use_source_pool",
+                    "platform": "facebook",
+                    "entity_type": "group",
+                    "search": "Node Group",
+                    "output_prefix": "GROUP",
+                },
+                {"id": "wait-after-source-pool", "type": "wait", "seconds": 1},
+            ],
+        )
+        preview = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch-preview",
+            json={"target": {"device_ids": [d1, d2]}},
+        )
+        assert preview.status_code == 200, preview.text
+        preview_body = preview.json()
+        assert [
+            row["external_entity_id"] for row in preview_body["assignments"]
+        ] == [second.id, first.id]
+
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 2,
+                }
+            ),
+        ):
+            dispatched = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch?include_vars=true",
+                json={
+                    "target": {"device_ids": [d1, d2]},
+                    "allocation_snapshot": [
+                        {
+                            "device_id": row["device_id"],
+                            "external_entity_id": row["external_entity_id"],
+                        }
+                        for row in preview_body["assignments"]
+                    ],
+                },
+            )
+
+    assert dispatched.status_code == 200, dispatched.text
+    rows = dispatched.json()["executions"]
+    assert [row["effective_vars"]["TARGET_GROUP_NAME"] for row in rows] == [
+        "Node Group Two",
+        "Node Group One",
+    ]
+    assert [row["effective_vars"]["GROUP_NAME"] for row in rows] == [
+        "Node Group Two",
+        "Node Group One",
+    ]
+    assert [row["effective_vars"]["GROUP_SEARCH_QUERY"] for row in rows] == [
+        "Node Group Two",
+        "Node Group One",
+    ]
 
 
 @pytest.mark.asyncio
@@ -881,7 +1146,6 @@ async def test_dispatch_batches_persistence_and_preserves_response_order(
     requested_device_ids = list(reversed(device_ids))
     app = _build_app(session_factory)
     inserted_statements: list[str] = []
-    claimed_device_ids: list[str] = []
 
     def _before_cursor_execute(_conn, _cursor, statement, _params, _context, _many):
         normalized = " ".join(statement.split())
@@ -894,30 +1158,20 @@ async def test_dispatch_batches_persistence_and_preserves_response_order(
         ):
             inserted_statements.append(normalized)
 
-    async def _claim_stub(_db, *, device_id: str, **_kwargs):
-        claimed_device_ids.append(device_id)
-        return SimpleNamespace(session_id=f"claim-{device_id}")
-
     event.listen(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             campaign_id = await _create_campaign(client, name="BatchedPersistence")
-            with (
-                patch(
-                    "services.campaign.dispatcher.claim_device_session",
-                    side_effect=_claim_stub,
-                ),
-                patch(
-                    "services.campaign.execution_runtime.start_execution_runtime",
-                    return_value={
-                        "temporal": 0,
-                        "fallback": 0,
-                        "failed": 0,
-                        "skipped": 120,
-                    },
-                ),
+            with patch(
+                "services.campaign.execution_runtime.start_execution_runtime",
+                return_value={
+                    "temporal": 0,
+                    "fallback": 0,
+                    "failed": 0,
+                    "skipped": 120,
+                },
             ):
                 response = await client.post(
                     f"/api/campaigns/{campaign_id}/dispatch",
@@ -927,12 +1181,11 @@ async def test_dispatch_batches_persistence_and_preserves_response_order(
         event.remove(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
 
     assert response.status_code == 200
-    assert claimed_device_ids == sorted(requested_device_ids)
     assert [
         row["device_id"] for row in response.json()["executions"]
     ] == requested_device_ids
-    # 120 rows at chunk size 25 => five statements per persistence table.
-    assert len(inserted_statements) == 15
+    # 120 rows at chunk size 100 => two statements per persistence table.
+    assert len(inserted_statements) == 6
     execution_ids = [
         row["execution_id"] for row in response.json()["executions"]
     ]
@@ -961,7 +1214,7 @@ async def test_dispatch_rolls_back_claims_and_first_chunk_when_later_chunk_fails
     await _seed_orgs(session_factory)
     device_ids = [
         await _online_device(session_factory, serial=f"ROLLBACK-{idx:02d}")
-        for idx in range(26)
+        for idx in range(101)
     ]
     app = _build_app(session_factory)
     execution_insert_count = 0
@@ -1028,6 +1281,77 @@ async def test_dispatch_rolls_back_claims_and_first_chunk_when_later_chunk_fails
         ]
     assert (execution_count, target_count) == (0, 0)
     assert active_sessions == [None] * len(device_ids)
+
+
+@pytest.mark.asyncio
+async def test_finish_fan_out_execution_fast_releases_campaign_claim(session_factory):
+    await _seed_orgs(session_factory)
+    device_id = await _online_device(session_factory, serial="FAST-RELEASE-D1")
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        campaign_id = await _create_campaign(client, name="FastRelease")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            return_value={
+                "temporal": 0,
+                "fallback": 0,
+                "failed": 0,
+                "skipped": 1,
+            },
+        ):
+            response = await client.post(
+                f"/api/campaigns/{campaign_id}/dispatch",
+                json={"target": {"device_ids": [device_id]}},
+            )
+
+    assert response.status_code == 200
+    execution_id = response.json()["executions"][0]["execution_id"]
+
+    async with session_factory() as db:
+        execution = await db.get(Execution, execution_id)
+        assert execution is not None
+        active_before = await get_active_session(db, device_id)
+        assert active_before is not None
+
+        with patch(
+            "services.campaign.aggregator_scheduler.request_campaign_status_evaluation",
+            AsyncMock(),
+        ):
+            await finish_fan_out_execution(
+                db,
+                execution,
+                org_id=ORG_A,
+                actor_user_id=USER_OWNER,
+                status="completed",
+                device_id=device_id,
+            )
+        await db.commit()
+
+    async with session_factory() as db:
+        active_after = await get_active_session(db, device_id)
+        state = await db.get(DeviceFsmSnapshot, device_id)
+        transition_count = await db.scalar(
+            select(func.count(DeviceStateTransition.id)).where(
+                DeviceStateTransition.device_id == device_id,
+                DeviceStateTransition.event == DeviceFsmEvent.SESSION_RELEASED.value,
+            )
+        )
+        audit_count = await db.scalar(
+            select(func.count(ActivityLog.id)).where(
+                ActivityLog.action == "session.released.execution_terminal",
+                ActivityLog.entity_id == device_id,
+            )
+        )
+
+    assert active_after is None
+    assert state is not None
+    assert state.state == "online"
+    assert state.session_id is None
+    assert transition_count == 1
+    assert audit_count == 1
 
 
 @pytest.mark.asyncio

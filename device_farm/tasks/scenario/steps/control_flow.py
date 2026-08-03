@@ -418,11 +418,30 @@ def _remember_fb_comment_target(
     *,
     source: str,
 ) -> None:
-    keep_post_detail_parent = bool(
-        sc.ctx.get("_active_comment_parent_hash")
-        and sc.ctx.get("_active_comment_parent_source") == "post_detail"
-    )
+    keep_post_detail_parent = _has_verified_post_detail_comment_parent(sc.ctx)
     parent_base_hash = target.get("parent_base_hash")
+    if keep_post_detail_parent:
+        sc.ctx["_fb_tapped_comment_target"] = {
+            "pid": target.get("pid"),
+            "post_key": target.get("post_key"),
+            "stable_post_id": target.get("stable_post_id"),
+            "fb_post_id": target.get("fb_post_id"),
+            "author": target.get("author"),
+            "timestamp": target.get("timestamp"),
+            "text_prefix": target.get("text_prefix"),
+            "parent_base_hash": target.get("parent_base_hash"),
+            "parent_id": target.get("parent_id"),
+            "source": source,
+        }
+        sc.ctx["_active_comment_anchor_verified"] = True
+        sc.ctx.pop("_fb_comment_target_missing", None)
+        result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
+        result["_pid"] = sc.ctx.get("_fb_comment_parent_pid") or target.get("pid")
+        result["tapped_target_pid"] = target.get("pid")
+        result["parent_context_preserved"] = True
+        return
+    sc.ctx.pop("_fb_comment_session", None)
+    sc.ctx.pop("_fb_tapped_comment_target", None)
     if parent_base_hash and not keep_post_detail_parent:
         sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
     if target.get("parent_id") and not keep_post_detail_parent:
@@ -446,6 +465,32 @@ def _remember_fb_comment_target(
     result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
     result["_pid"] = target.get("pid")
     result["parent_context_preserved"] = keep_post_detail_parent
+
+
+def _has_verified_post_detail_comment_parent(ctx: Dict[str, Any]) -> bool:
+    parent_id = str(ctx.get("_active_comment_parent_hash") or "").strip()
+    if not parent_id or ctx.get("_active_comment_parent_source") != "post_detail":
+        return False
+    if not ctx.get("_active_comment_anchor_verified"):
+        return False
+    session = ctx.get("_fb_comment_session")
+    if not isinstance(session, dict) or not session.get("session_id"):
+        return False
+    session_parent_id = str(session.get("parent_id") or "").strip()
+    if session_parent_id != parent_id:
+        return False
+    parent_pid = str(ctx.get("_fb_comment_parent_pid") or "").strip()
+    session_parent_pid = str(session.get("parent_post_id") or "").strip()
+    return bool(parent_pid and session_parent_pid == parent_pid)
+
+
+def _has_verified_existing_comment_parent(ctx: Dict[str, Any]) -> bool:
+    parent_id = str(ctx.get("_active_comment_parent_hash") or "").strip()
+    if not parent_id:
+        return False
+    if ctx.get("_active_comment_parent_source") == "post_detail":
+        return _has_verified_post_detail_comment_parent(ctx)
+    return bool(ctx.get("_active_comment_anchor_verified"))
 
 
 @register_step("fb_find_comment_button")
@@ -781,13 +826,7 @@ def handle_tap_fb_comment_button(
         tapped = False
     elif result.get("reason_code") == "already_on_comment_sheet":
         tapped = True
-        keep_existing_parent = bool(
-            sc.ctx.get("_active_comment_parent_hash")
-            and (
-                sc.ctx.get("_active_comment_anchor_verified")
-                or sc.ctx.get("_active_comment_parent_source") == "post_detail"
-            )
-        )
+        keep_existing_parent = _has_verified_existing_comment_parent(sc.ctx)
         if keep_existing_parent:
             sc.ctx.pop("_fb_comment_target_missing", None)
             result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
@@ -823,37 +862,15 @@ def handle_tap_fb_comment_button(
                     )
                 if verified:
                     tapped = True
-                    keep_post_detail_parent = bool(
-                        sc.ctx.get("_active_comment_parent_hash")
-                        and sc.ctx.get("_active_comment_parent_source") == "post_detail"
+                    _remember_fb_comment_target(
+                        sc,
+                        target,
+                        result,
+                        source="tap_fb_comment_button",
                     )
-                    parent_base_hash = target.get("parent_base_hash")
-                    if parent_base_hash and not keep_post_detail_parent:
-                        sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
-                    if target.get("parent_id") and not keep_post_detail_parent:
-                        sc.ctx["_active_comment_parent_hash"] = target.get("parent_id")
-                        sc.ctx["_first_new_post_hash"] = target.get("parent_id")
-                    if target.get("pid"):
-                        sc.ctx["_fb_comment_parent_pid"] = target.get("pid")
-                    if not keep_post_detail_parent:
-                        sc.ctx["_active_comment_parent_source"] = "tap_fb_comment_button"
-                    sc.ctx["_active_comment_parent_anchor"] = {
-                        "pid": target.get("pid"),
-                        "post_key": target.get("post_key"),
-                        "stable_post_id": target.get("stable_post_id"),
-                        "fb_post_id": target.get("fb_post_id"),
-                        "author": target.get("author"),
-                        "timestamp": target.get("timestamp"),
-                        "text_prefix": target.get("text_prefix"),
-                    }
-                    sc.ctx["_active_comment_anchor_verified"] = True
-                    sc.ctx.pop("_fb_comment_target_missing", None)
                     result["tapped_at"] = [cx, cy]
                     result["agent_tapped"] = agent_tapped
                     result["_bounds"] = bounds
-                    result["_pid"] = target.get("pid")
-                    result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
-                    result["parent_context_preserved"] = keep_post_detail_parent
                     result["target_score"] = target.get("score")
                     result["target_chosen_index"] = diag.get("chosen_index") if diag else None
                     result["target_verified"] = True

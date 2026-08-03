@@ -30,6 +30,20 @@ except (TypeError, ValueError):
     MAX_SESSIONS = 0
 # 0 means unlimited. Operators may set a per-agent ceiling when measured CPU,
 # bandwidth, or file-descriptor capacity requires one.
+try:
+    WARM_IDLE_TTL_S = max(0.0, float(os.getenv("SCRCPY_WARM_IDLE_TTL_S", "120")))
+except (TypeError, ValueError):
+    WARM_IDLE_TTL_S = 120.0
+WARM_IDLE_ENABLED = os.getenv("SCRCPY_WARM_IDLE_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+WARM_STOP_REASONS = {
+    "unsubscribe_frames:idle_no_viewers",
+    "unsubscribe_frames:post_grace_idle",
+}
 CLEANUP_INTERVAL = 15   # seconds between cleanup sweeps (halved from 30 to match lower TTL)
 
 
@@ -49,15 +63,27 @@ class ScrcpySessionManager:
     def __init__(
         self,
         on_session_stopped: Optional[Callable[[str, str], None]] = None,
+        on_session_health: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self._sessions:  Dict[str, ScrcpyRelaySession] = {}
         self._started_at: Dict[str, float] = {}  # serial → time.monotonic() at start
+        self._warm_since: Dict[str, float] = {}
+        self._warm_until: Dict[str, float] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._on_session_stopped = on_session_stopped
+        self._on_session_health = on_session_health
         self._starting_serials: set[str] = set()
         self._fatal_during_start: Dict[str, str] = {}
         self._serial_locks: Dict[str, asyncio.Lock] = {}
+        self._lifecycle_stats: Dict[str, int] = {
+            "start_requests": 0,
+            "cold_starts": 0,
+            "same_config_reuses": 0,
+            "warm_reuses": 0,
+            "rejected_max_sessions": 0,
+            "startup_failures": 0,
+        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -112,8 +138,9 @@ class ScrcpySessionManager:
         loop: asyncio.AbstractEventLoop,
         bitrate: int = 2_000_000,
         low_latency: bool = False,
-    ) -> None:
+    ) -> str:
         """Create and start a session. Stops any existing session for same serial."""
+        self._bump_lifecycle_stat("start_requests")
         async with self._lock_for_serial(serial):
             existing = self._sessions.get(serial)
             if (
@@ -122,17 +149,35 @@ class ScrcpySessionManager:
                 and hasattr(existing, "matches_config")
                 and existing.matches_config(max_fps, max_width, enable_control, port, bitrate, low_latency)
             ):
-                logger.info("session already running with same config: %s", serial)
-                return
+                resume = getattr(existing, "resume_forwarding", None)
+                if callable(resume):
+                    resume(send_queue=send_queue, loop=loop, reason="scrcpy_start")
+                was_warm = serial in self._warm_until
+                self._warm_since.pop(serial, None)
+                self._warm_until.pop(serial, None)
+                logger.info(
+                    "session already running with same config: %s%s",
+                    serial,
+                    " (warm_reuse)" if was_warm else "",
+                )
+                if was_warm:
+                    self._bump_lifecycle_stat("warm_reuses")
+                    return "warm_reuse"
+                self._bump_lifecycle_stat("same_config_reuses")
+                return "same_config_reuse"
 
             await self._stop_session_unlocked(serial)
+
+            if MAX_SESSIONS > 0 and len(self._sessions) >= MAX_SESSIONS:
+                await self._evict_one_warm_session_unlocked()
 
             if MAX_SESSIONS > 0 and len(self._sessions) >= MAX_SESSIONS:
                 logger.warning(
                     "max sessions (%d) reached — rejecting scrcpy for %s",
                     MAX_SESSIONS, serial,
                 )
-                return
+                self._bump_lifecycle_stat("rejected_max_sessions")
+                return "rejected_max_sessions"
 
             session = ScrcpyRelaySession(
                 serial=serial,
@@ -145,6 +190,7 @@ class ScrcpySessionManager:
                 bitrate=bitrate,
                 low_latency=low_latency,
                 on_fatal=self._on_session_fatal,
+                on_health=self._on_session_health,
             )
 
             try:
@@ -154,15 +200,19 @@ class ScrcpySessionManager:
                 await asyncio.get_running_loop().run_in_executor(scrcpy_executor(), session.start)
                 self._sessions[serial] = session
                 self._started_at[serial] = time.monotonic()
+                self._bump_lifecycle_stat("cold_starts")
                 logger.info("session started: %s (total=%d)", serial, len(self._sessions))
                 self._starting_serials.discard(serial)
                 fatal_reason = self._fatal_during_start.pop(serial, "")
                 if fatal_reason:
                     await self._stop_session_unlocked(serial, reason=fatal_reason)
+                return "cold_start"
             except Exception as exc:
                 logger.error("session start failed for %s: %s", serial, exc)
                 self._emit_stopped(serial, "startup_failure")
                 self._fatal_during_start.pop(serial, None)
+                self._bump_lifecycle_stat("startup_failures")
+                return "startup_failure"
             finally:
                 self._starting_serials.discard(serial)
 
@@ -189,9 +239,31 @@ class ScrcpySessionManager:
         ):
             self._serial_locks.pop(serial, None)
 
+    def _bump_lifecycle_stat(self, key: str, amount: int = 1) -> None:
+        self._lifecycle_stats[key] = self._lifecycle_stats.get(key, 0) + amount
+
     async def _stop_session_unlocked(self, serial: str, reason: str = "manual_stop") -> None:
+        if self._should_warm_instead_of_stop(serial, reason):
+            session = self._sessions.get(serial)
+            if session is not None:
+                pause = getattr(session, "pause_forwarding", None)
+                if callable(pause):
+                    pause(reason=reason)
+                now = time.monotonic()
+                self._warm_since[serial] = now
+                self._warm_until[serial] = now + WARM_IDLE_TTL_S
+                logger.info(
+                    "session warmed: %s (reason=%s ttl=%.1fs)",
+                    serial,
+                    reason,
+                    WARM_IDLE_TTL_S,
+                )
+                return
+
         session = self._sessions.pop(serial, None)
         self._started_at.pop(serial, None)
+        self._warm_since.pop(serial, None)
+        self._warm_until.pop(serial, None)
         if session:
             await asyncio.get_running_loop().run_in_executor(scrcpy_executor(), session.stop)
             logger.info(
@@ -201,6 +273,27 @@ class ScrcpySessionManager:
                 len(self._sessions),
             )
             self._emit_stopped(serial, reason)
+
+    def _should_warm_instead_of_stop(self, serial: str, reason: str) -> bool:
+        if not WARM_IDLE_ENABLED or WARM_IDLE_TTL_S <= 0:
+            return False
+        if reason not in WARM_STOP_REASONS:
+            return False
+        session = self._sessions.get(serial)
+        return bool(session is not None and session.is_alive())
+
+    async def _evict_one_warm_session_unlocked(self) -> None:
+        if not self._warm_until:
+            return
+        serial = min(
+            self._warm_until,
+            key=lambda item: (
+                self._warm_until.get(item, 0.0),
+                self._warm_since.get(item, 0.0),
+            ),
+        )
+        logger.info("session warm eviction: %s", serial)
+        await self._stop_session_unlocked(serial, reason="warm_lru_eviction")
 
     def send_control(self, serial: str, data: bytes) -> None:
         """Thread-safe — delegates to session.send_control()."""
@@ -235,11 +328,30 @@ class ScrcpySessionManager:
             "idr_recovery_max_ms": 0,
             "idr_pending": 0,
             "producer_suppressed": 0,
+            "connect_to_handshake_p95_ms": 0,
+            "connect_to_handshake_max_ms": 0,
+            "connect_to_first_frame_p95_ms": 0,
+            "connect_to_first_frame_max_ms": 0,
+            "start_to_handshake_p95_ms": 0,
+            "start_to_handshake_max_ms": 0,
+            "start_to_first_frame_p95_ms": 0,
+            "start_to_first_frame_max_ms": 0,
+            "gop_replay_packets": 0,
+            "capture_resets": 0,
+            "stream_errors": 0,
         }
+        for key, value in self._lifecycle_stats.items():
+            totals[key] = value
+        if reset:
+            for key in self._lifecycle_stats:
+                self._lifecycle_stats[key] = 0
         observed_fps: list[int] = []
         active_fps: list[int] = []
         for session in list(self._sessions.values()):
-            snapshot = session.stats_snapshot(reset=reset)
+            session_stats = getattr(session, "stats_snapshot", None)
+            if not callable(session_stats):
+                continue
+            snapshot = session_stats(reset=reset)
             totals["frames"] += snapshot.get("frames", 0)
             fps_x100 = snapshot.get("fps_x100", 0)
             totals["fps_x100"] += fps_x100
@@ -261,6 +373,41 @@ class ScrcpySessionManager:
                 "producer_suppressed",
                 0,
             )
+            totals["connect_to_handshake_p95_ms"] = max(
+                totals["connect_to_handshake_p95_ms"],
+                snapshot.get("connect_to_handshake_p95_ms", 0),
+            )
+            totals["connect_to_handshake_max_ms"] = max(
+                totals["connect_to_handshake_max_ms"],
+                snapshot.get("connect_to_handshake_max_ms", 0),
+            )
+            totals["connect_to_first_frame_p95_ms"] = max(
+                totals["connect_to_first_frame_p95_ms"],
+                snapshot.get("connect_to_first_frame_p95_ms", 0),
+            )
+            totals["connect_to_first_frame_max_ms"] = max(
+                totals["connect_to_first_frame_max_ms"],
+                snapshot.get("connect_to_first_frame_max_ms", 0),
+            )
+            totals["start_to_handshake_p95_ms"] = max(
+                totals["start_to_handshake_p95_ms"],
+                snapshot.get("start_to_handshake_p95_ms", 0),
+            )
+            totals["start_to_handshake_max_ms"] = max(
+                totals["start_to_handshake_max_ms"],
+                snapshot.get("start_to_handshake_max_ms", 0),
+            )
+            totals["start_to_first_frame_p95_ms"] = max(
+                totals["start_to_first_frame_p95_ms"],
+                snapshot.get("start_to_first_frame_p95_ms", 0),
+            )
+            totals["start_to_first_frame_max_ms"] = max(
+                totals["start_to_first_frame_max_ms"],
+                snapshot.get("start_to_first_frame_max_ms", 0),
+            )
+            totals["gop_replay_packets"] += snapshot.get("gop_replay_packets", 0)
+            totals["capture_resets"] += snapshot.get("capture_resets", 0)
+            totals["stream_errors"] += snapshot.get("stream_errors", 0)
         totals["fps_min_x100"] = min(observed_fps, default=0)
         totals["fps_max_x100"] = max(observed_fps, default=0)
         totals["fps_active_sessions"] = len(active_fps)
@@ -292,6 +439,12 @@ class ScrcpySessionManager:
                 to_stop.append((serial, "zombie thread"))
                 continue
 
+            warm_until = self._warm_until.get(serial)
+            if warm_until is not None:
+                if now >= warm_until:
+                    to_stop.append((serial, "warm TTL expired"))
+                continue
+
             # TTL: no frames received for SESSION_TTL seconds
             last = session.last_frame_time
             if last > 0 and (now - last) > SESSION_TTL:
@@ -299,7 +452,12 @@ class ScrcpySessionManager:
 
         for serial, reason in to_stop:
             logger.info("cleanup stopping session %s: %s", serial, reason)
-            reason_tag = "zombie_thread" if reason == "zombie thread" else "cleanup_idle"
+            if reason == "zombie thread":
+                reason_tag = "zombie_thread"
+            elif reason == "warm TTL expired":
+                reason_tag = "warm_ttl_expired"
+            else:
+                reason_tag = "cleanup_idle"
             await self.stop_session(serial, reason=reason_tag)
 
     def _on_session_fatal(self, serial: str, reason: str) -> None:

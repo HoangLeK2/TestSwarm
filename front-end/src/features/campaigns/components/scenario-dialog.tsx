@@ -976,7 +976,9 @@ export function ScenarioDialog({
     if (!xmlSerial) return;
     setFetchingXml(true);
     try {
-      const xml = await fetchHierarchy(xmlSerial, true);
+      const xml = await fetchHierarchy(xmlSerial, true, {
+        priority: 'visible'
+      });
       const trimmed = xml?.trim();
       if (trimmed) {
         setCollectedXmls((prev) => [
@@ -1030,7 +1032,9 @@ export function ScenarioDialog({
     if (!serial) return;
     setRefreshingXml(true);
     try {
-      const xml = await fetchHierarchy(serial, true);
+      const xml = await fetchHierarchy(serial, true, {
+        priority: 'visible'
+      });
       if (xml?.trim()) {
         setRecordXml(xml.trim());
         return xml.trim();

@@ -13,6 +13,7 @@ import type {
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 
 export const ACCOUNTS_LIST_KEY = ['accounts'] as const;
+const ACCOUNTS_STALE_MS = 30_000;
 
 export function accountsListQueryKey(
   orgId: string | null | undefined,
@@ -49,6 +50,7 @@ export function useAccounts(query?: {
   return useQuery({
     queryKey: accountsListQueryKey(orgId, query),
     queryFn: () => accountsApi.list(query),
+    staleTime: ACCOUNTS_STALE_MS,
     enabled: Boolean(orgId)
   });
 }

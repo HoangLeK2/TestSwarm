@@ -139,6 +139,27 @@ async def test_relay_attempts_first_connection_without_fixed_startup_sleep(
 
 
 @pytest.mark.asyncio
+async def test_adb_connect_backoff_suppresses_retry_until_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(relay_agent_module.random, "random", lambda: 0.0)
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        relay_mode="ws",
+    )
+    agent._adb_connect_retry_base_s = 2.0
+    agent._adb_connect_retry_max_s = 10.0
+
+    agent._record_adb_connect_failed("10.0.0.2:5555", "failed")
+
+    assert agent._adb_connect_backoff_active("10.0.0.2:5555") is True
+    agent._adb_connect_retry_after["10.0.0.2:5555"] = (
+        asyncio.get_running_loop().time() - 0.01
+    )
+    assert agent._adb_connect_backoff_active("10.0.0.2:5555") is False
+
+
+@pytest.mark.asyncio
 async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
     monkeypatch,
 ) -> None:
@@ -547,7 +568,7 @@ async def test_explicit_bootstrap_bypasses_active_viewer_deferral(
 
 
 @pytest.mark.asyncio
-async def test_explicit_bootstrap_cancels_deferred_auto_bootstrap(
+async def test_device_online_does_not_schedule_auto_bootstrap_before_registration(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS", "60")
@@ -568,20 +589,26 @@ async def test_explicit_bootstrap_cancels_deferred_auto_bootstrap(
     )
     agent._send_heartbeat = AsyncMock()
     agent._schedule_capability_probe = lambda *_args: None
+    u2_warm_calls: list[tuple[str, str]] = []
+    agent._schedule_u2_warm = lambda serial, *, reason: u2_warm_calls.append(
+        (serial, reason)
+    )
     send_queue: asyncio.Queue = asyncio.Queue()
 
     try:
         await agent._on_device_event("phone-1", "device", send_queue)
         await asyncio.sleep(0)
-        background = agent._auto_bootstrap_tasks["phone-1"]
-        assert not background.done()
+
+        assert "phone-1" not in agent._auto_bootstrap_tasks
+        assert bootstrap_calls == []
+        assert u2_warm_calls == []
 
         result = await agent._execute_bootstrap_command("cmd-1", "phone-1", 180)
         await asyncio.sleep(0)
 
         assert '"ok":true' in result
         assert bootstrap_calls == ["phone-1"]
-        assert background.cancelled()
+        assert u2_warm_calls == [("phone-1", "explicit-bootstrap")]
         assert "phone-1" not in agent._auto_bootstrap_tasks
     finally:
         pending = list(getattr(agent, "_auto_bootstrap_tasks", {}).values())
@@ -617,7 +644,7 @@ async def test_offline_device_cancels_deferred_auto_bootstrap(
     send_queue: asyncio.Queue = asyncio.Queue()
 
     try:
-        await agent._on_device_event("phone-1", "device", send_queue)
+        agent._schedule_auto_bootstrap("phone-1")
         await asyncio.sleep(0)
         task = agent._auto_bootstrap_tasks["phone-1"]
         assert not task.done()

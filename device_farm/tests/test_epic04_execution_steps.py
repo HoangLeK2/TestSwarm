@@ -312,6 +312,9 @@ def test_build_execution_step_payload_maps_fields():
         "ok": False,
         "message": "timeout",
         "reason_code": "timeout",
+        "failure_class": "system_timeout",
+        "retry_hint": "retry_if_policy_allows",
+        "operator_summary": "system_timeout",
         "retry_attempts": [{"attempt": 1, "error_reason": "timeout", "wait_ms_before_next": 500}],
         "artifacts_json": [{"type": "fail", "screenshot_url": "/captures/f.png"}],
     }
@@ -323,6 +326,9 @@ def test_build_execution_step_payload_maps_fields():
     assert payload["artifacts_json"][0]["type"] == "fail"
     assert payload["attempts_json"][0]["attempt"] == 1
     assert payload["error_json"]["reason_code"] == "timeout"
+    assert payload["error_json"]["failure_class"] == "system_timeout"
+    assert payload["error_json"]["retry_hint"] == "retry_if_policy_allows"
+    assert payload["error_json"]["operator_summary"] == "system_timeout"
     assert payload["effective_config_json"]["step_id"] == "s1"
 
 

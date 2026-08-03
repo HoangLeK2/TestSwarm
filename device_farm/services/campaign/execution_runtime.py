@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 DISPATCH_SOURCE_TEMPORAL = "temporal"
 DISPATCH_SOURCE_FALLBACK = "fallback"
-DEFAULT_RUNTIME_START_CONCURRENCY = 50
+DEFAULT_RUNTIME_START_CONCURRENCY = 100
 
 
 def workflow_id_for_execution(execution_id: str) -> str:

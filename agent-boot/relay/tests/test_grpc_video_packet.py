@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from relay.grpc_client import (
+    _GRPC_VIDEO_WRITE_WAIT_WARN_MS,
+    _GrpcVideoSendStats,
     agent_message_from_item,
     parse_binary_video_frame,
 )
@@ -49,3 +51,13 @@ def test_typed_video_packet_preserves_legacy_websocket_contract() -> None:
         720,
         1280,
     )
+
+
+def test_grpc_video_stats_tracks_write_wait_backpressure() -> None:
+    stats = _GrpcVideoSendStats()
+
+    stats.record_write_wait(_GRPC_VIDEO_WRITE_WAIT_WARN_MS)
+
+    assert stats.write_wait_samples == 1
+    assert stats.write_wait_warn == 1
+    assert stats.write_wait_max_ms == _GRPC_VIDEO_WRITE_WAIT_WARN_MS

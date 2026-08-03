@@ -496,7 +496,7 @@ async def test_start_runtime_large_fanout_starts_temporal_with_bounded_concurren
     assert stats["temporal"] == device_count
     assert temporal_client.start_workflow.await_count == device_count
     assert db.flush.await_count == 1
-    assert 1 < max_active_workflows <= 50
+    assert 1 < max_active_workflows <= 100
     assert elapsed_ms < budget_ms
 
 

@@ -15,6 +15,7 @@ from api.schemas.device_group import (
 from db.crud.device_group import (
     add_devices_to_group,
     count_group_members,
+    count_group_members_map,
     create_group,
     delete_group,
     get_group,
@@ -42,8 +43,12 @@ def _device_to_out(d) -> DeviceOut:
     )
 
 
-async def _group_to_out(db, group) -> DeviceGroupOut:
-    cnt = await count_group_members(db, group.id)
+async def _group_to_out(db, group, member_count: int | None = None) -> DeviceGroupOut:
+    cnt = (
+        member_count
+        if member_count is not None
+        else await count_group_members(db, group.id)
+    )
     return DeviceGroupOut(
         id=group.id,
         name=group.name,
@@ -96,7 +101,8 @@ async def _get_group_or_404(db, group_id: str, user: CurrentUser):
 async def list_device_groups(db: DB, user: CurrentUser):
     """List all device groups for the authenticated user (includes device count)."""
     groups = await list_groups(db, user_id=data_owner_user_id(user))
-    return [await _group_to_out(db, g) for g in groups]
+    counts = await count_group_members_map(db, [g.id for g in groups])
+    return [await _group_to_out(db, g, counts.get(g.id, 0)) for g in groups]
 
 
 @router.post(

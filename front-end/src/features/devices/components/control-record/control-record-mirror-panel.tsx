@@ -95,7 +95,7 @@ export const ControlRecordMirrorPanel = forwardRef<
         'flex min-h-0 flex-col overflow-hidden bg-muted/20',
         multiFocusMode
           ? 'min-w-0 flex-1'
-          : 'w-[clamp(300px,30vw,360px)] shrink-0 border-r border-border/60'
+          : 'w-[clamp(360px,34vw,470px)] shrink-0 border-r border-border/60'
       )}
     >
       {selectedDevice ? (

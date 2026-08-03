@@ -6,6 +6,10 @@ import {
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from './constants.ts';
 import {
+  getSocialActionOptions
+  // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
+} from './social-action-options.ts';
+import {
   createDefaultStep
   // @ts-expect-error Node --experimental-strip-types test files import TS sources by extension.
 } from '../scenario-steps/types.ts';
@@ -38,4 +42,12 @@ test('exposes all actions in the Facebook insert group', () => {
   assert.equal(types.has('content_interaction'), true);
   assert.equal(types.has('connection_request'), true);
   assert.equal(types.has('community_membership'), true);
+});
+
+test('content interaction exposes like, comment, and share choices', () => {
+  assert.deepEqual(getSocialActionOptions('content_interaction'), [
+    { value: 'like', label: 'Thích bài viết' },
+    { value: 'comment', label: 'Bình luận' },
+    { value: 'share', label: 'Chia sẻ' }
+  ]);
 });

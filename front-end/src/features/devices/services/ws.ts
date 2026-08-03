@@ -41,7 +41,7 @@ function normalizeWsUrl(raw: string, fallbackScheme: 'ws' | 'wss') {
   }
 }
 
-function buildDeviceFarmWsUrl(): string {
+function buildDeviceFarmWsUrl(options: { sessionIdSuffix?: string } = {}): string {
   const isSecure =
     typeof location !== 'undefined' && location.protocol === 'https:';
   const scheme = isSecure ? 'wss' : 'ws';
@@ -71,7 +71,10 @@ function buildDeviceFarmWsUrl(): string {
           : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       window.sessionStorage.setItem(key, sessionId);
     }
-    url += `${url.includes('?') ? '&' : '?'}session_id=${encodeURIComponent(sessionId)}`;
+    const effectiveSessionId = options.sessionIdSuffix
+      ? `${sessionId}:${options.sessionIdSuffix}`
+      : sessionId;
+    url += `${url.includes('?') ? '&' : '?'}session_id=${encodeURIComponent(effectiveSessionId)}`;
   }
   if (authToken && typeof window !== 'undefined') {
     url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(authToken)}`;
@@ -83,6 +86,12 @@ const listeners = new Set<(msg: WsMessage) => void>();
 const binaryListeners = new BinaryListenerRegistry();
 const textDecoder =
   typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+const DEDICATED_MEDIA_WS_ENABLED =
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_DEDICATED_MEDIA_WS ?? '1').trim() !==
+  '0';
+const MEDIA_WS_IDLE_CLOSE_MS = Number(
+  process.env.NEXT_PUBLIC_DEVICE_FARM_MEDIA_WS_IDLE_CLOSE_MS ?? 15_000
+);
 
 // Cache last H264 config frame (0x10) per serial so late-arriving binary listeners
 // (hooks that mount after the WS was already open) get the SPS/PPS immediately.
@@ -119,6 +128,17 @@ const pendingUnwatchTimersBySerial = new Map<
 const pendingIdrSerials = new Set<string>();
 type WsReadyCallback = () => void;
 const wsReadyQueue: WsReadyCallback[] = [];
+type MediaSocketEntry = {
+  serial: string;
+  socket: WebSocket | null;
+  listeners: BinaryListenerRegistry;
+  reconnectTimer?: ReturnType<typeof setTimeout>;
+  idleCloseTimer?: ReturnType<typeof setTimeout>;
+  reconnectAttempt: number;
+  pendingIdr: boolean;
+  watched: boolean;
+};
+const mediaSocketsBySerial = new Map<string, MediaSocketEntry>();
 
 function flushPendingIdrRequests() {
   if (sharedSocket?.readyState !== WebSocket.OPEN) return;
@@ -263,6 +283,61 @@ function isH264KeyFrame(buf: ArrayBuffer, slen: number): boolean {
   return false;
 }
 
+function handleBinaryFrame(
+  buf: ArrayBuffer,
+  registry: BinaryListenerRegistry
+): void {
+  let parsedSerial: string | null = null;
+  // Always cache H264 config frames (0x10) for late-arriving binary listeners.
+  // The WS text listener connects first (for device status); the H264 hook
+  // mounts later. Without caching, the bootstrap config frame arrives when
+  // binaryListeners is empty and is silently dropped — decoder never initialises.
+  if (buf.byteLength >= 3) {
+    const view = new DataView(buf);
+    const ft = view.getUint8(0);
+    const slen = view.getUint8(1);
+    if (slen > 0 && buf.byteLength >= 2 + slen) {
+      parsedSerial = decodeSerial(buf, slen);
+      if (ft === 0x10) {
+        if (
+          shouldInvalidateCachedH264KeyForConfig(
+            lastConfigBySerial.get(parsedSerial),
+            buf
+          )
+        ) {
+          lastKeyBySerial.delete(parsedSerial);
+          lastKeyTsBySerial.delete(parsedSerial);
+          waitForKeyBySerial.add(parsedSerial);
+        }
+        // Keep cache ownership stable: listeners may transfer incoming buffers
+        // to workers, which detaches them.
+        lastConfigBySerial.set(parsedSerial, buf.slice(0));
+      } else if (ft === 0x11) {
+        // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
+        // instead of waiting up to 14 s for the next one.
+        if (isH264KeyFrame(buf, slen)) {
+          // Same ownership rule as config cache above.
+          lastKeyBySerial.set(parsedSerial, buf.slice(0));
+          lastKeyTsBySerial.set(parsedSerial, Date.now());
+          waitForKeyBySerial.delete(parsedSerial);
+        } else if (waitForKeyBySerial.has(parsedSerial)) {
+          return;
+        }
+      }
+    }
+  }
+  if (registry.size > 0) {
+    if (parsedSerial === null && buf.byteLength >= 3) {
+      const view = new DataView(buf);
+      const slen = view.getUint8(1);
+      if (slen > 0 && buf.byteLength >= 2 + slen) {
+        parsedSerial = decodeSerial(buf, slen);
+      }
+    }
+    registry.dispatch(buf, parsedSerial);
+  }
+}
+
 // Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
 if (typeof window !== 'undefined') {
   window.addEventListener('visibilitychange', () => {
@@ -310,15 +385,19 @@ function broadcast(msg: WsMessage) {
   });
 }
 
-function sendPong(ts: unknown) {
-  if (sharedSocket?.readyState !== WebSocket.OPEN) return;
+function sendPongOnSocket(socket: WebSocket | null, ts: unknown) {
+  if (socket?.readyState !== WebSocket.OPEN) return;
   const payload: { type: 'pong'; ts?: number } = { type: 'pong' };
   if (typeof ts === 'number') payload.ts = ts;
   try {
-    sharedSocket.send(JSON.stringify(payload));
+    socket.send(JSON.stringify(payload));
   } catch {
     // socket may be closing; the normal onclose path reconnects
   }
+}
+
+function sendPong(ts: unknown) {
+  sendPongOnSocket(sharedSocket, ts);
 }
 
 function sendPing() {
@@ -329,6 +408,176 @@ function sendPing() {
   } catch {
     // socket may be closing; the normal onclose path reconnects
   }
+}
+
+function getOrCreateMediaSocketEntry(serial: string): MediaSocketEntry {
+  let entry = mediaSocketsBySerial.get(serial);
+  if (!entry) {
+    entry = {
+      serial,
+      socket: null,
+      listeners: new BinaryListenerRegistry(),
+      reconnectAttempt: 0,
+      pendingIdr: false,
+      watched: false
+    };
+    mediaSocketsBySerial.set(serial, entry);
+  }
+  return entry;
+}
+
+function sendMediaJson(entry: MediaSocketEntry, payload: object): boolean {
+  if (entry.socket?.readyState !== WebSocket.OPEN) return false;
+  try {
+    entry.socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendMediaWatchSerial(entry: MediaSocketEntry, force = false): void {
+  if (!force && entry.watched) return;
+  if (sendMediaJson(entry, { type: 'watch_serial', serial: entry.serial })) {
+    entry.watched = true;
+  }
+}
+
+function connectMediaSocket(entry: MediaSocketEntry): void {
+  if (!isCurrentTabNetworkActive()) return;
+  if (
+    entry.socket?.readyState === WebSocket.CONNECTING ||
+    entry.socket?.readyState === WebSocket.OPEN
+  ) {
+    return;
+  }
+  if (entry.reconnectTimer !== undefined) {
+    clearTimeout(entry.reconnectTimer);
+    entry.reconnectTimer = undefined;
+  }
+  const ws = new WebSocket(
+    buildDeviceFarmWsUrl({ sessionIdSuffix: `media:${entry.serial}` })
+  );
+  entry.socket = ws;
+  entry.watched = false;
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    if (entry.socket !== ws) {
+      try {
+        ws.close();
+      } catch {
+        // stale media socket
+      }
+      return;
+    }
+    entry.reconnectAttempt = 0;
+    sendMediaWatchSerial(entry, true);
+    if (entry.pendingIdr) {
+      entry.pendingIdr = false;
+      sendMediaJson(entry, { type: 'request_idr', serial: entry.serial });
+    }
+  };
+
+  ws.onclose = () => {
+    if (entry.socket !== ws) return;
+    entry.socket = null;
+    entry.watched = false;
+    if (entry.listeners.size > 0 && isCurrentTabNetworkActive()) {
+      const delay = nextReconnectDelayMs(entry.reconnectAttempt);
+      entry.reconnectAttempt += 1;
+      entry.reconnectTimer = setTimeout(() => connectMediaSocket(entry), delay);
+      return;
+    }
+    if (entry.listeners.size === 0) {
+      mediaSocketsBySerial.delete(entry.serial);
+    }
+  };
+
+  ws.onerror = () => {
+    if (entry.socket !== ws) return;
+    ws.close();
+  };
+
+  ws.onmessage = (evt) => {
+    if (entry.socket !== ws) return;
+    if (typeof evt.data === 'string') {
+      try {
+        const parsed = JSON.parse(evt.data) as unknown;
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          'type' in parsed &&
+          (parsed as { type?: unknown }).type === 'ping'
+        ) {
+          sendPongOnSocket(ws, (parsed as { ts?: unknown }).ts);
+        }
+      } catch {
+        // media socket ignores malformed text/control messages
+      }
+      return;
+    }
+    if (evt.data instanceof ArrayBuffer) {
+      handleBinaryFrame(evt.data as ArrayBuffer, entry.listeners);
+    }
+  };
+}
+
+function scheduleMediaSocketIdleClose(entry: MediaSocketEntry): void {
+  if (entry.idleCloseTimer !== undefined) {
+    clearTimeout(entry.idleCloseTimer);
+  }
+  entry.idleCloseTimer = setTimeout(() => {
+    entry.idleCloseTimer = undefined;
+    if (entry.listeners.size > 0) return;
+    sendMediaJson(entry, { type: 'unwatch_serial', serial: entry.serial });
+    try {
+      entry.socket?.close();
+    } catch {
+      // ignore close failure
+    }
+    entry.socket = null;
+    entry.watched = false;
+    mediaSocketsBySerial.delete(entry.serial);
+  }, Math.max(0, MEDIA_WS_IDLE_CLOSE_MS));
+}
+
+function subscribeMediaBinaryFrames(
+  onBinary: (buf: ArrayBuffer) => void,
+  serial: string
+): () => void {
+  const entry = getOrCreateMediaSocketEntry(serial);
+  if (entry.idleCloseTimer !== undefined) {
+    clearTimeout(entry.idleCloseTimer);
+    entry.idleCloseTimer = undefined;
+  }
+  const listener: BinaryListener = { fn: onBinary, serial };
+  entry.listeners.add(listener);
+  connectMediaSocket(entry);
+  const cfg = lastConfigBySerial.get(serial);
+  const key = isCachedKeyFrameStale(serial)
+    ? undefined
+    : lastKeyBySerial.get(serial);
+  const toReplay: ArrayBuffer[] = [];
+  if (cfg) toReplay.push(cfg);
+  if (key) toReplay.push(key);
+  if (toReplay.length > 0) {
+    queueMicrotask(() => {
+      toReplay.forEach((frame) => {
+        try {
+          onBinary(frame.slice(0));
+        } catch {
+          // isolate subscriber errors
+        }
+      });
+    });
+  }
+  return () => {
+    entry.listeners.delete(listener);
+    if (entry.listeners.size === 0) {
+      scheduleMediaSocketIdleClose(entry);
+    }
+  };
 }
 
 function stopClientHeartbeat() {
@@ -495,56 +744,7 @@ function connectShared() {
     if (typeof evt.data === 'string') {
       handleTextMessage(evt.data);
     } else if (evt.data instanceof ArrayBuffer) {
-      const buf = evt.data as ArrayBuffer;
-      let parsedSerial: string | null = null;
-      // Always cache H264 config frames (0x10) for late-arriving binary listeners.
-      // The WS text listener connects first (for device status); the H264 hook
-      // mounts later. Without caching, the bootstrap config frame arrives when
-      // binaryListeners is empty and is silently dropped � decoder never initialises.
-      if (buf.byteLength >= 3) {
-        const view = new DataView(buf);
-        const ft = view.getUint8(0);
-        const slen = view.getUint8(1);
-        if (slen > 0 && buf.byteLength >= 2 + slen) {
-          parsedSerial = decodeSerial(buf, slen);
-          if (ft === 0x10) {
-            if (
-              shouldInvalidateCachedH264KeyForConfig(
-                lastConfigBySerial.get(parsedSerial),
-                buf
-              )
-            ) {
-              lastKeyBySerial.delete(parsedSerial);
-              lastKeyTsBySerial.delete(parsedSerial);
-              waitForKeyBySerial.add(parsedSerial);
-            }
-            // Keep cache ownership stable: listeners may transfer incoming buffers
-            // to workers, which detaches them.
-            lastConfigBySerial.set(parsedSerial, buf.slice(0));
-          } else if (ft === 0x11) {
-            // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
-            // instead of waiting up to 14 s for the next one.
-            if (isH264KeyFrame(buf, slen)) {
-              // Same ownership rule as config cache above.
-              lastKeyBySerial.set(parsedSerial, buf.slice(0));
-              lastKeyTsBySerial.set(parsedSerial, Date.now());
-              waitForKeyBySerial.delete(parsedSerial);
-            } else if (waitForKeyBySerial.has(parsedSerial)) {
-              return;
-            }
-          }
-        }
-      }
-      if (binaryListeners.size > 0) {
-        if (parsedSerial === null && buf.byteLength >= 3) {
-          const view = new DataView(buf);
-          const slen = view.getUint8(1);
-          if (slen > 0 && buf.byteLength >= 2 + slen) {
-            parsedSerial = decodeSerial(buf, slen);
-          }
-        }
-        binaryListeners.dispatch(buf, parsedSerial);
-      }
+      handleBinaryFrame(evt.data as ArrayBuffer, binaryListeners);
     }
   };
 }
@@ -568,6 +768,9 @@ export function subscribeBinaryFrames(
   onBinary: (buf: ArrayBuffer) => void,
   serial?: string
 ): () => void {
+  if (serial && DEDICATED_MEDIA_WS_ENABLED) {
+    return subscribeMediaBinaryFrames(onBinary, serial);
+  }
   const listener: BinaryListener = { fn: onBinary, serial };
   binaryListeners.add(listener);
   if (serial) {
@@ -696,10 +899,32 @@ export function isCachedKeyFrameStale(serial: string): boolean {
  */
 export function requestIdr(serial: string, minIntervalMs = 700): void {
   if (!serial) return;
-  ensureWatchSerial(serial);
   const now = Date.now();
   const last = lastIdrRequestBySerial.get(serial) ?? 0;
   if (!shouldSendIdrRequest(last, now, minIntervalMs)) return;
+  const mediaEntry = mediaSocketsBySerial.get(serial);
+  if (
+    DEDICATED_MEDIA_WS_ENABLED &&
+    mediaEntry &&
+    mediaEntry.listeners.size > 0
+  ) {
+    if (mediaEntry.socket?.readyState === WebSocket.OPEN) {
+      if (
+        sendMediaJson(mediaEntry, {
+          type: 'request_idr',
+          serial
+        })
+      ) {
+        lastIdrRequestBySerial.set(serial, now);
+        return;
+      }
+    }
+    mediaEntry.pendingIdr = true;
+    lastIdrRequestBySerial.set(serial, now);
+    connectMediaSocket(mediaEntry);
+    return;
+  }
+  ensureWatchSerial(serial);
   if (sharedSocket?.readyState === WebSocket.OPEN) {
     try {
       lastIdrRequestBySerial.set(serial, now);

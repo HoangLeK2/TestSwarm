@@ -74,6 +74,8 @@
           "strategy_version": "fb_posts:v1",
           "open_post_before_extract": true,
           "require_open_post_detail": true,
+          "post_open_verify_retries": 1,
+          "post_open_verify_retry_pause_s": 0.18,
           "open_post_press_back_after_extract": false,
           "expand_see_more": true,
           "expand_see_more_max_passes": 2,

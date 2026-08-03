@@ -83,26 +83,51 @@ export type PairPollOut = {
   device?: Record<string, unknown>;
 };
 
-const listDevices = createSingleFlight(() =>
-  farmApi
+const DEVICE_LIST_CACHE_TTL_MS = 2_000;
+let deviceListCache: { expiresAt: number; data: DeviceOut[] } | null = null;
+
+function clearDeviceListCache() {
+  deviceListCache = null;
+}
+
+const listDevices = createSingleFlight(() => {
+  if (deviceListCache && Date.now() < deviceListCache.expiresAt) {
+    return Promise.resolve(deviceListCache.data);
+  }
+  return farmApi
     .get<DeviceOut[]>('/devices', { timeout: DEVICE_POLL_TIMEOUT_MS })
-    .then((r) => r.data)
-);
+    .then((r) => {
+      deviceListCache = {
+        data: r.data,
+        expiresAt: Date.now() + DEVICE_LIST_CACHE_TTL_MS
+      };
+      return r.data;
+    });
+});
 
 export const devicesApi = {
   list: listDevices,
   create: (data: DeviceCreate) =>
-    farmApi.post<DeviceOut>('/devices', data).then((r) => r.data),
+    farmApi.post<DeviceOut>('/devices', data).then((r) => {
+      clearDeviceListCache();
+      return r.data;
+    }),
   register: (body?: { name?: string; description?: string }) =>
     farmApi
       .post<DeviceOut>('/devices/register', body ?? {})
-      .then((r) => r.data),
+      .then((r) => {
+        clearDeviceListCache();
+        return r.data;
+      }),
   sessions: (deviceId: string) =>
     farmApi
       .get<SessionOut[]>(`/devices/${deviceId}/sessions`)
       .then((r) => r.data),
   delete: (deviceId: string) =>
-    farmApi.delete(`/devices/${deviceId}`).then((r) => r.data),
+    farmApi.delete(`/devices/${deviceId}`).then((r) => {
+      clearDeviceListCache();
+      return r.data;
+    }),
   pair: () =>
     farmApi
       .post<{ pairing_id: string; qr_url: string }>('/devices/pair')
@@ -112,7 +137,12 @@ export const devicesApi = {
       .post<{ pairings: PairingOut[] }>('/devices/pair/bulk', { count })
       .then((r) => r.data),
   pollPair: (pairingId: string) =>
-    farmApi.get<PairPollOut>(`/devices/pair/${pairingId}`).then((r) => r.data),
+    farmApi.get<PairPollOut>(`/devices/pair/${pairingId}`).then((r) => {
+      if (r.data.status === 'paired') {
+        clearDeviceListCache();
+      }
+      return r.data;
+    }),
   /** Backend chủ động kết nối tới thiết bị qua ADB TCP. Không cần QR. */
   connectByIp: (ip: string, port = 5555) =>
     farmApi
@@ -120,7 +150,10 @@ export const devicesApi = {
         ok: boolean;
         serial: string;
       }>('/devices/connect-adb', { ip, port })
-      .then((r) => r.data),
+      .then((r) => {
+        clearDeviceListCache();
+        return r.data;
+      }),
   fleetStats: (params?: { group_id?: string; relay_host?: string }) => {
     const qs = new URLSearchParams();
     if (params?.group_id) qs.set('group_id', params.group_id);

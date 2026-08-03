@@ -24,8 +24,11 @@ import json
 import logging
 import os
 import struct
+import time
 import uuid
 from typing import Any, Callable, Dict, Optional, Set
+
+from runtime.stream_telemetry import stream_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,8 @@ class RelayConnection:
         body: str = "",
         content_type: str = "application/json",
         timeout: float = 30.0,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> dict:
         """Send an HTTP proxy request to atx-agent on the remote device, await result."""
         msg_id = str(uuid.uuid4())
@@ -173,6 +178,8 @@ class RelayConnection:
             "body":         body,
             "content_type": content_type,
             "timeout":      max(1.0, float(timeout)),
+            **({"priority": priority} if priority is not None else {}),
+            **({"deadline_ms": deadline_ms} if deadline_ms is not None else {}),
         })
         await self._write_queue.put(msg)
 
@@ -721,6 +728,7 @@ class AdbRelayManager:
                     for key in keys:
                         self._pending_scrcpy.pop(key, None)
                     try:
+                        started = time.perf_counter()
                         receiver.push_frame(
                             data,
                             pts_raw,
@@ -730,13 +738,18 @@ class AdbRelayManager:
                             is_keyframe=is_keyframe,
                             pts=pts,
                         )
+                        stream_telemetry.record_dispatch(
+                            push_ms=(time.perf_counter() - started) * 1000.0
+                        )
                     except Exception as exc:
+                        stream_telemetry.record_dispatch(push_error=True)
                         logger.warning("scrcpy push_frame error serial=%s: %s", serial, exc)
                     return
             if not hasattr(self, "_no_receiver_log_count"):
                 self._no_receiver_log_count = {}
             cnt = self._no_receiver_log_count.get(serial, 0) + 1
             self._no_receiver_log_count[serial] = cnt
+            stream_telemetry.record_dispatch(no_receiver=True)
             if cnt <= 3 or cnt % 300 == 0:
                 if not self._scrcpy_receivers:
                     logger.debug(
@@ -751,9 +764,14 @@ class AdbRelayManager:
                     )
             return
         try:
+            started = time.perf_counter()
             receiver.push_frame(data, pts_raw, width, height,
                                 is_config=is_config, is_keyframe=is_keyframe, pts=pts)
+            stream_telemetry.record_dispatch(
+                push_ms=(time.perf_counter() - started) * 1000.0
+            )
         except Exception as exc:
+            stream_telemetry.record_dispatch(push_error=True)
             logger.warning("scrcpy push_frame error serial=%s: %s", serial, exc)
 
     async def start_scrcpy(
@@ -1031,6 +1049,8 @@ class AdbRelayManager:
         body: str = "",
         content_type: str = "application/json",
         timeout: float = 30.0,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> dict:
         """Proxy an HTTP request to atx-agent (port 7912) on a relay-managed device."""
         conn = self.relay_for_serial(serial)
@@ -1041,7 +1061,16 @@ class AdbRelayManager:
                 "content_type": "",
             }
         actual = self.resolve_serial(serial)
-        return await conn.send_u2_request(actual, method, path, body, content_type, timeout)
+        return await conn.send_u2_request(
+            actual,
+            method,
+            path,
+            body,
+            content_type,
+            timeout,
+            priority=priority,
+            deadline_ms=deadline_ms,
+        )
 
     async def u2_batch(
         self,
@@ -1050,6 +1079,8 @@ class AdbRelayManager:
         early_exit: bool = True,
         timeout: float = 30.0,
         cancel_event: Any = None,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> dict:
         """Send a u2_batch request to agent-boot and await aggregated results."""
         if not actions:
@@ -1093,6 +1124,8 @@ class AdbRelayManager:
                 msg={
                     "type": "u2_batch", "id": req_id, "serial": actual,
                     "schema": 1, "early_exit": early_exit, "actions": actions,
+                    **({"priority": priority} if priority is not None else {}),
+                    **({"deadline_ms": deadline_ms} if deadline_ms is not None else {}),
                 },
                 reply_id=req_id, timeout=timeout,
             )
@@ -1233,9 +1266,14 @@ class AdbRelayManager:
         flow: str,
         params: dict,
         timeout: float = 30.0,
+        priority: str | int | None = None,
+        deadline_ms: int | float | None = None,
     ) -> dict:
         """Send a u2_flow request to agent-boot and await result."""
-        conn = self.relay_for_serial(serial)
+        conn = await self._wait_for_relay(
+            serial,
+            timeout=min(2.0, max(0.0, float(timeout))),
+        )
         if conn is None:
             return {"ok": False, "value": None,
                     "error": f"no relay for serial={serial!r}"}
@@ -1245,6 +1283,8 @@ class AdbRelayManager:
             msg={
                 "type": "u2_flow", "id": req_id, "serial": actual,
                 "flow": flow, "params": params,
+                **({"priority": priority} if priority is not None else {}),
+                **({"deadline_ms": deadline_ms} if deadline_ms is not None else {}),
             },
             reply_id=req_id, timeout=timeout,
         )

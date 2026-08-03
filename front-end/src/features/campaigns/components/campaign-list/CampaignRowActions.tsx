@@ -105,7 +105,9 @@ export function CampaignRowActions({
     () => (entityDetail?.scenario_refs ?? []).map((ref) => ref.scenario_id),
     [entityDetail?.scenario_refs]
   );
-  const { data: orgScenarios = [] } = useOrgScenarios();
+  const { data: orgScenarios = [] } = useOrgScenarios({
+    enabled: dispatchDialogOpen && isEntityCampaign
+  });
   const orgScenarioBodies = useOrgScenarioBodies(
     scenarioRefIds,
     dispatchDialogOpen && isEntityCampaign
@@ -120,10 +122,17 @@ export function CampaignRowActions({
                 | Record<string, unknown>
                 | undefined)
             : undefined;
+        const steps =
+          bodyJson && typeof bodyJson === 'object'
+            ? ((bodyJson as Record<string, unknown>).steps as
+                | unknown[]
+                | undefined)
+            : undefined;
         return {
           id,
           name: orgScenarios.find((row) => row.id === id)?.name ?? id,
-          variables
+          variables,
+          steps
         };
       }),
     [orgScenarioBodies, orgScenarios, scenarioRefIds]

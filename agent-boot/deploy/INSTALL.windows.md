@@ -91,7 +91,10 @@ docker compose down
 
 ## Bootstrap APK
 
-Container chạy **relay** (`--relay-only`). Farm gửi lệnh bootstrap khi máy online (hoặc *Bootstrap all* trên UI). Image có sẵn `/app/assets/apks/` (STF + u2).
+Container chạy **relay** (`--relay-only`). Khi mới cắm phone, agent-boot chỉ
+report serial lên backend; không tự push STF/u2/atx cho phone chưa đăng ký.
+Farm gửi lệnh bootstrap sau khi user đăng ký phone, hoặc khi user bấm
+*Bootstrap all* trên UI. Image có sẵn `/app/assets/apks/` (STF + u2).
 
 ```bat
 docker compose logs -f agent-boot

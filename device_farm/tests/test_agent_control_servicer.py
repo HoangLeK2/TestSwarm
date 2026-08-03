@@ -136,8 +136,14 @@ async def test_start_grpc_server_wires_control_persistence_callbacks(monkeypatch
             self.started = True
 
     fake_server = _FakeServer()
+    captured_options: list[tuple[str, int]] = []
 
-    monkeypatch.setattr(grpc_relay_server.aio, "server", lambda **_kwargs: fake_server)
+    def _fake_aio_server(**kwargs):
+        captured_options.extend(kwargs.get("options") or [])
+        return fake_server
+
+    monkeypatch.setenv("RELAY_GRPC_MAX_MESSAGE_BYTES", str(8 * 1024 * 1024))
+    monkeypatch.setattr(grpc_relay_server.aio, "server", _fake_aio_server)
     monkeypatch.setattr(
         grpc_relay_server.relay_pb2_grpc,
         "add_RelayServiceServicer_to_server",
@@ -172,3 +178,5 @@ async def test_start_grpc_server_wires_control_persistence_callbacks(monkeypatch
     assert svc._on_register is on_register
     assert svc._on_heartbeat is on_heartbeat
     assert svc._on_offline is on_offline
+    assert ("grpc.max_send_message_length", 8 * 1024 * 1024) in captured_options
+    assert ("grpc.max_receive_message_length", 8 * 1024 * 1024) in captured_options

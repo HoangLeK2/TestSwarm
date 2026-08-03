@@ -15,6 +15,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -46,8 +48,11 @@ _SCRCPY_PATH_ON_DEVICE = (
     f"{_SCRCPY_DEVICE_DIR}/scrcpy-server-{_BUNDLED_JAR_VERSION}.jar"
 )
 _SCRCPY_JAR_DEPLOY_CONDITION = threading.Condition()
-_SCRCPY_JAR_DEPLOYING: set[tuple[str, str]] = set()
-_SCRCPY_JAR_READY: dict[tuple[str, str], float] = {}
+_SCRCPY_JAR_DEPLOYING: set[tuple[str, ...]] = set()
+_SCRCPY_JAR_READY: dict[tuple[str, ...], float] = {}
+_BUNDLED_JAR_SHA256: str = ""
+_SCRCPY_OEM_HINTS_LOCK = threading.Lock()
+_SCRCPY_OEM_HINTS: dict[str, tuple[float, tuple[str, str]]] = {}
 
 
 def invalidate_scrcpy_server_jar(serial: str) -> None:
@@ -59,6 +64,22 @@ def invalidate_scrcpy_server_jar(serial: str) -> None:
         stale = [key for key in _SCRCPY_JAR_READY if key[0] == serial]
         for key in stale:
             _SCRCPY_JAR_READY.pop(key, None)
+
+
+def invalidate_scrcpy_oem_hints(serial: str) -> None:
+    serial = str(serial or "").strip()
+    if not serial:
+        return
+    with _SCRCPY_OEM_HINTS_LOCK:
+        _SCRCPY_OEM_HINTS.pop(serial, None)
+
+
+def _bundled_jar_sha256() -> str:
+    """Return a process-local content hash for the bundled scrcpy-server JAR."""
+    global _BUNDLED_JAR_SHA256
+    if not _BUNDLED_JAR_SHA256:
+        _BUNDLED_JAR_SHA256 = hashlib.sha256(_BUNDLED_JAR.read_bytes()).hexdigest()
+    return _BUNDLED_JAR_SHA256
 
 
 def annexb_contains_idr(data: bytes) -> bool:
@@ -73,6 +94,19 @@ def annexb_contains_idr(data: bytes) -> bool:
 def _is_idr(data: bytes) -> bool:
     """Backward-compatible internal wrapper."""
     return annexb_contains_idr(data)
+
+
+def _p95_ms(values: tuple[int, ...]) -> int:
+    """Small windowed p95 helper for already-millisecond counters."""
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[
+        min(
+            len(ordered) - 1,
+            max(0, math.ceil(len(ordered) * 0.95) - 1),
+        )
+    ]
 
 
 def _relay_enqueue(
@@ -102,6 +136,7 @@ def _relay_enqueue(
             serial,
             is_config=is_cfg,
             is_key=is_key,
+            on_drop=on_p_drop,
         )
         if needs_idr and on_p_drop is not None:
             on_p_drop()
@@ -238,6 +273,34 @@ SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 600_000)
 SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS = max(
     0,
     min(3600, _env_int("SCRCPY_SERVER_JAR_VERIFY_TTL_SECONDS", 300)),
+)
+SCRCPY_OEM_HINT_TTL_SECONDS = max(
+    0,
+    min(3600, _env_int("SCRCPY_OEM_HINT_TTL_SECONDS", 900)),
+)
+SCRCPY_GOP_CACHE_MAX_BYTES = max(
+    0,
+    min(8 * 1024 * 1024, _env_int("SCRCPY_GOP_CACHE_MAX_BYTES", 2 * 1024 * 1024)),
+)
+SCRCPY_GOP_CACHE_MAX_FRAMES = max(
+    0,
+    min(240, _env_int("SCRCPY_GOP_CACHE_MAX_FRAMES", 90)),
+)
+SCRCPY_CAPTURE_RESET_STORM_WINDOW_S = max(
+    1,
+    _env_int("SCRCPY_CAPTURE_RESET_STORM_WINDOW_S", 30),
+)
+SCRCPY_CAPTURE_RESET_STORM_MAX = max(
+    1,
+    _env_int("SCRCPY_CAPTURE_RESET_STORM_MAX", 3),
+)
+SCRCPY_STREAM_ERROR_STORM_WINDOW_S = max(
+    1,
+    _env_int("SCRCPY_STREAM_ERROR_STORM_WINDOW_S", 60),
+)
+SCRCPY_STREAM_ERROR_STORM_MAX = max(
+    1,
+    _env_int("SCRCPY_STREAM_ERROR_STORM_MAX", 2),
 )
 
 
@@ -392,6 +455,20 @@ def prepare_video_packet(
     )
 
 
+def _clone_video_packet_for_replay(packet: VideoPacket) -> VideoPacket:
+    """Clone a cached packet with fresh local timing for queue-age metrics."""
+    return VideoPacket(
+        serial=packet.serial,
+        data=packet.data,
+        is_config=packet.is_config,
+        is_key=packet.is_key,
+        pts_us=packet.pts_us,
+        width=packet.width,
+        height=packet.height,
+        received_ns=time.monotonic_ns(),
+    )
+
+
 def _recvall(sock: socket.socket, n: int) -> bytes:
     buf = bytearray()
     while len(buf) < n:
@@ -477,6 +554,7 @@ class ScrcpyRelaySession:
         bitrate: int = 2_000_000,
         low_latency: bool = False,
         on_fatal: Optional[Callable[[str, str], None]] = None,
+        on_health: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self._serial         = serial
         self._jar_version    = _BUNDLED_JAR_VERSION
@@ -514,6 +592,7 @@ class ScrcpyRelaySession:
         self._device_width:  int = 0
         self._device_height: int = 0
         self._on_fatal = on_fatal
+        self._on_health = on_health
         self._oem_hint: str = ""
         self._model_hint: str = ""
         # Set to True (from asyncio thread) when a P-frame is dropped from the
@@ -522,6 +601,15 @@ class ScrcpyRelaySession:
         self._need_idr: bool = False
         self._last_idr_request_t: float = 0.0  # rate-limit to 1 IDR per 0.5s
         self._downstream_recovery = threading.Event()
+        self._forwarding_enabled = threading.Event()
+        self._forwarding_enabled.set()
+        self._forwarding_state_lock = threading.Lock()
+        self._forwarding_paused_reason: str = ""
+        self._gop_cache_lock = threading.Lock()
+        self._gop_config_packet: VideoPacket | None = None
+        self._gop_key_packet: VideoPacket | None = None
+        self._gop_delta_packets: deque[VideoPacket] = deque()
+        self._gop_cache_bytes: int = 0
         # Approximate operational counters. The relay thread is the sole
         # producer; the asyncio stats logger reads/resets once per interval.
         self._stats_started_at: float = 0.0
@@ -531,12 +619,28 @@ class ScrcpyRelaySession:
         self._stats_idr_recovery_samples_ms: list[int] = []
         self._stats_idr_pending_since: float = 0.0
         self._stats_producer_suppressed_total: int = 0
+        self._stats_start_requested_at: float = 0.0
+        self._stats_initial_handshake_recorded = False
+        self._stats_initial_first_frame_recorded = False
+        self._stats_connect_to_handshake_ms: list[int] = []
+        self._stats_connect_to_first_frame_ms: list[int] = []
+        self._stats_start_to_handshake_ms: list[int] = []
+        self._stats_start_to_first_frame_ms: list[int] = []
+        self._stats_gop_replay_packets_total: int = 0
+        self._stats_capture_resets_total: int = 0
+        self._stats_stream_errors_total: int = 0
         self._stats_lock = threading.Lock()
         self._stats_snapshot_at: float = 0.0
         self._stats_snapshot_frames: int = 0
         self._stats_snapshot_idr_requests: int = 0
         self._stats_snapshot_idr_recoveries: int = 0
         self._stats_snapshot_producer_suppressed: int = 0
+        self._stats_snapshot_gop_replay_packets: int = 0
+        self._stats_snapshot_capture_resets: int = 0
+        self._stats_snapshot_stream_errors: int = 0
+        self._capture_reset_events: deque[float] = deque()
+        self._stream_error_events: deque[float] = deque()
+        self._health_signals_emitted: set[str] = set()
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -552,6 +656,10 @@ class ScrcpyRelaySession:
 
         self._stream_ready.clear()
         self._running = True
+        with self._stats_lock:
+            self._stats_start_requested_at = time.monotonic()
+            self._stats_initial_handshake_recorded = False
+            self._stats_initial_first_frame_recorded = False
         self._relay_thread = threading.Thread(
             target=self._relay_loop,
             daemon=True,
@@ -665,6 +773,54 @@ class ScrcpyRelaySession:
         """Record an encoded frame for windowed stream-health metrics."""
         self._record_video_frame(is_key=is_key, now=now)
 
+    def _record_capture_reset(self) -> None:
+        with self._stats_lock:
+            self._stats_capture_resets_total += 1
+        self._record_health_event(
+            self._capture_reset_events,
+            window_s=SCRCPY_CAPTURE_RESET_STORM_WINDOW_S,
+            max_events=SCRCPY_CAPTURE_RESET_STORM_MAX,
+            reason="capture_reset_storm",
+        )
+
+    def _record_stream_error(self) -> None:
+        with self._stats_lock:
+            self._stats_stream_errors_total += 1
+        self._record_health_event(
+            self._stream_error_events,
+            window_s=SCRCPY_STREAM_ERROR_STORM_WINDOW_S,
+            max_events=SCRCPY_STREAM_ERROR_STORM_MAX,
+            reason="stream_error_storm",
+        )
+
+    def _record_health_event(
+        self,
+        events: deque[float],
+        *,
+        window_s: int,
+        max_events: int,
+        reason: str,
+    ) -> None:
+        now = time.monotonic()
+        cutoff = now - float(window_s)
+        should_emit = False
+        with self._stats_lock:
+            events.append(now)
+            while events and events[0] < cutoff:
+                events.popleft()
+            if (
+                len(events) >= max_events
+                and reason not in self._health_signals_emitted
+            ):
+                self._health_signals_emitted.add(reason)
+                should_emit = True
+        if not should_emit or self._on_health is None:
+            return
+        try:
+            self._on_health(self._serial, reason)
+        except Exception as exc:
+            logger.debug("[%s] on_health callback failed: %s", self._serial, exc)
+
     def stats_snapshot(
         self,
         *,
@@ -727,6 +883,49 @@ class ScrcpyRelaySession:
             "producer_suppressed": producer_suppressed,
             "max_fps_cap_x100": self._max_fps * 100,
         }
+        with self._stats_lock:
+            connect_to_handshake = tuple(self._stats_connect_to_handshake_ms)
+            connect_to_first_frame = tuple(self._stats_connect_to_first_frame_ms)
+            start_to_handshake = tuple(self._stats_start_to_handshake_ms)
+            start_to_first_frame = tuple(self._stats_start_to_first_frame_ms)
+            gop_replay_packets_total = self._stats_gop_replay_packets_total
+            capture_resets_total = self._stats_capture_resets_total
+            stream_errors_total = self._stats_stream_errors_total
+            gop_replay_packets = (
+                gop_replay_packets_total
+                - self._stats_snapshot_gop_replay_packets
+            )
+            capture_resets = (
+                capture_resets_total
+                - self._stats_snapshot_capture_resets
+            )
+            stream_errors = (
+                stream_errors_total
+                - self._stats_snapshot_stream_errors
+            )
+            if reset:
+                self._stats_connect_to_handshake_ms.clear()
+                self._stats_connect_to_first_frame_ms.clear()
+                self._stats_start_to_handshake_ms.clear()
+                self._stats_start_to_first_frame_ms.clear()
+                self._stats_snapshot_gop_replay_packets = (
+                    gop_replay_packets_total
+                )
+                self._stats_snapshot_capture_resets = capture_resets_total
+                self._stats_snapshot_stream_errors = stream_errors_total
+        stats.update({
+            "connect_to_handshake_p95_ms": _p95_ms(connect_to_handshake),
+            "connect_to_handshake_max_ms": max(connect_to_handshake, default=0),
+            "connect_to_first_frame_p95_ms": _p95_ms(connect_to_first_frame),
+            "connect_to_first_frame_max_ms": max(connect_to_first_frame, default=0),
+            "start_to_handshake_p95_ms": _p95_ms(start_to_handshake),
+            "start_to_handshake_max_ms": max(start_to_handshake, default=0),
+            "start_to_first_frame_p95_ms": _p95_ms(start_to_first_frame),
+            "start_to_first_frame_max_ms": max(start_to_first_frame, default=0),
+            "gop_replay_packets": gop_replay_packets,
+            "capture_resets": capture_resets,
+            "stream_errors": stream_errors,
+        })
         if reset:
             # Counters stay monotonic so a producer racing this snapshot cannot
             # be zeroed out and lost; only the observation baseline advances.
@@ -736,6 +935,48 @@ class ScrcpyRelaySession:
                 producer_suppressed_total
             )
         return stats
+
+    def _record_stream_handshake_latency(
+        self,
+        *,
+        now: float,
+        connect_started: float,
+    ) -> None:
+        connect_ms = max(0, round((now - connect_started) * 1_000))
+        with self._stats_lock:
+            self._stats_connect_to_handshake_ms.append(connect_ms)
+            if (
+                not self._stats_initial_handshake_recorded
+                and self._stats_start_requested_at > 0.0
+            ):
+                self._stats_start_to_handshake_ms.append(
+                    max(
+                        0,
+                        round((now - self._stats_start_requested_at) * 1_000),
+                    )
+                )
+                self._stats_initial_handshake_recorded = True
+
+    def _record_first_frame_latency(
+        self,
+        *,
+        now: float,
+        connect_started: float,
+    ) -> None:
+        connect_ms = max(0, round((now - connect_started) * 1_000))
+        with self._stats_lock:
+            self._stats_connect_to_first_frame_ms.append(connect_ms)
+            if (
+                not self._stats_initial_first_frame_recorded
+                and self._stats_start_requested_at > 0.0
+            ):
+                self._stats_start_to_first_frame_ms.append(
+                    max(
+                        0,
+                        round((now - self._stats_start_requested_at) * 1_000),
+                    )
+                )
+                self._stats_initial_first_frame_recorded = True
 
     def _wake_display(self) -> None:
         """Best-effort wake — Samsung/Exynos often ACK RESET_VIDEO but emit no frames while dozing."""
@@ -760,6 +1001,110 @@ class ScrcpyRelaySession:
     def notify_downstream_resynced(self) -> None:
         """Leave decoder recovery after a keyframe is admitted."""
         self._mark_downstream_resynced()
+
+    def _remember_gop_frame(self, frame: VideoPacket) -> None:
+        """Keep one decodable GOP for fast warm reattach.
+
+        The cache is updated from the relay thread even while forwarding is
+        paused. It never stores a partial delta-only chain: if the delta chain
+        exceeds limits, only the latest keyframe/config remain cached.
+        """
+        if SCRCPY_GOP_CACHE_MAX_BYTES <= 0 or SCRCPY_GOP_CACHE_MAX_FRAMES <= 0:
+            return
+        size = len(frame.data)
+        with self._gop_cache_lock:
+            if frame.is_config:
+                self._gop_config_packet = frame
+                return
+            if frame.is_key:
+                self._gop_key_packet = frame
+                self._gop_delta_packets.clear()
+                self._gop_cache_bytes = size
+                return
+            if self._gop_key_packet is None:
+                return
+            if (
+                len(self._gop_delta_packets) >= SCRCPY_GOP_CACHE_MAX_FRAMES
+                or self._gop_cache_bytes + size > SCRCPY_GOP_CACHE_MAX_BYTES
+            ):
+                self._gop_delta_packets.clear()
+                self._gop_cache_bytes = len(self._gop_key_packet.data)
+                return
+            self._gop_delta_packets.append(frame)
+            self._gop_cache_bytes += size
+
+    def _cached_gop_snapshot(self) -> tuple[VideoPacket, ...]:
+        with self._gop_cache_lock:
+            packets: list[VideoPacket] = []
+            if self._gop_config_packet is not None:
+                packets.append(self._gop_config_packet)
+            if self._gop_key_packet is not None:
+                packets.append(self._gop_key_packet)
+                packets.extend(self._gop_delta_packets)
+        return tuple(_clone_video_packet_for_replay(packet) for packet in packets)
+
+    def _replay_cached_gop(self, *, reason: str) -> int:
+        packets = self._cached_gop_snapshot()
+        if not packets or self._loop is None:
+            return 0
+        with self._stats_lock:
+            self._stats_gop_replay_packets_total += len(packets)
+        for packet in packets:
+            self._loop.call_soon_threadsafe(
+                enqueue_video_packet,
+                self._send_queue,
+                packet,
+                self.notify_downstream_drop,
+                self.notify_downstream_resynced,
+            )
+        logger.info(
+            "[%s] replayed cached GOP packets=%d (%s)",
+            self._serial,
+            len(packets),
+            reason,
+        )
+        return len(packets)
+
+    def pause_forwarding(self, *, reason: str = "warm_idle") -> None:
+        """Drain scrcpy sockets without forwarding frames to the transport.
+
+        Used for warm idle sessions after the last browser viewer detaches.
+        The relay thread keeps reading video so flow control does not back up
+        into ADB/scrcpy-server/MediaCodec, but frames are not enqueued while no
+        backend/browser receiver is expected to consume them.
+        """
+        with self._forwarding_state_lock:
+            self._forwarding_paused_reason = reason
+            self._forwarding_enabled.clear()
+
+    def resume_forwarding(
+        self,
+        *,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+        reason: str = "scrcpy_start",
+    ) -> None:
+        """Resume forwarding on an existing warm/live session.
+
+        The queue/loop may change after a relay transport reconnect, so update
+        them before enabling output. We then discard deltas until the next
+        keyframe to avoid resuming a non-decodable H.264 chain.
+        """
+        with self._forwarding_state_lock:
+            self._send_queue = send_queue
+            self._loop = loop
+            self._forwarding_paused_reason = ""
+            self._downstream_recovery.set()
+            self._need_idr = False
+            self._forwarding_enabled.set()
+        replayed = self._replay_cached_gop(reason=reason)
+        logger.info("[%s] scrcpy forwarding resumed (%s)", self._serial, reason)
+        if replayed <= 0:
+            logger.debug("[%s] no cached GOP available on resume", self._serial)
+
+    @property
+    def forwarding_enabled(self) -> bool:
+        return self._forwarding_enabled.is_set()
 
     @property
     def recovery_pending(self) -> bool:
@@ -853,6 +1198,7 @@ class ScrcpyRelaySession:
                 except Exception as exc:
                     if not self._running:
                         break
+                    self._record_stream_error()
 
                     # A session that streamed successfully for >10s then died is
                     # a normal transient stall (idle encoder, WiFi blip). Reset
@@ -935,14 +1281,35 @@ class ScrcpyRelaySession:
         """Best-effort OEM/model detection (cached per session)."""
         if self._oem_hint and self._model_hint:
             return self._oem_hint, self._model_hint
+        now = time.monotonic()
+        if SCRCPY_OEM_HINT_TTL_SECONDS > 0:
+            with _SCRCPY_OEM_HINTS_LOCK:
+                cached = _SCRCPY_OEM_HINTS.get(self._serial)
+                if cached and now - cached[0] < SCRCPY_OEM_HINT_TTL_SECONDS:
+                    self._oem_hint, self._model_hint = cached[1]
+                    return self._oem_hint, self._model_hint
         oem = ""
         model = ""
-        out_oem, _ = _adb("shell", "getprop ro.product.brand", serial=self._serial, timeout=4)
-        out_model, _ = _adb("shell", "getprop ro.product.model", serial=self._serial, timeout=4)
-        oem = (out_oem or "").strip().splitlines()[-1].strip().lower() if out_oem.strip() else ""
-        model = (out_model or "").strip().splitlines()[-1].strip().lower() if out_model.strip() else ""
+        out, _ = _adb(
+            "shell",
+            "printf '__DF__brand=%s\\n' \"$(getprop ro.product.brand)\"; "
+            "printf '__DF__model=%s\\n' \"$(getprop ro.product.model)\"",
+            serial=self._serial,
+            timeout=4,
+        )
+        for line in (out or "").splitlines():
+            if line.startswith("__DF__brand="):
+                oem = line.split("=", 1)[1].strip().lower()
+            elif line.startswith("__DF__model="):
+                model = line.split("=", 1)[1].strip().lower()
         self._oem_hint = oem
         self._model_hint = model
+        if SCRCPY_OEM_HINT_TTL_SECONDS > 0 and (oem or model):
+            with _SCRCPY_OEM_HINTS_LOCK:
+                _SCRCPY_OEM_HINTS[self._serial] = (
+                    time.monotonic(),
+                    (self._oem_hint, self._model_hint),
+                )
         return self._oem_hint, self._model_hint
 
     def _ensure_server_jar_on_device(self) -> None:
@@ -955,7 +1322,7 @@ class ScrcpyRelaySession:
         bootstrap bundle extraction, and temp+rename prevents a reconnect from
         observing a partial push.
         """
-        deployment_key = (self._serial, self._jar_version)
+        deployment_key = (self._serial, self._jar_version, _bundled_jar_sha256())
         with _SCRCPY_JAR_DEPLOY_CONDITION:
             while deployment_key in _SCRCPY_JAR_DEPLOYING:
                 _SCRCPY_JAR_DEPLOY_CONDITION.wait()
@@ -1192,6 +1559,8 @@ class ScrcpyRelaySession:
                             "",
                         )
                         if noisy_key:
+                            if noisy_key == "INFO: Video capture reset":
+                                self._record_capture_reset()
                             now = time.monotonic()
                             last = noisy_last_logged.get(noisy_key, 0.0)
                             if now - last < 30.0:
@@ -1225,6 +1594,7 @@ class ScrcpyRelaySession:
         """Connect sockets, read handshake, then stream H264 frames until error."""
 
         fwd_host = _adb_forward_host()
+        connect_started = time.monotonic()
 
         # 1. Connect video socket — poll until scrcpy binds localabstract:scrcpy.
         #    _connect_with_retry retries until scrcpy accepts OR timeout expires.
@@ -1265,6 +1635,11 @@ class ScrcpyRelaySession:
             self._device_width  = w
             self._device_height = h
         self._stream_ready.set()
+        handshake_at = time.monotonic()
+        self._record_stream_handshake_latency(
+            now=handshake_at,
+            connect_started=connect_started,
+        )
         logger.info("[%s] handshake OK — %dx%d", self._serial, self._device_width, self._device_height)
         # Browser requests can arrive before this new session has a control
         # socket and are therefore best-effort no-ops. Request the bootstrap
@@ -1291,6 +1666,7 @@ class ScrcpyRelaySession:
         #     reconnects the session.
         video_sock.settimeout(_IDR_REQUEST_AFTER)
         saw_video_frame = False
+        first_forwardable_frame_recorded = False
         last_good_frame = time.monotonic()
         idr_wait_started = 0.0
         idr_window_start = 0.0
@@ -1434,13 +1810,24 @@ class ScrcpyRelaySession:
                 idr_window_start = 0.0
                 idr_request_count = 0
 
-                self.last_frame_time = time.monotonic()
+                self.last_frame_time = last_good_frame
                 self.record_video_frame(
                     is_key=frame.is_key,
                     now=last_good_frame,
                 )
+                if not first_forwardable_frame_recorded:
+                    self._record_first_frame_latency(
+                        now=last_good_frame,
+                        connect_started=connect_started,
+                    )
+                    first_forwardable_frame_recorded = True
 
             if frame is None:
+                continue
+
+            self._remember_gop_frame(frame)
+
+            if not self._forwarding_enabled.is_set():
                 continue
 
             # Dispatch via module-level function. Pass _mark_idr_needed so the

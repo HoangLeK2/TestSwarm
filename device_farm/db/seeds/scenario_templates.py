@@ -32,6 +32,8 @@ from typing import Any, Dict, List
 _FB_POST_OPEN_EXTRACT: Dict[str, Any] = {
     "open_post_before_extract": True,
     "open_post_press_back_after_extract": False,
+    "post_open_verify_retries": 1,
+    "post_open_verify_retry_pause_s": 0.18,
 }
 
 # Sau extract comments — đóng sheet/detail để quay lại feed trước vòng kế tiếp.

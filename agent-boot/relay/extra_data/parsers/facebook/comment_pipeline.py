@@ -1702,6 +1702,30 @@ def _extract_comment_sheet_post_stats(root, action_btn_y2: Optional[int]) -> Opt
     return action_stats
 
 
+def _related_groups_section_top(nodes: List[Dict[str, Any]]) -> Optional[int]:
+    """Top edge of FB's related-groups module inside a comment sheet."""
+    heading_tokens = (
+        "nhóm liên quan",
+        "các nhóm liên quan",
+        "cac nhom lien quan",
+        "related groups",
+        "suggested groups",
+    )
+    for node in nodes:
+        text = str(node.get("text") or "").strip()
+        if not text:
+            continue
+        normalized = text.casefold()
+        if len(normalized) > 48:
+            continue
+        bounds = node.get("bounds") or [0, 0, 0, 0]
+        if int(bounds[0]) > 180:
+            continue
+        if any(token in normalized for token in heading_tokens):
+            return int(bounds[1])
+    return None
+
+
 def parse_fb_comments_from_xml_with_diagnostic(
     xml: str,
     parent_post_id: Optional[str] = None,
@@ -1796,6 +1820,15 @@ def parse_fb_comments_from_xml_with_diagnostic(
     anchor_found = action_btn_y2 is not None
     screen_w, screen_h = _infer_screen_size(root)
     comment_x_max = max(380, int(screen_w * 0.76))
+    related_groups_top = _related_groups_section_top(all_nodes)
+    if related_groups_top is not None and (
+        action_btn_y2 is None or related_groups_top > action_btn_y2
+    ):
+        comment_y_max = (
+            related_groups_top
+            if comment_y_max is None
+            else min(comment_y_max, related_groups_top)
+        )
     post_stats = _extract_comment_sheet_post_stats(root, action_btn_y2)
 
     def _include_comment_text_node(n: Dict[str, Any]) -> bool:
@@ -1912,6 +1945,7 @@ def parse_fb_comments_from_xml_with_diagnostic(
         "screen_size": [screen_w, screen_h],
         "locale_tokens_hit": [],
         "has_header_stats": bool(post_stats),
+        "related_groups_cutoff_y": related_groups_top,
         "parse_mode": "feed_inline" if feed_inline else "comment_sheet",
         "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
     }

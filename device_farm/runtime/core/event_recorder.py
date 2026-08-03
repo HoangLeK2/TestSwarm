@@ -124,9 +124,70 @@ class EventRecorder:
                     extra_data=entry.get("extra_data"),
                 )
                 db.add(obj)
+                try:
+                    await self._sync_device_fsm(db, entry)
+                except Exception as exc:
+                    log.warning(
+                        "EventRecorder FSM sync failed serial=%s event=%s: %s",
+                        entry.get("serial"),
+                        entry.get("event"),
+                        exc,
+                    )
                 await db.commit()
         except Exception as exc:
             log.warning("EventRecorder DB write failed: %s", exc)
+
+    async def _sync_device_fsm(self, db, entry: dict) -> None:
+        """Bridge legacy runtime READY events into the dispatch FSM snapshot."""
+        event = str(entry.get("event") or "").strip()
+        if event not in {"connected", "reconnected"}:
+            return
+
+        serial = str(entry.get("serial") or "").strip()
+        if not serial:
+            return
+
+        from db.crud.device import get_device_by_serial
+        from db.models.enums import DeviceFsmEvent, DeviceFsmState
+        from services.device_state.service import DeviceStateService
+
+        device = await get_device_by_serial(db, serial)
+        if device is None:
+            return
+
+        svc = DeviceStateService()
+        current = await svc.get_state(db, device.id)
+        event_id = str(entry.get("id") or "")
+        payload = {
+            "serial": serial,
+            "runtime_event": event,
+            "old_state": entry.get("old_state"),
+            "new_state": entry.get("new_state"),
+        }
+
+        if current in (DeviceFsmState.ONLINE, DeviceFsmState.BUSY):
+            return
+
+        if current in (DeviceFsmState.UNKNOWN, DeviceFsmState.DEAD):
+            attached = await svc.apply_event(
+                db,
+                device.id,
+                event=DeviceFsmEvent.ATTACHED.value,
+                source="agent",
+                event_id=f"runtime-{event_id}-attached" if event_id else None,
+                payload=payload,
+            )
+            current = attached.state
+
+        if current in (DeviceFsmState.CONNECTING, DeviceFsmState.RECONNECTING):
+            await svc.apply_event(
+                db,
+                device.id,
+                event=DeviceFsmEvent.ONLINE.value,
+                source="agent",
+                event_id=f"runtime-{event_id}-online" if event_id else None,
+                payload=payload,
+            )
 
     async def cleanup_old_events(self, keep_days: int = 30) -> int:
         """Delete events older than keep_days. Returns count deleted."""

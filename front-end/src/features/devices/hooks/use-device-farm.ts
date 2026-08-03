@@ -18,6 +18,7 @@ const LIVE_DEVICE_REFRESH_MS = 5_000;
 type UseDeviceFarmOptions = {
   liveRefreshMs?: number | false;
   loadTasks?: boolean;
+  loadRegisteredDevices?: boolean;
   refreshRegisteredOnFocus?: boolean;
   liveSnapshotAuthoritative?: boolean;
 };
@@ -25,6 +26,7 @@ type UseDeviceFarmOptions = {
 export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   const liveRefreshMs = options.liveRefreshMs ?? LIVE_DEVICE_REFRESH_MS;
   const loadTasks = options.loadTasks ?? true;
+  const loadRegisteredDevices = options.loadRegisteredDevices ?? true;
   const refreshRegisteredOnFocus = options.refreshRegisteredOnFocus ?? true;
   const liveSnapshotAuthoritative = options.liveSnapshotAuthoritative ?? false;
   const [devices, setDevices] = useState<Device[]>([]);
@@ -68,13 +70,14 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   }, [currentOrgId, tabActive]);
 
   const refreshRegisteredDevices = useCallback(() => {
+    if (!loadRegisteredDevices) return;
     if (!tabActive) return;
     if (!currentOrgId) return;
     devicesApi
       .list()
       .then((list) => setRegisteredDevices(list))
       .catch(() => {});
-  }, [currentOrgId, tabActive]);
+  }, [currentOrgId, loadRegisteredDevices, tabActive]);
 
   useEffect(() => {
     refreshDevices();
@@ -98,20 +101,21 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         refreshDevices();
-        if (refreshRegisteredOnFocus) refreshRegisteredDevices();
+        if (loadRegisteredDevices && refreshRegisteredOnFocus)
+          refreshRegisteredDevices();
         refreshTasks();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', refreshDevices);
-    if (refreshRegisteredOnFocus) {
+    if (loadRegisteredDevices && refreshRegisteredOnFocus) {
       window.addEventListener('focus', refreshRegisteredDevices);
     }
     window.addEventListener('focus', refreshTasks);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', refreshDevices);
-      if (refreshRegisteredOnFocus) {
+      if (loadRegisteredDevices && refreshRegisteredOnFocus) {
         window.removeEventListener('focus', refreshRegisteredDevices);
       }
       window.removeEventListener('focus', refreshTasks);
@@ -119,6 +123,7 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   }, [
     refreshDevices,
     refreshRegisteredDevices,
+    loadRegisteredDevices,
     refreshRegisteredOnFocus,
     refreshTasks
   ]);
@@ -153,15 +158,17 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
             liveSnapshotAuthoritative
           });
         });
-        // If we see a new device via WebSocket that is now registered, update serial set
-        setRegisteredDevices((prev) => {
-          if (prev.some((d) => d.serial === msg.serial)) return prev;
-          devicesApi
-            .list()
-            .then((list) => setRegisteredDevices(list))
-            .catch(() => {});
-          return prev;
-        });
+        if (loadRegisteredDevices) {
+          // If we see a new device via WebSocket that is now registered, update serial set
+          setRegisteredDevices((prev) => {
+            if (prev.some((d) => d.serial === msg.serial)) return prev;
+            devicesApi
+              .list()
+              .then((list) => setRegisteredDevices(list))
+              .catch(() => {});
+            return prev;
+          });
+        }
         return;
       }
 
@@ -195,7 +202,12 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [liveSnapshotAuthoritative, refreshDevices, tabActive]);
+  }, [
+    liveSnapshotAuthoritative,
+    loadRegisteredDevices,
+    refreshDevices,
+    tabActive
+  ]);
 
   const handleToggleMode = useCallback((serial: string) => {
     setModes((prev) => ({

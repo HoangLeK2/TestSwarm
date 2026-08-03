@@ -41,12 +41,18 @@ export function listSourcePoolOptions(
   );
 }
 
-export function buildSourcePoolInput(key: string, search: string) {
+export function buildSourcePoolInput(
+  key: string,
+  search: string,
+  outputPrefix?: string | null
+) {
   const [platform = '', entityType = ''] = key.split('::', 2);
   const trimmedSearch = search.trim();
+  const trimmedOutputPrefix = outputPrefix?.trim();
   return {
     platform,
     entity_type: entityType,
-    ...(trimmedSearch ? { search: trimmedSearch } : {})
+    ...(trimmedSearch ? { search: trimmedSearch } : {}),
+    ...(trimmedOutputPrefix ? { output_prefix: trimmedOutputPrefix } : {})
   };
 }

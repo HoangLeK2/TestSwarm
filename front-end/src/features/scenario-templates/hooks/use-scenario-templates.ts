@@ -10,6 +10,7 @@ const KEYS = {
   list: ['scenario-templates'] as const,
   detail: (id: string) => ['scenario-templates', id] as const
 };
+const CATALOG_STALE_MS = 30_000;
 
 export function useScenarioTemplates(
   query?: {
@@ -23,6 +24,7 @@ export function useScenarioTemplates(
   return useQuery({
     queryKey: [...KEYS.list, query] as const,
     queryFn: () => scenarioTemplatesApi.list(query),
+    staleTime: CATALOG_STALE_MS,
     enabled: options?.enabled ?? true
   });
 }

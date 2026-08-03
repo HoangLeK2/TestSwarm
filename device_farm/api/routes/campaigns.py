@@ -654,6 +654,7 @@ async def preview_campaign_dispatch_route(
             entity_type=body.source_pool.entity_type,
             search=body.source_pool.search,
             statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+            output_prefix=body.source_pool.output_prefix,
         )
         if body.source_pool is not None
         else None
@@ -742,6 +743,7 @@ async def dispatch_campaign_route(
             entity_type=body.source_pool.entity_type,
             search=body.source_pool.search,
             statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+            output_prefix=body.source_pool.output_prefix,
         )
         if body.source_pool is not None
         else None

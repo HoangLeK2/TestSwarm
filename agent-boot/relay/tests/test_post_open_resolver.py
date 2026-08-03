@@ -30,6 +30,76 @@ def _feed_card_xml(
 </hierarchy>"""
 
 
+def _many_feed_cards_xml(count: int = 24) -> str:
+    cards: list[str] = []
+    for idx in range(count):
+        y = 260 + idx * 360
+        cards.append(
+            f"""
+      <node class="android.view.ViewGroup" bounds="[0,{y}][1080,{y + 320}]">
+        <node class="android.widget.TextView" text="Author {idx}" bounds="[132,{y + 20}][520,{y + 64}]" clickable="false"/>
+        <node class="android.widget.TextView" text="{idx} giờ" bounds="[132,{y + 72}][280,{y + 108}]" clickable="true"/>
+        <node class="android.view.ViewGroup" content-desc="Post body {idx} for opening detail view" bounds="[36,{y + 130}][1044,{y + 230}]" clickable="true" focusable="true"/>
+        <node class="android.widget.Button" content-desc="Nút Bình luận" text="Bình luận" bounds="[360,{y + 250}][520,{y + 310}]" clickable="true"/>
+      </node>"""
+        )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1080,9600]">
+    <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,9400]">
+{''.join(cards)}
+    </node>
+  </node>
+</hierarchy>"""
+
+
+def test_resolve_uses_bounded_center_scan(monkeypatch) -> None:
+    xml = _many_feed_cards_xml()
+    post_open_pipeline._POST_OPEN_RESOLVE_CACHE.clear()
+    original = post_open_pipeline._build_post_open_candidate
+    build_count = 0
+
+    def counted_build(*args, **kwargs):
+        nonlocal build_count
+        build_count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(post_open_pipeline, "_build_post_open_candidate", counted_build)
+
+    top, _ = post_open_pipeline.resolve_post_open_targets_from_xml(
+        xml,
+        max_candidates=1,
+        max_scan_elements=3,
+    )
+
+    assert top is not None
+    assert build_count <= 4
+
+
+def test_resolve_reuses_cache_for_same_xml_and_exclusions(monkeypatch) -> None:
+    xml = _many_feed_cards_xml()
+    post_open_pipeline._POST_OPEN_RESOLVE_CACHE.clear()
+    original = post_open_pipeline._build_post_open_candidate
+    build_count = 0
+
+    def counted_build(*args, **kwargs):
+        nonlocal build_count
+        build_count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(post_open_pipeline, "_build_post_open_candidate", counted_build)
+
+    first, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+    first_build_count = build_count
+    second, _ = post_open_pipeline.resolve_post_open_targets_from_xml(xml)
+
+    assert first is not None
+    assert second is not None
+    assert second == first
+    assert first_build_count > 0
+    assert build_count == first_build_count
+
+
 def test_resolve_prefers_timestamp_metadata_over_geometric() -> None:
     xml = _feed_card_xml(
         author="Vũ Duy Mạnh",

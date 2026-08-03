@@ -40,6 +40,107 @@ async def _get_ui_elements(xml: str) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_ui_elements_request_uses_visible_hierarchy_lane() -> None:
+    device = Mock()
+    device.hierarchy_xml.return_value = "<hierarchy />"
+    manager = Mock()
+    manager.get_device.return_value = device
+    app = FastAPI()
+    app.include_router(build_device_ui_router(manager), prefix="/api")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/devices/test-serial/ui_elements?refresh=1")
+
+    assert resp.status_code == 200
+    device.hierarchy_xml.assert_called_once_with(
+        force_refresh=True,
+        priority="visible",
+        deadline_ms=1500,
+    )
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_request_uses_visible_hierarchy_lane() -> None:
+    device = Mock()
+    device.hierarchy_xml.return_value = "<hierarchy />"
+    manager = Mock()
+    manager.get_device.return_value = device
+    app = FastAPI()
+    app.include_router(build_device_ui_router(manager), prefix="/api")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.get(
+            "/api/devices/test-serial/hierarchy?refresh=1&priority=visible"
+        )
+
+    assert resp.status_code == 200
+    device.hierarchy_xml.assert_called_once_with(
+        force_refresh=True,
+        priority="visible",
+        deadline_ms=1500,
+    )
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_request_defaults_to_background_hierarchy_lane() -> None:
+    device = Mock()
+    device.hierarchy_xml.return_value = "<hierarchy />"
+    manager = Mock()
+    manager.get_device.return_value = device
+    app = FastAPI()
+    app.include_router(build_device_ui_router(manager), prefix="/api")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/devices/test-serial/hierarchy?refresh=1")
+
+    assert resp.status_code == 200
+    device.hierarchy_xml.assert_called_once_with(
+        force_refresh=True,
+        priority=None,
+        deadline_ms=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_hit_test_request_uses_visible_hierarchy_lane() -> None:
+    device = Mock()
+    device.screen_width = 100
+    device.screen_height = 200
+    device.hit_test_selector.return_value = {"by": "text", "value": "OK"}
+    manager = Mock()
+    manager.get_device.return_value = device
+    app = FastAPI()
+    app.include_router(build_device_ui_router(manager), prefix="/api")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/api/devices/test-serial/hit_test",
+            json={"x": 10, "y": 20},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"by": "text", "value": "OK"}
+    device.hit_test_selector.assert_called_once_with(
+        10,
+        20,
+        priority="visible",
+        deadline_ms=1500,
+    )
+
+
+@pytest.mark.asyncio
 async def test_ui_elements_avoids_duplicate_resource_id_when_text_is_unique() -> None:
     xml = """
     <hierarchy>

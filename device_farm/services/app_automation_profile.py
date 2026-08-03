@@ -165,6 +165,7 @@ class LoginField(StrictProfileModel):
     locator: str
     value_from: str
     input_method: Literal["set_text", "type_text", "clipboard"] = "set_text"
+    required: bool = True
 
     @model_validator(mode="after")
     def require_reference_value(self) -> "LoginField":
@@ -190,6 +191,8 @@ class LoginRecipe(StrictProfileModel):
     detect_logged_in: dict[str, Any]
     fields: dict[str, LoginField] = Field(min_length=1)
     submit: LoginSubmit
+    post_submit_fields: dict[str, LoginField] = Field(default_factory=dict)
+    post_submit: LoginSubmit | None = None
     blocked_text_any: list[str] = Field(default_factory=lambda: ["captcha", "2fa", "verification"])
 
 
@@ -242,6 +245,19 @@ class AppAutomationProfile(StrictProfileModel):
                     raise ValueError(f"login field {field_name!r} references unknown locator {field.locator!r}")
             if self.login_recipe.submit.locator and self.login_recipe.submit.locator not in locator_names:
                 raise ValueError(f"login submit references unknown locator {self.login_recipe.submit.locator!r}")
+            for field_name, field in self.login_recipe.post_submit_fields.items():
+                if field.locator not in locator_names:
+                    raise ValueError(
+                        f"login post-submit field {field_name!r} references unknown locator {field.locator!r}"
+                    )
+            if (
+                self.login_recipe.post_submit
+                and self.login_recipe.post_submit.locator
+                and self.login_recipe.post_submit.locator not in locator_names
+            ):
+                raise ValueError(
+                    f"login post-submit action references unknown locator {self.login_recipe.post_submit.locator!r}"
+                )
         for recipe_name, recipe in self.form_recipes.items():
             for field_name, field in recipe.fields.items():
                 if field.locator not in locator_names:

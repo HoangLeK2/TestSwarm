@@ -48,6 +48,7 @@ const GRID_PREVIEW_EAGER =
 const GRID_PREVIEW_H264 = isGridH264Enabled(
   process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_H264
 );
+const GRID_PREVIEW_VIEWPORT_MARGIN_PX = 0;
 const DASHBOARD_PREVIEW_REFRESH_MS = (() => {
   const raw = Number(
     process.env.NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_PREVIEW_MS ?? 2_000
@@ -95,11 +96,13 @@ function DeviceTilePreviewInner({
     if (GRID_PREVIEW_EAGER) return;
     const el = previewZoneRef.current;
     if (!el) return;
-    const margin = 140;
     const sync = () => {
       const r = el.getBoundingClientRect();
       const vh = window.innerHeight;
-      setInView(r.bottom > -margin && r.top < vh + margin);
+      setInView(
+        r.bottom > -GRID_PREVIEW_VIEWPORT_MARGIN_PX &&
+          r.top < vh + GRID_PREVIEW_VIEWPORT_MARGIN_PX
+      );
     };
     sync();
     window.addEventListener('scroll', sync, { passive: true, capture: true });
@@ -112,7 +115,7 @@ function DeviceTilePreviewInner({
         ? null
         : new IntersectionObserver(() => sync(), {
             root: null,
-            rootMargin: `${margin}px`,
+            rootMargin: `${GRID_PREVIEW_VIEWPORT_MARGIN_PX}px`,
             threshold: 0.04
           });
     io?.observe(el);
@@ -265,7 +268,7 @@ function DeviceTilePreviewInner({
         if (cancelled || previewWarmupRef.current !== handle) return;
         if (attached) {
           setPreviewWarmupState('live');
-          requestIdr(device.serial, 1500);
+          requestIdr(device.serial, 0);
           return;
         }
         handle.release();

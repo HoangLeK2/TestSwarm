@@ -1,6 +1,9 @@
 export const DEVICE_GRID_TILE_WIDTH_PX = 288;
 export const DEVICE_GRID_GAP_PX = 16;
-export const DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX = 570;
+// Keep the first layout conservative: the rendered card is ~634px tall.
+// Underestimating it briefly places the next row inside the viewport and starts
+// previews that should remain deferred until the user scrolls.
+export const DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX = 640;
 
 export function getDeviceGridColumnCount(
   containerWidth: number,

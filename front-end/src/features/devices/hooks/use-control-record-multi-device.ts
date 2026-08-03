@@ -29,7 +29,7 @@ export function useControlRecordMultiDevice({
   const leftCollapsedBeforeMultiRef = useRef<boolean | null>(null);
   const previousPrimarySerialRef = useRef<string | null>(null);
   const prevMultiRef = useRef(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(true);
   const [multiFollowerSerials, setMultiFollowerSerials] = useState<string[]>(
     []
   );

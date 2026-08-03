@@ -61,6 +61,34 @@ def test_login_recipe_uses_references_not_inline_secrets():
     assert dumped["login_recipe"]["fields"]["password"]["value_from"] == "secret.login_password"
 
 
+def test_login_recipe_accepts_optional_post_submit_auth_code():
+    raw = _minimal_profile()
+    raw["semantic_locators"]["auth_code_field"] = {
+        "candidates": [{"resource_id_contains": "approvals_code"}]
+    }
+    raw["login_recipe"] = {
+        "detect_logged_in": {"any_text": ["Home"]},
+        "fields": {
+            "username": {"locator": "username_field", "value_from": "account.username"},
+            "password": {"locator": "password_field", "value_from": "account.password"},
+        },
+        "submit": {"locator": "login_button"},
+        "post_submit_fields": {
+            "auth_code": {
+                "locator": "auth_code_field",
+                "value_from": "account.totp_code",
+                "required": False,
+            }
+        },
+        "post_submit": {"tap_text_any": ["Continue"]},
+    }
+
+    profile = validate_app_automation_profile(raw)
+
+    assert profile.login_recipe is not None
+    assert profile.login_recipe.post_submit_fields["auth_code"].required is False
+
+
 def test_rejects_inline_login_secret_value():
     raw = _minimal_profile()
     raw["login_recipe"] = {

@@ -42,7 +42,7 @@ class _WarmPool:
 
 
 @pytest.mark.asyncio
-async def test_online_device_schedules_u2_warm_session(monkeypatch) -> None:
+async def test_online_device_does_not_schedule_u2_warm_session(monkeypatch) -> None:
     monkeypatch.setenv("U2_BATCH_ENABLED", "true")
     agent = RelayAgent(
         server_url="localhost:50051",
@@ -55,6 +55,25 @@ async def test_online_device_schedules_u2_warm_session(monkeypatch) -> None:
     monkeypatch.setattr(agent, "_schedule_capability_probe", lambda *_args, **_kwargs: None)
 
     await agent._on_device_event("dev-001", "device", asyncio.Queue())
+    await asyncio.sleep(0)
+
+    assert warm_pool.calls == []
+    assert warm_pool.keep_warm == set()
+
+
+@pytest.mark.asyncio
+async def test_explicit_bootstrap_schedules_u2_warm_session(monkeypatch) -> None:
+    monkeypatch.setenv("U2_BATCH_ENABLED", "true")
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="relay-1",
+        enrollment_token="",
+    )
+    warm_pool = _WarmPool()
+    agent._u2_pool = warm_pool
+
+    agent._schedule_u2_warm("dev-001", reason="explicit-bootstrap")
 
     await asyncio.wait_for(warm_pool.event.wait(), timeout=1.0)
     assert warm_pool.calls == ["dev-001"]
@@ -82,7 +101,7 @@ async def test_heartbeat_does_not_warm_by_default(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_warm_can_be_enabled_by_env(monkeypatch) -> None:
+async def test_heartbeat_warm_env_is_ignored_before_explicit_bootstrap(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_BOOT_U2_WARM_ON_HEARTBEAT", "true")
     agent = RelayAgent(
         server_url="localhost:50051",
@@ -97,9 +116,9 @@ async def test_heartbeat_warm_can_be_enabled_by_env(monkeypatch) -> None:
     agent._registry.set_capabilities("dev-001", {"u2": True})
 
     await agent._send_heartbeat(asyncio.Queue())
+    await asyncio.sleep(0)
 
-    await asyncio.wait_for(warm_pool.event.wait(), timeout=1.0)
-    assert warm_pool.calls == ["dev-001"]
+    assert warm_pool.calls == []
 
 
 @pytest.mark.asyncio
@@ -142,11 +161,13 @@ async def test_heartbeat_does_not_rewarm_existing_session(monkeypatch) -> None:
     await asyncio.sleep(0)
 
     assert warm_pool.calls == []
-    assert warm_pool.keep_warm == {"dev-001"}
+    assert warm_pool.keep_warm == set()
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_warm_failure_uses_backoff(monkeypatch) -> None:
+async def test_heartbeat_warm_failure_path_is_not_entered_before_bootstrap(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("AGENT_BOOT_U2_WARM_ON_HEARTBEAT", "true")
 
     class _FailingWarmPool(_WarmPool):
@@ -169,19 +190,13 @@ async def test_heartbeat_warm_failure_uses_backoff(monkeypatch) -> None:
     agent._registry.set_capabilities("dev-001", {"u2": True})
 
     await agent._send_heartbeat(asyncio.Queue())
-    await asyncio.wait_for(warm_pool.event.wait(), timeout=1.0)
     await asyncio.sleep(0)
-
-    warm_pool.event.clear()
-    await agent._send_heartbeat(asyncio.Queue())
-    await asyncio.sleep(0)
-
-    assert warm_pool.calls == ["dev-001"]
-    assert agent._u2_warm_fail_count["dev-001"] == 1
+    assert warm_pool.calls == []
+    assert agent._u2_warm_fail_count.get("dev-001", 0) == 0
 
 
 @pytest.mark.asyncio
-async def test_reconnecting_device_evicts_completed_warm_session(monkeypatch) -> None:
+async def test_offline_device_evicts_completed_warm_session(monkeypatch) -> None:
     agent = RelayAgent(
         server_url="localhost:50051",
         api_key="x",
@@ -192,7 +207,7 @@ async def test_reconnecting_device_evicts_completed_warm_session(monkeypatch) ->
     agent._u2_pool = warm_pool
     monkeypatch.setattr(agent, "_schedule_capability_probe", lambda *_args, **_kwargs: None)
 
-    await agent._on_device_event("dev-001", "device", asyncio.Queue())
+    agent._schedule_u2_warm("dev-001", reason="explicit-bootstrap")
     await asyncio.wait_for(warm_pool.event.wait(), timeout=1.0)
     assert warm_pool.sessions == {"dev-001"}
 
@@ -227,7 +242,7 @@ async def test_offline_cancels_inflight_warm_and_evicts_after_race(monkeypatch) 
     agent._u2_pool = warm_pool
     monkeypatch.setattr(agent, "_schedule_capability_probe", lambda *_args, **_kwargs: None)
 
-    await agent._on_device_event("dev-001", "device", asyncio.Queue())
+    agent._schedule_u2_warm("dev-001", reason="explicit-bootstrap")
     await asyncio.wait_for(warm_pool.started.wait(), timeout=1.0)
 
     await agent._on_device_event("dev-001", "offline", asyncio.Queue())

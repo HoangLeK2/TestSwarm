@@ -24,12 +24,38 @@ from typing import Any, Optional
 import grpc
 from grpc import aio
 
+from runtime.stream_telemetry import stream_telemetry
+
 from .grpc_gen import relay_pb2, relay_pb2_grpc
 
 log = logging.getLogger("grpc_relay")
 
 # Bit masks matching scrcpy_relay.py binary format
 _PTS_CONFIG_MASK = 0x8000_0000_0000_0000
+
+
+def _env_int(name: str, default: int, *, lo: int = 1, hi: int = 128 * 1024 * 1024) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+    return max(lo, min(hi, value))
+
+
+_GRPC_VIDEO_STATS_INTERVAL_S = _env_int(
+    "RELAY_GRPC_VIDEO_STATS_INTERVAL_S",
+    30,
+    lo=5,
+    hi=3600,
+)
+
+
+def _grpc_max_message_bytes() -> int:
+    return _env_int(
+        "RELAY_GRPC_MAX_MESSAGE_BYTES",
+        4 * 1024 * 1024,
+        lo=1024 * 1024,
+    )
 
 
 class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
@@ -67,14 +93,48 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
         # relay_id for AdbRelayManager registration — use agent_id
         relay_id: Optional[str] = None
         conn: Optional[Any] = None
+        video_frames = 0
+        video_bytes = 0
+        video_max_bytes = 0
+        video_last_log = asyncio.get_running_loop().time()
+
+        def _log_video_stats(*, force: bool = False) -> None:
+            nonlocal video_frames, video_bytes, video_max_bytes, video_last_log
+            now = asyncio.get_running_loop().time()
+            if not force and now - video_last_log < _GRPC_VIDEO_STATS_INTERVAL_S:
+                return
+            if video_frames or video_bytes or video_max_bytes:
+                log_fn = log.warning if video_max_bytes >= 1024 * 1024 else log.debug
+                log_fn(
+                    "gRPC video recv stats agent=%s frames=%d bytes=%d max_frame_bytes=%d",
+                    agent_id,
+                    video_frames,
+                    video_bytes,
+                    video_max_bytes,
+                )
+            video_frames = 0
+            video_bytes = 0
+            video_max_bytes = 0
+            video_last_log = now
 
         async def _recv_frames() -> None:
-            nonlocal relay_id, conn
+            nonlocal relay_id, conn, video_frames, video_bytes, video_max_bytes
             try:
                 async for msg in request_iterator:
                     payload = msg.WhichOneof("payload")
                     if payload == "video":
                         frame = msg.video
+                        frame_size = len(frame.data)
+                        video_frames += 1
+                        video_bytes += frame_size
+                        video_max_bytes = max(video_max_bytes, frame_size)
+                        stream_telemetry.record_grpc_video(
+                            agent_id=agent_id,
+                            frame_bytes=frame_size,
+                            is_config=bool(frame.is_config),
+                            is_key=bool(frame.is_key),
+                        )
+                        _log_video_stats()
                         self._rm.dispatch_grpc_video_frame(frame)
                     elif payload == "meta":
                         # JSON control message from agent (register / heartbeat / result)
@@ -86,6 +146,7 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
                             data, agent_id, ctrl_q, relay_id, conn
                         )
             finally:
+                _log_video_stats(force=True)
                 # Signal _send_controls() to exit so asyncio.gather() can complete
                 # and the outer finally (unregister cleanup) runs correctly.
                 try:
@@ -244,10 +305,11 @@ async def start_grpc_server(
     control_callbacks: tuple | None = None,
 ) -> Any:
     """Start gRPC relay server. Returns the server object (call stop() on shutdown)."""
+    grpc_max_message_bytes = _grpc_max_message_bytes()
     server = aio.server(
         options=[
-            ("grpc.max_send_message_length",    4 * 1024 * 1024),   # 4 MB — safety margin for IDR frames
-            ("grpc.max_receive_message_length",  4 * 1024 * 1024),
+            ("grpc.max_send_message_length",    grpc_max_message_bytes),
+            ("grpc.max_receive_message_length", grpc_max_message_bytes),
             ("grpc.so_reuseport", 1),
             ("grpc.max_concurrent_streams", 512),
             # Keepalive: detect dead agent connections within ~15s

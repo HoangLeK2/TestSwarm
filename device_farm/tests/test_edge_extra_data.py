@@ -110,7 +110,78 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
     assert "posts" not in sc.ctx
 
 
-def test_try_edge_extra_data_fails_incomplete_known_comment_target(monkeypatch) -> None:
+def test_try_edge_extra_data_forwards_post_open_fast_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    })
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "dedupe_field": "post_key",
+            "edge_extra_data": True,
+        },
+        "fb_posts",
+        {},
+    )
+
+    assert handled is True
+    context = device.calls[-1]["context"]
+    assert context["post_open_max_attempts"] == 1
+    assert context["post_open_scan_window"] == 12
+    assert context["post_open_tap_settle_s"] == 0.65
+    assert context["post_open_verify_retries"] == 1
+    assert context["post_open_verify_retry_pause_s"] == 0.18
+
+
+def test_try_edge_extra_data_forwards_explicit_post_open_canonical_keys(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    })
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "dedupe_field": "post_key",
+            "edge_extra_data": True,
+            "post_open_max_attempts": 2,
+            "post_open_scan_window": 20,
+            "post_open_tap_settle_s": 0.2,
+            "post_open_verify_retries": 2,
+            "post_open_verify_retry_pause_s": 0.25,
+        },
+        "fb_posts",
+        {},
+    )
+
+    assert handled is True
+    context = device.calls[-1]["context"]
+    assert context["post_open_max_attempts"] == 2
+    assert context["post_open_scan_window"] == 20
+    assert context["post_open_tap_settle_s"] == 0.2
+    assert context["post_open_verify_retries"] == 2
+    assert context["post_open_verify_retry_pause_s"] == 0.25
+
+
+def test_try_edge_extra_data_accepts_partial_known_comment_target(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
     device = _FakeDevice({
@@ -144,10 +215,53 @@ def test_try_edge_extra_data_fails_incomplete_known_comment_target(monkeypatch) 
     )
 
     assert handled is True
-    assert result["ok"] is False
+    assert result.get("ok", True) is True
+    assert result["partial"] is True
     assert result["extracted"] == 20
     assert result["reason_code"] == "partial_target"
+    assert "partial" in result["message"]
     assert "20/220" in result["message"]
+    assert "coverage_tail_no_new" in result["message"]
+
+
+def test_try_edge_extra_data_fails_zero_comments_for_required_target(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 0,
+            "inserted_count": 0,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "partial_target",
+                "comments_returned": 0,
+                "comment_target": 20,
+                "post_comment_count": 20,
+                "coverage_ratio": 0,
+                "comment_scroll_stopped_reason": "coverage_tail_no_new",
+            },
+        },
+    })
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "max_items": 20,
+            "comment_require_complete": True,
+        },
+        "fb_comments",
+        result,
+    )
+
+    assert handled is True
+    assert result["ok"] is False
+    assert result["extracted"] == 0
+    assert result["reason_code"] == "partial_target"
+    assert "0/20" in result["message"]
     assert "coverage_tail_no_new" in result["message"]
 
 
@@ -816,6 +930,216 @@ def test_fb_comments_back_marks_parent_consumed_for_next_post_open(monkeypatch) 
     assert device.calls[2]["context"]["open_post_exclude_anchors"] == consumed
 
 
+def test_fb_posts_post_open_verify_failed_in_loop_skips_without_excluding_anchor(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _SequenceFakeDevice([
+        {
+            "ok": False,
+            "error": "post_open_required:post_open_verify_failed",
+            "diagnostic": {
+                "reason_code": "post_open_verify_failed",
+                "attempted_open_post_anchors": [
+                    {
+                        "pid": "pid-1",
+                        "post_key": "post-1",
+                        "stable_post_id": "stable-1",
+                        "author": "Alice",
+                        "timestamp": "1 giờ",
+                        "text_prefix": "parent post body",
+                    }
+                ],
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 0,
+                "inserted_count": 0,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+    ])
+    sc = _ctx(device)
+    sc.ctx["_loop_iter"] = 6
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "dedupe_field": "post_key",
+        },
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result.get("ok", True) is True
+    assert result["skipped"] is True
+    assert result["reason_code"] == "post_open_verify_failed"
+    assert result["post_open_attempted_anchor_count"] == 1
+    assert result["post_open_retryable_failure"] is True
+    assert "_break" not in sc.ctx
+    assert "_fb_consumed_post_anchors" not in sc.ctx
+
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "dedupe_field": "post_key",
+        },
+        "fb_posts",
+        {},
+    )
+
+    assert "open_post_exclude_anchors" not in device.calls[1]["context"]
+
+
+def test_fb_posts_post_open_verify_failed_without_anchor_breaks_loop(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": False,
+        "error": "post_open_required:post_open_verify_failed",
+        "diagnostic": {"reason_code": "post_open_verify_failed"},
+    })
+    sc = _ctx(device)
+    sc.ctx["_loop_iter"] = 6
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "dedupe_field": "post_key",
+        },
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result.get("ok", True) is True
+    assert result["skipped"] is True
+    assert sc.ctx["_break"] is True
+
+
+def test_fb_posts_reconcile_failed_in_loop_skips_and_excludes_opened_anchor(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    opened_anchor = {
+        "pid": "pid-1",
+        "post_key": "post-1",
+        "stable_post_id": "stable-1",
+        "author": "Alice",
+        "timestamp": "1 giờ",
+        "text_prefix": "parent post body",
+    }
+    device = _SequenceFakeDevice([
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 0,
+                "inserted_count": 0,
+                "duplicate_count": 0,
+                "diagnostic": {
+                    "reason_code": "post_detail_target_not_reconciled",
+                    "opened_post": opened_anchor,
+                },
+            },
+        },
+        {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+            },
+        },
+    ])
+    sc = _ctx(device)
+    sc.ctx["_loop_iter"] = 5
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "dedupe_field": "post_key",
+        },
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result.get("ok", True) is True
+    assert result["skipped"] is True
+    assert result["reason_code"] == "post_detail_target_not_reconciled"
+    assert "_break" not in sc.ctx
+    consumed = sc.ctx["_fb_consumed_post_anchors"]
+    assert consumed == [opened_anchor]
+
+    extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "dedupe_field": "post_key",
+        },
+        "fb_posts",
+        {},
+    )
+
+    assert device.calls[1]["context"]["open_post_exclude_anchors"] == consumed
+
+
+def test_fb_posts_reconcile_failed_with_opened_anchor_skips_even_without_loop_iter(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    opened_anchor = {
+        "pid": "pid-1",
+        "post_key": "post-1",
+        "stable_post_id": "stable-1",
+        "author": "Alice",
+        "timestamp": "1 giờ",
+        "text_prefix": "parent post body",
+    }
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 0,
+            "inserted_count": 0,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "post_detail_target_not_reconciled",
+                "opened_post": opened_anchor,
+            },
+        },
+    })
+    sc = _ctx(device)
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "dedupe_field": "post_key",
+        },
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result.get("ok", True) is True
+    assert result["skipped"] is True
+    assert result["reason_code"] == "post_detail_target_not_reconciled"
+    assert result["post_open_consumed_anchor_count"] == 1
+    assert sc.ctx["_fb_consumed_post_anchors"] == [opened_anchor]
+
+
 def test_fb_post_detail_parent_source_is_forwarded_to_comment_extract(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
@@ -1276,7 +1600,21 @@ def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) ->
     sc = _ctx(device)
     sc.ctx["_active_comment_parent_hash"] = "detail-parent-hash"
     sc.ctx["_first_new_post_hash"] = "detail-parent-hash"
+    sc.ctx["_fb_comment_parent_pid"] = "detail-pid"
     sc.ctx["_active_comment_parent_source"] = "post_detail"
+    sc.ctx["_active_comment_parent_anchor"] = {
+        "pid": "detail-pid",
+        "post_key": "detail-post",
+        "text_prefix": "detail parent text",
+    }
+    sc.ctx["_active_comment_anchor_verified"] = True
+    sc.ctx["_fb_comment_session"] = {
+        "session_id": "detail-session",
+        "parent_id": "detail-parent-hash",
+        "parent_post_id": "detail-pid",
+        "source": "post_detail",
+        "anchor": sc.ctx["_active_comment_parent_anchor"],
+    }
     result = {}
 
     control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
@@ -1288,7 +1626,72 @@ def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) ->
     assert sc.ctx["_first_new_post_hash"] == "detail-parent-hash"
     assert sc.ctx["_active_comment_parent_source"] == "post_detail"
     assert "_edge_comment_parent_base_hash" not in sc.ctx
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-1"
+    assert sc.ctx["_fb_comment_parent_pid"] == "detail-pid"
+    assert sc.ctx["_active_comment_parent_anchor"] == {
+        "pid": "detail-pid",
+        "post_key": "detail-post",
+        "text_prefix": "detail parent text",
+    }
+    assert sc.ctx["_fb_comment_session"]["parent_post_id"] == "detail-pid"
+    assert sc.ctx["_fb_tapped_comment_target"]["pid"] == "pid-1"
+
+
+def test_tap_fb_comment_button_does_not_preserve_incomplete_post_detail_parent(monkeypatch) -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "ok",
+                "verified": True,
+                "target": {
+                    "bounds": [10, 20, 110, 60],
+                    "pid": "target-pid",
+                    "parent_base_hash": "target-base-hash",
+                    "parent_id": "target-scoped-hash",
+                    "post_key": "target-post",
+                    "text_prefix": "target parent text",
+                },
+            },
+        },
+    })
+    device.taps = []
+    device.tap = lambda x, y: device.taps.append((x, y))
+    sc = _ctx(device)
+    sc.ctx["_active_comment_parent_hash"] = "stale-detail-parent-hash"
+    sc.ctx["_first_new_post_hash"] = "stale-detail-parent-hash"
+    sc.ctx["_active_comment_parent_source"] = "post_detail"
+    sc.ctx["_active_comment_anchor_verified"] = True
+    sc.ctx["_fb_comment_session"] = {
+        "session_id": "stale-session",
+        "parent_id": "different-detail-parent-hash",
+        "parent_post_id": "different-detail-pid",
+        "source": "post_detail",
+    }
+    sc.ctx["_fb_tapped_comment_target"] = {
+        "pid": "old-tapped-pid",
+        "parent_id": "old-tapped-hash",
+    }
+    sc.ctx["_fb_comment_target_missing"] = {
+        "reason_code": "post_extract_pending",
+    }
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+
+    assert result["tapped"] is True
+    assert result["parent_context_preserved"] is False
+    assert result["parent_id"] == "target-scoped-hash"
+    assert result["_pid"] == "target-pid"
+    assert device.taps == [(60, 40)]
+    assert sc.ctx["_edge_comment_parent_base_hash"] == "target-base-hash"
+    assert sc.ctx["_active_comment_parent_hash"] == "target-scoped-hash"
+    assert sc.ctx["_first_new_post_hash"] == "target-scoped-hash"
+    assert sc.ctx["_fb_comment_parent_pid"] == "target-pid"
+    assert sc.ctx["_active_comment_parent_source"] == "tap_fb_comment_button"
+    assert sc.ctx["_active_comment_anchor_verified"] is True
+    assert "_fb_comment_session" not in sc.ctx
+    assert "_fb_tapped_comment_target" not in sc.ctx
+    assert "_fb_comment_target_missing" not in sc.ctx
 
 
 def test_tap_fb_comment_button_uses_persisted_post_dedupe_field(monkeypatch) -> None:
@@ -1435,6 +1838,19 @@ def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_s
     sc.ctx["_fb_comment_parent_pid"] = "pid-detail"
     sc.ctx["_active_comment_parent_hash"] = "detail-parent-hash"
     sc.ctx["_active_comment_parent_source"] = "post_detail"
+    sc.ctx["_active_comment_parent_anchor"] = {
+        "pid": "pid-detail",
+        "post_key": "detail-post",
+        "text_prefix": "detail parent text",
+    }
+    sc.ctx["_active_comment_anchor_verified"] = True
+    sc.ctx["_fb_comment_session"] = {
+        "session_id": "detail-session",
+        "parent_id": "detail-parent-hash",
+        "parent_post_id": "pid-detail",
+        "source": "post_detail",
+        "anchor": sc.ctx["_active_comment_parent_anchor"],
+    }
     result = {}
 
     control_flow.handle_tap_fb_comment_button(sc, {"pre_scroll": True}, 0, result)
@@ -1837,6 +2253,59 @@ def test_try_edge_extra_data_forwards_custom_comment_crawl_budget(monkeypatch) -
     assert context["stop_if_no_new"] is False
     assert context["no_new_threshold"] == 6
     assert "comment_require_complete" not in context
+
+
+def test_try_edge_extra_data_forwards_comment_fast_scroll_and_coverage_knobs(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 0, "inserted_count": 0}})
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "max_items": 500,
+            "comment_large_target_fast_scroll": True,
+            "comment_large_target_swipes_per_dump": 12,
+            "comment_large_target_scroll_distance": 0.68,
+            "comment_large_target_duration_ms": 80,
+            "comment_target_budget": True,
+            "comment_target_comments_per_swipe": 2,
+            "comment_target_budget_unknown_count": True,
+            "comment_hard_budget": False,
+            "lock_comment_crawl_profile": False,
+            "comment_crawl_mode": "batched",
+            "comment_auto_coverage": False,
+            "comment_anchor_probe_count": 4,
+            "comment_anchor_min_overlap": 2,
+            "comment_coverage_scroll_distance": 0.42,
+            "comment_coverage_min_distance": 0.18,
+            "comment_coverage_gap_backoff": 0.7,
+            "comment_coverage_tail_no_new_threshold": 3,
+        },
+        "fb_comments",
+        {},
+    )
+
+    assert handled is True
+    context = device.calls[-1]["context"]
+    assert context["comment_large_target_fast_scroll"] is True
+    assert context["comment_large_target_swipes_per_dump"] == 12
+    assert context["comment_large_target_scroll_distance"] == 0.68
+    assert context["comment_large_target_duration_ms"] == 80
+    assert context["comment_target_budget"] is True
+    assert context["comment_target_comments_per_swipe"] == 2
+    assert context["comment_target_budget_unknown_count"] is True
+    assert context["comment_hard_budget"] is False
+    assert context["lock_comment_crawl_profile"] is False
+    assert context["comment_crawl_mode"] == "batched"
+    assert context["comment_auto_coverage"] is False
+    assert context["comment_anchor_probe_count"] == 4
+    assert context["comment_anchor_min_overlap"] == 2
+    assert context["comment_coverage_scroll_distance"] == 0.42
+    assert context["comment_coverage_min_distance"] == 0.18
+    assert context["comment_coverage_gap_backoff"] == 0.7
+    assert context["comment_coverage_tail_no_new_threshold"] == 3
 
 
 def test_try_edge_extra_data_normalizes_legacy_balanced_comment_budget(monkeypatch) -> None:

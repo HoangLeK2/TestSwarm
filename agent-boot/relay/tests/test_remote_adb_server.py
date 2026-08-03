@@ -229,7 +229,11 @@ def test_expired_scrcpy_jar_cache_revalidates_device(monkeypatch) -> None:
 
     try:
         session._ensure_server_jar_on_device()
-        key = (session._serial, session._jar_version)
+        key = (
+            session._serial,
+            session._jar_version,
+            scrcpy_mod._bundled_jar_sha256(),
+        )
         with scrcpy_mod._SCRCPY_JAR_DEPLOY_CONDITION:
             scrcpy_mod._SCRCPY_JAR_READY[key] = (
                 time.monotonic()

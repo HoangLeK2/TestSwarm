@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 
 from .grpc_client import agent_message_from_item
 from .grpc_gen import relay_pb2
-from .runtime import FairSendQueue
+from .runtime import FairSendQueue, MultiStreamSendQueue
 from .scrcpy_relay import enqueue_video_packet, prepare_video_packet
 from .video_packet import VideoPacket
 
@@ -44,6 +44,8 @@ class MockFleetConfig:
     consumer_delay_ms: float = 0.0
     reliable_per_device_max: int = 16
     video_per_device_max: int = 2
+    visible_phones: int | None = None
+    video_shards: int = 8
     noisy_phone_index: int | None = None
     noisy_fps_multiplier: float = 1.0
 
@@ -64,6 +66,12 @@ class MockFleetConfig:
             raise ValueError("reliable_per_device_max must be positive")
         if self.video_per_device_max < 2:
             raise ValueError("video_per_device_max must be at least two")
+        if self.visible_phones is not None and not (
+            1 <= self.visible_phones <= self.phones
+        ):
+            raise ValueError("visible_phones must be between one and phones")
+        if self.video_shards < 0:
+            raise ValueError("video_shards cannot be negative")
         if self.noisy_phone_index is not None and not (
             0 <= self.noisy_phone_index < self.phones
         ):
@@ -83,6 +91,8 @@ class MockFleetReport:
 
     measurement_scope: str
     phones: int
+    visible_phones: int
+    video_shards: int
     elapsed_s: float
     generated_video_packets: int
     delivered_video_packets: int
@@ -107,7 +117,7 @@ class MockFleetReport:
                 self.handoff_p95_ms <= self.thresholds.handoff_p95_ms
             ),
             "idr_recovery_p95": (
-                self.idr_recoveries == self.phones
+                self.idr_recoveries == self.visible_phones
                 and self.idr_recovery_p95_ms
                 <= self.thresholds.idr_recovery_p95_ms
             ),
@@ -161,24 +171,41 @@ async def run_mock_fleet(
 
     applied_thresholds = thresholds or StreamSloThresholds()
     loop = asyncio.get_running_loop()
-    queue = FairSendQueue(
-        per_device_max=config.reliable_per_device_max,
-        video_per_device_max=config.video_per_device_max,
-    )
+    if config.video_shards > 0:
+        queue: FairSendQueue | MultiStreamSendQueue = MultiStreamSendQueue(
+            video_shards=config.video_shards,
+            per_device_max=config.reliable_per_device_max,
+            video_per_device_max=config.video_per_device_max,
+        )
+    else:
+        queue = FairSendQueue(
+            per_device_max=config.reliable_per_device_max,
+            video_per_device_max=config.video_per_device_max,
+        )
     serials = [f"mock-phone-{index:03d}" for index in range(config.phones)]
+    visible_count = config.visible_phones or config.phones
+    video_serials = set(serials[:visible_count])
     recovery_events = {serial: threading.Event() for serial in serials}
     recovery_started_ns: dict[str, int] = {}
     idr_recovery_ms: list[float] = []
     handoff_ms: list[float] = []
     queue_age_ms: list[float] = []
-    handoff_ms_by_serial = {serial: [] for serial in serials}
-    queue_age_ms_by_serial = {serial: [] for serial in serials}
+    handoff_ms_by_serial = {serial: [] for serial in video_serials}
+    queue_age_ms_by_serial = {serial: [] for serial in video_serials}
     command_ids: set[str] = set()
     delivered_command_ids: set[str] = set()
     producer_errors: list[BaseException] = []
     producers_done = asyncio.Event()
     counter_lock = threading.Lock()
-    remaining = config.phones
+    producer_indexes = set(range(visible_count))
+    if config.noisy_phone_index is not None:
+        producer_indexes.add(config.noisy_phone_index)
+    producer_indexes = {
+        index
+        for index in producer_indexes
+        if 0 <= index < config.phones
+    }
+    remaining = len(producer_indexes)
     generated_video_packets = 0
     max_queue_size = 0
     payload = b"x" * config.payload_bytes
@@ -253,15 +280,24 @@ async def run_mock_fleet(
     def produce(serial: str, phone_index: int) -> None:
         nonlocal generated_video_packets
         try:
-            effective_fps = config.fps
+            emits_video = serial in video_serials
+            base_tick_hz = (
+                config.fps
+                if emits_video
+                else max(1.0, 1.0 / config.command_interval_s)
+            )
+            effective_fps = base_tick_hz
             if phone_index == config.noisy_phone_index:
                 effective_fps *= config.noisy_fps_multiplier
             interval_s = 1.0 / effective_fps
-            frames = max(4, math.ceil(config.duration_s * effective_fps))
+            frames = max(
+                4 if emits_video else 1,
+                math.ceil(config.duration_s * effective_fps),
+            )
             recovery_at = max(1, frames // 3)
             command_every = max(
                 1,
-                round(config.command_interval_s * effective_fps),
+                round(config.command_interval_s * base_tick_hz),
             )
             phase_s = (phone_index / config.phones) * min(interval_s, 0.05)
             next_frame_at = time.perf_counter() + phase_s
@@ -281,6 +317,9 @@ async def run_mock_fleet(
                         loop,
                     )
                     future.result(timeout=2.0)
+
+                if not emits_video:
+                    continue
 
                 if frame_index == recovery_at:
                     burst = tuple(
@@ -333,48 +372,69 @@ async def run_mock_fleet(
             daemon=True,
         )
         for index, serial in enumerate(serials)
+        if index in producer_indexes
     ]
     started = time.perf_counter()
     for thread in threads:
         thread.start()
 
-    delivered_video_packets = 0
     protobuf_bytes = 0
     delay_s = config.consumer_delay_ms / 1_000
-    while not producers_done.is_set() or queue.qsize() > 0:
-        try:
-            item = await asyncio.wait_for(queue.get(), timeout=0.1)
-        except TimeoutError:
-            continue
-        dequeued_ns = time.monotonic_ns()
-        message = agent_message_from_item(item, relay_pb2)
-        if message is None:
-            raise RuntimeError("mock stream item could not be serialized")
-        wire_bytes = message.SerializeToString()
-        protobuf_bytes += len(wire_bytes)
-        received_message = relay_pb2.AgentMsg.FromString(wire_bytes)
+    delivered_video_packets = 0
 
-        if isinstance(item, VideoPacket):
-            delivered_video_packets += 1
-            packet_handoff_ms = max(
-                0.0,
-                (item.enqueued_ns - item.received_ns) / 1_000_000,
-            )
-            packet_queue_age_ms = max(
-                0.0,
-                (dequeued_ns - item.enqueued_ns) / 1_000_000,
-            )
-            handoff_ms.append(packet_handoff_ms)
-            queue_age_ms.append(packet_queue_age_ms)
-            handoff_ms_by_serial[item.serial].append(packet_handoff_ms)
-            queue_age_ms_by_serial[item.serial].append(packet_queue_age_ms)
-        elif isinstance(item, str):
-            meta = json.loads(received_message.meta)
-            if meta.get("kind") == "mock_command_result":
-                delivered_command_ids.add(str(meta["command_id"]))
+    async def consume_queue(
+        source_queue: FairSendQueue | MultiStreamSendQueue,
+    ) -> None:
+        nonlocal protobuf_bytes, delivered_video_packets
+        while not producers_done.is_set() or source_queue.qsize() > 0:
+            try:
+                item = await asyncio.wait_for(source_queue.get(), timeout=0.1)
+            except TimeoutError:
+                continue
+            dequeued_ns = time.monotonic_ns()
+            message = agent_message_from_item(item, relay_pb2)
+            if message is None:
+                raise RuntimeError("mock stream item could not be serialized")
+            wire_bytes = message.SerializeToString()
+            protobuf_bytes += len(wire_bytes)
+            received_message = relay_pb2.AgentMsg.FromString(wire_bytes)
 
-        if delay_s > 0:
-            await asyncio.sleep(delay_s)
+            if isinstance(item, VideoPacket):
+                delivered_video_packets += 1
+                packet_handoff_ms = max(
+                    0.0,
+                    (item.enqueued_ns - item.received_ns) / 1_000_000,
+                )
+                packet_queue_age_ms = max(
+                    0.0,
+                    (dequeued_ns - item.enqueued_ns) / 1_000_000,
+                )
+                handoff_ms.append(packet_handoff_ms)
+                queue_age_ms.append(packet_queue_age_ms)
+                handoff_ms_by_serial[item.serial].append(packet_handoff_ms)
+                queue_age_ms_by_serial[item.serial].append(packet_queue_age_ms)
+            elif isinstance(item, str):
+                meta = json.loads(received_message.meta)
+                if meta.get("kind") == "mock_command_result":
+                    delivered_command_ids.add(str(meta["command_id"]))
+
+            if delay_s > 0:
+                await asyncio.sleep(delay_s)
+
+    if isinstance(queue, MultiStreamSendQueue):
+        consumers = [
+            asyncio.create_task(consume_queue(queue), name="mock-reliable-consumer"),
+            *[
+                asyncio.create_task(
+                    consume_queue(queue.video_shard_queue(index)),
+                    name=f"mock-video-shard-consumer-{index}",
+                )
+                for index in range(queue.video_shard_count())
+            ],
+        ]
+        await asyncio.gather(*consumers)
+    else:
+        await consume_queue(queue)
 
     for thread in threads:
         thread.join(timeout=0.1)
@@ -385,6 +445,8 @@ async def run_mock_fleet(
     return MockFleetReport(
         measurement_scope="agent_boot_transport_seam",
         phones=config.phones,
+        visible_phones=visible_count,
+        video_shards=config.video_shards,
         elapsed_s=round(elapsed_s, 3),
         generated_video_packets=generated_video_packets,
         delivered_video_packets=delivered_video_packets,
@@ -400,10 +462,12 @@ async def run_mock_fleet(
         per_phone_handoff_p95_ms={
             serial: _percentile(samples, 0.95)
             for serial, samples in handoff_ms_by_serial.items()
+            if samples
         },
         per_phone_queue_age_p95_ms={
             serial: _percentile(samples, 0.95)
             for serial, samples in queue_age_ms_by_serial.items()
+            if samples
         },
         thresholds=applied_thresholds,
     )
@@ -432,17 +496,22 @@ async def run_mock_isolation_probe(
         noisy_phone_index=None,
         noisy_fps_multiplier=1.0,
     )
+    if config.visible_phones is not None and config.visible_phones < config.phones:
+        noisy_index = config.visible_phones
+    else:
+        noisy_index = 0
     noisy_config = replace(
         config,
-        noisy_phone_index=0,
+        noisy_phone_index=noisy_index,
         noisy_fps_multiplier=noisy_fps_multiplier,
     )
     baseline = await run_mock_fleet(baseline_config, applied_thresholds)
     noisy_run = await run_mock_fleet(noisy_config, applied_thresholds)
-    noisy_serial = "mock-phone-000"
+    noisy_serial = f"mock-phone-{noisy_index:03d}"
     normal_serials = (
-        set(baseline.per_phone_queue_age_p95_ms) - {noisy_serial}
-    )
+        set(baseline.per_phone_queue_age_p95_ms)
+        & set(noisy_run.per_phone_queue_age_p95_ms)
+    ) - {noisy_serial}
 
     handoff_deltas = [
         max(

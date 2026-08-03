@@ -242,3 +242,65 @@ def test_social_action_verifies_state_near_the_tapped_target() -> None:
     assert result["ok"] is True
     assert result["outcome"] == "applied"
     assert device.taps == [(60, 245)]
+
+
+@pytest.mark.parametrize(
+    ("action", "before_label", "after_label", "expected_state"),
+    [
+        ("comment", "Bình luận", "Viết bình luận", "comment_opened"),
+        ("share", "Chia sẻ", "Chia sẻ ngay", "share_opened"),
+    ],
+)
+def test_content_interaction_supports_comment_and_share_actions(
+    action: str,
+    before_label: str,
+    after_label: str,
+    expected_state: str,
+) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml(_node(before_label)), _xml(_node(after_label)))
+    result = dispatch_step(
+        _context(device),
+        {
+            "type": "content_interaction",
+            "platform": "facebook",
+            "action": action,
+            "timeout": 0.1,
+            "poll": 0.01,
+            "verify_timeout": 0.1,
+            "settle_seconds": 0,
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "applied"
+    assert result["state"] == expected_state
+    assert device.taps == [(60, 45)]
+
+
+def test_connection_request_does_not_bulk_tap_search_results() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(
+        _xml(
+            _node("Thêm bạn bè", bounds="[500,120][700,170]"),
+            _node("Thêm bạn bè", bounds="[500,220][700,270]"),
+        )
+    )
+    result = dispatch_step(
+        _context(device),
+        {
+            "type": "connection_request",
+            "platform": "facebook",
+            "action": "request",
+            "timeout": 0.1,
+            "poll": 0.01,
+        },
+        0,
+    )
+
+    assert result["ok"] is False
+    assert result["outcome"] == "ambiguous_target"
+    assert device.taps == []

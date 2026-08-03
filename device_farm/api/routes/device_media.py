@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import base64
 import functools
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -13,6 +15,30 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
+
+
+def _screenshot_capture_workers() -> int:
+    try:
+        return max(
+            1,
+            min(
+                8,
+                int(os.environ.get("DEVICE_FARM_SCREENSHOT_CAPTURE_WORKERS", "4")),
+            ),
+        )
+    except Exception:
+        return 4
+
+
+_SCREENSHOT_CAPTURE_POOL = ThreadPoolExecutor(
+    max_workers=_screenshot_capture_workers(),
+    thread_name_prefix="screenshot-capture",
+)
+atexit.register(
+    _SCREENSHOT_CAPTURE_POOL.shutdown,
+    wait=False,
+    cancel_futures=True,
+)
 
 
 def _frame_age_ms(device) -> float:
@@ -56,6 +82,16 @@ def _request_stream_jpeg_frames(device, duration_s: float = 3.0) -> bool:
     return False
 
 
+def _screenshot_capture_timeout_s() -> float:
+    try:
+        return max(
+            0.05,
+            float(os.environ.get("DEVICE_FARM_SCREENSHOT_CAPTURE_TIMEOUT_S", "2.0")),
+        )
+    except Exception:
+        return 2.0
+
+
 async def _wait_for_new_jpeg(
     device,
     previous_jpeg_time: float,
@@ -77,6 +113,24 @@ async def _wait_for_new_jpeg(
     return None
 
 
+async def _capture_screenshot_bounded(device, serial: str, **kwargs) -> bytes | None:
+    loop = asyncio.get_running_loop()
+    capture_future = loop.run_in_executor(
+        _SCREENSHOT_CAPTURE_POOL,
+        functools.partial(device.capture_screenshot, **kwargs),
+    )
+    timeout_s = _screenshot_capture_timeout_s()
+    try:
+        return await asyncio.wait_for(capture_future, timeout=timeout_s)
+    except asyncio.TimeoutError:
+        log.warning(
+            "screenshot fresh capture timed out for %s after %.2fs",
+            serial,
+            timeout_s,
+        )
+        return None
+
+
 def build_device_media_router(manager: DeviceManager) -> APIRouter:
     router = APIRouter()
     low_bw_mode = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
@@ -92,7 +146,6 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 interval = 1.0 / max(0.1, min(fps, 30))
             else:
                 interval = 1.0 if low_bw_mode else 0.033
-            loop = asyncio.get_running_loop()
             while True:
                 _request_stream_jpeg_frames(
                     device,
@@ -109,15 +162,13 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                         log.debug("mjpeg stream cache read failed for %s: %s", serial, exc)
                 if not frame:
                     try:
-                        frame = await loop.run_in_executor(
-                            None,
-                            functools.partial(
-                                device.capture_screenshot,
-                                quality=70,
-                                max_width=800,
-                                allow_ws_u2_fallback=False,
-                                skip_cache=fresh,
-                            ),
+                        frame = await _capture_screenshot_bounded(
+                            device,
+                            serial,
+                            quality=70,
+                            max_width=800,
+                            allow_ws_u2_fallback=False,
+                            skip_cache=fresh,
                         )
                     except Exception as exc:
                         log.debug("mjpeg stream capture failed for %s: %s", serial, exc)
@@ -169,16 +220,13 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 frame = await _wait_for_new_jpeg(device, previous_jpeg_time)
                 stale = frame is None
         if stale:
-            loop = asyncio.get_running_loop()
-            fresh_frame = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    device.capture_screenshot,
-                    quality=70,
-                    max_width=800,
-                    allow_ws_u2_fallback=False,
-                    skip_cache=True,
-                ),
+            fresh_frame = await _capture_screenshot_bounded(
+                device,
+                serial,
+                quality=70,
+                max_width=800,
+                allow_ws_u2_fallback=False,
+                skip_cache=True,
             )
             if fresh_frame:
                 frame = fresh_frame
@@ -212,14 +260,11 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         if jpeg_demand_active and _frame_age_ms(device) >= 3_000:
             frame = await _wait_for_new_jpeg(device, previous_jpeg_time)
         if not frame:
-            loop = asyncio.get_running_loop()
-            frame = await loop.run_in_executor(
-                None,
-                functools.partial(
-                    device.capture_screenshot,
-                    allow_ws_u2_fallback=False,
-                    skip_cache=jpeg_demand_active,
-                ),
+            frame = await _capture_screenshot_bounded(
+                device,
+                serial,
+                allow_ws_u2_fallback=False,
+                skip_cache=jpeg_demand_active,
             )
             if frame:
                 _store_snapshot_frame(device, frame)

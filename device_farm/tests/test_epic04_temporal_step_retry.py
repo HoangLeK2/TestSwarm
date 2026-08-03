@@ -75,6 +75,35 @@ def test_step_runner_retries_until_success():
     assert len(result.get("retry_attempts") or []) == 3
 
 
+def test_step_runner_auto_recovers_and_retries_u2_transient_once():
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.trace_id = "t1"
+    sc.device = MagicMock()
+    calls = {"n": 0}
+
+    def fake_dispatch(_sc, _step, _idx):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "ok": False,
+                "message": "edge extra_data failed: JSON-RPC HTTP 502",
+            }
+        return {"ok": True, "message": "ok"}
+
+    with patch("services.execution.step_runner.dispatch_step", side_effect=fake_dispatch), patch(
+        "services.execution.step_runner.capture_pre_step"
+    ), patch("services.execution.step_runner.capture_post_step"), patch(
+        "services.execution.step_runner.time.sleep"
+    ):
+        result, attempts = execute_step_with_retry(sc, {"type": "fb_comment"}, 0)
+
+    assert result["ok"] is True
+    assert attempts == 2
+    assert sc.device._recover_u2_ws_mode.call_count == 1
+    assert result["retry_attempts"][0]["error_reason"] == "u2_transient_error"
+
+
 def test_step_runner_recovery_playbook_retries_same_main_step():
     sc = MagicMock()
     sc.serial = "SN1"

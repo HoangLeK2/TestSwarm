@@ -328,7 +328,9 @@ export function useControlRecord(
 
   const refreshRecordXml = useCallback(async (serial: string) => {
     try {
-      const xml = await fetchHierarchy(serial, true);
+      const xml = await fetchHierarchy(serial, true, {
+        priority: 'visible'
+      });
       if (
         !canApplyDeviceScopedResult(serial, selectedDeviceSerialRef.current)
       ) {
@@ -459,7 +461,8 @@ export function useControlRecord(
       // (search list → group page) and would map coords to the wrong row.
       const preTapHierarchyPromise = shouldCaptureTapBeforeSend
         ? fetchHierarchy(selectedDevice.serial, true, {
-            bypassInFlight: true
+            bypassInFlight: true,
+            priority: 'visible'
           }).catch(() => null)
         : undefined;
 
@@ -653,7 +656,11 @@ export function useControlRecord(
               stepSerial,
               oldHash,
               RECORD_XML_POLL_INTERVAL_MS,
-              RECORD_XML_POLL_TIMEOUT_MS
+              RECORD_XML_POLL_TIMEOUT_MS,
+              {
+                bypassInFlight: true,
+                priority: 'visible'
+              }
             )
               .then((newXml) => {
                 if (!recordingRef.current) return;
@@ -1242,7 +1249,10 @@ export function useControlRecord(
   );
   const hierarchyQuery = useQuery({
     queryKey: hierarchyQueryKey,
-    queryFn: () => fetchHierarchy(selectedHierarchySerial as string, false),
+    queryFn: () =>
+      fetchHierarchy(selectedHierarchySerial as string, false, {
+        priority: 'visible'
+      }),
     enabled: false,
     refetchOnWindowFocus: false,
     staleTime: 1500,
@@ -1318,7 +1328,8 @@ export function useControlRecord(
       fetchAndSetHierarchy(serial, true, {
         allowSerialMismatch: Boolean(serialOverride),
         bypassBackoff: true,
-        bypassInFlight: true
+        bypassInFlight: true,
+        priority: 'visible'
       })
         .catch((e) => {
           queryClient.setQueryData(
@@ -1355,7 +1366,8 @@ export function useControlRecord(
         setManualHierarchyLoading(true);
         await fetchAndSetHierarchy(selectedHierarchySerial, true, {
           bypassBackoff: true,
-          bypassInFlight: true
+          bypassInFlight: true,
+          priority: 'visible'
         });
       } catch {
         /* user can retry with the refresh button; avoid a hidden tight loop */

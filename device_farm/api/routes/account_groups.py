@@ -31,6 +31,7 @@ from db.crud.account_group import (
     remove_member,
     update_group,
 )
+from common.totp import account_metadata_value, generate_totp
 
 
 router = APIRouter(prefix="/account-groups", tags=["account-groups"])
@@ -275,5 +276,22 @@ async def resolve_account_group(
             vars_["__ACCOUNT_PASSWORD__"] = decrypt_password(account.password_encrypted)
         except Exception:
             vars_["__ACCOUNT_PASSWORD__"] = ""
+    metadata = account.account_metadata or {}
+    email = account_metadata_value(metadata, "email", "login_email", "account_email")
+    if email:
+        vars_["__ACCOUNT_EMAIL__"] = email
+    totp_secret = account_metadata_value(
+        metadata,
+        "totp_secret",
+        "two_factor_secret",
+        "authenticator_secret",
+        "otp_secret",
+        "2fa_secret",
+    )
+    if totp_secret:
+        try:
+            vars_["__ACCOUNT_TOTP_CODE__"] = generate_totp(totp_secret)
+        except Exception:
+            vars_["__ACCOUNT_TOTP_CODE__"] = ""
     await db.commit()
     return {"variables": vars_, "account_id": str(account.id)}

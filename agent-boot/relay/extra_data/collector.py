@@ -306,6 +306,41 @@ def _bool_context(context: dict[str, Any], key: str, default: bool = False) -> b
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _dump_action(
+    context: dict[str, Any],
+    *,
+    profile: str = "extract",
+) -> dict[str, Any]:
+    """Build a u2 dump_hierarchy action for the requested crawl profile.
+
+    extract: raw by default, because this XML may be parsed/ingested.
+    verify: compressed by default, because this XML should only prove UI state.
+    """
+    normalized_profile = (profile or "extract").strip().lower()
+    if normalized_profile == "verify":
+        compressed = _bool_context(context, "hierarchy_verify_compressed", True)
+    else:
+        compressed = _bool_context(
+            context,
+            "hierarchy_extract_compressed",
+            _bool_context(context, "hierarchy_compressed", False),
+        )
+    action: dict[str, Any] = {
+        "op": "dump_hierarchy",
+        "compressed": compressed,
+        "timeout": _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0),
+    }
+    max_depth_key = f"hierarchy_{normalized_profile}_max_depth"
+    if context.get(max_depth_key) is not None:
+        action["max_depth"] = _int_context(context, max_depth_key, 50, 1, 100)
+    elif context.get("hierarchy_max_depth") is not None:
+        action["max_depth"] = _int_context(context, "hierarchy_max_depth", 50, 1, 100)
+    if context.get("hierarchy_pretty") is not None:
+        action["pretty"] = _bool_context(context, "hierarchy_pretty", False)
+    action["profile"] = normalized_profile
+    return action
+
+
 def should_capture_screenshot(context: dict[str, Any]) -> bool:
     return _bool_context(
         context,
@@ -577,6 +612,7 @@ async def _u2_click_post_open_target_and_dump(
     context: dict[str, Any],
     *,
     settle_s: float,
+    dump_profile: str = "extract",
 ) -> tuple[bool, str, str | None]:
     """Coordinate tap and post-tap dump in one executor batch."""
     from relay.extra_data.parsers.facebook.post_open_pipeline import post_header_tap_point
@@ -602,14 +638,12 @@ async def _u2_click_post_open_target_and_dump(
         cy,
         bounds,
     )
-    compressed = _bool_context(context, "hierarchy_compressed", False)
-    dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
     batch = await executor.run_batch(
         serial,
         [
             {"op": "click", "x": cx, "y": cy},
             {"op": "sleep", "seconds": settle_s},
-            {"op": "dump_hierarchy", "compressed": compressed, "timeout": dump_timeout},
+            _dump_action(context, profile=dump_profile),
         ],
         early_exit=True,
     )
@@ -826,6 +860,7 @@ async def _maybe_open_fb_post_detail(
         locked_post_key=locked_post_key,
         exclude_post_anchors=exclude_post_anchors,
         center_y_ratio=float(context.get("post_open_center_y_ratio") or 0.5),
+        max_scan_elements=_int_context(context, "post_open_scan_window", 12, 0, 200),
     )
     _add_timing("resolve_ms", _elapsed_ms(resolve_started))
     candidates = ([primary] if primary else []) + [
@@ -923,9 +958,19 @@ async def _maybe_open_fb_post_detail(
     max_attempts = _int_context(context, "post_open_max_attempts", 2, 1, 4)
     back_settle_s = _float_context(context, "post_open_back_settle_s", 0.5, 0.0, 3.0)
     attempts: list[dict[str, Any]] = []
+    attempted_open_post_anchors = [
+        anchor
+        for target in attempt_targets[:max_attempts]
+        if (anchor := _opened_post_payload_from_target(target))
+    ]
 
     for idx, target in enumerate(attempt_targets[:max_attempts]):
         detail_xml: str | None = None
+        dump_profile = (
+            "verify"
+            if idx > 0 and _bool_context(context, "post_open_alternate_fast_verify", False)
+            else "extract"
+        )
         attempt_started = time.monotonic()
         use_batch_dump = _bool_context(
             context,
@@ -940,11 +985,12 @@ async def _maybe_open_fb_post_detail(
                 target,
                 context,
                 settle_s=settle_s,
+                dump_profile=dump_profile,
             )
             tap_dump_ms = _elapsed_ms(tap_started)
             if click_ok and not detail_xml:
                 dump_started = time.monotonic()
-                detail_xml = await _dump_hierarchy(executor, serial, context)
+                detail_xml = await _dump_hierarchy(executor, serial, context, profile=dump_profile)
                 fallback_dump_ms = _elapsed_ms(dump_started)
             else:
                 fallback_dump_ms = 0.0
@@ -978,7 +1024,7 @@ async def _maybe_open_fb_post_detail(
             _add_timing("settle_ms", _elapsed_ms(sleep_started))
         if detail_xml is None:
             dump_started = time.monotonic()
-            detail_xml = await _dump_hierarchy(executor, serial, context)
+            detail_xml = await _dump_hierarchy(executor, serial, context, profile=dump_profile)
             fallback_dump_ms = _elapsed_ms(dump_started)
         _add_timing("tap_dump_ms", tap_dump_ms)
         if fallback_dump_ms:
@@ -988,6 +1034,55 @@ async def _maybe_open_fb_post_detail(
         comment_sheet_opened = bool(detail_xml and _diag_sheet_opened(detail_xml))
         verify_ms = _elapsed_ms(verify_started)
         _add_timing("verify_ms", verify_ms)
+        verify_retry_count = 0
+        verify_retry_ms = 0.0
+        if (
+            verify
+            and not opened
+            and not comment_sheet_opened
+            and detail_xml
+            and _looks_like_hierarchy_xml(detail_xml)
+            and _sha256_hex(detail_xml) != _sha256_hex(feed_xml)
+        ):
+            max_verify_retries = _int_context(context, "post_open_verify_retries", 0, 0, 3)
+            verify_retry_pause_s = _float_context(
+                context,
+                "post_open_verify_retry_pause_s",
+                0.18,
+                0.0,
+                1.0,
+            )
+            for retry_index in range(max_verify_retries):
+                retry_started = time.monotonic()
+                if verify_retry_pause_s > 0:
+                    await asyncio.sleep(verify_retry_pause_s)
+                retry_xml = await _dump_hierarchy(executor, serial, context, profile=dump_profile)
+                retry_ms = _elapsed_ms(retry_started)
+                verify_retry_ms += retry_ms
+                verify_retry_count += 1
+                if not retry_xml:
+                    continue
+                retry_opened = hierarchy_is_fb_post_detail_from_xml(retry_xml)
+                retry_comment_sheet_opened = _diag_sheet_opened(retry_xml)
+                detail_xml = retry_xml
+                opened = bool(retry_opened)
+                comment_sheet_opened = bool(retry_comment_sheet_opened)
+                if opened or comment_sheet_opened:
+                    break
+                if _sha256_hex(retry_xml) == _sha256_hex(feed_xml):
+                    break
+                if retry_index + 1 >= max_verify_retries:
+                    break
+            if verify_retry_ms:
+                _add_timing("verify_retry_ms", verify_retry_ms)
+        raw_redump_ms = 0.0
+        if (opened or comment_sheet_opened) and dump_profile != "extract":
+            raw_started = time.monotonic()
+            raw_detail_xml = await _dump_hierarchy(executor, serial, context, profile="extract")
+            raw_redump_ms = _elapsed_ms(raw_started)
+            _add_timing("raw_redump_ms", raw_redump_ms)
+            if raw_detail_xml:
+                detail_xml = raw_detail_xml
         attempts.append(
             {
                 "index": idx,
@@ -999,6 +1094,10 @@ async def _maybe_open_fb_post_detail(
                 "tap_dump_ms": tap_dump_ms,
                 "fallback_dump_ms": fallback_dump_ms,
                 "verify_ms": verify_ms,
+                "verify_retry_count": verify_retry_count,
+                "verify_retry_ms": round(verify_retry_ms, 1),
+                "raw_redump_ms": raw_redump_ms,
+                "dump_profile": dump_profile,
                 "attempt_ms": _elapsed_ms(attempt_started),
             }
         )
@@ -1007,8 +1106,6 @@ async def _maybe_open_fb_post_detail(
             # Some Facebook layouts also satisfy the post-detail heuristic. Prefer
             # the more specific sheet state so ingest can safely fall back to the
             # complete feed row when the sheet exposes no parseable post row.
-            context["open_post_detail"] = True
-            context["open_post_detail_tap_kind"] = target.get("tap_kind")
             diagnostic = {
                 "reason_code": "comment_sheet",
                 "post_detail_verified": opened,
@@ -1020,12 +1117,21 @@ async def _maybe_open_fb_post_detail(
             opened_post = _opened_post_payload_from_target(target)
             if opened_post:
                 diagnostic["opened_post"] = opened_post
+                context["open_post_detail"] = True
+                context["open_post_detail_tap_kind"] = target.get("tap_kind")
+                logger.info(
+                    "[%s] open_post_before_extract tap #%d opened comment sheet — using for extract",
+                    serial,
+                    idx,
+                )
+                return (detail_xml or feed_xml), _finish_diagnostic(diagnostic)
+            diagnostic["reason_code"] = "comment_sheet_without_opened_post"
             logger.info(
-                "[%s] open_post_before_extract tap #%d opened comment sheet — using for extract",
+                "[%s] open_post_before_extract tap #%d opened comment sheet without opened-post payload",
                 serial,
                 idx,
             )
-            return (detail_xml or feed_xml), _finish_diagnostic(diagnostic)
+            return None, _finish_diagnostic(diagnostic)
         if opened or not verify:
             context["open_post_detail"] = True
             context["open_post_detail_tap_kind"] = target.get("tap_kind")
@@ -1094,6 +1200,7 @@ async def _maybe_open_fb_post_detail(
     return None, _finish_diagnostic({
         "reason_code": "post_open_verify_failed",
         "attempts": attempts,
+        "attempted_open_post_anchors": attempted_open_post_anchors,
         "candidate_count": len(candidates),
         "attempt_target_count": len(attempt_targets),
         "debug_xml": debug_path,
@@ -1139,9 +1246,11 @@ async def _u2_swipe_vertical(
 
             xml = context.get("_last_hierarchy_xml")
             if not isinstance(xml, str) or not xml.strip():
+                action = _dump_action(context, profile="verify")
+                action["timeout"] = 3.0
                 dump = await executor.run_batch(
                     serial,
-                    [{"op": "dump_hierarchy", "timeout": 3.0}],
+                    [action],
                     early_exit=True,
                 )
                 results = dump.get("results") or []
@@ -1480,15 +1589,13 @@ async def _expand_see_more_xml_probe_tap(
         return 0, xml
     bounds = min(plan, key=lambda bb: (_bounds_center(bb)[1], _bounds_center(bb)[0]))
     cx, cy = _bounds_center(bounds)
-    compressed = _bool_context(context, "hierarchy_compressed", False)
-    dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
     settle_s = _float_context(context, "expand_post_tap_settle_s", 0.35, 0.15, 2.0)
     batch = await executor.run_batch(
         serial,
         [
             {"op": "click", "x": cx, "y": cy},
             {"op": "sleep", "seconds": settle_s},
-            {"op": "dump_hierarchy", "compressed": compressed, "timeout": dump_timeout},
+            _dump_action(context, profile="extract"),
         ],
         early_exit=True,
     )
@@ -1691,19 +1798,15 @@ async def _dump_hierarchy(
     executor: Any,
     serial: str,
     context: dict[str, Any] | None = None,
+    *,
+    profile: str = "extract",
 ) -> str | None:
     ctx = context or {}
     _raise_if_cancelled(ctx)
-    compressed = _bool_context(ctx, "hierarchy_compressed", False)
-    dump_timeout = _float_context(ctx, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
     started = time.monotonic()
     result = await executor.run_batch(
         serial,
-        [{
-            "op": "dump_hierarchy",
-            "compressed": compressed,
-            "timeout": dump_timeout,
-        }],
+        [_dump_action(ctx, profile=profile)],
         early_exit=True,
     )
     _raise_if_cancelled(ctx)
@@ -1724,7 +1827,13 @@ async def _dump_hierarchy(
     if not isinstance(xml, str) or not _looks_like_hierarchy_xml(xml):
         logger.warning("[%s] dump_hierarchy invalid xml in %.2fs", serial, elapsed)
         return None
-    logger.info("[%s] dump_hierarchy ok in %.2fs bytes=%d", serial, elapsed, len(xml.encode("utf-8")))
+    logger.info(
+        "[%s] dump_hierarchy ok profile=%s in %.2fs bytes=%d",
+        serial,
+        profile,
+        elapsed,
+        len(xml.encode("utf-8")),
+    )
     return xml
 
 
@@ -2374,13 +2483,7 @@ async def _collect_comment_snapshots(
                     actions.append({"op": "sleep", "seconds": swipe_pause_s})
         if settle_after_batch_s > 0:
             actions.append({"op": "sleep", "seconds": settle_after_batch_s})
-        compressed = _bool_context(context, "hierarchy_compressed", False)
-        dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
-        actions.append({
-            "op": "dump_hierarchy",
-            "compressed": compressed,
-            "timeout": dump_timeout,
-        })
+        actions.append(_dump_action(context, profile="extract"))
 
         started = time.monotonic()
         result = await executor.run_batch(
@@ -2438,13 +2541,7 @@ async def _collect_comment_snapshots(
         }]
         if settle_after_batch_s > 0:
             actions.append({"op": "sleep", "seconds": settle_after_batch_s})
-        compressed = _bool_context(context, "hierarchy_compressed", False)
-        dump_timeout = _float_context(context, "hierarchy_dump_timeout_s", 5.0, 2.0, 15.0)
-        actions.append({
-            "op": "dump_hierarchy",
-            "compressed": compressed,
-            "timeout": dump_timeout,
-        })
+        actions.append(_dump_action(context, profile="extract"))
 
         started = time.monotonic()
         result = await executor.run_batch(serial, actions, early_exit=True)

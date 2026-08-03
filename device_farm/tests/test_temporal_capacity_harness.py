@@ -50,7 +50,7 @@ def test_harness_defaults_match_recommended_database_pools(monkeypatch):
 
     assert stress_temporal_capacity.main() == 0
     args = captured["args"]
-    assert args.db_pool_size == 8
-    assert args.db_max_overflow == 2
+    assert args.db_pool_size == 12
+    assert args.db_max_overflow == 3
     assert args.db_activity_pool_size == 4
     assert args.db_activity_max_overflow == 0

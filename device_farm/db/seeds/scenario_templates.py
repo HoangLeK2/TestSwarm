@@ -764,10 +764,21 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "ENABLE_CONNECTION_REQUEST": "true",
         },
         "steps": [
-            {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
-            {"type": "dismiss_popup", "retries": 2},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.45},
             {
+                "id": "open_facebook",
+                "type": "launch_app",
+                "package": "com.facebook.katana",
+                "title": "mở fb",
+            },
+            {"id": "dismiss_popups", "type": "dismiss_popup", "retries": 2},
+            {
+                "id": "wait_home_stable",
+                "type": "wait_stable",
+                "timeout": 5,
+                "stable_duration": 0.45,
+            },
+            {
+                "id": "branch_by_target_object",
                 "type": "if_variable",
                 "name": "TARGET_OBJECT_TYPE",
                 "equals": "fanpage",
@@ -861,7 +872,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     }
                 ],
             },
-            {"type": "key", "key": "home"},
+            {"id": "finish_home", "type": "key", "key": "home"},
         ],
     },
 

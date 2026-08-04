@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
 
+from db.models.enums import ScenarioKind
 from db.seeds.scenario_templates import (
     BUILTIN_TEMPLATE_BY_NAME,
     _graph_mirror_from_steps,
 )
+from services.scenario_dsl.body_validator import validate_org_scenario_body
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -119,6 +122,27 @@ def test_facebook_nurture_template_branches_by_target_object() -> None:
     nodes, edges = _graph_mirror_from_steps(steps)
     assert nodes
     assert edges
+
+
+def test_facebook_nurture_template_passes_sequence_body_validator() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME["Chiến lược nuôi Facebook theo đối tượng"]
+
+    async def _validate():
+        return await validate_org_scenario_body(
+            None,
+            org_id="org",
+            scenario_id="scenario",
+            kind=ScenarioKind.SEQUENCE.value,
+            body={
+                "steps": template["steps"],
+                "variables": template["variables"],
+            },
+        )
+
+    result = asyncio.run(_validate())
+
+    assert result.status == "valid"
+    assert result.errors == []
 
 
 def _post_comment_sibling_flows(

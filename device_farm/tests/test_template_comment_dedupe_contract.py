@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from db.seeds.scenario_templates import (
+    BUILTIN_TEMPLATE_BY_NAME,
+    _graph_mirror_from_steps,
+)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -16,6 +21,9 @@ def _walk_steps(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             out.extend(_walk_steps(step.get("steps")))
         for key in ("then", "else"):
             out.extend(_walk_steps(step.get(key)))
+        for branch in step.get("branches") or []:
+            if isinstance(branch, dict):
+                out.extend(_walk_steps(branch.get("steps")))
     return out
 
 
@@ -61,6 +69,56 @@ def test_scenario_fb_group_crawl_comment_extract_uses_comment_key_dedupe() -> No
     data = json.loads((ROOT / "scenarios" / "fb_group_crawl.json").read_text(encoding="utf-8"))
     _assert_comment_extract_dedupe_comment_key(data.get("steps", []))
     _assert_comment_flow_stays_on_detail_until_comments(data.get("steps", []))
+
+
+def test_facebook_nurture_template_branches_by_target_object() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME["Chiến lược nuôi Facebook theo đối tượng"]
+    assert template["variables"]["TARGET_OBJECT_TYPE"] == "fanpage"
+
+    steps = template["steps"]
+    flat_steps = _walk_steps(steps)
+
+    assert any(
+        step.get("type") == "if_variable"
+        and step.get("name") == "TARGET_OBJECT_TYPE"
+        and step.get("equals") == "fanpage"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "if_variable"
+        and step.get("name") == "TARGET_OBJECT_TYPE"
+        and step.get("equals") == "post"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "tap_selector"
+        and step.get("value") == "${FANPAGE_ROW_TEXT}"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "tap_selector"
+        and step.get("value") == "${POST_ROW_TEXT}"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "tap_selector"
+        and step.get("value") == "${PEOPLE_ROW_TEXT}"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "content_interaction"
+        and step.get("action") == "like"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "connection_request"
+        and step.get("action") == "request"
+        for step in flat_steps
+    )
+
+    nodes, edges = _graph_mirror_from_steps(steps)
+    assert nodes
+    assert edges
 
 
 def _post_comment_sibling_flows(

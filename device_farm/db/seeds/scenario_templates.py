@@ -95,6 +95,143 @@ def _fb_open_comments_steps(
     ]
 
 
+def _fb_open_search_result_steps(
+    *,
+    search_var: str,
+    tab_vi: str,
+    tab_en: str,
+    tab_description_contains: str,
+    row_text_var: str,
+) -> List[Dict[str, Any]]:
+    """Search Facebook, switch to a result tab, then open a configured row."""
+    return [
+        {
+            "type": "if_element",
+            "by": "content-desc",
+            "value": "Tìm kiếm",
+            "timeout": 5,
+            "then": [
+                {
+                    "type": "tap_selector",
+                    "by": "content-desc",
+                    "value": "Tìm kiếm",
+                    "timeout": 4,
+                },
+            ],
+            "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
+        },
+        {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+        {"type": "input_text", "text": f"${{{search_var}}}", "via": "u2"},
+        {"type": "wait", "seconds": 1},
+        {"type": "key", "key": "enter"},
+        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+        {
+            "type": "if_element",
+            "by": "descriptionContains",
+            "value": tab_description_contains,
+            "timeout": 5,
+            "then": [
+                {
+                    "type": "tap_selector",
+                    "by": "descriptionContains",
+                    "value": tab_description_contains,
+                    "timeout": 4,
+                },
+            ],
+            "else": [
+                {
+                    "type": "if_element",
+                    "by": "text",
+                    "value": tab_vi,
+                    "timeout": 3,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "text",
+                            "value": tab_vi,
+                            "timeout": 3,
+                        },
+                    ],
+                    "else": [
+                        {
+                            "type": "tap_selector",
+                            "by": "text",
+                            "value": tab_en,
+                            "timeout": 3,
+                            "ignore_error": True,
+                        }
+                    ],
+                }
+            ],
+        },
+        {"type": "wait_stable", "timeout": 2, "stable_duration": 0.45},
+        {
+            "type": "tap_selector",
+            "by": "text",
+            "value": f"${{{row_text_var}}}",
+            "timeout": 10,
+        },
+        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+    ]
+
+
+def _fb_nurture_feed_steps(*, tag: str, context_var: str) -> List[Dict[str, Any]]:
+    """Lightweight interaction loop for the current Facebook target screen."""
+    return [
+        {
+            "type": "loop",
+            "count": "${MAX_TOUCHES}",
+            "steps": [
+                {"type": "dismiss_popup", "retries": 1},
+                {
+                    "type": "random_pick",
+                    "branches": [
+                        {
+                            "weight": 3,
+                            "steps": [
+                                {
+                                    "type": "content_interaction",
+                                    "platform": "facebook",
+                                    "action": "like",
+                                    "timeout": 4,
+                                    "verify_timeout": 4,
+                                    "settle_seconds": 0.35,
+                                    "save_as": "_last_nurture_action",
+                                    "ignore_error": True,
+                                }
+                            ],
+                        },
+                        {
+                            "weight": 1,
+                            "steps": [
+                                {"type": "wait", "seconds": "${ACTION_WAIT_SECONDS}"},
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "type": "scroll_down",
+                    "repeats": 1,
+                    "start_x_ratio": "${SCROLL_X_RATIO}",
+                    "start_y_ratio": 0.65,
+                    "end_y_ratio": 0.47,
+                },
+                {
+                    "type": "set_variable",
+                    "name": "_W",
+                    "from_list": [1, 1.5, 2, 2.5, 3],
+                },
+                {"type": "wait", "seconds": "${_W}"},
+            ],
+        },
+        {
+            "type": "set_variable",
+            "name": "_nurture_target",
+            "value": f"{tag}:${{{context_var}}}",
+        },
+    ]
+
+
 _FB_DETECT_LOGGED_IN: Dict[str, Any] = {
     "any_text": ["Trang chủ", "Home", "Tìm kiếm", "Bạn đang nghĩ gì?"],
 }
@@ -597,6 +734,133 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             },
 
             # ── Phase 6: Kết thúc ────────────────────────────────────────────
+            {"type": "key", "key": "home"},
+        ],
+    },
+
+    {
+        "name": "Chiến lược nuôi Facebook theo đối tượng",
+        "display_name": "Chiến lược nuôi Facebook theo đối tượng",
+        "category": "facebook",
+        "description": (
+            "Template nuôi tương tác theo TARGET_OBJECT_TYPE: fanpage, post hoặc people. "
+            "Mỗi nhánh tự tìm đúng tab Facebook, mở đúng đối tượng rồi chạy tương tác nhẹ "
+            "có delay tự nhiên. Social-action node chỉ thao tác trên màn hình hiện tại; "
+            "các hành động tuỳ chọn được ignore_error để campaign không dừng khi target đã được xử lý "
+            "hoặc nút không xuất hiện."
+        ),
+        "tags": "facebook,nurture,fanpage,post,people,engagement",
+        "variables": {
+            "TARGET_OBJECT_TYPE": "fanpage",
+            "FANPAGE_SEARCH": "ten fanpage",
+            "FANPAGE_ROW_TEXT": "Tên Fanpage",
+            "POST_SEARCH": "noi dung bai viet",
+            "POST_ROW_TEXT": "Đoạn text bài viết",
+            "PEOPLE_SEARCH": "ten profile",
+            "PEOPLE_ROW_TEXT": "Tên Profile",
+            "MAX_TOUCHES": 8,
+            "SCROLL_X_RATIO": 0.22,
+            "ACTION_WAIT_SECONDS": 2,
+            "ENABLE_CONNECTION_REQUEST": "true",
+        },
+        "steps": [
+            {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
+            {"type": "dismiss_popup", "retries": 2},
+            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.45},
+            {
+                "type": "if_variable",
+                "name": "TARGET_OBJECT_TYPE",
+                "equals": "fanpage",
+                "then": [
+                    *_fb_open_search_result_steps(
+                        search_var="FANPAGE_SEARCH",
+                        tab_vi="Trang",
+                        tab_en="Pages",
+                        tab_description_contains="tab Trang",
+                        row_text_var="FANPAGE_ROW_TEXT",
+                    ),
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Theo dõi",
+                        "timeout": 2,
+                        "then": [
+                            {
+                                "type": "tap_selector",
+                                "by": "text",
+                                "value": "Theo dõi",
+                                "timeout": 2,
+                                "ignore_error": True,
+                            },
+                        ],
+                        "else": [
+                            {
+                                "type": "tap_selector",
+                                "by": "text",
+                                "value": "Follow",
+                                "timeout": 2,
+                                "ignore_error": True,
+                            },
+                        ],
+                    },
+                    *_fb_nurture_feed_steps(tag="fanpage", context_var="FANPAGE_SEARCH"),
+                ],
+                "else": [
+                    {
+                        "type": "if_variable",
+                        "name": "TARGET_OBJECT_TYPE",
+                        "equals": "post",
+                        "then": [
+                            *_fb_open_search_result_steps(
+                                search_var="POST_SEARCH",
+                                tab_vi="Bài viết",
+                                tab_en="Posts",
+                                tab_description_contains="tab Bài viết",
+                                row_text_var="POST_ROW_TEXT",
+                            ),
+                            {
+                                "type": "content_interaction",
+                                "platform": "facebook",
+                                "action": "like",
+                                "timeout": 5,
+                                "verify_timeout": 5,
+                                "settle_seconds": 0.35,
+                                "save_as": "_post_nurture_action",
+                                "ignore_error": True,
+                            },
+                            *_fb_nurture_feed_steps(tag="post", context_var="POST_SEARCH"),
+                        ],
+                        "else": [
+                            *_fb_open_search_result_steps(
+                                search_var="PEOPLE_SEARCH",
+                                tab_vi="Mọi người",
+                                tab_en="People",
+                                tab_description_contains="tab Mọi người",
+                                row_text_var="PEOPLE_ROW_TEXT",
+                            ),
+                            {
+                                "type": "if_variable",
+                                "name": "ENABLE_CONNECTION_REQUEST",
+                                "equals": "true",
+                                "then": [
+                                    {
+                                        "type": "connection_request",
+                                        "platform": "facebook",
+                                        "action": "request",
+                                        "timeout": 5,
+                                        "verify_timeout": 5,
+                                        "settle_seconds": 0.4,
+                                        "save_as": "_people_connection_action",
+                                        "ignore_error": True,
+                                    }
+                                ],
+                                "else": [],
+                            },
+                            *_fb_nurture_feed_steps(tag="people", context_var="PEOPLE_SEARCH"),
+                        ],
+                    }
+                ],
+            },
             {"type": "key", "key": "home"},
         ],
     },

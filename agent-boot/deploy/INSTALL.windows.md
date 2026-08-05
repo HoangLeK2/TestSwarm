@@ -10,7 +10,7 @@ Gói **Windows only** (linux/amd64). Chạy trên PC Windows với **Docker Desk
 
 ## Cài nhanh
 
-Giải nén `agent-boot-docker-windows-0.1.3.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
+Giải nén `agent-boot-docker-windows-0.1.4.zip`, mở **CMD** hoặc **PowerShell** trong thư mục đó:
 
 ```bat
 scripts\docker-load.cmd
@@ -31,6 +31,13 @@ Database URL phải là PostgreSQL credential giới hạn quyền, cấp riêng
 hàng; không dùng tài khoản owner/superuser. Các env vận hành còn lại đã có đầy
 đủ giá trị mặc định trong `.env.example`. Script khởi động sẽ từ chối chạy nếu
 ba giá trị bắt buộc chưa được điền.
+
+WebRTC video cần go2rtc chạy ở host hoặc media node mà container truy cập được.
+Mặc định media adapter publish H264 tại
+`rtsp://host.docker.internal:8556/device-{serial}` và tự gọi go2rtc API
+`http://host.docker.internal:1984`. Nếu go2rtc không chạy trên cùng máy Windows,
+sửa `MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE` và `MEDIA_ADAPTER_GO2RTC_URL`
+trong `.env`.
 
 (TLS cert đã có trong image.)
 
@@ -78,6 +85,9 @@ scripts\docker-up.cmd down
 
 Relay ID tự sinh được lưu trong Docker volume `agent-boot-state`, nên vẫn giữ
 nguyên sau `down`/`up`. Chỉ `docker compose down -v` mới xóa identity này.
+Go media adapter chạy cùng container khi `MEDIA_ADAPTER_ENABLED=1`; adapter đọc
+scrcpy video socket và publish sang go2rtc. Backend không còn nhận video qua
+gRPC.
 
 Luôn dùng `scripts\docker-up.cmd` để `up`/`restart`, vì wrapper kiểm tra secret
 và ADB trước khi khởi động. Có thể dùng Docker Compose trực tiếp cho các lệnh

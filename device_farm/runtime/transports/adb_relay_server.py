@@ -289,7 +289,7 @@ class AdbRelayManager:
         self._grpc_agents: Dict[str, "asyncio.Queue"] = {}
         # Per-device monotonic sequence for a11y_action
         self._a11y_seq: Dict[str, int] = {}
-        # Wakes commands admitted during a short gRPC video-channel reconnect.
+        # Wakes commands admitted during a short gRPC relay reconnect.
         # A Condition avoids polling and lets all waiting phones re-check their
         # own serial atomically after one relay registration/heartbeat update.
         self._relay_state_changed = asyncio.Condition()
@@ -783,6 +783,7 @@ class AdbRelayManager:
         port: int,
         bitrate: int = 2_000_000,
         low_latency: bool = False,
+        profile: str | None = None,
     ) -> bool:
         conn = self.relay_for_serial(serial)
         if conn is None:
@@ -797,6 +798,7 @@ class AdbRelayManager:
             "port":        port,
             "bitrate":     bitrate or SCRCPY_DEFAULT_BITRATE,
             "low_latency": low_latency,
+            "profile":     profile or "visible",
         })
         await conn._write_queue.put(msg)
         self._scrcpy_running.add(serial)
@@ -889,23 +891,6 @@ class AdbRelayManager:
                 q.put_nowait(None)  # sentinel → stops _send_controls()
             except Exception:
                 pass
-
-    def dispatch_grpc_video_frame(self, frame: Any) -> None:
-        """Route a VideoFrame proto received via gRPC to the appropriate RelayScrcpyReceiver."""
-        # Build pts_raw matching the existing dispatch_scrcpy_frame signature
-        pts_raw = int(frame.pts_us)
-        if frame.is_config:
-            pts_raw |= 0x8000_0000_0000_0000
-        self.dispatch_scrcpy_frame(
-            frame.serial,
-            bytes(frame.data),
-            pts_raw,
-            frame.width,
-            frame.height,
-            is_config=frame.is_config,
-            is_keyframe=frame.is_key,
-            pts=frame.pts_us,
-        )
 
     async def send_grpc_control(self, serial: str, data: bytes) -> None:
         """Send a raw scrcpy control packet to the agent-boot managing this serial via gRPC.

@@ -279,6 +279,32 @@ def _make_real_device_control_app(db_enabled: bool):
     return app
 
 
+@pytest.mark.anyio
+async def test_public_config_exposes_webrtc_flags_without_gateway_secrets():
+    from api.routes.public import build_public_router
+    from core.config import Config
+
+    config = Config()
+    config.streaming.webrtc_enabled = True
+    config.streaming.media_adapter_url = "http://adapter"
+    app = FastAPI()
+    app.include_router(
+        build_public_router(_mock_manager(), _mock_queue(), config, db_enabled=False)
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["webrtc_enabled"] is True
+    assert body["media_adapter_url_configured"] is True
+    assert "media_adapter_url" not in body
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Live device status normalization
 # ═══════════════════════════════════════════════════════════════════════════════

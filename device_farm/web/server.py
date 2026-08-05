@@ -1618,6 +1618,7 @@ def create_app(
         manager,
         db_enabled=db_enabled,
         read_only=config.safe_mode.read_only,
+        media_stream_enabled=not bool(config.streaming.webrtc_enabled),
     )
     app.state.ws_manager = ws_manager
     lifecycle_ws_manager = DeviceLifecycleWsManager()

@@ -127,4 +127,5 @@ export type DeviceFarmStreamingConfig = {
   mode: string;
   autoAttachScrcpy: boolean;
   autoAttachScrcpyOnRelayOnline: boolean;
+  webrtcEnabled?: boolean;
 };

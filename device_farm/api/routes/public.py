@@ -598,6 +598,10 @@ def build_public_router(
             out["streaming_auto_attach_scrcpy_on_relay_online"] = bool(
                 getattr(st, "auto_attach_scrcpy_on_relay_online", False)
             )
+            out["webrtc_enabled"] = bool(getattr(st, "webrtc_enabled", False))
+            out["media_adapter_url_configured"] = bool(
+                getattr(st, "media_adapter_url", "")
+            )
         dev = getattr(config, "device", None)
         if dev is not None:
             out["scrcpy_max_fps"] = getattr(dev, "scrcpy_max_fps", 30)

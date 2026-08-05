@@ -3208,6 +3208,7 @@ class DeviceClient:
         adb_port: int = 5555,
         enable_control: bool = True,
         *,
+        profile: str | None = None,
         max_fps: int | None = None,
         max_width: int | None = None,
         bitrate: int | None = None,
@@ -3234,6 +3235,7 @@ class DeviceClient:
         requested_max_fps = _positive_int(max_fps)
         requested_max_width = _positive_int(max_width)
         requested_bitrate = _positive_int(bitrate)
+        effective_profile = str(profile or "visible").strip().lower() or "visible"
         effective_max_fps = requested_max_fps or int(self.config.device.scrcpy_max_fps or 0)
         effective_max_width = requested_max_width or int(self.config.device.scrcpy_max_width or 0)
         effective_bitrate = requested_bitrate or int(self.config.device.scrcpy_relay_bitrate or 0)
@@ -3244,6 +3246,7 @@ class DeviceClient:
             requested_max_fps,
             requested_max_width,
             requested_bitrate,
+            effective_profile,
         )
 
         # If relay scrcpy is already streaming for the same device IP, don't tear it down.
@@ -3275,8 +3278,14 @@ class DeviceClient:
                     if len(current_params) >= 6
                     else None
                 ) or int(self.config.device.scrcpy_relay_bitrate or 0)
+                current_profile = (
+                    str(current_params[6]).strip().lower()
+                    if len(current_params) >= 7 and current_params[6]
+                    else "visible"
+                )
                 needs_reconfigure = (
                     enable_control != current_enable_control
+                    or effective_profile != current_profile
                     or effective_max_fps != current_max_fps
                     or effective_max_width != current_max_width
                     or effective_bitrate != current_bitrate
@@ -3318,6 +3327,7 @@ class DeviceClient:
                         f"fps {current_max_fps}->{effective_max_fps}, "
                         f"width {current_max_width}->{effective_max_width}, "
                         f"bitrate {current_bitrate}->{effective_bitrate}, "
+                        f"profile {current_profile}->{effective_profile}, "
                         f"control {current_enable_control}->{enable_control}",
                         level=logging.INFO,
                     )
@@ -3566,6 +3576,7 @@ class DeviceClient:
                             port=scrcpy_port,
                             bitrate=effective_bitrate,
                             low_latency=_low_latency,
+                            profile=effective_profile,
                         ),
                         self._loop,
                     )

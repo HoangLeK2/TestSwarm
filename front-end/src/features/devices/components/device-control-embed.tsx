@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useDeviceFarm } from '../hooks/use-device-farm';
 import { resolveControlRecordSelectedDevice } from '../lib/control-record-device-state';
 import { shouldRunEmbedStream } from '../lib/embed-stream-visibility';
+import { fetchConfig } from '../services/api';
 import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
+import type { DeviceScreenTransport } from './device-screen';
 import { DeviceTile } from './device-tile';
 
 type Props = {
@@ -35,6 +38,7 @@ type Props = {
 /** Lightweight scrcpy profile for campaign-monitor embeds — avoids fighting control streams. */
 const MONITOR_PREVIEW_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
   enableControl: false,
+  profile: 'degraded',
   maxFps: 4,
   maxWidth: 360,
   bitrate: 120_000
@@ -53,6 +57,11 @@ export function DeviceControlEmbed({
   const [nearViewport, setNearViewport] = useState(!readOnlyPreview);
   const [previewStreamEnabled, setPreviewStreamEnabled] =
     useState(!readOnlyPreview);
+  const { data: appConfig } = useQuery({
+    queryKey: ['device-farm', 'config'],
+    queryFn: fetchConfig,
+    staleTime: 60_000
+  });
 
   useLayoutEffect(() => {
     if (!readOnlyPreview) {
@@ -130,6 +139,15 @@ export function DeviceControlEmbed({
   );
 
   const mode = selectedDevice ? (modes[selectedDevice.serial] ?? 'tap') : 'tap';
+  const streamTransport = useMemo<DeviceScreenTransport>(
+    () =>
+      appConfig?.webrtc_enabled
+        ? 'webrtc'
+        : readOnlyPreview
+          ? 'h264-only'
+          : 'auto',
+    [appConfig?.webrtc_enabled, readOnlyPreview]
+  );
 
   if (error) {
     return (
@@ -191,7 +209,7 @@ export function DeviceControlEmbed({
         hideDeviceFunctions={readOnlyPreview}
         readOnlyPreview={readOnlyPreview}
         streamFetchPriority={readOnlyPreview ? 'low' : 'auto'}
-        streamTransport={readOnlyPreview ? 'h264-only' : 'auto'}
+        streamTransport={streamTransport}
         scrcpyViewerRole={
           readOnlyPreview ? 'campaign-monitor' : 'control-screen'
         }

@@ -6,18 +6,6 @@ from runtime.stream_telemetry import StreamTelemetry
 def test_stream_telemetry_records_stream_path_aggregate_and_resets() -> None:
     telemetry = StreamTelemetry()
 
-    telemetry.record_grpc_video(
-        agent_id="relay-a:video:0",
-        frame_bytes=128,
-        is_config=False,
-        is_key=True,
-    )
-    telemetry.record_grpc_video(
-        agent_id="relay-a",
-        frame_bytes=256,
-        is_config=True,
-        is_key=False,
-    )
     telemetry.record_dispatch(push_ms=2.4)
     telemetry.record_dispatch(no_receiver=True)
     telemetry.record_dispatch(push_error=True)
@@ -38,12 +26,6 @@ def test_stream_telemetry_records_stream_path_aggregate_and_resets() -> None:
 
     snapshot = telemetry.snapshot(reset=True)
 
-    assert snapshot["grpc_video_frames"] == 2
-    assert snapshot["grpc_video_bytes"] == 384
-    assert snapshot["grpc_video_config_frames"] == 1
-    assert snapshot["grpc_video_keyframes"] == 1
-    assert snapshot["grpc_video_agents"] == 2
-    assert snapshot["grpc_video_shard_agents"] == 1
     assert snapshot["dispatch_frames"] == 3
     assert snapshot["dispatch_no_receiver"] == 1
     assert snapshot["dispatch_push_errors"] == 1
@@ -60,4 +42,4 @@ def test_stream_telemetry_records_stream_path_aggregate_and_resets() -> None:
     assert snapshot["ws_send_wait_p95_ms"] >= 50
     assert snapshot["ws_send_p95_ms"] >= 2
 
-    assert telemetry.snapshot()["grpc_video_frames"] == 0
+    assert telemetry.snapshot()["dispatch_frames"] == 0

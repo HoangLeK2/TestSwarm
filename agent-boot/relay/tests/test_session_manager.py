@@ -45,6 +45,73 @@ class _FakeSession:
         return True
 
 
+class _ConfigAwareFakeSession(_FakeSession):
+    def __init__(
+        self,
+        serial: str,
+        max_fps: int,
+        max_width: int,
+        enable_control: bool,
+        port: int,
+        bitrate: int = 2_000_000,
+        low_latency: bool = False,
+        **kwargs,
+    ):
+        super().__init__(serial, **kwargs)
+        self.max_fps = max_fps
+        self.max_width = max_width
+        self.enable_control = bool(enable_control)
+        self.port = port
+        self.bitrate = bitrate
+        self.low_latency = bool(low_latency)
+        self.stop_calls = 0
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        super().stop()
+
+    def matches_config(
+        self,
+        max_fps: int,
+        max_width: int,
+        enable_control: bool,
+        port: int,
+        bitrate: int,
+        low_latency: bool,
+    ) -> bool:
+        return (
+            self.max_fps == max_fps
+            and self.max_width == max_width
+            and self.enable_control == bool(enable_control)
+            and self.port == port
+            and self.bitrate == bitrate
+            and self.low_latency == bool(low_latency)
+        )
+
+    def can_satisfy_config(
+        self,
+        max_fps: int,
+        max_width: int,
+        enable_control: bool,
+        port: int,
+        bitrate: int,
+        low_latency: bool,
+    ) -> bool:
+        del port
+        return (
+            self.max_fps >= max_fps
+            and self.max_width >= max_width
+            and self.bitrate >= bitrate
+            and (self.enable_control or not bool(enable_control))
+            and self.low_latency == bool(low_latency)
+        )
+
+
+class _DirectMediaFakeSession(_ConfigAwareFakeSession):
+    def supports_warm_forwarding(self) -> bool:
+        return False
+
+
 def test_stop_session_emits_manual_reason(monkeypatch):
     events: list[tuple[str, str]] = []
     monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
@@ -367,6 +434,251 @@ def test_warm_session_uses_warm_ttl_instead_of_frame_idle_ttl(monkeypatch):
     asyncio.run(_run())
 
 
+def test_lower_profile_reuses_stronger_live_session_without_restart(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _ConfigAwareFakeSession)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            result = await mgr.start_session(
+                "serial-profile",
+                15,
+                480,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=800_000,
+            )
+            assert result == "cold_start"
+            sess = mgr.get("serial-profile")
+            assert sess is not None
+
+            result = await mgr.start_session(
+                "serial-profile",
+                1,
+                360,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=100_000,
+            )
+
+            assert result == "stronger_config_reuse"
+            assert mgr.get("serial-profile") is sess
+            assert sess.stop_calls == 0
+            assert sess.resume_reasons == ["scrcpy_reuse_stronger_config"]
+            stats = mgr.stats_snapshot(reset=True)
+            assert stats["cold_starts"] == 1
+            assert stats["stronger_config_reuses"] == 1
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
+def test_profile_reconfigure_stop_holds_then_reuses_lower_profile(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _ConfigAwareFakeSession)
+    monkeypatch.setattr(sm, "PROFILE_RECONFIGURE_HOLD_TTL_S", 3.0)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            await mgr.start_session(
+                "serial-profile-hold",
+                15,
+                480,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=800_000,
+            )
+            sess = mgr.get("serial-profile-hold")
+            assert sess is not None
+
+            await mgr.stop_session(
+                "serial-profile-hold",
+                reason="attach_scrcpy_stream:profile_reconfigure",
+            )
+
+            assert mgr.get("serial-profile-hold") is sess
+            assert sess.stop_calls == 0
+            assert sess.paused is True
+            assert sess.pause_reasons == ["attach_scrcpy_stream:profile_reconfigure"]
+
+            result = await mgr.start_session(
+                "serial-profile-hold",
+                1,
+                360,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=100_000,
+            )
+
+            assert result == "warm_reuse"
+            assert mgr.get("serial-profile-hold") is sess
+            assert sess.stop_calls == 0
+            assert sess.resume_reasons == ["scrcpy_reuse_stronger_config"]
+            stats = mgr.stats_snapshot(reset=True)
+            assert stats["cold_starts"] == 1
+            assert stats["profile_reconfigure_holds"] == 1
+            assert stats["stronger_config_reuses"] == 1
+            assert stats["warm_reuses"] == 1
+            assert stats["profile_reconfigure_hold_expirations"] == 0
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
+def test_direct_media_adapter_sessions_do_not_warm_reuse(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _DirectMediaFakeSession)
+    monkeypatch.setattr(sm, "WARM_IDLE_ENABLED", True)
+    monkeypatch.setattr(sm, "WARM_IDLE_TTL_S", 45.0)
+    monkeypatch.setattr(sm, "PROFILE_RECONFIGURE_HOLD_TTL_S", 3.0)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            await mgr.start_session(
+                "serial-direct",
+                15,
+                600,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=900_000,
+            )
+            first = mgr.get("serial-direct")
+            assert first is not None
+
+            await mgr.stop_session(
+                "serial-direct",
+                reason="unsubscribe_frames:idle_no_viewers",
+            )
+
+            assert mgr.get("serial-direct") is None
+            assert first.stop_calls == 1
+            assert first.pause_reasons == []
+
+            result = await mgr.start_session(
+                "serial-direct",
+                15,
+                600,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=900_000,
+            )
+
+            assert result == "cold_start"
+            assert mgr.get("serial-direct") is not first
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
+def test_profile_reconfigure_hold_expires_if_no_replacement_start(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _ConfigAwareFakeSession)
+    monkeypatch.setattr(sm, "PROFILE_RECONFIGURE_HOLD_TTL_S", 0.001)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            await mgr.start_session(
+                "serial-profile-expire",
+                15,
+                480,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=800_000,
+            )
+            sess = mgr.get("serial-profile-expire")
+            assert sess is not None
+
+            await mgr.stop_session(
+                "serial-profile-expire",
+                reason="attach_scrcpy_stream:profile_reconfigure",
+            )
+            await asyncio.sleep(0.05)
+
+            assert mgr.get("serial-profile-expire") is None
+            assert sess.stop_calls == 1
+            stats = mgr.stats_snapshot(reset=True)
+            assert stats["profile_reconfigure_holds"] == 1
+            assert stats["profile_reconfigure_hold_expirations"] == 1
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
+def test_higher_profile_still_restarts_to_raise_quality(monkeypatch):
+    monkeypatch.setattr(sm, "ScrcpyRelaySession", _ConfigAwareFakeSession)
+
+    async def _run() -> None:
+        mgr = sm.ScrcpySessionManager()
+        await mgr.start()
+        try:
+            queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            await mgr.start_session(
+                "serial-profile-up",
+                1,
+                360,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=100_000,
+            )
+            first = mgr.get("serial-profile-up")
+            assert first is not None
+
+            result = await mgr.start_session(
+                "serial-profile-up",
+                15,
+                480,
+                True,
+                27183,
+                queue,
+                loop,
+                bitrate=800_000,
+            )
+
+            assert result == "cold_start"
+            assert first.stop_calls == 1
+            assert mgr.get("serial-profile-up") is not first
+            stats = mgr.stats_snapshot(reset=True)
+            assert stats["cold_starts"] == 2
+            assert stats["stronger_config_reuses"] == 0
+        finally:
+            await mgr.stop()
+
+    asyncio.run(_run())
+
+
 def test_max_sessions_evicts_warm_session_before_rejecting_new_start(monkeypatch):
     monkeypatch.setattr(sm, "ScrcpyRelaySession", _FakeSession)
     monkeypatch.setattr(sm, "MAX_SESSIONS", 1)
@@ -474,7 +786,10 @@ def test_stats_snapshot_aggregates_stream_health_without_serial_labels(
                 "start_requests": 2,
                 "cold_starts": 2,
                 "same_config_reuses": 0,
+                "stronger_config_reuses": 0,
                 "warm_reuses": 0,
+                "profile_reconfigure_holds": 0,
+                "profile_reconfigure_hold_expirations": 0,
                 "rejected_max_sessions": 0,
                 "startup_failures": 0,
             }

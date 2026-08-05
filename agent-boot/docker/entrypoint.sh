@@ -116,4 +116,68 @@ if [[ $# -eq 0 ]]; then
   set -- /app/.venv/bin/python main.py
 fi
 
+truthy() {
+  local value="${1:-}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  [[ "$value" =~ ^(1|true|yes|on)$ ]]
+}
+
+falsy() {
+  local value="${1:-}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  [[ "$value" =~ ^(0|false|no|off)$ ]]
+}
+
+should_start_media_adapter() {
+  if falsy "${MEDIA_ADAPTER_AUTOSTART:-1}"; then
+    return 1
+  fi
+  if [[ "${1:-}" == *"media-adapter"* ]]; then
+    return 1
+  fi
+  if truthy "${MEDIA_ADAPTER_ENABLED:-0}"; then
+    return 0
+  fi
+  return 1
+}
+
+wait_media_adapter_http() {
+  local host="${MEDIA_ADAPTER_HTTP_HOST:-127.0.0.1}"
+  local port="${MEDIA_ADAPTER_HTTP_PORT:-8878}"
+  local deadline="${MEDIA_ADAPTER_STARTUP_WAIT_MS:-2500}"
+  local waited=0
+  while (( waited < deadline )); do
+    if (: >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+    waited=$((waited + 100))
+  done
+  echo "entrypoint: media adapter not ready at ${host}:${port} after ${deadline}ms; relay will retry" >&2
+  return 1
+}
+
+if should_start_media_adapter "$*"; then
+  /app/bin/media-adapter &
+  media_adapter_pid="$!"
+  echo "entrypoint: media adapter started pid=${media_adapter_pid}"
+  wait_media_adapter_http || true
+
+  "$@" &
+  relay_pid="$!"
+
+  shutdown_children() {
+    kill "$relay_pid" "$media_adapter_pid" 2>/dev/null || true
+    wait "$relay_pid" 2>/dev/null || true
+    wait "$media_adapter_pid" 2>/dev/null || true
+  }
+
+  trap shutdown_children TERM INT
+  wait "$relay_pid"
+  relay_status="$?"
+  kill "$media_adapter_pid" 2>/dev/null || true
+  wait "$media_adapter_pid" 2>/dev/null || true
+  exit "$relay_status"
+fi
+
 exec "$@"

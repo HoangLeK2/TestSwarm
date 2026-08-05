@@ -168,7 +168,7 @@ async def test_command_result_waits_for_reliable_lane_capacity(monkeypatch):
         relay_id="r1",
         relay_mode="ws",
     )
-    send_q = FairSendQueue(per_device_max=1, video_per_device_max=1)
+    send_q = FairSendQueue(per_device_max=1)
     send_q.put_nowait_with_serial("older-result", "dev-001")
     command_q: asyncio.Queue = asyncio.Queue()
 

@@ -1,7 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
-import { AndroidMockup } from 'react-device-mockup';
+import { useMemo, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -10,7 +9,7 @@ type Props = {
    * device aspect ratio so object-cover never clips the horizontal axis. */
   deviceWidth?: number;
   deviceHeight?: number;
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 };
 
@@ -31,13 +30,31 @@ export function mockupPortraitScreenHeightPx(screenWidth: number): number {
   return Math.floor((screenWidth / 9) * 19.5);
 }
 
+function screenHeightForDevicePx(
+  screenWidth: number,
+  deviceWidth?: number,
+  deviceHeight?: number
+): number {
+  const safeDeviceWidth = Math.max(1, Number(deviceWidth) || 0);
+  const safeDeviceHeight = Math.max(1, Number(deviceHeight) || 0);
+  return Math.round((screenWidth * safeDeviceHeight) / safeDeviceWidth);
+}
+
 export function mockupFrameWidthPx(screenWidth: number): number {
-  return Math.max(1, Math.floor((screenWidth * 32) / 1080));
+  return Math.max(8, Math.floor((screenWidth * 32) / 1080));
 }
 
 /** Approximate outer height of frameOnly AndroidMockup — pairs with control rail stretch. */
-export function mockupOuterHeightPx(screenWidth: number): number {
-  const screenH = mockupPortraitScreenHeightPx(screenWidth);
+export function mockupOuterHeightPx(
+  screenWidth: number,
+  deviceWidth?: number,
+  deviceHeight?: number
+): number {
+  const screenH = screenHeightForDevicePx(
+    screenWidth,
+    deviceWidth,
+    deviceHeight
+  );
   const frame = mockupFrameWidthPx(screenWidth);
   const inset = screenContentInsetPx(screenWidth);
   return screenH + frame * 2 + inset * 2;
@@ -56,43 +73,67 @@ export function DeviceAndroidFrame({
     [screenWidth]
   );
   const inset = useMemo(() => screenContentInsetPx(screenWidth), [screenWidth]);
+  const frameWidth = useMemo(() => mockupFrameWidthPx(screenWidth), [
+    screenWidth
+  ]);
+  const screenHeight = useMemo(
+    () => screenHeightForDevicePx(screenWidth, deviceWidth, deviceHeight),
+    [deviceHeight, deviceWidth, screenWidth]
+  );
   const innerRadius = useMemo(
     () => Math.max(2, clipRadius - inset),
     [clipRadius, inset]
   );
+  const screenBoxStyle = useMemo<CSSProperties>(() => {
+    return {
+      width: screenWidth,
+      height: screenHeight
+    };
+  }, [screenHeight, screenWidth]);
 
-  const mockup = (
-    <AndroidMockup
-      screenWidth={screenWidth}
-      frameOnly
-      hideStatusBar
-      hideNavBar
-      frameColor='#1a1b22'
+  return (
+    <div
+      data-screen-width={screenWidth}
+      data-screen-height={screenHeight}
+      data-device-width={deviceWidth ?? 0}
+      data-device-height={deviceHeight ?? 0}
       className={cn(
-        'drop-shadow-[0_12px_28px_rgba(2,6,23,0.24)]',
-        // Lib always paints a fake punch-hole when hideStatusBar — no prop to disable it.
-        '[&>div>div>div>:last-child]:hidden',
+        'relative box-content shrink-0 bg-[#17181f] shadow-[0_12px_28px_rgba(2,6,23,0.24)]',
         className
       )}
+      style={{
+        width: screenWidth + inset * 2,
+        height: screenHeight + inset * 2,
+        borderRadius: clipRadius + frameWidth,
+        padding: frameWidth
+      }}
     >
       <div
         className='relative isolate box-border flex h-full min-h-0 w-full flex-col overflow-hidden bg-black'
         style={{ borderRadius: clipRadius, padding: inset }}
       >
         <div
-          className='h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden bg-black'
+          className='h-full min-h-0 w-full min-w-0 overflow-hidden bg-black'
           style={{ borderRadius: innerRadius }}
         >
-          {children}
+          <div
+            className='relative overflow-hidden bg-black'
+            style={screenBoxStyle}
+          >
+            {children}
+          </div>
         </div>
       </div>
-    </AndroidMockup>
+      <div
+        className='absolute right-[-5px] top-[18%] w-[5px] rounded-r-full bg-[#22242c]'
+        style={{ height: Math.max(56, Math.round(screenHeight * 0.2)) }}
+        aria-hidden
+      />
+      <div
+        className='absolute right-[-5px] top-[42%] w-[5px] rounded-r-full bg-[#22242c]'
+        style={{ height: Math.max(34, Math.round(screenHeight * 0.12)) }}
+        aria-hidden
+      />
+    </div>
   );
-
-  // Note: We intentionally do NOT clip the mockup height to match device aspect ratio.
-  // Shorter devices (e.g. 16:9) should appear with consistent bezel; stream should
-  // use `object-contain` to avoid cropping instead.
-  void deviceWidth;
-  void deviceHeight;
-  return mockup;
 }

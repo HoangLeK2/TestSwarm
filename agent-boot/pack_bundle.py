@@ -40,9 +40,9 @@ BUNDLE_DIR = _FARM_ROOT / "bundle"
 # Output archive placed alongside other bundle files
 OUTPUT_DIR = BUNDLE_DIR
 
-# scrcpy-server JAR — prefer relay/ in agent-boot, fall back to device_farm/runtime/
+# scrcpy-server JAR — owned by the media adapter, fall back to device_farm/runtime/
 _SCRCPY_CANDIDATES = [
-    _ROOT / "relay" / "scrcpy-server",
+    _ROOT / "media-adapter" / "assets" / "scrcpy-server",
     _FARM_ROOT / "runtime" / "scrcpy-server",
 ]
 

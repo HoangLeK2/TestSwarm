@@ -1,10 +1,10 @@
 """
 relay/session_manager.py — ScrcpySessionManager
 
-Manages all active ScrcpyRelaySession instances with:
+Manages active media-adapter stream sessions with:
   - Max concurrent session limit (prevents OOM / adb daemon overload)
   - TTL-based idle cleanup (stop sessions with no frames for SESSION_TTL seconds)
-  - Zombie detection (relay thread died without stop() being called)
+  - Zombie detection (session facade stopped without manager cleanup)
   - Background asyncio cleanup task (no busy-loop polling)
 """
 from __future__ import annotations
@@ -15,14 +15,16 @@ import os
 import time
 from typing import Callable, Dict, Optional
 
-from relay.scrcpy_relay import ScrcpyRelaySession
+from relay.media_adapter_session import MediaAdapterScrcpySession
 from relay.runtime import scrcpy_executor
 
 logger = logging.getLogger("relay.session_mgr")
 
-SESSION_TTL     = 60    # seconds — kill sessions that went stale (no frames) for 1 minute.
-                        # Frame-timeout in scrcpy_relay._connect_and_stream (5s) normally
-                        # catches stalls first; this sweep is the safety net.
+# Kept as a module attribute so existing tests can monkeypatch the concrete
+# session class. The production implementation is the media-adapter facade.
+ScrcpyRelaySession = MediaAdapterScrcpySession
+
+SESSION_TTL     = 60    # seconds without observed adapter frames before cleanup.
 ZOMBIE_TIMEOUT  = 10    # seconds — relay thread must be alive within this after start
 try:
     MAX_SESSIONS = max(0, int(os.getenv("SCRCPY_MAX_SESSIONS", "0")))
@@ -34,6 +36,13 @@ try:
     WARM_IDLE_TTL_S = max(0.0, float(os.getenv("SCRCPY_WARM_IDLE_TTL_S", "120")))
 except (TypeError, ValueError):
     WARM_IDLE_TTL_S = 120.0
+try:
+    PROFILE_RECONFIGURE_HOLD_TTL_S = max(
+        0.0,
+        float(os.getenv("SCRCPY_PROFILE_RECONFIGURE_HOLD_TTL_S", "3")),
+    )
+except (TypeError, ValueError):
+    PROFILE_RECONFIGURE_HOLD_TTL_S = 3.0
 WARM_IDLE_ENABLED = os.getenv("SCRCPY_WARM_IDLE_ENABLED", "1").strip().lower() not in {
     "0",
     "false",
@@ -44,12 +53,15 @@ WARM_STOP_REASONS = {
     "unsubscribe_frames:idle_no_viewers",
     "unsubscribe_frames:post_grace_idle",
 }
+PROFILE_RECONFIGURE_STOP_REASONS = {
+    "attach_scrcpy_stream:profile_reconfigure",
+}
 CLEANUP_INTERVAL = 15   # seconds between cleanup sweeps (halved from 30 to match lower TTL)
 
 
 class ScrcpySessionManager:
     """
-    Registry + lifecycle manager for ScrcpyRelaySession objects.
+    Registry + lifecycle manager for media-adapter stream session objects.
 
     Usage (inside RelayAgent):
         mgr = ScrcpySessionManager()
@@ -65,11 +77,12 @@ class ScrcpySessionManager:
         on_session_stopped: Optional[Callable[[str, str], None]] = None,
         on_session_health: Optional[Callable[[str, str], None]] = None,
     ) -> None:
-        self._sessions:  Dict[str, ScrcpyRelaySession] = {}
+        self._sessions:  Dict[str, MediaAdapterScrcpySession] = {}
         self._started_at: Dict[str, float] = {}  # serial → time.monotonic() at start
         self._warm_since: Dict[str, float] = {}
         self._warm_until: Dict[str, float] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._profile_reconfigure_hold_tasks: Dict[str, asyncio.Task] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._on_session_stopped = on_session_stopped
         self._on_session_health = on_session_health
@@ -80,7 +93,10 @@ class ScrcpySessionManager:
             "start_requests": 0,
             "cold_starts": 0,
             "same_config_reuses": 0,
+            "stronger_config_reuses": 0,
             "warm_reuses": 0,
+            "profile_reconfigure_holds": 0,
+            "profile_reconfigure_hold_expirations": 0,
             "rejected_max_sessions": 0,
             "startup_failures": 0,
         }
@@ -102,6 +118,7 @@ class ScrcpySessionManager:
                 await self._cleanup_task
             except asyncio.CancelledError:
                 pass
+        await self._cancel_all_profile_reconfigure_holds()
         await self.stop_all_sessions()
 
     async def stop_all_sessions(self) -> None:
@@ -147,12 +164,20 @@ class ScrcpySessionManager:
                 existing is not None
                 and existing.is_alive()
                 and hasattr(existing, "matches_config")
-                and existing.matches_config(max_fps, max_width, enable_control, port, bitrate, low_latency)
+                and existing.matches_config(
+                    max_fps,
+                    max_width,
+                    enable_control,
+                    port,
+                    bitrate,
+                    low_latency,
+                )
             ):
                 resume = getattr(existing, "resume_forwarding", None)
                 if callable(resume):
                     resume(send_queue=send_queue, loop=loop, reason="scrcpy_start")
                 was_warm = serial in self._warm_until
+                self._cancel_profile_reconfigure_hold(serial)
                 self._warm_since.pop(serial, None)
                 self._warm_until.pop(serial, None)
                 logger.info(
@@ -165,6 +190,42 @@ class ScrcpySessionManager:
                     return "warm_reuse"
                 self._bump_lifecycle_stat("same_config_reuses")
                 return "same_config_reuse"
+
+            if (
+                existing is not None
+                and existing.is_alive()
+                and hasattr(existing, "can_satisfy_config")
+                and existing.can_satisfy_config(
+                    max_fps,
+                    max_width,
+                    enable_control,
+                    port,
+                    bitrate,
+                    low_latency,
+                )
+            ):
+                resume = getattr(existing, "resume_forwarding", None)
+                if callable(resume):
+                    resume(
+                        send_queue=send_queue,
+                        loop=loop,
+                        reason="scrcpy_reuse_stronger_config",
+                    )
+                was_warm = serial in self._warm_until
+                self._cancel_profile_reconfigure_hold(serial)
+                self._warm_since.pop(serial, None)
+                self._warm_until.pop(serial, None)
+                logger.info(
+                    "session already running with stronger config: %s%s",
+                    serial,
+                    " (warm_reuse)" if was_warm else "",
+                )
+                if was_warm:
+                    self._bump_lifecycle_stat("stronger_config_reuses")
+                    self._bump_lifecycle_stat("warm_reuses")
+                    return "warm_reuse"
+                self._bump_lifecycle_stat("stronger_config_reuses")
+                return "stronger_config_reuse"
 
             await self._stop_session_unlocked(serial)
 
@@ -243,7 +304,8 @@ class ScrcpySessionManager:
         self._lifecycle_stats[key] = self._lifecycle_stats.get(key, 0) + amount
 
     async def _stop_session_unlocked(self, serial: str, reason: str = "manual_stop") -> None:
-        if self._should_warm_instead_of_stop(serial, reason):
+        hold_ttl = self._hold_ttl_for_stop_reason(serial, reason)
+        if hold_ttl > 0.0:
             session = self._sessions.get(serial)
             if session is not None:
                 pause = getattr(session, "pause_forwarding", None)
@@ -251,17 +313,24 @@ class ScrcpySessionManager:
                     pause(reason=reason)
                 now = time.monotonic()
                 self._warm_since[serial] = now
-                self._warm_until[serial] = now + WARM_IDLE_TTL_S
+                self._warm_until[serial] = now + hold_ttl
+                if self._is_profile_reconfigure_stop_reason(reason):
+                    self._bump_lifecycle_stat("profile_reconfigure_holds")
+                    self._schedule_profile_reconfigure_hold_expiry(
+                        serial,
+                        self._warm_until[serial],
+                    )
                 logger.info(
                     "session warmed: %s (reason=%s ttl=%.1fs)",
                     serial,
                     reason,
-                    WARM_IDLE_TTL_S,
+                    hold_ttl,
                 )
                 return
 
         session = self._sessions.pop(serial, None)
         self._started_at.pop(serial, None)
+        self._cancel_profile_reconfigure_hold(serial)
         self._warm_since.pop(serial, None)
         self._warm_until.pop(serial, None)
         if session:
@@ -274,13 +343,78 @@ class ScrcpySessionManager:
             )
             self._emit_stopped(serial, reason)
 
-    def _should_warm_instead_of_stop(self, serial: str, reason: str) -> bool:
-        if not WARM_IDLE_ENABLED or WARM_IDLE_TTL_S <= 0:
-            return False
-        if reason not in WARM_STOP_REASONS:
-            return False
+    def _hold_ttl_for_stop_reason(self, serial: str, reason: str) -> float:
         session = self._sessions.get(serial)
-        return bool(session is not None and session.is_alive())
+        if session is None or not session.is_alive():
+            return 0.0
+        supports_warm = getattr(session, "supports_warm_forwarding", None)
+        if callable(supports_warm) and not supports_warm():
+            return 0.0
+        if (
+            self._is_profile_reconfigure_stop_reason(reason)
+            and PROFILE_RECONFIGURE_HOLD_TTL_S > 0.0
+        ):
+            return PROFILE_RECONFIGURE_HOLD_TTL_S
+        if not WARM_IDLE_ENABLED or WARM_IDLE_TTL_S <= 0:
+            return 0.0
+        if reason in WARM_STOP_REASONS:
+            return WARM_IDLE_TTL_S
+        return 0.0
+
+    def _is_profile_reconfigure_stop_reason(self, reason: str) -> bool:
+        return reason in PROFILE_RECONFIGURE_STOP_REASONS
+
+    def _cancel_profile_reconfigure_hold(self, serial: str) -> None:
+        task = self._profile_reconfigure_hold_tasks.get(serial)
+        if task is asyncio.current_task():
+            return
+        self._profile_reconfigure_hold_tasks.pop(serial, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _cancel_all_profile_reconfigure_holds(self) -> None:
+        tasks = list(self._profile_reconfigure_hold_tasks.values())
+        self._profile_reconfigure_hold_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _schedule_profile_reconfigure_hold_expiry(
+        self,
+        serial: str,
+        expected_until: float,
+    ) -> None:
+        self._cancel_profile_reconfigure_hold(serial)
+        loop = self._loop
+        if loop is None:
+            return
+        self._profile_reconfigure_hold_tasks[serial] = loop.create_task(
+            self._expire_profile_reconfigure_hold(serial, expected_until),
+            name=f"scrcpy-profile-hold-expire-{serial}",
+        )
+
+    async def _expire_profile_reconfigure_hold(
+        self,
+        serial: str,
+        expected_until: float,
+    ) -> None:
+        try:
+            delay = max(0.0, expected_until - time.monotonic())
+            if delay > 0.0:
+                await asyncio.sleep(delay)
+            if self._warm_until.get(serial) != expected_until:
+                return
+            self._bump_lifecycle_stat("profile_reconfigure_hold_expirations")
+            await self.stop_session(serial, reason="profile_reconfigure_hold_expired")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("profile reconfigure hold expiry failed for %s: %s", serial, exc)
+        finally:
+            task = self._profile_reconfigure_hold_tasks.get(serial)
+            if task is asyncio.current_task():
+                self._profile_reconfigure_hold_tasks.pop(serial, None)
 
     async def _evict_one_warm_session_unlocked(self) -> None:
         if not self._warm_until:
@@ -301,7 +435,7 @@ class ScrcpySessionManager:
         if session:
             session.send_control(data)
 
-    def get(self, serial: str) -> Optional[ScrcpyRelaySession]:
+    def get(self, serial: str) -> Optional[MediaAdapterScrcpySession]:
         return self._sessions.get(serial)
 
     @property
@@ -462,8 +596,8 @@ class ScrcpySessionManager:
 
     def _on_session_fatal(self, serial: str, reason: str) -> None:
         """
-        Called from ScrcpyRelaySession relay thread when unrecoverable runtime
-        error happens. Schedule async stop on event loop thread-safely.
+        Called from the session facade when an unrecoverable runtime error
+        happens. Schedule async stop on event loop thread-safely.
         """
         if self._loop is None:
             return

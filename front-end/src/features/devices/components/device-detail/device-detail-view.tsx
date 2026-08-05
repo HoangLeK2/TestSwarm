@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
 import { enUS, vi } from 'date-fns/locale';
@@ -39,6 +39,7 @@ import {
 import { isDeviceOnlineForList } from '../../lib/device-online';
 import type { Device } from '../../types';
 import type { DeviceOut, RelayAgentOut } from '../../services/manage-api';
+import { fetchConfig } from '../../services/api';
 import { ensureWatchSerial } from '../../services/ws';
 
 function deviceOutToStreamDevice(
@@ -81,6 +82,11 @@ export function DeviceDetailView({
   const { data: sessions, isLoading: sessionsLoading } = useDeviceSessions(
     deviceRow?.id ?? ''
   );
+  const { data: appConfig } = useQuery({
+    queryKey: ['device-farm', 'config'],
+    queryFn: fetchConfig,
+    staleTime: 60_000
+  });
 
   const streamDevice = useMemo(
     () => (deviceRow ? deviceOutToStreamDevice(deviceRow, liveDevice) : null),
@@ -129,6 +135,7 @@ export function DeviceDetailView({
   const transportOnline = deviceRow
     ? isDeviceOnlineForList(deviceRow, relayMap)
     : false;
+  const liveStreamTransport = appConfig?.webrtc_enabled ? 'webrtc' : 'auto';
 
   const noopWsSend = useCallback((_obj: object) => {}, []);
 
@@ -256,6 +263,7 @@ export function DeviceDetailView({
                     interactive={false}
                     captionBelowFrame
                     streamFetchPriority='high'
+                    streamTransport={liveStreamTransport}
                   />
                 </DeviceAndroidFrame>
               </div>

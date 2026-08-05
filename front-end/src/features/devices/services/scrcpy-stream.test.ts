@@ -14,6 +14,7 @@ const blockedHeartbeatSerials = new Set<string>();
 const blockedHeartbeatResolvers = new Map<string, () => void>();
 const blockedAttachSerials = new Set<string>();
 const blockedAttachResolvers = new Map<string, () => void>();
+const pendingAttachSerials = new Set<string>();
 const heartbeatFailuresRemaining = new Map<string, number>();
 type ScrcpyStreamModule = typeof import('./scrcpy-stream');
 let streamModule: ScrcpyStreamModule | null = null;
@@ -50,6 +51,9 @@ async function loadScrcpyStream(): Promise<ScrcpyStreamModule> {
           resolve();
         });
       });
+    }
+    if (attachSerial && pendingAttachSerials.has(attachSerial)) {
+      return { data: { ok: true, status: 'pending' } };
     }
     const heartbeatMatch = url.match(/\/devices\/([^/]+)\/scrcpy\/heartbeat/);
     const heartbeatSerial = heartbeatMatch?.[1];
@@ -143,6 +147,35 @@ test('control screen attach uses normal retry policy and payload', async () => {
   await stream.detachScrcpyStream('serial one', 'device-screen:viewer-1');
 });
 
+test('pending attach is retryable and does not start viewer heartbeat', async () => {
+  const stream = await loadScrcpyStream();
+  postCalls.length = 0;
+  const serial = 'serial-pending';
+  const viewerId = 'control-screen:pending';
+  pendingAttachSerials.add(serial);
+
+  try {
+    await assert.rejects(
+      () => stream.attachScrcpyStream(serial, viewerId),
+      (error: unknown) => {
+        assert.equal(stream.isRecoverableScrcpyAttachError(error), true);
+        assert.equal(
+          stream.scrcpyAttachErrorMessage(error),
+          'scrcpy stream is not ready'
+        );
+        return true;
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+    assert.equal(
+      postCalls.filter((call) => call.url.endsWith('/scrcpy/heartbeat')).length,
+      0
+    );
+  } finally {
+    pendingAttachSerials.delete(serial);
+  }
+});
+
 test('snapshot preview attach keeps lightweight no-retry policy', async () => {
   const stream = await loadScrcpyStream();
   postCalls.length = 0;
@@ -152,6 +185,7 @@ test('snapshot preview attach keeps lightweight no-retry policy', async () => {
     'snapshot-preview:viewer-1',
     {
       enableControl: true,
+      profile: 'degraded',
       maxFps: 1,
       maxWidth: 360,
       bitrate: 100_000
@@ -162,6 +196,7 @@ test('snapshot preview attach keeps lightweight no-retry policy', async () => {
   assert.deepEqual(postCalls[0]?.payload, {
     viewer_id: 'snapshot-preview:viewer-1',
     enable_control: true,
+    profile: 'degraded',
     max_fps: 1,
     max_width: 360,
     bitrate: 100_000

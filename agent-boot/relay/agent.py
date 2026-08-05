@@ -45,15 +45,11 @@ from relay.recovery_coordinator import RecoveryCoordinator
 from relay.session_manager import ScrcpySessionManager
 from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
-from relay.video_packet import VideoPacket
 from relay.runtime         import (
     SEND_CONTROL_MAX,
     SEND_PER_DEVICE_MAX,
-    SEND_VIDEO_PER_DEVICE_MAX,
-    GRPC_VIDEO_STREAM_SHARDS,
     FairSendQueue,
     LoopWatchdog,
-    MultiStreamSendQueue,
     RuntimeStats,
     TaskRegistry,
     adb_executor,
@@ -177,21 +173,21 @@ SCRCPY_RESTART_MAX_ATTEMPTS = 5
 SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
 SCRCPY_STABLE_RESET_SECONDS = 30.0
 RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
-SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 12))
-SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 480))
-SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 600_000))
+SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 1))
+SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 320))
+SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 150_000))
 SCRCPY_ADAPTIVE_PROFILE_ENABLED = _env_bool("SCRCPY_ADAPTIVE_PROFILE_ENABLED", True)
 SCRCPY_VISIBLE_MAX_FPS = max(
     1,
-    _env_int("SCRCPY_VISIBLE_MAX_FPS", min(SCRCPY_DEFAULT_MAX_FPS, 12)),
+    _env_int("SCRCPY_VISIBLE_MAX_FPS", min(SCRCPY_DEFAULT_MAX_FPS, 1)),
 )
 SCRCPY_VISIBLE_MAX_WIDTH = max(
     160,
-    _env_int("SCRCPY_VISIBLE_MAX_WIDTH", min(SCRCPY_DEFAULT_MAX_WIDTH, 540)),
+    _env_int("SCRCPY_VISIBLE_MAX_WIDTH", min(SCRCPY_DEFAULT_MAX_WIDTH, 320)),
 )
 SCRCPY_VISIBLE_BITRATE = max(
     80_000,
-    _env_int("SCRCPY_VISIBLE_BITRATE", min(SCRCPY_DEFAULT_BITRATE, 1_200_000)),
+    _env_int("SCRCPY_VISIBLE_BITRATE", min(SCRCPY_DEFAULT_BITRATE, 150_000)),
 )
 SCRCPY_FOCUSED_MAX_FPS = max(
     1,
@@ -207,15 +203,15 @@ SCRCPY_FOCUSED_BITRATE = max(
 )
 SCRCPY_DEGRADED_MAX_FPS = max(
     1,
-    _env_int("SCRCPY_DEGRADED_MAX_FPS", min(SCRCPY_DEFAULT_MAX_FPS, 8)),
+    _env_int("SCRCPY_DEGRADED_MAX_FPS", min(SCRCPY_DEFAULT_MAX_FPS, 1)),
 )
 SCRCPY_DEGRADED_MAX_WIDTH = max(
     160,
-    _env_int("SCRCPY_DEGRADED_MAX_WIDTH", min(SCRCPY_DEFAULT_MAX_WIDTH, 360)),
+    _env_int("SCRCPY_DEGRADED_MAX_WIDTH", min(SCRCPY_DEFAULT_MAX_WIDTH, 320)),
 )
 SCRCPY_DEGRADED_BITRATE = max(
     80_000,
-    _env_int("SCRCPY_DEGRADED_BITRATE", min(SCRCPY_DEFAULT_BITRATE, 450_000)),
+    _env_int("SCRCPY_DEGRADED_BITRATE", min(SCRCPY_DEFAULT_BITRATE, 150_000)),
 )
 SCRCPY_ENCODER_DEGRADE_TTL_S = max(
     0.0,
@@ -427,7 +423,7 @@ class RelayAgent:
             "encoder_unhealthy_marks": 0,
             "encoder_health_signals": 0,
         }
-        self._active_send_queue: Optional[FairSendQueue | MultiStreamSendQueue] = None
+        self._active_send_queue: Optional[FairSendQueue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
         # Viewer-gated default: do not auto-start scrcpy for every online device.
         self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "false").lower() in ("1", "true", "yes", "on")
@@ -800,33 +796,13 @@ class RelayAgent:
             except Exception:
                 return {"qsize": q.qsize()}
             ctrl = snap.pop("_control", 0)
-            video_lanes = {
-                key: value
-                for key, value in snap.items()
-                if key.startswith("video:") or key.startswith("video_shard:")
-            }
-            reliable_lanes = {
-                key: value
-                for key, value in snap.items()
-                if not key.startswith("video:")
-                and not key.startswith("video_shard:")
-            }
+            reliable_lanes = dict(snap)
             stats = {
                 "qsize": sum(snap.values()) + ctrl,
                 "reliable_lanes": len(reliable_lanes),
-                "video_lanes": len(video_lanes),
                 "ctrl": ctrl,
                 "max_reliable": max(reliable_lanes.values(), default=0),
-                "max_video": max(video_lanes.values(), default=0),
             }
-            if hasattr(q, "video_stats_snapshot"):
-                video_stats = q.video_stats_snapshot(reset=True)
-                stats.update(
-                    {
-                        f"video_{key}": value
-                        for key, value in video_stats.items()
-                    }
-                )
             return stats
         register_stats_source("send_q", _send_queue_stats)
 
@@ -942,14 +918,11 @@ class RelayAgent:
 
         # send_queue: str for JSON text frames, bytes for binary frames.
         # FairSendQueue replaces a single shallow asyncio.Queue: one lane per
-        # device + a high-priority control lane. A phone whose scrcpy stream
-        # is stuck on IDR retries no longer blocks every other device's u2
-        # results, and heartbeats are never starved by a backlogged frame
-        # queue. scrcpy_relay.py drops deltas on overflow and requests IDR.
+        # device + a high-priority control lane. Media frames are no longer
+        # produced by agent-boot; the Go media adapter owns scrcpy/WebRTC.
         send_queue = FairSendQueue(
             per_device_max=SEND_PER_DEVICE_MAX,
             control_max=SEND_CONTROL_MAX,
-            video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
         )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
@@ -997,10 +970,7 @@ class RelayAgent:
                         item = await send_queue.get()
                         if item is None:
                             return
-                        if isinstance(item, VideoPacket):
-                            await ws.send(item.to_legacy_bytes())
-                        else:
-                            await ws.send(item)
+                        await ws.send(item)
                 except Exception as exc:
                     logger.debug("WS sender exited: %s", exc)
 
@@ -1033,32 +1003,21 @@ class RelayAgent:
         from relay.grpc_client import GrpcRelayClient, create_grpc_channel
         from relay.control_client import AgentControlClient
 
-        video_stream_shards = GRPC_VIDEO_STREAM_SHARDS
-        if video_stream_shards > 0:
-            send_queue = MultiStreamSendQueue(
-                video_shards=video_stream_shards,
-                per_device_max=SEND_PER_DEVICE_MAX,
-                control_max=SEND_CONTROL_MAX,
-                video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
-            )
-        else:
-            # FairSendQueue: same per-device fairness story as the WS path. The
-            # gRPC frame generator consumes via `await send_queue.get()`, which
-            # transparently interleaves frames + JSON results from the right lane.
-            send_queue = FairSendQueue(
-                per_device_max=SEND_PER_DEVICE_MAX,
-                control_max=SEND_CONTROL_MAX,
-                video_per_device_max=SEND_VIDEO_PER_DEVICE_MAX,
-            )
+        # gRPC is now the reliable control/meta transport only. Realtime H264 is
+        # published by the external media adapter, so we do not open per-shard
+        # video RPCs from agent-boot.
+        send_queue = FairSendQueue(
+            per_device_max=SEND_PER_DEVICE_MAX,
+            control_max=SEND_CONTROL_MAX,
+        )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
 
         logger.info(
-            "gRPC connecting → %s (relay_id=%s video_stream_shards=%d)",
+            "gRPC connecting → %s (relay_id=%s control_meta_only=true)",
             self._grpc_addr,
             self._relay_id,
-            video_stream_shards,
         )
 
         # Keep the long-lived campaign control channel independent from the
@@ -1084,9 +1043,10 @@ class RelayAgent:
                 self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
             )
 
-            # RelayService still carries U2 batch/meta results alongside H264,
-            # so it must be re-registered after every video-channel replacement.
-            async def _register_video_stream() -> str:
+            # RelayService carries register/heartbeat/result metadata. It is
+            # re-registered after every reconnect so control routing remains
+            # stable while media stays outside backend gRPC.
+            async def _register_relay_stream() -> str:
                 serials = self._registry.online_serials
                 register_msg = dumps({
                     "type":     "register",
@@ -1122,80 +1082,8 @@ class RelayAgent:
                             ctrl_msg.data,
                         )
 
-            async def _run_video_shard(shard_index: int) -> None:
-                shard_queue = send_queue.video_shard_queue(shard_index)
-                shard_retry = RelayRetryPolicy(startup_window_s=float("inf"))
-                shard_attempt = 0
-                while True:
-                    client: GrpcRelayClient | None = None
-                    consume_task: asyncio.Task | None = None
-                    stream_started_at = loop.time()
-                    failure: Exception | None = None
-                    try:
-                        async with create_grpc_channel(
-                            self._grpc_addr,
-                            tls_enabled=self._grpc_tls_enabled,
-                            root_cert_file=self._grpc_root_cert_file,
-                        ) as stream_channel:
-                            client = GrpcRelayClient(
-                                server_addr=self._grpc_addr,
-                                api_key=self._api_key,
-                                agent_id=f"{self._relay_id}:video:{shard_index}",
-                                send_queue=shard_queue,
-                                loop=loop,
-                                channel=stream_channel,
-                                tls_enabled=self._grpc_tls_enabled,
-                                root_cert_file=self._grpc_root_cert_file,
-                            )
-                            consume_task = asyncio.create_task(
-                                _consume_ctrl(client),
-                                name=f"grpc-video-shard-{shard_index}-ctrl-consumer",
-                            )
-                            await client._stream_once(stream_channel)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        failure = exc
-                    finally:
-                        if client is not None:
-                            client.stop()
-                        await _cancel_and_await(consume_task)
-
-                    stream_uptime = loop.time() - stream_started_at
-                    if stream_uptime >= 10.0:
-                        shard_attempt = 0
-                    shard_attempt += 1
-                    delay = shard_retry.delay(
-                        attempt=shard_attempt,
-                        startup_elapsed=0.0,
-                        jitter_ratio=random.random(),
-                    )
-                    log_fn = logger.info if failure is None else logger.warning
-                    log_fn(
-                        "gRPC video shard stream %d %s after %.1fs; retry in %.1fs%s",
-                        shard_index,
-                        "closed cleanly" if failure is None else "failed",
-                        stream_uptime,
-                        delay,
-                        "" if failure is None else f": {failure}",
-                    )
-                    await asyncio.sleep(delay)
-
-            # A stable video session followed by one transient failure should
-            # retry from the minimum delay, not retain an attempt count from
-            # hours earlier. Video retries cap at 2s; campaign control remains
-            # alive on control_channel throughout.
-            video_retry = RelayRetryPolicy(startup_window_s=float("inf"))
-            video_attempt = 0
-            video_shard_tasks: list[asyncio.Task] = []
-            if isinstance(send_queue, MultiStreamSendQueue):
-                video_shard_tasks = [
-                    asyncio.create_task(
-                        _run_video_shard(index),
-                        name=f"grpc-video-shard-{index}",
-                    )
-                    for index in range(send_queue.video_shard_count())
-                ]
+            relay_retry = RelayRetryPolicy(startup_window_s=float("inf"))
+            relay_attempt = 0
             try:
                 while True:
                     client: GrpcRelayClient | None = None
@@ -1220,9 +1108,9 @@ class RelayAgent:
                             )
                             consume_task = asyncio.create_task(
                                 _consume_ctrl(client),
-                                name="grpc-video-ctrl-consumer",
+                                name="grpc-relay-ctrl-consumer",
                             )
-                            register_msg = await _register_video_stream()
+                            register_msg = await _register_relay_stream()
                             await client._stream_once(
                                 stream_channel,
                                 initial_meta=register_msg,
@@ -1238,25 +1126,25 @@ class RelayAgent:
 
                     stream_uptime = loop.time() - stream_started_at
                     if stream_uptime >= 10.0:
-                        video_attempt = 0
-                    video_attempt += 1
-                    delay = video_retry.delay(
-                        attempt=video_attempt,
+                        relay_attempt = 0
+                    relay_attempt += 1
+                    delay = relay_retry.delay(
+                        attempt=relay_attempt,
                         startup_elapsed=0.0,
                         jitter_ratio=random.random(),
                     )
                     if failure is None:
                         logger.info(
-                            "gRPC reliable stream closed cleanly after %.1fs; "
+                            "gRPC relay stream closed cleanly after %.1fs; "
                             "control remains online — retry in %.1fs",
                             stream_uptime,
                             delay,
                         )
                     else:
                         logger.warning(
-                            "gRPC reliable stream failed (attempt %d, uptime %.1fs): %s; "
+                            "gRPC relay stream failed (attempt %d, uptime %.1fs): %s; "
                             "control remains online — retry in %.1fs",
-                            video_attempt,
+                            relay_attempt,
                             stream_uptime,
                             failure,
                             delay,
@@ -1270,7 +1158,6 @@ class RelayAgent:
                     hb_task,
                     consume_task,
                     ctrl_task,
-                    *video_shard_tasks,
                 )
                 await self._shutdown_stream_helpers()
                 if self._active_send_queue is send_queue:

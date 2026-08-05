@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json as _json
 import logging
 import os as _os
 import re
@@ -151,6 +152,7 @@ _ATX_FORWARD_FAIL_COUNT: dict[str, int] = {}
 _ATX_FORWARD_LAST_ERROR: dict[str, str] = {}
 _ATX_FORWARD_CREATE_RETRY_AFTER: dict[str, float] = {}
 _ATX_FORWARD_SERIAL_LOCKS: dict[str, threading.Lock] = {}
+_U2_RESTART_HEALTHY_UNTIL: dict[str, float] = {}
 _ADB_COMMAND_STATS: dict[str, int] = {}
 _ATX_FORWARD_RECONCILE_NEXT_AT = 0.0
 _ATX_FORWARD_FAILURES_BEFORE_RECREATE = max(
@@ -164,6 +166,10 @@ _ATX_FORWARD_RECONCILE_INTERVAL_SECONDS = max(
 _ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS = max(
     0,
     min(60, _env_int("AGENT_BOOT_ATX_FORWARD_CREATE_FAILURE_COOLDOWN_SECONDS", 2)),
+)
+_U2_RESTART_HEALTHY_CACHE_SECONDS = max(
+    0,
+    min(60, _env_int("AGENT_BOOT_U2_RESTART_HEALTHY_CACHE_SECONDS", 15)),
 )
 
 
@@ -700,19 +706,88 @@ def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -
         return False, f"{exc}; {forward_msg}"
 
 
-def _wait_for_u2_port_state(
+def _atx_jsonrpc_device_info_endpoint(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str]:
+    payload = _json.dumps({
+        "jsonrpc": "2.0",
+        "id":      1,
+        "method":  "deviceInfo",
+        "params":  {},
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://{host}:{port}/jsonrpc/0",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            body = resp.read(4096).decode("utf-8", errors="replace")
+            if not (200 <= int(resp.status) < 300):
+                return False, f"HTTP {resp.status}: {body[:200]}"
+        try:
+            parsed = _json.loads(body)
+        except Exception as exc:
+            return False, f"invalid JSON-RPC response: {exc}: {body[:200]}"
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return False, f"JSON-RPC error: {str(parsed.get('error'))[:200]}"
+        result = parsed.get("result") if isinstance(parsed, dict) else None
+        if isinstance(result, dict) and "currentPackageName" in result:
+            return True, "deviceInfo OK"
+        return False, f"deviceInfo unexpected: {str(result)[:200]}"
+    except urllib.error.HTTPError as exc:
+        body = exc.read(256).decode("utf-8", errors="replace") if exc.fp else ""
+        return False, f"HTTP {exc.code}: {body.strip()[:200]}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _atx_jsonrpc_device_info_via_adb_forward(serial: str, timeout: float = 2.0) -> tuple[bool, str]:
+    if not serial or ":" in serial:
+        return False, "adb forward unavailable for tcp serial"
+    endpoint = _ensure_atx_forward_endpoint(serial)
+    if endpoint is None:
+        with _ADB_CACHE_LOCK:
+            error = _ATX_FORWARD_LAST_ERROR.get(serial, "adb forward failed")
+        return False, error
+    host, port = endpoint
+    ok, msg = _atx_jsonrpc_device_info_endpoint(host, port, timeout=timeout)
+    if ok:
+        _record_atx_forward_ping_success(serial)
+        return True, f"{msg} via adb-forward"
+    if _record_atx_forward_ping_failure(serial) >= _ATX_FORWARD_FAILURES_BEFORE_RECREATE:
+        _clear_atx_forward(serial)
+    return False, f"adb-forward JSON-RPC failed: {msg}"
+
+
+def _atx_jsonrpc_device_info(serial: str, timeout: float = 2.0, host: str | None = None) -> tuple[bool, str]:
+    host = host or _resolve_device_lan_ip(serial)
+    if host:
+        ok, msg = _atx_jsonrpc_device_info_endpoint(host, 7912, timeout=timeout)
+        if ok:
+            return True, msg
+        forward_ok, forward_msg = _atx_jsonrpc_device_info_via_adb_forward(serial, timeout=timeout)
+        if forward_ok:
+            return True, forward_msg
+        return False, f"{msg}; {forward_msg}"
+    return _atx_jsonrpc_device_info_via_adb_forward(serial, timeout=timeout)
+
+
+def _wait_for_atx_jsonrpc_device_info(
     serial: str,
     *,
-    listening: bool,
     timeout: float,
-    interval: float = 0.25,
-) -> bool:
+    interval: float = 0.75,
+    host: str | None = None,
+) -> tuple[bool, str]:
     deadline = time.monotonic() + max(0.0, timeout)
+    last_msg = ""
     while time.monotonic() < deadline:
-        if _device_port_listening(serial, 9008) is listening:
-            return True
+        ok, last_msg = _atx_jsonrpc_device_info(serial, timeout=2.0, host=host)
+        if ok:
+            return True, last_msg
         time.sleep(interval)
-    return _device_port_listening(serial, 9008) is listening
+    ok, last_msg = _atx_jsonrpc_device_info(serial, timeout=2.0, host=host)
+    return ok, last_msg
 
 
 def _run_u2_recovery_cleanup(serial: str, *, stop_atx: bool) -> None:
@@ -732,19 +807,55 @@ def _run_u2_recovery_cleanup(serial: str, *, stop_atx: bool) -> None:
     _adb_shell(serial, script, timeout=12)
 
 
+def _u2_restart_recently_proved_healthy(serial: str) -> bool:
+    if not serial or _U2_RESTART_HEALTHY_CACHE_SECONDS <= 0:
+        return False
+    now = time.monotonic()
+    with _ADB_CACHE_LOCK:
+        healthy_until = _U2_RESTART_HEALTHY_UNTIL.get(serial, 0.0)
+        if now < healthy_until:
+            return True
+        _U2_RESTART_HEALTHY_UNTIL.pop(serial, None)
+    return False
+
+
+def _mark_u2_restart_healthy(serial: str) -> None:
+    if not serial or _U2_RESTART_HEALTHY_CACHE_SECONDS <= 0:
+        return
+    with _ADB_CACHE_LOCK:
+        _U2_RESTART_HEALTHY_UNTIL[serial] = (
+            time.monotonic() + _U2_RESTART_HEALTHY_CACHE_SECONDS
+        )
+
+
 def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
+    if _u2_restart_recently_proved_healthy(serial):
+        return "u2 recently healthy; skipped duplicate restart", 0
+
     _apply_u2_stability_settings(serial)
+
+    if _u2_atx_healthy(serial):
+        lock_portrait_rotation(serial)
+        _mark_u2_restart_healthy(serial)
+        return "u2 already healthy; skipped restart", 0
+
+    atx_host = _resolve_device_lan_ip(serial)
     _run_u2_recovery_cleanup(serial, stop_atx=False)
-    _wait_for_u2_port_state(serial, listening=False, timeout=3.0)
 
-    atx_ok, _ = _atx_http_ping(serial, timeout=1.5)
-    if atx_ok and _wait_for_u2_port_state(serial, listening=True, timeout=min(8.0, timeout)):
+    atx_ok, _ = _atx_http_ping(serial, timeout=1.5, host=atx_host)
+    if atx_ok:
+        rpc_ok, _ = _wait_for_atx_jsonrpc_device_info(
+            serial,
+            timeout=min(8.0, timeout),
+            host=atx_host,
+        )
+    else:
+        rpc_ok = False
+
+    if rpc_ok:
         lock_portrait_rotation(serial)
+        _mark_u2_restart_healthy(serial)
         return "u2 started via atx-agent", 0
-
-    if _device_port_listening(serial, 9008):
-        lock_portrait_rotation(serial)
-        return "u2 already listening after cleanup; skipped duplicate start", 0
 
     _adb_shell(
         serial,
@@ -756,8 +867,10 @@ def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         time.sleep(1.0)
-        if _device_port_listening(serial, 9008):
+        rpc_ok, _ = _atx_jsonrpc_device_info(serial, timeout=2.0, host=atx_host)
+        if rpc_ok:
             lock_portrait_rotation(serial)
+            _mark_u2_restart_healthy(serial)
             return "u2 started", 0
     log_tail, _ = _adb_shell(serial, "tail -n 40 /data/local/tmp/u2.log 2>/dev/null || true", timeout=5)
     return f"u2 did not start within timeout; log_tail={log_tail[-1000:]}", -1
@@ -770,6 +883,23 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
     cleaner than restarting u2 instrumentation directly when atx is frozen/dead.
     """
     _apply_u2_stability_settings(serial)
+
+    atx_host = _resolve_device_lan_ip(serial)
+    rpc_ok, rpc_msg = _atx_jsonrpc_device_info(serial, timeout=2.0, host=atx_host)
+    if rpc_ok:
+        lock_portrait_rotation(serial)
+        _mark_u2_restart_healthy(serial)
+        return "atx-agent and u2 already healthy; skipped restart", 0
+
+    atx_ok, atx_ping = _atx_http_ping(serial, timeout=1.5, host=atx_host)
+    if atx_ok:
+        msg, rc = _restart_u2(serial, timeout=min(timeout, 60))
+        if rc == 0:
+            return f"atx-agent healthy; {msg}", 0
+        logger.warning("[%s] atx-agent healthy but u2 restart failed: %s", serial, msg)
+    elif atx_ping.startswith("device LAN IP unavailable"):
+        logger.debug("[%s] atx-agent JSON-RPC unavailable before restart: %s", serial, rpc_msg)
+
     # Kill zombie u2 first — a stuck u2 process is the #1 reason atx freezes.
     _run_u2_recovery_cleanup(serial, stop_atx=True)
     time.sleep(0.5)
@@ -787,13 +917,9 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
     atx_host = _resolve_device_lan_ip(serial)
     while time.monotonic() < deadline:
         time.sleep(1.5)
-        ok, last_ping = _atx_http_ping(serial, host=atx_host)
+        ok, last_ping = _atx_jsonrpc_device_info(serial, host=atx_host)
         if ok:
-            return "atx-agent started", 0
-        if not last_ping.startswith("device LAN IP unavailable"):
-            continue
-        if _device_port_listening(serial, 7912):
-            return "atx-agent started (port check only; LAN HTTP unavailable)", 0
+            return "atx-agent and u2 started", 0
     log_tail, _ = _adb_shell(serial, "tail -n 60 /data/local/tmp/atx-agent.log 2>/dev/null || true", timeout=5)
     return f"atx-agent did not start within timeout; last_ping={last_ping}; log_tail={log_tail[-1000:]}", -1
 
@@ -1413,15 +1539,17 @@ def _grant_stf_permissions(serial: str) -> list[str]:
 
 
 def _u2_atx_healthy(serial: str) -> bool:
-    """True when atx-agent and u2 instrumentation are already up (skip cold restart)."""
+    """True when the active atx-agent JSON-RPC route can reach u2."""
     atx_host = _resolve_device_lan_ip(serial)
+    ok, msg = _atx_jsonrpc_device_info(serial, host=atx_host)
+    if ok:
+        return True
     atx_ok, ping_err = _atx_http_ping(serial, host=atx_host)
-    if not atx_ok and ping_err.startswith("device LAN IP unavailable"):
-        atx_ok = _device_port_listening(serial, 7912)
-    elif not atx_ok:
+    if atx_ok:
+        logger.warning("[%s] atx-agent reachable but u2 JSON-RPC unhealthy: %s", serial, msg)
+    else:
         logger.warning("[%s] atx-agent HTTP unhealthy: %s", serial, ping_err)
-        return False
-    return atx_ok and _device_port_listening(serial, 9008)
+    return False
 
 
 def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:

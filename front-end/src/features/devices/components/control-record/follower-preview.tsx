@@ -1,11 +1,13 @@
 'use client';
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import type { Device } from '../../types';
 import { DeviceAndroidFrame } from '../device-android-frame';
 import { DeviceScreen } from '../device-screen';
 import { cn } from '@/lib/utils';
+import { fetchConfig } from '../../services/api';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import { useTabNetworkActive } from '../../hooks/use-tab-network-active';
@@ -14,53 +16,36 @@ import {
   subscribeFollowerH264SlotChanges
 } from '../../services/follower-h264-slots';
 import type { ScrcpyAttachOptions } from '../../services/scrcpy-stream';
-
-function followerH264Int(
-  name: string,
-  fallback: number,
-  min: number,
-  max: number
-) {
-  const raw = Number(process.env[name] ?? fallback);
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.max(min, Math.min(max, Math.round(raw)));
-}
+import {
+  FOLLOWER_H264_ATTACH_DWELL_MS,
+  FOLLOWER_PREVIEW_MAX_AGE_MS,
+  FOLLOWER_PREVIEW_REFRESH_MS,
+  boundedInt
+} from '../../lib/follower-preview-timing';
 
 const FOLLOWER_H264_OPTIONS: ScrcpyAttachOptions = {
   enableControl: false,
-  maxFps: followerH264Int('NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_FPS', 4, 1, 8),
-  maxWidth: followerH264Int(
-    'NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_WIDTH',
+  profile: 'degraded',
+  maxFps: boundedInt(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_FPS,
+    4,
+    1,
+    8
+  ),
+  maxWidth: boundedInt(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_WIDTH,
     360,
     240,
     540
   ),
-  bitrate: followerH264Int(
-    'NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_BITRATE',
+  bitrate: boundedInt(
+    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_H264_BITRATE,
     120_000,
     80_000,
     600_000
   )
 };
 const FOLLOWER_WS_SEND = () => undefined;
-
-const FOLLOWER_PREVIEW_REFRESH_MS = (() => {
-  const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MS ?? 1_000
-  );
-  if (!Number.isFinite(raw)) return 1_000;
-  return Math.max(1_000, Math.min(5_000, Math.round(raw)));
-})();
-const FOLLOWER_PREVIEW_MAX_AGE_MS = (() => {
-  const raw = Number(
-    process.env.NEXT_PUBLIC_DEVICE_FARM_FOLLOWER_PREVIEW_MAX_AGE_MS ?? 10_000
-  );
-  if (!Number.isFinite(raw)) return 10_000;
-  return Math.max(
-    FOLLOWER_PREVIEW_REFRESH_MS,
-    Math.min(10_000, Math.round(raw))
-  );
-})();
 
 export function formatFollowerLabel(
   d: Pick<Device, 'brand' | 'model' | 'serial'>
@@ -95,6 +80,11 @@ export const FollowerPreview = memo(function FollowerPreview({
   previewCount = 1
 }: Props) {
   const t = useTranslations('devicesControlRecord.view');
+  const { data: appConfig } = useQuery({
+    queryKey: ['device-farm', 'config'],
+    queryFn: fetchConfig,
+    staleTime: 60_000
+  });
   const label = formatFollowerLabel(device);
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const tabActive = useTabNetworkActive();
@@ -111,9 +101,14 @@ export const FollowerPreview = memo(function FollowerPreview({
     .replace('DeviceState.', '')
     .toUpperCase();
   const isActive = state && !['DISCONNECTED', 'DEAD'].includes(state);
-  const wantsH264Preview = Boolean(isActive && tabActive && inView);
-  const useH264Preview = wantsH264Preview && h264SlotSerial === device.serial;
-  const shouldSchedulePreview = wantsH264Preview && !useH264Preview;
+  const wantsLivePreview = Boolean(isActive && tabActive && inView);
+  const useWebRtcPreview = Boolean(
+    appConfig?.webrtc_enabled && wantsLivePreview
+  );
+  const useH264Preview =
+    !useWebRtcPreview && wantsLivePreview && h264SlotSerial === device.serial;
+  const shouldSchedulePreview =
+    wantsLivePreview && !useWebRtcPreview && !useH264Preview;
   const loadPreview = shouldSchedulePreview && previewCadenceReady;
   const refreshOffsetMs = useMemo(() => {
     const count = Math.max(1, Math.round(previewCount));
@@ -143,12 +138,14 @@ export const FollowerPreview = memo(function FollowerPreview({
 
   useEffect(() => {
     setH264SlotSerial(null);
-    if (!wantsH264Preview) return;
+    if (!wantsLivePreview || useWebRtcPreview) return;
 
     let cancelled = false;
     let releaseSlot: (() => void) | null = null;
+    let dwellDone = FOLLOWER_H264_ATTACH_DWELL_MS <= 0;
+    let dwellTimer: number | undefined;
     const tryAcquire = () => {
-      if (cancelled || releaseSlot) return;
+      if (cancelled || releaseSlot || !dwellDone) return;
       const release = acquireFollowerH264Slot();
       if (!release) return;
       if (cancelled) {
@@ -159,14 +156,22 @@ export const FollowerPreview = memo(function FollowerPreview({
       setH264SlotSerial(device.serial);
     };
     const unsubscribe = subscribeFollowerH264SlotChanges(tryAcquire);
-    tryAcquire();
+    if (dwellDone) {
+      tryAcquire();
+    } else {
+      dwellTimer = window.setTimeout(() => {
+        dwellDone = true;
+        tryAcquire();
+      }, FOLLOWER_H264_ATTACH_DWELL_MS);
+    }
 
     return () => {
       cancelled = true;
+      if (dwellTimer !== undefined) window.clearTimeout(dwellTimer);
       unsubscribe();
       releaseSlot?.();
     };
-  }, [device.serial, wantsH264Preview]);
+  }, [device.serial, useWebRtcPreview, wantsLivePreview]);
 
   const previewUrl = useMemo(() => {
     if (!loadPreview) return null;
@@ -253,7 +258,21 @@ export const FollowerPreview = memo(function FollowerPreview({
             className='shrink-0'
           >
             {isActive ? (
-              useH264Preview ? (
+              useWebRtcPreview ? (
+                <DeviceScreen
+                  device={device}
+                  wsSend={FOLLOWER_WS_SEND}
+                  mode='tap'
+                  captionBelowFrame
+                  interactive={false}
+                  streamFetchPriority='low'
+                  streamTransport='webrtc'
+                  streamFit='contain'
+                  streamCoverAlign='center'
+                  scrcpyViewerRole='follower-preview'
+                  scrcpyAttachOptions={FOLLOWER_H264_OPTIONS}
+                />
+              ) : useH264Preview ? (
                 <DeviceScreen
                   device={device}
                   wsSend={FOLLOWER_WS_SEND}

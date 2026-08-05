@@ -19,6 +19,7 @@ import {
   DeviceAndroidFrame,
   mockupOuterHeightPx
 } from './device-android-frame';
+import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 import { DeviceStepMonitorButton } from './device-step-monitor';
@@ -30,6 +31,7 @@ import {
   acquireSnapshotPreviewWarmup,
   type SnapshotPreviewWarmupHandle
 } from '../services/snapshot-preview-warmup';
+import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import { useH264Video } from '../hooks/use-h264-canvas';
 import { requestIdr } from '../services/ws';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
@@ -65,10 +67,46 @@ const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
   return Math.max(500, Math.min(10_000, Math.round(raw)));
 })();
 
+function dashboardWebRtcInt(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number
+) {
+  const raw = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(raw)));
+}
+
+const DASHBOARD_WEBRTC_PREVIEW_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: false,
+  profile: 'degraded',
+  maxFps: dashboardWebRtcInt(
+    'NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_WEBRTC_FPS',
+    1,
+    1,
+    5
+  ),
+  maxWidth: dashboardWebRtcInt(
+    'NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_WEBRTC_WIDTH',
+    320,
+    160,
+    540
+  ),
+  bitrate: dashboardWebRtcInt(
+    'NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_WEBRTC_BITRATE',
+    150_000,
+    80_000,
+    600_000
+  )
+};
+const DASHBOARD_PREVIEW_WS_SEND = () => undefined;
+
 interface DeviceTilePreviewProps {
   device: Device;
   onOpenSteps?: (serial: string) => void;
   previewEnabled?: boolean;
+  streamTransport?: DeviceScreenTransport;
 }
 
 type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
@@ -76,7 +114,8 @@ type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
 function DeviceTilePreviewInner({
   device,
   onOpenSteps,
-  previewEnabled = true
+  previewEnabled = true,
+  streamTransport = 'auto'
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -158,10 +197,16 @@ function DeviceTilePreviewInner({
     webCodecsSupport,
     h264Stalled
   });
-  const shouldUseH264Preview = previewMode.useH264 && isActive && loadStream;
+  const shouldUseWebRtcPreview =
+    streamTransport === 'webrtc' && isActive && loadStream;
+  const shouldUseH264Preview =
+    !shouldUseWebRtcPreview && previewMode.useH264 && isActive && loadStream;
   const shouldUseSnapshotPreview =
-    previewMode.useSnapshot && isActive && loadStream;
-  const shouldWarmupPreview = isActive && loadStream;
+    !shouldUseWebRtcPreview &&
+    previewMode.useSnapshot &&
+    isActive &&
+    loadStream;
+  const shouldWarmupPreview = !shouldUseWebRtcPreview && isActive && loadStream;
   const h264PreviewActive =
     shouldUseH264Preview &&
     (previewWarmupState === 'attaching' || previewWarmupState === 'live');
@@ -190,6 +235,7 @@ function DeviceTilePreviewInner({
   const isUnresponsive =
     isActive &&
     loadStream &&
+    !shouldUseWebRtcPreview &&
     !isPreviewQueued &&
     !hasFrame &&
     loadingElapsedSec >= 12;
@@ -216,6 +262,8 @@ function DeviceTilePreviewInner({
   }, [device.serial]);
 
   useH264Video(h264PreviewActive ? device.serial : '', previewCanvasRef, {
+    inspectFramesForBlack: false,
+    renderInWorker: true,
     onFrame: useCallback(() => {
       setHasFrame(true);
       setH264Stalled(false);
@@ -434,6 +482,21 @@ function DeviceTilePreviewInner({
                 ref={previewZoneRef}
                 className='relative h-full min-h-0 w-full overflow-hidden bg-zinc-950'
               >
+                {shouldUseWebRtcPreview && (
+                  <DeviceScreen
+                    device={device}
+                    wsSend={DASHBOARD_PREVIEW_WS_SEND}
+                    mode='tap'
+                    captionBelowFrame
+                    interactive={false}
+                    streamFetchPriority='low'
+                    streamTransport='webrtc'
+                    streamFit='contain'
+                    streamCoverAlign='center'
+                    scrcpyViewerRole='follower-preview'
+                    scrcpyAttachOptions={DASHBOARD_WEBRTC_PREVIEW_OPTIONS}
+                  />
+                )}
                 {showPreviewImg && (
                   // eslint-disable-next-line @next/next/no-img-element -- dashboard preview uses cached screenshot polling.
                   <img
@@ -473,7 +536,7 @@ function DeviceTilePreviewInner({
                         : t('previewDeferred')}
                     </p>
                   </div>
-                ) : (
+                ) : shouldUseWebRtcPreview ? null : (
                   <div
                     className={cn(
                       'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-500',
@@ -517,6 +580,7 @@ function tilePreviewPropsEqual(
   if (prev.device.serial !== next.device.serial) return false;
   if (prev.onOpenSteps !== next.onOpenSteps) return false;
   if (prev.previewEnabled !== next.previewEnabled) return false;
+  if (prev.streamTransport !== next.streamTransport) return false;
   const pd = prev.device;
   const nd = next.device;
   return (

@@ -7,14 +7,14 @@ import type {
   CampaignDispatchIn as GeneratedCampaignDispatchIn,
   CampaignDispatchOut,
   CampaignEntityOut,
-  CampaignEntityUpdate,
-  CampaignScenarioRefIn,
+  CampaignEntityUpdate as GeneratedCampaignEntityUpdate,
   CampaignAccountBindIn
 } from '../../device-farm/services/generated/DeviceFarmApi';
 import type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignScenarioRefIn as CampaignScenarioRefInLocal,
   CampaignScenarioRefOut,
   CampaignRunResponse,
   CampaignStatus,
@@ -31,6 +31,13 @@ import type {
   ExecutionArtifact,
   ExecutionEventOut
 } from '../types';
+
+export type CampaignEntityUpdate = Omit<
+  GeneratedCampaignEntityUpdate,
+  'scenario_refs'
+> & {
+  scenario_refs?: CampaignScenarioRefInLocal[] | null;
+};
 
 export type {
   CampaignCreate,
@@ -51,13 +58,9 @@ export type {
   ExecutionArtifact
 } from '../types';
 
-export type {
-  CampaignDispatchOut,
-  CampaignEntityOut,
-  CampaignEntityUpdate,
-  CampaignScenarioRefIn,
-  CampaignAccountBindIn
-};
+export type { CampaignDispatchOut, CampaignEntityOut, CampaignAccountBindIn };
+
+export type { CampaignScenarioRefInLocal as CampaignScenarioRefIn };
 
 export type CampaignDispatchIn = GeneratedCampaignDispatchIn & {
   source_pool?: {

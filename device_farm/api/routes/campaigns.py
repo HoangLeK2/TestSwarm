@@ -261,6 +261,7 @@ def _entity_out(view: CampaignView) -> CampaignEntityOut:
             CampaignScenarioRefOut(
                 scenario_id=ref.scenario_id,
                 scenario_version=ref.scenario_version,
+                repeat_count=ref.repeat_count,
             )
             for ref in view.scenario_refs
         ],

@@ -21,6 +21,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode
@@ -51,7 +52,8 @@ import {
   type CampaignAccountBindingValue
 } from './campaign-account-binding-fields';
 import { RecoveryPolicyEditor } from './recovery-policy-editor';
-import type { RecoveryPolicy } from '../types';
+import type { CampaignScenarioRefIn, RecoveryPolicy } from '../types';
+import { normalizeCampaignScenarioRefs, scenarioRefRunCount } from '../types';
 
 type FormData = {
   name: string;
@@ -127,8 +129,16 @@ export function CreateCampaignDialog({
   const userEditedVariablesRef = useRef(false);
   const [tags, setTags] = useState('');
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
-  const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>(
-    preselectedScenarioIds
+  const [selectedScenarioRefs, setSelectedScenarioRefs] = useState<
+    CampaignScenarioRefIn[]
+  >(
+    normalizeCampaignScenarioRefs(
+      preselectedScenarioIds.map((scenario_id) => ({ scenario_id }))
+    )
+  );
+  const selectedScenarioIds = useMemo(
+    () => selectedScenarioRefs.map((ref) => ref.scenario_id),
+    [selectedScenarioRefs]
   );
   const [currentStep, setCurrentStep] = useState<CreateStep>('basics');
   const bodyQueries = useOrgScenarioBodies(selectedScenarioIds, open);
@@ -147,11 +157,11 @@ export function CreateCampaignDialog({
     [replaceVariables]
   );
 
-  const handleSelectedScenarioIdsChange = useCallback(
-    (ids: string[]) => {
+  const handleSelectedScenarioRefsChange = useCallback(
+    (refs: CampaignScenarioRefIn[]) => {
       userEditedVariablesRef.current = false;
       lastMergedSelectionRef.current = '';
-      setSelectedScenarioIds(ids);
+      setSelectedScenarioRefs(normalizeCampaignScenarioRefs(refs));
       replaceVariables({});
     },
     [replaceVariables]
@@ -161,13 +171,21 @@ export function CreateCampaignDialog({
     if (!initialOpen) return;
     setOpen(true);
     if (preselectedScenarioIds.length) {
-      setSelectedScenarioIds(preselectedScenarioIds);
+      setSelectedScenarioRefs(
+        normalizeCampaignScenarioRefs(
+          preselectedScenarioIds.map((scenario_id) => ({ scenario_id }))
+        )
+      );
     }
   }, [initialOpen, preselectedScenarioIds]);
 
   useEffect(() => {
     if (preselectedScenarioIds.length) {
-      setSelectedScenarioIds(preselectedScenarioIds);
+      setSelectedScenarioRefs(
+        normalizeCampaignScenarioRefs(
+          preselectedScenarioIds.map((scenario_id) => ({ scenario_id }))
+        )
+      );
     }
   }, [preselectedScenarioIds]);
 
@@ -237,7 +255,11 @@ export function CreateCampaignDialog({
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
-      setSelectedScenarioIds(preselectedScenarioIds);
+      setSelectedScenarioRefs(
+        normalizeCampaignScenarioRefs(
+          preselectedScenarioIds.map((scenario_id) => ({ scenario_id }))
+        )
+      );
       reset({
         name: defaultCampaignName ?? '',
         description: ''
@@ -256,10 +278,25 @@ export function CreateCampaignDialog({
     }
   };
 
-  const effectiveScenarioIds =
-    selectedScenarioIds.length > 0
-      ? selectedScenarioIds
-      : preselectedScenarioIds;
+  const preselectedScenarioRefs = useMemo(
+    () =>
+      normalizeCampaignScenarioRefs(
+        preselectedScenarioIds.map((scenario_id) => ({ scenario_id }))
+      ),
+    [preselectedScenarioIds]
+  );
+  const effectiveScenarioRefs = useMemo(
+    () =>
+      selectedScenarioRefs.length > 0
+        ? selectedScenarioRefs
+        : preselectedScenarioRefs,
+    [preselectedScenarioRefs, selectedScenarioRefs]
+  );
+  const effectiveScenarioIds = useMemo(
+    () => effectiveScenarioRefs.map((ref) => ref.scenario_id),
+    [effectiveScenarioRefs]
+  );
+  const effectiveRunCount = scenarioRefRunCount(effectiveScenarioRefs);
 
   const currentStepIndex = createSteps.indexOf(currentStep);
   const isLastStep = currentStepIndex === createSteps.length - 1;
@@ -330,9 +367,7 @@ export function CreateCampaignDialog({
           .split(',')
           .map((tag) => tag.trim())
           .filter(Boolean),
-        scenario_refs: effectiveScenarioIds.map((scenario_id) => ({
-          scenario_id
-        })),
+        scenario_refs: effectiveScenarioRefs,
         recovery_policy: recoveryPolicy,
         ...campaignBindingToPayload(accountBinding)
       },
@@ -343,7 +378,11 @@ export function CreateCampaignDialog({
           replaceVariables({});
           setTags('');
           setRecoveryPolicy({});
-          setSelectedScenarioIds(preselectedScenarioIds);
+          setSelectedScenarioRefs(
+            normalizeCampaignScenarioRefs(
+              preselectedScenarioIds.map((scenario_id) => ({ scenario_id }))
+            )
+          );
           setCurrentStep('basics');
           setAccountBinding({
             mode: 'none',
@@ -471,10 +510,19 @@ export function CreateCampaignDialog({
                     hint={t('mainScenariosHint')}
                   >
                     <CampaignOrgScenarioPicker
-                      selectedIds={selectedScenarioIds}
-                      onSelectedIdsChange={handleSelectedScenarioIdsChange}
+                      selectedRefs={selectedScenarioRefs}
+                      onSelectedRefsChange={handleSelectedScenarioRefsChange}
                       scenarioFilter='regular'
+                      showRepeatConfig
                     />
+                    {effectiveScenarioRefs.length > 0 ? (
+                      <p className='mt-2 text-[11px] text-muted-foreground'>
+                        {t('repeatSummary', {
+                          scenarios: effectiveScenarioRefs.length,
+                          runs: effectiveRunCount
+                        })}
+                      </p>
+                    ) : null}
                   </Section>
                 </TabsContent>
 

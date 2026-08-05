@@ -6,15 +6,19 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from common.campaign_scenario_refs import MAX_SCENARIO_REPEAT_COUNT
+
 
 class CampaignScenarioRefIn(BaseModel):
     scenario_id: str
     scenario_version: Optional[int] = Field(default=None, ge=1)
+    repeat_count: int = Field(default=1, ge=1, le=MAX_SCENARIO_REPEAT_COUNT)
 
 
 class CampaignScenarioRefOut(BaseModel):
     scenario_id: str
     scenario_version: int
+    repeat_count: int = Field(default=1)
 
 
 class CampaignEntityCreate(BaseModel):

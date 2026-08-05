@@ -14,6 +14,7 @@ from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.enums import ExecutionStatus
 from db.models.execution import Execution, ExecutionDevice
+from common.campaign_scenario_refs import normalize_scenario_repeat_count
 from services.campaign.dispatcher import (
     FanOutExecutionView,
     FanOutResult,
@@ -126,24 +127,35 @@ def build_sequence_steps(
         if campaign_vars is not None
         else dict(effective_vars or {})
     )
-    for scenario_idx, ref in enumerate(scenario_refs):
+    scenario_sequence_index = 0
+    for scenario_ref_index, ref in enumerate(scenario_refs):
         scenario_id = str(ref["scenario_id"])
+        repeat_count = normalize_scenario_repeat_count(ref.get("repeat_count"))
         scoped_vars = dict((scenario_device_vars or {}).get(scenario_id) or {})
-        merged_vars = {
-            **campaign_override_vars,
-            **device_override_vars,
-            **scoped_vars,
-            **account_vars,
-            "DEVICE_INDEX": str(device_index),
-            "SCENARIO_INDEX": str(scenario_idx),
-        }
-        steps.append(
-            {
-                "type": "run_scenario",
-                "scenario_id": scenario_id,
-                "variables": merged_vars,
+        for repeat_index in range(repeat_count):
+            merged_vars = {
+                **campaign_override_vars,
+                **device_override_vars,
+                **scoped_vars,
+                **account_vars,
+                "DEVICE_INDEX": str(device_index),
+                "SCENARIO_INDEX": str(scenario_sequence_index),
+                "SCENARIO_REF_INDEX": str(scenario_ref_index),
+                "SCENARIO_REPEAT_INDEX": str(repeat_index),
+                "SCENARIO_REPEAT_COUNT": str(repeat_count),
             }
-        )
+            steps.append(
+                {
+                    "type": "run_scenario",
+                    "scenario_id": scenario_id,
+                    "variables": merged_vars,
+                    "scenario_ref_index": scenario_ref_index,
+                    "scenario_sequence_index": scenario_sequence_index,
+                    "repeat_index": repeat_index,
+                    "repeat_count": repeat_count,
+                }
+            )
+            scenario_sequence_index += 1
     return steps
 
 

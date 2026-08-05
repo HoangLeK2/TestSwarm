@@ -112,6 +112,9 @@ class CampaignOrgScenarioRef(Base):
     )
     pinned_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    repeat_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="org_scenario_refs")

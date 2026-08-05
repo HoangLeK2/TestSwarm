@@ -24,8 +24,16 @@ import {
   usePatchCampaignEntity,
   useUnbindCampaignAccounts
 } from '../hooks/use-campaigns';
-import type { CampaignOut, RecoveryPolicy } from '../types';
-import { isCampaignBodyEditable } from '../types';
+import type {
+  CampaignOut,
+  CampaignScenarioRefIn,
+  RecoveryPolicy
+} from '../types';
+import {
+  isCampaignBodyEditable,
+  normalizeCampaignScenarioRefs,
+  scenarioRefRunCount
+} from '../types';
 import { isCampaignEntityOut } from '../services/api';
 import {
   CampaignAccountBindingFields,
@@ -65,7 +73,7 @@ export function EditCampaignEntityDialog({
   const [tags, setTags] = useState('');
   const [variables, setVariables] = useState<Record<string, unknown>>({});
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedRefs, setSelectedRefs] = useState<CampaignScenarioRefIn[]>([]);
   const [accountBinding, setAccountBinding] =
     useState<CampaignAccountBindingValue>({
       mode: 'none',
@@ -80,7 +88,7 @@ export function EditCampaignEntityDialog({
     setTags((entity.tags ?? []).join(', '));
     setVariables(entity.vars ?? entity.variables ?? {});
     setRecoveryPolicy((entity.recovery_policy ?? {}) as RecoveryPolicy);
-    setSelectedIds((entity.scenario_refs ?? []).map((ref) => ref.scenario_id));
+    setSelectedRefs(normalizeCampaignScenarioRefs(entity.scenario_refs ?? []));
     setAccountBinding(campaignBindingFromEntity(entity));
   }, [entity]);
 
@@ -107,9 +115,7 @@ export function EditCampaignEntityDialog({
                 .map((tag) => tag.trim())
                 .filter(Boolean),
               vars: variables,
-              scenario_refs: selectedIds.map((scenario_id) => ({
-                scenario_id
-              })),
+              scenario_refs: normalizeCampaignScenarioRefs(selectedRefs),
               recovery_policy: recoveryPolicy
             }
       },
@@ -203,11 +209,22 @@ export function EditCampaignEntityDialog({
           <div className='space-y-2'>
             <Label>{t('scenariosLabel')}</Label>
             <CampaignOrgScenarioPicker
-              selectedIds={selectedIds}
-              onSelectedIdsChange={setSelectedIds}
+              selectedRefs={selectedRefs}
+              onSelectedRefsChange={(refs) =>
+                setSelectedRefs(normalizeCampaignScenarioRefs(refs))
+              }
               disabled={bodyLocked}
               messagesNs='entityDialog'
+              showRepeatConfig
             />
+            {selectedRefs.length > 0 ? (
+              <p className='text-[11px] text-muted-foreground'>
+                {t('repeatSummary', {
+                  scenarios: selectedRefs.length,
+                  runs: scenarioRefRunCount(selectedRefs)
+                })}
+              </p>
+            ) : null}
           </div>
           <div
             className={cn(

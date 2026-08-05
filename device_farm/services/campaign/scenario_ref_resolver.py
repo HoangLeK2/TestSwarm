@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.campaign_scenario_refs import normalize_scenario_repeat_count
 from db.crud import org_scenario as org_scenario_repo
 from db.models.enums import OrgScenarioStatus
 from tenancy.context import tenant_context
@@ -38,6 +39,7 @@ class ResolvedScenarioRef:
     scenario_id: str
     scenario_version: int
     order_index: int
+    repeat_count: int
 
 
 async def resolve_scenario_refs(
@@ -98,11 +100,17 @@ async def _resolve_scenario_refs_in_tenant(
             if pinned < 1 or pinned > int(current_version or 1):
                 raise ScenarioVersionNotFoundForCampaignError(scenario_id, pinned)
 
+        try:
+            repeat_count = normalize_scenario_repeat_count(ref.get("repeat_count"))
+        except ValueError as exc:
+            raise CampaignScenarioRefError(str(exc), code="INVALID_SCENARIO_REF") from exc
+
         resolved.append(
             ResolvedScenarioRef(
                 scenario_id=scenario_id,
                 scenario_version=pinned,
                 order_index=order_index,
+                repeat_count=repeat_count,
             )
         )
     return resolved

@@ -26,7 +26,7 @@ export function SortableFlowRow({
   } = useSortable({ id });
 
   const style: CSSProperties = {
-    contain: 'layout paint style',
+    contain: 'layout style',
     transform: CSS.Transform.toString(transform),
     transition: transition ?? undefined,
     willChange: isDragging ? 'transform' : undefined

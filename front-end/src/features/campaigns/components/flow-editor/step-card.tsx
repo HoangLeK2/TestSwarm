@@ -106,7 +106,7 @@ export function StepCard({
         coordPickActive &&
           'shadow-[0_0_0_1px_rgba(14,165,233,0.35)] ring-2 ring-sky-500/75'
       )}
-      style={{ contain: 'layout paint style' }}
+      style={{ contain: 'layout style' }}
       onClick={onClick}
     >
       {isPickTarget && (
@@ -207,6 +207,8 @@ export function StepCard({
             <img
               src={imgSrc}
               alt=''
+              loading='lazy'
+              decoding='async'
               className='h-12 w-8 shrink-0 rounded border border-border/40 object-cover object-top'
             />
           ) : null;

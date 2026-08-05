@@ -9,10 +9,13 @@ import {
   useState
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useQuery } from '@tanstack/react-query';
 import { ROUTES } from '@/config/routes';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
 import { useDeviceFarm } from '../hooks/use-device-farm';
+import { fetchConfig } from '../services/api';
+import type { DeviceScreenTransport } from './device-screen';
 import { Badge } from '@/components/ui/badge';
 import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
 import { CoreEmptyState } from '@/components/core-empty-state';
@@ -49,6 +52,15 @@ export function DeviceFarm() {
   const tEmpty = useTranslations('coreEmptyState');
   const tHeader = useTranslations('devicesFarm.header');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+  const { data: appConfig } = useQuery({
+    queryKey: ['device-farm', 'config'],
+    queryFn: fetchConfig,
+    staleTime: 60_000
+  });
+  const gridStreamTransport = useMemo<DeviceScreenTransport>(
+    () => (appConfig?.webrtc_enabled ? 'webrtc' : 'auto'),
+    [appConfig?.webrtc_enabled]
+  );
 
   const { devices, wsConnected, error } = useDeviceFarm({
     liveRefreshMs: 15_000,
@@ -230,7 +242,11 @@ export function DeviceFarm() {
                     }}
                   >
                     {pageDevices.slice(start, end).map((device) => (
-                      <DeviceTilePreview key={device.serial} device={device} />
+                      <DeviceTilePreview
+                        key={device.serial}
+                        device={device}
+                        streamTransport={gridStreamTransport}
+                      />
                     ))}
                   </div>
                 );

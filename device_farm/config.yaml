@@ -24,10 +24,10 @@ device:
   stf_apk_path: ""       
 
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  scrcpy_max_fps: 8
-  scrcpy_max_width: 360
+  scrcpy_max_fps: 15
+  scrcpy_max_width: 600
   scrcpy_bitrate: 1500000        # H.264 bitrate bps for local ADB path (1.5Mbps)
-  scrcpy_relay_bitrate: 400000   # relay bitrate — conservative H264 profile for stable cloud control
+  scrcpy_relay_bitrate: 900000   # relay/WebRTC source bitrate for readable low-latency control
   scrcpy_control: true      # Keep scrcpy control socket for H264 IDR/keyframes; input still prioritizes u2
   u2_always_tunnel: false  # Local/LAN: prefer direct atx-agent on device_ip:7912 (no WS u2 tunnel)
 

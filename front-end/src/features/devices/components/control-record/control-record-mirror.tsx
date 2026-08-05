@@ -1,12 +1,15 @@
 'use client';
 
 import { memo, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
 import type { DeviceOpsConfig } from '../device-ops-rail';
 import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
 import { isManualControlBlockedByAutomation } from '../../lib/control-record-device-state';
+import { fetchConfig } from '../../services/api';
 import type { ScrcpyAttachOptions } from '../../services/scrcpy-stream';
+import type { DeviceScreenTransport } from '../device-screen';
 
 type Props = {
   device: Device;
@@ -47,6 +50,7 @@ function controlScrcpyInt(
 
 const CONTROL_RECORD_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
   enableControl: true,
+  profile: 'focused',
   maxFps: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_FPS',
     15,
@@ -55,13 +59,13 @@ const CONTROL_RECORD_SCRCPY_OPTIONS: ScrcpyAttachOptions = {
   ),
   maxWidth: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_WIDTH',
-    480,
+    600,
     360,
     720
   ),
   bitrate: controlScrcpyInt(
     'NEXT_PUBLIC_DEVICE_FARM_CONTROL_SCRCPY_BITRATE',
-    800_000,
+    900_000,
     300_000,
     2_000_000
   )
@@ -134,6 +138,11 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   mirrorSize = 'default',
   deviceOps
 }: Props) {
+  const { data: appConfig } = useQuery({
+    queryKey: ['device-farm', 'config'],
+    queryFn: fetchConfig,
+    staleTime: 60_000
+  });
   const mockupScreenWidth =
     mirrorSize === 'multiFocus'
       ? 236
@@ -144,6 +153,10 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   const compactOverlay = mirrorSize !== 'default';
 
   const manualControlBlocked = isManualControlBlocked(device);
+  const streamTransport = useMemo<DeviceScreenTransport>(
+    () => (appConfig?.webrtc_enabled ? 'webrtc' : 'h264-only'),
+    [appConfig?.webrtc_enabled]
+  );
   const screenOverlay = useMemo(() => {
     if (!manualControlBlocked) {
       return undefined;
@@ -185,7 +198,8 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
             readOnlyPreview={readOnlyPreview}
             mockupScreenWidth={mockupScreenWidth}
             streamFetchPriority='high'
-            streamTransport='h264-only'
+            streamTransport={streamTransport}
+            streamFit='contain'
             scrcpyAttachOptions={CONTROL_RECORD_SCRCPY_OPTIONS}
             hideAppCaption={compactPadding}
             deviceOps={deviceOps}

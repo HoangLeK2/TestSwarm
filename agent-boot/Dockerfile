@@ -27,12 +27,21 @@ ARG RELAY_GRPC_TLS_HOST=grpc-device-farm.tommadethis.app
 ARG RELAY_GRPC_TLS_PORT=443
 RUN ./docker/fetch-grpc-relay-ca.sh "$RELAY_GRPC_TLS_HOST" "$RELAY_GRPC_TLS_PORT" /app/certs/grpc-relay-ca.pem
 
+# ── Media adapter: reusable Go process for video publishing ──────────────────
+FROM golang:1.25-bookworm AS media-adapter-builder
+
+WORKDIR /src/media-adapter
+COPY media-adapter/go.mod ./
+COPY media-adapter ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/media-adapter ./cmd/media-adapter
+
 # ── Runtime: adb + venv only (no uv/curl/openssl build tools) ────────────────
 FROM python:3.13-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     adb \
     ca-certificates \
+    ffmpeg \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
@@ -43,7 +52,9 @@ COPY --from=builder /app/certs /app/certs
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/main.py /app/main.py
 COPY --from=builder /app/relay /app/relay
+COPY --from=builder /app/media-adapter/assets /app/media-adapter/assets
 COPY --from=builder /app/assets /app/assets
+COPY --from=media-adapter-builder /out/media-adapter /app/bin/media-adapter
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     ADB_HOST=host.docker.internal \

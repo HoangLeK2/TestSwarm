@@ -11,6 +11,7 @@ from api.routes.dashboard_page import build_dashboard_router
 from api.routes.device_control import build_device_control_router
 from api.routes.device_media import build_device_media_router
 from api.routes.extraction import build_extraction_router
+from api.routes.media_webrtc import build_media_webrtc_router
 from api.routes.public import build_public_router
 from common.session_lock import SessionLockStore
 from core.config import Config
@@ -42,6 +43,10 @@ def mount_http_routers(
     )
     app.include_router(
         build_device_media_router(manager),
+        dependencies=[Depends(device_auth), Depends(device_read)],
+    )
+    app.include_router(
+        build_media_webrtc_router(manager, config, db_enabled=db_enabled),
         dependencies=[Depends(device_auth), Depends(device_read)],
     )
     app.include_router(

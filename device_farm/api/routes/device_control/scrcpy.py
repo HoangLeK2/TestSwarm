@@ -42,6 +42,21 @@ _VIEWER_SURFACE_PRIORITY = {
     "device-screen": 100,
     "control-screen": 100,
 }
+_SCRCPY_PROFILE_ALIASES = {
+    "focus": "focused",
+    "focused": "focused",
+    "control": "focused",
+    "control_screen": "focused",
+    "full": "focused",
+    "high": "focused",
+    "low": "degraded",
+    "degraded": "degraded",
+    "thumbnail": "degraded",
+    "thumb": "degraded",
+    "background": "degraded",
+    "visible": "visible",
+    "default": "visible",
+}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -92,6 +107,17 @@ def _scrcpy_viewer_surface(viewer_id: str) -> str | None:
         return None
     surface = viewer_id.split(":", 1)[0].strip()
     return surface or None
+
+
+def _normalize_scrcpy_profile(raw: str | None, viewer_id: str) -> str:
+    profile = _SCRCPY_PROFILE_ALIASES.get(str(raw or "").strip().lower())
+    if profile:
+        return profile
+    if _is_control_viewer(viewer_id):
+        return "focused"
+    if _is_preview_viewer(viewer_id):
+        return "degraded"
+    return "visible"
 
 
 def _is_control_viewer(viewer_id: str) -> bool:
@@ -161,6 +187,15 @@ def _current_scrcpy_profile(device: object) -> tuple[int | None, int | None, int
     return (None, None, None)
 
 
+def _current_scrcpy_profile_name(device: object) -> str:
+    params = getattr(device, "_scrcpy_params", None)
+    if isinstance(params, tuple) and len(params) >= 7:
+        return _normalize_scrcpy_profile(str(params[6] or ""), _LEGACY_VIEWER_ID)
+    if isinstance(params, dict):
+        return _normalize_scrcpy_profile(str(params.get("profile") or ""), _LEGACY_VIEWER_ID)
+    return "visible"
+
+
 def _has_limited_profile_request(body: ScrcpyAttachRequest) -> bool:
     return any(value is not None for value in _requested_scrcpy_profile(body))
 
@@ -170,7 +205,11 @@ def _has_limited_scrcpy_profile(device: object) -> bool:
 
 
 def _scrcpy_profile_matches_request(device: object, body: ScrcpyAttachRequest) -> bool:
-    return _current_scrcpy_profile(device) == _requested_scrcpy_profile(body)
+    return (
+        _current_scrcpy_profile(device) == _requested_scrcpy_profile(body)
+        and _current_scrcpy_profile_name(device)
+        == _normalize_scrcpy_profile(body.profile, _LEGACY_VIEWER_ID)
+    )
 
 
 def _scrcpy_request_matches_device(
@@ -231,7 +270,7 @@ def _effective_viewer_request(
 
     highest_priority = max(item[0] for item in ranked)
     selected = [item for item in ranked if item[0] == highest_priority]
-    _, _, base = max(
+    _, selected_viewer_id, base = max(
         selected,
         key=lambda item: (
             _positive_profile_value(item[2].max_fps) or 0,
@@ -255,6 +294,10 @@ def _effective_viewer_request(
             "max_fps": _max_requested("max_fps"),
             "max_width": _max_requested("max_width"),
             "bitrate": _max_requested("bitrate"),
+            "profile": _normalize_scrcpy_profile(
+                base.profile,
+                selected_viewer_id,
+            ),
         }
     )
 
@@ -267,6 +310,7 @@ def build_scrcpy_router(
     manager: DeviceManager,
     *,
     db_enabled: bool,
+    stream_owned_by_adapter: bool = False,
     scrcpy_detach_grace_s: float = _DEFAULT_DETACH_GRACE_S,
     scrcpy_preview_detach_grace_s: float | None = None,
     scrcpy_viewer_lease_ttl_s: float | None = None,
@@ -404,6 +448,7 @@ def build_scrcpy_router(
                 effective_request.device_ip,
                 effective_request.adb_port,
                 effective_request.enable_control,
+                profile=effective_request.profile,
                 max_fps=effective_request.max_fps,
                 max_width=effective_request.max_width,
                 bitrate=effective_request.bitrate,
@@ -547,6 +592,16 @@ def build_scrcpy_router(
                 _expire_viewer_lease(serial, viewer_id)
             )
 
+    def _adapter_owned_response(serial: str, viewer_id: str) -> dict[str, object]:
+        return {
+            "ok": True,
+            "serial": serial,
+            "viewer_id": viewer_id,
+            "status": "webrtc_adapter_owned",
+            "transport": "webrtc",
+            "active_viewers": 0,
+        }
+
     async def _stop_scrcpy_after_grace(
         serial: str,
         viewer_id: str,
@@ -583,6 +638,16 @@ def build_scrcpy_router(
 
     @router.post("/devices/{serial}/scrcpy/attach")
     async def api_scrcpy_attach(serial: str, body: ScrcpyAttachRequest):
+        viewer_id = _scrcpy_viewer_id(body.viewer_id)
+        if stream_owned_by_adapter:
+            log.debug(
+                "api_scrcpy_attach ignored because media adapter owns stream "
+                "serial=%s viewer=%s",
+                serial,
+                viewer_id,
+            )
+            return _adapter_owned_response(serial, viewer_id)
+
         lock = _scrcpy_op_lock(serial)
 
         if not await _scrcpy_serial_is_registered(serial):
@@ -610,7 +675,6 @@ def build_scrcpy_router(
                     status_code=400,
                 )
 
-        viewer_id = _scrcpy_viewer_id(body.viewer_id)
         async with lock:
             viewers = _SCRCPY_VIEWERS.get(serial)
             if viewers is not None:
@@ -643,7 +707,12 @@ def build_scrcpy_router(
             scrcpy_pending = bool(getattr(device, "_scrcpy_pending_registered_ip", None))
             should_start = not scrcpy_active and not scrcpy_pending
             viewers.add(viewer_id)
-            viewer_request = body.model_copy(update={"device_ip": device_ip})
+            viewer_request = body.model_copy(
+                update={
+                    "device_ip": device_ip,
+                    "profile": _normalize_scrcpy_profile(body.profile, viewer_id),
+                }
+            )
             _SCRCPY_VIEWER_REQUESTS.setdefault(serial, {})[viewer_id] = viewer_request
             _refresh_viewer_lease(serial, viewer_id)
             attach_request = _effective_viewer_request(serial, viewers) or viewer_request
@@ -665,6 +734,7 @@ def build_scrcpy_router(
                         device_ip,
                         attach_request.adb_port,
                         attach_request.enable_control,
+                        profile=attach_request.profile,
                     )
                 else:
                     attach_call = partial(
@@ -672,6 +742,7 @@ def build_scrcpy_router(
                         device_ip,
                         attach_request.adb_port,
                         attach_request.enable_control,
+                        profile=attach_request.profile,
                         max_fps=attach_request.max_fps,
                         max_width=attach_request.max_width,
                         bitrate=attach_request.bitrate,
@@ -734,6 +805,8 @@ def build_scrcpy_router(
     @router.post("/devices/{serial}/scrcpy/heartbeat")
     async def api_scrcpy_heartbeat(serial: str, body: ScrcpyDetachRequest):
         viewer_id = _scrcpy_viewer_id(body.viewer_id)
+        if stream_owned_by_adapter:
+            return _adapter_owned_response(serial, viewer_id)
         if not _viewer_uses_lease(viewer_id):
             return JSONResponse(
                 {"error": "viewer_id must identify a leased scrcpy viewer"},
@@ -760,12 +833,21 @@ def build_scrcpy_router(
 
     @router.post("/devices/{serial}/scrcpy/detach")
     async def api_scrcpy_detach(serial: str, body: ScrcpyDetachRequest | None = None):
+        viewer_id = _scrcpy_viewer_id(body.viewer_id if body else None)
+        if stream_owned_by_adapter:
+            log.debug(
+                "api_scrcpy_detach ignored because media adapter owns stream "
+                "serial=%s viewer=%s",
+                serial,
+                viewer_id,
+            )
+            return _adapter_owned_response(serial, viewer_id)
+
         lock = _scrcpy_op_lock(serial)
 
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": "Device not found"}, status_code=404)
-        viewer_id = _scrcpy_viewer_id(body.viewer_id if body else None)
         async with lock:
             viewers = _SCRCPY_VIEWERS.get(serial)
             if viewers is not None:

@@ -36,7 +36,11 @@ def build_device_control_router(
         dependencies=[Depends(device_execute)],
     )
     router.include_router(
-        build_scrcpy_router(manager, db_enabled=config.database.enabled),
+        build_scrcpy_router(
+            manager,
+            db_enabled=config.database.enabled,
+            stream_owned_by_adapter=bool(config.streaming.webrtc_enabled),
+        ),
         dependencies=[Depends(device_execute)],
     )
     router.include_router(

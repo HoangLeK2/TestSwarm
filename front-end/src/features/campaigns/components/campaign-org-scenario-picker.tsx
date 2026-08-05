@@ -122,7 +122,7 @@ export function CampaignOrgScenarioPicker({
 
   return (
     <div className='space-y-2'>
-      <div className='flex items-center justify-end'>
+      <div className='flex min-w-0 items-center justify-end'>
         <CreateOrgScenarioDialog
           onCreated={onScenarioCreated}
           trigger={
@@ -130,18 +130,18 @@ export function CampaignOrgScenarioPicker({
               type='button'
               variant='outline'
               size='sm'
-              className='h-8 gap-1'
+              className='h-8 max-w-full gap-1'
               disabled={disabled}
             >
-              <Plus size={14} />
-              {t('createScenario')}
+              <Plus className='size-3.5 shrink-0' />
+              <span className='truncate'>{t('createScenario')}</span>
             </Button>
           }
         />
       </div>
       <div
         className={cn(
-          'max-h-52 space-y-2 overflow-y-auto rounded-md border p-3',
+          'max-h-52 space-y-2 overflow-y-auto overflow-x-hidden rounded-md border p-3',
           disabled && 'pointer-events-none opacity-60'
         )}
       >
@@ -164,7 +164,7 @@ export function CampaignOrgScenarioPicker({
             <div
               key={scenario.id}
               className={cn(
-                'flex items-start gap-2 text-sm',
+                'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 text-sm',
                 selectable ? '' : 'cursor-not-allowed opacity-70'
               )}
             >
@@ -197,8 +197,8 @@ export function CampaignOrgScenarioPicker({
                 </span>
               </label>
               {showRepeatConfig ? (
-                <span className='flex min-w-0 items-center gap-2'>
-                  <span className='shrink-0 text-[11px] text-muted-foreground'>
+                <span className='grid w-[4.75rem] grid-cols-1 gap-1 justify-self-end'>
+                  <span className='truncate text-[11px] leading-none text-muted-foreground'>
                     {t('repeatCountLabel')}
                   </span>
                   <Input
@@ -213,7 +213,7 @@ export function CampaignOrgScenarioPicker({
                     onChange={(event) =>
                       updateRepeatCount(scenario.id, event.target.value)
                     }
-                    className='h-7 w-16 px-2 text-xs tabular-nums'
+                    className='h-7 w-full px-2 text-xs tabular-nums'
                   />
                 </span>
               ) : null}

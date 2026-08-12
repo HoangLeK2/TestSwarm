@@ -59,7 +59,7 @@ import {
   isSwipeCoordinatePickableStep
 } from './coordinate-pick';
 import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
-import { SortableFlowRow } from './sortable-flow-row';
+import { MaybeSortableFlowRow } from './sortable-flow-row';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
 import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
 import {
@@ -117,16 +117,19 @@ interface BracketBlockProps {
    */
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
   campaignScenarios?: RunScenarioCampaignOption[];
+  enableDragDrop?: boolean;
 }
 
 // ── ChildStepList ────────────────────────────────────────────────────────────
 
 function SectionLabel({
   label,
+  count,
   color,
   variant
 }: {
   label: string;
+  count?: number;
   color: string;
   variant?: 'then' | 'else';
 }) {
@@ -146,6 +149,11 @@ function SectionLabel({
         <X size={12} className='shrink-0 opacity-80' strokeWidth={2.5} />
       )}
       {label}
+      {count != null && (
+        <span className='border-current/15 ml-auto rounded-full border bg-background/70 px-1.5 py-0.5 text-[9px] font-medium tabular-nums opacity-75'>
+          {count} bước
+        </span>
+      )}
     </div>
   );
 }
@@ -153,10 +161,14 @@ function SectionLabel({
 function BranchLane({
   variant,
   label,
+  count,
+  description,
   children
 }: {
   variant?: 'then' | 'else' | 'body';
   label: string;
+  count?: number;
+  description?: string;
   children: ReactNode;
 }) {
   return (
@@ -170,9 +182,15 @@ function BranchLane({
     >
       <SectionLabel
         label={label}
+        count={count}
         color=''
         variant={variant === 'then' || variant === 'else' ? variant : undefined}
       />
+      {description && (
+        <p className='border-t border-border/40 bg-background/35 px-2.5 py-1.5 text-[10px] leading-relaxed text-muted-foreground'>
+          {description}
+        </p>
+      )}
       <div className='space-y-0 px-1 pb-1.5'>{children}</div>
     </div>
   );
@@ -202,6 +220,7 @@ interface ChildStepListProps {
   stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
   onStopInlineRun?: () => void;
   campaignScenarios?: RunScenarioCampaignOption[];
+  enableDragDrop?: boolean;
 }
 
 function ChildStepList({
@@ -227,9 +246,18 @@ function ChildStepList({
   nestedInDialog,
   stepRunStates = {},
   onStopInlineRun,
-  campaignScenarios = []
+  campaignScenarios = [],
+  enableDragDrop = true
 }: ChildStepListProps) {
   const tBracket = useTranslations('campaignsFeature.flowBracket');
+  const insertionLabel =
+    listKey === 'then'
+      ? 'Thêm vào nhánh Nếu đúng'
+      : listKey === 'else'
+        ? 'Thêm vào nhánh Nếu sai'
+        : listKey === 'steps'
+          ? 'Thêm vào vòng lặp'
+          : 'Thêm vào nhánh này';
   const pathKey = JSON.stringify(pathFromRoot ?? []);
   const sortableContainerId = useMemo(() => {
     const path = (JSON.parse(pathKey) || []) as Array<{
@@ -250,7 +278,8 @@ function ChildStepList({
   );
   const { isOver, setNodeRef } = useDroppable({
     id: sortableContainerId,
-    data: { flowListContainerId: sortableContainerId }
+    data: { flowListContainerId: sortableContainerId },
+    disabled: !enableDragDrop
   });
 
   return (
@@ -280,8 +309,11 @@ function ChildStepList({
             );
             return (
               <div key={rowId}>
-                <InsertGap onInsert={(s) => onInsertChild(listKey, ci, s)} />
-                <SortableFlowRow id={rowId}>
+                <InsertGap
+                  label={insertionLabel}
+                  onInsert={(s) => onInsertChild(listKey, ci, s)}
+                />
+                <MaybeSortableFlowRow id={rowId} enabled={enableDragDrop}>
                   {(dragHandle, isDragging) => (
                     <div
                       className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}
@@ -338,11 +370,12 @@ function ChildStepList({
                               : undefined
                           }
                           campaignScenarios={campaignScenarios}
+                          enableDragDrop={enableDragDrop}
                         />
                       </div>
                     </div>
                   )}
-                </SortableFlowRow>
+                </MaybeSortableFlowRow>
               </div>
             );
           }
@@ -384,8 +417,11 @@ function ChildStepList({
                 : null;
           return (
             <div key={rowId}>
-              <InsertGap onInsert={(s) => onInsertChild(listKey, ci, s)} />
-              <SortableFlowRow id={rowId}>
+              <InsertGap
+                label={insertionLabel}
+                onInsert={(s) => onInsertChild(listKey, ci, s)}
+              />
+              <MaybeSortableFlowRow id={rowId} enabled={enableDragDrop}>
                 {(dragHandle, isDragging) => (
                   <div
                     className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}
@@ -445,11 +481,14 @@ function ChildStepList({
                     </div>
                   </div>
                 )}
-              </SortableFlowRow>
+              </MaybeSortableFlowRow>
             </div>
           );
         })}
-        <InsertGap onInsert={(s) => onInsertChild(listKey, steps.length, s)} />
+        <InsertGap
+          label={insertionLabel}
+          onInsert={(s) => onInsertChild(listKey, steps.length, s)}
+        />
       </SortableContext>
       {steps.length === 0 && (
         <div className='rounded-md border border-dashed border-muted-foreground/25 bg-muted/20 px-2 py-2 text-center'>
@@ -492,7 +531,8 @@ export function BracketBlock({
   onStopInlineRun,
   rootStepIndex,
   pathFromRoot,
-  campaignScenarios = []
+  campaignScenarios = [],
+  enableDragDrop = true
 }: BracketBlockProps) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
   const { getStepTypeName } = useCampaignFlowI18n();
@@ -638,7 +678,8 @@ export function BracketBlock({
     nestedInDialog,
     stepRunStates,
     onStopInlineRun,
-    campaignScenarios
+    campaignScenarios,
+    enableDragDrop
   };
 
   return (
@@ -1011,7 +1052,12 @@ export function BracketBlock({
             {(step.type === 'loop' ||
               step.type === 'repeat' ||
               step.type === 'repeat_until') && (
-              <BranchLane variant='body' label={tFlow('loopBody')}>
+              <BranchLane
+                variant='body'
+                label={tFlow('loopBody')}
+                count={(step.steps ?? []).length}
+                description='Các bước trong vùng này sẽ được chạy lại ở mỗi vòng.'
+              >
                 <ChildStepList
                   steps={step.steps ?? []}
                   listKey='steps'
@@ -1038,27 +1084,60 @@ export function BracketBlock({
                   ? tFlow('fbTapBranchOnMiss')
                   : tFlow('branchElse');
                 const thenVariant = isFbTap ? 'body' : 'then';
-                const showElseLane = !isFbTap || elseSteps.length > 0;
 
                 return (
-                  <>
-                    <BranchLane variant={thenVariant} label={thenLabel}>
-                      <ChildStepList
-                        steps={thenSteps}
-                        listKey='then'
-                        {...childListProps}
-                      />
-                    </BranchLane>
-                    {showElseLane && (
-                      <BranchLane variant='else' label={elseLabel}>
+                  <div className='overflow-hidden rounded-xl border-2 border-amber-500/45 bg-amber-500/[0.025] shadow-sm'>
+                    <div className='flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2'>
+                      <span className='rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white'>
+                        IF
+                      </span>
+                      <span className='text-[11px] font-semibold text-amber-900 dark:text-amber-200'>
+                        Nếu điều kiện đúng, chạy nhánh đầu tiên; nếu không, chạy
+                        nhánh còn lại
+                      </span>
+                    </div>
+                    <div className='space-y-0 p-2 pb-0'>
+                      <BranchLane
+                        variant={thenVariant}
+                        label={thenLabel}
+                        count={thenSteps.length}
+                        description='Chỉ chạy các bước trong vùng này khi điều kiện đúng.'
+                      >
+                        <ChildStepList
+                          steps={thenSteps}
+                          listKey='then'
+                          {...childListProps}
+                        />
+                      </BranchLane>
+                      <div
+                        className='relative -my-1 flex items-center justify-center py-1'
+                        aria-hidden
+                      >
+                        <div className='absolute inset-x-3 top-1/2 border-t border-dashed border-amber-500/35' />
+                        <span className='relative rounded-full border border-amber-500/35 bg-background px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300'>
+                          else
+                        </span>
+                      </div>
+                      <BranchLane
+                        variant='else'
+                        label={elseLabel}
+                        count={elseSteps.length}
+                        description='Chạy vùng này khi điều kiện không đúng; để trống nếu muốn bỏ qua.'
+                      >
                         <ChildStepList
                           steps={elseSteps}
                           listKey='else'
                           {...childListProps}
                         />
                       </BranchLane>
-                    )}
-                  </>
+                    </div>
+                    <div className='flex items-center gap-2 border-t border-amber-500/30 bg-amber-500/[0.07] px-3 py-1.5 text-[10px] font-semibold text-amber-900/75 dark:text-amber-200/75'>
+                      <span className='font-mono' aria-hidden>
+                        └
+                      </span>
+                      Kết thúc IF / ELSE
+                    </div>
+                  </div>
                 );
               })()}
 
@@ -1114,15 +1193,16 @@ export function BracketBlock({
 
         {/* End bar */}
         {!collapsed && (
-          <div
-            className={cn(
-              'flex items-center gap-1.5 border-t border-border/50 bg-muted/20 px-2.5 py-1 text-[10px] font-medium normal-case text-muted-foreground'
-            )}
-          >
-            <span className='font-mono text-muted-foreground' aria-hidden>
-              └
-            </span>
-            <span>{tFlow('endBlock', { title: blockTitle })}</span>
+          <div className='border-t border-border/60 bg-muted/25 px-2.5 py-1.5 text-[10px] text-muted-foreground'>
+            <div className='flex items-center gap-1.5 font-semibold text-foreground/70'>
+              <span className='font-mono text-muted-foreground' aria-hidden>
+                └
+              </span>
+              <span>{tFlow('endBlock', { title: blockTitle })}</span>
+            </div>
+            <p className='ml-3.5 mt-0.5 leading-relaxed'>
+              Kịch bản tiếp tục với bước kế tiếp sau khối này.
+            </p>
           </div>
         )}
       </div>

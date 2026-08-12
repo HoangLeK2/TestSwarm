@@ -211,6 +211,24 @@ def test_login_if_needed_inputs_account_password_source():
     assert sc.device.u2.sent == ["account-user", "account-pw"]
 
 
+def test_login_if_needed_supports_legacy_secret_login_password_alias():
+    sc = _sc()
+    sc.var_ctx = VariableContext(
+        scenario_vars={},
+        campaign_vars={
+            "__ACCOUNT_USERNAME__": "account-user",
+            "__ACCOUNT_PASSWORD__": "account-pw",
+        },
+        device_serial="SERIAL1",
+    )
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(sc, {"type": "login_if_needed"}, 0, result)
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw"]
+
+
 def test_login_if_needed_fills_optional_post_submit_auth_code_when_visible():
     sc = _sc(_XML_WITH_AUTH_CODE)
     sc.scenario = {"app_automation_profile": _auth_code_profile()}

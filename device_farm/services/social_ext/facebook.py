@@ -44,6 +44,10 @@ FACEBOOK_STEP_TYPES = [
     "fb_find_comment_button",
     "fb_tap_comment_target",
     "fb_apply_comment_filter",
+    "fb_select_people_profile",
+    "fb_connect_visible_people",
+    "fb_select_post_target",
+    "fb_scan_posts_interact",
 ]
 
 FACEBOOK_ALIASES = {

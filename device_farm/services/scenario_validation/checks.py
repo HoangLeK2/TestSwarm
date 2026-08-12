@@ -16,6 +16,7 @@ from services.scenario_validation.graph_reachability import (
 from services.scenario_validation.models import ValidationIssue, ValidationResult
 from services.scenario_validation.ref_cache import ScenarioRefCache, steps_from_row
 from services.scenario_validation.step_index import StepIndex
+from services.scenario_validation.variable_contracts import step_output_variables
 
 _MAX_NESTING_DEPTH = 10
 _ERROR_POLICIES = frozenset({"pause", "continue", "stop"})
@@ -155,6 +156,11 @@ def check_variables(
                         location=ref_path,
                     )
                 )
+        if step.get("type") == "loop":
+            loop_var = step.get("loop_var")
+            if isinstance(loop_var, str) and loop_var:
+                declared.add(loop_var)
+        declared.update(step_output_variables(step.get("type")))
         if step.get("type") == "set_variable":
             name = step.get("name")
             if isinstance(name, str) and name:

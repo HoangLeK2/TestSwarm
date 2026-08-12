@@ -29,6 +29,7 @@ export const STEP_COLORS: Record<string, string> = {
   assert_element: 'border-l-green-500',
   dismiss_popup: 'border-l-green-500',
   login_if_needed: 'border-l-emerald-500',
+  facebook_session_gate: 'border-l-emerald-600',
   fill_form: 'border-l-cyan-600',
   assert_app_state: 'border-l-green-600',
   double_tap: 'border-l-blue-400',
@@ -45,6 +46,10 @@ export const STEP_COLORS: Record<string, string> = {
   fb_find_comment_button: 'border-l-sky-500',
   fb_tap_comment_target: 'border-l-blue-500',
   fb_apply_comment_filter: 'border-l-emerald-500',
+  fb_select_people_profile: 'border-l-emerald-600',
+  fb_connect_visible_people: 'border-l-emerald-600',
+  fb_select_post_target: 'border-l-emerald-700',
+  fb_scan_posts_interact: 'border-l-blue-600',
   content_interaction: 'border-l-blue-500',
   connection_request: 'border-l-sky-500',
   community_membership: 'border-l-emerald-500',
@@ -290,6 +295,7 @@ export const INSERT_MENU_DEF = [
       'assert_element',
       'dismiss_popup',
       'login_if_needed',
+      'facebook_session_gate',
       'fill_form',
       'assert_app_state',
       'double_tap',
@@ -324,7 +330,13 @@ export const INSERT_MENU_DEF = [
     items: [
       'content_interaction',
       'connection_request',
+      'lease_source_target',
+      'lease_connection_candidate',
       'community_membership',
+      'fb_select_people_profile',
+      'fb_connect_visible_people',
+      'fb_select_post_target',
+      'fb_scan_posts_interact',
       'fb_find_comment_button',
       'fb_tap_comment_target',
       'fb_apply_comment_filter',
@@ -431,6 +443,10 @@ export function getStepSummary(step: FlowStep): string {
     }
     case 'login_if_needed':
       return step.profile?.package || '';
+    case 'facebook_session_gate':
+      return step.phase === 'confirm'
+        ? 'Xác nhận sau đăng nhập'
+        : 'Kiểm tra trước';
     case 'fill_form':
       return step.recipe || '';
     case 'assert_app_state':
@@ -542,6 +558,14 @@ export function getStepSummary(step: FlowStep): string {
       return `tap target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
     case 'fb_apply_comment_filter':
       return `Lọc bình luận → ${localizeCommentFilterVi(step.comment_filter)}`;
+    case 'fb_select_people_profile':
+      return `Xác minh profile · ${step.display_name || step.search || step.save_as || '_people_target'}`;
+    case 'fb_connect_visible_people':
+      return `Kết bạn người có điểm chung · điểm >= ${step.min_score ?? 40}`;
+    case 'fb_select_post_target':
+      return `Xác minh post · ${step.display_text || step.search || step.save_as || '_post_target'}`;
+    case 'fb_scan_posts_interact':
+      return `Scan post · ${step.target_count ?? 1} bài · ${step.max_scrolls ?? 0} scroll`;
     case 'content_interaction':
       return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
     case 'connection_request':
@@ -674,6 +698,11 @@ export function getStepDisplay(
       return { target: step.retries != null ? `×${step.retries}` : '' };
     case 'login_if_needed':
       return { target: step.profile?.package ?? '' };
+    case 'facebook_session_gate':
+      return {
+        target:
+          step.phase === 'confirm' ? 'Xác nhận sau đăng nhập' : 'Kiểm tra trước'
+      };
     case 'fill_form':
       return { target: step.recipe ?? '' };
     case 'assert_app_state':
@@ -739,6 +768,12 @@ export function getStepDisplay(
       return {
         target: `${step.platform ?? 'facebook'} / ${step.entity_type ?? 'group'}`
       };
+    case 'lease_source_target':
+      return {
+        target: `${step.platform ?? 'facebook'} / ${step.entity_type ?? 'post'} / ${step.action ?? 'like'}`
+      };
+    case 'lease_connection_candidate':
+      return { target: `${step.platform ?? 'facebook'} / ready_to_connect` };
     case 'if':
       return {
         target: Object.keys(step.condition ?? {}).join(', ') || 'condition'
@@ -793,12 +828,36 @@ export function getStepDisplay(
           : `Filter · ${filterLabel}`
       };
     }
+    case 'fb_select_people_profile':
+      return {
+        target:
+          step.display_name || step.search || step.save_as || '_people_target'
+      };
+    case 'fb_connect_visible_people':
+      return {
+        target: `common-context · score >= ${step.min_score ?? 40}`
+      };
+    case 'fb_select_post_target':
+      return {
+        target:
+          step.display_text || step.search || step.save_as || '_post_target'
+      };
+    case 'fb_scan_posts_interact':
+      return {
+        target: `${step.keywords || 'mọi keyword'} · ${step.target_count ?? 1} bài`
+      };
     case 'content_interaction':
       return {
         target: `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`
       };
     case 'connection_request':
       return { target: `${step.platform ?? 'facebook'} · request` };
+    case 'lease_source_target':
+      return {
+        target: `${step.platform ?? 'facebook'} · ${step.entity_type ?? 'post'} · ${step.action ?? 'like'}`
+      };
+    case 'lease_connection_candidate':
+      return { target: `${step.platform ?? 'facebook'} · ready_to_connect` };
     case 'community_membership':
       return { target: `${step.platform ?? 'facebook'} · join` };
     case 'extract': {

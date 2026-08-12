@@ -188,3 +188,49 @@ test('foldEventsToStepLog exposes step.started as a running row for live UI spin
   assert.equal(rows[0].status, 'running');
   assert.equal(rows[0].message, 'running if');
 });
+
+test('foldEventsToStepLog preserves every repeated step occurrence and action proof', () => {
+  const events = [1, 2].flatMap((iteration) => [
+    {
+      event_id: `started-${iteration}`,
+      event_type: 'step.started',
+      execution_id: 'exec-1',
+      step_id: 'batch-like',
+      payload: {
+        step_index: 4,
+        step_id: 'batch-like',
+        step_type: 'content_interaction',
+        depth: 2
+      }
+    },
+    {
+      event_id: `completed-${iteration}`,
+      event_type: 'step.completed',
+      execution_id: 'exec-1',
+      step_id: 'batch-like',
+      payload: {
+        step_index: 4,
+        step_id: 'batch-like',
+        step_type: 'content_interaction',
+        depth: 2,
+        display_name: `Post ${iteration}`,
+        outcome: 'applied',
+        action_performed: true,
+        account_action_id: `action-${iteration}`
+      }
+    }
+  ]);
+
+  const rows = foldEventsToStepLog(events as any);
+
+  assert.equal(rows.length, 2);
+  assert.notEqual(rows[0].occurrence_key, rows[1].occurrence_key);
+  assert.deepEqual(
+    rows.map((row) => row.details?.display_name),
+    ['Post 1', 'Post 2']
+  );
+  assert.deepEqual(
+    rows.map((row) => row.details?.account_action_id),
+    ['action-1', 'action-2']
+  );
+});

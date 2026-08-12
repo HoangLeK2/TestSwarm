@@ -57,11 +57,23 @@
       "formTitle": "Edit fields",
       "advancedJson": "Advanced JSON",
       "advancedJsonHint": "Edit the device override object directly. Use for copy/paste or uncommon keys.",
+      "formMode": "Form",
+      "jsonMode": "JSON",
+      "formJsonInvalid": "The current JSON has a syntax error. Switch to JSON and fix it before using the form.",
+      "otherVariablesTitle": "Other variables",
+      "otherVariablesEmpty": "No device-specific variables outside target settings yet.",
+      "targetFormTitle": "Platform targets",
+      "specialFormNone": "None",
+      "specialFormFacebook": "Facebook targets",
+      "specialFormNoneHint": "Use only regular variable fields. Choose a specialized form only when this scenario needs platform targets.",
+      "specialFormFacebookHint": "Select Groups, Pages, or profiles to generate TARGET_* variables for this device.",
+      "globalValueHint": "Global: {value}",
       "globalBlockTitle": "Global variables (scenario defaults, campaign overrides duplicate keys)",
       "globalReadonlyAria": "Global variables (read-only)",
       "globalEmpty": "No global variables on campaign/scenario (or only hidden system keys like __…).",
       "modeOffHint": "Inherited: campaign + scenario globals only. Turn on the switch above to add per-device overrides.",
       "addGlobalKeyLabel": "Add global key:",
+      "addGlobalKeySelect": "Add global variable",
       "footerLoading": "Loading saved configuration…",
       "footerMergedEditor": "Current JSON is device overrides only. Remove a key in JSON to inherit global.",
       "footerUsingGlobal": "Using global variables.",
@@ -69,7 +81,25 @@
       "parseInvalidRoot": "JSON must be an object, e.g. '{\"group_name\": \"abc\"}'",
       "parseUnknown": "Invalid JSON",
       "invalidAtDevice": "Invalid JSON for device {serial}",
-      "saveFailed": "Failed to save device variables"
+      "saveFailed": "Failed to save device variables",
+      "targetForm": {
+        "platformLabel": "Platform",
+        "platformFacebook": "Facebook",
+        "targetTypeLabel": "Target type",
+        "types": {
+          "group": "Group",
+          "page": "Page",
+          "profile": "Profile"
+        },
+        "searchPlaceholder": "Search saved targets",
+        "selectedTotal": "Selected {count}",
+        "toggleTarget": "Select {name}",
+        "noLocator": "No locator",
+        "loadError": "Could not load targets.",
+        "emptyTitle": "No targets",
+        "emptyDescription": "Try another search or add targets in the target library.",
+        "refreshing": "Refreshing targets..."
+      }
     },
     "modal": {
       "confirmAction": "Confirm Action",
@@ -173,9 +203,11 @@
       "footerTipTrail": "in a step field for suggestions · Tab to insert",
       "builtinsTitle": "System variables",
       "builtinsReferenceTitle": "Quick reference",
-      "sourcePoolVariablesTitle": "Campaign source variables",
-      "sourcePoolVariablesSubtitle": "Crawled groups",
-      "sourcePoolVariablesHint": "Set when the campaign has a crawled-group source node.",
+      "sourcePoolVariablesTitle": "Campaign target variables",
+      "sourcePoolVariablesSubtitle": "Assigned target",
+      "sourcePoolVariablesHint": "Set when the campaign has an assigned-target node.",
+      "pageDiscoveryVariablesTitle": "Page keyword crawl",
+      "pageDiscoveryVariablesHint": "PAGE_KEYWORDS is the keyword list; PAGE_KEYWORD_COUNT is synced automatically from the list length.",
       "builtinGroups": {
         "system": "System",
         "account": "Account"
@@ -197,6 +229,10 @@
         "groupSelectorValue": "Primary selector for the assigned group",
         "groupFallbackSelectorBy": "Fallback selector type for the assigned group",
         "groupFallbackSelectorValue": "Fallback selector for the assigned group",
+        "pageKeywords": "Keyword list for finding Facebook Pages",
+        "pageKeywordCount": "Number of keywords to run; synced from PAGE_KEYWORDS",
+        "maxItemsPerKeyword": "Maximum Pages to save per keyword",
+        "maxPages": "Maximum result screens the agent scrolls",
         "accountId": "Account id bound to the device",
         "accountUsername": "Account username",
         "accountPassword": "Account password",
@@ -280,6 +316,7 @@
     "schedules": "Schedules",
     "device_groups": "Device Groups",
     "accounts": "Accounts",
+    "account_assignments": "Account assignments",
     "account_groups": "Account groups",
     "scenario_templates": "Scenario Templates",
     "org_scenarios": "Scenario library",
@@ -559,6 +596,7 @@
       "trigger": "Add Devices",
       "title": "Add Devices to Group",
       "loading": "Loading...",
+      "loadError": "Could not load assignments. Try again before making changes.",
       "noDevices": "No available devices",
       "adding": "Adding...",
       "submit": "Add {count} device(s)"
@@ -582,6 +620,10 @@
     }
   },
   "accountsFeature": {
+    "workspace": {
+      "title": "Account workspace",
+      "description": "Create and manage accounts in one place."
+    },
     "list": {
       "loading": "Loading accounts...",
       "loadError": "Failed to load accounts",
@@ -671,7 +713,99 @@
       "availableDevices": "Available devices",
       "loading": "Loading...",
       "noAvailable": "All devices are already assigned",
-      "assignError": "Failed to assign device"
+      "assignError": "Failed to assign device",
+      "removeSuccess": "Device link removed",
+      "removeError": "Failed to remove device link"
+    },
+    "assignments": {
+      "title": "Account assignments",
+      "description": "Link multiple accounts to a device, preview changes, and review each result.",
+      "devicesTitle": "Devices",
+      "deviceSearch": "Search device or serial",
+      "loading": "Loading...",
+      "selectDevice": "Select a device to manage its account links.",
+      "linkedCount": "{count} linked",
+      "statusHint": "Linked means available on this device. Primary is preferred; it does not guarantee the account is currently logged in.",
+      "noLinked": "No linked accounts yet.",
+      "linked": "Linked",
+      "primary": "Primary",
+      "setPrimary": "Set as primary",
+      "primarySuccess": "Primary account updated",
+      "primaryError": "Failed to update primary account",
+      "remove": "Remove link",
+      "removeSuccess": "Account link removed",
+      "removeError": "Failed to remove account link",
+      "unknownPlatform": "Other",
+      "availableCount": "{count} existing account(s) available",
+      "selectAll": "Select all shown",
+      "clearSelection": "Clear selection",
+      "noAvailable": "No matching unlinked accounts.",
+      "previewTitle": "Change preview",
+      "previewAdd": "Add {count} account link(s)",
+      "selectedCount": "{count} existing account(s) selected",
+      "apply": "Link {count} selected",
+      "applySuccess": "Assigned {count} account(s)",
+      "applyPartial": "Assigned {success}; {failed} failed. Failed items remain selected for retry.",
+      "resultsTitle": "Results",
+      "result": { "created": "Assigned", "failed": "Failed" },
+      "verification": {
+        "unknown": "Not verified",
+        "verified": "Verified",
+        "mismatch": "Mismatch",
+        "inconclusive": "Inconclusive",
+        "unsupported": "Unsupported"
+      }
+    },
+    "devicePanel": {
+      "title": "Accounts",
+      "add": "Add accounts",
+      "loading": "Loading accounts...",
+      "empty": "No accounts are assigned to this phone.",
+      "searchPlaceholder": "Search username, name, or platform",
+      "noAvailable": "No matching unassigned accounts",
+      "cancel": "Cancel",
+      "assign": "Assign {count}",
+      "assignSuccess": "Assigned {count} account(s)",
+      "assignError": "Failed to assign accounts",
+      "primary": "Primary",
+      "setPrimary": "Set as device primary",
+      "primarySuccess": "Primary account updated",
+      "primaryError": "Failed to update the primary account",
+      "verify": "Verify active account",
+      "verifySuccess": "Active account verified",
+      "verifyResult": "Verification result: {status}",
+      "verifyError": "Account verification failed",
+      "lastVerified": "Checked {time}",
+      "remove": "Remove from device",
+      "removeTitle": "Remove account?",
+      "removeConfirm": "Remove {account} from this phone? The account itself will not be deleted.",
+      "removeSuccess": "Account removed from phone",
+      "removeError": "Failed to remove account",
+      "unknownPlatform": "Other",
+      "unavailableAccount": "Unavailable account",
+      "status": {
+        "unknown": "Not verified",
+        "verified": "Verified",
+        "mismatch": "Mismatch",
+        "inconclusive": "Inconclusive",
+        "unsupported": "Unsupported"
+      },
+      "session": {
+        "unknown": "Unknown session",
+        "logged_out": "Logged out",
+        "login_required": "Login required",
+        "logging_in": "Logging in",
+        "active": "Session active",
+        "suspected_mismatch": "Session mismatch",
+        "checkpoint": "Checkpoint",
+        "expired": "Expired",
+        "failed": "Failed"
+      },
+      "sessionReason": {
+        "primary_account_changed": "Primary account changed",
+        "provenance_account_unassigned": "Active session account was removed",
+        "migration_operator_confirmed": "Operator confirmed current session"
+      }
     },
     "history": {
       "trigger": "History",
@@ -680,6 +814,51 @@
       "empty": "No events yet",
       "device": "Device",
       "loadMore": "Load more",
+      "tabs": { "actions": "Business actions", "events": "Lifecycle" },
+      "loadingActions": "Loading actions...",
+      "emptyActions": "No business actions yet",
+      "currentActivity": "Current activity",
+      "activity": "Activity",
+      "outcome": "Outcome",
+      "noTarget": "No target",
+      "actionPerformed": "Action performed on device",
+      "actionNotPerformed": "No duplicate action",
+      "actions": {
+        "content_interaction": "Post interaction",
+        "connection_request": "Friend request",
+        "community_membership": "Join group"
+      },
+      "summary": {
+        "running": "Running",
+        "succeeded": "Succeeded",
+        "failed": "Failed",
+        "total": "Total"
+      },
+      "statuses": {
+        "pending": "Pending",
+        "queued": "Queued",
+        "running": "Running",
+        "succeeded": "Succeeded",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "observed": "Observed",
+        "stale": "Stale"
+      },
+      "outcomes": {
+        "applied": "Applied and verified",
+        "already_applied": "Already applied, no action repeated",
+        "attempted": "Action intent observed",
+        "tap_failed": "Tap failed",
+        "verification_failed": "Result could not be verified",
+        "unsupported_platform": "Platform is not supported",
+        "unsupported_action": "Action is not supported",
+        "hierarchy_unavailable": "Device UI is unavailable",
+        "observation_failed": "Current state could not be inspected",
+        "ambiguous_target": "Multiple targets matched",
+        "target_not_found": "Target was not found",
+        "cancelled": "Cancelled"
+      },
       "events": {
         "created": "Created",
         "updated": "Updated",
@@ -1107,6 +1286,7 @@
       "targetGroupLabel": "Target Device Group",
       "targetGroupPlaceholder": "Select a device group...",
       "noGroup": "No group (all devices)",
+      "automationLabel": "Run mode",
       "variablesLabel": "Variables",
       "platformLabel": "Social Platform",
       "platformFacebook": "Facebook",
@@ -1152,7 +1332,11 @@
       "singleLabel": "Account",
       "singlePlaceholder": "Select an account…",
       "singleNone": "Select an account…",
-      "singleEmpty": "No accounts in this org yet."
+      "singleEmpty": "No accounts in this org yet.",
+      "perDeviceLabel": "Per-device overrides",
+      "perDeviceHint": "Override the fallback for selected devices. Devices without an override use the group or shared account above.",
+      "perDeviceEmpty": "Attach devices to this campaign before adding overrides.",
+      "useFallback": "Use fallback binding"
     },
     "entityDialog": {
       "title": "Edit library campaign",
@@ -1183,6 +1367,10 @@
       "saving": "Saving...",
       "submit": "Save",
       "cancel": "Cancel"
+    },
+    "continuousCrawlSettings": {
+      "enabledLabel": "Process assigned targets in sequence",
+      "enabledHint": "Each phone only processes the targets assigned to that phone."
     },
     "recoveryPolicy": {
       "title": "Recovery scenario",
@@ -1252,6 +1440,85 @@
       "dispatching": "Dispatching…",
       "dispatchCount": "Dispatch ({count})"
     },
+    "automationStart": {
+      "title": "Set up an automated run",
+      "steps": {
+        "goal": "Goal",
+        "source": "Data source",
+        "operation": "Operation",
+        "review": "Review"
+      },
+      "goal": {
+        "eyebrow": "Step 1 · Goal",
+        "title": "What should the system do?",
+        "description": "The system will run the configured scenarios for each matching item.",
+        "scenarioCount": "Uses {count} configured scenarios"
+      },
+      "source": {
+        "eyebrow": "Step 2 · Data source",
+        "title": "Where should the system get items from?",
+        "description": "The target type is read from the scenario and matched against each phone's assignments.",
+        "configured": "Target type configured in the scenario",
+        "deduplication": "Each target is processed once on the phone it is assigned to.",
+        "snapshot": "Items added after this run starts will be saved for the next run."
+      },
+      "operation": {
+        "eyebrow": "Step 3 · Operation",
+        "title": "Each phone runs its assigned list",
+        "description": "A phone's targets are only processed on that phone.",
+        "devices": "{count} selected devices",
+        "devicesHelp": "Uses the devices already assigned to this campaign.",
+        "automatic": "Fixed assignments",
+        "automaticHelp": "Completes one target, then takes the next target from that phone's list."
+      },
+      "review": {
+        "eyebrow": "Step 4 · Review",
+        "title": "Ready to start",
+        "description": "The system is checking the source, devices, and scenarios.",
+        "checking": "Checking readiness…",
+        "sources": "{count} items can be processed",
+        "devices": "{count} devices ready",
+        "scenario": "Scenarios are configured",
+        "targetsForDevice": "{count} targets",
+        "retry": "Check again",
+        "summary": "This run will use {devices} devices to process all {targets} assigned targets."
+      },
+      "problems": {
+        "devices": {
+          "title": "Devices are not ready",
+          "help": "Add devices or check their connection, then return and run the check again.",
+          "action": "Manage devices"
+        },
+        "targets": {
+          "title": "Phones do not have assigned targets",
+          "help": "Each phone needs at least one target matching the type used by the scenario.",
+          "action": "Configure targets"
+        },
+        "source": {
+          "title": "The data source is not ready",
+          "help": "Check the source in the scenario or add matching items to the source.",
+          "action": "Check configuration"
+        },
+        "account": {
+          "title": "The account is not ready",
+          "help": "Assign a suitable account or check the account status.",
+          "action": "Check account"
+        },
+        "retry": {
+          "title": "The check could not be completed",
+          "help": "Wait a moment and check again. If the error continues, verify the service connection."
+        }
+      },
+      "checkFailed": "Could not check readiness",
+      "startFailed": "Could not start the run",
+      "started": "The first run is being prepared",
+      "alreadyActive": "The run is already active. Opening the monitor.",
+      "cancel": "Cancel",
+      "back": "Back",
+      "next": "Continue",
+      "start": "Start processing",
+      "starting": "Starting…"
+    },
     "list": {
       "statusIdle": "Idle",
       "statusDraft": "Draft",
@@ -1292,6 +1559,13 @@
       "titleNeedDevice": "Add at least 1 device before running",
       "titleAddScenario": "Add scenario",
       "titleRun": "Run campaign",
+      "automationBadge": "Automation",
+      "automationActions": {
+        "setup": "Set up and run",
+        "monitor": "View run",
+        "resume": "Resume",
+        "inspect": "Review issue"
+      },
       "runDialogNotReady": "This campaign does not have enough devices or scenarios to run.",
       "runDialogSelectAll": "Select all",
       "runDialogAriaSelectDevice": "Select device",
@@ -1328,6 +1602,61 @@
       "monitorTitle": "Monitor — {campaign}",
       "monitorStatusRunning": "RUNNING",
       "monitorStatusIdle": "NOT RUNNING",
+      "crawlTitle": "Automation",
+      "crawlAutomation": "Automation",
+      "crawlCurrentRun": "Current run",
+      "crawlLoading": "Loading run progress…",
+      "crawlUnavailable": "Progress is not available for this run yet.",
+      "crawlControlFailed": "Could not control the run",
+      "crawlPauseTitle": "Pause this run?",
+      "crawlPauseDescription": "The system will stop accepting new items. Items already in progress will be allowed to finish. You can resume the run at any time.",
+      "crawlStopRun": "Stop run",
+      "crawlStopTitle": "Stop this run?",
+      "crawlStopDescription": "Completed results will be kept. Unprocessed items will not continue in this run. This does not turn off the automation.",
+      "crawlCompleted": "Completed",
+      "crawlNeedsAttention": "Needs attention",
+      "crawlOperationalDetails": "View devices and recent items",
+      "crawlDevices": "Devices",
+      "crawlRecentItems": "Recent items",
+      "crawlPausingDetail": "{count} items are finishing. The system is not accepting new items.",
+      "crawlStatus": "Status",
+      "crawlDiscovered": "Discovered",
+      "crawlActive": "In progress",
+      "crawlSucceeded": "Succeeded",
+      "crawlFailed": "Failed",
+      "crawlComplete": "Complete",
+      "crawlDeviceLanes": "Devices",
+      "crawlRecentTargets": "Recent items",
+      "crawlNoLanes": "No active devices.",
+      "crawlNoRecentTargets": "No recent items.",
+      "crawlHealth": {
+        "healthy": "Healthy",
+        "degraded": "Degraded",
+        "critical": "Critical"
+      },
+      "crawlHealthMessage": {
+        "healthy": "Everything is working normally. You do not need to do anything.",
+        "degraded": "Some items need attention. The remaining items are still being processed.",
+        "critical": "This run needs your attention before it can continue."
+      },
+      "crawlStatuses": {
+        "idle": "Idle",
+        "preflight": "Preflight",
+        "starting": "Starting",
+        "running": "Active",
+        "pausing": "Finishing current items",
+        "paused": "Paused",
+        "cancelling": "Stopping",
+        "cancelled": "Stopped",
+        "completed": "Completed",
+        "failed": "Needs attention"
+      },
+      "crawlTargetStatuses": {
+        "queued": "Queued",
+        "running": "Running",
+        "succeeded": "Done",
+        "failed": "Failed"
+      },
       "monitorSectionHintLabel": "What is this section",
       "monitorTemporalUnavailableMessage": "Step-by-step monitoring unavailable (Temporal off).",
       "monitorNoRunningWorkflowsMessage": "No workflow is running.",
@@ -1495,6 +1824,16 @@
       "monitorStepOutputTruncated": "truncated",
       "monitorStepFallback": "Step {n}",
       "monitorStepRowLoopRound": "Round {n}",
+      "monitorActionPerformed": "Action performed",
+      "monitorActionNotPerformed": "No duplicate action",
+      "monitorBatchCompleted": "Completed {count} runs",
+      "monitorActionOutcome": {
+        "applied": "Applied",
+        "alreadyApplied": "Already applied",
+        "leased": "Target leased",
+        "noEligibleTarget": "No eligible targets",
+        "noReadyCandidate": "No ready candidates"
+      },
       "monitorStepBranchThen": "Then",
       "monitorStepBranchElse": "Else",
       "monitorStepBranchLoop": "Loop body",
@@ -1876,6 +2215,21 @@
       "runScenario": {
         "intro": "Pick a shared template or another scenario from this campaign. At runtime the worker resolves by scenario ID (campaign row) first, then by name (campaign name beats template name if both match)."
       },
+      "leaseTarget": {
+        "sourceHint": "Each run takes one target this account has not processed; concurrent executions cannot reserve the same target.",
+        "connectionHint": "Takes a ready connection candidate and locks it for the account currently running.",
+        "platform": "Platform",
+        "entityType": "Target type",
+        "post": "Post",
+        "page": "Page",
+        "profile": "Profile",
+        "action": "Action",
+        "like": "Like",
+        "comment": "Comment",
+        "share": "Share",
+        "keywords": "Post keywords",
+        "keywordPlaceholder": "AI, recruiting, technology"
+      },
       "adbShell": {
         "hint": "Runs on the real phone — enter the full command (e.g. adb shell getprop …) or shell-only (getprop …).",
         "commandLabel": "Shell command",
@@ -2192,7 +2546,7 @@
         "facebook": "Facebook"
       },
       "itemDesc": {
-        "use_source_pool": "Use crawled groups from the source catalog for this campaign",
+        "use_source_pool": "Use targets assigned to each phone",
         "extract": "Read feed, expand «See more», optional collection save",
         "save_extraction": "Write to DB only — no screen read",
         "extract_text_hierarchy": "Read text from UI hierarchy tree",
@@ -2223,6 +2577,7 @@
         "assert_element": "Fail if element is missing",
         "dismiss_popup": "Close blocking dialog or popup",
         "login_if_needed": "Log in only when the profile detects a logged-out screen",
+        "facebook_session_gate": "Check Facebook login state before or after a login step",
         "fill_form": "Fill fields from an app automation profile",
         "assert_app_state": "Assert app package, text, or semantic locator state",
         "double_tap": "Double-tap at coordinates",
@@ -2245,9 +2600,15 @@
         "repeat_until": "Repeat until condition is true",
         "random_pick": "Pick one child branch at random",
         "run_scenario": "Call a sub-scenario in the campaign",
+        "lease_source_target": "Lease the next assigned Facebook target for this device",
+        "lease_connection_candidate": "Lease the next eligible friend candidate for the account",
         "content_interaction": "Interact with the current post and verify the resulting state",
         "connection_request": "Request a connection on the current profile, skipping an existing request or connection",
         "community_membership": "Join the current group and detect member or pending state",
+        "fb_select_people_profile": "Find and open the matching people profile by name, keywords, and score",
+        "fb_connect_visible_people": "Scan visible cards and send a friend request when common-context signals match",
+        "fb_select_post_target": "Find and open the matching post by text, keywords, and score",
+        "fb_scan_posts_interact": "Scan the current feed/group, match keywords, then like and comment real posts",
         "fb_find_comment_button": "Find and cache the Comment button target without tapping",
         "fb_tap_comment_target": "Tap the cached Comment target and verify the sheet opened",
         "fb_apply_comment_filter": "Switch the comment filter in the open sheet",
@@ -2305,6 +2666,7 @@
         "assert_element": "Assert element",
         "dismiss_popup": "Dismiss popup",
         "login_if_needed": "Login if needed",
+        "facebook_session_gate": "Check Facebook session",
         "fill_form": "Fill form",
         "assert_app_state": "Assert app state",
         "double_tap": "Double tap",
@@ -2327,10 +2689,16 @@
         "repeat_until": "Repeat until",
         "random_pick": "Random pick",
         "run_scenario": "Run sub-scenario",
-        "use_source_pool": "Use crawled groups",
+        "use_source_pool": "Use assigned targets",
+        "lease_source_target": "Get next target",
+        "lease_connection_candidate": "Get friend candidate",
         "content_interaction": "Interact with post",
         "connection_request": "Send friend request",
         "community_membership": "Join group",
+        "fb_select_people_profile": "Select people profile",
+        "fb_connect_visible_people": "Connect visible people",
+        "fb_select_post_target": "Select target post",
+        "fb_scan_posts_interact": "Scan and interact with posts",
         "fb_find_comment_button": "Find Comment button (FB)",
         "fb_tap_comment_target": "Tap Comment target (FB)",
         "fb_apply_comment_filter": "Apply comment filter (FB)",
@@ -2390,9 +2758,12 @@
         "loop": "LOOP",
         "extract": "EXTRACT",
         "save_extraction": "SAVE DATA",
+        "lease_source_target": "GET TARGET",
+        "lease_connection_candidate": "GET CANDIDATE",
         "content_interaction": "POST INTERACTION",
         "connection_request": "SEND FRIEND REQUEST",
         "community_membership": "JOIN GROUP",
+        "fb_scan_posts_interact": "SCAN AND INTERACT WITH POSTS",
         "fb_find_comment_button": "FIND FB COMMENT",
         "fb_tap_comment_target": "TAP FB COMMENT TARGET",
         "fb_apply_comment_filter": "FILTER FB COMMENTS",
@@ -2540,6 +2911,23 @@
       "addDevice": "Add device",
       "selectDevice": "Select device",
       "selectPhonePlaceholder": "Select phone…",
+      "deviceLabel": "Device",
+      "gettingStarted": {
+        "title": "Select a device to get started",
+        "description": "Connect to a device to control its screen and build an automated scenario from your actions.",
+        "selectDevice": "Select device",
+        "deviceStepTitle": "Select a device",
+        "deviceStepDescription": "Choose an online device from the bar above.",
+        "createStepTitle": "Create steps",
+        "createStepDescription": "Record actions directly or start from an existing template.",
+        "finishStepTitle": "Try it out",
+        "finishStepDescription": "Run the complete scenario on the device before using it.",
+        "saveHint": "Save the scenario after every step works as expected"
+      },
+      "smallScreen": {
+        "title": "A larger screen is required",
+        "description": "The control studio needs room for the device screen, UI tree, and scenario editor at the same time. Open this page on a computer or in a wider window."
+      },
       "touchMethodTitle": "Current touch control method",
       "scenarioCardTitle": "Scenario (record actions)",
       "waitingUi": "Waiting for UI change…",
@@ -2601,7 +2989,7 @@
       "exitConfirmDesc": "The preview scenario is still running on the device. Leaving will stop it. Continue?",
       "exitConfirmCancel": "Stay",
       "exitConfirmConfirm": "Stop & leave",
-      "wsConnected": "Dashboard stream connected",
+      "wsConnected": "Connected",
       "wsDisconnected": "Dashboard stream reconnecting",
       "touchPrefix": "Touch:",
       "hierarchyTitle": "UI tree",
@@ -2639,6 +3027,17 @@
       "flowSwitchToFlow": "Switch to visual Flow Editor",
       "flowListLabel": "List",
       "flowFlowLabel": "Flow",
+      "settings": "Settings",
+      "flowMap": {
+        "title": "Scenario flow",
+        "stepCount": "{count} steps · auto-arranged",
+        "arranging": "Arranging",
+        "building": "Building flow…",
+        "dragHint": "Drag a node to a new position or branch to change execution order",
+        "fitView": "Fit view",
+        "addToEnd": "Add to flow end",
+        "invalidDrop": "This node cannot be dropped there. The flow was not changed."
+      },
       "multiControl": {
         "banner": "Multi · {count} devices",
         "buttonLabel": "Sync devices",
@@ -2869,6 +3268,7 @@
     "transportOnline": "Transport live",
     "transportOffline": "No transport",
     "connect": "Connect",
+    "accounts": "Accounts",
     "deleteDevice": "Delete device",
     "deleteConfirm": "Delete this device? Related campaigns will also be unlinked from this device.",
     "realtime": {
@@ -2918,6 +3318,11 @@
       "title": "Status summary ({total} devices)",
       "loadError": "Could not load fleet stats.",
       "activeSessions": "Active sessions ({total})",
+      "viewSessions": "View details",
+      "sessionExplanation": "This is the number of active logical sessions, including registered sessions and control claims held by busy devices. A device can have multiple sessions and is flagged below.",
+      "sessionLoadError": "Could not load session details.",
+      "duplicateSession": "Same device",
+      "busyClaim": "Busy claim",
       "sessionOwner": {
         "user": "User",
         "execution": "Execution",
@@ -3056,6 +3461,9 @@
     "namePlaceholder": "E.g. Test phone 1",
     "deviceLabel": "Device to register",
     "devicePlaceholder": "Select serial from agent-boot",
+    "deviceSearchPlaceholder": "Search by name or serial...",
+    "deviceResultsLimited": "Showing {shown}/{total} devices. Type a name or serial to narrow the list.",
+    "noSearchResults": "No matching device found",
     "noAvailableDevices": "No device on the same WiFi/LAN as the relay agent is visible yet. Connect via USB or Wi‑Fi ADB on the same network as the agent, then try again.",
     "descLabel": "Notes (optional)",
     "descPlaceholder": "E.g. QA room, Samsung device...",
@@ -3117,6 +3525,40 @@
     "openFleetView": "Open fleet view"
   },
   "devicesFarm": {
+    "pageTitle": "Live monitoring",
+    "lastUpdated": "Last updated: {time}",
+    "waitingForData": "Waiting for device data",
+    "loadingDevices": "Loading device data",
+    "loadErrorHint": "Device data could not be loaded. Check the connection and retry.",
+    "refreshErrorTitle": "Could not refresh data",
+    "refreshErrorHint": "The last successful data is still shown.",
+    "retry": "Retry",
+    "health": {
+      "agentLabel": "Agent",
+      "streamLabel": "Video",
+      "commandLabel": "Command",
+      "agentHint": "Online means the agent control channel is connected.",
+      "streamHint": "The video channel is independent from agent connectivity and command readiness.",
+      "commandHint": "Ready means the device is online, can receive commands, and is not held by another session.",
+      "heartbeat": "Last heartbeat",
+      "unknownTime": "not available",
+      "agent": {
+        "online": "Online",
+        "offline": "Offline",
+        "unknown": "Unknown"
+      },
+      "stream": {
+        "ready": "Ready",
+        "starting": "Starting",
+        "unavailable": "Unavailable",
+        "error": "Error"
+      },
+      "command": {
+        "ready": "Ready",
+        "busy": "Busy",
+        "unavailable": "Unavailable"
+      }
+    },
     "backendErrorTitle": "Cannot connect to backend.",
     "backendErrorHint": "Is backend running on port 8081?",
     "streamConnecting": "Connecting screen...",
@@ -3149,6 +3591,7 @@
     "addDevice": "Add device",
     "controlAndRecord": "Control & record scenario",
     "controlDevice": "Control",
+    "deviceAccounts": "Accounts",
     "restartDeviceConfirmTitle": "Restart device",
     "restartDeviceConfirmDescription": "Send restart command to device {serial}?",
     "deviceInactive": "Device is inactive",
@@ -3165,6 +3608,8 @@
       "realtimeOk": "Dashboard realtime connected",
       "realtimeLost": "Dashboard realtime reconnecting…",
       "devicesReady": "{count} devices ready",
+      "devicesReadyLoading": "Loading status",
+      "devicesReadyUnavailable": "Status data unavailable",
       "devicesRegistered": "{count} registered",
       "tasks": "{count} tasks"
     },
@@ -4006,6 +4451,25 @@
       "windowHoursStep": "Every {step} hours between {start}:00 and {end}:00 at {minute}:00",
       "windowHoursRangeOnly": "Every hour between {start}:00 and {end}:00 at {minute}:00"
     },
+    "preview": {
+      "title": "Weekly schedule",
+      "subtitle": "Scan scheduled runs by day and time for the current week.",
+      "compactSubtitle": "Visual preview for the configured cron.",
+      "scheduleCount": "{count} schedules",
+      "unsupportedCount": "{count} complex cron",
+      "empty": "No schedules to display.",
+      "time": "Time",
+      "more": "+{count} more",
+      "days": {
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat",
+        "sun": "Sun"
+      }
+    },
     "form": {
       "titleCreate": "Create schedule",
       "titleEdit": "Edit schedule: {name}",
@@ -4386,6 +4850,7 @@
     "empty": "No notifications",
     "emptyHint": "Device and campaign alerts will appear here.",
     "markAllRead": "Mark all as read",
+    "openRelated": "Open related item",
     "unreadBadge": "{count} unread",
     "timeGroupToday": "Today",
     "timeGroupEarlier": "Earlier",
@@ -4456,6 +4921,7 @@
     },
     "eventTitles": {
       "deviceDisconnect": "Device {label} disconnected",
+      "deviceDisconnectGrouped": "Device {label} disconnected {count} times in {days} days",
       "deviceReconnect": "Device {label} reconnected",
       "deviceError": "Device {label} reported an error"
     },

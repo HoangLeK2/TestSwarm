@@ -18,6 +18,7 @@ EDGE_CONTENT_STRATEGIES = {
     "fb_posts",
     "fb_comments",
     "fb_groups",
+    "fb_pages",
     "text_nodes",
     "ig_posts",
     "tiktok_posts",
@@ -28,6 +29,7 @@ EDGE_CONTENT_STRATEGIES = {
     "linkedin_comments",
     "auto_comments",
 }
+ENTITY_STRATEGIES = {"fb_groups", "fb_pages"}
 
 COMMENT_STRATEGIES = {
     "fb_comments",
@@ -68,6 +70,8 @@ def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
         return "text_nodes"
     if strategy == "fb_groups":
         return "groups"
+    if strategy == "fb_pages":
+        return "pages"
     if strategy in COMMENT_STRATEGIES:
         return "comments"
     return "posts"
@@ -830,9 +834,7 @@ def request_edge_extra_data(
     if strategy == "fb_posts" and step.get("dedupe_field"):
         ctx["_fb_posts_dedupe_field"] = step.get("dedupe_field")
     return_items = (
-        True
-        if strategy == "fb_groups"
-        else _edge_extra_should_return_items(step, collection)
+        True if strategy in ENTITY_STRATEGIES else _edge_extra_should_return_items(step, collection)
     )
     comment_defaults: dict[str, Any] = {}
     if strategy in COMMENT_STRATEGIES:
@@ -855,6 +857,19 @@ def request_edge_extra_data(
         group_max_pages = max(1, min(200, int(group_max_pages_raw)))
     except (TypeError, ValueError):
         group_max_pages = 20
+    entity_max_items = 500
+    if strategy in ENTITY_STRATEGIES:
+        entity_max_items_raw = step.get("max_items")
+        if (
+            entity_max_items_raw is None
+            or str(entity_max_items_raw).strip().startswith("${")
+        ):
+            var_name = str(entity_max_items_raw or "").strip()[2:-1]
+            entity_max_items_raw = campaign_vars.get(var_name, 500) if var_name else 500
+        try:
+            entity_max_items = max(1, min(5_000, int(entity_max_items_raw)))
+        except (TypeError, ValueError):
+            entity_max_items = 500
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
@@ -889,24 +904,22 @@ def request_edge_extra_data(
         "posts": ctx.get("posts"),
         "_active_comment_parent_anchor": ctx.get("_active_comment_parent_anchor"),
         "_fb_comment_session": ctx.get("_fb_comment_session"),
-        "max_items": int(
-            step.get("max_items")
-            or comment_defaults.get("max_items")
-            or (
-                400
-                if strategy in COMMENT_STRATEGIES
-                else 500
-                if strategy == "fb_groups"
-                else 50
+        "max_items": (
+            entity_max_items
+            if strategy in ENTITY_STRATEGIES
+            else int(
+                step.get("max_items")
+                or comment_defaults.get("max_items")
+                or (400 if strategy in COMMENT_STRATEGIES else 50)
             )
         ),
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
-        "persist": bool(collection) or strategy == "fb_groups",
+        "persist": bool(collection) or strategy in ENTITY_STRATEGIES,
         "return_items": return_items,
         "search_query": step.get("search_query") or step.get("query"),
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
-    if strategy == "fb_groups":
+    if strategy in ENTITY_STRATEGIES:
         context["max_pages"] = group_max_pages
     if strategy == "fb_posts":
         consumed_anchors = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
@@ -1116,10 +1129,11 @@ def request_edge_extra_data(
         else {}
     )
     result["reason_code"] = diagnostic.get("reason_code", "ok")
-    if strategy == "fb_groups" and parsed_count == 0:
+    if strategy in ENTITY_STRATEGIES and parsed_count == 0:
+        entity_label = "page" if strategy == "fb_pages" else "group"
         result["ok"] = False
         result["message"] = (
-            "edge extra_data fb_groups: không đọc được group nào "
+            f"edge extra_data {strategy}: không đọc được {entity_label} nào "
             f"({result['reason_code']})"
         )
         log.warning("[%s] %s", serial, result["message"])

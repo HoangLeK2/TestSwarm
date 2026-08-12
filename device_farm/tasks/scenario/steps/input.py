@@ -39,6 +39,7 @@ def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
 def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     text = str(step.get("text") or "")
     via = str(step.get("via") or "u2")
+    clear_first = bool(step.get("clear_first", False))
     serial = sc.serial
     device = sc.device
 
@@ -61,9 +62,24 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         return
 
     typed = False
+    if clear_first and d is not None:
+        replace_text = getattr(d, "adb_keyboard_replace_text", None)
+        if callable(replace_text):
+            try:
+                replace_text(text)
+                typed = True
+                result["message"] = "input_text via u2 replace_text"
+                log.info(f"[{serial}] input_text: clear_first replace_text OK")
+            except Exception as replace_exc:
+                log.info(f"[{serial}] input_text: clear_first replace_text failed: {replace_exc}")
+        if not typed:
+            try:
+                d.clear_text()
+            except Exception as clear_exc:
+                log.info(f"[{serial}] input_text: clear_first failed: {clear_exc}")
 
     # Strategy 1: u2 send_keys — setText on focused field, then IME (Unicode OK on Android 14).
-    if d is not None:
+    if not typed and d is not None:
         try:
             d.send_keys(text)
             typed = True

@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
@@ -58,5 +58,39 @@ export function SortableFlowRow({
     >
       {children(dragHandle, isDragging)}
     </div>
+  );
+}
+
+export function StaticFlowRow({
+  children
+}: {
+  children: (dragHandle: ReactNode, isDragging: boolean) => ReactNode;
+}) {
+  const dragHandle = (
+    <div
+      className={[
+        'flex shrink-0 items-center justify-center self-stretch',
+        FLOW_ROW_DRAG_GUTTER_CLASS
+      ].join(' ')}
+      aria-hidden
+    />
+  );
+
+  return <div>{children(dragHandle, false)}</div>;
+}
+
+export function MaybeSortableFlowRow({
+  id,
+  enabled,
+  children
+}: {
+  id: string;
+  enabled: boolean;
+  children: (dragHandle: ReactNode, isDragging: boolean) => ReactNode;
+}) {
+  return enabled ? (
+    <SortableFlowRow id={id}>{children}</SortableFlowRow>
+  ) : (
+    <StaticFlowRow>{children}</StaticFlowRow>
   );
 }

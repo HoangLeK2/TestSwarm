@@ -134,9 +134,13 @@ class TestSharedDataclasses:
 
     def test_save_extraction_input_accepts_execution_id(self):
         inp = SaveExtractionInput(
-            device_serial="SN001", step={}, execution_id="exec-123"
+            device_serial="SN001",
+            step={},
+            execution_id="exec-123",
+            account_id="account-123",
         )
         assert inp.execution_id == "exec-123"
+        assert inp.account_id == "account-123"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1012,12 +1016,19 @@ class TestSaveExtractionExecutionId:
         posts = [{"content": "hello world", "author": "user1"}]
         inp = SaveExtractionInput(
             device_serial="SN001",
-            step={"type": "save_extraction", "data_var": "posts", "collection": "test"},
+            step={
+                "type": "save_extraction",
+                "data_var": "posts",
+                "collection": "test",
+                "platform": "facebook",
+                "content_type": "fb_post",
+            },
             step_index=0,
             context={"posts": posts},
             campaign_id="camp-1",
             run_id="run-001",
             execution_id="exec-001",
+            account_id="account-001",
         )
 
         from services.extraction_usecase import PersistReport
@@ -1029,6 +1040,13 @@ class TestSaveExtractionExecutionId:
             stack.enter_context(patch(
                 "temporal.activities.persist_data_items", persist_mock
             ))
+            stack.enter_context(patch(
+                "services.content.campaign_ref.resolve_persist_campaign_id",
+                AsyncMock(return_value="camp-1"),
+            ))
+            stack.enter_context(patch(
+                "db.database.activity_session", return_value=_make_db_mock()
+            ))
 
             from temporal.activities import DeviceActivities
             result = await acts.execute_save_extraction(inp)
@@ -1036,6 +1054,7 @@ class TestSaveExtractionExecutionId:
         persist_mock.assert_awaited_once()
         call_kwargs = persist_mock.call_args.kwargs
         assert call_kwargs["execution_id"] == "exec-001"
+        assert call_kwargs["account_id"] == "account-001"
         assert call_kwargs["campaign_id"] == "camp-1"
         assert call_kwargs["data_var"] == "posts"
         assert result.ok is True
@@ -1048,7 +1067,13 @@ class TestSaveExtractionExecutionId:
         posts = [{"content": "hello", "author": "x"}]
         inp = SaveExtractionInput(
             device_serial="SN001",
-            step={"type": "save_extraction", "data_var": "posts", "collection": "col"},
+            step={
+                "type": "save_extraction",
+                "data_var": "posts",
+                "collection": "col",
+                "platform": "facebook",
+                "content_type": "fb_post",
+            },
             step_index=0,
             context={"posts": posts},
             campaign_id="camp-2",
@@ -1064,6 +1089,13 @@ class TestSaveExtractionExecutionId:
             stack.enter_context(patch("temporal.activities.activity"))
             stack.enter_context(patch(
                 "temporal.activities.persist_data_items", persist_mock
+            ))
+            stack.enter_context(patch(
+                "services.content.campaign_ref.resolve_persist_campaign_id",
+                AsyncMock(return_value="camp-2"),
+            ))
+            stack.enter_context(patch(
+                "db.database.activity_session", return_value=_make_db_mock()
             ))
 
             result = await acts.execute_save_extraction(inp)

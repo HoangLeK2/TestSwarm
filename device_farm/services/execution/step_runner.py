@@ -168,6 +168,7 @@ def execute_step_with_retry(
     while attempt < loop_attempt_limit or force_recovery_retry:
         attempt += 1
         force_recovery_retry = False
+        step["_account_action_retry_attempt"] = attempt
         cancel_event = _cancel_event(sc)
         if cancel_event is not None and cancel_event.is_set():
             return {

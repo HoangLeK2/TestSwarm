@@ -816,6 +816,20 @@ def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: 
         legacy_streak = int(ctx.get("_no_new_streak", 0) or 0)
         return max(posts_streak, legacy_streak) >= threshold
 
+    elif ctype == "variable_equals" or "variable_equals" in condition:
+        spec = condition.get("variable_equals") or condition
+        name = str(spec.get("name") or "").strip()
+        if not name:
+            return False
+        variables = ctx.get("vars") if isinstance(ctx.get("vars"), dict) else {}
+        actual = variables.get(name, ctx.get(name))
+        expected = spec.get("value")
+        if isinstance(expected, bool):
+            if isinstance(actual, str):
+                actual = actual.strip().casefold() in {"1", "true", "yes", "on"}
+            return actual is expected
+        return str(actual) == str(expected)
+
     return False
 
 
@@ -2376,7 +2390,8 @@ def _run_scenario_task_legacy(
             count = step.get("count")
             while_cond = step.get("while")  # condition dict
             max_iterations = int(step.get("max_iterations", 100))
-            nested_steps = step.get("steps") or []
+            nested_steps = raw_step.get("steps") or []
+            loop_var = str(step.get("loop_var") or "").strip()
 
             if not nested_steps:
                 step_result["ok"] = False
@@ -2404,6 +2419,9 @@ def _run_scenario_task_legacy(
                         break
 
                     ctx["_loop_iter"] = i
+                    _var_ctx.set("_loop_iter", i)
+                    if loop_var:
+                        _var_ctx.set(loop_var, i)
                     # Run nested steps (reuse run_scenario_task recursively)
                     nested_result = run_scenario_task(device, {"steps": nested_steps}, context=ctx, _var_ctx=_var_ctx, _depth=_depth + 1)
                     sub_results.append({"iteration": i, "result": nested_result})
@@ -2422,8 +2440,8 @@ def _run_scenario_task_legacy(
         elif t == "if":
             """Conditional: run 'then' steps if condition is true, else 'else' steps."""
             condition = step.get("condition") or {}
-            then_steps = step.get("then") or []
-            else_steps = step.get("else") or []
+            then_steps = raw_step.get("then") or []
+            else_steps = raw_step.get("else") or []
 
             if not condition:
                 step_result["ok"] = False
@@ -2460,7 +2478,7 @@ def _run_scenario_task_legacy(
         elif t == "repeat":
             count = step.get("count")
             delay = float(step.get("delay_between", 0.0) or 0.0)
-            sub_steps = step.get("steps") or []
+            sub_steps = raw_step.get("steps") or []
 
             if count is None:
                 step_result["ok"] = False
@@ -2501,7 +2519,7 @@ def _run_scenario_task_legacy(
         elif t == "repeat_until":
             condition = step.get("condition") or {}
             max_iter = max(1, int(step.get("max_iterations", 100) or 100))
-            sub_steps = step.get("steps") or []
+            sub_steps = raw_step.get("steps") or []
 
             if not condition:
                 step_result["ok"] = False
@@ -2543,8 +2561,8 @@ def _run_scenario_task_legacy(
             by = str(step.get("by") or "")
             value = str(step.get("value") or "").strip()
             timeout = float(step.get("timeout", 3.0) or 3.0)
-            then_steps = step.get("then") or []
-            else_steps = step.get("else") or []
+            then_steps = raw_step.get("then") or []
+            else_steps = raw_step.get("else") or []
 
             if not by or not value:
                 step_result["ok"] = False
@@ -2584,8 +2602,8 @@ def _run_scenario_task_legacy(
 
         elif t == "if_variable":
             name = str(step.get("name") or "")
-            then_steps = step.get("then") or []
-            else_steps = step.get("else") or []
+            then_steps = raw_step.get("then") or []
+            else_steps = raw_step.get("else") or []
 
             if not name:
                 step_result["ok"] = False
@@ -2640,7 +2658,7 @@ def _run_scenario_task_legacy(
                     step_result["message"] = f"if_variable({name}={str_val!r}): no steps for {branch_name}, skip"
 
         elif t == "random_pick":
-            branches = step.get("branches") or []
+            branches = raw_step.get("branches") or []
             if not branches:
                 step_result["ok"] = False
                 step_result["message"] = "random_pick: no branches"
@@ -2677,15 +2695,40 @@ def _run_scenario_task_legacy(
             elif "from_list" in raw_step:
                 vals = raw_step.get("from_list")
                 if isinstance(vals, str):
-                    resolved_list = _var_ctx.resolve(vals, step_index=idx)
+                    exact_var = vals.strip()
+                    if exact_var.startswith("${") and exact_var.endswith("}"):
+                        resolved_list = _var_ctx.lookup_raw(exact_var[2:-1], step_index=idx)
+                    else:
+                        resolved_list = _var_ctx.resolve(vals, step_index=idx)
                     vals = resolved_list if isinstance(resolved_list, list) else []
                 if not isinstance(vals, list) or not vals:
                     step_result["ok"] = False
                     step_result["message"] = "set_variable: from_list phải là list không rỗng"
                 else:
                     resolved_vals = [_var_ctx.resolve(v, step_index=idx) for v in vals]
-                    chosen = _var_ctx.set_from_list(name, resolved_vals)
-                    step_result["message"] = f"set_variable: {name} = {chosen!r} (from_list)"
+                    if "from_list_index" in step:
+                        try:
+                            list_index = int(_var_ctx.resolve(step["from_list_index"], step_index=idx))
+                        except (TypeError, ValueError):
+                            step_result["ok"] = False
+                            step_result["message"] = "set_variable: from_list_index phải là số"
+                        else:
+                            if list_index < 0 or list_index >= len(resolved_vals):
+                                step_result["ok"] = False
+                                step_result["message"] = (
+                                    f"set_variable: from_list_index {list_index} ngoài phạm vi "
+                                    f"0..{len(resolved_vals) - 1}"
+                                )
+                            else:
+                                chosen = resolved_vals[list_index]
+                                _var_ctx.set(name, chosen)
+                                step_result["message"] = (
+                                    f"set_variable: {name} = {chosen!r} "
+                                    f"(from_list_index={list_index})"
+                                )
+                    else:
+                        chosen = _var_ctx.set_from_list(name, resolved_vals)
+                        step_result["message"] = f"set_variable: {name} = {chosen!r} (from_list)"
             elif "increment" in step:
                 try:
                     inc = int(step["increment"])

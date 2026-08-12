@@ -75,12 +75,16 @@ test('custom fb comment crawl budget survives frontend JSON payload', () => {
 
 test('app automation default steps include editable profile shells', () => {
   const login = createDefaultStep('login_if_needed');
+  const sessionGate = createDefaultStep('facebook_session_gate');
   const form = createDefaultStep('fill_form');
   const assertState = createDefaultStep('assert_app_state');
 
   assert.equal(login.type, 'login_if_needed');
   assert.equal(login.profile.package, '');
   assert.deepEqual(login.profile.login_recipe.detect_logged_in.any_text, []);
+  assert.equal(sessionGate.type, 'facebook_session_gate');
+  assert.equal(sessionGate.phase, 'preflight');
+  assert.equal(sessionGate.timeout, 0);
 
   assert.equal(form.type, 'fill_form');
   assert.deepEqual(form.profile.form_recipes, {});

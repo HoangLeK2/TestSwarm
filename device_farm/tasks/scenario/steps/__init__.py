@@ -41,6 +41,7 @@ from tasks.scenario.steps import (  # noqa: E402, F401
     interaction,
     input,
     app_automation,
+    facebook_session,
     wait,
     extraction,
     persistence,
@@ -48,4 +49,6 @@ from tasks.scenario.steps import (  # noqa: E402, F401
     composition,
     social_actions,
     source_pool,
+    candidate_lease,
+    account_target_lease,
 )

@@ -18,6 +18,7 @@ SCENARIO_STEP_TYPES = [
     "swipe_ratio",
     "tap",
     "tap_selector",
+    "tap_xml_match",
     "wait_element",
     "assert_element",
     "input_selector",
@@ -25,6 +26,7 @@ SCENARIO_STEP_TYPES = [
     "scroll_to",
     "input_text",
     "login_if_needed",
+    "facebook_session_gate",
     "fill_form",
     "assert_app_state",
     "key",
@@ -43,8 +45,14 @@ SCENARIO_STEP_TYPES = [
     "fb_find_comment_button",
     "fb_tap_comment_target",
     "fb_apply_comment_filter",
+    "fb_select_people_profile",
+    "fb_connect_visible_people",
+    "fb_select_post_target",
+    "fb_scan_posts_interact",
     "content_interaction",
     "connection_request",
+    "lease_connection_candidate",
+    "lease_source_target",
     "community_membership",
     "random_pick",
     "run_scenario",
@@ -150,15 +158,92 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element."
         ),
     },
+    "tap_xml_match": {
+        "required": [],
+        "optional": ["attr", "by", "contains", "equals", "value", "clickable", "timeout", "poll"],
+        "description": (
+            "Dump UI XML fresh, find first node by attr contains/equals, then tap center from bounds. "
+            "Useful for Facebook result rows whose u2 selector surface is unstable."
+        ),
+    },
     "content_interaction": {
         "required": [],
-        "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
+        "optional": [
+            "platform", "action", "timeout", "poll", "verify_timeout",
+            "settle_seconds", "save_as", "require_verified_target",
+            "require_completion", "completion_steps", "completion_verify",
+            "candidate_entity_id", "require_candidate_status",
+            "account_action_id",
+        ],
         "description": "Interact with content on the current screen through a platform adapter. Facebook actions: like, comment, share.",
     },
     "connection_request": {
         "required": [],
-        "optional": ["platform", "action", "timeout", "poll", "verify_timeout", "settle_seconds", "save_as"],
-        "description": "Send an idempotent connection request on the current profile screen; multiple visible targets are rejected.",
+        "optional": [
+            "platform", "action", "timeout", "poll", "verify_timeout",
+            "settle_seconds", "save_as", "require_verified_target",
+            "require_completion", "completion_steps", "completion_verify",
+            "candidate_entity_id", "require_candidate_status", "candidate_lease_token",
+        ],
+        "description": "Send an idempotent connection request on the current profile screen; use require_verified_target to bind it to a resolver result.",
+    },
+    "lease_connection_candidate": {
+        "required": [],
+        "optional": ["platform"],
+        "description": "Atomically lease the highest-ranked ready connection candidate for the bound account; request discovery when none is ready.",
+    },
+    "lease_source_target": {
+        "required": [],
+        "optional": [
+            "platform", "entity_type", "action_type", "action",
+            "statuses", "keywords", "search",
+        ],
+        "description": "Atomically reserve the next unused device target for the bound account and action.",
+    },
+    "fb_select_people_profile": {
+        "required": [],
+        "optional": [
+            "search", "display_name", "row_text", "required_keywords", "optional_keywords",
+            "forbidden_keywords", "min_score", "require_unique", "timeout", "profile_wait_s",
+            "save_as", "save_success_as", "skip_candidate_on_not_verified",
+            "candidate_entity_id", "candidate_lease_token", "skip_candidate_defer_hours",
+        ],
+        "description": "Agent-boot resolver: score Facebook People results, open one verified profile, and save the target proof.",
+    },
+    "fb_connect_visible_people": {
+        "required": [],
+        "optional": [
+            "platform", "min_score", "require_common", "common_keywords",
+            "forbidden_keywords", "timeout", "verify_wait_s", "save_as",
+            "account_action_id", "open_surface", "target_count", "batch_size",
+            "max_scrolls", "no_more_common_limit", "dry_run", "scroll_wait_s",
+            "surface_wait_s", "stop_on_unverified",
+        ],
+        "description": "Agent-boot flow: open Facebook friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
+    },
+    "fb_select_post_target": {
+        "required": [],
+        "optional": [
+            "search", "display_text", "row_text", "required_keywords", "optional_keywords",
+            "forbidden_keywords", "min_score", "require_unique", "timeout", "detail_wait_s",
+            "current_detail",
+            "save_as",
+        ],
+        "description": "Agent-boot resolver: score Facebook post results, open one verified post, and save the target proof.",
+    },
+    "fb_scan_posts_interact": {
+        "required": [],
+        "optional": [
+            "platform", "keywords", "match_mode", "comment_text", "target_count",
+            "batch_size", "max_scrolls", "timeout", "scroll_x_ratio",
+            "scroll_y1_ratio", "scroll_y2_ratio", "scroll_duration_s",
+            "scroll_wait_s", "comment_wait_s", "submit_wait_s",
+            "require_comment", "save_as",
+        ],
+        "description": (
+            "Agent-boot flow: scan visible Facebook feed/group posts, match configured "
+            "keywords, then perform real like and comment on matched posts."
+        ),
     },
     "community_membership": {
         "required": [],
@@ -211,8 +296,11 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "input_text": {
         "required": ["text", "via"],
-        "optional": [],
-        "description": "Gõ text vào element đang focused. via: u2. Ưu tiên dùng input_selector.",
+        "optional": ["clear_first"],
+        "description": (
+            "Gõ text vào element đang focused. via: u2. clear_first=true để xóa "
+            "nội dung cũ trước khi gõ. Ưu tiên dùng input_selector khi có selector."
+        ),
     },
     "login_if_needed": {
         "required": [],
@@ -220,6 +308,14 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "description": (
             "Profile-driven login. Detects logged-in state first, fills login_recipe fields from "
             "account/scenario/variables/secret references, then submits."
+        ),
+    },
+    "facebook_session_gate": {
+        "required": [],
+        "optional": ["phase", "timeout", "poll_interval"],
+        "description": (
+            "Account-scoped Facebook session gate. preflight reuses only a matching trusted "
+            "session or requests login; confirm establishes provenance after this run logged in."
         ),
     },
     "fill_form": {
@@ -294,11 +390,12 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "set_variable": {
         "required": ["name"],
-        "optional": ["value", "from_list", "increment"],
+        "optional": ["value", "from_list", "from_list_index", "increment"],
         "description": (
             "Đặt hoặc cập nhật một runtime variable để dùng trong các step sau với ${NAME}. "
             "value: giá trị cụ thể (hỗ trợ ${VAR} interpolation). "
-            "from_list: chọn ngẫu nhiên 1 phần tử từ danh sách. "
+            "from_list: chọn 1 phần tử từ danh sách; mặc định chọn ngẫu nhiên. "
+            "from_list_index: nếu có, chọn phần tử theo index sau khi resolve (ví dụ ${_loop_iter}). "
             "increment: tăng counter thêm N (bắt đầu từ 0 nếu chưa có). "
             "Chỉ dùng 1 trong 3 tùy chọn trên; 'value' là mặc định."
         ),
@@ -498,6 +595,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "comments/shares/post_type/image_desc/comment_preview); "
             "'text_nodes' — thu thập text node vào context['text_nodes']; "
             "'fb_comments' — parse comment rows + stats trong comment view/feed preview; "
+            "'fb_groups'/'fb_pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; "
             "ig/tiktok/linkedin/auto posts/comments — parse content tương ứng trong agent-boot. "
             "extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). "
             "strategy_version: lock behavior parser/runtime (vd: fb_comments:v1). "
@@ -515,12 +613,14 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "loop": {
         "required": ["steps"],
-        "optional": ["count", "while", "max_iterations"],
+        "optional": ["count", "while", "max_iterations", "loop_var", "duration_seconds"],
         "description": (
             "Lặp lại steps theo count hoặc while-condition. "
             "count: số lần lặp cố định (chạy đúng N lần, không bị max_iterations cắt). "
+            "duration_seconds: nếu > 0, dừng loop khi hết thời lượng kể cả chưa hết count. "
             "while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. "
             "max_iterations: giới hạn an toàn chỉ khi dùng while (không có count, default 100). "
+            "loop_var: tên biến runtime nhận index hiện tại để nested loop không ghi đè nhau. "
             "Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' "
             "với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. "
             "${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based)."

@@ -257,6 +257,8 @@ export function normalizeTemporalStepLogEntry(
   const ok = raw.ok !== false;
   return {
     index: Number(raw.index ?? 0),
+    occurrence_key:
+      typeof raw.occurrence_key === 'string' ? raw.occurrence_key : undefined,
     step_id: typeof raw.step_id === 'string' ? raw.step_id : null,
     type,
     step_type: type,
@@ -276,6 +278,7 @@ export function normalizeTemporalStepLogEntry(
 }
 
 function stepLogMergeKey(entry: StepLogEntry): string {
+  if (entry.occurrence_key) return entry.occurrence_key;
   return `${entry.depth ?? 0}:${entry.index}:${entry.step_id ?? entry.step_type ?? ''}`;
 }
 

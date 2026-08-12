@@ -85,6 +85,7 @@ export type ActionType =
   | 'verify_screen'
   | 'dismiss_popup'
   | 'login_if_needed'
+  | 'facebook_session_gate'
   | 'fill_form'
   | 'assert_app_state'
   | 'input_text'
@@ -100,10 +101,16 @@ export type ActionType =
   | 'set_clipboard'
   | 'extract'
   | 'use_source_pool'
+  | 'lease_source_target'
+  | 'lease_connection_candidate'
   | 'save_extraction'
   | 'fb_find_comment_button'
   | 'fb_tap_comment_target'
   | 'fb_apply_comment_filter'
+  | 'fb_select_people_profile'
+  | 'fb_connect_visible_people'
+  | 'fb_select_post_target'
+  | 'fb_scan_posts_interact'
   | 'content_interaction'
   | 'connection_request'
   | 'community_membership'
@@ -146,6 +153,8 @@ export function getStepIcon(type: string): LucideIcon {
       return RefreshCw;
     case 'extract':
     case 'use_source_pool':
+    case 'lease_source_target':
+    case 'lease_connection_candidate':
     case 'extract_text_hierarchy':
     case 'extract_text_ocr':
     case 'extract_text_ai':
@@ -193,6 +202,9 @@ export function getStepIcon(type: string): LucideIcon {
     case 'fb_find_comment_button':
       return Search;
     case 'fb_apply_comment_filter':
+    case 'fb_select_people_profile':
+    case 'fb_connect_visible_people':
+    case 'fb_select_post_target':
       return ShieldCheck;
     case 'fb_tap_comment_button':
     case 'tap_fb_comment_button':
@@ -225,6 +237,7 @@ export function getStepIcon(type: string): LucideIcon {
       return Timer;
     case 'verify_screen':
     case 'login_if_needed':
+    case 'facebook_session_gate':
       return ShieldCheck;
     case 'pinch':
       return ZoomIn;
@@ -312,6 +325,8 @@ export function getStepLabel(step: FlowStep): string {
       return `input [${step.by}="${step.value}"] "${step.text}"`;
     case 'login_if_needed':
       return `login_if_needed ${step.profile?.package || ''}`;
+    case 'facebook_session_gate':
+      return `Phiên Facebook · ${step.phase === 'confirm' ? 'xác nhận sau đăng nhập' : 'kiểm tra trước'}`;
     case 'fill_form':
       return `fill_form ${step.recipe || ''}`;
     case 'assert_app_state':
@@ -350,10 +365,22 @@ export function getStepLabel(step: FlowStep): string {
       const filter = step.comment_filter ?? 'all_comments';
       return `Lọc bình luận → ${filterLabels[filter] ?? filter}`;
     }
+    case 'fb_select_people_profile':
+      return `Xác minh profile · ${step.display_name || step.search || step.save_as || '_people_target'}`;
+    case 'fb_connect_visible_people':
+      return `Kết bạn người có điểm chung · điểm >= ${step.min_score ?? 40}`;
+    case 'fb_select_post_target':
+      return `Xác minh post · ${step.display_text || step.search || step.save_as || '_post_target'}`;
+    case 'fb_scan_posts_interact':
+      return `Scan post · ${step.target_count ?? 1} bài · ${step.keywords || 'mọi keyword'}`;
     case 'content_interaction':
       return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
     case 'connection_request':
       return `${step.platform ?? 'facebook'} · gửi lời mời`;
+    case 'lease_source_target':
+      return `${step.platform ?? 'facebook'} · ${step.entity_type ?? 'post'} · ${step.keywords || step.search || 'tất cả'}`;
+    case 'lease_connection_candidate':
+      return `${step.platform ?? 'facebook'} · ready_to_connect`;
     case 'community_membership':
       return `${step.platform ?? 'facebook'} · tham gia nhóm`;
     default:
@@ -394,8 +421,38 @@ export const ALL_STEP_TYPES: {
     group: 'action'
   },
   {
+    value: 'lease_source_target',
+    label: 'Lấy mục tiêu tiếp theo',
+    group: 'action'
+  },
+  {
+    value: 'lease_connection_candidate',
+    label: 'Lấy ứng viên kết bạn',
+    group: 'action'
+  },
+  {
     value: 'community_membership',
     label: 'Tham gia nhóm',
+    group: 'action'
+  },
+  {
+    value: 'fb_select_people_profile',
+    label: 'Xác minh profile bạn bè (FB)',
+    group: 'action'
+  },
+  {
+    value: 'fb_connect_visible_people',
+    label: 'Kết bạn người có điểm chung (FB)',
+    group: 'action'
+  },
+  {
+    value: 'fb_select_post_target',
+    label: 'Xác minh bài viết (FB)',
+    group: 'action'
+  },
+  {
+    value: 'fb_scan_posts_interact',
+    label: 'Scan và tương tác post (FB)',
     group: 'action'
   },
   {
@@ -422,6 +479,11 @@ export const ALL_STEP_TYPES: {
   { value: 'verify_screen', label: 'verify_screen', group: 'action' },
   { value: 'dismiss_popup', label: 'dismiss_popup', group: 'action' },
   { value: 'login_if_needed', label: 'login_if_needed', group: 'action' },
+  {
+    value: 'facebook_session_gate',
+    label: 'Kiểm tra phiên Facebook',
+    group: 'action'
+  },
   { value: 'fill_form', label: 'fill_form', group: 'action' },
   { value: 'assert_app_state', label: 'assert_app_state', group: 'action' },
   { value: 'key', label: 'key', group: 'action' },
@@ -638,6 +700,64 @@ export function createDefaultStep(
         comment_filter_step_pause_s: 0.35,
         comment_filter_post_select_s: 0.85
       };
+    case 'fb_select_people_profile':
+      return {
+        ...base,
+        type,
+        search: '',
+        display_name: '',
+        required_keywords: [],
+        optional_keywords: [],
+        forbidden_keywords: [],
+        min_score: 80,
+        require_unique: true,
+        timeout: 12,
+        profile_wait_s: 1,
+        save_as: '_people_target'
+      };
+    case 'fb_connect_visible_people':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        min_score: 40,
+        require_common: true,
+        common_keywords: ['bạn chung', 'mutual friends', 'cùng nhóm'],
+        forbidden_keywords: ['trang', 'page', 'người tham gia ẩn danh', 'anonymous'],
+        timeout: 8,
+        verify_wait_s: 0.8,
+        save_as: '_visible_connection_action'
+      };
+    case 'fb_select_post_target':
+      return {
+        ...base,
+        type,
+        search: '',
+        display_text: '',
+        required_keywords: [],
+        optional_keywords: [],
+        forbidden_keywords: [],
+        min_score: 80,
+        require_unique: true,
+        timeout: 12,
+        detail_wait_s: 1,
+        save_as: '_post_target'
+      };
+    case 'fb_scan_posts_interact':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        keywords: [],
+        match_mode: 'any',
+        comment_text: '',
+        target_count: 1,
+        max_scrolls: 6,
+        timeout: 45,
+        scroll_x_ratio: 0.5,
+        require_comment: true,
+        save_as: '_post_scan'
+      };
     case 'content_interaction':
       return {
         ...base,
@@ -649,6 +769,19 @@ export function createDefaultStep(
         verify_timeout: 5,
         settle_seconds: 0.35
       };
+    case 'lease_source_target':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        entity_type: 'post',
+        action_type: 'content_interaction',
+        action: 'like',
+        statuses: ['approved', 'active'],
+        keywords: ''
+      };
+    case 'lease_connection_candidate':
+      return { ...base, type, platform: 'facebook' };
     case 'connection_request':
       return {
         ...base,
@@ -781,6 +914,14 @@ export function createDefaultStep(
           }
         },
         clear_first: true
+      };
+    case 'facebook_session_gate':
+      return {
+        ...base,
+        type: 'facebook_session_gate',
+        phase: 'preflight',
+        timeout: 0,
+        poll_interval: 0.5
       };
     case 'fill_form':
       return {

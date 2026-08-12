@@ -109,20 +109,24 @@ function validateStep(
         };
       }
       const then = s.then;
-      if (!Array.isArray(then) || then.length < 1) {
+      const els = s.else;
+      const hasThenSteps = Array.isArray(then) && then.length > 0;
+      const hasElseSteps = Array.isArray(els) && els.length > 0;
+      if (!hasThenSteps && !hasElseSteps) {
         return {
           ok: false,
-          message: `${path} (if_variable): nhánh "then" cần ít nhất 1 bước`
+          message: `${path} (if_variable): cần ít nhất 1 bước trong nhánh "then" hoặc "else"`
         };
       }
-      const rThen = validateStepsArray(
-        then,
-        `${path} (if_variable) → then`,
-        tr
-      );
-      if (!rThen.ok) return rThen;
-      const els = s.else;
-      if (els != null && Array.isArray(els) && els.length > 0) {
+      if (hasThenSteps) {
+        const rThen = validateStepsArray(
+          then,
+          `${path} (if_variable) → then`,
+          tr
+        );
+        if (!rThen.ok) return rThen;
+      }
+      if (hasElseSteps) {
         const rElse = validateStepsArray(
           els,
           `${path} (if_variable) → else`,

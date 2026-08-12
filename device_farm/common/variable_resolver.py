@@ -141,6 +141,10 @@ class VariableContext:
         self._runtime_vars[name] = chosen
         return chosen
 
+    def lookup_raw(self, name: str, step_index: int = 0) -> Any:
+        """Return a variable value without list randomization/interpolation."""
+        return self._lookup(name, step_index)
+
     def increment(self, name: str, step: int = 1) -> int:
         """Increment counter (starts from 0) and save it into runtime vars. Return the new value."""
         current = self._counters.get(name, 0) + step

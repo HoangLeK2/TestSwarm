@@ -13,7 +13,7 @@ Template step types used:
   launch_app, open_url, wait, wait_stable, wait_element, dismiss_popup, key,
   scroll_down, swipe_ratio, tap_selector, input_selector, input_text,
   set_variable, repeat, repeat_until, if_element, if_variable, random_pick,
-  login_if_needed, fill_form, assert_app_state,
+  login_if_needed, facebook_session_gate, fill_form, assert_app_state,
   extract (optional collection → inline save), save_extraction (advanced), loop, break_if
 
 Design rules:
@@ -26,6 +26,7 @@ Design rules:
   - Selectors may need updating per app version (see Maintenance Notes in DF-006 spec)
 """
 
+from copy import deepcopy
 from typing import Any, Dict, List
 
 # fb_posts: mở chi tiết bài trước extract; back do kịch bản điều khiển (không auto trong agent).
@@ -105,6 +106,31 @@ def _fb_open_search_result_steps(
 ) -> List[Dict[str, Any]]:
     """Search Facebook, switch to a result tab, then open a configured row."""
     return [
+        *_fb_open_search_tab_steps(
+            search_var=search_var,
+            tab_vi=tab_vi,
+            tab_en=tab_en,
+            tab_description_contains=tab_description_contains,
+        ),
+        {
+            "type": "tap_selector",
+            "by": "text",
+            "value": f"${{{row_text_var}}}",
+            "timeout": 10,
+        },
+        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+    ]
+
+
+def _fb_open_search_tab_steps(
+    *,
+    search_var: str,
+    tab_vi: str,
+    tab_en: str,
+    tab_description_contains: str,
+) -> List[Dict[str, Any]]:
+    """Search Facebook and switch to a result tab without selecting a row."""
+    return [
         {
             "type": "if_element",
             "by": "content-desc",
@@ -121,7 +147,12 @@ def _fb_open_search_result_steps(
             "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
         },
         {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-        {"type": "input_text", "text": f"${{{search_var}}}", "via": "u2"},
+        {
+            "type": "input_text",
+            "text": f"${{{search_var}}}",
+            "via": "u2",
+            "clear_first": True,
+        },
         {"type": "wait", "seconds": 1},
         {"type": "key", "key": "enter"},
         {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
@@ -136,12 +167,13 @@ def _fb_open_search_result_steps(
                     "by": "descriptionContains",
                     "value": tab_description_contains,
                     "timeout": 4,
+                    "ignore_error": True,
                 },
             ],
             "else": [
                 {
                     "type": "if_element",
-                    "by": "text",
+                    "by": "content-desc",
                     "value": tab_vi,
                     "timeout": 3,
                     "then": [
@@ -150,6 +182,7 @@ def _fb_open_search_result_steps(
                             "by": "text",
                             "value": tab_vi,
                             "timeout": 3,
+                            "ignore_error": True,
                         },
                     ],
                     "else": [
@@ -164,23 +197,93 @@ def _fb_open_search_result_steps(
                 }
             ],
         },
-        {"type": "wait_stable", "timeout": 2, "stable_duration": 0.45},
         {
-            "type": "tap_selector",
+            "type": "if_element",
             "by": "text",
-            "value": f"${{{row_text_var}}}",
-            "timeout": 10,
+            "value": tab_vi,
+            "timeout": 1,
+            "then": [{"type": "wait", "seconds": 0.1}],
+            "else": [
+                # Facebook search tabs are horizontally scrollable; Page/Trang
+                # can sit off-screen after All/Posts/Groups/Events.
+                {"type": "swipe_ratio", "x1": 0.86, "y1": 0.16, "x2": 0.22, "y2": 0.16, "duration_ms": 260},
+                {"type": "wait", "seconds": 0.35},
+                {
+                    "type": "if_element",
+                    "by": "descriptionContains",
+                    "value": tab_description_contains,
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "descriptionContains",
+                            "value": tab_description_contains,
+                            "timeout": 2,
+                            "ignore_error": True,
+                        }
+                    ],
+                    "else": [
+                        {
+                            "type": "if_element",
+                            "by": "text",
+                            "value": tab_vi,
+                            "timeout": 2,
+                            "then": [
+                                {
+                                    "type": "tap_selector",
+                                    "by": "text",
+                                    "value": tab_vi,
+                                    "timeout": 2,
+                                    "ignore_error": True,
+                                }
+                            ],
+                            "else": [
+                                {
+                                    "type": "tap_selector",
+                                    "by": "text",
+                                    "value": tab_en,
+                                    "timeout": 2,
+                                    "ignore_error": True,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
         },
-        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+        {"type": "wait_stable", "timeout": 2, "stable_duration": 0.45},
     ]
 
 
-def _fb_nurture_feed_steps(*, tag: str, context_var: str) -> List[Dict[str, Any]]:
+def _fb_nurture_feed_steps(
+    *,
+    tag: str,
+    context_var: str,
+    require_verified_target: str | None = None,
+    id_prefix: str | None = None,
+) -> List[Dict[str, Any]]:
     """Lightweight interaction loop for the current Facebook target screen."""
+    step_prefix = id_prefix or tag
+    like_step: Dict[str, Any] = {
+        "id": f"{step_prefix}_nurture_like_${{_TOUCH_INDEX}}",
+        "type": "content_interaction",
+        "platform": "facebook",
+        "action": "like",
+        "timeout": 4,
+        "verify_timeout": 4,
+        "settle_seconds": 0.35,
+        "save_as": "_last_nurture_action",
+        "ignore_error": True,
+    }
+    if tag == "fanpage":
+        like_step["post_capture"] = True
+    if require_verified_target:
+        like_step["require_verified_target"] = require_verified_target
     return [
         {
             "type": "loop",
             "count": "${MAX_TOUCHES}",
+            "loop_var": "_TOUCH_INDEX",
             "steps": [
                 {"type": "dismiss_popup", "retries": 1},
                 {
@@ -188,18 +291,7 @@ def _fb_nurture_feed_steps(*, tag: str, context_var: str) -> List[Dict[str, Any]
                     "branches": [
                         {
                             "weight": 3,
-                            "steps": [
-                                {
-                                    "type": "content_interaction",
-                                    "platform": "facebook",
-                                    "action": "like",
-                                    "timeout": 4,
-                                    "verify_timeout": 4,
-                                    "settle_seconds": 0.35,
-                                    "save_as": "_last_nurture_action",
-                                    "ignore_error": True,
-                                }
-                            ],
+                            "steps": [like_step],
                         },
                         {
                             "weight": 1,
@@ -229,6 +321,403 @@ def _fb_nurture_feed_steps(*, tag: str, context_var: str) -> List[Dict[str, Any]
             "name": "_nurture_target",
             "value": f"{tag}:${{{context_var}}}",
         },
+    ]
+
+
+def _fb_post_like_and_comment_steps(
+    *,
+    require_verified_target: str,
+    account_action_id: str | None = None,
+    save_prefix: str = "_post",
+) -> List[Dict[str, Any]]:
+    like_step: Dict[str, Any] = {
+        "type": "content_interaction",
+        "platform": "facebook",
+        "action": "like",
+        "timeout": 5,
+        "verify_timeout": 5,
+        "settle_seconds": 0.35,
+        "require_verified_target": require_verified_target,
+        "save_as": f"{save_prefix}_like_action",
+    }
+    if account_action_id:
+        like_step["account_action_id"] = account_action_id
+    return [
+        like_step,
+        {
+            "type": "content_interaction",
+            "platform": "facebook",
+            "action": "comment",
+            "timeout": 5,
+            "verify_timeout": 5,
+            "settle_seconds": 0.35,
+            "require_verified_target": require_verified_target,
+            "require_completion": True,
+            "completion_steps": [
+                {
+                    "type": "input_selector",
+                    "by": "descriptionContains",
+                    "value": "${COMMENT_INPUT_LABEL}",
+                    "text": "${COMMENT_TEXT}",
+                    "clear_first": False,
+                },
+                {
+                    "type": "tap_selector",
+                    "by": "descriptionContains",
+                    "value": "${COMMENT_SUBMIT_LABEL}",
+                    "timeout": 5,
+                },
+            ],
+            "completion_verify": {
+                "type": "wait_element",
+                "by": "text",
+                "value": "${COMMENT_TEXT}",
+                "timeout": 6,
+            },
+            "save_as": f"{save_prefix}_comment_action",
+        },
+    ]
+
+
+def _fb_set_page_context_steps() -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": "if_variable",
+            "name": "TARGET_NAME",
+            "then": [
+                {
+                    "type": "set_variable",
+                    "name": "PAGE_CONTEXT",
+                    "value": "${TARGET_NAME}",
+                }
+            ],
+            "else": [
+                {
+                    "type": "set_variable",
+                    "name": "PAGE_CONTEXT",
+                    "value": "${PAGE_SEARCH}",
+                }
+            ],
+        }
+    ]
+
+
+def _fb_open_page_target_steps(
+    *,
+    search_var: str,
+    row_text_var: str,
+) -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "open_assigned_page_or_configured_page",
+            "type": "if_variable",
+            "name": "TARGET_SELECTOR_VALUE",
+            "then": [
+                *_fb_open_search_tab_steps(
+                    search_var="TARGET_SEARCH_QUERY",
+                    tab_vi="Trang",
+                    tab_en="Pages",
+                    tab_description_contains="tab Trang",
+                ),
+                {"type": "tap_ratio", "x": 0.5, "y": 0.22},
+                {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            ],
+            "else": [
+                *_fb_open_search_result_steps(
+                    search_var=search_var,
+                    tab_vi="Trang",
+                    tab_en="Pages",
+                    tab_description_contains="tab Trang",
+                    row_text_var=row_text_var,
+                )
+            ],
+        }
+    ]
+
+
+def _fb_open_page_first_result_steps(*, search_var: str) -> List[Dict[str, Any]]:
+    return [
+        *_fb_open_search_tab_steps(
+            search_var=search_var,
+            tab_vi="Trang",
+            tab_en="Pages",
+            tab_description_contains="tab Trang",
+        ),
+        {"type": "tap_ratio", "x": 0.5, "y": 0.22},
+        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+    ]
+
+
+def _fb_open_page_exact_result_steps(
+    *,
+    search_var: str,
+    row_text_var: str,
+) -> List[Dict[str, Any]]:
+    """Search the exact page and open the matching clickable result row."""
+    return [
+        {
+            "type": "tap_selector",
+            "by": "content-desc",
+            "value": "Tìm kiếm",
+            "timeout": 5,
+        },
+        {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+        {
+            "type": "input_text",
+            "text": f"${{{search_var}}}",
+            "via": "u2",
+            "clear_first": True,
+        },
+        {"type": "wait", "seconds": 1},
+        {"type": "key", "key": "enter"},
+        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+        {
+            "type": "tap_xml_match",
+            "attr": "content-desc",
+            "contains": f"${{{row_text_var}}}",
+            "clickable": True,
+            "timeout": 10,
+        },
+        {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+    ]
+
+
+def _fb_follow_current_page_steps() -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": "if_variable",
+            "name": "FOLLOW_PAGE",
+            "equals": "true",
+            "then": [
+                {
+                    "type": "if_element",
+                    "by": "content-desc",
+                    "value": "Theo dõi",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "content-desc",
+                            "value": "Theo dõi",
+                            "timeout": 2,
+                            "ignore_error": True,
+                        }
+                    ],
+                    "else": [
+                        {
+                            "type": "tap_selector",
+                            "by": "content-desc",
+                            "value": "Follow",
+                            "timeout": 2,
+                            "ignore_error": True,
+                        }
+                    ],
+                },
+                {"type": "wait", "seconds": 0.8},
+            ],
+            "else": [{"type": "wait", "seconds": 0.1}],
+        }
+    ]
+
+
+def _fb_back_to_page_search_before_next_page_steps() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "back_to_page_search_before_next_page",
+            "type": "key",
+            "key": "back",
+        },
+        {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
+        {"type": "dismiss_popup", "retries": 1},
+    ]
+
+
+def _fb_open_page_posts_area_steps() -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": "scroll_down",
+            "repeats": 2,
+            "start_x_ratio": "${SCROLL_X_RATIO}",
+            "start_y_ratio": 0.72,
+            "end_y_ratio": 0.42,
+        },
+        {"type": "wait", "seconds": 1},
+    ]
+
+
+def _fb_crawl_page_search_results_steps() -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": "set_variable",
+            "name": "_PAGE_SEARCH_QUERY",
+            "from_list": "${PAGE_KEYWORDS}",
+            "from_list_index": "${_PAGE_KEYWORD_INDEX}",
+        },
+        {
+            "type": "if_variable",
+            "name": "_PAGE_SEARCH_QUERY",
+            "then": [
+                *_fb_open_search_tab_steps(
+                    search_var="_PAGE_SEARCH_QUERY",
+                    tab_vi="Trang",
+                    tab_en="Pages",
+                    tab_description_contains="tab Trang",
+                ),
+                {
+                    "type": "if_element",
+                    "by": "text",
+                    "value": "Xem tất cả",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "text",
+                            "value": "Xem tất cả",
+                            "timeout": 2,
+                            "ignore_error": True,
+                        }
+                    ],
+                    "else": [
+                        {
+                            "type": "tap_selector",
+                            "by": "text",
+                            "value": "See all",
+                            "timeout": 2,
+                            "ignore_error": True,
+                        }
+                    ],
+                },
+                {"type": "wait_stable", "timeout": 3, "stable_duration": 0.45},
+                {
+                    "type": "extract",
+                    "strategy": "fb_pages",
+                    "edge_extra_data": True,
+                    "search_query": "${_PAGE_SEARCH_QUERY}",
+                    "max_pages": "${MAX_PAGES}",
+                    "max_items": "${MAX_ITEMS_PER_KEYWORD}",
+                    "stop_if_no_new": True,
+                    "no_new_threshold": 2,
+                    "entity_scroll_pause_s": 0.5,
+                    "edge_extra_timeout_s": 180,
+                },
+                {"type": "key", "key": "home"},
+                {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+            ],
+            "else": [{"type": "wait", "seconds": 0.1}],
+        },
+    ]
+
+
+def _fb_nurture_page_by_search_steps(
+    *,
+    search_var: str,
+    row_text_var: str,
+    id_prefix: str,
+) -> List[Dict[str, Any]]:
+    return [
+        {"type": "set_variable", "name": "PAGE_CONTEXT", "value": f"${{{row_text_var}}}"},
+        *_fb_open_page_exact_result_steps(
+            search_var=search_var,
+            row_text_var=row_text_var,
+        ),
+        *_fb_follow_current_page_steps(),
+        *_fb_open_page_posts_area_steps(),
+        *_fb_nurture_feed_steps(
+            tag="fanpage",
+            context_var="PAGE_CONTEXT",
+            id_prefix=id_prefix,
+        ),
+    ]
+
+
+def _fb_crawl_current_target_feed_steps(
+    *,
+    context_var: str,
+    collection_var: str,
+    tag_prefix: str,
+    max_scroll_var: str = "MAX_SCROLLS",
+) -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": "scroll_down",
+            "repeats": 2,
+            "start_x_ratio": "${SCROLL_X_RATIO}",
+            "start_y_ratio": 0.65,
+            "end_y_ratio": 0.47,
+        },
+        {"type": "wait", "seconds": 2},
+        {
+            "type": "loop",
+            "count": f"${{{max_scroll_var}}}",
+            "steps": [
+                {"type": "dismiss_popup", "retries": 1},
+                {
+                    "type": "extract",
+                    "strategy": "fb_posts",
+                    "edge_extra_data": True,
+                    "extract_profile": "balanced",
+                    "strategy_version": "fb_posts:v1",
+                    **_FB_POST_OPEN_EXTRACT,
+                    "expand_see_more": True,
+                    "expand_see_more_max_passes": 2,
+                    "expand_see_more_scroll": True,
+                    "expand_see_more_scroll_distance": 0.25,
+                    "expand_completion_retries": 2,
+                    "stop_if_no_new": False,
+                    "collection": f"${{{collection_var}}}",
+                    "platform": "facebook",
+                    "content_type": "fb_post",
+                    "dedupe_field": "post_key",
+                    "tags": f"{tag_prefix},crawl,${{{context_var}}}",
+                },
+                *_fb_open_comments_steps(),
+                {"type": "wait", "seconds": 0.3},
+                {
+                    "type": "extract",
+                    "strategy": "fb_comments",
+                    "edge_extra_data": True,
+                    "extract_profile": "balanced",
+                    "strategy_version": "fb_comments:v1",
+                    "parent_post_id_var": "_fb_comment_parent_pid",
+                    "require_verified_parent": True,
+                    "max_items": 220,
+                    "comment_scroll_passes": 16,
+                    "comment_swipes_per_dump": 4,
+                    "comment_scroll_distance": 0.52,
+                    "comment_scroll_duration_ms": 120,
+                    "comment_scroll_pause_s": 0.03,
+                    "comment_no_growth_break": 0,
+                    "min_comment_scan_passes": 2,
+                    "comment_max_snapshots": 12,
+                    "comment_scroll_wall_s": 25,
+                    "comment_stop_if_no_new": False,
+                    "stop_if_no_new": False,
+                    "no_new_threshold": 3,
+                    "collection": f"${{{collection_var}}}",
+                    "platform": "facebook",
+                    "content_type": "fb_comment",
+                    "dedupe_field": "comment_key",
+                    "tags": f"{tag_prefix},comment,${{{context_var}}}",
+                    "save_parent_id_var": "_active_comment_parent_hash",
+                    "item_level": 1,
+                },
+                *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
+                {
+                    "type": "scroll_down",
+                    "repeats": 1,
+                    "start_x_ratio": "${SCROLL_X_RATIO}",
+                    "start_y_ratio": 0.65,
+                    "end_y_ratio": 0.47,
+                },
+                {
+                    "type": "set_variable",
+                    "name": "_W",
+                    "from_list": [0.5, 0.5, 1, 1, 1.5, 2],
+                },
+                {"type": "wait", "seconds": "${_W}"},
+            ],
+        },
+        {"type": "key", "key": "home"},
     ]
 
 
@@ -270,159 +759,88 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
         "detect_logged_in": _FB_DETECT_LOGGED_IN,
         "fields": {
             "username": {"locator": "username_field", "value_from": "account.username"},
-            "password": {"locator": "password_field", "value_from": "secret.login_password"},
+            "password": {"locator": "password_field", "value_from": "account.password"},
         },
         "submit": {"locator": "login_button"},
     },
 }
 
-_FB_LOGIN_PROFILE_GOOGLE: Dict[str, Any] = {
-    "package": "com.facebook.katana",
-    "semantic_locators": {
-        "fb_google_button": {
-            "candidates": [
-                {"by": "text", "value": "Continue with Google"},
-                {"by": "text", "value": "Tiếp tục với Google"},
-                {"description_contains": "Google"},
-            ]
-        },
-        "google_email_field": {
-            "candidates": [{"by": "resource-id", "value": "identifierId"}]
-        },
-        "google_next_button": {
-            "candidates": [
-                {"by": "text", "value": "NEXT"},
-                {"by": "text", "value": "Tiếp theo"},
-                {"by": "text", "value": "Tiếp tục"},
-            ]
-        },
-        "google_password_field": {
-            "candidates": [
-                {"by": "resource-id", "value": "password"},
-                {"by": "resource-id", "value": "Passwd"},
-            ]
-        },
-        "google_signin_button": {
-            "candidates": [
-                {"by": "text", "value": "Next"},
-                {"by": "text", "value": "NEXT"},
-                {"by": "text", "value": "Sign in"},
-                {"by": "text", "value": "Đăng nhập"},
-            ]
-        },
-    },
-    "login_recipe": {
-        "detect_logged_in": _FB_DETECT_LOGGED_IN,
-        "fields": {
-            "email": {"locator": "google_email_field", "value_from": "account.username"},
-        },
-        "submit": {"locator": "google_next_button"},
-    },
-    "form_recipes": {
-        "google_password": {
-            "fields": {
-                "password": {
-                    "locator": "google_password_field",
-                    "value_from": "secret.login_password",
-                }
-            },
-            "submit": {"locator": "google_signin_button"},
-        }
-    },
-    "popup_watchers": [
+
+def _fb_session_guard_steps(
+    prefix: str,
+    *,
+    allow_login_recovery: bool = True,
+) -> List[Dict[str, Any]]:
+    steps: List[Dict[str, Any]] = [
         {
-            "name": "google_oauth_terms_en",
-            "when": {"text": "I agree"},
-            "action": {"tap_text": "I agree"},
-            "scope": {"package": "com.google.android.gms"},
+            "id": f"{prefix}_launch",
+            "type": "launch_app",
+            "package": "com.facebook.katana",
+            "title": "Mở Facebook",
         },
         {
-            "name": "google_oauth_terms_vi",
-            "when": {"text": "Tôi đồng ý"},
-            "action": {"tap_text": "Tôi đồng ý"},
-            "scope": {"package": "com.google.android.gms"},
+            "id": f"{prefix}_wait_stable",
+            "type": "wait_stable",
+            "timeout": 5,
+            "stable_duration": 0.5,
         },
-    ],
-}
-
-_FB_TAP_GOOGLE_BUTTON_STEPS: List[Dict[str, Any]] = [
-    {
-        "type": "if_element",
-        "by": "text",
-        "value": "Tiếp tục với Google",
-        "timeout": 4,
-        "then": [
-            {"type": "tap_selector", "by": "text", "value": "Tiếp tục với Google", "timeout": 4},
-        ],
-        "else": [
-            {
-                "type": "if_element",
-                "by": "text",
-                "value": "Continue with Google",
-                "timeout": 3,
-                "then": [
-                    {"type": "tap_selector", "by": "text", "value": "Continue with Google", "timeout": 4},
-                ],
-                "else": [],
-            },
-        ],
-    },
-    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-]
-
-_FB_GOOGLE_LOGIN_STEPS: List[Dict[str, Any]] = [
-    *_FB_TAP_GOOGLE_BUTTON_STEPS,
-    {"type": "login_if_needed", "profile": _FB_LOGIN_PROFILE_GOOGLE, "clear_first": True},
-    {
-        "type": "fill_form",
-        "recipe": "google_password",
-        "profile": _FB_LOGIN_PROFILE_GOOGLE,
-        "clear_first": True,
-    },
-    {"type": "wait", "seconds": 8, "profile": _FB_LOGIN_PROFILE_GOOGLE},
-    {"type": "launch_app", "package": "com.facebook.katana"},
-    {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-]
-
-_FB_NATIVE_LOGIN_STEPS: List[Dict[str, Any]] = [
-    {"type": "login_if_needed", "profile": _FB_LOGIN_PROFILE_NATIVE, "clear_first": True},
-]
-
-_FB_LOGIN_METHOD_BRANCH: List[Dict[str, Any]] = [
-    {
-        "type": "if_variable",
-        "name": "LOGIN_METHOD",
-        "equals": "google",
-        "then": _FB_GOOGLE_LOGIN_STEPS,
-        "else": [
-            {
-                "type": "if_variable",
-                "name": "LOGIN_METHOD",
-                "equals": "native",
-                "then": _FB_NATIVE_LOGIN_STEPS,
-                "else": [
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Tiếp tục với Google",
-                        "timeout": 3,
-                        "then": _FB_GOOGLE_LOGIN_STEPS,
-                        "else": [
-                            {
-                                "type": "if_element",
-                                "by": "text",
-                                "value": "Continue with Google",
-                                "timeout": 2,
-                                "then": _FB_GOOGLE_LOGIN_STEPS,
-                                "else": _FB_NATIVE_LOGIN_STEPS,
-                            },
-                        ],
-                    },
-                ],
-            },
-        ],
-    },
-]
+        {
+            "id": f"{prefix}_dismiss_popups",
+            "type": "dismiss_popup",
+            "retries": 2,
+        },
+        {
+            "id": f"{prefix}_session_preflight",
+            "type": "facebook_session_gate",
+            "phase": "preflight",
+            "timeout": 0,
+        },
+    ]
+    if not allow_login_recovery:
+        return steps
+    return [
+        *steps,
+        {
+            "id": f"{prefix}_login_when_needed",
+            "type": "if_variable",
+            "name": "FACEBOOK_SESSION_READY",
+            "then": [{"type": "wait", "seconds": 0.1}],
+            "else": [
+                {
+                    "type": "if_element",
+                    "by": "content-desc",
+                    "value": "Dùng trang cá nhân khác",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "content-desc",
+                            "value": "Dùng trang cá nhân khác",
+                            "timeout": 4,
+                        },
+                        {
+                            "type": "wait_stable",
+                            "timeout": 5,
+                            "stable_duration": 0.4,
+                        },
+                    ],
+                    "else": [],
+                },
+                {
+                    "type": "login_if_needed",
+                    "profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE),
+                    "clear_first": True,
+                },
+                {
+                    "id": f"{prefix}_session_confirm",
+                    "type": "facebook_session_gate",
+                    "phase": "confirm",
+                    "timeout": 20,
+                    "poll_interval": 0.5,
+                },
+            ],
+        },
+    ]
 
 _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
@@ -431,42 +849,13 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "display_name": "Đăng nhập Facebook",
         "category": "facebook",
         "description": (
-            "Mở Facebook và đăng nhập khi chưa có session. Hỗ trợ native (SĐT/email + mật khẩu FB) "
-            "và Google SSO (Gmail + mật khẩu Google). Account platform vẫn là facebook.\n"
-            "Biến LOGIN_METHOD: auto (mặc định — ưu tiên nút Google nếu thấy), native, google.\n"
-            "Account Google SSO: username = Gmail, tag google, mật khẩu Google qua secret.login_password."
+            "Xác nhận session đúng account rồi mới đăng nhập khi cần. "
+            "Dùng số điện thoại hoặc email và mật khẩu Facebook của account đã gắn."
         ),
-        "tags": "facebook,login,app-automation,native,google",
-        "variables": {
-            "LOGIN_METHOD": "auto",
-        },
+        "tags": "facebook,login,app-automation",
+        "variables": {},
         "steps": [
-            {"type": "launch_app", "package": "com.facebook.katana", "title": "Mở Facebook"},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-            {"type": "dismiss_popup", "retries": 2},
-            {
-                "type": "if_element",
-                "by": "text",
-                "value": "Bạn đang nghĩ gì?",
-                "timeout": 4,
-                "then": [],
-                "else": [
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Trang chủ",
-                        "timeout": 2,
-                        "then": [],
-                        "else": _FB_LOGIN_METHOD_BRANCH,
-                    },
-                ],
-            },
-            {"type": "login_if_needed", "profile": _FB_LOGIN_PROFILE_NATIVE},
-            {
-                "type": "assert_app_state",
-                "profile": _FB_LOGIN_PROFILE_NATIVE,
-                "any_text": ["Trang chủ", "Tìm kiếm", "Bạn đang nghĩ gì?"],
-            },
+            *_fb_session_guard_steps("facebook"),
         ],
     },
 
@@ -569,6 +958,45 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "edge_extra_timeout_s": 180,
             },
             {"type": "key", "key": "home"},
+        ],
+    },
+
+    {
+        "name": "Khám phá Page Facebook theo keyword",
+        "display_name": "Khám phá Page Facebook theo keyword",
+        "category": "facebook",
+        "description": (
+            "Tìm Facebook Page bằng nhiều keyword, chuyển sang tab Trang/Pages "
+            "(có vuốt ngang tab nếu Trang đang nằm ngoài màn hình), cào các page "
+            "đang thấy và lưu vào catalog Page để phân công cho phone."
+        ),
+        "tags": "facebook,page,fanpage,discovery,catalog,keyword",
+        "variables": {
+            "PAGE_KEYWORDS": [
+                "Go2Joy Vietnam",
+                "khách sạn Việt Nam",
+                "du lịch Việt Nam",
+            ],
+            "PAGE_KEYWORD_COUNT": 3,
+            "MAX_PAGES": 8,
+            "MAX_ITEMS_PER_KEYWORD": 120,
+        },
+        "steps": [
+            *_fb_session_guard_steps("page_discovery", allow_login_recovery=False),
+            {
+                "id": "page_discovery_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    {
+                        "type": "loop",
+                        "count": "${PAGE_KEYWORD_COUNT}",
+                        "loop_var": "_PAGE_KEYWORD_INDEX",
+                        "steps": _fb_crawl_page_search_results_steps(),
+                    }
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
         ],
     },
 
@@ -739,6 +1167,108 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 
     {
+        "name": "Crawl bài viết + bình luận Fanpage Facebook",
+        "display_name": "Crawl bài viết + bình luận Fanpage Facebook",
+        "category": "facebook",
+        "description": (
+            "Mở Fanpage đã gắn cho phone hoặc fallback theo PAGE_SEARCH/PAGE_ROW_TEXT, "
+            "crawl bài viết và bình luận để tạo kho post/page evidence dùng cho nuôi account."
+        ),
+        "tags": "facebook,page,fanpage,crawl,feed,post,comment",
+        "variables": {
+            "PAGE_SEARCH": "ten fanpage",
+            "PAGE_ROW_TEXT": "Tên Fanpage",
+            "PAGE_CONTEXT": "ten fanpage",
+            "MAX_SCROLLS": 180,
+            "SCROLL_X_RATIO": 0.18,
+            "SAVE_COLLECTION": "fb_page_posts",
+        },
+        "steps": [
+            *_fb_session_guard_steps("fanpage_crawl", allow_login_recovery=False),
+            {
+                "id": "fanpage_crawl_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    *_fb_set_page_context_steps(),
+                    *_fb_open_page_target_steps(
+                        search_var="PAGE_SEARCH",
+                        row_text_var="PAGE_ROW_TEXT",
+                    ),
+                    *_fb_crawl_current_target_feed_steps(
+                        context_var="PAGE_CONTEXT",
+                        collection_var="SAVE_COLLECTION",
+                        tag_prefix="page",
+                    ),
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
+        ],
+    },
+
+    {
+        "name": "Nuôi Facebook - Tương tác Fanpage",
+        "display_name": "Nuôi Facebook - Tương tác Fanpage",
+        "category": "facebook",
+        "description": (
+            "Đi tuần tự từng Fanpage trong PAGE_TARGETS: search đúng page, mở đúng row, "
+            "follow nếu còn nút theo dõi, tương tác đủ vòng rồi back để sang page kế tiếp."
+        ),
+        "tags": "facebook,page,fanpage,nurture,interaction",
+        "variables": {
+            "PAGE_SEARCH": "ten fanpage",
+            "PAGE_ROW_TEXT": "Tên Fanpage",
+            "PAGE_CONTEXT": "ten fanpage",
+            "PAGE_TARGETS": ["ten fanpage"],
+            "PAGE_ROW_TEXTS": ["Tên Fanpage"],
+            "PAGE_COUNT": 1,
+            "MAX_TOUCHES": 20,
+            "SCROLL_X_RATIO": 0.22,
+            "ACTION_WAIT_SECONDS": 2,
+            "FOLLOW_PAGE": "true",
+            "TARGET_NAME": "",
+            "TARGET_SEARCH_QUERY": "",
+        },
+        "steps": [
+            *_fb_session_guard_steps("fanpage_nurture", allow_login_recovery=False),
+            {
+                "id": "fanpage_nurture_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    {
+                        "type": "loop",
+                        "count": "${PAGE_COUNT}",
+                        "loop_var": "PAGE_INDEX",
+                        "steps": [
+                            {
+                                "type": "set_variable",
+                                "name": "PAGE_SEARCH_CURRENT",
+                                "from_list": "${PAGE_TARGETS}",
+                                "from_list_index": "${PAGE_INDEX}",
+                            },
+                            {
+                                "type": "set_variable",
+                                "name": "PAGE_ROW_TEXT_CURRENT",
+                                "from_list": "${PAGE_ROW_TEXTS}",
+                                "from_list_index": "${PAGE_INDEX}",
+                            },
+                            *_fb_nurture_page_by_search_steps(
+                                search_var="PAGE_SEARCH_CURRENT",
+                                row_text_var="PAGE_ROW_TEXT_CURRENT",
+                                id_prefix="fanpage_page_${PAGE_INDEX}",
+                            ),
+                            *_fb_back_to_page_search_before_next_page_steps(),
+                        ],
+                    },
+                    {"id": "fanpage_nurture_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
+        ],
+    },
+
+    {
         "name": "Chiến lược nuôi Facebook theo đối tượng",
         "display_name": "Chiến lược nuôi Facebook theo đối tượng",
         "category": "facebook",
@@ -758,9 +1288,12 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POST_ROW_TEXT": "Đoạn text bài viết",
             "PEOPLE_SEARCH": "ten profile",
             "PEOPLE_ROW_TEXT": "Tên Profile",
-            "MAX_TOUCHES": 8,
+            "MAX_TOUCHES": 20,
             "SCROLL_X_RATIO": 0.22,
             "ACTION_WAIT_SECONDS": 2,
+            "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
+            "COMMENT_INPUT_LABEL": "Viết bình luận",
+            "COMMENT_SUBMIT_LABEL": "Đăng",
             "ENABLE_CONNECTION_REQUEST": "true",
         },
         "steps": [
@@ -822,33 +1355,49 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "name": "TARGET_OBJECT_TYPE",
                         "equals": "post",
                         "then": [
-                            *_fb_open_search_result_steps(
+                            *_fb_open_search_tab_steps(
                                 search_var="POST_SEARCH",
                                 tab_vi="Bài viết",
                                 tab_en="Posts",
                                 tab_description_contains="tab Bài viết",
-                                row_text_var="POST_ROW_TEXT",
                             ),
                             {
-                                "type": "content_interaction",
-                                "platform": "facebook",
-                                "action": "like",
-                                "timeout": 5,
-                                "verify_timeout": 5,
-                                "settle_seconds": 0.35,
-                                "save_as": "_post_nurture_action",
-                                "ignore_error": True,
+                                "type": "fb_select_post_target",
+                                "search": "${POST_SEARCH}",
+                                "display_text": "${POST_ROW_TEXT}",
+                                "required_keywords": ["${POST_ROW_TEXT}"],
+                                "min_score": 80,
+                                "require_unique": True,
+                                "timeout": 12,
+                                "save_as": "_post_target",
                             },
-                            *_fb_nurture_feed_steps(tag="post", context_var="POST_SEARCH"),
+                            *_fb_post_like_and_comment_steps(
+                                require_verified_target="_post_target",
+                                save_prefix="_post_nurture",
+                            ),
+                            *_fb_nurture_feed_steps(
+                                tag="post",
+                                context_var="POST_SEARCH",
+                                require_verified_target="_post_target",
+                            ),
                         ],
                         "else": [
-                            *_fb_open_search_result_steps(
+                            *_fb_open_search_tab_steps(
                                 search_var="PEOPLE_SEARCH",
                                 tab_vi="Mọi người",
                                 tab_en="People",
                                 tab_description_contains="tab Mọi người",
-                                row_text_var="PEOPLE_ROW_TEXT",
                             ),
+                            {
+                                "type": "fb_select_people_profile",
+                                "search": "${PEOPLE_SEARCH}",
+                                "display_name": "${PEOPLE_ROW_TEXT}",
+                                "required_keywords": ["${PEOPLE_ROW_TEXT}"],
+                                "min_score": 80,
+                                "require_unique": True,
+                                "timeout": 12,
+                                "save_as": "_people_target",
+                            },
                             {
                                 "type": "if_variable",
                                 "name": "ENABLE_CONNECTION_REQUEST",
@@ -861,18 +1410,238 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                         "timeout": 5,
                                         "verify_timeout": 5,
                                         "settle_seconds": 0.4,
+                                        "require_verified_target": "_people_target",
                                         "save_as": "_people_connection_action",
                                         "ignore_error": True,
                                     }
                                 ],
                                 "else": [],
                             },
-                            *_fb_nurture_feed_steps(tag="people", context_var="PEOPLE_SEARCH"),
+                            *_fb_nurture_feed_steps(
+                                tag="people",
+                                context_var="PEOPLE_SEARCH",
+                                require_verified_target="_people_target",
+                            ),
                         ],
                     }
                 ],
             },
             {"id": "finish_home", "type": "key", "key": "home"},
+        ],
+    },
+
+    {
+        "name": "Nuôi Facebook - Tương tác bài viết trên Feed",
+        "display_name": "Nuôi Facebook - Tương tác bài viết trên Feed",
+        "category": "facebook",
+        "description": (
+            "Mở Facebook rồi scan feed theo nhiều cycle để treo dài. Mỗi bài post "
+            "được mở 'xem thêm' trước, chỉ khi nội dung đầy đủ khớp keyword mới "
+            "like thật và comment thật."
+        ),
+        "tags": "facebook,nurture,post,feed,keyword,interaction",
+        "variables": {
+            "POST_RUN_HOURS": 8,
+            "POST_RUN_SECONDS": 28800,
+            "POST_SCAN_CYCLES": 9999,
+            "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
+            "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
+            "POST_TARGET_COUNT": 5,
+            "MAX_SCROLLS": 40,
+            "SCROLL_X_RATIO": 0.5,
+            "POST_MATCH_MODE": "any",
+            "POST_SCAN_TIMEOUT_SECONDS": 300,
+        },
+        "steps": [
+            *_fb_session_guard_steps("feed_post_nurture", allow_login_recovery=False),
+            {
+                "id": "feed_post_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    {
+                        "id": "feed_post_scan_8h_loop",
+                        "type": "loop",
+                        "count": "${POST_SCAN_CYCLES}",
+                        "duration_seconds": "${POST_RUN_SECONDS}",
+                        "loop_var": "POST_SCAN_CYCLE",
+                        "steps": [
+                            {
+                                "id": "feed_post_scan_and_interact",
+                                "type": "fb_scan_posts_interact",
+                                "platform": "facebook",
+                                "keywords": "${POST_KEYWORDS}",
+                                "keywords_var": "POST_KEYWORDS",
+                                "match_mode": "${POST_MATCH_MODE}",
+                                "comment_text": "${COMMENT_TEXT}",
+                                "target_count": "${POST_TARGET_COUNT}",
+                                "max_scrolls": "${MAX_SCROLLS}",
+                                "scroll_x_ratio": "${SCROLL_X_RATIO}",
+                                "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                                "require_comment": True,
+                                "save_as": "_post_scan",
+                            }
+                        ],
+                    },
+                    {"id": "feed_post_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
+        ],
+    },
+
+    {
+        "name": "Nuôi Facebook - Tương tác bài viết trong Group",
+        "display_name": "Nuôi Facebook - Tương tác bài viết trong Group",
+        "category": "facebook",
+        "description": (
+            "Đi tuần tự từng group trong GROUP_SEARCHES: search đúng group, mở đúng "
+            "row, treo scan trong group theo nhiều cycle rồi back để sang group tiếp "
+            "theo. Mỗi bài được mở 'xem thêm' trước, chỉ nội dung đầy đủ khớp keyword "
+            "mới được like thật và comment thật."
+        ),
+        "tags": "facebook,nurture,post,group,multi-group,keyword,interaction",
+        "variables": {
+            "POST_RUN_HOURS": 8,
+            "POST_RUN_SECONDS": 28800,
+            "GROUP_SCAN_SECONDS": 28800,
+            "POST_SCAN_CYCLES": 9999,
+            "GROUP_SEARCH": "ten group 1",
+            "GROUP_ROW_TEXT": "Tên group 1",
+            "GROUP_SEARCHES": ["ten group 1", "ten group 2"],
+            "GROUP_ROW_TEXTS": ["Tên group 1", "Tên group 2"],
+            "GROUP_COUNT": 2,
+            "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
+            "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
+            "POST_TARGET_COUNT": 5,
+            "MAX_SCROLLS": 40,
+            "SCROLL_X_RATIO": 0.5,
+            "POST_MATCH_MODE": "any",
+            "POST_SCAN_TIMEOUT_SECONDS": 300,
+        },
+        "steps": [
+            *_fb_session_guard_steps("group_post_nurture", allow_login_recovery=False),
+            {
+                "id": "group_post_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    {
+                        "id": "group_post_multi_group_loop",
+                        "type": "loop",
+                        "count": "${GROUP_COUNT}",
+                        "loop_var": "GROUP_INDEX",
+                        "steps": [
+                            {
+                                "type": "set_variable",
+                                "name": "GROUP_SEARCH_CURRENT",
+                                "from_list": "${GROUP_SEARCHES}",
+                                "from_list_index": "${GROUP_INDEX}",
+                            },
+                            {
+                                "type": "set_variable",
+                                "name": "GROUP_ROW_TEXT_CURRENT",
+                                "from_list": "${GROUP_ROW_TEXTS}",
+                                "from_list_index": "${GROUP_INDEX}",
+                            },
+                            *_fb_open_search_tab_steps(
+                                search_var="GROUP_SEARCH_CURRENT",
+                                tab_vi="Nhóm",
+                                tab_en="Groups",
+                                tab_description_contains="tab Nhóm",
+                            ),
+                            {
+                                "type": "tap_xml_match",
+                                "attr": "content-desc",
+                                "contains": "${GROUP_ROW_TEXT_CURRENT}",
+                                "clickable": True,
+                                "timeout": 10,
+                            },
+                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+                            {
+                                "id": "group_post_scan_8h_loop",
+                                "type": "loop",
+                                "count": "${POST_SCAN_CYCLES}",
+                                "duration_seconds": "${GROUP_SCAN_SECONDS}",
+                                "loop_var": "POST_SCAN_CYCLE",
+                                "steps": [
+                                    {
+                                        "id": "group_post_scan_and_interact",
+                                        "type": "fb_scan_posts_interact",
+                                        "platform": "facebook",
+                                        "keywords": "${POST_KEYWORDS}",
+                                        "keywords_var": "POST_KEYWORDS",
+                                        "match_mode": "${POST_MATCH_MODE}",
+                                        "comment_text": "${COMMENT_TEXT}",
+                                        "target_count": "${POST_TARGET_COUNT}",
+                                        "max_scrolls": "${MAX_SCROLLS}",
+                                        "scroll_x_ratio": "${SCROLL_X_RATIO}",
+                                        "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                                        "require_comment": True,
+                                        "save_as": "_group_post_scan",
+                                    }
+                                ],
+                            },
+                            *_fb_back_to_page_search_before_next_page_steps(),
+                        ],
+                    },
+                    {"id": "group_post_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
+        ],
+    },
+
+    {
+        "name": "Nuôi Facebook - Kết bạn theo ứng viên đã duyệt",
+        "display_name": "Nuôi Facebook - Kết bạn theo ứng viên đã duyệt",
+        "category": "facebook",
+        "description": (
+            "Mở bề mặt bạn bè/gợi ý trong app Facebook, scan trực tiếp các row/card có "
+            "nút Thêm bạn bè, chỉ gửi lời mời khi UI có điểm chung như bạn chung, cùng "
+            "nhóm hoặc keyword ngữ cảnh. Không search tên từng người."
+        ),
+        "tags": "facebook,nurture,profile,connection,common-context,visible-scan",
+        "variables": {
+            "CONNECTION_TARGET_COUNT": 20,
+            "CONNECTION_MAX_SCROLLS": 30,
+            "CONNECTION_MIN_COMMON_SCORE": 40,
+            "CONNECTION_COMMON_KEYWORDS": ["bạn chung", "mutual friends", "cùng nhóm"],
+        },
+        "steps": [
+            *_fb_session_guard_steps("candidate_profile", allow_login_recovery=False),
+            {
+                "id": "candidate_profile_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    {
+                        "id": "candidate_profile_connect_visible_common_batch",
+                        "type": "fb_connect_visible_people",
+                        "platform": "facebook",
+                        "open_surface": True,
+                        "target_count": "${CONNECTION_TARGET_COUNT}",
+                        "max_scrolls": "${CONNECTION_MAX_SCROLLS}",
+                        "no_more_common_limit": 4,
+                        "min_score": "${CONNECTION_MIN_COMMON_SCORE}",
+                        "require_common": True,
+                        "common_keywords": "${CONNECTION_COMMON_KEYWORDS}",
+                        "forbidden_keywords": [
+                            "trang",
+                            "page",
+                            "người tham gia ẩn danh",
+                            "anonymous",
+                        ],
+                        "timeout": 150,
+                        "verify_wait_s": 0.8,
+                        "scroll_wait_s": 0.7,
+                        "stop_on_unverified": True,
+                        "save_as": "_visible_connection_action",
+                    },
+                    {"id": "candidate_profile_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
         ],
     },
 

@@ -110,6 +110,13 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
         execution_id = sc.scenario.get("_execution_id")   # real DB FK — set by Temporal
         run_hash_scope = sc.scenario.get("_run_hash_scope") or execution_id
         campaign_id = sc.scenario.get("_campaign_id")
+        campaign_vars = sc.scenario.get("_campaign_vars") or {}
+        account_id = (
+            campaign_vars.get("__ACCOUNT_ID__")
+            or sc.scenario.get("__ACCOUNT_ID__")
+            or (sc.ctx.get("vars") or {}).get("__ACCOUNT_ID__")
+            or sc.var_ctx._runtime_vars.get("__ACCOUNT_ID__")
+        )
 
         async def _resolve_user_id() -> str | None:
             """Fallback to device owner when caller context is absent."""
@@ -152,6 +159,7 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
                                 parent_id_already_scoped=parent_id_already_scoped,
                                 item_level=item_level, user_id=resolved_uid,
                                 campaign_id=campaign_id, execution_id=execution_id,
+                                account_id=str(account_id) if account_id else None,
                                 scenario_id=sc.scenario.get("_scenario_id"),
                                 hash_scope=run_hash_scope, db=db,
                             )

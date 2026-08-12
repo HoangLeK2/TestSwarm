@@ -430,6 +430,34 @@ export function StepRow({
     ? (logEntry?.message ?? currentMessage)
     : (logEntry?.message ?? '');
   const adbOutput = stepOutput(logEntry);
+  const proofDetails = logEntry?.details ?? {};
+  const proofOutcome = String(proofDetails.outcome ?? '').trim();
+  const proofOutcomeKey = (
+    {
+      applied: 'monitorActionOutcome.applied',
+      already_applied: 'monitorActionOutcome.alreadyApplied',
+      leased: 'monitorActionOutcome.leased',
+      no_eligible_target: 'monitorActionOutcome.noEligibleTarget',
+      no_ready_candidate: 'monitorActionOutcome.noReadyCandidate'
+    } as Record<string, string>
+  )[proofOutcome];
+  const proofTarget = String(
+    proofDetails.display_name ??
+      (
+        proofDetails.account_action_ledger as
+          | Record<string, unknown>
+          | undefined
+      )?.target_label ??
+      ''
+  ).trim();
+  const actionPerformed =
+    typeof proofDetails.action_performed === 'boolean'
+      ? proofDetails.action_performed
+      : null;
+  const completedIterations =
+    typeof proofDetails.iterations === 'number'
+      ? proofDetails.iterations
+      : null;
   const incidents = logEntry?.incidents ?? [];
   const badgeState = isCurrentlyRunning
     ? 'running'
@@ -556,6 +584,45 @@ export function StepRow({
               {msg}
             </div>
           )}
+          {(proofOutcome ||
+            proofTarget ||
+            actionPerformed !== null ||
+            completedIterations !== null) && (
+            <div className='mt-1 flex flex-wrap gap-1 text-[10px]'>
+              {proofTarget && (
+                <span
+                  className='max-w-full truncate rounded bg-muted px-1.5 py-0.5'
+                  title={proofTarget}
+                >
+                  {proofTarget}
+                </span>
+              )}
+              {proofOutcome && (
+                <span className='rounded bg-muted px-1.5 py-0.5'>
+                  {proofOutcomeKey ? t(proofOutcomeKey) : proofOutcome}
+                </span>
+              )}
+              {actionPerformed !== null && (
+                <span
+                  className={cn(
+                    'rounded px-1.5 py-0.5',
+                    actionPerformed
+                      ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                  )}
+                >
+                  {actionPerformed
+                    ? t('monitorActionPerformed')
+                    : t('monitorActionNotPerformed')}
+                </span>
+              )}
+              {completedIterations !== null && (
+                <span className='rounded bg-muted px-1.5 py-0.5'>
+                  {t('monitorBatchCompleted', { count: completedIterations })}
+                </span>
+              )}
+            </div>
+          )}
           {incidents.length > 0 && (
             <div className='mt-1.5 space-y-1 text-[10px]'>
               {incidents.map((incident, incidentIndex) => (
@@ -647,9 +714,13 @@ export function WorkflowStepList({
     deviceSerial
   });
 
-  const eventStepLog = parentProvidesEventFeed
-    ? (sseStepLog ?? [])
-    : internalEventStream.stepLog;
+  const eventStepLog = useMemo(
+    () =>
+      parentProvidesEventFeed
+        ? (sseStepLog ?? [])
+        : internalEventStream.stepLog,
+    [internalEventStream.stepLog, parentProvidesEventFeed, sseStepLog]
+  );
 
   const shouldPollEvents =
     isActive && !!executionId && !parentProvidesEventFeed;

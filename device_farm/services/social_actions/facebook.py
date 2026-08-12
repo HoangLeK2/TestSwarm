@@ -35,7 +35,7 @@ def _parse_bounds(value: str | None) -> Bounds | None:
 
 def _matches(label: str, aliases: frozenset[str]) -> bool:
     return label in aliases or any(
-        label.startswith((f"{alias},", f"{alias} ·"))
+        label.startswith((f"{alias},", f"{alias}.", f"{alias} ·"))
         for alias in aliases
     )
 
@@ -93,7 +93,7 @@ def _nodes(hierarchy_xml: str) -> list[_UiNode]:
     return result
 
 
-_LIKE_AVAILABLE = frozenset({"like", "thich"})
+_LIKE_AVAILABLE = frozenset({"like", "thich", "nut thich"})
 _LIKE_ACTIVE = frozenset(
     {
         "unlike",
@@ -101,9 +101,11 @@ _LIKE_ACTIVE = frozenset(
         "bo thich",
         "bo cam xuc thich",
         "da thich",
+        "da nhan nut thich",
+        "nut bo thich",
     }
 )
-_COMMENT_AVAILABLE = frozenset({"comment", "binh luan"})
+_COMMENT_AVAILABLE = frozenset({"comment", "binh luan", "nut binh luan"})
 _COMMENT_OPEN = frozenset(
     {
         "write a comment",
@@ -113,7 +115,7 @@ _COMMENT_OPEN = frozenset(
         "binh luan cong khai",
     }
 )
-_SHARE_AVAILABLE = frozenset({"share", "chia se"})
+_SHARE_AVAILABLE = frozenset({"share", "chia se", "nut chia se"})
 _SHARE_OPEN = frozenset(
     {
         "share now",
@@ -122,20 +124,23 @@ _SHARE_OPEN = frozenset(
         "copy link",
         "send in messenger",
         "chia se ngay",
+        "nut chia se ngay",
         "chia se len tin cua ban",
         "viet bai",
         "sao chep lien ket",
         "gui bang messenger",
     }
 )
-_FRIEND_AVAILABLE = frozenset({"add friend", "them ban be"})
+_FRIEND_AVAILABLE = frozenset({"add friend", "them ban be", "nut them ban be"})
 _FRIEND_PENDING = frozenset(
     {
         "cancel request",
         "cancel friend request",
         "request sent",
         "huy loi moi",
+        "huy yeu cau",
         "da gui loi moi",
+        "nut huy loi moi",
     }
 )
 _FRIEND_CONNECTED = frozenset({"friends", "ban be"})
@@ -252,11 +257,16 @@ class FacebookSocialActionAdapter:
 
         # An available action is stronger evidence than unrelated state labels
         # elsewhere on the screen. Never pick an arbitrary item from a feed.
-        actionable = [
+        bounded = [
             (node, label)
             for node, label in available_matches
             if node.bounds is not None
         ]
+        actionable = [
+            (node, label)
+            for node, label in bounded
+            if node.clickable
+        ] or bounded
         if len(actionable) > 1:
             return SocialActionObservation(state="ambiguous")
         if len(actionable) == 1:
@@ -273,8 +283,29 @@ class FacebookSocialActionAdapter:
                 matched_label=label,
             )
 
-        # Multiple state controls are ambiguous without a target anchor. During
-        # post-tap verification the caller scopes observation near tapped bounds.
+        # Facebook commonly exposes the same state on a clickable button and
+        # its non-clickable text child. Prefer the actionable node so one visual
+        # control is not misclassified as multiple targets.
+        bounded_active = [
+            (node, label, state)
+            for node, label, state in active_matches
+            if node.bounds is not None
+        ]
+        actionable_active = [
+            (node, label, state)
+            for node, label, state in bounded_active
+            if node.clickable
+        ] or bounded_active
+        if len(actionable_active) > 1:
+            return SocialActionObservation(state="ambiguous")
+        if len(actionable_active) == 1:
+            node, label, state = actionable_active[0]
+            return SocialActionObservation(
+                state=state,
+                target_bounds=node.bounds,
+                matched_label=label,
+                satisfied=True,
+            )
         if len(active_matches) > 1:
             return SocialActionObservation(state="ambiguous")
         if len(active_matches) == 1:
@@ -318,11 +349,16 @@ class FacebookSocialActionAdapter:
                 satisfied=True,
             )
 
-        actionable = [
+        bounded = [
             (node, label)
             for node, label in available_matches
             if node.bounds is not None
         ]
+        actionable = [
+            (node, label)
+            for node, label in bounded
+            if node.clickable
+        ] or bounded
         if len(actionable) > 1:
             return SocialActionObservation(state="ambiguous")
         if len(actionable) == 1:

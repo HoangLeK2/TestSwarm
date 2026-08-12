@@ -73,18 +73,25 @@ export function foldEventsToStepLog(
   events: ExecutionEventOut[]
 ): StepLogEntry[] {
   const byKey = new Map<string, StepLogEntry>();
+  const activeByBase = new Map<string, string>();
+  const occurrenceCount = new Map<string, number>();
 
   for (const ev of events) {
     const p = (ev.payload ?? {}) as Record<string, unknown>;
     const idx = Number(p.step_index ?? 0);
     const depth = typeof p.depth === 'number' ? p.depth : 0;
-    const key = `${depth}:${idx}`;
+    const baseKey = `${depth}:${idx}:${String(p.step_id ?? ev.step_id ?? p.step_type ?? '')}`;
 
     if (ev.event_type === 'step.started') {
+      const occurrence = (occurrenceCount.get(baseKey) ?? 0) + 1;
+      occurrenceCount.set(baseKey, occurrence);
+      const key = `${baseKey}:${occurrence}`;
+      activeByBase.set(baseKey, key);
       const stepType = String(p.step_type ?? '');
       const existing = byKey.get(key);
       byKey.set(key, {
         index: idx,
+        occurrence_key: key,
         step_id:
           typeof p.step_id === 'string'
             ? p.step_id
@@ -100,11 +107,18 @@ export function foldEventsToStepLog(
     }
 
     if (ev.event_type === 'step.completed' || ev.event_type === 'step.failed') {
+      let key = activeByBase.get(baseKey);
+      if (!key) {
+        const occurrence = (occurrenceCount.get(baseKey) ?? 0) + 1;
+        occurrenceCount.set(baseKey, occurrence);
+        key = `${baseKey}:${occurrence}`;
+      }
       const stepType = String(p.step_type ?? '');
       const existing = byKey.get(key);
       const ok = ev.event_type === 'step.completed';
       byKey.set(key, {
         index: idx,
+        occurrence_key: key,
         step_id:
           typeof p.step_id === 'string'
             ? p.step_id
@@ -119,12 +133,19 @@ export function foldEventsToStepLog(
         exit_code: typeof p.exit_code === 'number' ? p.exit_code : null,
         save_as: typeof p.save_as === 'string' ? p.save_as : null,
         output_truncated: Boolean(p.output_truncated),
-        details: mergeAppAutomationDetails(undefined, p),
+        details: {
+          ...p,
+          ...(mergeAppAutomationDetails(undefined, p) ?? {})
+        },
         incidents: existing?.incidents
       });
+      activeByBase.delete(baseKey);
     }
 
     if (ev.event_type.startsWith('incident.')) {
+      const key =
+        activeByBase.get(baseKey) ??
+        `${baseKey}:${occurrenceCount.get(baseKey) ?? 1}`;
       const stepType = String(p.step_type ?? '');
       const existing = byKey.get(key);
       const incident: IncidentEvent = {
@@ -153,6 +174,7 @@ export function foldEventsToStepLog(
 
       byKey.set(key, {
         index: idx,
+        occurrence_key: key,
         step_id:
           existing?.step_id ??
           (typeof p.step_id === 'string' ? p.step_id : ev.step_id),

@@ -57,11 +57,23 @@
       "formTitle": "Chỉnh từng biến",
       "advancedJson": "JSON nâng cao",
       "advancedJsonHint": "Sửa trực tiếp object override của thiết bị. Dùng khi copy/paste hoặc thêm key lạ.",
+      "formMode": "Form",
+      "jsonMode": "JSON",
+      "formJsonInvalid": "JSON hiện tại đang sai cú pháp. Chuyển sang tab JSON để sửa trước khi dùng form.",
+      "otherVariablesTitle": "Biến khác",
+      "otherVariablesEmpty": "Chưa có biến riêng nào ngoài phần mục tiêu.",
+      "targetFormTitle": "Mục tiêu theo platform",
+      "specialFormNone": "Không dùng",
+      "specialFormFacebook": "Facebook targets",
+      "specialFormNoneHint": "Chỉ dùng form biến thường. Chọn form chuyên dụng khi kịch bản cần mục tiêu theo platform.",
+      "specialFormFacebookHint": "Chọn Group, Page hoặc trang cá nhân để sinh biến TARGET_* cho thiết bị này.",
+      "globalValueHint": "Global: {value}",
       "globalBlockTitle": "Biến global (kịch bản làm mặc định, campaign ghi đè key trùng)",
       "globalReadonlyAria": "Biến global (chỉ đọc)",
       "globalEmpty": "Chưa có biến global nào trên campaign/kịch bản (hoặc chỉ có biến hệ thống dạng __… bị ẩn).",
       "modeOffHint": "Đang kế thừa: chỉ biến global (campaign + kịch bản). Bật công tắc phía trên nếu cần ghi đè theo thiết bị.",
       "addGlobalKeyLabel": "Thêm key global:",
+      "addGlobalKeySelect": "Thêm biến global",
       "footerLoading": "Đang tải cấu hình đã lưu...",
       "footerMergedEditor": "JSON hiện tại chỉ là override thiết bị. Xóa key trong JSON để kế thừa global.",
       "footerUsingGlobal": "Đang dùng biến global.",
@@ -69,7 +81,25 @@
       "parseInvalidRoot": "JSON phải là object, ví dụ '{\"group_name\": \"abc\"}'",
       "parseUnknown": "JSON không hợp lệ",
       "invalidAtDevice": "JSON không hợp lệ ở thiết bị {serial}",
-      "saveFailed": "Lưu biến thiết bị thất bại"
+      "saveFailed": "Lưu biến thiết bị thất bại",
+      "targetForm": {
+        "platformLabel": "Platform",
+        "platformFacebook": "Facebook",
+        "targetTypeLabel": "Loại mục tiêu",
+        "types": {
+          "group": "Group",
+          "page": "Page",
+          "profile": "Cá nhân"
+        },
+        "searchPlaceholder": "Tìm mục tiêu có sẵn",
+        "selectedTotal": "Đã chọn {count}",
+        "toggleTarget": "Chọn {name}",
+        "noLocator": "Chưa có locator",
+        "loadError": "Không tải được danh sách mục tiêu.",
+        "emptyTitle": "Chưa có mục tiêu",
+        "emptyDescription": "Thử từ khóa khác hoặc thêm mục tiêu trong kho target.",
+        "refreshing": "Đang cập nhật danh sách..."
+      }
     },
     "modal": {
       "confirmAction": "Xác nhận hành động",
@@ -175,9 +205,11 @@
       "footerTipTrail": "trong ô bước để gợi ý biến · Tab để chèn",
       "builtinsTitle": "Biến hệ thống",
       "builtinsReferenceTitle": "Tham chiếu nhanh",
-      "sourcePoolVariablesTitle": "Biến nguồn campaign",
-      "sourcePoolVariablesSubtitle": "Group đã cào",
-      "sourcePoolVariablesHint": "Có giá trị khi campaign có node dùng group đã cào.",
+      "sourcePoolVariablesTitle": "Biến mục tiêu campaign",
+      "sourcePoolVariablesSubtitle": "Mục tiêu đã phân công",
+      "sourcePoolVariablesHint": "Có giá trị khi campaign có node dùng mục tiêu đã phân công.",
+      "pageDiscoveryVariablesTitle": "Crawl Page theo keyword",
+      "pageDiscoveryVariablesHint": "PAGE_KEYWORDS là danh sách keyword; hệ thống tự cập nhật PAGE_KEYWORD_COUNT theo số keyword.",
       "builtinGroups": {
         "system": "Hệ thống",
         "account": "Tài khoản"
@@ -199,6 +231,10 @@
         "groupSelectorValue": "Selector chính để mở group được gán",
         "groupFallbackSelectorBy": "Kiểu selector dự phòng của group được gán",
         "groupFallbackSelectorValue": "Selector dự phòng để mở group được gán",
+        "pageKeywords": "Danh sách keyword dùng để tìm Page Facebook",
+        "pageKeywordCount": "Số keyword sẽ chạy; tự đồng bộ từ PAGE_KEYWORDS",
+        "maxItemsPerKeyword": "Số Page tối đa lưu cho mỗi keyword",
+        "maxPages": "Số màn hình kết quả tối đa agent sẽ cuộn",
         "loopIndex": "Chỉ số vòng lặp hiện tại (0-based, trong bước loop)",
         "accountId": "ID tài khoản được gán cho device",
         "accountUsername": "Username tài khoản",
@@ -281,6 +317,7 @@
     "schedules": "Lịch chạy tự động",
     "device_groups": "Nhóm thiết bị",
     "accounts": "Danh sách tài khoản",
+    "account_assignments": "Gắn tài khoản vào thiết bị",
     "account_groups": "Nhóm tài khoản",
     "scenario_templates": "Mẫu kịch bản",
     "org_scenarios": "Thư viện kịch bản",
@@ -560,6 +597,7 @@
       "trigger": "Thêm thiết bị",
       "title": "Thêm thiết bị vào nhóm",
       "loading": "Đang tải...",
+      "loadError": "Không thể tải phân công. Hãy thử lại trước khi thay đổi.",
       "noDevices": "Không có thiết bị khả dụng",
       "adding": "Đang thêm...",
       "submit": "Thêm {count} thiết bị"
@@ -583,6 +621,10 @@
     }
   },
   "accountsFeature": {
+    "workspace": {
+      "title": "Trung tâm tài khoản",
+      "description": "Tạo và quản lý tài khoản trong một nơi."
+    },
     "list": {
       "loading": "Đang tải tài khoản...",
       "loadError": "Không thể tải tài khoản",
@@ -672,7 +714,99 @@
       "availableDevices": "Thiết bị khả dụng",
       "loading": "Đang tải...",
       "noAvailable": "Tất cả thiết bị đã được gán",
-      "assignError": "Gán thiết bị thất bại"
+      "assignError": "Gán thiết bị thất bại",
+      "removeSuccess": "Đã gỡ liên kết thiết bị",
+      "removeError": "Gỡ liên kết thiết bị thất bại"
+    },
+    "assignments": {
+      "title": "Gắn tài khoản vào thiết bị",
+      "description": "Liên kết nhiều tài khoản với thiết bị, xem trước thay đổi và kiểm tra kết quả từng tài khoản.",
+      "devicesTitle": "Thiết bị",
+      "deviceSearch": "Tìm thiết bị hoặc serial",
+      "loading": "Đang tải...",
+      "selectDevice": "Chọn một thiết bị để quản lý liên kết tài khoản.",
+      "linkedCount": "{count} đã gắn",
+      "statusHint": "Đã gắn nghĩa là tài khoản có thể dùng trên thiết bị. Mặc định là tài khoản ưu tiên, không đảm bảo tài khoản đang đăng nhập.",
+      "noLinked": "Chưa gắn tài khoản nào.",
+      "linked": "Đã gắn",
+      "primary": "Mặc định",
+      "setPrimary": "Đặt làm mặc định",
+      "primarySuccess": "Đã cập nhật tài khoản mặc định",
+      "primaryError": "Không thể cập nhật tài khoản mặc định",
+      "remove": "Gỡ liên kết",
+      "removeSuccess": "Đã gỡ liên kết tài khoản",
+      "removeError": "Không thể gỡ liên kết tài khoản",
+      "unknownPlatform": "Khác",
+      "availableCount": "Có {count} tài khoản sẵn sàng để gắn",
+      "selectAll": "Chọn tất cả đang hiển thị",
+      "clearSelection": "Bỏ chọn",
+      "noAvailable": "Không có tài khoản chưa gắn phù hợp.",
+      "previewTitle": "Xem trước thay đổi",
+      "previewAdd": "Thêm {count} liên kết tài khoản",
+      "selectedCount": "Đã chọn {count} tài khoản có sẵn",
+      "apply": "Gắn {count} tài khoản đã chọn",
+      "applySuccess": "Đã gắn {count} tài khoản",
+      "applyPartial": "Đã gắn {success}; {failed} thất bại. Các mục lỗi vẫn được chọn để thử lại.",
+      "resultsTitle": "Kết quả",
+      "result": { "created": "Đã gắn", "failed": "Thất bại" },
+      "verification": {
+        "unknown": "Chưa xác minh",
+        "verified": "Đã xác minh",
+        "mismatch": "Không khớp",
+        "inconclusive": "Chưa kết luận",
+        "unsupported": "Chưa hỗ trợ"
+      }
+    },
+    "devicePanel": {
+      "title": "Tài khoản",
+      "add": "Thêm tài khoản",
+      "loading": "Đang tải tài khoản...",
+      "empty": "Chưa có tài khoản nào được gán cho điện thoại này.",
+      "searchPlaceholder": "Tìm tên đăng nhập, tên hoặc nền tảng",
+      "noAvailable": "Không có tài khoản chưa gán phù hợp",
+      "cancel": "Hủy",
+      "assign": "Gán {count}",
+      "assignSuccess": "Đã gán {count} tài khoản",
+      "assignError": "Gán tài khoản thất bại",
+      "primary": "Mặc định",
+      "setPrimary": "Đặt làm tài khoản mặc định của thiết bị",
+      "primarySuccess": "Đã cập nhật tài khoản mặc định",
+      "primaryError": "Không thể cập nhật tài khoản mặc định",
+      "verify": "Xác minh tài khoản đang hoạt động",
+      "verifySuccess": "Đã xác minh tài khoản đang hoạt động",
+      "verifyResult": "Kết quả xác minh: {status}",
+      "verifyError": "Xác minh tài khoản thất bại",
+      "lastVerified": "Kiểm tra {time}",
+      "remove": "Gỡ khỏi thiết bị",
+      "removeTitle": "Gỡ tài khoản?",
+      "removeConfirm": "Gỡ {account} khỏi điện thoại này? Tài khoản sẽ không bị xóa.",
+      "removeSuccess": "Đã gỡ tài khoản khỏi điện thoại",
+      "removeError": "Gỡ tài khoản thất bại",
+      "unknownPlatform": "Khác",
+      "unavailableAccount": "Tài khoản không còn khả dụng",
+      "status": {
+        "unknown": "Chưa xác minh",
+        "verified": "Đã xác minh",
+        "mismatch": "Không khớp",
+        "inconclusive": "Chưa kết luận",
+        "unsupported": "Chưa hỗ trợ"
+      },
+      "session": {
+        "unknown": "Chưa rõ session",
+        "logged_out": "Đã đăng xuất",
+        "login_required": "Cần đăng nhập",
+        "logging_in": "Đang đăng nhập",
+        "active": "Session đang dùng",
+        "suspected_mismatch": "Session không khớp",
+        "checkpoint": "Checkpoint",
+        "expired": "Hết hạn",
+        "failed": "Thất bại"
+      },
+      "sessionReason": {
+        "primary_account_changed": "Tài khoản mặc định đã đổi",
+        "provenance_account_unassigned": "Tài khoản đang giữ session đã bị gỡ",
+        "migration_operator_confirmed": "Operator đã xác nhận session hiện tại"
+      }
     },
     "history": {
       "trigger": "Lịch sử",
@@ -681,6 +815,51 @@
       "empty": "Chưa có sự kiện",
       "device": "Thiết bị",
       "loadMore": "Tải thêm",
+      "tabs": { "actions": "Hành động nghiệp vụ", "events": "Vòng đời" },
+      "loadingActions": "Đang tải hành động...",
+      "emptyActions": "Chưa có hành động nghiệp vụ",
+      "currentActivity": "Hoạt động hiện tại",
+      "activity": "Hoạt động",
+      "outcome": "Kết quả",
+      "noTarget": "Không có mục tiêu",
+      "actionPerformed": "Đã thao tác thật trên thiết bị",
+      "actionNotPerformed": "Không thao tác lại",
+      "actions": {
+        "content_interaction": "Tương tác bài viết",
+        "connection_request": "Gửi lời mời kết bạn",
+        "community_membership": "Tham gia nhóm"
+      },
+      "summary": {
+        "running": "Đang chạy",
+        "succeeded": "Thành công",
+        "failed": "Thất bại",
+        "total": "Tổng"
+      },
+      "statuses": {
+        "pending": "Đang chờ",
+        "queued": "Trong hàng đợi",
+        "running": "Đang chạy",
+        "succeeded": "Thành công",
+        "completed": "Hoàn tất",
+        "failed": "Thất bại",
+        "cancelled": "Đã hủy",
+        "observed": "Đã quan sát",
+        "stale": "Quá hạn"
+      },
+      "outcomes": {
+        "applied": "Đã thực hiện và xác minh",
+        "already_applied": "Đã có sẵn, không thao tác lại",
+        "attempted": "Đã ghi nhận ý định thao tác",
+        "tap_failed": "Không thể thao tác",
+        "verification_failed": "Không xác minh được kết quả",
+        "unsupported_platform": "Nền tảng chưa được hỗ trợ",
+        "unsupported_action": "Hành động chưa được hỗ trợ",
+        "hierarchy_unavailable": "Không đọc được giao diện thiết bị",
+        "observation_failed": "Không thể kiểm tra trạng thái hiện tại",
+        "ambiguous_target": "Có nhiều mục tiêu trùng khớp",
+        "target_not_found": "Không tìm thấy mục tiêu",
+        "cancelled": "Đã hủy"
+      },
       "events": {
         "created": "Đã tạo",
         "updated": "Đã cập nhật",
@@ -1108,6 +1287,7 @@
       "targetGroupLabel": "Nhóm thiết bị mục tiêu",
       "targetGroupPlaceholder": "Chọn nhóm thiết bị...",
       "noGroup": "Không chọn nhóm (tất cả thiết bị)",
+      "automationLabel": "Chế độ chạy",
       "variablesLabel": "Biến",
       "platformLabel": "Nền tảng mạng xã hội",
       "platformFacebook": "Facebook",
@@ -1154,7 +1334,11 @@
       "singleLabel": "Tài khoản",
       "singlePlaceholder": "Chọn tài khoản…",
       "singleNone": "Chọn tài khoản…",
-      "singleEmpty": "Chưa có tài khoản trong tổ chức."
+      "singleEmpty": "Chưa có tài khoản trong tổ chức.",
+      "perDeviceLabel": "Gán riêng theo thiết bị",
+      "perDeviceHint": "Ghi đè tài khoản fallback cho từng thiết bị. Thiết bị không ghi đè sẽ dùng nhóm hoặc tài khoản chung ở trên.",
+      "perDeviceEmpty": "Hãy thêm thiết bị vào chiến dịch trước khi cấu hình gán riêng.",
+      "useFallback": "Dùng cấu hình fallback"
     },
     "entityDialog": {
       "title": "Sửa chiến dịch thư viện",
@@ -1185,6 +1369,10 @@
       "saving": "Đang lưu...",
       "submit": "Lưu",
       "cancel": "Huỷ"
+    },
+    "continuousCrawlSettings": {
+      "enabledLabel": "Xử lý lần lượt mục tiêu đã phân công",
+      "enabledHint": "Mỗi điện thoại chỉ xử lý danh sách mục tiêu được gắn cho chính nó."
     },
     "recoveryPolicy": {
       "title": "Kịch bản xử lý lỗi",
@@ -1254,6 +1442,85 @@
       "dispatching": "Đang phân phối…",
       "dispatchCount": "Phân phối ({count})"
     },
+    "automationStart": {
+      "title": "Thiết lập lần chạy tự động",
+      "steps": {
+        "goal": "Mục tiêu",
+        "source": "Nguồn dữ liệu",
+        "operation": "Cách vận hành",
+        "review": "Kiểm tra"
+      },
+      "goal": {
+        "eyebrow": "Bước 1 · Mục tiêu",
+        "title": "Bạn muốn hệ thống làm gì?",
+        "description": "Hệ thống sẽ chạy các kịch bản đã thiết lập cho từng mục phù hợp.",
+        "scenarioCount": "Sử dụng {count} kịch bản đã thiết lập"
+      },
+      "source": {
+        "eyebrow": "Bước 2 · Nguồn dữ liệu",
+        "title": "Hệ thống sẽ lấy mục cần xử lý từ đâu?",
+        "description": "Loại mục tiêu được đọc từ kịch bản và đối chiếu với phân công của từng điện thoại.",
+        "configured": "Loại mục tiêu đã cấu hình trong kịch bản",
+        "deduplication": "Mỗi mục tiêu được xử lý một lần trên điện thoại đã được phân công.",
+        "snapshot": "Mục được thêm sau khi lần chạy bắt đầu sẽ được dành cho lần chạy tiếp theo."
+      },
+      "operation": {
+        "eyebrow": "Bước 3 · Cách vận hành",
+        "title": "Mỗi điện thoại chạy danh sách đã phân công",
+        "description": "Mục tiêu của điện thoại nào chỉ được chạy trên điện thoại đó.",
+        "devices": "{count} thiết bị đã chọn",
+        "devicesHelp": "Sử dụng các thiết bị đang gắn với chiến dịch.",
+        "automatic": "Phân công cố định",
+        "automaticHelp": "Hoàn thành một mục tiêu rồi lấy mục tiêu tiếp theo trong danh sách riêng."
+      },
+      "review": {
+        "eyebrow": "Bước 4 · Kiểm tra",
+        "title": "Sẵn sàng để bắt đầu",
+        "description": "Hệ thống đang kiểm tra nguồn, thiết bị và kịch bản.",
+        "checking": "Đang kiểm tra mức độ sẵn sàng…",
+        "sources": "{count} mục có thể xử lý",
+        "devices": "{count} thiết bị sẵn sàng",
+        "scenario": "Kịch bản đã được cấu hình",
+        "targetsForDevice": "{count} mục tiêu",
+        "retry": "Kiểm tra lại",
+        "summary": "Lần chạy sẽ dùng {devices} thiết bị để xử lý đủ {targets} mục tiêu đã phân công."
+      },
+      "problems": {
+        "devices": {
+          "title": "Thiết bị chưa sẵn sàng",
+          "help": "Thêm thiết bị hoặc kiểm tra kết nối, sau đó quay lại kiểm tra lần nữa.",
+          "action": "Quản lý thiết bị"
+        },
+        "targets": {
+          "title": "Điện thoại chưa được phân công mục tiêu",
+          "help": "Mỗi điện thoại phải có ít nhất một mục tiêu đúng loại mà kịch bản sử dụng.",
+          "action": "Cấu hình mục tiêu"
+        },
+        "source": {
+          "title": "Nguồn dữ liệu chưa sẵn sàng",
+          "help": "Kiểm tra nguồn trong kịch bản hoặc thêm mục phù hợp vào nguồn.",
+          "action": "Kiểm tra cấu hình"
+        },
+        "account": {
+          "title": "Tài khoản chưa sẵn sàng",
+          "help": "Gắn tài khoản phù hợp hoặc kiểm tra lại trạng thái tài khoản.",
+          "action": "Kiểm tra tài khoản"
+        },
+        "retry": {
+          "title": "Chưa thể hoàn tất kiểm tra",
+          "help": "Đợi một chút rồi kiểm tra lại. Nếu lỗi tiếp diễn, hãy kiểm tra kết nối dịch vụ."
+        }
+      },
+      "checkFailed": "Chưa thể kiểm tra mức độ sẵn sàng",
+      "startFailed": "Không thể bắt đầu lần chạy",
+      "started": "Lần chạy đầu tiên đang được chuẩn bị",
+      "alreadyActive": "Lần chạy đã hoạt động. Đang mở trang theo dõi.",
+      "cancel": "Huỷ",
+      "back": "Quay lại",
+      "next": "Tiếp tục",
+      "start": "Bắt đầu xử lý",
+      "starting": "Đang bắt đầu…"
+    },
     "list": {
       "statusIdle": "Sẵn sàng",
       "statusDraft": "Nháp",
@@ -1314,6 +1581,13 @@
       "titleContent": "Dữ liệu thu thập",
       "titleEditEntity": "Sửa chiến dịch thư viện",
       "titleRun": "Chạy chiến dịch",
+      "automationBadge": "Tự động hóa",
+      "automationActions": {
+        "setup": "Thiết lập và chạy",
+        "monitor": "Xem lần chạy",
+        "resume": "Tiếp tục",
+        "inspect": "Kiểm tra vấn đề"
+      },
       "runDialogNotReady": "Chưa có đủ thiết bị hoặc kịch bản để chạy chiến dịch này.",
       "runDialogSelectAll": "Chọn tất cả",
       "runDialogAriaSelectDevice": "Chọn thiết bị",
@@ -1350,6 +1624,61 @@
       "monitorTitle": "Theo dõi — {campaign}",
       "monitorStatusRunning": "ĐANG CHẠY",
       "monitorStatusIdle": "KHÔNG CHẠY",
+      "crawlTitle": "Tự động hóa",
+      "crawlAutomation": "Tự động hóa",
+      "crawlCurrentRun": "Lần chạy hiện tại",
+      "crawlLoading": "Đang tải tiến độ lần chạy…",
+      "crawlUnavailable": "Chưa có dữ liệu tiến độ cho lần chạy này.",
+      "crawlControlFailed": "Không thể điều khiển lần chạy",
+      "crawlPauseTitle": "Tạm dừng lần chạy?",
+      "crawlPauseDescription": "Hệ thống sẽ ngừng nhận mục mới. Những mục đang xử lý sẽ được phép hoàn tất. Bạn có thể tiếp tục lần chạy bất kỳ lúc nào.",
+      "crawlStopRun": "Dừng lần chạy",
+      "crawlStopTitle": "Dừng lần chạy này?",
+      "crawlStopDescription": "Các kết quả đã hoàn tất vẫn được giữ lại. Những mục chưa xử lý sẽ không tiếp tục trong lần chạy này. Hành động này không tắt tự động hóa.",
+      "crawlCompleted": "Đã hoàn tất",
+      "crawlNeedsAttention": "Cần kiểm tra",
+      "crawlOperationalDetails": "Xem thiết bị và mục gần đây",
+      "crawlDevices": "Thiết bị",
+      "crawlRecentItems": "Mục gần đây",
+      "crawlPausingDetail": "Còn {count} mục đang hoàn tất. Hệ thống không nhận thêm mục mới.",
+      "crawlStatus": "Trạng thái",
+      "crawlDiscovered": "Đã tìm thấy",
+      "crawlActive": "Đang xử lý",
+      "crawlSucceeded": "Thành công",
+      "crawlFailed": "Thất bại",
+      "crawlComplete": "Hoàn thành",
+      "crawlDeviceLanes": "Thiết bị",
+      "crawlRecentTargets": "Mục gần đây",
+      "crawlNoLanes": "Chưa có thiết bị hoạt động.",
+      "crawlNoRecentTargets": "Chưa có mục nào gần đây.",
+      "crawlHealth": {
+        "healthy": "Ổn định",
+        "degraded": "Suy giảm",
+        "critical": "Nghiêm trọng"
+      },
+      "crawlHealthMessage": {
+        "healthy": "Mọi thứ đang hoạt động bình thường. Bạn không cần làm gì.",
+        "degraded": "Một số mục cần kiểm tra. Các mục còn lại vẫn tiếp tục được xử lý.",
+        "critical": "Lần chạy cần bạn kiểm tra trước khi tiếp tục."
+      },
+      "crawlStatuses": {
+        "idle": "Chờ",
+        "preflight": "Kiểm tra",
+        "starting": "Đang bắt đầu",
+        "running": "Đang hoạt động",
+        "pausing": "Đang hoàn tất các mục hiện tại",
+        "paused": "Đã tạm dừng",
+        "cancelling": "Đang dừng",
+        "cancelled": "Đã dừng",
+        "completed": "Hoàn tất",
+        "failed": "Cần kiểm tra"
+      },
+      "crawlTargetStatuses": {
+        "queued": "Đang chờ",
+        "running": "Đang chạy",
+        "succeeded": "Hoàn tất",
+        "failed": "Thất bại"
+      },
       "monitorSectionHintLabel": "Giải thích mục này",
       "monitorTemporalUnavailableMessage": "Không theo dõi được từng bước (Temporal đang tắt).",
       "monitorNoRunningWorkflowsMessage": "Chưa có luồng công việc đang chạy.",
@@ -1517,6 +1846,16 @@
       "monitorStepOutputTruncated": "đã rút gọn",
       "monitorStepFallback": "Bước {n}",
       "monitorStepRowLoopRound": "Vòng {n}",
+      "monitorActionPerformed": "Đã thao tác thật",
+      "monitorActionNotPerformed": "Không bấm lại",
+      "monitorBatchCompleted": "Đã chạy {count} lượt",
+      "monitorActionOutcome": {
+        "applied": "Đã áp dụng",
+        "alreadyApplied": "Đã có từ trước",
+        "leased": "Đã thuê mục tiêu",
+        "noEligibleTarget": "Hết mục tiêu phù hợp",
+        "noReadyCandidate": "Chưa có ứng viên sẵn sàng"
+      },
       "monitorStepBranchThen": "Nhánh đúng",
       "monitorStepBranchElse": "Nhánh sai",
       "monitorStepBranchLoop": "Thân vòng lặp",
@@ -1878,6 +2217,21 @@
       "runScenario": {
         "intro": "Chọn mẫu dùng chung (template) hoặc một kịch bản khác trong cùng campaign. Khi chạy, hệ thống ưu tiên theo ID kịch bản (bản ghi campaign), sau đó theo tên — nếu trùng tên, kịch bản trong campaign được ưu tiên hơn template."
       },
+      "leaseTarget": {
+        "sourceHint": "Mỗi lần chạy lấy một mục tiêu chưa được account này xử lý; các execution đồng thời không lấy trùng.",
+        "connectionHint": "Lấy ứng viên có trạng thái sẵn sàng kết bạn và khóa ứng viên cho account đang chạy.",
+        "platform": "Nền tảng",
+        "entityType": "Loại mục tiêu",
+        "post": "Bài viết",
+        "page": "Page",
+        "profile": "Trang cá nhân",
+        "action": "Hành động",
+        "like": "Thích",
+        "comment": "Bình luận",
+        "share": "Chia sẻ",
+        "keywords": "Từ khóa bài viết",
+        "keywordPlaceholder": "AI, tuyển dụng, công nghệ"
+      },
       "adbShell": {
         "hint": "Chạy trên phone thật — nhập lệnh đầy đủ (vd. adb shell getprop …) hoặc chỉ phần shell (getprop …).",
         "commandLabel": "Lệnh shell",
@@ -2194,7 +2548,7 @@
         "facebook": "Facebook"
       },
       "itemDesc": {
-        "use_source_pool": "Dùng group đã cào trong kho nguồn cho campaign",
+        "use_source_pool": "Dùng mục tiêu đã phân công cho điện thoại",
         "extract": "Đọc feed, mở «Xem thêm», có thể lưu collection",
         "save_extraction": "Chỉ ghi DB — không đọc màn hình",
         "extract_text_hierarchy": "Lấy text từ cây UI hierarchy",
@@ -2225,6 +2579,7 @@
         "assert_element": "Kiểm tra phần tử có trên màn hình",
         "dismiss_popup": "Đóng dialog / popup che màn hình",
         "login_if_needed": "Tự đăng nhập khi hồ sơ phát hiện màn hình chưa đăng nhập",
+        "facebook_session_gate": "Kiểm tra trạng thái đăng nhập Facebook trước hoặc sau bước đăng nhập",
         "fill_form": "Nhập các trường theo hồ sơ tự động hoá ứng dụng",
         "assert_app_state": "Kiểm tra tên gói, chữ hoặc bộ định vị ngữ nghĩa của ứng dụng",
         "double_tap": "Chạm đúp tại tọa độ",
@@ -2247,9 +2602,15 @@
         "repeat_until": "Lặp đến khi điều kiện đúng",
         "random_pick": "Chọn ngẫu nhiên một nhánh con",
         "run_scenario": "Gọi kịch bản con trong campaign",
+        "lease_source_target": "Lấy mục tiêu Facebook tiếp theo đã phân công cho thiết bị",
+        "lease_connection_candidate": "Lấy ứng viên kết bạn tiếp theo đủ điều kiện cho tài khoản",
         "content_interaction": "Tương tác bài viết hiện tại và xác minh trạng thái sau thao tác",
         "connection_request": "Gửi lời mời trên profile hiện tại, bỏ qua nếu đã gửi hoặc đã là bạn",
         "community_membership": "Tham gia nhóm hiện tại, nhận biết trạng thái thành viên hoặc đang chờ",
+        "fb_select_people_profile": "Tìm và mở đúng profile người dùng theo tên, keyword và điểm match",
+        "fb_connect_visible_people": "Scan các card đang hiện và gửi lời mời khi có điểm chung phù hợp",
+        "fb_select_post_target": "Tìm và mở đúng bài viết theo text, keyword và điểm match",
+        "fb_scan_posts_interact": "Scan feed/group hiện tại, match keyword rồi like và comment bài post thật",
         "fb_find_comment_button": "Tìm và cache target nút Bình luận, chưa bấm",
         "fb_tap_comment_target": "Bấm target Bình luận đã tìm và xác minh sheet mở",
         "fb_apply_comment_filter": "Đổi bộ lọc bình luận trong sheet đang mở",
@@ -2307,6 +2668,7 @@
         "assert_element": "Kiểm tra phần tử",
         "dismiss_popup": "Đóng popup",
         "login_if_needed": "Đăng nhập nếu cần",
+        "facebook_session_gate": "Kiểm tra phiên Facebook",
         "fill_form": "Nhập biểu mẫu",
         "assert_app_state": "Kiểm tra trạng thái ứng dụng",
         "double_tap": "Chạm đúp",
@@ -2329,10 +2691,16 @@
         "repeat_until": "Lặp cho đến khi",
         "random_pick": "Chọn ngẫu nhiên",
         "run_scenario": "Chạy kịch bản con",
-        "use_source_pool": "Dùng group đã cào",
+        "use_source_pool": "Dùng mục tiêu đã phân công",
+        "lease_source_target": "Lấy mục tiêu tiếp theo",
+        "lease_connection_candidate": "Lấy ứng viên kết bạn",
         "content_interaction": "Tương tác bài viết",
         "connection_request": "Gửi lời mời kết bạn",
         "community_membership": "Tham gia nhóm",
+        "fb_select_people_profile": "Chọn profile người dùng",
+        "fb_connect_visible_people": "Kết bạn người đang thấy",
+        "fb_select_post_target": "Chọn bài viết mục tiêu",
+        "fb_scan_posts_interact": "Scan và tương tác post",
         "fb_find_comment_button": "Tìm nút Bình luận (FB)",
         "fb_tap_comment_target": "Bấm target Bình luận (FB)",
         "fb_apply_comment_filter": "Áp dụng bộ lọc bình luận (FB)",
@@ -2392,9 +2760,12 @@
         "loop": "VÒNG LẶP",
         "extract": "TRÍCH XUẤT",
         "save_extraction": "LƯU DỮ LIỆU (riêng)",
+        "lease_source_target": "LẤY MỤC TIÊU",
+        "lease_connection_candidate": "LẤY ỨNG VIÊN",
         "content_interaction": "TƯƠNG TÁC BÀI VIẾT",
         "connection_request": "GỬI LỜI MỜI KẾT BẠN",
         "community_membership": "THAM GIA NHÓM",
+        "fb_scan_posts_interact": "SCAN VÀ TƯƠNG TÁC POST",
         "fb_find_comment_button": "TÌM NÚT BÌNH LUẬN (FB)",
         "fb_tap_comment_target": "BẤM TARGET BÌNH LUẬN (FB)",
         "fb_apply_comment_filter": "LỌC BÌNH LUẬN (FB)",
@@ -2544,6 +2915,23 @@
       "addDevice": "Thêm thiết bị",
       "selectDevice": "Chọn thiết bị",
       "selectPhonePlaceholder": "Chọn điện thoại…",
+      "deviceLabel": "Thiết bị",
+      "gettingStarted": {
+        "title": "Chọn thiết bị để bắt đầu",
+        "description": "Kết nối với một thiết bị để điều khiển màn hình và tạo kịch bản tự động từ các thao tác của bạn.",
+        "selectDevice": "Chọn thiết bị",
+        "deviceStepTitle": "Chọn thiết bị",
+        "deviceStepDescription": "Chọn thiết bị đang trực tuyến từ thanh phía trên.",
+        "createStepTitle": "Tạo các bước",
+        "createStepDescription": "Ghi thao tác trực tiếp hoặc bắt đầu từ một mẫu có sẵn.",
+        "finishStepTitle": "Chạy thử",
+        "finishStepDescription": "Kiểm tra toàn bộ kịch bản trên thiết bị trước khi sử dụng.",
+        "saveHint": "Lưu kịch bản khi mọi bước đã hoạt động đúng"
+      },
+      "smallScreen": {
+        "title": "Cần màn hình lớn hơn để điều khiển",
+        "description": "Studio điều khiển cần không gian để hiển thị đồng thời màn hình thiết bị, cây giao diện và trình chỉnh sửa kịch bản. Hãy mở trang trên máy tính hoặc cửa sổ rộng hơn."
+      },
       "touchMethodTitle": "Phương thức điều khiển chạm hiện tại",
       "scenarioCardTitle": "Kịch bản (ghi thao tác)",
       "waitingUi": "Chờ UI đổi…",
@@ -2605,7 +2993,7 @@
       "exitConfirmDesc": "Kịch bản chạy thử vẫn đang chạy trên thiết bị. Thoát sẽ dừng kịch bản. Tiếp tục?",
       "exitConfirmCancel": "Ở lại",
       "exitConfirmConfirm": "Dừng & thoát",
-      "wsConnected": "Luồng màn hình đã kết nối",
+      "wsConnected": "Đã kết nối",
       "wsDisconnected": "Luồng màn hình đang kết nối lại",
       "touchPrefix": "Chạm:",
       "hierarchyTitle": "Cây giao diện",
@@ -2643,6 +3031,17 @@
       "flowSwitchToFlow": "Chuyển sang Flow Editor trực quan",
       "flowListLabel": "Danh sách",
       "flowFlowLabel": "Flow",
+      "settings": "Cài đặt",
+      "flowMap": {
+        "title": "Luồng kịch bản",
+        "stepCount": "{count} bước · tự động sắp xếp",
+        "arranging": "Đang sắp xếp",
+        "building": "Đang dựng luồng…",
+        "dragHint": "Kéo node đến vị trí hoặc nhánh mới để đổi thứ tự chạy",
+        "fitView": "Vừa khung",
+        "addToEnd": "Thêm cuối luồng",
+        "invalidDrop": "Không thể thả node vào vị trí này. Luồng được giữ nguyên."
+      },
       "multiControl": {
         "banner": "{count} máy cùng lúc",
         "buttonLabel": "Đồng bộ máy",
@@ -2873,6 +3272,7 @@
     "transportOnline": "Kênh truyền đang hoạt động",
     "transportOffline": "Không có kênh truyền",
     "connect": "Kết nối",
+    "accounts": "Tài khoản",
     "deleteDevice": "Xoá thiết bị",
     "deleteConfirm": "Xoá thiết bị này? Các campaign liên quan cũng sẽ bỏ liên kết với thiết bị.",
     "realtime": {
@@ -2921,7 +3321,12 @@
     "fleetStats": {
       "title": "Thống kê trạng thái ({total} thiết bị)",
       "loadError": "Không tải được thống kê đội thiết bị.",
-      "activeSessions": "Phiên đang chạy ({total})",
+      "activeSessions": "Phiên đang hoạt động ({total})",
+      "viewSessions": "Xem chi tiết",
+      "sessionExplanation": "Đây là số phiên logic đang hoạt động, gồm phiên đã đăng ký và claim điều khiển của thiết bị đang bận. Một thiết bị có thể có nhiều phiên và sẽ được đánh dấu bên dưới.",
+      "sessionLoadError": "Không tải được chi tiết phiên.",
+      "duplicateSession": "Trùng thiết bị",
+      "busyClaim": "Claim đang bận",
       "sessionOwner": {
         "user": "Người dùng",
         "execution": "Thực thi",
@@ -3060,6 +3465,9 @@
     "namePlaceholder": "VD: Điện thoại test 1",
     "deviceLabel": "Thiết bị cần đăng ký",
     "devicePlaceholder": "Chọn serial từ máy kết nối",
+    "deviceSearchPlaceholder": "Tìm theo tên hoặc serial...",
+    "deviceResultsLimited": "Đang hiện {shown}/{total} thiết bị. Gõ tên hoặc serial để lọc thêm.",
+    "noSearchResults": "Không tìm thấy thiết bị phù hợp",
     "noAvailableDevices": "Chưa thấy thiết bị cùng Wi‑Fi/LAN với máy kết nối. Cắm USB hoặc bật ADB qua Wi‑Fi trên cùng mạng với máy kết nối, rồi thử lại.",
     "descLabel": "Ghi chú (tuỳ chọn)",
     "descPlaceholder": "VD: Phòng QA, máy Samsung...",
@@ -3121,6 +3529,40 @@
     "openFleetView": "Mở xem lưới"
   },
   "devicesFarm": {
+    "pageTitle": "Giám sát trực tiếp",
+    "lastUpdated": "Cập nhật lần cuối: {time}",
+    "waitingForData": "Đang chờ dữ liệu thiết bị",
+    "loadingDevices": "Đang tải dữ liệu thiết bị",
+    "loadErrorHint": "Không tải được dữ liệu thiết bị. Kiểm tra kết nối rồi thử lại.",
+    "refreshErrorTitle": "Không thể cập nhật dữ liệu mới",
+    "refreshErrorHint": "Dữ liệu gần nhất vẫn được giữ lại.",
+    "retry": "Thử lại",
+    "health": {
+      "agentLabel": "Agent",
+      "streamLabel": "Video",
+      "commandLabel": "Lệnh",
+      "agentHint": "Trực tuyến nghĩa là kênh điều khiển agent đang kết nối.",
+      "streamHint": "Kênh truyền video độc lập với kết nối agent và khả năng nhận lệnh.",
+      "commandHint": "Sẵn sàng nghĩa là thiết bị đang trực tuyến, nhận được lệnh và không bị phiên khác chiếm.",
+      "heartbeat": "Lần báo hiệu",
+      "unknownTime": "chưa có",
+      "agent": {
+        "online": "Trực tuyến",
+        "offline": "Mất kết nối",
+        "unknown": "Chưa rõ"
+      },
+      "stream": {
+        "ready": "Sẵn sàng",
+        "starting": "Đang khởi tạo",
+        "unavailable": "Không khả dụng",
+        "error": "Có lỗi"
+      },
+      "command": {
+        "ready": "Sẵn sàng",
+        "busy": "Đang bận",
+        "unavailable": "Không khả dụng"
+      }
+    },
     "backendErrorTitle": "Không kết nối được backend.",
     "backendErrorHint": "Backend đang chạy trên port 8081?",
     "streamConnecting": "Đang kết nối màn hình...",
@@ -3153,6 +3595,7 @@
     "addDevice": "Thêm thiết bị",
     "controlAndRecord": "Điều khiển & ghi kịch bản",
     "controlDevice": "Điều khiển",
+    "deviceAccounts": "Tài khoản",
     "restartDeviceConfirmTitle": "Khởi động lại thiết bị",
     "restartDeviceConfirmDescription": "Gửi lệnh khởi động lại tới thiết bị {serial}?",
     "deviceInactive": "Thiết bị chưa hoạt động",
@@ -3169,6 +3612,8 @@
       "realtimeOk": "Bảng điều khiển cập nhật trực tiếp",
       "realtimeLost": "Bảng điều khiển đang kết nối lại…",
       "devicesReady": "{count} thiết bị sẵn sàng",
+      "devicesReadyLoading": "Đang tải trạng thái",
+      "devicesReadyUnavailable": "Chưa có dữ liệu trạng thái",
       "devicesRegistered": "{count} đã đăng ký",
       "tasks": "{count} tác vụ"
     },
@@ -3542,6 +3987,25 @@
       "windowMinutes": "Cứ mỗi {interval} phút trong khoảng {start}:00 đến {end}:00",
       "windowHoursStep": "Cứ mỗi {step} giờ trong khoảng {start}:00 đến {end}:00 vào phút {minute}:00",
       "windowHoursRangeOnly": "Cứ mỗi giờ trong khoảng {start}:00 đến {end}:00 vào phút {minute}:00"
+    },
+    "preview": {
+      "title": "Lịch chạy tuần",
+      "subtitle": "Xem nhanh các lần chạy theo khung giờ trong tuần hiện tại.",
+      "compactSubtitle": "Preview trực quan theo cron đang cấu hình.",
+      "scheduleCount": "{count} lịch",
+      "unsupportedCount": "{count} cron phức tạp",
+      "empty": "Chưa có lịch để hiển thị.",
+      "time": "Giờ",
+      "more": "+{count} lần nữa",
+      "days": {
+        "mon": "Thứ 2",
+        "tue": "Thứ 3",
+        "wed": "Thứ 4",
+        "thu": "Thứ 5",
+        "fri": "Thứ 6",
+        "sat": "Thứ 7",
+        "sun": "CN"
+      }
     },
     "form": {
       "titleCreate": "Tạo lịch chạy",
@@ -3922,7 +4386,8 @@
     "loadingChannels": "Đang tải kênh thông báo",
     "empty": "Chưa có thông báo",
     "emptyHint": "Cảnh báo thiết bị và chiến dịch sẽ hiển thị tại đây.",
-    "markAllRead": "Đánh dấu đã đọc",
+    "markAllRead": "Đánh dấu tất cả là đã đọc",
+    "openRelated": "Mở đối tượng liên quan",
     "unreadBadge": "{count} chưa đọc",
     "timeGroupToday": "Hôm nay",
     "timeGroupEarlier": "Trước đó",
@@ -3993,6 +4458,7 @@
     },
     "eventTitles": {
       "deviceDisconnect": "Thiết bị {label} mất kết nối",
+      "deviceDisconnectGrouped": "Thiết bị {label} mất kết nối {count} lần trong {days} ngày",
       "deviceReconnect": "Thiết bị {label} đã kết nối lại",
       "deviceError": "Thiết bị {label} báo lỗi"
     },

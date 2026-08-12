@@ -1,14 +1,18 @@
 import { useReducer, useCallback } from 'react';
 import { generateKeyBetween } from 'fractional-indexing';
 import { nanoid } from 'nanoid';
-import {
+import type {
   FlowNode,
   FlowEdge,
-  NodeScope,
-  getChildNodes,
-  getRootNodes
+  NodeScope
 } from '../components/scenario-steps/types';
 import { createDefaultStep } from '../components/scenario-steps/types';
+import {
+  getOrderedScopeNodes,
+  insertScenarioNode,
+  moveScenarioNode,
+  rebuildScenarioSequenceEdges
+} from '../utils/scenario-graph';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -39,81 +43,19 @@ type GraphAction =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getSiblings(
+function appendOrder(
   nodes: FlowNode[],
   scope: NodeScope | null | undefined
-): FlowNode[] {
-  if (!scope?.parentId) return getRootNodes(nodes);
-  return getChildNodes(nodes, scope.parentId, scope.branch);
-}
-
-function calcOrder(
-  nodes: FlowNode[],
-  scope: NodeScope | null | undefined,
-  afterNodeId?: string | null
 ): string {
-  const siblings = getSiblings(nodes, scope);
-  if (!siblings.length) return generateKeyBetween(null, null);
-  if (!afterNodeId) {
-    return generateKeyBetween(siblings[siblings.length - 1]!.order, null);
-  }
-  const idx = siblings.findIndex((n) => n.id === afterNodeId);
-  if (idx === -1) {
-    // afterNodeId not found in this scope — append at end instead of silently misplacing
-    return generateKeyBetween(siblings[siblings.length - 1]!.order, null);
-  }
-  const prev = siblings[idx]!.order;
-  const next = siblings[idx + 1]?.order ?? null;
-  return generateKeyBetween(prev, next);
+  const siblings = getOrderedScopeNodes(nodes, scope);
+  return generateKeyBetween(siblings.at(-1)?.order ?? null, null);
 }
 
-function wireEdgesForInsert(
-  edges: FlowEdge[],
-  newId: string,
-  afterNodeId: string | null | undefined,
-  siblings: FlowNode[]
-): FlowEdge[] {
-  if (!afterNodeId) {
-    // Prepend: new → first existing sibling (if any)
-    const first = siblings[0];
-    if (!first) return edges;
-    return [
-      ...edges,
-      {
-        id: nanoid(10),
-        source: newId,
-        target: first.id,
-        type: 'default' as const
-      }
-    ];
-  }
-  const afterIdx = siblings.findIndex((n) => n.id === afterNodeId);
-  if (afterIdx === -1) return edges; // afterNode not in scope — skip edge wiring
-  const afterNode = siblings[afterIdx]!;
-  const nextNode = siblings[afterIdx + 1];
-
-  // Remove afterNode → nextNode edge (we insert between them)
-  const filtered = edges.filter(
-    (e) => !(e.source === afterNode.id && e.target === (nextNode?.id ?? ''))
-  );
-  const newEdges: FlowEdge[] = [
-    ...filtered,
-    {
-      id: nanoid(10),
-      source: afterNode.id,
-      target: newId,
-      type: 'default' as const
-    }
-  ];
-  if (nextNode) {
-    newEdges.push({
-      id: nanoid(10),
-      source: newId,
-      target: nextNode.id,
-      type: 'default' as const
-    });
-  }
-  return newEdges;
+function appendAfterNodeId(
+  nodes: FlowNode[],
+  scope: NodeScope | null | undefined
+): string | null {
+  return getOrderedScopeNodes(nodes, scope).at(-1)?.id ?? null;
 }
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
@@ -122,14 +64,10 @@ function reducer(state: GraphState, action: GraphAction): GraphState {
   switch (action.type) {
     case 'ADD_NODE': {
       const { node, afterNodeId, scope } = action;
-      const siblings = getSiblings(state.nodes, scope);
-      const newEdges = wireEdgesForInsert(
-        state.edges,
-        node.id,
-        afterNodeId,
-        siblings
+      return (
+        insertScenarioNode(state, node, scope ?? null, afterNodeId ?? null) ??
+        state
       );
-      return { nodes: [...state.nodes, node], edges: newEdges };
     }
 
     case 'UPDATE_NODE':
@@ -151,7 +89,6 @@ function reducer(state: GraphState, action: GraphAction): GraphState {
       };
 
     case 'REMOVE_NODE': {
-      // Collect node + all descendants
       const toRemove = new Set<string>();
       const queue = [action.id];
       while (queue.length) {
@@ -162,68 +99,28 @@ function reducer(state: GraphState, action: GraphAction): GraphState {
           .forEach((n) => queue.push(n.id));
       }
       const nodes = state.nodes.filter((n) => !toRemove.has(n.id));
-      // Reconnect predecessor → successor across the removed node
-      const inEdge = state.edges.find((e) => e.target === action.id);
-      const outEdge = state.edges.find((e) => e.source === action.id);
-      const remaining = state.edges.filter(
-        (e) => !toRemove.has(e.source) && !toRemove.has(e.target)
+      const remainingEdges = state.edges.filter(
+        (edge) => !toRemove.has(edge.source) && !toRemove.has(edge.target)
       );
-      const edges =
-        inEdge && outEdge
-          ? [
-              ...remaining,
-              {
-                id: nanoid(10),
-                source: inEdge.source,
-                target: outEdge.target,
-                type: 'default' as const
-              }
-            ]
-          : remaining;
-      return { nodes, edges };
+      return {
+        nodes,
+        edges: rebuildScenarioSequenceEdges(nodes, remainingEdges)
+      };
     }
 
     case 'MOVE_NODE': {
-      const { id, afterNodeId, newScope } = action;
-      const node = state.nodes.find((n) => n.id === id);
+      const node = state.nodes.find((candidate) => candidate.id === action.id);
       if (!node) return state;
-      const effectiveScope = newScope !== undefined ? newScope : node.scope;
-      const nodesWithoutMoved = state.nodes.filter((n) => n.id !== id);
-      const order = calcOrder(nodesWithoutMoved, effectiveScope, afterNodeId);
-
-      // Rewire edges: remove old edges connected to this node, add new ones in target scope
-      const oldInEdge = state.edges.find((e) => e.target === id);
-      const oldOutEdge = state.edges.find((e) => e.source === id);
-
-      // Patch the predecessor/successor gap left by the move
-      let edges = state.edges.filter((e) => e.source !== id && e.target !== id);
-      if (oldInEdge && oldOutEdge) {
-        edges = [
-          ...edges,
-          {
-            id: nanoid(10),
-            source: oldInEdge.source,
-            target: oldOutEdge.target,
-            type: 'default' as const
-          }
-        ];
-      }
-
-      // Wire into target position
-      const targetSiblings = getSiblings(nodesWithoutMoved, effectiveScope);
-      edges = wireEdgesForInsert(edges, id, afterNodeId, targetSiblings);
-
-      const nodes = nodesWithoutMoved
-        .map((n) => n)
-        .concat([
-          {
-            ...node,
-            order,
-            scope: effectiveScope ?? null
-          }
-        ]);
-
-      return { nodes, edges };
+      const effectiveScope =
+        action.newScope !== undefined ? action.newScope : (node.scope ?? null);
+      return (
+        moveScenarioNode(
+          state,
+          action.id,
+          effectiveScope ?? null,
+          action.afterNodeId
+        ) ?? state
+      );
     }
 
     case 'RESET':
@@ -271,8 +168,11 @@ export function useScenarioGraph(
       scope?: NodeScope | null
     ): string => {
       const id = nanoid(10);
-      // calcOrder needs current state — we compute it here, before dispatch
-      const order = calcOrder(state.nodes, scope, afterNodeId);
+      const effectiveAfterNodeId =
+        afterNodeId === undefined
+          ? appendAfterNodeId(state.nodes, scope)
+          : afterNodeId;
+      const order = appendOrder(state.nodes, scope);
       const defaultStep = createDefaultStep(type);
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const {
@@ -290,7 +190,12 @@ export function useScenarioGraph(
         order,
         scope: scope ?? null
       };
-      dispatch({ type: 'ADD_NODE', node, afterNodeId, scope });
+      dispatch({
+        type: 'ADD_NODE',
+        node,
+        afterNodeId: effectiveAfterNodeId,
+        scope
+      });
       return id;
     },
     [state.nodes]

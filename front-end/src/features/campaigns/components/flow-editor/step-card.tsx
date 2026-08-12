@@ -9,7 +9,9 @@ import {
   Crosshair,
   MousePointerClick,
   Move,
-  Square
+  Square,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
@@ -53,6 +55,12 @@ interface Props {
   coordPickActive?: 'tap_point' | 'swipe_segment' | null;
   onTogglePickTapCoords?: () => void;
   onTogglePickSwipeCoords?: () => void;
+  reorderControls?: {
+    canMoveUp: boolean;
+    canMoveDown: boolean;
+    onMoveUp: () => void;
+    onMoveDown: () => void;
+  };
 }
 
 export function StepCard({
@@ -68,7 +76,8 @@ export function StepCard({
   onTogglePickSelector,
   coordPickActive,
   onTogglePickTapCoords,
-  onTogglePickSwipeCoords
+  onTogglePickSwipeCoords,
+  reorderControls
 }: Props) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
   const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
@@ -98,13 +107,15 @@ export function StepCard({
   return (
     <div
       className={cn(
-        'group cursor-pointer rounded-lg border border-l-[3px] border-border/70 bg-card shadow-sm transition-[background-color,border-color,box-shadow]',
+        'group cursor-pointer rounded-md border border-l-[3px] border-border/60 bg-background shadow-[0_1px_2px_rgba(0,0,0,0.035)] transition-[background-color,border-color,box-shadow]',
         colorCls,
+        category === 'flow' && 'border-border/80 bg-purple-500/[0.025]',
         selected && 'bg-accent/25 ring-2 ring-primary/35',
         isPickTarget &&
           'shadow-[0_0_0_1px_rgba(245,158,11,0.35)] ring-2 ring-amber-500/80',
         coordPickActive &&
-          'shadow-[0_0_0_1px_rgba(14,165,233,0.35)] ring-2 ring-sky-500/75'
+          'shadow-[0_0_0_1px_rgba(14,165,233,0.35)] ring-2 ring-sky-500/75',
+        reorderControls && 'bg-accent/10 ring-1 ring-primary/15'
       )}
       style={{ contain: 'layout style' }}
       onClick={onClick}
@@ -215,6 +226,37 @@ export function StepCard({
         })()}
 
         <div className='flex shrink-0 items-center gap-0.5'>
+          {reorderControls && (
+            <span className='mr-1 flex items-center overflow-hidden rounded-md border border-border/70 bg-background shadow-sm'>
+              <button
+                type='button'
+                className='flex size-6 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35'
+                disabled={!reorderControls.canMoveUp}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  reorderControls.onMoveUp();
+                }}
+                aria-label='Đưa bước lên'
+                title='Đưa bước lên'
+              >
+                <ChevronUp size={13} />
+              </button>
+              <span className='h-4 w-px bg-border/70' aria-hidden />
+              <button
+                type='button'
+                className='flex size-6 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35'
+                disabled={!reorderControls.canMoveDown}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  reorderControls.onMoveDown();
+                }}
+                aria-label='Đưa bước xuống'
+                title='Đưa bước xuống'
+              >
+                <ChevronDown size={13} />
+              </button>
+            </span>
+          )}
           {onTogglePickTapCoords && (
             <button
               type='button'

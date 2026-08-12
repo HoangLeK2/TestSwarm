@@ -16,6 +16,8 @@ env/
 
 # Environment variables
 .env
+tmp/
+logs
 
 # OS
 .DS_Store

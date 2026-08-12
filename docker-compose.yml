@@ -204,6 +204,11 @@ services:
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
       DEVICE_FARM_WEBRTC_ENABLED: ${DEVICE_FARM_WEBRTC_ENABLED:-1}
+      MEDIA_ADAPTER_CONTROL_PLANE: ${MEDIA_ADAPTER_CONTROL_PLANE:-grpc}
+      DEVICE_FARM_GO2RTC_URL: ${DEVICE_FARM_GO2RTC_URL:-http://go2rtc:1984}
+      MEDIA_WEBRTC_SIGNALING_PLANE: ${MEDIA_WEBRTC_SIGNALING_PLANE:-backend}
+      # HTTP is a local/dev fallback. Production cloud should use gRPC because
+      # local media-adapter opens the outbound control stream to this backend.
       MEDIA_ADAPTER_HTTP_URL: ${MEDIA_ADAPTER_HTTP_URL:-http://host.docker.internal:8878}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # Web/API pool: 12 persistent + 3 burst connections. With the documented

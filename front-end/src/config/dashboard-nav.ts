@@ -64,12 +64,6 @@ const PREPARATION_GROUP: NavGroupDef = {
       permission: { object: 'accounts', action: 'read' }
     },
     {
-      titleKey: 'account_groups',
-      url: ROUTES.ACCOUNT_GROUPS.ROOT,
-      icon: 'usersGroup',
-      permission: { object: 'account-groups', action: 'read' }
-    },
-    {
       titleKey: 'device_groups',
       url: ROUTES.DEVICE_GROUPS.ROOT,
       icon: 'folder',

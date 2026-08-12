@@ -2768,6 +2768,276 @@
         }
       }
     },
+    "/api/campaigns/{campaign_id}/continuous-crawl/preflight": {
+      "post": {
+        "tags": ["campaigns"],
+        "summary": "Continuous Crawl Preflight",
+        "operationId": "continuous_crawl_preflight_api_campaigns__campaign_id__continuous_crawl_preflight_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousCrawlPreflightOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/continuous-crawl/start": {
+      "post": {
+        "tags": ["campaigns"],
+        "summary": "Start Continuous Crawl",
+        "operationId": "start_continuous_crawl_api_campaigns__campaign_id__continuous_crawl_start_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousCrawlStartOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/continuous-crawl/progress": {
+      "get": {
+        "tags": ["campaigns"],
+        "summary": "Continuous Crawl Progress",
+        "operationId": "continuous_crawl_progress_api_campaigns__campaign_id__continuous_crawl_progress_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousCrawlProgressOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/continuous-crawl/pause": {
+      "post": {
+        "tags": ["campaigns"],
+        "summary": "Pause Continuous Crawl",
+        "operationId": "pause_continuous_crawl_api_campaigns__campaign_id__continuous_crawl_pause_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousCrawlProgressOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/continuous-crawl/resume": {
+      "post": {
+        "tags": ["campaigns"],
+        "summary": "Resume Continuous Crawl",
+        "operationId": "resume_continuous_crawl_api_campaigns__campaign_id__continuous_crawl_resume_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousCrawlProgressOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/continuous-crawl/cancel": {
+      "post": {
+        "tags": ["campaigns"],
+        "summary": "Cancel Continuous Crawl",
+        "operationId": "cancel_continuous_crawl_api_campaigns__campaign_id__continuous_crawl_cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinuousCrawlProgressOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/campaigns/{campaign_id}/pause": {
       "post": {
         "tags": ["campaigns"],
@@ -6339,7 +6609,7 @@
       "post": {
         "tags": ["accounts"],
         "summary": "Bulk Import Csv",
-        "description": "Stream-import accounts from a CSV file upload.\n\nReads the upload in 64 KB chunks, parses CSV incrementally, and flushes\nbatches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING —\nso memory usage stays flat regardless of file size.\n\nExpected CSV columns: platform, username, password, display_name, tags, notes",
+        "description": "Stream-import accounts from a CSV file upload.\n\nReads the upload in 64 KB chunks, parses CSV incrementally, and flushes\nbatches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING —\nso memory usage stays flat regardless of file size.\n\nExpected CSV columns: platform, username, password, display_name, tags, notes,\nemail, totp_secret, cookies, token",
         "operationId": "bulk_import_csv_api_accounts_import_csv_post",
         "requestBody": {
           "content": {
@@ -7027,6 +7297,60 @@
         }
       }
     },
+    "/api/devices/{device_id}/accounts/{account_id}/verify": {
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Verify Account On Device Endpoint",
+        "operationId": "verify_account_on_device_endpoint_api_devices__device_id__accounts__account_id__verify_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountVerificationOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{device_id}/accounts/primary": {
       "post": {
         "tags": ["accounts"],
@@ -7066,6 +7390,511 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DeviceAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions": {
+      "get": {
+        "tags": ["accounts"],
+        "summary": "List Device Platform Sessions Endpoint",
+        "description": "List platform session provenance rows for a device.",
+        "operationId": "list_device_platform_sessions_endpoint_api_devices__device_id__platform_sessions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DevicePlatformSessionOut"
+                  },
+                  "title": "Response List Device Platform Sessions Endpoint Api Devices  Device Id  Platform Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook": {
+      "get": {
+        "tags": ["accounts"],
+        "summary": "Get Facebook Platform Session Endpoint",
+        "description": "Return the Facebook session provenance row, creating an unknown row on first read.",
+        "operationId": "get_facebook_platform_session_endpoint_api_devices__device_id__platform_sessions_facebook_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook/confirm": {
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Confirm Facebook Platform Session Endpoint",
+        "description": "Operator-confirm the current Facebook session for migration only.",
+        "operationId": "confirm_facebook_platform_session_endpoint_api_devices__device_id__platform_sessions_facebook_confirm_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmPlatformSessionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook/invalidate": {
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Invalidate Facebook Platform Session Endpoint",
+        "description": "Invalidate the current Facebook provenance row.",
+        "operationId": "invalidate_facebook_platform_session_endpoint_api_devices__device_id__platform_sessions_facebook_invalidate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvalidatePlatformSessionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformSessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook/login-attempts": {
+      "get": {
+        "tags": ["accounts"],
+        "summary": "List Facebook Login Attempts Endpoint",
+        "operationId": "list_facebook_login_attempts_endpoint_api_devices__device_id__platform_sessions_facebook_login_attempts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DevicePlatformLoginAttemptOut"
+                  },
+                  "title": "Response List Facebook Login Attempts Endpoint Api Devices  Device Id  Platform Sessions Facebook Login Attempts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Start Facebook Login Attempt Endpoint",
+        "operationId": "start_facebook_login_attempt_endpoint_api_devices__device_id__platform_sessions_facebook_login_attempts_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartFacebookLoginAttemptBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformLoginAttemptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook/login-attempts/controlled": {
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Start Controlled Facebook Login Attempt Endpoint",
+        "operationId": "start_controlled_facebook_login_attempt_endpoint_api_devices__device_id__platform_sessions_facebook_login_attempts_controlled_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartFacebookLoginAttemptBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformLoginAttemptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook/login-attempts/{attempt_id}/complete": {
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Complete Facebook Login Attempt Endpoint",
+        "operationId": "complete_facebook_login_attempt_endpoint_api_devices__device_id__platform_sessions_facebook_login_attempts__attempt_id__complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Attempt Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteFacebookLoginAttemptBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformLoginAttemptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{device_id}/platform-sessions/facebook/login-attempts/{attempt_id}/cancel": {
+      "post": {
+        "tags": ["accounts"],
+        "summary": "Cancel Facebook Login Attempt Endpoint",
+        "operationId": "cancel_facebook_login_attempt_endpoint_api_devices__device_id__platform_sessions_facebook_login_attempts__attempt_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Attempt Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelFacebookLoginAttemptBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePlatformLoginAttemptOut"
                 }
               }
             }
@@ -13718,6 +14547,104 @@
         }
       }
     },
+    "/api/devices/{device_id}/target-groups": {
+      "get": {
+        "tags": ["external-entities"],
+        "summary": "List Device Target Groups Route",
+        "operationId": "list_device_target_groups_route_api_devices__device_id__target_groups_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceTargetGroupsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["external-entities"],
+        "summary": "Replace Device Target Groups Route",
+        "operationId": "replace_device_target_groups_route_api_devices__device_id__target_groups_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceTargetGroupsReplaceIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceTargetGroupsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Dashboard",
@@ -14906,6 +15833,16 @@
               "type": "boolean",
               "default": false,
               "title": "Refresh"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "background",
+              "title": "Priority"
             }
           }
         ],
@@ -16740,6 +17677,193 @@
         }
       }
     },
+    "/api/media/webrtc/sessions": {
+      "post": {
+        "summary": "Create Session",
+        "operationId": "create_session_api_media_webrtc_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebRTCSessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/media/webrtc/sessions/{session_id}/answer": {
+      "post": {
+        "summary": "Answer Session",
+        "operationId": "answer_session_api_media_webrtc_sessions__session_id__answer_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionDescription"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media/webrtc/sessions/{session_id}/heartbeat": {
+      "post": {
+        "summary": "Heartbeat Session",
+        "operationId": "heartbeat_session_api_media_webrtc_sessions__session_id__heartbeat_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebRTCSessionHeartbeat"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media/webrtc/sessions/{session_id}": {
+      "delete": {
+        "summary": "Close Session",
+        "operationId": "close_session_api_media_webrtc_sessions__session_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/devices/{serial}/extract/hierarchy": {
       "post": {
         "tags": ["extraction"],
@@ -17694,6 +18818,64 @@
         "type": "object",
         "title": "AccountUpdate"
       },
+      "AccountVerificationOut": {
+        "properties": {
+          "assignment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "attempted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Attempted At"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "attempt_id": {
+            "type": "string",
+            "title": "Attempt Id"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          }
+        },
+        "type": "object",
+        "required": ["status", "reason", "attempted_at", "attempt_id"],
+        "title": "AccountVerificationOut"
+      },
       "AccountWithLinksOut": {
         "properties": {
           "id": {
@@ -18477,7 +19659,7 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File",
-            "description": "CSV file with columns: platform, username, password, display_name, tags, notes"
+            "description": "CSV file with columns: platform, username, password, display_name, tags, notes, email, totp_secret, cookies, token"
           }
         },
         "type": "object",
@@ -18608,6 +19790,56 @@
             "type": "string",
             "title": "Notes",
             "default": ""
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "totp_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totp Secret"
+          },
+          "cookies": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cookies"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "account_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Account Metadata",
+            "default": {}
           }
         },
         "type": "object",
@@ -19677,6 +20909,13 @@
               }
             ],
             "title": "Scenario Version"
+          },
+          "repeat_count": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Repeat Count",
+            "default": 1
           }
         },
         "type": "object",
@@ -19692,6 +20931,11 @@
           "scenario_version": {
             "type": "integer",
             "title": "Scenario Version"
+          },
+          "repeat_count": {
+            "type": "integer",
+            "title": "Repeat Count",
+            "default": 1
           }
         },
         "type": "object",
@@ -19724,6 +20968,18 @@
             ],
             "title": "Search"
           },
+          "output_prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Prefix"
+          },
           "statuses": {
             "items": {
               "type": "string"
@@ -19737,6 +20993,17 @@
         "type": "object",
         "required": ["platform", "entity_type"],
         "title": "CampaignSourcePoolIn"
+      },
+      "CancelFacebookLoginAttemptBody": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": "operator_cancelled"
+          }
+        },
+        "type": "object",
+        "title": "CancelFacebookLoginAttemptBody"
       },
       "CapacityGroupBreakdownOut": {
         "properties": {
@@ -20037,6 +21304,75 @@
         },
         "type": "object",
         "title": "CompileScenarioBody"
+      },
+      "CompleteFacebookLoginAttemptBody": {
+        "properties": {
+          "operator_confirmed": {
+            "type": "boolean",
+            "title": "Operator Confirmed",
+            "default": false
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "title": "CompleteFacebookLoginAttemptBody"
+      },
+      "ConfirmPlatformSessionBody": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "display_name_observed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name Observed"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": ["account_id", "reason"],
+        "title": "ConfirmPlatformSessionBody"
       },
       "ConnectByIpBody": {
         "properties": {
@@ -20513,6 +21849,295 @@
         "required": ["total_items", "by_platform", "by_collection"],
         "title": "ContentStatsOut"
       },
+      "ContinuousCrawlDeviceLaneOut": {
+        "properties": {
+          "device_serial": {
+            "type": "string",
+            "title": "Device Serial"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["idle", "running", "paused", "offline", "failed"],
+            "title": "Status"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": ["device_serial", "status"],
+        "title": "ContinuousCrawlDeviceLaneOut"
+      },
+      "ContinuousCrawlPreflightOut": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "target_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Count"
+          },
+          "device_count": {
+            "type": "integer",
+            "title": "Device Count"
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "title": "Max Concurrency"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": ["ready", "device_count", "max_concurrency"],
+        "title": "ContinuousCrawlPreflightOut"
+      },
+      "ContinuousCrawlProgressOut": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "dispatch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatch Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "health": {
+            "type": "string",
+            "enum": ["healthy", "degraded", "critical"],
+            "title": "Health"
+          },
+          "loaded": {
+            "type": "integer",
+            "title": "Loaded",
+            "default": 0
+          },
+          "active": {
+            "type": "integer",
+            "title": "Active",
+            "default": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "title": "Succeeded",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "title": "Consecutive Failures",
+            "default": 0
+          },
+          "exhausted": {
+            "type": "boolean",
+            "title": "Exhausted",
+            "default": false
+          },
+          "generation": {
+            "type": "integer",
+            "title": "Generation",
+            "default": 0
+          },
+          "max_targets": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Targets"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "device_lanes": {
+            "items": {
+              "$ref": "#/components/schemas/ContinuousCrawlDeviceLaneOut"
+            },
+            "type": "array",
+            "title": "Device Lanes"
+          },
+          "recent_targets": {
+            "items": {
+              "$ref": "#/components/schemas/ContinuousCrawlTargetSummaryOut"
+            },
+            "type": "array",
+            "title": "Recent Targets"
+          }
+        },
+        "type": "object",
+        "required": ["campaign_id", "status", "health"],
+        "title": "ContinuousCrawlProgressOut"
+      },
+      "ContinuousCrawlStartOut": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "dispatch_id": {
+            "type": "string",
+            "title": "Dispatch Id"
+          },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": ["campaign_id", "dispatch_id", "workflow_id", "status"],
+        "title": "ContinuousCrawlStartOut"
+      },
+      "ContinuousCrawlTargetSummaryOut": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "running", "succeeded", "failed"],
+            "title": "Status"
+          },
+          "device_serial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Serial"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": ["target_id", "status"],
+        "title": "ContinuousCrawlTargetSummaryOut"
+      },
       "DLQBulkRetryBody": {
         "properties": {
           "execution_ids": {
@@ -20871,6 +22496,40 @@
             "type": "string",
             "format": "date-time",
             "title": "Assigned At"
+          },
+          "verification_status": {
+            "type": "string",
+            "title": "Verification Status",
+            "default": "unknown"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "verification_attempted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Attempted At"
+          },
+          "verification_evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Verification Evidence"
           }
         },
         "type": "object",
@@ -21424,6 +23083,309 @@
         ],
         "title": "DeviceOut"
       },
+      "DevicePlatformLoginAttemptOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reserve_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reserve Session Id"
+          },
+          "created_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By User Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "device_id",
+          "platform",
+          "account_id",
+          "state",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DevicePlatformLoginAttemptOut"
+      },
+      "DevicePlatformSessionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "state_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State Reason"
+          },
+          "established_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Established At"
+          },
+          "last_ready_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ready At"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "invalidated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidated At"
+          },
+          "login_attempt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login Attempt Id"
+          },
+          "establishment_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Establishment Method"
+          },
+          "app_package": {
+            "type": "string",
+            "title": "App Package"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version"
+          },
+          "display_name_observed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name Observed"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "device_id",
+          "platform",
+          "state",
+          "app_package",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DevicePlatformSessionOut"
+      },
       "DeviceReleaseBody": {
         "properties": {
           "session_id": {
@@ -21555,6 +23517,95 @@
         },
         "type": "object",
         "title": "DeviceStateCountsOut"
+      },
+      "DeviceTargetGroupOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "canonical_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Url"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": ["id", "display_name", "status"],
+        "title": "DeviceTargetGroupOut"
+      },
+      "DeviceTargetGroupsOut": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceTargetGroupOut"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "added_count": {
+            "type": "integer",
+            "title": "Added Count",
+            "default": 0
+          },
+          "removed_count": {
+            "type": "integer",
+            "title": "Removed Count",
+            "default": 0
+          },
+          "unchanged_count": {
+            "type": "integer",
+            "title": "Unchanged Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": ["device_id", "groups"],
+        "title": "DeviceTargetGroupsOut"
+      },
+      "DeviceTargetGroupsReplaceIn": {
+        "properties": {
+          "external_entity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "External Entity Ids"
+          }
+        },
+        "type": "object",
+        "required": ["external_entity_ids"],
+        "title": "DeviceTargetGroupsReplaceIn"
       },
       "DoubleTapRequest": {
         "properties": {
@@ -21982,6 +24033,17 @@
               }
             ],
             "title": "Scenario Version Id"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
           },
           "device_config": {
             "additionalProperties": true,
@@ -23022,6 +25084,33 @@
         "type": "object",
         "required": ["text"],
         "title": "InputTextRequest"
+      },
+      "InvalidatePlatformSessionBody": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": ["reason"],
+        "title": "InvalidatePlatformSessionBody"
       },
       "KeyRequest": {
         "properties": {
@@ -27342,6 +29431,17 @@
             ],
             "title": "Viewer Id"
           },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          },
           "max_fps": {
             "anyOf": [
               {
@@ -27411,6 +29511,23 @@
         },
         "type": "object",
         "title": "ScrollRequest"
+      },
+      "SessionDescription": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^offer$",
+            "title": "Type"
+          },
+          "sdp": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Sdp"
+          }
+        },
+        "type": "object",
+        "required": ["type", "sdp"],
+        "title": "SessionDescription"
       },
       "SessionListOut": {
         "properties": {
@@ -27556,6 +29673,22 @@
         "required": ["mode"],
         "title": "SetRingerModeRequest"
       },
+      "StartFacebookLoginAttemptBody": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": ["account_id"],
+        "title": "StartFacebookLoginAttemptBody"
+      },
       "StartSessionRequest": {
         "properties": {
           "device_id": {
@@ -27640,6 +29773,132 @@
           "total_content_items": {
             "type": "integer",
             "title": "Total Content Items"
+          },
+          "latest_dispatch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch Id"
+          },
+          "latest_dispatch_target_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Target Count",
+            "default": 0
+          },
+          "latest_dispatch_finished_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Finished Count",
+            "default": 0
+          },
+          "latest_dispatch_running_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Running Count",
+            "default": 0
+          },
+          "latest_dispatch_pending_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Pending Count",
+            "default": 0
+          },
+          "latest_dispatch_failed_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Failed Count",
+            "default": 0
+          },
+          "latest_dispatch_workflow_started_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Workflow Started Count",
+            "default": 0
+          },
+          "latest_dispatch_fallback_count": {
+            "type": "integer",
+            "title": "Latest Dispatch Fallback Count",
+            "default": 0
+          },
+          "latest_dispatch_created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch Created At"
+          },
+          "latest_dispatch_first_started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch First Started At"
+          },
+          "latest_dispatch_latest_finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch Latest Finished At"
+          },
+          "latest_dispatch_elapsed_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch Elapsed Ms"
+          },
+          "latest_dispatch_terminal_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch Terminal Ms"
+          },
+          "latest_dispatch_to_first_start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch To First Start Ms"
+          },
+          "latest_dispatch_to_start_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Dispatch To Start P95 Ms"
           }
         },
         "type": "object",
@@ -27982,6 +30241,104 @@
         "type": "object",
         "required": ["loc", "msg", "type"],
         "title": "ValidationError"
+      },
+      "WebRTCSessionCreate": {
+        "properties": {
+          "serial": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Serial"
+          },
+          "viewer_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Viewer Id"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "maximum": 1800.0,
+            "minimum": 1.0,
+            "title": "Ttl Seconds",
+            "default": 300
+          },
+          "control": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Control"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          },
+          "max_fps": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 60.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Fps"
+          },
+          "max_width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2160.0,
+                "minimum": 120.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Width"
+          },
+          "bitrate": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 8000000.0,
+                "minimum": 50000.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bitrate"
+          }
+        },
+        "type": "object",
+        "required": ["serial", "viewer_id"],
+        "title": "WebRTCSessionCreate"
+      },
+      "WebRTCSessionHeartbeat": {
+        "properties": {
+          "ttl_seconds": {
+            "type": "integer",
+            "maximum": 1800.0,
+            "minimum": 1.0,
+            "title": "Ttl Seconds",
+            "default": 300
+          }
+        },
+        "type": "object",
+        "title": "WebRTCSessionHeartbeat"
       },
       "api__routes__devices__PairBulkBody": {
         "properties": {

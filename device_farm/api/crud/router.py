@@ -9,6 +9,8 @@ from api.routes.scenario_templates import router as scenario_templates_router
 from api.routes.scenarios import router as scenarios_router
 from api.routes.device_groups import router as device_groups_router
 from api.routes.accounts import router as accounts_router
+from api.routes.account_actions import router as account_actions_router
+from api.routes.account_discovery import router as account_discovery_router
 from api.routes.account_groups import router as account_groups_router
 from api.routes.content import router as content_router
 from api.routes.artifacts import router as artifacts_router
@@ -21,7 +23,11 @@ from api.routes.analytics import router as analytics_router
 from api.routes.preview import router as preview_router
 from api.routes.social_ext import router as social_ext_router
 from api.routes.mcp import router as mcp_router
-from api.routes.external_entities import router as external_entities_router
+from api.routes.external_entities import (
+    device_target_groups_router,
+    router as external_entities_router,
+)
+from api.routes.facebook_candidates import router as facebook_candidates_router
 
 api_router = APIRouter()
 
@@ -37,6 +43,8 @@ api_router.include_router(scenario_templates_router)
 api_router.include_router(scenarios_router)
 api_router.include_router(device_groups_router)
 api_router.include_router(accounts_router)
+api_router.include_router(account_actions_router)
+api_router.include_router(account_discovery_router)
 api_router.include_router(account_groups_router)
 api_router.include_router(content_router)
 api_router.include_router(artifacts_router)
@@ -50,3 +58,5 @@ api_router.include_router(preview_router)
 api_router.include_router(social_ext_router)
 api_router.include_router(mcp_router)
 api_router.include_router(external_entities_router)
+api_router.include_router(device_target_groups_router)
+api_router.include_router(facebook_candidates_router)

@@ -71,7 +71,6 @@ ocr = [
     "paddlepaddle>=2.6",
     "paddleocr>=2.8",
 ]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

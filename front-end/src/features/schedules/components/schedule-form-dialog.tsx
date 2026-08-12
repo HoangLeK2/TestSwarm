@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { useCreateSchedule, useUpdateSchedule } from '../hooks/use-schedules';
@@ -37,6 +37,10 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import {
+  ScheduleCalendarPreview,
+  type ScheduleCalendarPreviewItem
+} from './schedule-calendar-preview';
 
 type Mode = 'create' | 'edit';
 
@@ -92,6 +96,42 @@ export function ScheduleFormDialog({
     mode === 'create'
       ? t('titleCreate')
       : t('titleEdit', { name: schedule?.name ?? '' });
+
+  const previewTargetLabel = useMemo(() => {
+    if (targetType === 'campaign') {
+      return (
+        (campaigns ?? []).find((campaign) => campaign.id === targetId)?.name ??
+        t('targetCampaign')
+      );
+    }
+    if (targetType === 'template') {
+      return (
+        (templates ?? []).find((template) => template.id === targetId)?.name ??
+        t('targetTemplate')
+      );
+    }
+    return t('targetFleet');
+  }, [campaigns, targetId, targetType, templates, t]);
+
+  const previewSchedule = useMemo<ScheduleCalendarPreviewItem>(
+    () => ({
+      id: schedule?.id ?? 'draft',
+      name: name.trim() || t('namePlaceholder'),
+      cronExpression: cronExpression.trim() || '*/30 * * * *',
+      timezone,
+      targetLabel: previewTargetLabel,
+      isEnabled
+    }),
+    [
+      cronExpression,
+      isEnabled,
+      name,
+      previewTargetLabel,
+      schedule?.id,
+      t,
+      timezone
+    ]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -259,318 +299,347 @@ export function ScheduleFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='z-[1000] flex max-h-[90vh] max-w-2xl flex-col'>
-        <DialogHeader className='shrink-0'>
+      <DialogContent className='z-[1000] flex max-h-[92vh] w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-w-[760px] xl:max-w-[1180px]'>
+        <DialogHeader className='shrink-0 border-b bg-muted/25 px-5 py-4'>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
-        <div className='flex-1 space-y-5 overflow-y-auto pr-1 pt-2'>
-          {/* ── Thông tin cơ bản ── */}
-          <div className='space-y-3'>
-            <div className='space-y-1'>
-              <Label>{t('nameLabel')}</Label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t('namePlaceholder')}
-              />
-            </div>
-            <div className='space-y-1'>
-              <Label>{t('descriptionLabel')}</Label>
-              <Textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                placeholder={t('optional')}
-              />
-            </div>
-            <div className='flex items-center gap-3'>
-              <Switch
-                checked={isEnabled}
-                onCheckedChange={setIsEnabled}
-                id='schedule-enabled'
-              />
-              <label
-                htmlFor='schedule-enabled'
-                className='cursor-pointer select-none text-sm'
-              >
-                {isEnabled ? t('enabledOn') : t('enabledOff')}
-              </label>
-            </div>
-          </div>
-
-          {/* ── Mục tiêu ── */}
-          <div className='space-y-3 rounded-lg border p-3'>
-            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-              {t('targetTypeLabel')}
-            </p>
-            {targetType === 'fleet' && mode === 'edit' ? (
-              <p className='text-sm text-muted-foreground'>
-                {t('targetFleet')}
-              </p>
-            ) : (
-              <Select
-                value={targetType === 'fleet' ? 'campaign' : targetType}
-                onValueChange={(v) => {
-                  const next = v as 'campaign' | 'template';
-                  setTargetType(next);
-                  setTargetId(null);
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className='z-[10001]'>
-                  <SelectItem value='campaign'>
-                    {t('targetCampaign')}
-                  </SelectItem>
-                  <SelectItem value='template'>
-                    {t('targetTemplate')}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-
-            {(targetType === 'campaign' || targetType === 'template') && (
-              <div className='space-y-1'>
-                <Label>{t('targetLabel')}</Label>
-                {targetType === 'campaign' ? (
-                  <Select
-                    value={targetId ?? '_none'}
-                    onValueChange={(v) => setTargetId(v === '_none' ? null : v)}
+        <div className='flex-1 overflow-y-auto bg-muted/15 p-4 sm:p-5'>
+          <div className='grid gap-5 xl:grid-cols-[minmax(34rem,1fr)_34rem]'>
+            <div className='space-y-5'>
+              {/* ── Thông tin cơ bản ── */}
+              <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
+                <div className='space-y-1'>
+                  <Label>{t('nameLabel')}</Label>
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t('namePlaceholder')}
+                  />
+                </div>
+                <div className='space-y-1'>
+                  <Label>{t('descriptionLabel')}</Label>
+                  <Textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={2}
+                    placeholder={t('optional')}
+                  />
+                </div>
+                <div className='flex items-center gap-3'>
+                  <Switch
+                    checked={isEnabled}
+                    onCheckedChange={setIsEnabled}
+                    id='schedule-enabled'
+                  />
+                  <label
+                    htmlFor='schedule-enabled'
+                    className='cursor-pointer select-none text-sm'
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder={t('pickCampaign')} />
-                    </SelectTrigger>
-                    <SelectContent className='z-[10001]'>
-                      <SelectItem value='_none'>
-                        {t('selectCampaign')}
-                      </SelectItem>
-                      {(campaigns ?? []).map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    {isEnabled ? t('enabledOn') : t('enabledOff')}
+                  </label>
+                </div>
+              </div>
+
+              {/* ── Mục tiêu ── */}
+              <div className='space-y-3 rounded-lg border bg-background p-4 shadow-sm'>
+                <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+                  {t('targetTypeLabel')}
+                </p>
+                {targetType === 'fleet' && mode === 'edit' ? (
+                  <p className='text-sm text-muted-foreground'>
+                    {t('targetFleet')}
+                  </p>
                 ) : (
                   <Select
-                    value={targetId ?? '_none'}
-                    onValueChange={(v) => setTargetId(v === '_none' ? null : v)}
+                    value={targetType === 'fleet' ? 'campaign' : targetType}
+                    onValueChange={(v) => {
+                      const next = v as 'campaign' | 'template';
+                      setTargetType(next);
+                      setTargetId(null);
+                    }}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder={t('pickTemplate')} />
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent className='z-[10001]'>
-                      <SelectItem value='_none'>
-                        {t('selectTemplate')}
+                      <SelectItem value='campaign'>
+                        {t('targetCampaign')}
                       </SelectItem>
-                      {(templates ?? []).map((tpl) => (
-                        <SelectItem key={tpl.id} value={tpl.id}>
-                          {tpl.name}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value='template'>
+                        {t('targetTemplate')}
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 )}
-              </div>
-            )}
 
-            {targetType === 'fleet' && (
-              <div className='space-y-2'>
-                <Label>
-                  {t('inlineStepsLabel', { count: inlineSteps.length })}
-                </Label>
-                <FlowEditor
-                  steps={inlineSteps}
-                  onChange={setInlineSteps}
-                  compact
-                  maxHeight='min(320px,40vh)'
-                  onChildStepEditorOpenChange={setChildStepEditorOpen}
+                {(targetType === 'campaign' || targetType === 'template') && (
+                  <div className='space-y-1'>
+                    <Label>{t('targetLabel')}</Label>
+                    {targetType === 'campaign' ? (
+                      <Select
+                        value={targetId ?? '_none'}
+                        onValueChange={(v) =>
+                          setTargetId(v === '_none' ? null : v)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('pickCampaign')} />
+                        </SelectTrigger>
+                        <SelectContent className='z-[10001]'>
+                          <SelectItem value='_none'>
+                            {t('selectCampaign')}
+                          </SelectItem>
+                          {(campaigns ?? []).map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Select
+                        value={targetId ?? '_none'}
+                        onValueChange={(v) =>
+                          setTargetId(v === '_none' ? null : v)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('pickTemplate')} />
+                        </SelectTrigger>
+                        <SelectContent className='z-[10001]'>
+                          <SelectItem value='_none'>
+                            {t('selectTemplate')}
+                          </SelectItem>
+                          {(templates ?? []).map((tpl) => (
+                            <SelectItem key={tpl.id} value={tpl.id}>
+                              {tpl.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                )}
+
+                {targetType === 'fleet' && (
+                  <div className='space-y-2'>
+                    <Label>
+                      {t('inlineStepsLabel', { count: inlineSteps.length })}
+                    </Label>
+                    <FlowEditor
+                      steps={inlineSteps}
+                      onChange={setInlineSteps}
+                      compact
+                      maxHeight='min(320px,40vh)'
+                      onChildStepEditorOpenChange={setChildStepEditorOpen}
+                    />
+                  </div>
+                )}
+
+                {targetType === 'fleet' && (
+                  <details className='group'>
+                    <summary className='flex cursor-pointer items-center gap-2 text-sm font-medium'>
+                      {t('inlineVariablesSummary')}
+                      {Object.keys(inlineVariables ?? {}).length > 0 && (
+                        <span className='text-xs text-muted-foreground'>
+                          ({Object.keys(inlineVariables).length})
+                        </span>
+                      )}
+                    </summary>
+                    <div className='pt-2'>
+                      <VariableEditor
+                        variables={inlineVariables}
+                        onChange={setInlineVariables}
+                      />
+                      <p className='mt-1 text-[10px] text-muted-foreground'>
+                        {t('inlineVariablesHintPrefix')}{' '}
+                        <code className='rounded bg-muted px-1 py-0.5'>
+                          {'${__DEVICE_SERIAL__}'}
+                        </code>
+                        {t('inlineVariablesHintSuffix')}
+                      </p>
+                    </div>
+                  </details>
+                )}
+              </div>
+
+              {/* ── Lịch cron ── */}
+              <div className='rounded-lg border bg-background p-4 shadow-sm'>
+                <CronBuilder
+                  key={`${mode}-${schedule?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
+                  value={cronExpression}
+                  onChange={setCronExpression}
                 />
               </div>
-            )}
 
-            {targetType === 'fleet' && (
-              <details className='group'>
-                <summary className='flex cursor-pointer items-center gap-2 text-sm font-medium'>
-                  {t('inlineVariablesSummary')}
-                  {Object.keys(inlineVariables ?? {}).length > 0 && (
-                    <span className='text-xs text-muted-foreground'>
-                      ({Object.keys(inlineVariables).length})
-                    </span>
-                  )}
-                </summary>
-                <div className='pt-2'>
-                  <VariableEditor
-                    variables={inlineVariables}
-                    onChange={setInlineVariables}
-                  />
-                  <p className='mt-1 text-[10px] text-muted-foreground'>
-                    {t('inlineVariablesHintPrefix')}{' '}
-                    <code className='rounded bg-muted px-1 py-0.5'>
-                      {'${__DEVICE_SERIAL__}'}
-                    </code>
-                    {t('inlineVariablesHintSuffix')}
-                  </p>
+              {/* ── Nhóm thiết bị ── */}
+              <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
+                  <div className='space-y-1'>
+                    <Label>{t('deviceGroupLabel')}</Label>
+                    <Select
+                      value={deviceGroupId ?? '_none'}
+                      onValueChange={(v) =>
+                        setDeviceGroupId(v === '_none' ? null : v)
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('allReadyDevices')} />
+                      </SelectTrigger>
+                      <SelectContent className='z-[10001]'>
+                        <SelectItem value='_none'>
+                          {t('allReadyDevices')}
+                        </SelectItem>
+                        {(groups ?? []).map((g) => (
+                          <SelectItem key={g.id} value={g.id}>
+                            {g.name} ({g.device_count})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className='space-y-1'>
+                    <Label>{t('timezoneLabel')}</Label>
+                    <Input
+                      value={timezone}
+                      onChange={(e) => setTimezone(e.target.value)}
+                      placeholder={t('timezonePlaceholder')}
+                    />
+                  </div>
                 </div>
-              </details>
-            )}
-          </div>
 
-          {/* ── Lịch cron ── */}
-          <div className='space-y-2'>
-            <CronBuilder
-              key={`${mode}-${schedule?.id ?? 'new'}-${open ? 'open' : 'closed'}`}
-              value={cronExpression}
-              onChange={setCronExpression}
-            />
-          </div>
-
-          {/* ── Nhóm thiết bị ── */}
-          <div className='grid grid-cols-2 gap-4'>
-            <div className='space-y-1'>
-              <Label>{t('deviceGroupLabel')}</Label>
-              <Select
-                value={deviceGroupId ?? '_none'}
-                onValueChange={(v) =>
-                  setDeviceGroupId(v === '_none' ? null : v)
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t('allReadyDevices')} />
-                </SelectTrigger>
-                <SelectContent className='z-[10001]'>
-                  <SelectItem value='_none'>{t('allReadyDevices')}</SelectItem>
-                  {(groups ?? []).map((g) => (
-                    <SelectItem key={g.id} value={g.id}>
-                      {g.name} ({g.device_count})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className='space-y-1'>
-              <Label>{t('timezoneLabel')}</Label>
-              <Input
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                placeholder={t('timezonePlaceholder')}
-              />
-            </div>
-          </div>
-
-          {/* ── Lọc thiết bị ── */}
-          <div className='grid grid-cols-3 gap-4'>
-            <div className='space-y-1'>
-              <Label>{t('filterStateLabel')}</Label>
-              <Input
-                value={filterState}
-                onChange={(e) => setFilterState(e.target.value)}
-                placeholder={t('filterStatePlaceholder')}
-              />
-            </div>
-            <div className='space-y-1'>
-              <Label>{t('filterModelLabel')}</Label>
-              <Input
-                value={filterModel}
-                onChange={(e) => setFilterModel(e.target.value)}
-                placeholder={t('filterModelPlaceholder')}
-              />
-            </div>
-            <div className='space-y-1'>
-              <Label>{t('maxDevicesLabel')}</Label>
-              <Input
-                type='number'
-                value={maxDevices ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setMaxDevices(v === '' ? null : Math.max(1, Number(v)));
-                }}
-                placeholder={t('optional')}
-              />
-            </div>
-          </div>
-
-          {/* ── Tuỳ chọn thời gian ── */}
-          <div className='space-y-3 rounded-lg border p-3'>
-            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-              {t('staggerDevicesLabel')}
-            </p>
-            <div className='grid grid-cols-2 gap-4'>
-              <div className='space-y-1'>
-                <Label>{t('randomDelayMinLabel')}</Label>
-                <Input
-                  type='number'
-                  min={0}
-                  value={randomDelayMin}
-                  onChange={(e) =>
-                    setRandomDelayMin(Math.max(0, Number(e.target.value) || 0))
-                  }
-                />
+                {/* ── Lọc thiết bị ── */}
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
+                  <div className='space-y-1'>
+                    <Label>{t('filterStateLabel')}</Label>
+                    <Input
+                      value={filterState}
+                      onChange={(e) => setFilterState(e.target.value)}
+                      placeholder={t('filterStatePlaceholder')}
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label>{t('filterModelLabel')}</Label>
+                    <Input
+                      value={filterModel}
+                      onChange={(e) => setFilterModel(e.target.value)}
+                      placeholder={t('filterModelPlaceholder')}
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label>{t('maxDevicesLabel')}</Label>
+                    <Input
+                      type='number'
+                      value={maxDevices ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setMaxDevices(v === '' ? null : Math.max(1, Number(v)));
+                      }}
+                      placeholder={t('optional')}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className='space-y-1'>
-                <Label>{t('randomDelayMaxLabel')}</Label>
-                <Input
-                  type='number'
-                  min={0}
-                  value={randomDelayMax}
-                  onChange={(e) =>
-                    setRandomDelayMax(Math.max(0, Number(e.target.value) || 0))
-                  }
-                />
-              </div>
-            </div>
 
-            <div className='flex items-center gap-3'>
-              <Switch
-                checked={staggerDevices}
-                onCheckedChange={setStaggerDevices}
-                id='stagger-toggle'
-              />
-              <div>
-                <label
-                  htmlFor='stagger-toggle'
-                  className='block cursor-pointer select-none text-sm font-medium'
-                >
+              {/* ── Tuỳ chọn thời gian ── */}
+              <div className='space-y-4 rounded-lg border bg-background p-4 shadow-sm'>
+                <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
                   {t('staggerDevicesLabel')}
-                </label>
-                <p className='text-[11px] text-muted-foreground'>
-                  {t('staggerHint')}
                 </p>
+                <div className='grid grid-cols-2 gap-4'>
+                  <div className='space-y-1'>
+                    <Label>{t('randomDelayMinLabel')}</Label>
+                    <Input
+                      type='number'
+                      min={0}
+                      value={randomDelayMin}
+                      onChange={(e) =>
+                        setRandomDelayMin(
+                          Math.max(0, Number(e.target.value) || 0)
+                        )
+                      }
+                    />
+                  </div>
+                  <div className='space-y-1'>
+                    <Label>{t('randomDelayMaxLabel')}</Label>
+                    <Input
+                      type='number'
+                      min={0}
+                      value={randomDelayMax}
+                      onChange={(e) =>
+                        setRandomDelayMax(
+                          Math.max(0, Number(e.target.value) || 0)
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className='flex items-center gap-3'>
+                  <Switch
+                    checked={staggerDevices}
+                    onCheckedChange={setStaggerDevices}
+                    id='stagger-toggle'
+                  />
+                  <div>
+                    <label
+                      htmlFor='stagger-toggle'
+                      className='block cursor-pointer select-none text-sm font-medium'
+                    >
+                      {t('staggerDevicesLabel')}
+                    </label>
+                    <p className='text-[11px] text-muted-foreground'>
+                      {t('staggerHint')}
+                    </p>
+                  </div>
+                </div>
+
+                {staggerDevices && (
+                  <div className='space-y-1'>
+                    <Label>{t('staggerIntervalSecondsLabel')}</Label>
+                    <Input
+                      type='number'
+                      min={1}
+                      max={3600}
+                      value={staggerIntervalSeconds}
+                      onChange={(e) =>
+                        setStaggerIntervalSeconds(
+                          Math.max(
+                            1,
+                            Math.min(3600, Number(e.target.value) || 60)
+                          )
+                        )
+                      }
+                    />
+                  </div>
+                )}
               </div>
+
+              {(createMutation.error || updateMutation.error) && (
+                <p className='text-xs text-destructive'>
+                  {formatFarmApiError(
+                    mode === 'create'
+                      ? createMutation.error
+                      : updateMutation.error,
+                    mode === 'create' ? t('createFailed') : t('updateFailed')
+                  )}
+                </p>
+              )}
             </div>
 
-            {staggerDevices && (
-              <div className='space-y-1'>
-                <Label>{t('staggerIntervalSecondsLabel')}</Label>
-                <Input
-                  type='number'
-                  min={1}
-                  max={3600}
-                  value={staggerIntervalSeconds}
-                  onChange={(e) =>
-                    setStaggerIntervalSeconds(
-                      Math.max(1, Math.min(3600, Number(e.target.value) || 60))
-                    )
-                  }
-                />
-              </div>
-            )}
+            <div className='xl:sticky xl:top-0 xl:self-start'>
+              <ScheduleCalendarPreview
+                schedules={[previewSchedule]}
+                compact
+                className='overflow-hidden shadow-sm'
+              />
+            </div>
           </div>
-
-          {(createMutation.error || updateMutation.error) && (
-            <p className='text-xs text-destructive'>
-              {formatFarmApiError(
-                mode === 'create' ? createMutation.error : updateMutation.error,
-                mode === 'create' ? t('createFailed') : t('updateFailed')
-              )}
-            </p>
-          )}
         </div>
 
         {/* ── Footer ── */}
-        <div className='flex shrink-0 items-center justify-end gap-2 border-t pt-3'>
+        <div className='flex shrink-0 items-center justify-end gap-2 border-t bg-background px-5 py-4'>
           <Button
             size='sm'
             variant='outline'

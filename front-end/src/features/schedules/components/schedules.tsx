@@ -11,24 +11,26 @@ import {
   type CampaignOut
 } from '@/features/campaigns/types';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
-import { DataTable } from '@/components/ui/table/data-table';
-import { useDataTable } from '@/hooks/use-data-table';
 import { Button } from '@/components/ui/button';
 import { ScheduleFormDialog } from './schedule-form-dialog';
-import { getScheduleColumns } from './schedule-columns';
+import {
+  ScheduleCalendarPreview,
+  type ScheduleCalendarPreviewItem
+} from './schedule-calendar-preview';
 import { FileText } from 'lucide-react';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { Can } from '@/features/auth';
 import { Badge } from '@/components/ui/badge';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 export function Schedules() {
   const tList = useTranslations('schedulesFeature.list');
-  const tCron = useTranslations('schedulesFeature.cronBuilder');
   const { data: schedules, isLoading, error } = useSchedules();
   const { data: campaigns = [] } = useCampaigns();
+  const perms = useResourcePermissions('schedules');
 
-  const data: ScheduleOut[] = schedules ?? [];
+  const data: ScheduleOut[] = useMemo(() => schedules ?? [], [schedules]);
   const hasTemplateTargets = data.some((s) => s.target_type === 'template');
   const { data: templates = [] } = useScenarioTemplates(undefined, {
     enabled: hasTemplateTargets
@@ -48,18 +50,40 @@ export function Schedules() {
       ),
     [campaigns]
   );
-  const columns = useMemo(
-    () => getScheduleColumns(tList, tCron, { campaignById, templateById }),
-    [tList, tCron, campaignById, templateById]
+  const calendarSchedules = useMemo<ScheduleCalendarPreviewItem[]>(
+    () =>
+      data.map((schedule) => {
+        const targetLabel =
+          schedule.target_type === 'campaign'
+            ? (campaignById.get(schedule.target_id ?? '')?.name ??
+              tList('targetCampaign'))
+            : schedule.target_type === 'template'
+              ? (templateById.get(schedule.target_id ?? '')?.name ??
+                tList('targetTemplate'))
+              : tList('targetFleet');
+
+        return {
+          id: schedule.id,
+          name: schedule.name,
+          cronExpression: schedule.cron_expression ?? '*/30 * * * *',
+          timezone: schedule.timezone,
+          targetLabel,
+          isEnabled: Boolean(schedule.is_enabled)
+        };
+      }),
+    [data, campaignById, templateById, tList]
   );
 
-  const { table } = useDataTable<ScheduleOut>({
-    data,
-    columns,
-    pageCount: 1
-  });
-
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<ScheduleOut | null>(
+    null
+  );
+
+  const handleSelectSchedule = (scheduleId: string) => {
+    const schedule = data.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    setEditingSchedule(schedule);
+  };
 
   return (
     <div className='space-y-6'>
@@ -155,7 +179,12 @@ export function Schedules() {
               </div>
             </div>
           ) : (
-            <DataTable table={table} total={data.length} />
+            <ScheduleCalendarPreview
+              schedules={calendarSchedules}
+              onSelectSchedule={
+                perms.canUpdate ? handleSelectSchedule : undefined
+              }
+            />
           )}
 
           {createOpen && (
@@ -163,6 +192,17 @@ export function Schedules() {
               open={createOpen}
               onOpenChange={setCreateOpen}
               mode='create'
+            />
+          )}
+
+          {editingSchedule && (
+            <ScheduleFormDialog
+              open={Boolean(editingSchedule)}
+              onOpenChange={(nextOpen) => {
+                if (!nextOpen) setEditingSchedule(null);
+              }}
+              mode='edit'
+              schedule={editingSchedule}
             />
           )}
         </>

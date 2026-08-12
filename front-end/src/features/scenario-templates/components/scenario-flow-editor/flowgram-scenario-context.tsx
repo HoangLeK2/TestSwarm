@@ -2,7 +2,8 @@
 
 /**
  * Context cho nút play / chọn node trên Flowgram canvas.
- * UI Flowgram đang tắt tạm ở parent: `ENABLE_FLOWGRAM_CONTROL_UI` / `ENABLE_FLOWGRAM_SCENARIO_UI`.
+ * Parent screens gate Flowgram with public env-backed feature switches so the
+ * legacy list editor can remain available as a fallback.
  */
 
 import { createContext, useContext, type ReactNode } from 'react';
@@ -12,7 +13,6 @@ export type FlowgramRunState = 'idle' | 'running' | 'ok' | 'error';
 
 export type FlowgramScenarioWorkbench = {
   deviceSerial: string | null;
-  selectedFgId: string | null;
   setSelectedFgId: (id: string | null) => void;
   runStates: Record<string, FlowgramRunState>;
   onRunLeafStep: (fgId: string, step: FlowStep) => void;

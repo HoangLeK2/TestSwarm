@@ -10,9 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
-import { Copy, MoreHorizontal, Trash2, GitBranch } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { ROUTES } from '@/config/routes';
+import { Copy, MoreHorizontal, Trash2 } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { ScenarioTemplateOut } from '../../services/api';
 import { templateDisplayLabel } from '../../lib/template-label';
@@ -33,7 +31,6 @@ function TemplateActionsCell({
   onDelete: (template: ScenarioTemplateOut) => void;
   onDuplicate: (template: ScenarioTemplateOut) => void;
 }) {
-  const router = useRouter();
   const perms = useResourcePermissions('scenario-templates');
   const campaignPerms = useResourcePermissions('campaigns');
 
@@ -42,17 +39,6 @@ function TemplateActionsCell({
       {campaignPerms.canCreate ? <UseTemplateDialog template={tpl} /> : null}
       {!tpl.is_builtin && perms.canUpdate ? (
         <EditTemplateDialog template={tpl} />
-      ) : null}
-      {perms.canUpdate ? (
-        <Button
-          size='icon'
-          variant='ghost'
-          className='size-8'
-          title='Mở trong Flow Editor'
-          onClick={() => router.push(ROUTES.SCENARIO_TEMPLATES.FLOW(tpl.id))}
-        >
-          <GitBranch size={14} />
-        </Button>
       ) : null}
       {(perms.canCreate || perms.canDelete) && !tpl.is_builtin ? (
         <DropdownMenu>

@@ -16,6 +16,7 @@ export function patchStepByFlowgramId(
 
 function hasThenElseBranches(type: string): boolean {
   return (
+    type === 'if' ||
     type === 'if_element' ||
     type === 'if_variable' ||
     type === 'tap_fb_comment_button' ||
@@ -23,12 +24,39 @@ function hasThenElseBranches(type: string): boolean {
   );
 }
 
+function hasArrayField(s: FlowStep, key: 'then' | 'else' | 'steps'): boolean {
+  return Array.isArray((s as Record<string, unknown>)[key]);
+}
+
+function hasThenElseStep(s: FlowStep): boolean {
+  return (
+    hasThenElseBranches(s.type) ||
+    hasArrayField(s, 'then') ||
+    hasArrayField(s, 'else')
+  );
+}
+
+function hasBranchStep(s: FlowStep): boolean {
+  return (
+    s.type === 'random_pick' ||
+    Array.isArray((s as { branches?: unknown }).branches)
+  );
+}
+
+function hasLoopStep(s: FlowStep): boolean {
+  return (
+    s.type === 'repeat' ||
+    s.type === 'repeat_until' ||
+    s.type === 'loop' ||
+    hasArrayField(s, 'steps')
+  );
+}
+
 function patchOne(s: FlowStep, fgId: string, replacement: FlowStep): FlowStep {
   if ((s as Record<string, unknown>)[FG] === fgId) {
     return { ...replacement, [FG]: fgId } as FlowStep;
   }
-  const t = s.type;
-  if (hasThenElseBranches(t)) {
+  if (hasThenElseStep(s)) {
     const cur = s as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
     return {
       ...s,
@@ -36,7 +64,7 @@ function patchOne(s: FlowStep, fgId: string, replacement: FlowStep): FlowStep {
       else: patchArray(cur.else ?? [], fgId, replacement)
     } as FlowStep;
   }
-  if (t === 'random_pick') {
+  if (hasBranchStep(s)) {
     const cur = s as FlowStep & {
       branches?: Array<{ weight?: number; steps?: FlowStep[] }>;
     };
@@ -48,7 +76,7 @@ function patchOne(s: FlowStep, fgId: string, replacement: FlowStep): FlowStep {
       }))
     } as FlowStep;
   }
-  if (t === 'repeat' || t === 'repeat_until' || t === 'loop') {
+  if (hasLoopStep(s)) {
     const cur = s as FlowStep & { steps?: FlowStep[] };
     return {
       ...s,
@@ -84,8 +112,7 @@ function mergeOne(
     const next = typeof patch === 'function' ? patch(s) : { ...s, ...patch };
     return { ...next, [FG]: fgId } as FlowStep;
   }
-  const t = s.type;
-  if (hasThenElseBranches(t)) {
+  if (hasThenElseStep(s)) {
     const cur = s as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
     return {
       ...s,
@@ -93,7 +120,7 @@ function mergeOne(
       else: mergeArray(cur.else ?? [], fgId, patch)
     } as FlowStep;
   }
-  if (t === 'random_pick') {
+  if (hasBranchStep(s)) {
     const cur = s as FlowStep & {
       branches?: Array<{ weight?: number; steps?: FlowStep[] }>;
     };
@@ -105,7 +132,7 @@ function mergeOne(
       }))
     } as FlowStep;
   }
-  if (t === 'repeat' || t === 'repeat_until' || t === 'loop') {
+  if (hasLoopStep(s)) {
     const cur = s as FlowStep & { steps?: FlowStep[] };
     return {
       ...s,
@@ -177,8 +204,7 @@ export function findStepByFlowgramId(
 
 function findOneDeep(s: FlowStep, fgId: string): FlowStep | null {
   if ((s as Record<string, unknown>)[FG] === fgId) return s;
-  const t = s.type;
-  if (hasThenElseBranches(t)) {
+  if (hasThenElseStep(s)) {
     const cur = s as FlowStep & { then?: FlowStep[]; else?: FlowStep[] };
     for (const x of cur.then ?? []) {
       const h = findOneDeep(x, fgId);
@@ -188,7 +214,7 @@ function findOneDeep(s: FlowStep, fgId: string): FlowStep | null {
       const h = findOneDeep(x, fgId);
       if (h) return h;
     }
-  } else if (t === 'random_pick') {
+  } else if (hasBranchStep(s)) {
     const cur = s as FlowStep & { branches?: Array<{ steps?: FlowStep[] }> };
     for (const br of cur.branches ?? []) {
       for (const x of br.steps ?? []) {
@@ -196,7 +222,7 @@ function findOneDeep(s: FlowStep, fgId: string): FlowStep | null {
         if (h) return h;
       }
     }
-  } else if (t === 'repeat' || t === 'repeat_until' || t === 'loop') {
+  } else if (hasLoopStep(s)) {
     const cur = s as FlowStep & { steps?: FlowStep[] };
     for (const x of cur.steps ?? []) {
       const h = findOneDeep(x, fgId);

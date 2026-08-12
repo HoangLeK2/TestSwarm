@@ -1,0 +1,55 @@
+.scenario-flowgram-shell {
+  --g-selection-background: #2563eb;
+  --g-editor-background: #f8fafc;
+  --g-playground-select: #2563eb;
+  --g-playground-hover: #1d4ed8;
+  --g-playground-line: #94a3b8;
+  --g-playground-blur: #cbd5e1;
+  --g-playground-selectBox-outline: #2563eb;
+  --g-playground-selectBox-background: rgba(37, 99, 235, 0.08);
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: linear-gradient(rgba(148, 163, 184, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.09) 1px, transparent 1px),
+    #f8fafc;
+  background-size: 24px 24px;
+}
+
+.scenario-flowgram-shell * {
+  box-sizing: border-box;
+}
+
+.scenario-flowgram-shell .gedit-playground {
+  background-color: transparent;
+}
+
+.scenario-flowgram-shell .gedit-playground::-webkit-scrollbar,
+.scenario-flowgram-shell *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scenario-flowgram-shell .gedit-playground::-webkit-scrollbar-thumb,
+.scenario-flowgram-shell *::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border: 2px solid #f8fafc;
+  border-radius: 999px;
+}
+
+.scenario-flowgram-shell .gedit-playground::-webkit-scrollbar-thumb:hover,
+.scenario-flowgram-shell *::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.scenario-flowgram-shell .gedit-playground-scroll-right-block,
+.scenario-flowgram-shell .gedit-playground-scroll-bottom-block {
+  background: #94a3b8;
+}
+
+.scenario-flowgram-shell .flow-lines-container path,
+.scenario-flowgram-shell svg path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

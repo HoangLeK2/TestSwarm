@@ -1286,16 +1286,17 @@ async def _u2_swipe_vertical(
     return bool(result.get("ok"))
 
 
-async def _collect_fb_group_snapshots(
+async def _collect_fb_entity_snapshots(
     executor: Any,
     serial: str,
     context: dict[str, Any],
     initial_xml: str,
+    *,
+    strategy: str,
+    item_label: str,
+    parser: Any,
 ) -> list[str]:
-    """Run one bounded group-result crawl session on the edge agent."""
-    from relay.extra_data.parsers.facebook.group_pipeline import (
-        parse_group_search_results,
-    )
+    """Run one bounded external-entity search crawl session on the edge agent."""
 
     max_pages = _int_context(context, "max_pages", 20, 1, 200)
     max_items = _int_context(context, "max_items", 500, 1, 5_000)
@@ -1343,7 +1344,7 @@ async def _collect_fb_group_snapshots(
         _raise_if_cancelled(context)
         pages_scanned += 1
 
-        items, _diagnostic = parse_group_search_results(xml)
+        items, _diagnostic = parser(xml)
         new_items = 0
         for item in items:
             identity_key = str(item.get("identity_key") or "").strip()
@@ -1452,14 +1453,58 @@ async def _collect_fb_group_snapshots(
     context["entity_crawl_stopped_reason"] = stopped_reason
     context["entity_crawl_payload_bytes"] = len(compact_xml.encode("utf-8"))
     logger.info(
-        "[%s] fb_groups crawl done pages=%d items=%d snapshots=%d reason=%s",
+        "[%s] %s crawl done pages=%d %ss=%d snapshots=%d reason=%s",
         serial,
+        strategy,
         pages_scanned,
+        item_label,
         len(compact_labels),
         1,
         stopped_reason,
     )
     return [compact_xml]
+
+
+async def _collect_fb_group_snapshots(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+    initial_xml: str,
+) -> list[str]:
+    from relay.extra_data.parsers.facebook.group_pipeline import (
+        parse_group_search_results,
+    )
+
+    return await _collect_fb_entity_snapshots(
+        executor,
+        serial,
+        context,
+        initial_xml,
+        strategy="fb_groups",
+        item_label="group",
+        parser=parse_group_search_results,
+    )
+
+
+async def _collect_fb_page_snapshots(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+    initial_xml: str,
+) -> list[str]:
+    from relay.extra_data.parsers.facebook.page_pipeline import (
+        parse_page_search_results,
+    )
+
+    return await _collect_fb_entity_snapshots(
+        executor,
+        serial,
+        context,
+        initial_xml,
+        strategy="fb_pages",
+        item_label="page",
+        parser=parse_page_search_results,
+    )
 
 
 # Caption "xem thêm" only — avoid profile tab strip "Xem thêm" (capital X, trong số).
@@ -3679,6 +3724,13 @@ async def collect_xml_snapshots(
                 snapshots = await _collect_comment_snapshots(executor, serial, context, xml)
             elif strategy == "fb_groups":
                 snapshots = await _collect_fb_group_snapshots(
+                    executor,
+                    serial,
+                    context,
+                    xml,
+                )
+            elif strategy == "fb_pages":
+                snapshots = await _collect_fb_page_snapshots(
                     executor,
                     serial,
                     context,

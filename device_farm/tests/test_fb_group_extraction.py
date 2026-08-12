@@ -35,6 +35,36 @@ class _NoGroupDevice(_FakeDevice):
         }
 
 
+class _FakePageDevice(_FakeDevice):
+    def request_extra_data_xml(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 1,
+                "inserted_count": 1,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "ok"},
+                "items": [{"display_name": "Go2Joy Vietnam"}],
+            },
+        }
+
+
+class _NoPageDevice(_FakeDevice):
+    def request_extra_data_xml(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "ok": True,
+            "ingest": {
+                "parsed_count": 0,
+                "inserted_count": 0,
+                "duplicate_count": 0,
+                "diagnostic": {"reason_code": "no_pages"},
+                "items": [],
+            },
+        }
+
+
 def test_fb_groups_persists_without_content_collection_and_keeps_query(
     monkeypatch,
 ) -> None:
@@ -177,6 +207,71 @@ def test_fb_groups_fails_the_step_when_visible_results_parse_to_zero(
     assert "_break" not in ctx
 
 
+def test_fb_pages_persists_without_content_collection_and_keeps_query(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setattr(
+        extraction_mod,
+        "_relay_extra_data_available",
+        lambda _device: True,
+    )
+    device = _FakePageDevice()
+    ctx = {}
+    result = {}
+
+    handled = extraction_mod.request_edge_extra_data(
+        device=device,
+        serial="device-a",
+        ctx=ctx,
+        scenario={"_execution_id": "execution-a"},
+        step={
+            "edge_extra_data": True,
+            "search_query": "${_PAGE_SEARCH_QUERY}",
+            "max_pages": 6,
+            "max_items": "${MAX_ITEMS_PER_KEYWORD}",
+        },
+        strategy="fb_pages",
+        result=result,
+    )
+
+    assert handled is True
+    assert device.calls[0]["strategy"] == "fb_pages"
+    assert device.calls[0]["context"]["persist"] is True
+    assert device.calls[0]["context"]["return_items"] is True
+    assert device.calls[0]["context"]["search_query"] == "${_PAGE_SEARCH_QUERY}"
+    assert device.calls[0]["context"]["max_pages"] == 6
+    assert device.calls[0]["context"]["max_items"] == 500
+    assert ctx["pages"] == [{"display_name": "Go2Joy Vietnam"}]
+
+
+def test_fb_pages_fails_the_step_when_visible_results_parse_to_zero(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setattr(
+        extraction_mod,
+        "_relay_extra_data_available",
+        lambda _device: True,
+    )
+    result = {}
+
+    handled = extraction_mod.request_edge_extra_data(
+        device=_NoPageDevice(),
+        serial="device-a",
+        ctx={},
+        scenario={"_execution_id": "execution-a"},
+        step={"edge_extra_data": True, "search_query": "go2joy"},
+        strategy="fb_pages",
+        result=result,
+    )
+
+    assert handled is True
+    assert result["ok"] is False
+    assert result["reason_code"] == "no_pages"
+    assert "không đọc được page" in result["message"]
+
+
 def test_group_discovery_template_uses_one_agent_owned_crawl_step() -> None:
     template = BUILTIN_TEMPLATE_BY_NAME["Khám phá nguồn từ Facebook Groups"]
     group_steps = [
@@ -199,3 +294,44 @@ def test_group_discovery_template_uses_one_agent_owned_crawl_step() -> None:
         "entity_scroll_pause_s": 0.6,
         "edge_extra_timeout_s": 180,
     }
+
+
+def test_page_discovery_template_uses_keyword_loop_and_fb_pages_extract() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME["Khám phá Page Facebook theo keyword"]
+    assert template["variables"]["PAGE_KEYWORDS"]
+    assert template["variables"]["PAGE_KEYWORD_COUNT"] == len(
+        template["variables"]["PAGE_KEYWORDS"]
+    )
+
+    def walk(steps):
+        for step in steps:
+            yield step
+            for key in ("then", "else", "steps"):
+                nested = step.get(key)
+                if isinstance(nested, list):
+                    yield from walk(nested)
+
+    steps = list(walk(template["steps"]))
+    page_extracts = [
+        step
+        for step in steps
+        if step.get("type") == "extract" and step.get("strategy") == "fb_pages"
+    ]
+    tab_swipes = [
+        step
+        for step in steps
+        if step.get("type") == "swipe_ratio"
+        and step.get("x1") == 0.86
+        and step.get("x2") == 0.22
+    ]
+
+    assert len(page_extracts) == 1
+    assert page_extracts[0]["search_query"] == "${_PAGE_SEARCH_QUERY}"
+    assert page_extracts[0]["max_items"] == "${MAX_ITEMS_PER_KEYWORD}"
+    assert any(
+        step.get("type") == "loop"
+        and step.get("loop_var") == "_PAGE_KEYWORD_INDEX"
+        and step.get("count") == "${PAGE_KEYWORD_COUNT}"
+        for step in steps
+    )
+    assert tab_swipes

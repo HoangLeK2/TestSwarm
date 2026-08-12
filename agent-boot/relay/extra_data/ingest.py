@@ -23,7 +23,7 @@ _SUPPORTED_CONTENT_STRATEGIES = (
     | _MULTI_PLATFORM_POST_STRATEGIES
     | _MULTI_PLATFORM_COMMENT_STRATEGIES
 )
-_SUPPORTED_ENTITY_STRATEGIES = {"fb_groups"}
+_SUPPORTED_ENTITY_STRATEGIES = {"fb_groups", "fb_pages"}
 
 
 def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, str]:
@@ -146,6 +146,12 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         )
 
         return parse_group_search_results(xml)
+    if strategy == "fb_pages":
+        from relay.extra_data.parsers.facebook.page_pipeline import (
+            parse_page_search_results,
+        )
+
+        return parse_page_search_results(xml)
     if strategy == "fb_comment_filter_next":
         from relay.extra_data.parsers.facebook.comment_filter import resolve_comment_filter_next_tap
 
@@ -473,9 +479,11 @@ def _parse_fb_post_snapshots(
     return deduped, diagnostic
 
 
-def _parse_fb_group_snapshots(
+def _parse_fb_entity_snapshots(
     snapshots: list[str],
     context: dict[str, Any],
+    strategy: str,
+    item_label: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     def merge_non_empty(existing: Any, incoming: Any) -> Any:
         if isinstance(existing, dict) and isinstance(incoming, dict):
@@ -495,11 +503,11 @@ def _parse_fb_group_snapshots(
     last_diagnostic: dict[str, Any] = {"reason_code": "no_snapshots"}
 
     for snapshot in snapshots:
-        items, diagnostic = _parse_items("fb_groups", snapshot, context)
+        items, diagnostic = _parse_items(strategy, snapshot, context)
         last_diagnostic = diagnostic
         frame_codes.append(str(diagnostic.get("reason_code") or "unknown"))
         frame_groups_returned.append(
-            int(diagnostic.get("groups_returned") or len(items))
+            int(diagnostic.get(f"{item_label}s_returned") or len(items))
         )
         for item in items:
             identity_key = str(item.get("identity_key") or "").strip()
@@ -521,14 +529,28 @@ def _parse_fb_group_snapshots(
         "reason_code": (
             "ok"
             if merged
-            else last_diagnostic.get("reason_code", "no_groups")
+            else last_diagnostic.get("reason_code", f"no_{item_label}s")
         ),
         "snapshot_count": len(snapshots),
         "frame_reason_codes": frame_codes,
-        "frame_groups_returned": frame_groups_returned,
-        "groups_returned": len(merged),
+        f"frame_{item_label}s_returned": frame_groups_returned,
+        f"{item_label}s_returned": len(merged),
     }
     return merged, diagnostic
+
+
+def _parse_fb_group_snapshots(
+    snapshots: list[str],
+    context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return _parse_fb_entity_snapshots(snapshots, context, "fb_groups", "group")
+
+
+def _parse_fb_page_snapshots(
+    snapshots: list[str],
+    context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return _parse_fb_entity_snapshots(snapshots, context, "fb_pages", "page")
 
 
 def _trusted_preparsed_fb_comments(
@@ -623,6 +645,9 @@ def _parse_payload_items(
         return items, diagnostic, snapshots
     if strategy == "fb_groups" and len(snapshots) > 1:
         items, diagnostic = _parse_fb_group_snapshots(snapshots, context)
+        return items, diagnostic, snapshots
+    if strategy == "fb_pages" and len(snapshots) > 1:
+        items, diagnostic = _parse_fb_page_snapshots(snapshots, context)
         return items, diagnostic, snapshots
     items, diagnostic = _parse_items(strategy, xml, context)
     return items, diagnostic, snapshots

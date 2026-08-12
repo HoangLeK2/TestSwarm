@@ -19,6 +19,17 @@ def _group_page(*cards: tuple[str, str]) -> str:
     return f"<hierarchy>{nodes}</hierarchy>"
 
 
+def _fb_page(*cards: tuple[str, str]) -> str:
+    nodes = "".join(
+        (
+            '<node class="android.widget.Button" clickable="true" '
+            f'content-desc="{name},{metadata}" />'
+        )
+        for name, metadata in cards
+    )
+    return f"<hierarchy>{nodes}</hierarchy>"
+
+
 class _PagedGroupExecutor:
     def __init__(self, pages: list[str]) -> None:
         self.pages = pages
@@ -110,6 +121,45 @@ async def test_fb_groups_crawl_runs_entire_bounded_session_in_agent_boot() -> No
     assert context["entity_crawl_items_seen"] == 3
     assert context["entity_crawl_stopped_reason"] == "no_new_items"
     assert context["entity_crawl_payload_bytes"] == len(snapshots[0].encode("utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_fb_pages_crawl_runs_entire_bounded_session_in_agent_boot() -> None:
+    executor = _PagedGroupExecutor(
+        [
+            _fb_page(
+                ("Go2Joy Vietnam", " Trang · 120K người thích"),
+                ("Booking.com", " Page · 16M followers"),
+            ),
+            _fb_page(
+                ("Booking.com", " Page · 17M followers"),
+                ("Travel Vietnam", " Trang · 20K người theo dõi"),
+            ),
+        ]
+    )
+    context: dict[str, Any] = {
+        "max_pages": 10,
+        "max_items": 100,
+        "stop_if_no_new": True,
+        "no_new_threshold": 1,
+        "entity_scroll_pause_s": 0,
+    }
+
+    snapshots, error = await collect_xml_snapshots(
+        executor,
+        "device-pages",
+        "fb_pages",
+        context,
+    )
+
+    assert error is None
+    assert len(snapshots) == 1
+    assert "Go2Joy Vietnam" in snapshots[0]
+    assert "Booking.com, Page · 17M followers" in snapshots[0]
+    assert "Travel Vietnam" in snapshots[0]
+    assert executor.swipes == 2
+    assert context["entity_crawl_pages_scanned"] == 3
+    assert context["entity_crawl_items_seen"] == 3
 
 
 @pytest.mark.asyncio

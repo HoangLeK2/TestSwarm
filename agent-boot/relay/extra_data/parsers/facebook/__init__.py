@@ -72,5 +72,6 @@ from .post_extractor import (
 from .shared import COMMENT_BUTTON_TOKENS as _COMMENT_BUTTON_TOKENS
 from .ui_expansion import _collect_see_more_tap_plan
 from .group_pipeline import parse_group_search_results
+from .page_pipeline import parse_page_search_results
 
 __all__ = [k for k in globals().keys() if not k.startswith("__")]

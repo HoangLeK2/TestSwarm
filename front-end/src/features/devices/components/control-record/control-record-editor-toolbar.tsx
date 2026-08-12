@@ -5,7 +5,10 @@ import {
   ChevronRight,
   Circle,
   Code2,
+  Settings2,
   HelpCircle,
+  GitBranch,
+  List,
   Play,
   RefreshCw,
   Save,
@@ -14,6 +17,14 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import {
   Tooltip,
   TooltipContent,
@@ -36,6 +47,11 @@ type ControlRecordEditorToolbarLabels = {
   deviceVars: string;
   deviceVarsTooltip: string;
   helpTooltip: string;
+  flowSwitchToList: string;
+  flowSwitchToFlow: string;
+  flowListLabel: string;
+  flowFlowLabel: string;
+  settings: string;
 };
 
 type ControlRecordEditorToolbarProps = {
@@ -54,6 +70,8 @@ type ControlRecordEditorToolbarProps = {
   saveLabel: string;
   onOpenVariables: () => void;
   variableCount: number;
+  pageSummary?: string;
+  pageSummaryWarning?: string;
   showRecovery: boolean;
   recoveryEnabled: boolean;
   onOpenRecovery: () => void;
@@ -61,6 +79,9 @@ type ControlRecordEditorToolbarProps = {
   deviceVarsEnabled: boolean;
   deviceVarsDisabled: boolean;
   onHelpClick?: () => void;
+  flowEnabled: boolean;
+  flowMode: boolean;
+  onToggleFlowMode: () => void;
   labels: ControlRecordEditorToolbarLabels;
 };
 
@@ -80,6 +101,8 @@ export function ControlRecordEditorToolbar({
   saveLabel,
   onOpenVariables,
   variableCount,
+  pageSummary,
+  pageSummaryWarning,
   showRecovery,
   recoveryEnabled,
   onOpenRecovery,
@@ -87,10 +110,13 @@ export function ControlRecordEditorToolbar({
   deviceVarsEnabled,
   deviceVarsDisabled,
   onHelpClick,
+  flowEnabled,
+  flowMode,
+  onToggleFlowMode,
   labels
 }: ControlRecordEditorToolbarProps) {
   return (
-    <div className='flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/20 px-2 py-2'>
+    <div className='flex shrink-0 items-center gap-1 border-b border-border/50 bg-background px-2 py-2'>
       {showClosePicker ? (
         <Button
           type='button'
@@ -103,9 +129,44 @@ export function ControlRecordEditorToolbar({
           <ChevronRight className='size-3.5' />
         </Button>
       ) : null}
-      <div className='flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+      <div className='flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+        {flowEnabled ? (
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 shrink-0 gap-1.5 px-2 text-xs'
+            onClick={onToggleFlowMode}
+            title={flowMode ? labels.flowSwitchToList : labels.flowSwitchToFlow}
+          >
+            {flowMode ? (
+              <List className='size-3.5' />
+            ) : (
+              <GitBranch className='size-3.5' />
+            )}
+            {flowMode ? labels.flowListLabel : labels.flowFlowLabel}
+          </Button>
+        ) : null}
+        {flowEnabled ? <div className='h-5 w-px shrink-0 bg-border' /> : null}
         {pollingXml ? (
           <RefreshCw size={12} className='animate-spin text-red-500/80' />
+        ) : null}
+        {pageSummary ? (
+          <div
+            className={cn(
+              'flex h-7 max-w-[min(36rem,55vw)] shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs',
+              pageSummaryWarning
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                : 'border-border/70 bg-muted/50 text-muted-foreground'
+            )}
+            title={
+              pageSummaryWarning
+                ? `${pageSummary} · ${pageSummaryWarning}`
+                : pageSummary
+            }
+          >
+            <List className='size-3.5 shrink-0' />
+            <span className='truncate'>{pageSummary}</span>
+          </div>
         ) : null}
         <Button
           size='sm'
@@ -136,25 +197,96 @@ export function ControlRecordEditorToolbar({
           <Play className='size-3.5' />
           {labels.tryRun}
         </Button>
-        <Tooltip delayDuration={300}>
-          <TooltipTrigger asChild>
+      </div>
+      <div className='h-5 w-px shrink-0 bg-border' />
+      <div className='flex shrink-0 items-center gap-1.5'>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
               size='sm'
-              variant='ghost'
-              className='h-7 w-7 shrink-0 p-0'
+              variant='outline'
+              className={cn(
+                'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                (variableCount > 0 || recoveryEnabled || deviceVarsEnabled) &&
+                  'border-primary/40 bg-primary/5'
+              )}
+            >
+              <Settings2 className='size-3.5' />
+              {labels.settings}
+              {variableCount > 0 ? (
+                <span className='rounded-full bg-primary/15 px-1.5 text-[10px] font-bold text-primary'>
+                  {variableCount}
+                </span>
+              ) : null}
+              {recoveryEnabled ? (
+                <span className='size-1.5 rounded-full bg-amber-500' />
+              ) : null}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='w-72'>
+            <DropdownMenuLabel>{labels.settings}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className='gap-2'
               onClick={onOpenJson}
               disabled={!hasSteps}
             >
-              <Code2 className='size-3.5' />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side='bottom' className='text-xs'>
-            {labels.jsonTooltip}
-          </TooltipContent>
-        </Tooltip>
+              <Code2 className='size-4' />
+              <div className='min-w-0'>
+                <p>{labels.jsonTooltip}</p>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem className='gap-2' onClick={onOpenVariables}>
+              <SlidersHorizontal className='size-4' />
+              <div className='min-w-0 flex-1'>
+                <p>{labels.variables}</p>
+                <p className='truncate text-[10px] text-muted-foreground'>
+                  {labels.variablesTooltip}
+                </p>
+              </div>
+              {variableCount > 0 ? (
+                <span className='rounded-full bg-primary/15 px-1.5 text-[10px] font-bold text-primary'>
+                  {variableCount}
+                </span>
+              ) : null}
+            </DropdownMenuItem>
+            {showRecovery ? (
+              <DropdownMenuItem className='gap-2' onClick={onOpenRecovery}>
+                <AlertCircle className='size-4' />
+                <div className='min-w-0 flex-1'>
+                  <p>{labels.recoveryTitle}</p>
+                  <p className='truncate text-[10px] text-muted-foreground'>
+                    {labels.recoveryTooltip}
+                  </p>
+                </div>
+                {recoveryEnabled ? (
+                  <span className='rounded-full bg-amber-500/15 px-1.5 text-[10px] font-bold text-amber-700 dark:text-amber-300'>
+                    {labels.recoveryEnabledBadge}
+                  </span>
+                ) : null}
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem
+              className='gap-2'
+              onClick={onOpenDeviceVars}
+              disabled={deviceVarsDisabled}
+            >
+              <SlidersHorizontal className='size-4' />
+              <div className='min-w-0 flex-1'>
+                <p>{labels.deviceVars}</p>
+                <p className='truncate text-[10px] text-muted-foreground'>
+                  {labels.deviceVarsTooltip}
+                </p>
+              </div>
+              {deviceVarsEnabled ? (
+                <span className='size-1.5 rounded-full bg-emerald-500' />
+              ) : null}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
           size='sm'
-          variant='outline'
+          variant='default'
           className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
           onClick={onSave}
           disabled={saveDisabled}
@@ -162,80 +294,6 @@ export function ControlRecordEditorToolbar({
           <Save className='size-3.5' />
           {saveLabel}
         </Button>
-        <Tooltip delayDuration={400}>
-          <TooltipTrigger asChild>
-            <Button
-              size='sm'
-              variant='outline'
-              onClick={onOpenVariables}
-              className={cn(
-                'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                variableCount > 0 &&
-                  'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
-              )}
-            >
-              <SlidersHorizontal className='size-3.5' />
-              {labels.variables}
-              {variableCount > 0 ? (
-                <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
-                  {variableCount}
-                </span>
-              ) : null}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side='bottom' className='text-xs'>
-            {labels.variablesTooltip}
-          </TooltipContent>
-        </Tooltip>
-        {showRecovery ? (
-          <Tooltip delayDuration={400}>
-            <TooltipTrigger asChild>
-              <Button
-                size='sm'
-                variant='outline'
-                onClick={onOpenRecovery}
-                className={cn(
-                  'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                  recoveryEnabled &&
-                    'border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300'
-                )}
-              >
-                <AlertCircle className='size-3.5' />
-                {labels.recoveryTitle}
-                {recoveryEnabled ? (
-                  <span className='rounded-full bg-amber-500/20 px-1.5 text-[10px] font-bold'>
-                    {labels.recoveryEnabledBadge}
-                  </span>
-                ) : null}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side='bottom' className='max-w-xs text-xs'>
-              {labels.recoveryTooltip}
-            </TooltipContent>
-          </Tooltip>
-        ) : null}
-        <Tooltip delayDuration={400}>
-          <TooltipTrigger asChild>
-            <Button
-              size='sm'
-              variant='outline'
-              onClick={onOpenDeviceVars}
-              disabled={deviceVarsDisabled}
-              className={cn(
-                'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                deviceVarsEnabled
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
-                  : ''
-              )}
-            >
-              <SlidersHorizontal className='size-3.5' />
-              {labels.deviceVars}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side='bottom' className='text-xs'>
-            {labels.deviceVarsTooltip}
-          </TooltipContent>
-        </Tooltip>
         <Tooltip delayDuration={400}>
           <TooltipTrigger asChild>
             <Button

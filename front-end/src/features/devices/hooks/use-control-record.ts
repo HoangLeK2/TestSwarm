@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction
+} from 'react';
 import {
   useQuery,
   useQueryClient,
@@ -26,8 +33,16 @@ import {
   pollUntilUiChange
 } from '../utils/control-record-xml';
 import { parseHierarchySelectorNodes } from '../utils/hierarchy-selectors';
-import { createDefaultStep } from '@/features/campaigns/components/scenario-steps/types';
+import {
+  createDefaultStep,
+  type FlowEdge,
+  type FlowNode,
+  type FlowStep
+} from '@/features/campaigns/components/scenario-steps/types';
+import { graphToSteps } from '@/features/campaigns/utils/scenario-graph';
+import { stepsToGraph } from '@/features/campaigns/utils/steps-to-graph';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import { buildControlRecordScenarioSnapshot } from '../lib/control-record-scenario-state';
 import { buildRecordedTapStep } from '../lib/scenario-selector-step';
 import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
@@ -50,7 +65,7 @@ function nextStepId() {
   return `step-${++_stepIdCounter}`;
 }
 
-export type StepWithId = ScenarioStep & { _id: string };
+export type StepWithId = FlowStep & { _id: string };
 
 const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
 const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
@@ -389,14 +404,34 @@ export function useControlRecord(
 
   // ── Steps ────────────────────────────────────────────────────────────────
   const [steps, setSteps] = useState<StepWithId[]>([]);
+  const stepsRef = useRef<StepWithId[]>([]);
+  const [graphNodes, setGraphNodes] = useState<FlowNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<FlowEdge[]>([]);
   const pendingScreenshotTasksRef = useRef(new Set<Promise<unknown>>());
+
+  const setSynchronizedSteps = useCallback(
+    (action: SetStateAction<StepWithId[]>) => {
+      const nextSteps =
+        typeof action === 'function' ? action(stepsRef.current) : action;
+      if (nextSteps === stepsRef.current) return;
+      const snapshot = buildControlRecordScenarioSnapshot(nextSteps);
+      stepsRef.current = snapshot.steps;
+      setSteps(snapshot.steps);
+      setGraphNodes(snapshot.nodes);
+      setGraphEdges(snapshot.edges);
+    },
+    []
+  );
   const [pendingScreenshotCount, setPendingScreenshotCount] = useState(0);
 
-  const recordStep = useCallback((step: ScenarioStep) => {
-    const stepId = nextStepId();
-    setSteps((s) => [...s, { ...step, _id: stepId }]);
-    return stepId;
-  }, []);
+  const recordStep = useCallback(
+    (step: ScenarioStep) => {
+      const stepId = nextStepId();
+      setSynchronizedSteps((s) => [...s, { ...step, _id: stepId }]);
+      return stepId;
+    },
+    [setSynchronizedSteps]
+  );
 
   const trackScreenshotTask = useCallback(<T>(task: Promise<T>) => {
     pendingScreenshotTasksRef.current.add(task);
@@ -619,7 +654,7 @@ export function useControlRecord(
                   const elementImage = ratioCrop
                     ? await cropBase64(imgData.screenshot, ratioCrop)
                     : undefined;
-                  setSteps((prev) => {
+                  setSynchronizedSteps((prev) => {
                     const idxById = prev.findIndex(
                       (step) => step._id === recordedStepId
                     );
@@ -752,39 +787,55 @@ export function useControlRecord(
         });
       }
     },
-    [wsSend, recordStep, t, trackScreenshotTask, pulseHierarchyRefresh]
+    [
+      wsSend,
+      recordStep,
+      t,
+      trackScreenshotTask,
+      pulseHierarchyRefresh,
+      setSynchronizedSteps
+    ]
   );
 
   const addWaitStep = useCallback(() => {
-    setSteps((s) => [...s, { type: 'wait', seconds: 2, _id: nextStepId() }]);
-  }, []);
-
-  const addFlowStep = useCallback((type: string) => {
-    setSteps((s) => [
+    setSynchronizedSteps((s) => [
       ...s,
-      { ...createDefaultStep(type), _id: nextStepId() } as StepWithId
+      { type: 'wait', seconds: 2, _id: nextStepId() }
     ]);
-  }, []);
+  }, [setSynchronizedSteps]);
+
+  const addFlowStep = useCallback(
+    (type: string) => {
+      setSynchronizedSteps((s) => [
+        ...s,
+        { ...createDefaultStep(type), _id: nextStepId() } as StepWithId
+      ]);
+    },
+    [setSynchronizedSteps]
+  );
 
   // Append an array of steps loaded from a template. Each step gets a fresh
   // internal id so React keys stay unique across multiple loads of the same
   // template. Invalid or non-object entries are dropped defensively — template
   // data may come from the server in a shape that predates the current schema.
-  const appendSteps = useCallback((incoming: any[]) => {
-    if (!Array.isArray(incoming) || incoming.length === 0) return 0;
-    const mapped = incoming
-      .filter((s) => s && typeof s === 'object')
-      .map(
-        (s) => ({ ...(s as ScenarioStep), _id: nextStepId() }) as StepWithId
-      );
-    if (mapped.length === 0) return 0;
-    setSteps((prev) => [...prev, ...mapped]);
-    return mapped.length;
-  }, []);
+  const appendSteps = useCallback(
+    (incoming: any[]) => {
+      if (!Array.isArray(incoming) || incoming.length === 0) return 0;
+      const mapped = incoming
+        .filter((s) => s && typeof s === 'object')
+        .map(
+          (s) => ({ ...(s as ScenarioStep), _id: nextStepId() }) as StepWithId
+        );
+      if (mapped.length === 0) return 0;
+      setSynchronizedSteps((prev) => [...prev, ...mapped]);
+      return mapped.length;
+    },
+    [setSynchronizedSteps]
+  );
 
   const cleanSteps = useCallback(
-    () => steps.map(({ _id, ...rest }) => rest),
-    [steps]
+    () => stepsRef.current.map(({ _id, ...rest }) => rest),
+    []
   );
 
   // ── Editing context (pre-loaded from URL params) ─────────────────────────
@@ -835,12 +886,26 @@ export function useControlRecord(
         if (cancelled) return;
         setOrgScenarioContext(null);
         setTemplateContext(null);
-        const loaded = Array.isArray(sc.steps)
-          ? sc.steps.map(
-              (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
+        const persistedNodes = Array.isArray(sc.nodes)
+          ? sc.nodes.filter((node): node is FlowNode =>
+              Boolean(
+                node &&
+                  typeof node.id === 'string' &&
+                  typeof node.type === 'string' &&
+                  typeof node.order === 'string'
+              )
             )
           : [];
-        setSteps(loaded);
+        const loadedSource =
+          persistedNodes.length > 0
+            ? graphToSteps(persistedNodes)
+            : Array.isArray(sc.steps)
+              ? sc.steps
+              : [];
+        const loaded = loadedSource.map(
+          (step) => ({ ...step, _id: nextStepId() }) as StepWithId
+        );
+        setSynchronizedSteps(loaded);
         const mergedVars = mergeCampaignScenarioVariables(
           (campaign as { variables?: Record<string, any> } | null)?.variables ??
             {},
@@ -872,6 +937,7 @@ export function useControlRecord(
     initialScenarioId,
     initialOrgScenarioId,
     initialTemplateId,
+    setSynchronizedSteps,
     t
   ]);
 
@@ -901,7 +967,7 @@ export function useControlRecord(
               (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
             )
           : [];
-        setSteps(loaded);
+        setSynchronizedSteps(loaded);
         setTemplateContext({
           templateId: tpl.id,
           name: tpl.name,
@@ -927,6 +993,7 @@ export function useControlRecord(
     initialOrgScenarioId,
     initialCampaignId,
     initialScenarioId,
+    setSynchronizedSteps,
     t
   ]);
 
@@ -963,7 +1030,7 @@ export function useControlRecord(
         const loaded = previewSteps.map(
           (s) => ({ ...s, _id: nextStepId() }) as StepWithId
         );
-        setSteps(loaded);
+        setSynchronizedSteps(loaded);
         setOrgScenarioContext({
           scenarioId: initialOrgScenarioId,
           name: meta.name,
@@ -990,7 +1057,13 @@ export function useControlRecord(
     return () => {
       cancelled = true;
     };
-  }, [initialCampaignId, initialOrgScenarioId, initialTemplateId, t]);
+  }, [
+    initialCampaignId,
+    initialOrgScenarioId,
+    initialTemplateId,
+    setSynchronizedSteps,
+    t
+  ]);
 
   const saveToTemplate = useCallback(
     async (variables?: Record<string, any>) => {
@@ -1105,6 +1178,7 @@ export function useControlRecord(
         toast.error(check.message);
         return;
       }
+      const payloadGraph = stepsToGraph(payloadSteps);
       setSavingCampaignId(scenarioId);
       // account_group_id resolution:
       // - override provided → use it (empty string clears the binding)
@@ -1118,6 +1192,8 @@ export function useControlRecord(
       }
       const payload: Parameters<typeof scenariosApi.update>[2] = {
         steps: payloadSteps,
+        nodes: payloadGraph.nodes,
+        edges: payloadGraph.edges,
         variables,
         ...(accountGroupForEdit !== undefined
           ? { account_group_id: accountGroupForEdit }
@@ -1181,12 +1257,15 @@ export function useControlRecord(
         toast.error(check.message);
         return;
       }
+      const payloadGraph = stepsToGraph(payloadSteps);
       setSavingCampaignId('new');
       const createBody: Parameters<typeof scenariosApi.create>[1] = {
         name: t('newScenarioName', {
           time: new Date().toLocaleTimeString('vi-VN')
         }),
         steps: payloadSteps,
+        nodes: payloadGraph.nodes,
+        edges: payloadGraph.edges,
         variables,
         ...(accountGroupIdOverride
           ? { account_group_id: accountGroupIdOverride }
@@ -1564,8 +1643,10 @@ export function useControlRecord(
 
     steps: {
       items: steps,
-      setItems: setSteps,
+      setItems: setSynchronizedSteps,
       cleanItems: cleanSteps,
+      graphNodes,
+      graphEdges,
       addWait: addWaitStep,
       addFlow: addFlowStep,
       appendSteps,

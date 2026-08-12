@@ -160,6 +160,9 @@ def _db_patch(
     session_execute_side_effect=None,
 ):
     mock_session = AsyncMock()
+    mock_session.in_transaction = MagicMock(return_value=False)
+    mock_session.sync_session = MagicMock()
+    mock_session.sync_session.info = {}
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     if session_execute_side_effect is not None:
@@ -382,6 +385,50 @@ class TestLiveDevices:
         assert device["serial"] == "10.0.0.9:41111"
         assert device["registered_serial"] == "HW123"
         assert device["state"] == "READY"
+
+    @pytest.mark.anyio
+    async def test_media_adapter_only_device_stays_visible_when_agent_boot_is_down(self):
+        db_devices = [_FakeDevice("serial-media", user_id="user-1")]
+        media_ctrl = MagicMock()
+        media_ctrl.has_serial.side_effect = lambda serial: serial == "serial-media"
+        media_ctrl.stream_for_serial.side_effect = lambda serial: (
+            {
+                "serial": "serial-media",
+                "stream_name": "device-serial-media",
+                "active": True,
+                "connected": True,
+                "width": 216,
+                "height": 480,
+                "last_frame_unix_ms": 1234,
+            }
+            if serial == "serial-media"
+            else None
+        )
+
+        with (
+            _jwt_patch(),
+            _db_patch(db_devices),
+            patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=None),
+            patch("runtime.transports.agent_control_servicer.get_control_servicer", return_value=None),
+            patch("api.routes.public._media_adapter_control", return_value=media_ctrl),
+            patch("api.deps._install_request_write_tracking", return_value=None),
+            patch("api.routes.public.repo.get_relay_scrcpy_enabled_map", new=AsyncMock(return_value={})),
+        ):
+            app = _make_public_app(db_enabled=True, manager=_mock_manager([]))
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.get("/api/devices/live", headers=_auth("user-1"))
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        device = data["devices"][0]
+        assert device["serial"] == "serial-media"
+        assert device["state"] == "DISCONNECTED"
+        assert device["agent_connected"] is False
+        assert device["media_adapter_connected"] is True
+        assert device["media_stream_active"] is True
+        assert device["media_stream_connected"] is True
+        assert device["media_stream_name"] == "device-serial-media"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

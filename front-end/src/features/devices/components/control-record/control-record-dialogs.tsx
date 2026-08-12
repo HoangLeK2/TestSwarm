@@ -64,6 +64,8 @@ export function ControlRecordVariablesDialog({
     variableCount: string | null;
     headerSubtitleLead: string;
     headerSubtitleTrail: string;
+    pageSummary?: string;
+    pageSummaryWarning?: string;
   };
 }) {
   const variableCount = Object.keys(variables).length;
@@ -91,6 +93,16 @@ export function ControlRecordVariablesDialog({
             </code>{' '}
             {labels.headerSubtitleTrail}
           </DialogDescription>
+          {labels.pageSummary ? (
+            <p className='rounded-md border border-border/70 bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground'>
+              {labels.pageSummary}
+              {labels.pageSummaryWarning ? (
+                <span className='ml-2 font-medium text-amber-700 dark:text-amber-300'>
+                  {labels.pageSummaryWarning}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
         </DialogHeader>
         <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
           <VariableEditor variables={variables} onChange={onVariablesChange} />

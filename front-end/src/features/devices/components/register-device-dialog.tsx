@@ -5,12 +5,13 @@ import QRCode from 'qrcode';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select';
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command';
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,11 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@/components/ui/popover';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { Separator } from '@/components/ui/separator';
@@ -26,6 +32,7 @@ import {
   Copy,
   Check,
   CheckCircle2,
+  ChevronsUpDown,
   Loader2,
   QrCode,
   Send,
@@ -49,10 +56,12 @@ import type {
   DeviceOut,
   RelayAgentOut
 } from '@/features/devices/services/manage-api';
+import { cn } from '@/lib/utils';
 
 type Step = 'form' | 'confirm' | 'qr' | 'connected';
 
 const POLL_INTERVAL_MS = 2000;
+const DEVICE_PICKER_LIMIT = 8;
 
 type RelayDeviceChoice = {
   id: string;
@@ -61,6 +70,15 @@ type RelayDeviceChoice = {
   serial: string;
   deviceName?: string;
 };
+
+function normalizeDeviceSearch(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
 
 export function RegisterDeviceDialog({
   relayAgents = [],
@@ -73,6 +91,8 @@ export function RegisterDeviceDialog({
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>('form');
   const [loading, setLoading] = useState(false);
+  const [devicePickerOpen, setDevicePickerOpen] = useState(false);
+  const [deviceSearch, setDeviceSearch] = useState('');
   const [selectedRelayDeviceId, setSelectedRelayDeviceId] = useState('');
   const [registeredDevice, setRegisteredDevice] = useState<DeviceOut | null>(
     null
@@ -111,6 +131,26 @@ export function RegisterDeviceDialog({
     return choices;
   }, [relayAgents, registeredSerials]);
   const hasRelayChoices = relayDeviceChoices.length > 0;
+  const selectedRelayDevice = useMemo(
+    () =>
+      relayDeviceChoices.find((choice) => choice.id === selectedRelayDeviceId),
+    [relayDeviceChoices, selectedRelayDeviceId]
+  );
+  const filteredRelayDeviceChoices = useMemo(() => {
+    const query = normalizeDeviceSearch(deviceSearch);
+    if (!query) return relayDeviceChoices;
+    return relayDeviceChoices.filter((choice) => {
+      const name = normalizeDeviceSearch(choice.deviceName || '');
+      const serial = normalizeDeviceSearch(choice.serial);
+      return name.includes(query) || serial.includes(query);
+    });
+  }, [relayDeviceChoices, deviceSearch]);
+  const visibleRelayDeviceChoices = filteredRelayDeviceChoices.slice(
+    0,
+    DEVICE_PICKER_LIMIT
+  );
+  const hiddenRelayDeviceCount =
+    filteredRelayDeviceChoices.length - visibleRelayDeviceChoices.length;
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -123,6 +163,8 @@ export function RegisterDeviceDialog({
     if (!open) {
       stopPolling();
       setStep('form');
+      setDevicePickerOpen(false);
+      setDeviceSearch('');
       setSelectedRelayDeviceId('');
       setRegisteredDevice(null);
       setConnectedDevice(null);
@@ -275,26 +317,103 @@ export function RegisterDeviceDialog({
             </p>
             <div className='space-y-2'>
               <Label htmlFor='reg-relay-device'>{t('deviceLabel')}</Label>
-              <Select
-                value={selectedRelayDeviceId}
-                onValueChange={setSelectedRelayDeviceId}
-                disabled={relayDeviceChoices.length === 0}
+              <Popover
+                open={devicePickerOpen}
+                onOpenChange={(nextOpen) => {
+                  setDevicePickerOpen(nextOpen);
+                  if (!nextOpen) setDeviceSearch('');
+                }}
+                modal={false}
               >
-                <SelectTrigger id='reg-relay-device' className='w-full'>
-                  <SelectValue placeholder={t('devicePlaceholder')} />
-                </SelectTrigger>
-                <SelectContent className='z-[20002]'>
-                  {relayDeviceChoices.map((choice) => (
-                    <SelectItem key={choice.id} value={choice.id}>
-                      <span>{choice.deviceName || choice.serial}</span>
-                      <span className='text-xs text-muted-foreground'>
-                        {' '}
-                        · {choice.relayLabel}
+                <PopoverTrigger asChild>
+                  <Button
+                    id='reg-relay-device'
+                    type='button'
+                    variant='outline'
+                    role='combobox'
+                    aria-expanded={devicePickerOpen}
+                    disabled={relayDeviceChoices.length === 0}
+                    className='h-9 w-full justify-between px-3 font-normal'
+                  >
+                    {selectedRelayDevice ? (
+                      <span className='min-w-0 truncate text-left'>
+                        <span>
+                          {selectedRelayDevice.deviceName ||
+                            selectedRelayDevice.serial}
+                        </span>
+                        {selectedRelayDevice.deviceName && (
+                          <span className='text-xs text-muted-foreground'>
+                            {' '}
+                            · {selectedRelayDevice.serial}
+                          </span>
+                        )}
                       </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                    ) : (
+                      <span className='text-muted-foreground'>
+                        {t('devicePlaceholder')}
+                      </span>
+                    )}
+                    <ChevronsUpDown className='ml-2 size-4 shrink-0 opacity-50' />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align='start'
+                  className='z-[20002] w-[min(462px,calc(100vw-3rem))] p-0'
+                >
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      value={deviceSearch}
+                      onValueChange={setDeviceSearch}
+                      placeholder={t('deviceSearchPlaceholder')}
+                    />
+                    <CommandList className='max-h-72'>
+                      <CommandEmpty>{t('noSearchResults')}</CommandEmpty>
+                      <CommandGroup>
+                        {visibleRelayDeviceChoices.map((choice) => (
+                          <CommandItem
+                            key={choice.id}
+                            value={choice.id}
+                            onSelect={() => {
+                              setSelectedRelayDeviceId(choice.id);
+                              setDevicePickerOpen(false);
+                              setDeviceSearch('');
+                            }}
+                            className='min-w-0'
+                          >
+                            <Smartphone className='size-4 shrink-0 text-muted-foreground' />
+                            <span className='min-w-0 flex-1'>
+                              <span className='block truncate'>
+                                {choice.deviceName || choice.serial}
+                              </span>
+                              <span className='block truncate font-mono text-[11px] text-muted-foreground'>
+                                {choice.deviceName
+                                  ? `${choice.serial} · ${choice.relayLabel}`
+                                  : choice.relayLabel}
+                              </span>
+                            </span>
+                            <Check
+                              className={cn(
+                                'ml-auto size-4 shrink-0',
+                                selectedRelayDeviceId === choice.id
+                                  ? 'opacity-100'
+                                  : 'opacity-0'
+                              )}
+                            />
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                      {hiddenRelayDeviceCount > 0 && (
+                        <div className='border-t px-3 py-2 text-xs text-muted-foreground'>
+                          {t('deviceResultsLimited', {
+                            shown: visibleRelayDeviceChoices.length,
+                            total: filteredRelayDeviceChoices.length
+                          })}
+                        </div>
+                      )}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               {relayDeviceChoices.length === 0 && (
                 <p className='text-xs text-muted-foreground'>
                   {t('noAvailableDevices')}

@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft, GitBranch, List } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -26,13 +26,10 @@ type ControlRecordTopBarLabels = {
   templateBadge: string;
   backToMainScenario: string;
   selectPhonePlaceholder: string;
+  deviceLabel: string;
   deviceCampaignBadge: string;
   wsConnected: string;
   wsDisconnected: string;
-  flowSwitchToList: string;
-  flowSwitchToFlow: string;
-  flowListLabel: string;
-  flowFlowLabel: string;
 };
 
 type ControlRecordTopBarProps = {
@@ -54,9 +51,6 @@ type ControlRecordTopBarProps = {
   multiPickerDisabled: boolean;
   multiPickerDisabledTitle?: string;
   wsConnected: boolean;
-  flowEnabled: boolean;
-  flowMode: boolean;
-  onToggleFlowMode: () => void;
 };
 
 function isDeviceBusy(d: Device) {
@@ -81,52 +75,59 @@ export function ControlRecordTopBar({
   maxMultiDevices,
   multiPickerDisabled,
   multiPickerDisabledTitle,
-  wsConnected,
-  flowEnabled,
-  flowMode,
-  onToggleFlowMode
+  wsConnected
 }: ControlRecordTopBarProps) {
   return (
-    <div className='flex min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b bg-background px-3 py-2'>
-      <div className='h-5 w-px bg-border' />
+    <div className='flex min-w-0 shrink-0 flex-col gap-2 overflow-hidden border-b bg-background px-3 py-2 md:flex-row md:items-center md:gap-3'>
+      <div className='flex min-w-0 items-center gap-2 md:flex-1'>
+        <div className='min-w-0 flex-1'>
+          <div className='flex min-w-0 items-center gap-2'>
+            <p className='truncate text-sm font-semibold leading-tight'>
+              {title}
+            </p>
+            {editing ? (
+              <Badge
+                variant='outline'
+                className='shrink-0 border-amber-400/40 bg-amber-400/10 text-[10px] font-medium text-amber-700 dark:text-amber-300'
+              >
+                {labels.editingScenario}
+              </Badge>
+            ) : null}
+            {template ? (
+              <span className='inline-flex shrink-0 items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
+                {labels.templateBadge}
+              </span>
+            ) : null}
+          </div>
+          <p className='text-[10px] text-muted-foreground'>{eyebrow}</p>
+        </div>
 
-      <div className='min-w-0 flex-1'>
-        <p className='truncate text-sm font-semibold leading-tight'>{title}</p>
-        <p className='text-[10px] text-muted-foreground'>{eyebrow}</p>
+        {showRecoveryBack ? (
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+            onClick={onRecoveryBack}
+          >
+            <ArrowLeft className='size-3.5' />
+            {labels.backToMainScenario}
+          </Button>
+        ) : null}
       </div>
 
-      {editing ? (
-        <Badge
-          variant='outline'
-          className='shrink-0 border-amber-400/40 bg-amber-400/10 text-[10px] font-medium text-amber-700 dark:text-amber-300'
-        >
-          {labels.editingScenario}
-        </Badge>
-      ) : null}
-      {template ? (
-        <span className='inline-flex shrink-0 items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
-          {labels.templateBadge}
-        </span>
-      ) : null}
-      {showRecoveryBack ? (
-        <Button
-          variant='outline'
-          size='sm'
-          className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-          onClick={onRecoveryBack}
-        >
-          <ArrowLeft className='size-3.5' />
-          {labels.backToMainScenario}
-        </Button>
-      ) : null}
+      <div className='hidden h-6 w-px shrink-0 bg-border md:block' />
 
-      <div className='flex min-w-0 shrink items-center gap-1.5'>
-        <div className='min-w-0 max-w-[min(240px,calc(100vw-16rem))]'>
+      <div className='flex min-w-0 items-center gap-1.5 md:shrink'>
+        <span className='hidden shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground xl:inline'>
+          {labels.deviceLabel}
+        </span>
+        <div className='min-w-0 flex-1 md:max-w-[min(240px,calc(100vw-16rem))]'>
           <Select
             value={deviceSelectValue}
             onValueChange={(v) => onDeviceChange(v || null)}
           >
             <SelectTrigger
+              id='control-record-device-select'
               className={cn(
                 'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
                 '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
@@ -177,7 +178,7 @@ export function ControlRecordTopBar({
         className={cn(
           'h-8 shrink-0 gap-1.5 rounded-full px-2.5 text-[11px] font-medium',
           wsConnected
-            ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+            ? 'border-transparent bg-transparent px-1.5 text-muted-foreground shadow-none'
             : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
         )}
       >
@@ -189,25 +190,6 @@ export function ControlRecordTopBar({
         />
         {wsConnected ? labels.wsConnected : labels.wsDisconnected}
       </Badge>
-
-      <div className='h-5 w-px bg-border' />
-
-      {flowEnabled ? (
-        <Button
-          size='sm'
-          variant={flowMode ? 'default' : 'outline'}
-          className='h-8 shrink-0 gap-1.5 text-xs'
-          onClick={onToggleFlowMode}
-          title={flowMode ? labels.flowSwitchToList : labels.flowSwitchToFlow}
-        >
-          {flowMode ? (
-            <List className='size-3.5' />
-          ) : (
-            <GitBranch className='size-3.5' />
-          )}
-          {flowMode ? labels.flowListLabel : labels.flowFlowLabel}
-        </Button>
-      ) : null}
     </div>
   );
 }

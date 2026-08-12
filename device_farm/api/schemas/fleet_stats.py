@@ -1,7 +1,8 @@
 """Fleet health summary API schemas (DF-T-02-013)."""
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,24 @@ class FleetStatsOut(BaseModel):
         default=None,
         description="Null for read-only callers; empty list or anomalies for devices:manage callers.",
     )
+
+
+class ActiveFleetSessionOut(BaseModel):
+    session_id: str
+    device_id: str
+    device_serial: str
+    device_name: str
+    owner_type: SessionOwnerType
+    source: Literal["active_session", "busy_claim"]
+    created_at: datetime
+    duplicate_for_device: bool = False
+
+
+class ActiveFleetSessionListOut(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    sessions: list[ActiveFleetSessionOut]
 
 
 def build_device_state_counts(counts: dict[str, int]) -> DeviceStateCountsOut:

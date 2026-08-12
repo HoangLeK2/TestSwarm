@@ -34,7 +34,7 @@ func TestHandleStreamDecodesSerialPath(t *testing.T) {
 	)
 	res := httptest.NewRecorder()
 
-	server.handleStream(res, req)
+	server.routes().ServeHTTP(res, req)
 
 	if res.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
@@ -93,7 +93,7 @@ func TestWebRTCSessionStartsOwnedScrcpyAndProxiesGo2RTC(t *testing.T) {
 		strings.NewReader(`{"serial":"SERIAL-1","viewer_id":"viewer-1","ttl_seconds":120,"profile":"degraded","max_fps":1,"max_width":320,"bitrate":150000}`),
 	)
 	createRes := httptest.NewRecorder()
-	server.handleWebRTCSessions(createRes, create)
+	server.routes().ServeHTTP(createRes, create)
 
 	if createRes.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", createRes.Code, createRes.Body.String())
@@ -119,7 +119,7 @@ func TestWebRTCSessionStartsOwnedScrcpyAndProxiesGo2RTC(t *testing.T) {
 		strings.NewReader(`{"ttl_seconds":120}`),
 	)
 	heartbeatRes := httptest.NewRecorder()
-	server.handleWebRTCSession(heartbeatRes, heartbeat)
+	server.routes().ServeHTTP(heartbeatRes, heartbeat)
 	if heartbeatRes.Code != http.StatusOK {
 		t.Fatalf("heartbeat status=%d body=%s", heartbeatRes.Code, heartbeatRes.Body.String())
 	}
@@ -133,7 +133,7 @@ func TestWebRTCSessionStartsOwnedScrcpyAndProxiesGo2RTC(t *testing.T) {
 		strings.NewReader(`{"type":"offer","sdp":"v=0 offer"}`),
 	)
 	answerRes := httptest.NewRecorder()
-	server.handleWebRTCSession(answerRes, answer)
+	server.routes().ServeHTTP(answerRes, answer)
 
 	if answerRes.Code != http.StatusOK {
 		t.Fatalf("answer status=%d body=%s", answerRes.Code, answerRes.Body.String())
@@ -147,12 +147,43 @@ func TestWebRTCSessionStartsOwnedScrcpyAndProxiesGo2RTC(t *testing.T) {
 
 	closeReq := httptest.NewRequest(http.MethodDelete, "/v1/webrtc/sessions/"+created.ID, nil)
 	closeRes := httptest.NewRecorder()
-	server.handleWebRTCSession(closeRes, closeReq)
+	server.routes().ServeHTTP(closeRes, closeReq)
 	if closeRes.Code != http.StatusOK {
 		t.Fatalf("close status=%d", closeRes.Code)
 	}
 	if _, ok := manager.Status("SERIAL-1"); ok {
 		t.Fatal("expected stream to stop after last WebRTC session closes")
+	}
+}
+
+func TestWebRTCObserveOnlySessionKeepsScrcpyControlSocketForKeyframes(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	manager := scrcpy.NewManagerWithLauncher(fakePublisher{}, fakeLauncher{}, logger)
+	server := NewServerWithWebRTC(
+		"127.0.0.1:0",
+		manager,
+		go2rtc.New(go2rtc.Config{}),
+		logger,
+	)
+	defer manager.Close()
+
+	create := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/webrtc/sessions",
+		strings.NewReader(`{"serial":"SERIAL-1","viewer_id":"viewer-1","control":false}`),
+	)
+	createRes := httptest.NewRecorder()
+	server.routes().ServeHTTP(createRes, create)
+
+	if createRes.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", createRes.Code, createRes.Body.String())
+	}
+	status, ok := manager.Status("SERIAL-1")
+	if !ok {
+		t.Fatal("expected stream status")
+	}
+	if !status.Control {
+		t.Fatal("expected internal scrcpy control socket for keyframe requests")
 	}
 }
 
@@ -171,7 +202,7 @@ func TestWebRTCSessionCloseKeepsScrcpyWarmDuringTransientSwitch(t *testing.T) {
 	firstID := createWebRTCSessionForTest(t, server, "SERIAL-1", "viewer-1")
 	closeReq := httptest.NewRequest(http.MethodDelete, "/v1/webrtc/sessions/"+firstID, nil)
 	closeRes := httptest.NewRecorder()
-	server.handleWebRTCSession(closeRes, closeReq)
+	server.routes().ServeHTTP(closeRes, closeReq)
 	if closeRes.Code != http.StatusOK {
 		t.Fatalf("close status=%d", closeRes.Code)
 	}
@@ -194,7 +225,7 @@ func createWebRTCSessionForTest(t *testing.T, server *Server, serial string, vie
 		strings.NewReader(`{"serial":"`+serial+`","viewer_id":"`+viewerID+`","ttl_seconds":120,"profile":"degraded","max_fps":1,"max_width":320,"bitrate":150000}`),
 	)
 	createRes := httptest.NewRecorder()
-	server.handleWebRTCSessions(createRes, create)
+	server.routes().ServeHTTP(createRes, create)
 	if createRes.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", createRes.Code, createRes.Body.String())
 	}

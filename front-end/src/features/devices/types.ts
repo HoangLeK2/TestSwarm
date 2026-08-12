@@ -16,11 +16,51 @@ export interface Device {
   u2_ready?: boolean;
   agent_connected?: boolean;
   stf_connected?: boolean;
+  /** Media-plane liveness from local media-adapter, independent from agent-boot control. */
+  media_adapter_connected?: boolean;
+  media_stream_active?: boolean;
+  media_stream_connected?: boolean;
+  media_stream_name?: string;
+  media_stream_source?: string;
+  media_stream_last_frame_unix_ms?: number;
   relay_scrcpy_enabled?: boolean;
   /** >0 when a Temporal scenario/campaign is actively driving this device */
   scenario_active?: number;
+  /** Current server-side session ownership, for example idle or reserved. */
+  usage_state?: string;
   /** True after operator paused automation to take manual control. */
   manual_takeover_active?: boolean;
+  health?: DeviceHealth;
+}
+
+export type DeviceHealthStatus =
+  | 'ready'
+  | 'degraded'
+  | 'busy'
+  | 'offline'
+  | 'unknown';
+
+export interface DeviceHealth {
+  overall: DeviceHealthStatus;
+  agent: {
+    status: 'online' | 'offline' | 'unknown';
+    observed_at?: string | null;
+    reason?: string | null;
+  };
+  stream: {
+    status: 'ready' | 'starting' | 'unavailable' | 'error';
+    observed_at?: string | null;
+    reason?: string | null;
+  };
+  command: {
+    status: 'ready' | 'busy' | 'unavailable';
+    reason?: string | null;
+  };
+  heartbeat_at?: string | null;
+  last_signal_at?: string | null;
+  last_signal_source?: 'live_transport' | 'heartbeat';
+  evaluated_at: string;
+  reason_codes: string[];
 }
 
 export interface Task {

@@ -16,6 +16,7 @@ import (
 
 	"devicefarm/media-adapter/internal/adapters/outbound/go2rtc"
 	"devicefarm/media-adapter/internal/adapters/scrcpy"
+	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
@@ -56,15 +57,10 @@ func NewServerWithWebRTC(addr string, manager *scrcpy.Manager, webrtc *go2rtc.Cl
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", s.handleHealth)
-	mux.HandleFunc("/v1/scrcpy/streams", s.handleStreams)
-	mux.HandleFunc("/v1/scrcpy/streams/", s.handleStream)
-	mux.HandleFunc("/v1/webrtc/sessions", s.handleWebRTCSessions)
-	mux.HandleFunc("/v1/webrtc/sessions/", s.handleWebRTCSession)
+	router := s.routes()
 	server := &http.Server{
 		Addr:              s.addr,
-		Handler:           mux,
+		Handler:           router,
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 	s.server = server
@@ -86,56 +82,80 @@ func (s *Server) Run(ctx context.Context) error {
 	return err
 }
 
+func (s *Server) routes() http.Handler {
+	router := chi.NewRouter()
+	router.Get("/healthz", s.handleHealth)
+	router.Get("/v1/scrcpy/streams", s.handleStreams)
+	router.Route("/v1/scrcpy/streams/{serial}", func(r chi.Router) {
+		r.Post("/start", func(w http.ResponseWriter, r *http.Request) {
+			serial, ok := routeParam(w, r, "serial")
+			if ok {
+				s.handleStart(w, r, serial)
+			}
+		})
+		r.Post("/stop", func(w http.ResponseWriter, r *http.Request) {
+			serial, ok := routeParam(w, r, "serial")
+			if !ok {
+				return
+			}
+			s.manager.Stop(serial)
+			writeJSON(w, http.StatusOK, map[string]any{"stopped": true})
+		})
+		r.Post("/keyframe", func(w http.ResponseWriter, r *http.Request) {
+			serial, ok := routeParam(w, r, "serial")
+			if !ok {
+				return
+			}
+			if !s.manager.RequestKeyframe(serial) {
+				writeError(w, http.StatusNotFound, "stream not found or control unavailable")
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"requested": true})
+		})
+		r.Get("/status", func(w http.ResponseWriter, r *http.Request) {
+			serial, ok := routeParam(w, r, "serial")
+			if !ok {
+				return
+			}
+			status, ok := s.manager.Status(serial)
+			if !ok {
+				writeError(w, http.StatusNotFound, "stream not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, status)
+		})
+	})
+	router.Post("/v1/webrtc/sessions", s.handleWebRTCSessions)
+	router.Route("/v1/webrtc/sessions/{sessionID}", func(r chi.Router) {
+		r.Post("/answer", func(w http.ResponseWriter, r *http.Request) {
+			s.handleWebRTCAnswer(w, r, chi.URLParam(r, "sessionID"))
+		})
+		r.Post("/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+			s.handleWebRTCHeartbeat(w, r, chi.URLParam(r, "sessionID"))
+		})
+		r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+			s.closeWebRTCSession(chi.URLParam(r, "sessionID"))
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		})
+	})
+	return router
+}
+
+func routeParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	value, err := url.PathUnescape(chi.URLParam(r, name))
+	if err != nil || strings.TrimSpace(value) == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return "", false
+	}
+	return value, true
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/scrcpy/streams" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"streams": s.manager.Statuses()})
-}
-
-func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/scrcpy/streams/"), "/")
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	serial, err := url.PathUnescape(parts[0])
-	if err != nil || strings.TrimSpace(serial) == "" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	action := parts[1]
-	switch {
-	case r.Method == http.MethodPost && action == "start":
-		s.handleStart(w, r, serial)
-	case r.Method == http.MethodPost && action == "stop":
-		s.manager.Stop(serial)
-		writeJSON(w, http.StatusOK, map[string]any{"stopped": true})
-	case r.Method == http.MethodPost && action == "keyframe":
-		if !s.manager.RequestKeyframe(serial) {
-			writeError(w, http.StatusNotFound, "stream not found or control unavailable")
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"requested": true})
-	case r.Method == http.MethodGet && action == "status":
-		status, ok := s.manager.Status(serial)
-		if !ok {
-			writeError(w, http.StatusNotFound, "stream not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	default:
-		writeError(w, http.StatusNotFound, "not found")
-	}
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, serial string) {
@@ -178,14 +198,6 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, serial stri
 }
 
 func (s *Server) handleWebRTCSessions(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/webrtc/sessions" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	var body struct {
 		Serial     string `json:"serial"`
 		ViewerID   string `json:"viewer_id"`
@@ -211,10 +223,6 @@ func (s *Server) handleWebRTCSessions(w http.ResponseWriter, r *http.Request) {
 	if body.TTLSeconds > 1800 {
 		body.TTLSeconds = 1800
 	}
-	control := true
-	if body.Control != nil {
-		control = *body.Control
-	}
 	maxFPS, maxWidth, bitrate := normalizeWebRTCProfile(body.Profile, body.MaxFPS, body.MaxWidth, body.Bitrate)
 	now := time.Now()
 	s.mu.Lock()
@@ -225,8 +233,11 @@ func (s *Server) handleWebRTCSessions(w http.ResponseWriter, r *http.Request) {
 	s.stopStreams(stopSerials)
 
 	status, err := s.manager.Start(scrcpy.StartRequest{
-		Serial:     serial,
-		Control:    control,
+		Serial: serial,
+		// Keep scrcpy control socket open even for observe-only WebRTC viewers.
+		// The socket is required to request IDR/keyframes; viewer input remains
+		// governed by the WebRTC/control API layer, not by this internal socket.
+		Control:    true,
 		OwnsScrcpy: true,
 		MaxFPS:     maxFPS,
 		MaxWidth:   maxWidth,
@@ -261,26 +272,6 @@ func (s *Server) handleWebRTCSessions(w http.ResponseWriter, r *http.Request) {
 		"expires_at":    expires.UTC().Format(time.RFC3339Nano),
 		"scrcpy":        status,
 	})
-}
-
-func (s *Server) handleWebRTCSession(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/webrtc/sessions/"), "/")
-	if len(parts) < 1 || strings.TrimSpace(parts[0]) == "" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	sessionID := strings.TrimSpace(parts[0])
-	switch {
-	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "answer":
-		s.handleWebRTCAnswer(w, r, sessionID)
-	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "heartbeat":
-		s.handleWebRTCHeartbeat(w, r, sessionID)
-	case r.Method == http.MethodDelete && len(parts) == 1:
-		s.closeWebRTCSession(sessionID)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	default:
-		writeError(w, http.StatusNotFound, "not found")
-	}
 }
 
 func (s *Server) handleWebRTCAnswer(w http.ResponseWriter, r *http.Request, sessionID string) {

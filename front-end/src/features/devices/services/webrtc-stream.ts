@@ -21,7 +21,10 @@ const configuredSessionHeartbeatMs = Number(
 const WEBRTC_SESSION_HEARTBEAT_MS = Number.isFinite(
   configuredSessionHeartbeatMs
 )
-  ? Math.max(10_000, Math.min(120_000, Math.round(configuredSessionHeartbeatMs)))
+  ? Math.max(
+      10_000,
+      Math.min(120_000, Math.round(configuredSessionHeartbeatMs))
+    )
   : 60_000;
 
 type MediaSession = {
@@ -49,6 +52,13 @@ type StartWebRtcStreamOptions = {
   bitrate?: number;
   onFrame?: () => void;
   onSize?: (width: number, height: number) => void;
+};
+
+type VideoElementWithFrameCallback = HTMLVideoElement & {
+  requestVideoFrameCallback?: (
+    callback: (now: DOMHighResTimeStamp, metadata: unknown) => void
+  ) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
 };
 
 export type WebRtcStreamController = {
@@ -199,10 +209,9 @@ export async function startWebRtcStream({
     payload
   );
   let sessionOpen = true;
-  let heartbeatTimer: ReturnType<typeof window.setInterval> | null =
-    window.setInterval(() => {
-      keepWebRtcSessionAlive(session.id, signal).catch(() => {});
-    }, WEBRTC_SESSION_HEARTBEAT_MS);
+  let heartbeatTimer: number | null = window.setInterval(() => {
+    keepWebRtcSessionAlive(session.id, signal).catch(() => {});
+  }, WEBRTC_SESSION_HEARTBEAT_MS);
   const closeSession = async () => {
     if (!sessionOpen) return;
     sessionOpen = false;
@@ -220,13 +229,39 @@ export async function startWebRtcStream({
   const pc = new RTCPeerConnection({ iceServers: parseIceServers() });
   pc.addTransceiver('video', { direction: 'recvonly' });
 
+  let firstFrameSeen = false;
+  let frameCallbackHandle: number | null = null;
   const markFrame = () => {
+    firstFrameSeen = true;
     onFrame?.();
     if (video.videoWidth && video.videoHeight) {
       onSize?.(video.videoWidth, video.videoHeight);
     }
   };
+  const cancelFrameCallback = () => {
+    if (frameCallbackHandle === null) return;
+    const typedVideo = video as VideoElementWithFrameCallback;
+    typedVideo.cancelVideoFrameCallback?.(frameCallbackHandle);
+    frameCallbackHandle = null;
+  };
+  const requestFirstVideoFrame = () => {
+    if (firstFrameSeen) return;
+    const typedVideo = video as VideoElementWithFrameCallback;
+    if (typedVideo.requestVideoFrameCallback) {
+      cancelFrameCallback();
+      frameCallbackHandle = typedVideo.requestVideoFrameCallback(() => {
+        frameCallbackHandle = null;
+        markFrame();
+      });
+      return;
+    }
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      markFrame();
+    }
+  };
   video.addEventListener('loadeddata', markFrame);
+  video.addEventListener('canplay', requestFirstVideoFrame);
+  video.addEventListener('playing', requestFirstVideoFrame);
   video.addEventListener('resize', markFrame);
 
   pc.ontrack = (event) => {
@@ -235,6 +270,7 @@ export async function startWebRtcStream({
       video.srcObject = stream;
     }
     video.play().catch(() => {});
+    requestFirstVideoFrame();
   };
 
   try {
@@ -253,7 +289,10 @@ export async function startWebRtcStream({
     );
     await pc.setRemoteDescription(answer);
   } catch (error) {
+    cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
+    video.removeEventListener('canplay', requestFirstVideoFrame);
+    video.removeEventListener('playing', requestFirstVideoFrame);
     video.removeEventListener('resize', markFrame);
     pc.close();
     video.srcObject = null;
@@ -262,7 +301,10 @@ export async function startWebRtcStream({
   }
 
   const close = async () => {
+    cancelFrameCallback();
     video.removeEventListener('loadeddata', markFrame);
+    video.removeEventListener('canplay', requestFirstVideoFrame);
+    video.removeEventListener('playing', requestFirstVideoFrame);
     video.removeEventListener('resize', markFrame);
     pc.close();
     video.srcObject = null;

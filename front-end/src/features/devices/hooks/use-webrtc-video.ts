@@ -18,18 +18,16 @@ type UseWebRtcVideoOptions = {
 };
 
 const configuredCloseGraceMs = Number(
-  process.env.NEXT_PUBLIC_WEBRTC_TRANSIENT_CLOSE_GRACE_MS ?? 2500
+  process.env.NEXT_PUBLIC_WEBRTC_TRANSIENT_CLOSE_GRACE_MS ?? 8000
 );
-const WEBRTC_TRANSIENT_CLOSE_GRACE_MS = Number.isFinite(
-  configuredCloseGraceMs
-)
+const WEBRTC_TRANSIENT_CLOSE_GRACE_MS = Number.isFinite(configuredCloseGraceMs)
   ? Math.max(0, Math.min(15_000, Math.round(configuredCloseGraceMs)))
-  : 2500;
+  : 8000;
 
 type WarmWebRtcEntry = {
   controller: WebRtcStreamController;
   refs: number;
-  closeTimer: ReturnType<typeof window.setTimeout> | null;
+  closeTimer: number | null;
 };
 
 const warmWebRtcControllers = new Map<string, WarmWebRtcEntry>();

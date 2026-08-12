@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"devicefarm/media-adapter/internal/adapters/inbound/httpapi"
+	"devicefarm/media-adapter/internal/adapters/outbound/controlplane"
+	"devicefarm/media-adapter/internal/adapters/outbound/go2rtc"
 	"devicefarm/media-adapter/internal/adapters/outbound/rtspserver"
 	"devicefarm/media-adapter/internal/adapters/scrcpy"
 )
@@ -23,6 +25,7 @@ func main() {
 
 	publisher := rtspserver.New(rtspserver.ConfigFromEnv(), logger)
 	scrcpyManager := scrcpy.NewManager(publisher, logger)
+	go2rtcClient := go2rtc.New(go2rtc.ConfigFromEnv())
 	publisher.SetKeyframeRequester(scrcpyManager.RequestKeyframe)
 	defer func() {
 		scrcpyManager.Close()
@@ -31,9 +34,18 @@ func main() {
 
 	httpBind := envDefault("MEDIA_ADAPTER_HTTP_BIND", "127.0.0.1")
 	httpPort := envDefault("MEDIA_ADAPTER_HTTP_PORT", "8878")
-	httpServer := httpapi.NewServer(
+	controlClient := controlplane.New(
+		controlplane.ConfigFromEnv(),
+		scrcpyManager,
+		go2rtcClient,
+		logger,
+	)
+	go controlClient.Run(ctx)
+
+	httpServer := httpapi.NewServerWithWebRTC(
 		net.JoinHostPort(httpBind, httpPort),
 		scrcpyManager,
+		go2rtcClient,
 		logger,
 	)
 

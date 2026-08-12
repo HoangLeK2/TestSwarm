@@ -181,3 +181,90 @@ class AgentControlService(object):
             timeout,
             metadata,
             _registered_method=True)
+
+
+class MediaAdapterControlServiceStub(object):
+    """── Media adapter control plane ──────────────────────────────────────────────
+    Local media-adapter opens this outbound stream to the cloud backend. Only
+    lifecycle/signaling/status messages travel here. H264 media must be published
+    directly from media-adapter to go2rtc, never through this gRPC service.
+
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.ControlStream = channel.stream_stream(
+                '/devicefarm.MediaAdapterControlService/ControlStream',
+                request_serializer=relay__pb2.MediaAdapterMsg.SerializeToString,
+                response_deserializer=relay__pb2.MediaAdapterCommand.FromString,
+                _registered_method=True)
+
+
+class MediaAdapterControlServiceServicer(object):
+    """── Media adapter control plane ──────────────────────────────────────────────
+    Local media-adapter opens this outbound stream to the cloud backend. Only
+    lifecycle/signaling/status messages travel here. H264 media must be published
+    directly from media-adapter to go2rtc, never through this gRPC service.
+
+    """
+
+    def ControlStream(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_MediaAdapterControlServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'ControlStream': grpc.stream_stream_rpc_method_handler(
+                    servicer.ControlStream,
+                    request_deserializer=relay__pb2.MediaAdapterMsg.FromString,
+                    response_serializer=relay__pb2.MediaAdapterCommand.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'devicefarm.MediaAdapterControlService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('devicefarm.MediaAdapterControlService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class MediaAdapterControlService(object):
+    """── Media adapter control plane ──────────────────────────────────────────────
+    Local media-adapter opens this outbound stream to the cloud backend. Only
+    lifecycle/signaling/status messages travel here. H264 media must be published
+    directly from media-adapter to go2rtc, never through this gRPC service.
+
+    """
+
+    @staticmethod
+    def ControlStream(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/devicefarm.MediaAdapterControlService/ControlStream',
+            relay__pb2.MediaAdapterMsg.SerializeToString,
+            relay__pb2.MediaAdapterCommand.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)

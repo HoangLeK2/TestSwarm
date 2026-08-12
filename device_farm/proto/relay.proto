@@ -1,5 +1,6 @@
 syntax = "proto3";
 package devicefarm;
+option go_package = "devicefarm/media-adapter/internal/grpcapi/relaypb";
 
 // Sent by agent-boot → device_farm (replaces the 0x53 binary frame)
 message VideoFrame {
@@ -101,3 +102,114 @@ message RestartU2Cmd     { string msg_id = 1; string serial = 2; int32 timeout =
 message RestartAtxCmd    { string msg_id = 1; string serial = 2; int32 timeout = 3; }
 message ShellCmd         { string msg_id = 1; string serial = 2; string cmd = 3; int32 timeout = 4; }
 message RestartScrcpyCmd { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+
+// ── Media adapter control plane ──────────────────────────────────────────────
+// Local media-adapter opens this outbound stream to the cloud backend. Only
+// lifecycle/signaling/status messages travel here. H264 media must be published
+// directly from media-adapter to go2rtc, never through this gRPC service.
+
+service MediaAdapterControlService {
+  rpc ControlStream(stream MediaAdapterMsg) returns (stream MediaAdapterCommand);
+}
+
+message MediaAdapterMsg {
+  oneof payload {
+    MediaAdapterRegister      register       = 1;
+    MediaAdapterHeartbeat     heartbeat      = 2;
+    MediaAdapterSessionResult session_result = 3;
+  }
+}
+
+message MediaAdapterRegister {
+  string          adapter_id           = 1;
+  string          relay_id             = 2;
+  repeated string serials              = 3;
+  string          hostname             = 4;
+  string          ip                   = 5;
+  string          adapter_version      = 6;
+  string          go2rtc_base_url      = 7;
+  string          stream_source_template = 8;
+}
+
+message MediaAdapterHeartbeat {
+  string                     adapter_id = 1;
+  repeated string            serials    = 2;
+  repeated MediaStreamStatus streams    = 3;
+}
+
+message MediaStreamStatus {
+  string serial              = 1;
+  string stream_name         = 2;
+  string stream_source       = 3;
+  bool   active              = 4;
+  bool   connected           = 5;
+  uint32 width               = 6;
+  uint32 height              = 7;
+  uint64 frames              = 8;
+  uint64 bytes               = 9;
+  uint64 keyframes           = 10;
+  uint64 publish_errors      = 11;
+  int64  last_frame_unix_ms  = 12;
+  string error               = 13;
+}
+
+message MediaAdapterSessionResult {
+  string request_id        = 1;
+  bool   ok                = 2;
+  string error             = 3;
+  int32  retry_after_ms    = 4;
+  string session_id        = 5;
+  string serial            = 6;
+  string viewer_id         = 7;
+  string stream_name       = 8;
+  string stream_source     = 9;
+  int64  expires_at_unix_ms = 10;
+  string sdp_type          = 11;
+  string sdp               = 12;
+}
+
+message MediaAdapterCommand {
+  oneof payload {
+    MediaAdapterAck                 ack               = 1;
+    MediaAdapterStartSessionCmd     start_session     = 2;
+    MediaAdapterAnswerSessionCmd    answer_session    = 3;
+    MediaAdapterHeartbeatSessionCmd heartbeat_session = 4;
+    MediaAdapterCloseSessionCmd     close_session     = 5;
+  }
+}
+
+message MediaAdapterAck {
+  string message = 1;
+}
+
+message MediaAdapterStartSessionCmd {
+  string request_id  = 1;
+  string org_id      = 2;
+  string user_id     = 3;
+  string serial      = 4;
+  string viewer_id   = 5;
+  int32  ttl_seconds = 6;
+  bool   control     = 7;
+  string profile     = 8;
+  int32  max_fps     = 9;
+  int32  max_width   = 10;
+  int32  bitrate     = 11;
+}
+
+message MediaAdapterAnswerSessionCmd {
+  string request_id = 1;
+  string session_id = 2;
+  string sdp_type   = 3;
+  string sdp        = 4;
+}
+
+message MediaAdapterHeartbeatSessionCmd {
+  string request_id  = 1;
+  string session_id  = 2;
+  int32  ttl_seconds = 3;
+}
+
+message MediaAdapterCloseSessionCmd {
+  string request_id = 1;
+  string session_id = 2;
+}

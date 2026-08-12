@@ -185,9 +185,7 @@ export function DeviceTile({
   const handleStreamSize = useCallback(
     (size: { width: number; height: number }) => {
       setStreamRenderSize((prev) =>
-        prev?.width === size.width && prev?.height === size.height
-          ? prev
-          : size
+        prev?.width === size.width && prev?.height === size.height ? prev : size
       );
     },
     []
@@ -300,7 +298,9 @@ export function DeviceTile({
                 <DeviceAndroidFrame
                   screenWidth={mockupScreenWidth}
                   deviceWidth={streamRenderSize?.width ?? device.screen_width}
-                  deviceHeight={streamRenderSize?.height ?? device.screen_height}
+                  deviceHeight={
+                    streamRenderSize?.height ?? device.screen_height
+                  }
                   className='shrink-0'
                 >
                   <div className='relative flex h-full min-h-0 w-full flex-col'>

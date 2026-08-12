@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -21,11 +22,14 @@ import (
 )
 
 type Config struct {
-	RTSPAddress    string
-	QueueMax       int
-	StalePacketAge time.Duration
-	InputFPS       int
-	WriteQueueSize int
+	RTSPAddress     string
+	PublishTemplate string
+	QueueMax        int
+	StalePacketAge  time.Duration
+	InputFPS        int
+	WriteQueueSize  int
+	RemoteQueueSize int
+	RemoteTimeout   time.Duration
 }
 
 type Publisher struct {
@@ -80,6 +84,12 @@ func New(cfg Config, logger *slog.Logger) *Publisher {
 	}
 	if cfg.WriteQueueSize <= 0 {
 		cfg.WriteQueueSize = 128
+	}
+	if cfg.RemoteQueueSize <= 0 {
+		cfg.RemoteQueueSize = 256
+	}
+	if cfg.RemoteTimeout <= 0 {
+		cfg.RemoteTimeout = 1500 * time.Millisecond
 	}
 	handler := &rtspHandler{
 		streams: make(map[string]*gortsplib.ServerStream),
@@ -211,16 +221,35 @@ func (p *Publisher) ensureRTSPStream(serial string, sps []byte, pps []byte) (*st
 		return nil, err
 	}
 	state := &streamState{
-		serial: serial,
-		media:  desc.Medias[0],
-		format: forma,
-		stream: rtspStream,
+		serial:        serial,
+		media:         desc.Medias[0],
+		format:        forma,
+		stream:        rtspStream,
+		remoteURL:     p.remoteURL(serial),
+		remoteQueue:   make(chan *rtp.Packet, p.cfg.RemoteQueueSize),
+		remoteDone:    make(chan struct{}),
+		remoteTimeout: p.cfg.RemoteTimeout,
+		stats:         &p.stats,
 	}
+	state.startRemote(p.logger)
 	p.rtsp.streams[name] = rtspStream
 	p.rtsp.states[name] = state
 	p.stats.streamsReady.Add(1)
 	p.logger.Info("media adapter RTSP stream ready", "serial", serial, "stream", name)
 	return state, nil
+}
+
+func (p *Publisher) remoteURL(serial string) string {
+	tpl := strings.TrimSpace(p.cfg.PublishTemplate)
+	if tpl == "" {
+		return ""
+	}
+	name := stream.StreamName(serial)
+	return strings.NewReplacer(
+		"{serial}", url.PathEscape(serial),
+		"{stream}", url.PathEscape(name),
+		"{stream_raw}", name,
+	).Replace(tpl)
 }
 
 type rtspHandler struct {
@@ -267,10 +296,168 @@ func normalizePath(path string) string {
 }
 
 type streamState struct {
-	serial string
-	media  *description.Media
-	format *format.H264
-	stream *gortsplib.ServerStream
+	serial         string
+	media          *description.Media
+	format         *format.H264
+	stream         *gortsplib.ServerStream
+	remoteURL      string
+	remoteClient   *gortsplib.Client
+	remoteMu       sync.Mutex
+	remoteQueue    chan *rtp.Packet
+	remoteDone     chan struct{}
+	remoteOnce     sync.Once
+	remoteTimeout  time.Duration
+	remoteNextDial time.Time
+	remoteNextLog  time.Time
+	stats          *publisherCounters
+}
+
+func (s *streamState) startRemote(logger *slog.Logger) {
+	if s.remoteURL == "" {
+		return
+	}
+	go s.remoteLoop(logger)
+}
+
+func (s *streamState) remoteLoop(logger *slog.Logger) {
+	for {
+		select {
+		case <-s.remoteDone:
+			return
+		case packet := <-s.remoteQueue:
+			if packet == nil {
+				continue
+			}
+			if err := s.writeRemote(logger, packet); err != nil {
+				if s.stats != nil {
+					s.stats.writeErrors.Add(1)
+				}
+				s.logRemoteWriteError(logger, err)
+			}
+		}
+	}
+}
+
+func (s *streamState) enqueueRemote(logger *slog.Logger, packet *rtp.Packet) {
+	if s.remoteURL == "" || s.remoteQueue == nil {
+		return
+	}
+	clone := packet.Clone()
+	select {
+	case s.remoteQueue <- clone:
+		return
+	default:
+	}
+	select {
+	case <-s.remoteQueue:
+		if s.stats != nil {
+			s.stats.queueEvictions.Add(1)
+		}
+	default:
+	}
+	select {
+	case s.remoteQueue <- clone:
+	default:
+		if s.stats != nil {
+			s.stats.queueDrops.Add(1)
+		}
+		s.logRemoteWriteError(logger, fmt.Errorf("remote RTSP queue full"))
+	}
+}
+
+func (s *streamState) ensureRemote(logger *slog.Logger) bool {
+	if s.remoteURL == "" {
+		return false
+	}
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	if s.remoteClient != nil {
+		return true
+	}
+	now := time.Now()
+	if now.Before(s.remoteNextDial) {
+		return false
+	}
+	desc := &description.Session{
+		Medias: []*description.Media{{
+			Type:    description.MediaTypeVideo,
+			Formats: []format.Format{s.format},
+		}},
+	}
+	client := &gortsplib.Client{
+		ReadTimeout:  s.remoteTimeout,
+		WriteTimeout: s.remoteTimeout,
+	}
+	if err := client.StartRecording(s.remoteURL, desc); err != nil {
+		client.Close()
+		s.remoteNextDial = now.Add(1 * time.Second)
+		s.logRemoteConnectErrorLocked(logger, err, now)
+		return false
+	}
+	s.remoteClient = client
+	logger.Info("media adapter remote RTSP publishing", "serial", s.serial, "url", s.remoteURL)
+	return true
+}
+
+func (s *streamState) writeRemote(logger *slog.Logger, packet *rtp.Packet) error {
+	if s.remoteURL == "" {
+		return nil
+	}
+	if !s.ensureRemote(logger) {
+		return nil
+	}
+	s.remoteMu.Lock()
+	client := s.remoteClient
+	s.remoteMu.Unlock()
+	if client == nil {
+		return nil
+	}
+	if err := client.WritePacketRTP(s.media, packet); err != nil {
+		s.remoteMu.Lock()
+		if s.remoteClient != nil {
+			s.remoteClient.Close()
+			s.remoteClient = nil
+		}
+		s.remoteMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *streamState) logRemoteConnectErrorLocked(logger *slog.Logger, err error, now time.Time) {
+	if logger == nil || now.Before(s.remoteNextLog) {
+		return
+	}
+	s.remoteNextLog = now.Add(5 * time.Second)
+	logger.Warn("media adapter remote RTSP publish not ready", "serial", s.serial, "url", s.remoteURL, "error", err)
+}
+
+func (s *streamState) logRemoteWriteError(logger *slog.Logger, err error) {
+	if logger == nil {
+		return
+	}
+	now := time.Now()
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	if now.Before(s.remoteNextLog) {
+		return
+	}
+	s.remoteNextLog = now.Add(5 * time.Second)
+	logger.Warn("media adapter remote RTSP packet dropped", "serial", s.serial, "url", s.remoteURL, "error", err)
+}
+
+func (s *streamState) closeRemote() {
+	s.remoteOnce.Do(func() {
+		if s.remoteDone != nil {
+			close(s.remoteDone)
+		}
+		s.remoteMu.Lock()
+		defer s.remoteMu.Unlock()
+		if s.remoteClient != nil {
+			s.remoteClient.Close()
+			s.remoteClient = nil
+		}
+	})
 }
 
 type serialLane struct {
@@ -408,6 +595,7 @@ func (l *serialLane) write(item queuedPacket) error {
 		if err := state.stream.WritePacketRTP(state.media, packet); err != nil {
 			return err
 		}
+		state.enqueueRemote(l.logger, packet)
 		l.publisher.stats.rtpPacketsWritten.Add(1)
 	}
 	return nil
@@ -470,6 +658,9 @@ func (l *serialLane) close() {
 		l.state = nil
 		l.mu.Unlock()
 		if state != nil {
+			state.closeRemote()
+		}
+		if state != nil {
 			state.stream.Close()
 		}
 		l.publisher.rtsp.mu.Lock()
@@ -510,11 +701,14 @@ func prependParams(sps []byte, pps []byte, au [][]byte) [][]byte {
 
 func ConfigFromEnv() Config {
 	return Config{
-		RTSPAddress:    envDefault("MEDIA_ADAPTER_RTSP_ADDRESS", ":8556"),
-		QueueMax:       envInt("MEDIA_ADAPTER_QUEUE_MAX", 8),
-		StalePacketAge: time.Duration(envInt("MEDIA_ADAPTER_STALE_PACKET_MS", 160)) * time.Millisecond,
-		InputFPS:       envInt("MEDIA_ADAPTER_INPUT_FPS", 15),
-		WriteQueueSize: envInt("MEDIA_ADAPTER_RTSP_WRITE_QUEUE", 128),
+		RTSPAddress:     envDefault("MEDIA_ADAPTER_RTSP_ADDRESS", ":8556"),
+		PublishTemplate: envDefault("MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE", ""),
+		QueueMax:        envInt("MEDIA_ADAPTER_QUEUE_MAX", 8),
+		StalePacketAge:  time.Duration(envInt("MEDIA_ADAPTER_STALE_PACKET_MS", 160)) * time.Millisecond,
+		InputFPS:        envInt("MEDIA_ADAPTER_INPUT_FPS", 15),
+		WriteQueueSize:  envInt("MEDIA_ADAPTER_RTSP_WRITE_QUEUE", 128),
+		RemoteQueueSize: envInt("MEDIA_ADAPTER_REMOTE_RTSP_QUEUE", 256),
+		RemoteTimeout:   time.Duration(envInt("MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS", 1500)) * time.Millisecond,
 	}
 }
 

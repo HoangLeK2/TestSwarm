@@ -18,6 +18,7 @@ import (
 type Config struct {
 	BaseURL        string
 	RTSPTemplate   string
+	RegisterStream bool
 	RequestTimeout time.Duration
 }
 
@@ -47,6 +48,9 @@ func New(cfg Config) *Client {
 	if cfg.RTSPTemplate == "" {
 		cfg.RTSPTemplate = "rtsp://host.docker.internal:8556/{stream_raw}"
 	}
+	if !cfg.RegisterStream && strings.TrimSpace(os.Getenv("MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED")) == "" {
+		cfg.RegisterStream = true
+	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 900 * time.Millisecond
 	}
@@ -71,6 +75,7 @@ func ConfigFromEnv() Config {
 			"MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE",
 			envDefault("MEDIA_ADAPTER_RTSP_URL_TEMPLATE", "rtsp://host.docker.internal:8556/{stream_raw}"),
 		),
+		RegisterStream: envBool("MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED", true),
 		RequestTimeout: time.Duration(timeout) * time.Millisecond,
 	}
 }
@@ -89,6 +94,9 @@ func (c *Client) StreamSource(serial string) string {
 }
 
 func (c *Client) RegisterStream(ctx context.Context, serial string) error {
+	if !c.cfg.RegisterStream {
+		return nil
+	}
 	endpoint, err := url.Parse(c.cfg.BaseURL + "/api/streams")
 	if err != nil {
 		return err
@@ -173,4 +181,19 @@ func envInt(name string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

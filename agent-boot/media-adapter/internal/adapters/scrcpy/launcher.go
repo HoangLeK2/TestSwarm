@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"devicefarm/media-adapter/internal/adapters/adbserver"
 )
 
 const (
@@ -284,7 +286,9 @@ func (l *ADBLauncher) run(ctx context.Context, serial string, timeout time.Durat
 }
 
 func (l *ADBLauncher) adbCommand(ctx context.Context, serial string, args ...string) *exec.Cmd {
-	argv := make([]string, 0, len(args)+2)
+	serverArgs := adbserver.ArgsForSerial(ctx, l.cfg.ADBPath, serial)
+	argv := make([]string, 0, len(serverArgs)+len(args)+2)
+	argv = append(argv, serverArgs...)
 	if serial != "" {
 		argv = append(argv, "-s", serial)
 	}

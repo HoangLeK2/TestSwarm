@@ -724,6 +724,15 @@ def create_app(
 
             lifecycle.register_task(
                 LifecyclePhase.BACKGROUND,
+                "account-action-reconcile",
+                lambda: __import__(
+                    "services.account_actions.reconcile_worker",
+                    fromlist=["account_action_reconcile_loop"],
+                ).account_action_reconcile_loop(),
+            )
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
                 "device-auto-release",
                 lambda: __import__(
                     "services.device_state.auto_release_worker",

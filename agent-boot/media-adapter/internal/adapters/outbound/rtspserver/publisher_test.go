@@ -10,6 +10,7 @@ import (
 	"devicefarm/media-adapter/internal/domain/stream"
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/pion/rtp"
 )
 
 func TestNormalizePathMatchesGortsplibLeadingSlash(t *testing.T) {
@@ -106,5 +107,36 @@ func TestPublisherStatsCountKeyframeEvictions(t *testing.T) {
 	}
 	if stats.EnqueuedPackets != 3 {
 		t.Fatalf("enqueued=%d, want 3", stats.EnqueuedPackets)
+	}
+}
+
+func TestRemoteRTSPQueueDropsInsteadOfBlockingLane(t *testing.T) {
+	publisher := &Publisher{
+		cfg: Config{
+			QueueMax:        2,
+			StalePacketAge:  time.Second,
+			InputFPS:        15,
+			RemoteQueueSize: 1,
+			RemoteTimeout:   time.Millisecond,
+		},
+	}
+	state := &streamState{
+		serial:      "SERIAL-1",
+		remoteURL:   "rtsp://127.0.0.1:1/device-SERIAL-1",
+		remoteQueue: make(chan *rtp.Packet, 1),
+		remoteDone:  make(chan struct{}),
+		stats:       &publisher.stats,
+	}
+	packet := &rtp.Packet{Payload: []byte{0x01}}
+
+	state.enqueueRemote(nil, packet)
+	state.enqueueRemote(nil, packet)
+	state.enqueueRemote(nil, packet)
+
+	if queued := len(state.remoteQueue); queued != 1 {
+		t.Fatalf("remote queue len=%d, want 1", queued)
+	}
+	if publisher.Stats().QueueEvictions == 0 {
+		t.Fatal("expected remote queue eviction instead of blocking")
 	}
 }

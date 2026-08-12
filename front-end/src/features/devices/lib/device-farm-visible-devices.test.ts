@@ -112,6 +112,38 @@ test('dashboard active check keeps transport-live devices visible despite stale 
   );
 });
 
+test('dashboard active check keeps campaign-running devices visible despite stale offline state', () => {
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('campaign-1'),
+      state: 'DISCONNECTED',
+      agent_connected: false,
+      stf_connected: false,
+      u2_ready: false,
+      minitouch_ready: false,
+      touch_method: 'none',
+      scenario_active: 1
+    }),
+    true
+  );
+});
+
+test('dashboard active check keeps reserved work devices visible despite stale offline state', () => {
+  assert.equal(
+    isVisibleDeviceFarmActiveDevice({
+      ...live('reserved-1'),
+      state: 'DISCONNECTED',
+      agent_connected: false,
+      stf_connected: false,
+      u2_ready: false,
+      minitouch_ready: false,
+      touch_method: 'none',
+      usage_state: 'reserved'
+    } as Device),
+    true
+  );
+});
+
 test('dashboard active check drops disconnected devices with only stale readiness flags', () => {
   assert.equal(
     isVisibleDeviceFarmActiveDevice({

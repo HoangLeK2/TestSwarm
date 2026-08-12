@@ -73,9 +73,10 @@ export function DeviceAndroidFrame({
     [screenWidth]
   );
   const inset = useMemo(() => screenContentInsetPx(screenWidth), [screenWidth]);
-  const frameWidth = useMemo(() => mockupFrameWidthPx(screenWidth), [
-    screenWidth
-  ]);
+  const frameWidth = useMemo(
+    () => mockupFrameWidthPx(screenWidth),
+    [screenWidth]
+  );
   const screenHeight = useMemo(
     () => screenHeightForDevicePx(screenWidth, deviceWidth, deviceHeight),
     [deviceHeight, deviceWidth, screenWidth]

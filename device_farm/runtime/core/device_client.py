@@ -1775,6 +1775,72 @@ class DeviceClient:
             return svc.get_properties()
         return None
 
+    @staticmethod
+    def _adb_keyevent_name(key_name: str) -> Optional[str]:
+        key = (key_name or "").strip()
+        if not key:
+            return None
+        key_map = {
+            "home": "KEYCODE_HOME",
+            "back": "KEYCODE_BACK",
+            "recent": "KEYCODE_APP_SWITCH",
+            "app_switch": "KEYCODE_APP_SWITCH",
+            "menu": "KEYCODE_MENU",
+            "power": "KEYCODE_POWER",
+            "enter": "KEYCODE_ENTER",
+            "tab": "KEYCODE_TAB",
+            "delete": "KEYCODE_DEL",
+            "del": "KEYCODE_DEL",
+            "volume_up": "KEYCODE_VOLUME_UP",
+            "volume_down": "KEYCODE_VOLUME_DOWN",
+        }
+        lower = key.lower()
+        if lower in key_map:
+            return key_map[lower]
+        upper = key.upper()
+        if upper.startswith("KEYCODE_"):
+            return upper
+        if key.isdigit():
+            return key
+        return None
+
+    @classmethod
+    def _adb_key_command(cls, key_name: str) -> Optional[str]:
+        key = (key_name or "").strip()
+        if not key:
+            return None
+        if key.lower() == "home":
+            return "am start -a android.intent.action.MAIN -c android.intent.category.HOME"
+        keyevent = cls._adb_keyevent_name(key)
+        if keyevent:
+            return f"input keyevent {keyevent}"
+        return None
+
+    def _key_via_adb_relay(self, key_name: str, timeout: float = 5.0) -> bool:
+        cmd = self._adb_key_command(key_name)
+        if not cmd or not self._loop:
+            return False
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial()
+            if not relay or not relay.relay_for_serial(serial):
+                return False
+
+            import asyncio
+
+            fut = asyncio.run_coroutine_threadsafe(
+                relay.adb_shell(serial, cmd, timeout=timeout),
+                self._loop,
+            )
+            fut.result(timeout=timeout + 5.0)
+            self._log(f"key via adb relay ({key_name})")
+            return True
+        except Exception as exc:
+            self._log(f"key via adb relay failed ({key_name}): {exc}", level=logging.WARNING)
+            return False
+
     def key(self, key_name: str) -> None:
         """
         Key press (home, back, power, enter).
@@ -1807,6 +1873,8 @@ class DeviceClient:
             if self._agent_send is not None:
                 self._send_to_agent({"type": "key", "key": key_l})
                 return
+            if self._key_via_adb_relay(key_l):
+                return
 
         # Non-nav keys: u2 → APK injectKey (InputManager reflection).
         with self._u2_lock:
@@ -1828,6 +1896,9 @@ class DeviceClient:
 
         if self._agent_send is not None:
             self._send_to_agent({"type": "key", "key": key_l})
+            return
+
+        if self._key_via_adb_relay(key_l):
             return
 
         self._log(f"key skipped ({k}): no agent and no u2", level=logging.WARNING)

@@ -288,6 +288,17 @@ async def start_grpc_server(
         ctrl_servicer.set_persistence_callbacks(*control_callbacks)
     set_control_servicer(ctrl_servicer)
     relay_pb2_grpc.add_AgentControlServiceServicer_to_server(ctrl_servicer, server)
+
+    # ── MediaAdapterControlService (media lifecycle/signaling only) ─────────
+    from .media_adapter_control_servicer import (
+        MediaAdapterControlServicer,
+        set_media_adapter_servicer,
+    )
+    media_servicer = MediaAdapterControlServicer(api_key=api_key or "")
+    if control_callbacks is not None:
+        media_servicer.set_register_callback(control_callbacks[0])
+    set_media_adapter_servicer(media_servicer)
+    relay_pb2_grpc.add_MediaAdapterControlServiceServicer_to_server(media_servicer, server)
     env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
     is_prod_like = env_name in {"prod", "production", "staging"}
     tls_ready = bool(tls_cert_file and tls_key_file)

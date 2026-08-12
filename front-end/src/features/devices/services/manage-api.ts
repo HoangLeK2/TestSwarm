@@ -62,6 +62,22 @@ export type FleetStatsOut = {
   owner_anomalies: SessionOwnerAnomalyOut[] | null;
 };
 
+export type ActiveFleetSessionListOut = {
+  total: number;
+  offset: number;
+  limit: number;
+  sessions: Array<{
+    session_id: string;
+    device_id: string;
+    device_serial: string;
+    device_name: string;
+    owner_type: string;
+    source: 'active_session' | 'busy_claim';
+    created_at: string;
+    duplicate_for_device: boolean;
+  }>;
+};
+
 export type DeviceCreate = { serial: string; name?: string };
 
 export type SessionOut = {
@@ -160,7 +176,13 @@ export const devicesApi = {
     return farmApi
       .get<FleetStatsOut>(`/devices/fleet/stats${suffix}`)
       .then((r) => r.data);
-  }
+  },
+  activeSessions: (limit = 50, offset = 0) =>
+    farmApi
+      .get<ActiveFleetSessionListOut>('/devices/fleet/sessions', {
+        params: { limit, offset }
+      })
+      .then((r) => r.data)
 };
 
 // ── Relay agent types ─────────────────────────────────────────────────────────

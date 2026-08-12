@@ -21,6 +21,50 @@ trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
 _MAX_NESTING_DEPTH = 10
 
 
+def _resolve_step_for_execution(
+    sc: "ScenarioContext",
+    raw_step: Dict[str, Any],
+    *,
+    step_index: int,
+) -> Dict[str, Any]:
+    """Resolve step fields while preserving nested step bodies for control flow."""
+    step_type = str(raw_step.get("type") or "")
+    nested_keys: set[str] = set()
+    if step_type in {"loop", "repeat", "repeat_until"}:
+        nested_keys.add("steps")
+    elif step_type in {"if", "if_element", "if_variable"}:
+        nested_keys.update({"then", "else"})
+    elif step_type == "random_pick":
+        nested_keys.add("branches")
+
+    if not nested_keys:
+        return sc.var_ctx.resolve(raw_step, step_index=step_index)
+
+    resolved = sc.var_ctx.resolve(
+        {key: value for key, value in raw_step.items() if key not in nested_keys},
+        step_index=step_index,
+    )
+    for key in nested_keys:
+        if key not in raw_step:
+            continue
+        if key != "branches":
+            resolved[key] = raw_step[key]
+            continue
+        branches = []
+        for branch in raw_step.get("branches") or []:
+            if not isinstance(branch, dict):
+                branches.append(branch)
+                continue
+            resolved_branch = sc.var_ctx.resolve(
+                {k: v for k, v in branch.items() if k != "steps"},
+                step_index=step_index,
+            )
+            resolved_branch["steps"] = branch.get("steps") or []
+            branches.append(resolved_branch)
+        resolved[key] = branches
+    return resolved
+
+
 def _error_policy(step: Dict[str, Any], scenario: Dict[str, Any]) -> str:
     """Return parent-owned error policy for a failed step."""
     step_type = str(step.get("type") or "")
@@ -260,7 +304,11 @@ class ScenarioExecutor:
                     "context": sc.ctx,
                 }
 
-            step: Dict[str, Any] = sc.var_ctx.resolve(raw_step, step_index=idx)
+            step: Dict[str, Any] = _resolve_step_for_execution(
+                sc,
+                raw_step,
+                step_index=idx,
+            )
             t = step.get("type")
             trace_log.info(
                 "step_start",

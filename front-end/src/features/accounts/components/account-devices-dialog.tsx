@@ -3,9 +3,8 @@
 import { useState, useCallback } from 'react';
 import { Smartphone, Plus, X, Star } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { devicesApi } from '@/features/devices/services/manage-api';
+import { useDevices } from '@/features/devices/hooks/use-devices';
 import {
   useAccountDevices,
   useAssignDeviceToAccount,
@@ -25,18 +24,20 @@ function deviceLabel(d: { serial: string; name?: string | null }) {
   return d.name?.trim() || d.serial || '—';
 }
 
-export function AccountDevicesDialog({ account }: { account: AccountOut }) {
+export function AccountDevicesDialog({
+  account,
+  canUpdate
+}: {
+  account: AccountOut;
+  canUpdate: boolean;
+}) {
   const t = useTranslations('accountsFeature.devicesDialog');
   const [open, setOpen] = useState(false);
 
   const { data: links = [], isLoading: loadingLinks } = useAccountDevices(
     open ? account.id : ''
   );
-  const { data: allDevices = [], isLoading: loadingAll } = useQuery({
-    queryKey: ['devices'],
-    queryFn: () => devicesApi.list(),
-    enabled: open
-  });
+  const { data: allDevices = [], isLoading: loadingAll } = useDevices();
   const { mutateAsync: assignDevice, isPending: assigning } =
     useAssignDeviceToAccount();
   const { mutate: unassignDevice, isPending: unassigning } =
@@ -59,7 +60,12 @@ export function AccountDevicesDialog({ account }: { account: AccountOut }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size='icon' variant='ghost' className='size-8'>
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-8'
+          title={t('title')}
+        >
           <Smartphone size={14} />
         </Button>
       </DialogTrigger>
@@ -94,21 +100,30 @@ export function AccountDevicesDialog({ account }: { account: AccountOut }) {
                       {link.is_primary && (
                         <Star size={12} className='shrink-0 text-yellow-500' />
                       )}
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='ghost'
-                        className='size-6 shrink-0 text-destructive hover:bg-destructive/10'
-                        disabled={unassigning}
-                        onClick={() =>
-                          unassignDevice({
-                            accountId: account.id,
-                            deviceId: link.device_id
-                          })
-                        }
-                      >
-                        <X size={12} />
-                      </Button>
+                      {canUpdate ? (
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='ghost'
+                          className='size-6 shrink-0 text-destructive hover:bg-destructive/10'
+                          disabled={unassigning}
+                          onClick={() =>
+                            unassignDevice(
+                              {
+                                accountId: account.id,
+                                deviceId: link.device_id
+                              },
+                              {
+                                onSuccess: () =>
+                                  toast.success(t('removeSuccess')),
+                                onError: () => toast.error(t('removeError'))
+                              }
+                            )
+                          }
+                        >
+                          <X size={12} />
+                        </Button>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -117,38 +132,42 @@ export function AccountDevicesDialog({ account }: { account: AccountOut }) {
           )}
 
           {/* Available devices */}
-          <div>
-            <p className='mb-2 text-xs font-medium'>{t('availableDevices')}</p>
-            {loadingLinks || loadingAll ? (
-              <p className='text-sm text-muted-foreground'>{t('loading')}</p>
-            ) : available.length === 0 ? (
-              <p className='text-sm text-muted-foreground'>
-                {t('noAvailable')}
+          {canUpdate ? (
+            <div>
+              <p className='mb-2 text-xs font-medium'>
+                {t('availableDevices')}
               </p>
-            ) : (
-              <ul className='max-h-48 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 p-2'>
-                {available.map((d) => (
-                  <li
-                    key={d.id}
-                    className='flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50'
-                  >
-                    <span className='min-w-0 flex-1 truncate text-sm'>
-                      {deviceLabel(d)}
-                    </span>
-                    <Button
-                      size='sm'
-                      variant='ghost'
-                      className='size-7 shrink-0'
-                      disabled={assigning}
-                      onClick={() => handleAssign(d.id)}
+              {loadingLinks || loadingAll ? (
+                <p className='text-sm text-muted-foreground'>{t('loading')}</p>
+              ) : available.length === 0 ? (
+                <p className='text-sm text-muted-foreground'>
+                  {t('noAvailable')}
+                </p>
+              ) : (
+                <ul className='max-h-48 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 p-2'>
+                  {available.map((d) => (
+                    <li
+                      key={d.id}
+                      className='flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50'
                     >
-                      <Plus size={14} />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                      <span className='min-w-0 flex-1 truncate text-sm'>
+                        {deviceLabel(d)}
+                      </span>
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='size-7 shrink-0'
+                        disabled={assigning}
+                        onClick={() => handleAssign(d.id)}
+                      >
+                        <Plus size={14} />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

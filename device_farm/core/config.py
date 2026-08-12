@@ -120,14 +120,7 @@ class WifiDenseposeConfig:
 
 @dataclass
 class StreamingConfig:
-    """Streaming mode controls how video is delivered to the browser.
-
-    "periodic"   — JPEG screenshot polled every `dashboard_interval` seconds.
-                   Low CPU, high latency (~3s). Good for monitoring dashboards.
-    "continuous" — H264 WebCodecs relay via scrcpy. Raw AVCC bytes sent to browser;
-                   VideoDecoder decodes in-browser (zero server-side decode per frame).
-                   Typical latency: 50-100ms. Requires scrcpy-server on device.
-    """
+    """Streaming mode controls how video is delivered to the browser."""
     mode: str = "periodic"             # "periodic" | "continuous"
     dashboard_interval: float = 3.0    # seconds between screenshots (periodic mode only)
     # Viewer-gated default: do not start scrcpy unless a viewer explicitly attaches.
@@ -136,6 +129,8 @@ class StreamingConfig:
     auto_attach_scrcpy_on_relay_online: bool = False
     # When False, device-farm grid does not load MJPEG preview tiles (saves bandwidth server↔browser).
     dashboard_grid_preview_mjpeg: bool = True
+    webrtc_enabled: bool = False
+    media_adapter_url: str = "http://host.docker.internal:8878"
 
 
 @dataclass
@@ -691,6 +686,24 @@ def load_config(path: str = "config.yaml") -> Config:
                 _get(streaming_raw, "auto_attach_scrcpy_on_relay_online", False),
                 True,
             ),
+            webrtc_enabled=_as_bool(
+                os.environ.get(
+                    "DEVICE_FARM_WEBRTC_ENABLED",
+                    _get(streaming_raw, "webrtc_enabled", False),
+                ),
+                True,
+            ),
+            media_adapter_url=(
+                os.environ.get(
+                    "MEDIA_ADAPTER_HTTP_URL",
+                    _get(
+                        streaming_raw,
+                        "media_adapter_url",
+                        "http://host.docker.internal:8878",
+                    ),
+                )
+                or ""
+            ).strip().rstrip("/"),
         ),
         temporal=_build_temporal_config(raw.get("temporal", {})),
         object_storage=_build_object_storage_config(raw),

@@ -63,8 +63,9 @@ export function ScenarioBodyPreview({
             nestedInDialog
             steps={steps}
             onChange={() => {}}
-            maxHeight='min(52vh, 520px)'
+            maxHeight='min(60vh, 640px)'
             compact
+            enableDragDrop={false}
           />
         </div>
       ) : (

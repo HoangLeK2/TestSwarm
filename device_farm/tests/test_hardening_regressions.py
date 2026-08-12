@@ -222,6 +222,39 @@ def test_production_disables_sqlalchemy_create_all_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_all_repairs_device_composite_parent_key_first():
+    from db.database import _ensure_create_all_prerequisites
+
+    conn = AsyncMock()
+    conn.run_sync.return_value = True
+
+    await _ensure_create_all_prerequisites(conn)
+
+    statement = str(conn.execute.await_args.args[0])
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_org_id" in statement
+    assert "ON devices (org_id, id)" in statement
+
+
+@pytest.mark.asyncio
+async def test_device_target_groups_migration_tolerates_create_all_schema():
+    from importlib import import_module
+
+    migration = import_module("db.migrations.101_device_target_groups")
+    conn = AsyncMock()
+
+    await migration.upgrade(conn)
+    await migration.upgrade(conn)
+
+    statements = [str(call.args[0]) for call in conn.execute.await_args_list]
+    assert len(statements) == 8
+    assert all(
+        "IF NOT EXISTS" in statement
+        for statement in statements
+        if "CREATE TABLE" in statement or "CREATE INDEX" in statement
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_dlq_entry_is_idempotent_for_open_items():
     from db.crud.execution_dlq import create_dlq_entry
 

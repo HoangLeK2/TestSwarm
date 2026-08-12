@@ -16,8 +16,14 @@ export function applyStepsToFlowgramDocument(
   ctx: FixedLayoutPluginContext,
   steps: FlowStep[]
 ): FlowStep[] {
+  const selectedIds = ctx.selection.selection.map((entity) => entity.id);
+
   // Build FlowDocumentJSON (start / các node nội dung / end) rồi nạp vào editor
   ctx.document.fromJSON(stepsToFlowDoc(steps));
+  ctx.selection.selection = selectedIds.flatMap((id) => {
+    const node = ctx.document.getNode(id);
+    return node ? [node] : [];
+  });
   // Serialize lại để mọi node nhận _fgId khớp id trên canvas
   return flowDocToSteps(ctx.document.toJSON());
 }

@@ -5,8 +5,7 @@ before the DB REST router (so `/api/devices/live` is not swallowed by `/api/devi
 
 from __future__ import annotations
 
-import asyncio
-
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,6 +24,90 @@ _CONNECTING_LIVE_STATES = {"CONNECTING"}
 _LIVE_DEVICE_INFO_KEY = "_live_device_info"
 
 
+def _device_health_projection(
+    device: dict[str, object],
+    *,
+    heartbeat_at: object = None,
+    evaluated_at: Optional[datetime] = None,
+) -> dict[str, object]:
+    """Return one operator-facing status projection without removing legacy fields."""
+    now = evaluated_at or datetime.now(timezone.utc)
+    state = str(device.get("state") or "UNKNOWN").upper()
+    agent_connected = bool(device.get("agent_connected"))
+    transport_connected = bool(device.get("stf_connected"))
+    control_connected = agent_connected or transport_connected
+    busy = (
+        state == "BUSY"
+        or str(device.get("usage_state") or "idle").lower() != "idle"
+        or _cap_int(device.get("scenario_active"), 0) > 0
+    )
+    command_ready = control_connected and state not in _OFFLINE_LIVE_STATES
+
+    media_connected = bool(device.get("media_adapter_connected"))
+    stream_active = bool(device.get("media_stream_active"))
+    stream_connected = bool(device.get("media_stream_connected"))
+    last_frame_ms = _cap_int(device.get("media_stream_last_frame_unix_ms"), 0)
+    if stream_active and stream_connected:
+        stream_status = "ready"
+        stream_reason = None
+    elif media_connected:
+        stream_status = "starting"
+        stream_reason = "waiting_first_frame"
+    elif control_connected:
+        stream_status = "unavailable"
+        stream_reason = "media_channel_unavailable"
+    else:
+        stream_status = "unavailable"
+        stream_reason = "device_offline"
+
+    if not control_connected or state in _OFFLINE_LIVE_STATES:
+        overall = "offline"
+        command_status = "unavailable"
+        reason_codes = ["agent_offline"]
+    elif busy:
+        overall = "busy"
+        command_status = "busy"
+        reason_codes = ["device_busy"]
+    elif command_ready:
+        overall = "ready"
+        command_status = "ready"
+        reason_codes = []
+    else:
+        overall = "degraded"
+        command_status = "unavailable"
+        reason_codes = ["command_channel_unavailable"]
+
+    heartbeat = heartbeat_at.isoformat() if hasattr(heartbeat_at, "isoformat") else heartbeat_at
+    evaluated = now.isoformat()
+    last_signal_at = evaluated if control_connected else heartbeat
+    return {
+        "overall": overall,
+        "agent": {
+            "status": "online" if control_connected else "offline",
+            "observed_at": last_signal_at,
+            "reason": None if control_connected else "agent_offline",
+        },
+        "stream": {
+            "status": stream_status,
+            "observed_at": (
+                datetime.fromtimestamp(last_frame_ms / 1000, tz=timezone.utc).isoformat()
+                if last_frame_ms > 0
+                else None
+            ),
+            "reason": stream_reason,
+        },
+        "command": {
+            "status": command_status,
+            "reason": reason_codes[0] if reason_codes else None,
+        },
+        "heartbeat_at": heartbeat,
+        "last_signal_at": last_signal_at,
+        "last_signal_source": "live_transport" if control_connected else "heartbeat",
+        "evaluated_at": evaluated,
+        "reason_codes": reason_codes,
+    }
+
+
 def _cap_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -32,6 +115,8 @@ def _cap_bool(value: object) -> bool:
 
 
 def _cap_int(value: object, default: int) -> int:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
     try:
         return int(str(value))
     except (TypeError, ValueError):
@@ -136,6 +221,99 @@ def _relay_online_for_live_device(
         return _relay_online_for_serial(serial, ctrl=ctrl)
     return _relay_online_for_serial(serial, relay=relay, ctrl=ctrl)
 
+
+def _media_adapter_control():
+    try:
+        from runtime.transports.media_adapter_control_servicer import (
+            get_media_adapter_servicer,
+        )
+    except Exception:
+        return None
+    try:
+        return get_media_adapter_servicer()
+    except Exception:
+        return None
+
+
+def _media_adapter_status_for_aliases(
+    aliases: list[str],
+    *,
+    media_ctrl=None,
+    online_serials: Optional[set[str]] = None,
+    streams: Optional[dict[str, dict]] = None,
+) -> tuple[bool, Optional[dict]]:
+    if media_ctrl is None and online_serials is None and streams is None:
+        return False, None
+    connected = False
+    for alias in aliases:
+        serial = str(alias or "").strip()
+        if not serial:
+            continue
+        if online_serials is not None and serial in online_serials:
+            connected = True
+        if streams is not None:
+            stream = streams.get(serial)
+            if isinstance(stream, dict):
+                return True, stream
+            continue
+        try:
+            if media_ctrl.has_serial(serial):
+                connected = True
+        except Exception:
+            pass
+        try:
+            stream = media_ctrl.stream_for_serial(serial)
+        except Exception:
+            stream = None
+        if isinstance(stream, dict):
+            return True, stream
+    return connected, None
+
+
+def _snapshot_serials(owner, method_name: str) -> set[str]:
+    if owner is None:
+        return set()
+    try:
+        method = getattr(owner, method_name)
+    except Exception:
+        return set()
+    try:
+        return {str(s) for s in method()}
+    except Exception:
+        return set()
+
+
+def _snapshot_media_streams(media_ctrl) -> dict[str, dict]:
+    if media_ctrl is None:
+        return {}
+    try:
+        streams = media_ctrl.streams_snapshot()
+    except Exception:
+        return {}
+    if not isinstance(streams, dict):
+        return {}
+    return {
+        str(serial): dict(stream)
+        for serial, stream in streams.items()
+        if serial and isinstance(stream, dict)
+    }
+
+
+def _aliases_have_live_transport(
+    aliases: list[str],
+    *,
+    relay_online_serials: set[str],
+    control_online_serials: set[str],
+    requires_relay: bool,
+) -> bool:
+    lookup = (
+        control_online_serials
+        if requires_relay
+        else relay_online_serials | control_online_serials
+    )
+    return any(str(alias or "").strip() in lookup for alias in aliases)
+
+
 def _relay_capabilities_for_serial(serial: str, *, relay=None) -> dict[str, object]:
     if relay is None:
         return {}
@@ -196,6 +374,7 @@ def _relay_candidate_serials_for_registered(
     info: dict[str, object],
     *,
     relay=None,
+    relay_devices: Optional[list[dict[str, object]]] = None,
 ) -> list[str]:
     candidates: list[str] = []
 
@@ -208,7 +387,9 @@ def _relay_candidate_serials_for_registered(
         add(alias)
         add(_resolve_relay_serial(alias, relay=relay))
 
-    for device in _relay_list_devices(relay):
+    for device in (
+        relay_devices if relay_devices is not None else _relay_list_devices(relay)
+    ):
         runtime_serial = str(device.get("serial") or "").strip()
         if not runtime_serial:
             continue
@@ -229,18 +410,32 @@ def _synthesize_live_device_from_relay(
     *,
     relay=None,
     ctrl=None,
+    relay_devices: Optional[list[dict[str, object]]] = None,
+    relay_online_serials: Optional[set[str]] = None,
+    control_online_serials: Optional[set[str]] = None,
 ) -> Optional[dict]:
     """Build a live device row from relay/control state when DeviceManager lags."""
     runtime_serial = ""
     relay_online = False
+    relay_lookup = relay_online_serials or set()
+    control_lookup = control_online_serials or set()
     for candidate in _relay_candidate_serials_for_registered(
         registered_serial,
         info,
         relay=relay,
+        relay_devices=relay_devices,
     ):
-        if _relay_online_for_serial(candidate, relay=relay, ctrl=ctrl):
+        if relay_online_serials is not None or control_online_serials is not None:
+            candidate_online = candidate in relay_lookup or candidate in control_lookup
+        else:
+            candidate_online = _relay_online_for_serial(candidate, relay=relay, ctrl=ctrl)
+        if candidate_online:
             runtime_serial = candidate
-            relay_online = _relay_online_for_serial(candidate, relay=relay)
+            relay_online = (
+                candidate in relay_lookup
+                if relay_online_serials is not None
+                else _relay_online_for_serial(candidate, relay=relay)
+            )
             break
     if not runtime_serial:
         return None
@@ -254,7 +449,11 @@ def _synthesize_live_device_from_relay(
 
     has_u2 = _cap_bool(caps.get("has_u2") or caps.get("u2_ready"))
     minitouch_ready = _cap_bool(caps.get("minitouch_ready"))
-    agent_connected = _relay_online_for_serial(runtime_serial, ctrl=ctrl)
+    agent_connected = (
+        runtime_serial in control_lookup
+        if control_online_serials is not None
+        else _relay_online_for_serial(runtime_serial, ctrl=ctrl)
+    )
     brand = str(caps.get("brand") or "").strip()
     model = str(caps.get("model") or "").strip()
     touch_method = "u2" if has_u2 else "none"
@@ -277,6 +476,50 @@ def _synthesize_live_device_from_relay(
         "minitouch_ready": minitouch_ready,
         "touch_method": touch_method,
         "stf_connected": relay_online,
+        _LIVE_DEVICE_INFO_KEY: info,
+    }
+
+
+def _synthesize_live_device_from_media_adapter(
+    registered_serial: str,
+    info: dict[str, object],
+    *,
+    media_ctrl=None,
+    media_online_serials: Optional[set[str]] = None,
+    media_streams: Optional[dict[str, dict]] = None,
+) -> Optional[dict]:
+    """Build a live device row when media-plane is alive but control-plane lags."""
+    aliases = _live_device_aliases(registered_serial, info)
+    media_connected, stream = _media_adapter_status_for_aliases(
+        aliases,
+        media_ctrl=media_ctrl,
+        online_serials=media_online_serials,
+        streams=media_streams,
+    )
+    if not media_connected:
+        return None
+
+    runtime_serial = str((stream or {}).get("serial") or registered_serial).strip()
+    width = _cap_int((stream or {}).get("width"), 1080)
+    height = _cap_int((stream or {}).get("height"), 1920)
+    return {
+        "type": "status",
+        "serial": runtime_serial,
+        "registered_serial": registered_serial,
+        "name": info.get("name", ""),
+        "display_name": info.get("display_name", runtime_serial),
+        "brand": str(info.get("brand") or "").strip(),
+        "model": str(info.get("model") or "").strip(),
+        "state": "MEDIA_READY",
+        "battery": -1,
+        "current_app": "",
+        "screen_width": width,
+        "screen_height": height,
+        "agent_connected": False,
+        "u2_ready": False,
+        "minitouch_ready": False,
+        "touch_method": "none",
+        "stf_connected": False,
         _LIVE_DEVICE_INFO_KEY: info,
     }
 
@@ -337,6 +580,28 @@ def _apply_realtime_connectivity(
     device["state"] = "DISCONNECTED"
     device["touch_method"] = "none"
     device["stf_connected"] = False
+
+
+def _apply_media_adapter_status(
+    device: dict,
+    *,
+    media_connected: bool,
+    stream: Optional[dict],
+) -> None:
+    device["media_adapter_connected"] = bool(media_connected)
+    device["media_stream_active"] = bool(stream and stream.get("active"))
+    device["media_stream_connected"] = bool(stream and stream.get("connected"))
+    if not stream:
+        return
+    stream_name = str(stream.get("stream_name") or "").strip()
+    if stream_name:
+        device["media_stream_name"] = stream_name
+    stream_source = str(stream.get("stream_source") or "").strip()
+    if stream_source:
+        device["media_stream_source"] = stream_source
+    last_frame = _cap_int(stream.get("last_frame_unix_ms"), 0)
+    if last_frame > 0:
+        device["media_stream_last_frame_unix_ms"] = last_frame
 
 
 def _verify_token_only(request: Request) -> None:
@@ -410,9 +675,15 @@ async def _get_live_device_map(
                 aliases.add(f"{adb_ip}:{adb_port}")
             out[serial] = {
                 "name": name,
+                "brand": brand,
+                "model": model,
                 "display_name": display_name,
                 "requires_relay": bool(adb_serial or adb_ip),
                 "relay_aliases": sorted(aliases),
+                "relay_scrcpy_enabled": bool(
+                    getattr(device, "relay_scrcpy_enabled", True)
+                ),
+                "last_seen": getattr(device, "last_seen", None),
             }
         return out
 
@@ -427,33 +698,63 @@ async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optio
 async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
     try:
         from services import redis_store
-        from services.manual_takeover import is_manual_takeover_active
+        from services.manual_takeover import is_manual_takeover_local
     except Exception:
         return
 
+    serials = [str(d.get("serial") or "").strip() for d in devices]
+    if not any(serials):
+        return
+
+    scenario_by_serial: dict[str, int] = {}
+    manual_by_serial = {
+        serial: is_manual_takeover_local(serial)
+        for serial in serials
+        if serial
+    }
     redis_client = redis_store.client() if redis_store.enabled() else None
-    async def _enrich_one(d: dict) -> None:
-        serial = str(d.get("serial") or "").strip()
-        if not serial:
-            return
-        scenario_active = _cap_int(d.get("scenario_active"), 0)
-        if redis_client is not None:
-            try:
-                raw = await redis_client.get(
-                    redis_store.key(f"device:{serial}:scenario_active")
-                )
-                scenario_active = max(scenario_active, _cap_int(raw, 0))
-            except Exception:
-                pass
-        d["scenario_active"] = scenario_active
+    if redis_client is not None:
+        redis_serials = [serial for serial in serials if serial]
         try:
-            d["manual_takeover_active"] = bool(
-                await is_manual_takeover_active(serial)
+            scenario_keys = [
+                redis_store.key(f"device:{serial}:scenario_active")
+                for serial in redis_serials
+            ]
+            scenario_values = await redis_client.mget(scenario_keys)
+            scenario_by_serial.update(
+                {
+                    serial: _cap_int(value, 0)
+                    for serial, value in zip(redis_serials, scenario_values)
+                }
             )
         except Exception:
-            d["manual_takeover_active"] = bool(d.get("manual_takeover_active"))
+            scenario_by_serial.clear()
+        try:
+            manual_keys = [
+                redis_store.key(f"device:{serial}:manual_takeover")
+                for serial in redis_serials
+            ]
+            manual_values = await redis_client.mget(manual_keys)
+            manual_by_serial.update(
+                {
+                    serial: manual_by_serial.get(serial, False) or value is not None
+                    for serial, value in zip(redis_serials, manual_values)
+                }
+            )
+        except Exception:
+            pass
 
-    await asyncio.gather(*(_enrich_one(d) for d in devices))
+    for d in devices:
+        serial = str(d.get("serial") or "").strip()
+        if not serial:
+            continue
+        d["scenario_active"] = max(
+            _cap_int(d.get("scenario_active"), 0),
+            scenario_by_serial.get(serial, 0),
+        )
+        d["manual_takeover_active"] = bool(
+            manual_by_serial.get(serial, d.get("manual_takeover_active"))
+        )
 
 
 def build_public_router(
@@ -486,9 +787,18 @@ def build_public_router(
 
             relay = get_relay_manager()
             ctrl = get_control_servicer()
+            media_ctrl = _media_adapter_control()
         except Exception:
             relay = None
             ctrl = None
+            media_ctrl = _media_adapter_control()
+        relay_online_serials = _snapshot_serials(relay, "list_online_serials")
+        control_online_serials = _snapshot_serials(ctrl, "online_serials_snapshot")
+        media_online_serials = _snapshot_serials(media_ctrl, "online_serials_snapshot")
+        relay_devices = _relay_list_devices(relay)
+        media_streams = _snapshot_media_streams(media_ctrl)
+        media_online_lookup = media_online_serials or None
+        media_stream_lookup = media_streams or None
 
         allowed_devices = await _get_live_device_map(request, db_enabled)
         devices = [d.status_dict() for d in manager.all_devices()]
@@ -516,9 +826,24 @@ def build_public_router(
                     info,
                     relay=relay,
                     ctrl=ctrl,
+                    relay_devices=relay_devices,
+                    relay_online_serials=relay_online_serials,
+                    control_online_serials=control_online_serials,
                 )
                 if relay_device is not None:
                     visible_devices.append(relay_device)
+                    seen_registered_serials.add(registered_serial)
+                    continue
+                media_device = _synthesize_live_device_from_media_adapter(
+                    registered_serial,
+                    info,
+                    media_ctrl=media_ctrl,
+                    media_online_serials=media_online_lookup,
+                    media_streams=media_stream_lookup,
+                )
+                if media_device is not None:
+                    visible_devices.append(media_device)
+                    seen_registered_serials.add(registered_serial)
             devices = visible_devices
 
         await _enrich_live_manual_control_state(devices)
@@ -534,41 +859,44 @@ def build_public_router(
                 serial,
                 info,
             )
-            relay_online = any(
-                _relay_online_for_live_device(
-                    str(alias),
-                    relay=relay,
-                    ctrl=ctrl,
-                    requires_relay=requires_relay,
-                )
-                for alias in aliases
+            relay_online = _aliases_have_live_transport(
+                aliases,
+                relay_online_serials=relay_online_serials,
+                control_online_serials=control_online_serials,
+                requires_relay=requires_relay,
             )
             _apply_realtime_connectivity(
                 d,
                 relay_online=relay_online,
                 requires_relay=requires_relay,
             )
+            media_connected, media_stream = _media_adapter_status_for_aliases(
+                aliases,
+                media_ctrl=media_ctrl,
+                online_serials=media_online_lookup,
+                streams=media_stream_lookup,
+            )
+            _apply_media_adapter_status(
+                d,
+                media_connected=media_connected,
+                stream=media_stream,
+            )
         store = getattr(request.app.state, "session_store", None)
         for d in devices:
             serial = d.get("serial", "")
             d["usage_state"] = store.get_usage(serial) if store else "idle"
         if db_enabled and devices:
-            serials = [
-                str(d.get("registered_serial") or d.get("serial") or "")
-                for d in devices
-                if d.get("registered_serial") or d.get("serial")
-            ]
-            try:
-                async with AsyncSessionLocal() as db:
-                    pref_map = await repo.get_relay_scrcpy_enabled_map(db, serials)
-                for d in devices:
-                    s = str(d.get("registered_serial") or d.get("serial") or "")
-                    d["relay_scrcpy_enabled"] = pref_map.get(s, True)
-            except Exception:
-                for d in devices:
-                    d["relay_scrcpy_enabled"] = True
+            for d in devices:
+                info = d.get(_LIVE_DEVICE_INFO_KEY, {}) if allowed_devices else {}
+                d["relay_scrcpy_enabled"] = bool(
+                    info.get("relay_scrcpy_enabled", True)
+                    if isinstance(info, dict)
+                    else True
+                )
         for d in devices:
-            d.pop(_LIVE_DEVICE_INFO_KEY, None)
+            info = d.pop(_LIVE_DEVICE_INFO_KEY, None)
+            heartbeat_at = info.get("last_seen") if isinstance(info, dict) else None
+            d["health"] = _device_health_projection(d, heartbeat_at=heartbeat_at)
         if state:
             devices = [d for d in devices if d.get("state", "").upper() == state.upper()]
         if model:
@@ -597,6 +925,10 @@ def build_public_router(
             )
             out["streaming_auto_attach_scrcpy_on_relay_online"] = bool(
                 getattr(st, "auto_attach_scrcpy_on_relay_online", False)
+            )
+            out["webrtc_enabled"] = bool(getattr(st, "webrtc_enabled", False))
+            out["media_adapter_url_configured"] = bool(
+                getattr(st, "media_adapter_url", "")
             )
         dev = getattr(config, "device", None)
         if dev is not None:

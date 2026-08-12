@@ -724,6 +724,15 @@ def create_app(
 
             lifecycle.register_task(
                 LifecyclePhase.BACKGROUND,
+                "account-action-reconcile",
+                lambda: __import__(
+                    "services.account_actions.reconcile_worker",
+                    fromlist=["account_action_reconcile_loop"],
+                ).account_action_reconcile_loop(),
+            )
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
                 "device-auto-release",
                 lambda: __import__(
                     "services.device_state.auto_release_worker",
@@ -1618,6 +1627,7 @@ def create_app(
         manager,
         db_enabled=db_enabled,
         read_only=config.safe_mode.read_only,
+        media_stream_enabled=not bool(config.streaming.webrtc_enabled),
     )
     app.state.ws_manager = ws_manager
     lifecycle_ws_manager = DeviceLifecycleWsManager()

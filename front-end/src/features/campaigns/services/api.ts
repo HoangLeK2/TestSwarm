@@ -7,14 +7,14 @@ import type {
   CampaignDispatchIn as GeneratedCampaignDispatchIn,
   CampaignDispatchOut,
   CampaignEntityOut,
-  CampaignEntityUpdate,
-  CampaignScenarioRefIn,
+  CampaignEntityUpdate as GeneratedCampaignEntityUpdate,
   CampaignAccountBindIn
 } from '../../device-farm/services/generated/DeviceFarmApi';
 import type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignScenarioRefIn as CampaignScenarioRefInLocal,
   CampaignScenarioRefOut,
   CampaignRunResponse,
   CampaignStatus,
@@ -31,6 +31,19 @@ import type {
   ExecutionArtifact,
   ExecutionEventOut
 } from '../types';
+import type {
+  ContinuousCrawlControl,
+  ContinuousCrawlPreflight,
+  ContinuousCrawlProgress,
+  ContinuousCrawlStartResponse
+} from '../lib/continuous-crawl-monitor';
+
+export type CampaignEntityUpdate = Omit<
+  GeneratedCampaignEntityUpdate,
+  'scenario_refs'
+> & {
+  scenario_refs?: CampaignScenarioRefInLocal[] | null;
+};
 
 export type {
   CampaignCreate,
@@ -51,13 +64,9 @@ export type {
   ExecutionArtifact
 } from '../types';
 
-export type {
-  CampaignDispatchOut,
-  CampaignEntityOut,
-  CampaignEntityUpdate,
-  CampaignScenarioRefIn,
-  CampaignAccountBindIn
-};
+export type { CampaignDispatchOut, CampaignEntityOut, CampaignAccountBindIn };
+
+export type { CampaignScenarioRefInLocal as CampaignScenarioRefIn };
 
 export type CampaignDispatchIn = GeneratedCampaignDispatchIn & {
   source_pool?: {
@@ -444,6 +453,33 @@ export const campaignsApi = {
       .put<ScenarioDeviceVariablesOut>(
         `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`,
         body
+      )
+      .then((r) => r.data)
+};
+
+export const continuousCrawlApi = {
+  preflight: (campaignId: string) =>
+    farmApi
+      .post<ContinuousCrawlPreflight>(
+        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/preflight`
+      )
+      .then((r) => r.data),
+  start: (campaignId: string) =>
+    farmApi
+      .post<ContinuousCrawlStartResponse>(
+        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/start`
+      )
+      .then((r) => r.data),
+  progress: (campaignId: string) =>
+    farmApi
+      .get<ContinuousCrawlProgress>(
+        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/progress`
+      )
+      .then((r) => r.data),
+  control: (campaignId: string, control: ContinuousCrawlControl) =>
+    farmApi
+      .post<ContinuousCrawlProgress>(
+        `/campaigns/${encodeURIComponent(campaignId)}/continuous-crawl/${control}`
       )
       .then((r) => r.data)
 };

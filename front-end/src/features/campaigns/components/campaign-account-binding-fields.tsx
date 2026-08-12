@@ -11,59 +11,38 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
-import { useAccounts } from '@/features/accounts/hooks/use-accounts';
+import {
+  ACCOUNTS_PAGE_LIMIT,
+  useAccounts
+} from '@/features/accounts/hooks/use-accounts';
+import type { CampaignDeviceOut } from '../types';
+import type {
+  CampaignAccountBindingMode,
+  CampaignAccountBindingValue
+} from '../lib/campaign-account-binding';
 
-export type CampaignAccountBindingMode = 'none' | 'group' | 'single';
-
-export type CampaignAccountBindingValue = {
-  mode: CampaignAccountBindingMode;
-  accountGroupId: string;
-  scenarioAccountId: string;
-};
-
-export function campaignBindingFromEntity(entity: {
-  account_group_id?: string | null;
-  scenario_account_id?: string | null;
-}): CampaignAccountBindingValue {
-  if (entity.account_group_id) {
-    return {
-      mode: 'group',
-      accountGroupId: entity.account_group_id,
-      scenarioAccountId: ''
-    };
-  }
-  if (entity.scenario_account_id) {
-    return {
-      mode: 'single',
-      accountGroupId: '',
-      scenarioAccountId: entity.scenario_account_id
-    };
-  }
-  return { mode: 'none', accountGroupId: '', scenarioAccountId: '' };
-}
-
-export function campaignBindingToPayload(value: CampaignAccountBindingValue): {
-  account_group_id?: string;
-  scenario_account_id?: string;
-} {
-  if (value.mode === 'group' && value.accountGroupId) {
-    return { account_group_id: value.accountGroupId };
-  }
-  if (value.mode === 'single' && value.scenarioAccountId) {
-    return { scenario_account_id: value.scenarioAccountId };
-  }
-  return {};
-}
+export type {
+  CampaignAccountBindingMode,
+  CampaignAccountBindingValue
+} from '../lib/campaign-account-binding';
+export {
+  campaignBindingFromEntity,
+  campaignBindingToPayload
+} from '../lib/campaign-account-binding';
 
 export function CampaignAccountBindingFields({
   value,
   onChange,
   platform,
+  devices = [],
+  showPerDevice = false,
   disabled
 }: {
   value: CampaignAccountBindingValue;
   onChange: (next: CampaignAccountBindingValue) => void;
   platform?: string;
+  devices?: CampaignDeviceOut[];
+  showPerDevice?: boolean;
   disabled?: boolean;
 }) {
   const t = useTranslations('campaignsFeature.accountBinding');
@@ -73,7 +52,9 @@ export function CampaignAccountBindingFields({
   );
   const { data: groups = [] } = useAccountGroups(groupQuery);
   const { data: accounts = [] } = useAccounts(
-    platform ? { platform, limit: 200 } : { limit: 200 }
+    platform
+      ? { platform, limit: ACCOUNTS_PAGE_LIMIT }
+      : { limit: ACCOUNTS_PAGE_LIMIT }
   );
 
   const pickedGroup = groups.find((g) => g.id === value.accountGroupId);
@@ -89,7 +70,8 @@ export function CampaignAccountBindingFields({
             onChange({
               mode: mode as CampaignAccountBindingMode,
               accountGroupId: '',
-              scenarioAccountId: ''
+              scenarioAccountId: '',
+              perDeviceAccounts: value.perDeviceAccounts
             })
           }
         >
@@ -176,6 +158,67 @@ export function CampaignAccountBindingFields({
             <p className='text-[11px] text-muted-foreground'>
               {t('singleEmpty')}
             </p>
+          )}
+        </div>
+      )}
+
+      {showPerDevice && (
+        <div className='space-y-2 border-t pt-3'>
+          <div>
+            <Label className='text-xs'>{t('perDeviceLabel')}</Label>
+            <p className='text-[11px] text-muted-foreground'>
+              {t('perDeviceHint')}
+            </p>
+          </div>
+          {!devices.length ? (
+            <p className='text-[11px] text-muted-foreground'>
+              {t('perDeviceEmpty')}
+            </p>
+          ) : (
+            <div className='max-h-64 space-y-2 overflow-y-auto pr-1'>
+              {devices.map((device) => (
+                <div
+                  key={device.id}
+                  className='grid gap-1.5 rounded-md border p-2 sm:grid-cols-[minmax(0,1fr)_minmax(180px,1fr)] sm:items-center'
+                >
+                  <div className='min-w-0'>
+                    <p className='truncate text-xs font-medium'>
+                      {device.name || device.serial}
+                    </p>
+                    <p className='truncate text-[10px] text-muted-foreground'>
+                      {device.serial}
+                    </p>
+                  </div>
+                  <Select
+                    value={value.perDeviceAccounts[device.id] || '_fallback'}
+                    disabled={disabled}
+                    onValueChange={(accountId) => {
+                      const next = { ...value.perDeviceAccounts };
+                      if (accountId === '_fallback') delete next[device.id];
+                      else next[device.id] = accountId;
+                      onChange({ ...value, perDeviceAccounts: next });
+                    }}
+                  >
+                    <SelectTrigger className='h-8 w-full text-xs'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className='z-[10001]'>
+                      <SelectItem value='_fallback'>
+                        {t('useFallback')}
+                      </SelectItem>
+                      {accounts.map((account) => (
+                        <SelectItem key={account.id} value={account.id}>
+                          {account.username}
+                          {account.display_name
+                            ? ` · ${account.display_name}`
+                            : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

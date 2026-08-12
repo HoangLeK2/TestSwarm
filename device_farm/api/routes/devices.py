@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 
 from api.deps import AdminUser, CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id, device_visible_to_user
@@ -28,6 +29,8 @@ from api.schemas.device_capacity import (
 )
 from api.schemas.fleet_query import FleetDeviceItemOut, FleetDeviceListOut
 from api.schemas.fleet_stats import (
+    ActiveFleetSessionListOut,
+    ActiveFleetSessionOut,
     FleetStatsFiltersOut,
     FleetStatsOut,
     SessionOwnerAnomalyOut,
@@ -51,6 +54,11 @@ from db.crud.fleet_stats import (
 from db.crud.device_group import update_device_tags
 from db.crud.device_state import get_device_state, get_device_states_map
 from db.models.enums import DeviceFsmState
+from db.models.enums import McpSessionStatus
+from db.models.device import Device
+from db.models.device_fsm import DeviceFsmSnapshot
+from db.models.mcp_session import McpSession
+from services.fleet_stats import derive_session_owner_type
 from services.device_state.exceptions import IllegalDeviceTransitionError
 from services.device_state.service import ApplyOutcome, DeviceStateService
 from services.agent_boot_presence import (
@@ -624,6 +632,95 @@ async def fleet_stats(
         devices=build_device_state_counts(stats.devices_by_state),
         active_sessions=build_session_owner_counts(stats.active_sessions_by_owner),
         owner_anomalies=owner_anomalies,
+    )
+
+
+@router.get(
+    "/fleet/sessions",
+    response_model=ActiveFleetSessionListOut,
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
+async def list_active_fleet_sessions(
+    db: DB,
+    user: CurrentUser,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    """List active logical sessions so fleet totals are operator-auditable."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization context required",
+        )
+
+    scope = (
+        Device.org_id == org_id,
+        McpSession.status == McpSessionStatus.ACTIVE.value,
+    )
+    active_rows = (
+        await db.execute(
+            select(McpSession, Device)
+            .join(Device, Device.serial == McpSession.device_serial)
+            .where(*scope)
+        )
+    ).all()
+    active_ids = {str(session.id) for session, _device in active_rows}
+    busy_claim_rows = (
+        await db.execute(
+            select(DeviceFsmSnapshot, Device)
+            .join(Device, Device.id == DeviceFsmSnapshot.device_id)
+            .where(
+                Device.org_id == org_id,
+                DeviceFsmSnapshot.state == DeviceFsmState.BUSY.value,
+                DeviceFsmSnapshot.session_id.is_not(None),
+            )
+        )
+    ).all()
+
+    sessions = [
+        ActiveFleetSessionOut(
+            session_id=session.id,
+            device_id=device.id,
+            device_serial=device.serial,
+            device_name=device.name or device.serial,
+            owner_type=derive_session_owner_type(
+                session_id=session.id,
+                user_id=session.user_id,
+            ),
+            source="active_session",
+            created_at=session.created_at,
+        )
+        for session, device in active_rows
+    ]
+    sessions.extend(
+        ActiveFleetSessionOut(
+            session_id=str(snapshot.session_id),
+            device_id=device.id,
+            device_serial=device.serial,
+            device_name=device.name or device.serial,
+            owner_type=derive_session_owner_type(
+                session_id=str(snapshot.session_id),
+                user_id=None,
+            ),
+            source="busy_claim",
+            created_at=snapshot.updated_at,
+        )
+        for snapshot, device in busy_claim_rows
+        if str(snapshot.session_id) not in active_ids
+    )
+    serial_counts: dict[str, int] = {}
+    for session in sessions:
+        serial_counts[session.device_serial] = serial_counts.get(session.device_serial, 0) + 1
+    sessions.sort(key=lambda session: session.created_at, reverse=True)
+    for session in sessions:
+        session.duplicate_for_device = serial_counts[session.device_serial] > 1
+
+    return ActiveFleetSessionListOut(
+        total=len(sessions),
+        offset=offset,
+        limit=limit,
+        sessions=sessions[offset : offset + limit],
     )
 
 

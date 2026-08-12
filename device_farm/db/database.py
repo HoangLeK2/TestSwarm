@@ -20,6 +20,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Dict
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -235,6 +236,7 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         if _auto_create_schema_enabled():
+            await _ensure_create_all_prerequisites(conn)
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
         else:
             log.info(
@@ -253,6 +255,18 @@ async def init_db() -> None:
         await seed_db.commit()
 
     schema_init_ok = True
+
+
+async def _ensure_create_all_prerequisites(conn) -> None:
+    """Repair parent keys needed when create_all runs against a legacy schema."""
+    devices_exists = await conn.run_sync(
+        lambda sync_conn: inspect(sync_conn).has_table("devices")
+    )
+    if devices_exists:
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_org_id "
+            "ON devices (org_id, id)"
+        ))
 
 
 def _auto_create_schema_enabled() -> bool:

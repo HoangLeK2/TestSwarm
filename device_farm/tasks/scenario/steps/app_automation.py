@@ -33,6 +33,12 @@ _ACCOUNT_REF_TO_VAR = {
     "account.auth_code": "__ACCOUNT_TOTP_CODE__",
 }
 
+_SECRET_REF_TO_VAR = {
+    # Backward compatibility for cloned login templates created before the
+    # Facebook profile switched to the explicit account.password reference.
+    "secret.login_password": "__ACCOUNT_PASSWORD__",
+}
+
 
 def _load_profile(sc: ScenarioContext, step: Dict[str, Any]) -> AppAutomationProfile:
     raw = (
@@ -58,6 +64,8 @@ def _value_from_ref(sc: ScenarioContext, value_from: str, idx: int) -> str:
         var_name = "__ACCOUNT_TOTP_CODE__"
     elif ref in _ACCOUNT_REF_TO_VAR:
         var_name = _ACCOUNT_REF_TO_VAR[ref]
+    elif ref in _SECRET_REF_TO_VAR:
+        var_name = _SECRET_REF_TO_VAR[ref]
     elif ref.startswith(("variables.", "scenario.", "secret.")):
         var_name = ref.split(".", 1)[1]
     else:

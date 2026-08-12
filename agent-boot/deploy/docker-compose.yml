@@ -5,29 +5,89 @@ name: agent-boot
 
 services:
   agent-boot:
-    image: agent-boot:0.1.3
+    image: agent-boot:0.1.4
     container_name: agent-boot
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     environment:
-      RELAY_API_KEY: ${RELAY_API_KEY:-}
-      RELAY_ENROLLMENT_TOKEN: ${RELAY_ENROLLMENT_TOKEN:-}
-      AGENT_BOOT_CONTENT_DATABASE_URL: ${AGENT_BOOT_CONTENT_DATABASE_URL:-}
+      RELAY_API_KEY: ${RELAY_API_KEY:?configure RELAY_API_KEY in .env}
+      RELAY_ENROLLMENT_TOKEN: ${RELAY_ENROLLMENT_TOKEN:?configure RELAY_ENROLLMENT_TOKEN in .env}
+      AGENT_BOOT_CONTENT_DATABASE_URL: ${AGENT_BOOT_CONTENT_DATABASE_URL:?configure AGENT_BOOT_CONTENT_DATABASE_URL in .env}
       ADB_HOST: ${ADB_HOST:-host.docker.internal}
       ADB_PORT: ${ADB_PORT:-5037}
       ADB_SERVER_SOCKET: "tcp:${ADB_HOST:-host.docker.internal}:${ADB_PORT:-5037}"
+      ADB_SERVER_SOCKETS: ${ADB_SERVER_SOCKETS:-}
       ANDROID_ADB_SERVER_HOST: ${ADB_HOST:-host.docker.internal}
       ANDROID_ADB_SERVER_PORT: ${ADB_PORT:-5037}
       AGENT_BOOT_STATE_DIR: /app/state
+      MEDIA_ADAPTER_ENABLED: "0"
+      MEDIA_ADAPTER_AUTOSTART: "0"
+    depends_on:
+      - media-adapter
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc: 65535
     volumes:
       - agent-boot-state:/app/state
     # Optional: mount custom APKs/binaries over baked-in /app/assets
     # volumes:
     #   - ./assets:/app/assets:ro
+
+  media-adapter:
+    image: agent-boot:0.1.4
+    container_name: media-adapter
+    restart: unless-stopped
+    command: ["/app/bin/media-adapter"]
+    environment:
+      ADB_HOST: ${ADB_HOST:-host.docker.internal}
+      ADB_PORT: ${ADB_PORT:-5037}
+      ADB_SERVER_SOCKET: "tcp:${ADB_HOST:-host.docker.internal}:${ADB_PORT:-5037}"
+      ADB_SERVER_SOCKETS: ${ADB_SERVER_SOCKETS:-}
+      ANDROID_ADB_SERVER_HOST: ${ADB_HOST:-host.docker.internal}
+      ANDROID_ADB_SERVER_PORT: ${ADB_PORT:-5037}
+      MEDIA_ADAPTER_ENABLED: ${MEDIA_ADAPTER_ENABLED:-1}
+      MEDIA_ADAPTER_AUTOSTART: "0"
+      MEDIA_ADAPTER_DIRECT_SCRCPY_ENABLED: ${MEDIA_ADAPTER_DIRECT_SCRCPY_ENABLED:-1}
+      MEDIA_ADAPTER_HTTP_BIND: ${MEDIA_ADAPTER_HTTP_BIND:-0.0.0.0}
+      MEDIA_ADAPTER_HTTP_PORT: ${MEDIA_ADAPTER_HTTP_PORT:-8878}
+      MEDIA_ADAPTER_RTSP_ADDRESS: ":8556"
+      MEDIA_ADAPTER_GO2RTC_URL: ${MEDIA_ADAPTER_GO2RTC_URL:-http://host.docker.internal:1984}
+      MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE: ${MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE:-rtsp://host.docker.internal:8556/{stream_raw}}
+      MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE: ${MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE:-}
+      MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED: ${MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED:-1}
+      MEDIA_ADAPTER_CONTROL_GRPC_ENABLED: ${MEDIA_ADAPTER_CONTROL_GRPC_ENABLED:-1}
+      MEDIA_ADAPTER_CONTROL_GRPC_SERVER: ${MEDIA_ADAPTER_CONTROL_GRPC_SERVER:-host.docker.internal:50051}
+      MEDIA_ADAPTER_CONTROL_GRPC_TLS: ${MEDIA_ADAPTER_CONTROL_GRPC_TLS:-false}
+      MEDIA_ADAPTER_CONTROL_GRPC_ROOT_CERT_FILE: ${MEDIA_ADAPTER_CONTROL_GRPC_ROOT_CERT_FILE:-}
+      MEDIA_ADAPTER_CONTROL_GRPC_API_KEY: ${RELAY_API_KEY:?configure RELAY_API_KEY in .env}
+      MEDIA_ADAPTER_CONTROL_GRPC_ENROLLMENT_TOKEN: ${RELAY_ENROLLMENT_TOKEN:?configure RELAY_ENROLLMENT_TOKEN in .env}
+      MEDIA_ADAPTER_CONTROL_HEARTBEAT_SECONDS: ${MEDIA_ADAPTER_CONTROL_HEARTBEAT_SECONDS:-5}
+      MEDIA_ADAPTER_ID: ${MEDIA_ADAPTER_ID:-}
+      MEDIA_ADAPTER_QUEUE_MAX: ${MEDIA_ADAPTER_QUEUE_MAX:-8}
+      MEDIA_ADAPTER_STALE_PACKET_MS: ${MEDIA_ADAPTER_STALE_PACKET_MS:-160}
+      MEDIA_ADAPTER_RTSP_WRITE_QUEUE: ${MEDIA_ADAPTER_RTSP_WRITE_QUEUE:-128}
+      MEDIA_ADAPTER_REMOTE_RTSP_QUEUE: ${MEDIA_ADAPTER_REMOTE_RTSP_QUEUE:-256}
+      MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS: ${MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS:-1500}
+      MEDIA_ADAPTER_INPUT_FPS: ${MEDIA_ADAPTER_INPUT_FPS:-15}
+      MEDIA_ADAPTER_OWNS_SCRCPY: ${MEDIA_ADAPTER_OWNS_SCRCPY:-1}
+      MEDIA_ADAPTER_SCRCPY_SERVER_PATH: ${MEDIA_ADAPTER_SCRCPY_SERVER_PATH:-/app/media-adapter/assets/scrcpy-server}
+      MEDIA_ADAPTER_SCRCPY_SERVER_VERSION: ${MEDIA_ADAPTER_SCRCPY_SERVER_VERSION:-4.1}
+    ports:
+      - "127.0.0.1:${MEDIA_ADAPTER_HTTP_PORT:-8878}:8878/tcp"
+      - "${MEDIA_ADAPTER_RTSP_PORT:-8556}:8556/tcp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc: 65535
 
 volumes:
   agent-boot-state:

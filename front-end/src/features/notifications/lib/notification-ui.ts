@@ -248,3 +248,84 @@ export function groupNotificationsByDay<T extends { created_at: string }>(
   }
   return { today, earlier };
 }
+
+const DEVICE_DISCONNECT_GROUP_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
+
+export function collapseRepeatedDeviceDisconnects(
+  items: NotificationItem[]
+): NotificationItem[] {
+  const output: NotificationItem[] = [];
+  const groups = new Map<
+    string,
+    { index: number; newestAt: number; oldestAt: number; count: number }
+  >();
+
+  for (const item of items) {
+    if (item.event !== 'device.disconnect' && item.event !== 'device.offline') {
+      output.push(item);
+      continue;
+    }
+    const data = item.data ?? {};
+    const serial = String(data.serial ?? data.device_serial ?? '').trim();
+    if (!serial) {
+      output.push(item);
+      continue;
+    }
+    const occurredAt = new Date(item.created_at).getTime();
+    const key = `${item.event}:${serial}`;
+    const group = groups.get(key);
+    if (
+      !group ||
+      !Number.isFinite(occurredAt) ||
+      group.newestAt - occurredAt > DEVICE_DISCONNECT_GROUP_WINDOW_MS
+    ) {
+      groups.set(key, {
+        index: output.length,
+        newestAt: occurredAt,
+        oldestAt: occurredAt,
+        count: 1
+      });
+      output.push({
+        ...item,
+        data: {
+          ...data,
+          occurrence_count: 1,
+          grouped_notification_ids: [item.id],
+          first_occurred_at: item.created_at,
+          last_occurred_at: item.created_at
+        }
+      });
+      continue;
+    }
+
+    group.count += 1;
+    group.oldestAt = Math.min(group.oldestAt, occurredAt);
+    const current = output[group.index];
+    output[group.index] = {
+      ...current,
+      is_read: current.is_read && item.is_read,
+      data: {
+        ...(current.data ?? {}),
+        occurrence_count: group.count,
+        grouped_notification_ids: [
+          ...((current.data?.grouped_notification_ids as string[]) ?? [
+            current.id
+          ]),
+          item.id
+        ],
+        first_occurred_at: new Date(group.oldestAt).toISOString(),
+        last_occurred_at: new Date(group.newestAt).toISOString()
+      }
+    };
+  }
+  return output;
+}
+
+export function notificationMemberIds(item: NotificationItem): string[] {
+  const grouped = item.data?.grouped_notification_ids;
+  if (!Array.isArray(grouped)) return [item.id];
+  const ids = grouped
+    .map((id) => String(id ?? '').trim())
+    .filter((id) => id.length > 0);
+  return ids.length > 0 ? Array.from(new Set(ids)) : [item.id];
+}

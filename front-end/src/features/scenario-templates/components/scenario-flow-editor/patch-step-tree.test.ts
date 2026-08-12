@@ -51,3 +51,46 @@ test('findStepByFlowgramId locates nested extract under fb_tap_comment_button', 
   assert.equal(found.type, 'extract');
   assert.equal((found as { strategy?: string }).strategy, 'fb_comments');
 });
+
+test('findStepByFlowgramId locates children under generic if step', () => {
+  const steps: FlowStep[] = [
+    {
+      type: 'if',
+      then: [{ type: 'tap_selector', _fgId: 'then-child', value: 'Follow' }],
+      else: []
+    }
+  ];
+
+  const found = findStepByFlowgramId(steps, 'then-child');
+
+  assert.ok(found);
+  assert.equal(found.type, 'tap_selector');
+  assert.equal((found as { value?: string }).value, 'Follow');
+});
+
+test('patchStepByFlowgramId updates child under generic random branch', () => {
+  const steps: FlowStep[] = [
+    {
+      type: 'random_pick',
+      branches: [
+        {
+          weight: 2,
+          steps: [{ type: 'wait', seconds: 1, _fgId: 'branch-child' }]
+        }
+      ]
+    }
+  ];
+
+  const next = patchStepByFlowgramId(steps, 'branch-child', {
+    type: 'wait',
+    seconds: 5
+  });
+  const randomPick = next[0] as FlowStep & {
+    branches?: Array<{ steps?: FlowStep[] }>;
+  };
+  const child = randomPick.branches?.[0]?.steps?.[0];
+
+  assert.equal(child?.type, 'wait');
+  assert.equal((child as { seconds?: number }).seconds, 5);
+  assert.equal((child as Record<string, unknown>)._fgId, 'branch-child');
+});

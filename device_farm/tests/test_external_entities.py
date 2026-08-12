@@ -18,6 +18,8 @@ from db.models.external_entity import (
     ExternalEntityDiscovery,
     ExternalEntityObservation,
 )
+from db.models.content import ContentItem
+from services.content_author_sync import sync_author_profiles_from_content
 from tenancy.context import set_current_org_id, tenant_context
 from tests.test_epic04_scenario_entity import (
     ORG_A,
@@ -189,3 +191,152 @@ async def test_external_entity_api_observes_and_lists_current_org(session_factor
     assert listed.status_code == 200, listed.text
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["display_name"] == "API Group"
+
+
+@pytest.mark.asyncio
+async def test_sync_authors_from_content_skips_anonymous_and_dedupes_by_content(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    set_current_org_id(ORG_A)
+
+    async with session_factory() as db:
+        db.add_all(
+            [
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="crawl",
+                    platform="facebook",
+                    content_type="fb_post",
+                    author="Nguyen Van A",
+                    body="post one",
+                    content_hash="hash-post-1",
+                    campaign_id="campaign-1",
+                ),
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="crawl",
+                    platform="facebook",
+                    content_type="fb_post",
+                    author=" Nguyen  Van A ",
+                    body="duplicate source",
+                    content_hash="hash-post-1",
+                    campaign_id="campaign-1",
+                ),
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="crawl",
+                    platform="facebook",
+                    content_type="fb_comment",
+                    author="Nguyen Van A",
+                    body="same name different comment",
+                    content_hash="hash-comment-1",
+                    campaign_id="campaign-1",
+                ),
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="crawl",
+                    platform="facebook",
+                    content_type="fb_comment",
+                    author="Người tham gia ẩn danh",
+                    body="anonymous comment",
+                    content_hash="hash-comment-2",
+                    campaign_id="campaign-1",
+                ),
+                ContentItem(
+                    org_id=ORG_A,
+                    collection="crawl",
+                    platform="facebook",
+                    content_type="fb_comment",
+                    author="Xem thêm",
+                    body="chrome",
+                    content_hash="hash-comment-3",
+                    campaign_id="campaign-1",
+                ),
+            ]
+        )
+        await db.flush()
+
+        result = await sync_author_profiles_from_content(
+            db,
+            org_id=ORG_A,
+            campaign_id="campaign-1",
+        )
+        await db.commit()
+
+        assert result.scanned_count == 5
+        assert result.valid_count == 2
+        assert result.created_count == 2
+        assert result.existing_count == 0
+        assert result.skipped_existing_count == 0
+        assert result.skipped_count == 2
+        assert result.skipped_anonymous_count == 1
+        assert result.skipped_invalid_count == 1
+
+        entities = list(
+            (
+                await db.scalars(
+                    select(ExternalEntity).where(
+                        ExternalEntity.org_id == ORG_A,
+                        ExternalEntity.entity_type == "profile",
+                    )
+                )
+            ).all()
+        )
+        assert len(entities) == 2
+        assert {entity.display_name for entity in entities} == {"Nguyen Van A"}
+        assert {entity.status for entity in entities} == {"candidate"}
+        assert {
+            entity.current_attributes["source_content_hash"] for entity in entities
+        } == {"hash-post-1", "hash-comment-1"}
+
+    async with session_factory() as db:
+        again = await sync_author_profiles_from_content(
+            db,
+            org_id=ORG_A,
+            campaign_id="campaign-1",
+        )
+        await db.commit()
+        assert again.valid_count == 0
+        assert again.created_count == 0
+        assert again.existing_count == 2
+        assert again.skipped_existing_count == 2
+        assert again.skipped_count == 4
+
+
+@pytest.mark.asyncio
+async def test_sync_authors_from_content_dry_run_does_not_insert(session_factory):
+    await _seed_orgs(session_factory)
+    set_current_org_id(ORG_A)
+
+    async with session_factory() as db:
+        db.add(
+            ContentItem(
+                org_id=ORG_A,
+                collection="crawl",
+                platform="facebook",
+                content_type="fb_post",
+                author="Tran Thi B",
+                body="post",
+                content_hash="hash-post-2",
+                campaign_id="campaign-2",
+            )
+        )
+        await db.flush()
+
+        result = await sync_author_profiles_from_content(
+            db,
+            org_id=ORG_A,
+            campaign_id="campaign-2",
+            dry_run=True,
+        )
+
+        assert result.created_count == 1
+        assert (
+            await db.scalar(
+                select(func.count(ExternalEntity.id)).where(
+                    ExternalEntity.org_id == ORG_A,
+                    ExternalEntity.entity_type == "profile",
+                )
+            )
+        ) == 0

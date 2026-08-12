@@ -1,0 +1,23 @@
+# go2rtc local media gateway configuration.
+#
+# STUN-only policy: do not add TURN servers here. Browser signaling stays behind
+# the Device Farm backend; RTP media is negotiated by WebRTC/ICE against go2rtc.
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+
+webrtc:
+  listen: ":8555"
+  candidates:
+    # Keep a loopback candidate for browsers running on this Docker host, and
+    # derive a server-reflexive candidate for viewers outside the local machine.
+    - 127.0.0.1:8555
+    - stun:8555
+  ice_servers:
+    - urls: [stun:stun.l.google.com:19302]
+streams:
+  device-10AE7S00HD002JK:
+    - rtsp://host.docker.internal:8556/device-10AE7S00HD002JK

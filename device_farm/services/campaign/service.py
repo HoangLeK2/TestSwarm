@@ -34,11 +34,13 @@ from tenancy.context import tenant_context
 class CampaignScenarioRefView:
     scenario_id: str
     scenario_version: int
+    repeat_count: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "scenario_id": self.scenario_id,
             "scenario_version": self.scenario_version,
+            "repeat_count": self.repeat_count,
         }
 
 
@@ -106,6 +108,7 @@ def _refs_from_row(row: Campaign) -> list[CampaignScenarioRefView]:
         CampaignScenarioRefView(
             scenario_id=ref.org_scenario_id,
             scenario_version=int(ref.pinned_version or 1),
+            repeat_count=int(getattr(ref, "repeat_count", 1) or 1),
         )
         for ref in ordered
     ]
@@ -154,6 +157,7 @@ def _ref_views_from_resolved(resolved: list[ResolvedScenarioRef]) -> list[Campai
         CampaignScenarioRefView(
             scenario_id=ref.scenario_id,
             scenario_version=ref.scenario_version,
+            repeat_count=ref.repeat_count,
         )
         for ref in resolved
     ]
@@ -305,7 +309,12 @@ async def _create_campaign_in_tenant(
                 db,
                 row.id,
                 [
-                    (r.scenario_id, r.scenario_version, r.order_index)
+                    (
+                        r.scenario_id,
+                        r.scenario_version,
+                        r.order_index,
+                        r.repeat_count,
+                    )
                     for r in resolved
                 ],
             )
@@ -468,7 +477,10 @@ async def _update_campaign_in_tenant(
         await repo.replace_campaign_scenario_refs(
             db,
             updated.id,
-            [(r.scenario_id, r.scenario_version, r.order_index) for r in resolved],
+            [
+                (r.scenario_id, r.scenario_version, r.order_index, r.repeat_count)
+                for r in resolved
+            ],
         )
 
     await emit_campaign_domain_event(

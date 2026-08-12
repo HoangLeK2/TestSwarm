@@ -7,8 +7,12 @@ backpressure isolation therefore happen in agent-boot's FairSendQueue; HTTP/2 do
 not provide per-phone flow-control isolation inside this RPC.
 
 Protocol (proto/relay.proto):
-  agent-boot → device_farm : AgentMsg { video: VideoFrame | meta: bytes (JSON) }
+  agent-boot → device_farm : AgentMsg { meta: bytes (JSON) }
   device_farm → agent-boot : ControlMsg { serial, data, is_json }
+
+The proto still contains AgentMsg.video for older agents, but production video
+does not travel through backend gRPC anymore. H264 is published by the local
+media adapter/go2rtc path so this service stays on control-plane traffic.
 
 Auth: gRPC metadata  x-relay-api-key  (same key as WebSocket relay).
 """
@@ -18,21 +22,14 @@ import asyncio
 import json
 import logging
 import os
-import struct
 from typing import Any, Optional
 
 import grpc
 from grpc import aio
 
-from runtime.stream_telemetry import stream_telemetry
-
 from .grpc_gen import relay_pb2, relay_pb2_grpc
 
 log = logging.getLogger("grpc_relay")
-
-# Bit masks matching scrcpy_relay.py binary format
-_PTS_CONFIG_MASK = 0x8000_0000_0000_0000
-
 
 def _env_int(name: str, default: int, *, lo: int = 1, hi: int = 128 * 1024 * 1024) -> int:
     try:
@@ -40,14 +37,6 @@ def _env_int(name: str, default: int, *, lo: int = 1, hi: int = 128 * 1024 * 102
     except Exception:
         return default
     return max(lo, min(hi, value))
-
-
-_GRPC_VIDEO_STATS_INTERVAL_S = _env_int(
-    "RELAY_GRPC_VIDEO_STATS_INTERVAL_S",
-    30,
-    lo=5,
-    hi=3600,
-)
 
 
 def _grpc_max_message_bytes() -> int:
@@ -93,49 +82,15 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
         # relay_id for AdbRelayManager registration — use agent_id
         relay_id: Optional[str] = None
         conn: Optional[Any] = None
-        video_frames = 0
-        video_bytes = 0
-        video_max_bytes = 0
-        video_last_log = asyncio.get_running_loop().time()
-
-        def _log_video_stats(*, force: bool = False) -> None:
-            nonlocal video_frames, video_bytes, video_max_bytes, video_last_log
-            now = asyncio.get_running_loop().time()
-            if not force and now - video_last_log < _GRPC_VIDEO_STATS_INTERVAL_S:
-                return
-            if video_frames or video_bytes or video_max_bytes:
-                log_fn = log.warning if video_max_bytes >= 1024 * 1024 else log.debug
-                log_fn(
-                    "gRPC video recv stats agent=%s frames=%d bytes=%d max_frame_bytes=%d",
-                    agent_id,
-                    video_frames,
-                    video_bytes,
-                    video_max_bytes,
-                )
-            video_frames = 0
-            video_bytes = 0
-            video_max_bytes = 0
-            video_last_log = now
-
         async def _recv_frames() -> None:
-            nonlocal relay_id, conn, video_frames, video_bytes, video_max_bytes
+            nonlocal relay_id, conn
             try:
                 async for msg in request_iterator:
                     payload = msg.WhichOneof("payload")
                     if payload == "video":
-                        frame = msg.video
-                        frame_size = len(frame.data)
-                        video_frames += 1
-                        video_bytes += frame_size
-                        video_max_bytes = max(video_max_bytes, frame_size)
-                        stream_telemetry.record_grpc_video(
-                            agent_id=agent_id,
-                            frame_bytes=frame_size,
-                            is_config=bool(frame.is_config),
-                            is_key=bool(frame.is_key),
-                        )
-                        _log_video_stats()
-                        self._rm.dispatch_grpc_video_frame(frame)
+                        # Legacy agents may still send AgentMsg.video. Drop it
+                        # here so backend does not become a media relay again.
+                        continue
                     elif payload == "meta":
                         # JSON control message from agent (register / heartbeat / result)
                         try:
@@ -146,7 +101,6 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
                             data, agent_id, ctrl_q, relay_id, conn
                         )
             finally:
-                _log_video_stats(force=True)
                 # Signal _send_controls() to exit so asyncio.gather() can complete
                 # and the outer finally (unregister cleanup) runs correctly.
                 try:
@@ -334,6 +288,17 @@ async def start_grpc_server(
         ctrl_servicer.set_persistence_callbacks(*control_callbacks)
     set_control_servicer(ctrl_servicer)
     relay_pb2_grpc.add_AgentControlServiceServicer_to_server(ctrl_servicer, server)
+
+    # ── MediaAdapterControlService (media lifecycle/signaling only) ─────────
+    from .media_adapter_control_servicer import (
+        MediaAdapterControlServicer,
+        set_media_adapter_servicer,
+    )
+    media_servicer = MediaAdapterControlServicer(api_key=api_key or "")
+    if control_callbacks is not None:
+        media_servicer.set_register_callback(control_callbacks[0])
+    set_media_adapter_servicer(media_servicer)
+    relay_pb2_grpc.add_MediaAdapterControlServiceServicer_to_server(media_servicer, server)
     env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
     is_prod_like = env_name in {"prod", "production", "staging"}
     tls_ready = bool(tls_cert_file and tls_key_file)

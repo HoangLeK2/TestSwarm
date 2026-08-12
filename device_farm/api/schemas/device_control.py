@@ -131,6 +131,7 @@ class ScrcpyAttachRequest(BaseModel):
     adb_port: int = 5555
     enable_control: bool = True  # Enable scrcpy control channel for touch/key input
     viewer_id: str | None = None
+    profile: str | None = None
     max_fps: int | None = None
     max_width: int | None = None
     bitrate: int | None = None

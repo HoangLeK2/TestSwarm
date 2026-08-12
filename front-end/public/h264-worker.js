@@ -3,7 +3,7 @@ const H264_WORKER_DEBUG = false;
 function debugLog() {
   if (H264_WORKER_DEBUG) console.log.apply(console, arguments);
 }
-debugLog('[H264Worker] LOADED v46');
+debugLog('[H264Worker] LOADED v47');
 /**
  * H264 VideoDecoder — Web Worker, push-model rendering.
  *
@@ -41,6 +41,8 @@ let decoderInitToken = 0;
 let decoderConfiguring = false;
 let pendingKeyChunk = null;
 let lastBackpressurePostAt = 0;
+let renderCanvas = null;
+let renderCtx = null;
 
 // Keep the stream live-first. Once WebCodecs has this much pending decode work,
 // decoding more P-frames only makes the visible stream play old frames in bursts.
@@ -157,6 +159,7 @@ function tryPostPendingFrame() {
   if (frameInFlight || !pendingFrame) return;
   var frame = pendingFrame;
   pendingFrame = null;
+  if (tryRenderFrameInWorker(frame)) return;
   frameInFlight = true;
   self.postMessage(
     {
@@ -167,6 +170,44 @@ function tryPostPendingFrame() {
     },
     [frame]
   );
+}
+
+function attachCanvas(canvas) {
+  renderCanvas = canvas || null;
+  renderCtx = null;
+  if (!renderCanvas || typeof renderCanvas.getContext !== 'function') return;
+  try {
+    renderCtx = renderCanvas.getContext('2d', {
+      alpha: false,
+      desynchronized: true
+    });
+  } catch (_) {
+    renderCtx = null;
+  }
+}
+
+function tryRenderFrameInWorker(frame) {
+  if (!renderCanvas || !renderCtx || !frame) return false;
+  try {
+    var width = Math.max(1, Math.floor(frame.displayWidth || 1));
+    var height = Math.max(1, Math.floor(frame.displayHeight || 1));
+    if (renderCanvas.width !== width) renderCanvas.width = width;
+    if (renderCanvas.height !== height) renderCanvas.height = height;
+    renderCtx.drawImage(frame, 0, 0, width, height);
+    self.postMessage({
+      type: 'frame-rendered',
+      width: width,
+      height: height
+    });
+    return true;
+  } catch (e) {
+    postBackpressure('worker_canvas_render_failed');
+    return true;
+  } finally {
+    try {
+      frame.close();
+    } catch (_) {}
+  }
 }
 
 function normalizeChunkTimestampUs(ptsUs) {
@@ -526,6 +567,11 @@ self.onmessage = function (event) {
     case 'init':
       debugLog('[H264Worker] init');
       if (data.preferHardware === false) hwFailed = true;
+      break;
+
+    case 'attach-canvas':
+      attachCanvas(data.canvas);
+      tryPostPendingFrame();
       break;
 
     case 'config': {

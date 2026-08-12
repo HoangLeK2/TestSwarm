@@ -21,11 +21,21 @@ const STRIP_FROM_CONFIG = new Set([
   'then',
   'else',
   'branches',
-  'else_steps'
+  'else_steps',
+  'id',
+  'order',
+  '_id',
+  '_fgId'
 ]);
 
 const CONTAINER_STEP_TYPES = new Set(['loop', 'repeat', 'repeat_until']);
-const CONTAINER_IF_TYPES = new Set(['if_element', 'if_variable']);
+const CONTAINER_IF_TYPES = new Set([
+  'if',
+  'if_element',
+  'if_variable',
+  'fb_tap_comment_button',
+  'tap_fb_comment_button'
+]);
 
 export function stepsToGraph(steps: Record<string, unknown>[]): {
   nodes: FlowNode[];
@@ -44,7 +54,8 @@ export function stepsToGraph(steps: Record<string, unknown>[]): {
     let prevId: string | null = null;
 
     stepList.forEach((step, i) => {
-      const id = nanoid(10);
+      const id =
+        typeof step.id === 'string' && step.id.trim() ? step.id : nanoid(10);
       const type = String(step.type ?? 'unknown');
 
       // Build config — strip structural keys and type; keep everything else including description
@@ -67,7 +78,10 @@ export function stepsToGraph(steps: Record<string, unknown>[]): {
         id,
         type,
         config,
-        order: orders[i]!,
+        order:
+          typeof step.order === 'string' && step.order
+            ? step.order
+            : orders[i]!,
         scope: parentScope ?? null,
         ...(step.title ? { title: String(step.title) } : {})
       };

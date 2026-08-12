@@ -12,8 +12,11 @@ import { mergeDeviceFarmWsStatus } from '../lib/device-farm-ws-status';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { useTabNetworkActive } from './use-tab-network-active';
+import { isAxiosError } from 'axios';
 
 const LIVE_DEVICE_REFRESH_MS = 5_000;
+
+export type DeviceFarmRequestStatus = 'idle' | 'loading' | 'success' | 'error';
 
 type UseDeviceFarmOptions = {
   liveRefreshMs?: number | false;
@@ -38,6 +41,9 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   const [modes, setModes] = useState<Record<string, 'tap' | 'swipe'>>({});
   const [wifiDenseposeUrl, setWifiDenseposeUrl] = useState<string | null>(null);
   const [devicesReady, setDevicesReady] = useState(false);
+  const [requestStatus, setRequestStatus] =
+    useState<DeviceFarmRequestStatus>('idle');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
 
   const wsRef = useRef<ReturnType<typeof createWs> | null>(null);
   const t = useTranslations('devicesFarm');
@@ -56,18 +62,36 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
       .catch(() => {});
   }, [loadTasks, tabActive]);
 
-  const refreshDevices = useCallback(() => {
-    if (!tabActive) return;
-    if (!currentOrgId) return;
-    fetchLiveDevices(undefined)
-      .then((live) => {
-        setDevices((previous) => mergeLiveDeviceSnapshot(previous, live));
-        setDevicesReady(true);
-      })
-      .catch(() => {
-        setDevicesReady(true);
-      });
-  }, [currentOrgId, tabActive]);
+  const refreshDevices = useCallback(async () => {
+    if (!tabActive || !currentOrgId) return;
+    setRequestStatus((current) =>
+      current === 'success' ? current : 'loading'
+    );
+    try {
+      const live = await fetchLiveDevices(undefined);
+      setDevices((previous) => mergeLiveDeviceSnapshot(previous, live));
+      setDevicesReady(true);
+      setRequestStatus('success');
+      setError(null);
+      setLastUpdatedAt(new Date().toISOString());
+    } catch (cause) {
+      const status = isAxiosError(cause) ? cause.response?.status : undefined;
+      const requestId = isAxiosError(cause)
+        ? String(cause.response?.headers?.['x-request-id'] ?? '').trim()
+        : '';
+      const baseMessage =
+        cause instanceof Error ? cause.message : String(cause);
+      const message = [
+        status ? `HTTP ${status}` : '',
+        requestId ? `request ${requestId}` : '',
+        baseMessage
+      ]
+        .filter(Boolean)
+        .join(' - ');
+      setError(message || t('backendErrorTitle'));
+      setRequestStatus('error');
+    }
+  }, [currentOrgId, t, tabActive]);
 
   const refreshRegisteredDevices = useCallback(() => {
     if (!loadRegisteredDevices) return;
@@ -95,6 +119,9 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
     setDevices([]);
     setRegisteredDevices([]);
     setDevicesReady(false);
+    setRequestStatus(currentOrgId ? 'loading' : 'idle');
+    setError(null);
+    setLastUpdatedAt(null);
   }, [currentOrgId]);
 
   useEffect(() => {
@@ -241,6 +268,9 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
   return {
     devices: myDevices,
     devicesReady,
+    requestStatus,
+    lastUpdatedAt,
+    refreshDevices,
     tasks,
     wsConnected,
     error,

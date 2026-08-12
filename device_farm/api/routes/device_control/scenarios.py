@@ -89,6 +89,7 @@ from db.database import AsyncSessionLocal
 from db.crud.scenario_device_variable import get_scenario_device_variables
 from common.variable_resolver import normalize_device_vars, normalize_variable_map
 from runtime.core import DeviceManager
+from tenancy.context import use_tenant_scope
 
 log = logging.getLogger(__name__)
 trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
@@ -160,22 +161,61 @@ async def _resolve_account_group_vars(
                 await db.commit()
                 return {}
             account = accounts[0]
-            out: Dict[str, Any] = {
-                "__ACCOUNT_ID__": str(account.id),
-                "__ACCOUNT_USERNAME__": account.username,
-                "__ACCOUNT_DISPLAY_NAME__": account.display_name or "",
-                "__ACCOUNT_PLATFORM__": account.platform,
-            }
-            if account.password_encrypted:
-                try:
-                    out["__ACCOUNT_PASSWORD__"] = decrypt_password(account.password_encrypted)
-                except Exception:
-                    # Keep the preview running; executor will substitute empty.
-                    out["__ACCOUNT_PASSWORD__"] = ""
+            out = _preview_account_vars(account, decrypt_password)
             await db.commit()
             return out
     except Exception as exc:
         log.warning("preview account_group resolve failed: %s", exc)
+        return {}
+
+
+def _preview_account_vars(account: Any, decrypt_password: Callable[[Any], str]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "__ACCOUNT_ID__": str(account.id),
+        "__ACCOUNT_USERNAME__": account.username,
+        "__ACCOUNT_DISPLAY_NAME__": account.display_name or "",
+        "__ACCOUNT_PLATFORM__": account.platform,
+    }
+    if account.password_encrypted:
+        try:
+            out["__ACCOUNT_PASSWORD__"] = decrypt_password(account.password_encrypted)
+        except Exception:
+            # Keep the preview running; the executor will report an unresolved secret.
+            out["__ACCOUNT_PASSWORD__"] = ""
+    return out
+
+
+async def _resolve_primary_device_account_vars(
+    serial_or_device_id: str,
+    user_id: Optional[str],
+    platform: str,
+) -> Dict[str, Any]:
+    """Resolve the deterministic account already assigned to this preview device."""
+    try:
+        from common.crypto import decrypt_password
+        from db.crud.account import get_primary_account_for_device
+        from db.crud.device import get_device, get_device_by_serial
+    except Exception:
+        return {}
+    try:
+        async with AsyncSessionLocal() as db:
+            device = await get_device_by_serial(db, serial_or_device_id)
+            if not device:
+                device = await get_device(db, serial_or_device_id)
+            if not device:
+                return {}
+            if user_id and getattr(device, "user_id", None) != user_id:
+                return {}
+            account = await get_primary_account_for_device(
+                db,
+                device.id,
+                platform,
+            )
+            if not account:
+                return {}
+            return _preview_account_vars(account, decrypt_password)
+    except Exception as exc:
+        log.warning("preview primary account resolve failed: %s", exc)
         return {}
 
 
@@ -256,29 +296,46 @@ async def _apply_preview_variables(
     body: ScenarioPreviewRequest,
     serial_or_device_id: str,
     user_id: Optional[str],
+    org_id: Optional[str] = None,
 ) -> None:
     """Resolve DB-backed vars into ``body.variables`` (mutates *body* in place)."""
-    campaign_vars: Dict[str, Any] = {}
-    scenario_vars: Dict[str, Any] = {}
-    if body.scenario_id:
-        campaign_vars, scenario_vars = await _resolve_scenario_scope_vars(
-            body.scenario_id,
+    with use_tenant_scope(org_id):
+        campaign_vars: Dict[str, Any] = {}
+        scenario_vars: Dict[str, Any] = {}
+        if body.scenario_id:
+            campaign_vars, scenario_vars = await _resolve_scenario_scope_vars(
+                body.scenario_id,
+                user_id,
+            )
+        device_vars = await _resolve_device_runtime_vars(
+            serial_or_device_id,
             user_id,
+            body.scenario_id,
+            body.scenario_device_vars,
         )
-    device_vars = await _resolve_device_runtime_vars(
-        serial_or_device_id,
-        user_id,
-        body.scenario_id,
-        body.scenario_device_vars,
-    )
-    acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
-    body.variables = merge_preview_variable_layers(
-        client_vars=body.variables,
-        campaign_vars=campaign_vars,
-        scenario_vars=scenario_vars,
-        device_vars=device_vars,
-        account_vars=acct_vars,
-    )
+        base_vars = merge_preview_variable_layers(
+            client_vars=body.variables,
+            campaign_vars=campaign_vars,
+            scenario_vars=scenario_vars,
+            device_vars=device_vars,
+            account_vars={},
+        )
+        if body.account_group_id:
+            acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
+        elif not base_vars.get("__ACCOUNT_ID__"):
+            platform = str(
+                base_vars.get("__ACCOUNT_PLATFORM__")
+                or base_vars.get("__PLATFORM__")
+                or "facebook"
+            ).strip().lower()
+            acct_vars = await _resolve_primary_device_account_vars(
+                serial_or_device_id,
+                user_id,
+                platform,
+            )
+        else:
+            acct_vars = {}
+        body.variables = {**base_vars, **acct_vars}
 
 
 async def _execute_scenario_body(
@@ -332,8 +389,14 @@ def build_scenarios_router(
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
-        user_id = _resolve_user_id_from_request(request)
-        await _apply_preview_variables(body, serial, user_id)
+        auth_ctx = caller_auth_from_request(request)
+        user_id = auth_ctx.user_id if auth_ctx else None
+        await _apply_preview_variables(
+            body,
+            serial,
+            user_id,
+            auth_ctx.org_id if auth_ctx else None,
+        )
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.preview", user_id=user_id
         )
@@ -358,8 +421,14 @@ def build_scenarios_router(
             source="api.preview_stream",
             total_steps=len(body.steps),
         )
-        user_id = _resolve_user_id_from_request(request)
-        await _apply_preview_variables(body, serial, user_id)
+        auth_ctx = caller_auth_from_request(request)
+        user_id = auth_ctx.user_id if auth_ctx else None
+        await _apply_preview_variables(
+            body,
+            serial,
+            user_id,
+            auth_ctx.org_id if auth_ctx else None,
+        )
 
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)
@@ -457,8 +526,14 @@ def build_scenarios_router(
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
-        user_id = _resolve_user_id_from_request(request)
-        await _apply_preview_variables(body, serial, user_id)
+        auth_ctx = caller_auth_from_request(request)
+        user_id = auth_ctx.user_id if auth_ctx else None
+        await _apply_preview_variables(
+            body,
+            serial,
+            user_id,
+            auth_ctx.org_id if auth_ctx else None,
+        )
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.run", user_id=user_id
         )
@@ -485,7 +560,7 @@ def build_scenarios_router(
         if not device_id:
             return JSONResponse({"error": "Session not found"}, status_code=404)
         caller_id = ctx.user_id
-        await _apply_preview_variables(body, device_id, caller_id)
+        await _apply_preview_variables(body, device_id, caller_id, ctx.org_id)
         if not body.steps:
             return JSONResponse(
                 {"error": "steps must be a non-empty array"},

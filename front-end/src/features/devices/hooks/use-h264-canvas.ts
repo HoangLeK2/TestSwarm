@@ -40,11 +40,13 @@ export function useH264Video(
   opts?: {
     restartKey?: number;
     onFrame?: (frame?: { mostlyBlack: boolean }) => void;
+    onSize?: (size: { width: number; height: number }) => void;
     onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
     inspectFramesForBlack?: boolean;
     notifyStallWithVisibleFrame?: boolean;
     visibleFrameRecoveryMinIntervalMs?: number;
     renderedFrameStaleMs?: number;
+    renderInWorker?: boolean;
     onStats?: (stats: {
       decodeQueueSize: number;
       droppedDelta: number;
@@ -55,6 +57,7 @@ export function useH264Video(
 ) {
   const restartKey = opts?.restartKey ?? 0;
   const workerRef = useRef<Worker | null>(null);
+  const workerCanvasAttachedRef = useRef(false);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const blackProbeRef = useRef<BlackFrameProbe | null>(null);
@@ -70,6 +73,7 @@ export function useH264Video(
     workerRef.current?.postMessage({ type: 'frame-consumed' });
   };
   const onFrameRef = useRef(opts?.onFrame);
+  const onSizeRef = useRef(opts?.onSize);
   const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
   const inspectFramesForBlackRef = useRef(opts?.inspectFramesForBlack ?? true);
@@ -89,6 +93,7 @@ export function useH264Video(
   const everDisconnectedRef = useRef(false);
 
   onFrameRef.current = opts?.onFrame;
+  onSizeRef.current = opts?.onSize;
   onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
   inspectFramesForBlackRef.current = opts?.inspectFramesForBlack ?? true;
@@ -113,14 +118,41 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=46');
+    let worker = workerRef.current;
+    const reuseWorker = Boolean(opts?.renderInWorker && worker);
+    if (!worker) {
+      worker = new Worker('/h264-worker.js?v=47');
+      workerRef.current = worker;
+      worker.postMessage({
+        type: 'init',
+        preferHardware: !h264HardwareFailureRegistry.has(serial)
+      });
+    }
     workerRef.current = worker;
     mountedAtRef.current = Date.now();
 
-    worker.postMessage({
-      type: 'init',
-      preferHardware: !h264HardwareFailureRegistry.has(serial)
-    });
+    const canvasForWorker = canvasRef.current;
+    const workerRenderEnabled = Boolean(
+      opts?.renderInWorker &&
+        canvasForWorker &&
+        typeof canvasForWorker.transferControlToOffscreen === 'function' &&
+        !workerCanvasAttachedRef.current
+    );
+    if (workerRenderEnabled && canvasForWorker) {
+      try {
+        const offscreen = canvasForWorker.transferControlToOffscreen();
+        worker.postMessage({ type: 'attach-canvas', canvas: offscreen }, [
+          offscreen
+        ]);
+        workerCanvasAttachedRef.current = true;
+      } catch {
+        // Fall back to main-thread canvas rendering below.
+      }
+    }
+    if (reuseWorker) {
+      postWorkerReset(worker, serial);
+      clearLatestFrame();
+    }
 
     const getRenderContext = (canvas: HTMLCanvasElement) => {
       if (renderCanvasRef.current !== canvas) {
@@ -211,6 +243,11 @@ export function useH264Video(
         notifyDecoderBackpressure(serial, 500);
         return;
       }
+      if (data.type === 'frame-rendered') {
+        lastRenderedFrameAtRef.current = Date.now();
+        onFrameRef.current?.({ mostlyBlack: false });
+        return;
+      }
       if (data.type === 'frame' && data.frame) {
         renderFrame(
           data.frame as VideoFrame,
@@ -256,6 +293,12 @@ export function useH264Video(
 
       const slen = view.getUint8(1);
       if (buf.byteLength < 2 + slen + 4) return;
+      const headerOffset = 2 + slen;
+      const headerWidth = view.getUint16(headerOffset, false);
+      const headerHeight = view.getUint16(headerOffset + 2, false);
+      if (frameType === 0x10 && headerWidth > 0 && headerHeight > 0) {
+        onSizeRef.current?.({ width: headerWidth, height: headerHeight });
+      }
       const doff = 2 + slen + 4; // skip serial + w/h
 
       if (frameType === 0x10) {
@@ -278,13 +321,38 @@ export function useH264Video(
       unsubscribe();
       mountedAtRef.current = 0;
       postWorkerReset(worker, serial);
+      if (opts?.renderInWorker) {
+        // An HTMLCanvasElement can only be transferred to OffscreenCanvas once.
+        // Keep the worker alive across active/inactive preview transitions so
+        // the transferred canvas remains usable for the next attach.
+        return;
+      }
       worker.terminate();
-      if (workerRef.current === worker) workerRef.current = null;
+      if (workerRef.current === worker) {
+        workerRef.current = null;
+        workerCanvasAttachedRef.current = false;
+      }
       renderCanvasRef.current = null;
       renderCtxRef.current = null;
       // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
-  }, [canvasRef, serial, restartKey]);
+  }, [canvasRef, opts?.renderInWorker, serial, restartKey]);
+
+  useEffect(() => {
+    return () => {
+      const worker = workerRef.current;
+      if (!worker) return;
+      try {
+        worker.terminate();
+      } catch {
+        /* ok */
+      }
+      workerRef.current = null;
+      workerCanvasAttachedRef.current = false;
+      renderCanvasRef.current = null;
+      renderCtxRef.current = null;
+    };
+  }, []);
 
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
@@ -372,6 +440,7 @@ export function useH264Video(
   // the bootstrap cache replay in the effect above — resetting there would
   // wipe a just-initialized decoder and leave the browser black.
   useEffect(() => {
+    if (!serial) return;
     const unsub = subscribeDeviceFarm((msg) => {
       if (msg.type !== 'ws_status') return;
       const next = Boolean(msg.connected);
@@ -409,7 +478,7 @@ export function useH264Video(
       }, 30);
     });
     return () => unsub();
-  }, []);
+  }, [serial]);
 
   // Tab visibility recovery: Chrome pauses RAF + throttles WebCodecs when tab
   // hidden. On return, P-frames in-flight reference an IDR the decoder no
@@ -417,6 +486,7 @@ export function useH264Video(
   // Reset decoder, drop the invalidated VideoFrame, replay cache (if fresh),
   // and ask server for a forced IDR.
   useEffect(() => {
+    if (!serial) return;
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
       const w = workerRef.current;
@@ -433,13 +503,14 @@ export function useH264Video(
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, []);
+  }, [serial]);
 
   // Runtime freeze recovery: the WS can stay open and keep receiving H264
   // packets while WebCodecs stops producing frames (bad P-frame chain, decoder
   // hiccup, GPU/context stall). In that state the canvas keeps showing the last
   // good frame forever, so periodically ask for a fresh IDR and reset decoder.
   useEffect(() => {
+    if (!serial) return;
     const timer = setInterval(() => {
       const s = serialRef.current;
       const w = workerRef.current;
@@ -520,7 +591,7 @@ export function useH264Video(
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [serial]);
 }
 
 type BlackFrameProbe = {

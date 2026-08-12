@@ -23,3 +23,4 @@ Rules:
 | `core-release-qc-process.md` | QC process, UAT matrix, smoke/regression checks, go/no-go, and rollback verification for the core release |
 | `core-release-scope-validation.md` | Scope-to-code validation, automated smoke results, blockers, and minimum fix tickets before acceptance |
 | `social-platform-extension-gaps.md` | Known gaps for Facebook hardening and future TikTok/Instagram/Threads extensions |
+| `flowgram-free-layout-workbench.md` | Phased delivery plan for a searchable, configurable, executable FlowGram workflow workbench |

@@ -18,6 +18,7 @@ from services.scenario_validation.graph_reachability import (
     reachable_from,
 )
 from services.scenario_validation.models import ValidationIssue, ValidationResult
+from services.scenario_validation.variable_contracts import step_output_variables
 
 _ERROR_POLICIES = frozenset({"pause", "continue", "stop", "ignore", "on_error"})
 _SKIP_VAR_SCAN_KEYS = frozenset({
@@ -127,6 +128,11 @@ def check_variables(
                     )
                 )
         stype = str(step.get("type") or "")
+        if stype == "loop":
+            loop_var = config.get("loop_var") or step.get("loop_var")
+            if isinstance(loop_var, str) and loop_var:
+                declared.add(loop_var)
+        declared.update(step_output_variables(stype))
         if stype in ("variables_control.set_variable", "set_variable"):
             name = config.get("name") or step.get("name")
             if isinstance(name, str) and name:

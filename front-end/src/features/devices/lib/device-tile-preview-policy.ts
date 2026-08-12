@@ -5,8 +5,41 @@ export type DeviceTilePreviewMode = {
   useSnapshot: boolean;
 };
 
+type MediaPreviewDevice = {
+  state?: string | null;
+  media_adapter_connected?: boolean;
+  media_stream_active?: boolean;
+  media_stream_connected?: boolean;
+};
+
+const TERMINAL_OFFLINE_STATES = new Set(['DISCONNECTED', 'DEAD']);
+
 export function isGridH264Enabled(rawValue: string | undefined): boolean {
   return (rawValue ?? '1').trim() !== '0';
+}
+
+export function isGridWebRtcPreviewEnabled(rawValue: string | undefined): boolean {
+  return (rawValue ?? '1').trim() !== '0';
+}
+
+export function hasMediaPlanePreview(device: MediaPreviewDevice): boolean {
+  return Boolean(
+    device.media_adapter_connected ||
+      device.media_stream_active ||
+      device.media_stream_connected
+  );
+}
+
+export function isDevicePreviewStreamEligible(
+  device: MediaPreviewDevice,
+  controlPlaneActive: boolean
+): boolean {
+  if (hasMediaPlanePreview(device)) return true;
+  const state = String(device.state || '')
+    .replace('DeviceState.', '')
+    .trim()
+    .toUpperCase();
+  return controlPlaneActive && !TERMINAL_OFFLINE_STATES.has(state);
 }
 
 export function selectDeviceTilePreviewMode({

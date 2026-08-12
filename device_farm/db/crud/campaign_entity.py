@@ -182,19 +182,23 @@ async def replace_campaign_tags(
 async def replace_campaign_scenario_refs(
     db: AsyncSession,
     campaign_id: str,
-    refs: list[tuple[str, int, int]],
+    refs: list[tuple[str, int, int, int]],
 ) -> None:
-    """Replace all org-scenario refs: (org_scenario_id, pinned_version, order_index)."""
+    """Replace all org-scenario refs.
+
+    Tuples are (org_scenario_id, pinned_version, order_index, repeat_count).
+    """
     await db.execute(
         delete(CampaignOrgScenarioRef).where(CampaignOrgScenarioRef.campaign_id == campaign_id)
     )
-    for scenario_id, pinned_version, order_index in refs:
+    for scenario_id, pinned_version, order_index, repeat_count in refs:
         db.add(
             CampaignOrgScenarioRef(
                 campaign_id=campaign_id,
                 org_scenario_id=scenario_id,
                 pinned_version=pinned_version,
                 order_index=order_index,
+                repeat_count=repeat_count,
             )
         )
     await db.flush()

@@ -9,6 +9,7 @@ import { isCampaignEntityOut } from '../../services/api';
 import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { ScenarioListDialog } from '../scenario-list-dialog';
 import type { CampaignOut } from '../../types';
+import { scenarioRefRunCount } from '../../types';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +37,7 @@ export function CampaignScenarioSummary({
     (detail && isCampaignEntityOut(detail) ? detail.scenario_refs : []) ??
     [];
   const entityRefCount = entityRefs.length;
+  const entityRunCount = scenarioRefRunCount(entityRefs);
   const entityRefNames = entityRefs
     .map(
       (ref) =>
@@ -47,9 +49,19 @@ export function CampaignScenarioSummary({
 
   const label = hasScenario
     ? entityRefNames.length > 0
-      ? t('summaryEntityRefNames', { names: entityRefNames.join(', ') })
+      ? entityRunCount > entityRefCount
+        ? t('summaryEntityRefNamesWithRuns', {
+            names: entityRefNames.join(', '),
+            runs: entityRunCount
+          })
+        : t('summaryEntityRefNames', { names: entityRefNames.join(', ') })
       : entityRefCount > 0 && totalSteps === 0
-        ? t('summaryEntityRefs', { count: entityRefCount })
+        ? entityRunCount > entityRefCount
+          ? t('summaryEntityRefsWithRuns', {
+              count: entityRefCount,
+              runs: entityRunCount
+            })
+          : t('summaryEntityRefs', { count: entityRefCount })
         : t('summaryCount', { scenarios: scenarios.length, steps: totalSteps })
     : t('summaryEmpty');
 

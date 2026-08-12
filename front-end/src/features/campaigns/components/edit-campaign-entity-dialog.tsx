@@ -21,11 +21,20 @@ import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import {
   useCampaign,
   useBindCampaignAccounts,
+  useCampaignDevices,
   usePatchCampaignEntity,
   useUnbindCampaignAccounts
 } from '../hooks/use-campaigns';
-import type { CampaignOut, RecoveryPolicy } from '../types';
-import { isCampaignBodyEditable } from '../types';
+import type {
+  CampaignOut,
+  CampaignScenarioRefIn,
+  RecoveryPolicy
+} from '../types';
+import {
+  isCampaignBodyEditable,
+  normalizeCampaignScenarioRefs,
+  scenarioRefRunCount
+} from '../types';
 import { isCampaignEntityOut } from '../services/api';
 import {
   CampaignAccountBindingFields,
@@ -33,6 +42,11 @@ import {
   campaignBindingToPayload,
   type CampaignAccountBindingValue
 } from './campaign-account-binding-fields';
+import { ContinuousCrawlSettings } from './continuous-crawl-settings';
+import {
+  campaignVariablesForEditor,
+  mergeCampaignEditorVariables
+} from '../lib/continuous-crawl-monitor';
 
 export function EditCampaignEntityDialog({
   campaign,
@@ -45,6 +59,7 @@ export function EditCampaignEntityDialog({
 }) {
   const t = useTranslations('campaignsFeature.entityDialog');
   const { data: detail } = useCampaign(campaign.id, open);
+  const { data: campaignDevices = [] } = useCampaignDevices(campaign.id, open);
   const {
     mutate: patchEntity,
     mutateAsync: patchEntityAsync,
@@ -65,12 +80,13 @@ export function EditCampaignEntityDialog({
   const [tags, setTags] = useState('');
   const [variables, setVariables] = useState<Record<string, unknown>>({});
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedRefs, setSelectedRefs] = useState<CampaignScenarioRefIn[]>([]);
   const [accountBinding, setAccountBinding] =
     useState<CampaignAccountBindingValue>({
       mode: 'none',
       accountGroupId: '',
-      scenarioAccountId: ''
+      scenarioAccountId: '',
+      perDeviceAccounts: {}
     });
 
   useEffect(() => {
@@ -80,9 +96,24 @@ export function EditCampaignEntityDialog({
     setTags((entity.tags ?? []).join(', '));
     setVariables(entity.vars ?? entity.variables ?? {});
     setRecoveryPolicy((entity.recovery_policy ?? {}) as RecoveryPolicy);
-    setSelectedIds((entity.scenario_refs ?? []).map((ref) => ref.scenario_id));
+    setSelectedRefs(normalizeCampaignScenarioRefs(entity.scenario_refs ?? []));
     setAccountBinding(campaignBindingFromEntity(entity));
   }, [entity]);
+
+  useEffect(() => {
+    if (!entity || !campaignDevices.length) return;
+    const currentDeviceIds = new Set(
+      campaignDevices.map((device) => device.id)
+    );
+    setAccountBinding((current) => ({
+      ...current,
+      perDeviceAccounts: Object.fromEntries(
+        Object.entries(current.perDeviceAccounts).filter(([deviceId]) =>
+          currentDeviceIds.has(deviceId)
+        )
+      )
+    }));
+  }, [campaignDevices, entity]);
 
   const isSaving = isPatching || isBinding || isUnbinding;
 
@@ -107,9 +138,7 @@ export function EditCampaignEntityDialog({
                 .map((tag) => tag.trim())
                 .filter(Boolean),
               vars: variables,
-              scenario_refs: selectedIds.map((scenario_id) => ({
-                scenario_id
-              })),
+              scenario_refs: normalizeCampaignScenarioRefs(selectedRefs),
               recovery_policy: recoveryPolicy
             }
       },
@@ -118,7 +147,10 @@ export function EditCampaignEntityDialog({
           try {
             if (!bodyLocked) {
               const payload = campaignBindingToPayload(accountBinding);
-              if (accountBinding.mode === 'none') {
+              if (
+                accountBinding.mode === 'none' &&
+                Object.keys(accountBinding.perDeviceAccounts).length === 0
+              ) {
                 await unbindAccounts(campaign.id);
               } else {
                 await bindAccounts({
@@ -203,10 +235,33 @@ export function EditCampaignEntityDialog({
           <div className='space-y-2'>
             <Label>{t('scenariosLabel')}</Label>
             <CampaignOrgScenarioPicker
-              selectedIds={selectedIds}
-              onSelectedIdsChange={setSelectedIds}
+              selectedRefs={selectedRefs}
+              onSelectedRefsChange={(refs) =>
+                setSelectedRefs(normalizeCampaignScenarioRefs(refs))
+              }
               disabled={bodyLocked}
               messagesNs='entityDialog'
+              showRepeatConfig
+            />
+            {selectedRefs.length > 0 ? (
+              <p className='text-[11px] text-muted-foreground'>
+                {t('repeatSummary', {
+                  scenarios: selectedRefs.length,
+                  runs: scenarioRefRunCount(selectedRefs)
+                })}
+              </p>
+            ) : null}
+          </div>
+          <div
+            className={cn(
+              'space-y-1.5',
+              bodyLocked && 'pointer-events-none opacity-60'
+            )}
+          >
+            <ContinuousCrawlSettings
+              variables={variables}
+              onChange={setVariables}
+              disabled={bodyLocked}
             />
           </div>
           <div
@@ -217,8 +272,10 @@ export function EditCampaignEntityDialog({
           >
             <Label>{t('variablesLabel')}</Label>
             <VariableEditor
-              variables={variables}
-              onChange={(next) => setVariables(next)}
+              variables={campaignVariablesForEditor(variables)}
+              onChange={(next) =>
+                setVariables(mergeCampaignEditorVariables(variables, next))
+              }
             />
           </div>
           <div
@@ -234,6 +291,8 @@ export function EditCampaignEntityDialog({
             <CampaignAccountBindingFields
               value={accountBinding}
               onChange={setAccountBinding}
+              devices={campaignDevices}
+              showPerDevice
             />
           </div>
           <RecoveryPolicyEditor

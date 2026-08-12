@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from api.crud.router import api_router
 from api.deps import _get_current_user, _get_db
+from api.routes.devices import list_active_fleet_sessions
 from db.crud.fleet_stats import query_fleet_stats
 from db.crud.mcp_session import create_mcp_session
 from db.database import Base
@@ -207,6 +208,34 @@ async def test_fleet_stats_success_counts(session_factory):
     reasons = {item["reason"] for item in body["owner_anomalies"]}
     assert "active_session_missing_owner" not in reasons
     assert "busy_device_without_active_mcp_session" in reasons
+
+
+@pytest.mark.asyncio
+async def test_active_fleet_sessions_explain_duplicate_sessions_per_device(session_factory):
+    await _seed_base(session_factory)
+    await _seed_devices_with_states(session_factory)
+    await _seed_sessions(session_factory)
+    async with session_factory() as db:
+        await create_mcp_session(db, "mcp-user-2", "SER-ON", USER_ID)
+        await db.commit()
+
+    async with session_factory() as db:
+        set_current_org_id(ORG_ID)
+        result = await list_active_fleet_sessions(
+            db=db,
+            user=SimpleNamespace(id=USER_ID, org_id=ORG_ID),
+            offset=0,
+            limit=50,
+        )
+        stats = await query_fleet_stats(db, org_id=ORG_ID)
+
+    ser_on = [item for item in result.sessions if item.device_serial == "SER-ON"]
+    assert len(ser_on) == 2
+    assert all(item.duplicate_for_device for item in ser_on)
+    assert {item.owner_type.value for item in ser_on} == {"user"}
+    assert result.total == sum(stats.active_sessions_by_owner.values())
+    busy_claim = next(item for item in result.sessions if item.device_serial == "SER-BUSY")
+    assert busy_claim.source == "busy_claim"
 
 
 @pytest.mark.asyncio

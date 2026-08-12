@@ -70,6 +70,11 @@ def test_list_random_pick_returns_one_of_values():
         assert result in ["a", "b", "c"]
 
 
+def test_lookup_raw_returns_list_without_randomizing():
+    ctx = VariableContext(scenario_vars={"X": ["a", "b", "c"]})
+    assert ctx.lookup_raw("X") == ["a", "b", "c"]
+
+
 
 def test_nested_dict():
     ctx = VariableContext(scenario_vars={"A": "1", "B": "2"})

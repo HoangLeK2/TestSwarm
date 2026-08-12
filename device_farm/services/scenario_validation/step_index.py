@@ -80,7 +80,17 @@ _INTERACTION_PREFIXES = (
 )
 _SOCIAL_MARKERS = ("tap_fb", "fb_", "ig_", "tiktok_", "linkedin_")
 _GENERIC_SOCIAL_TYPES = frozenset(
-    {"content_interaction", "connection_request", "community_membership"}
+    {
+        "content_interaction",
+        "connection_request",
+        "lease_connection_candidate",
+        "lease_source_target",
+        "community_membership",
+        "fb_select_people_profile",
+        "fb_connect_visible_people",
+        "fb_select_post_target",
+        "fb_scan_posts_interact",
+    }
 )
 
 

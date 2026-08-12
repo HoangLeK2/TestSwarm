@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict
 
 from tasks.scenario.steps import register_step
@@ -33,6 +35,97 @@ def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
         return bool(sc.cancel_event.wait(seconds))
     time.sleep(seconds)
     return False
+
+
+_BOUNDS_RE = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
+
+
+def _bounds_tuple(raw: str) -> tuple[int, int, int, int] | None:
+    match = _BOUNDS_RE.match(str(raw or ""))
+    if match is None:
+        return None
+    left, top, right, bottom = (int(group) for group in match.groups())
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def _bounds_center(raw: str) -> tuple[int, int] | None:
+    bounds = _bounds_tuple(raw)
+    if bounds is None:
+        return None
+    left, top, right, bottom = bounds
+    return (left + right) // 2, (top + bottom) // 2
+
+
+def _xml_attr_name(raw: Any) -> str:
+    attr = str(raw or "content-desc").strip()
+    if attr in {"description", "content_desc", "accessibility id", "accessibility_id"}:
+        return "content-desc"
+    if attr in {"className", "class name"}:
+        return "class"
+    if attr == "resourceId":
+        return "resource-id"
+    return attr
+
+
+@register_step("tap_xml_match")
+def handle_tap_xml_match(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    attr = _xml_attr_name(step.get("attr") or step.get("by"))
+    contains = str(step.get("contains") or step.get("value") or "").strip()
+    equals = str(step.get("equals") or "").strip()
+    timeout = float(step.get("timeout", 6.0) or 6.0)
+    poll = float(step.get("poll", 0.25) or 0.25)
+    require_clickable = bool(step.get("clickable", True))
+
+    if not contains and not equals:
+        result["ok"] = False
+        result["message"] = "tap_xml_match: missing contains/equals"
+        return
+
+    deadline = time.monotonic() + max(0.1, timeout)
+    last_error = ""
+    while time.monotonic() < deadline:
+        if _cancelled(sc):
+            _mark_cancelled(result, "tap_xml_match: cancelled by user")
+            return
+        try:
+            xml = sc.device.hierarchy_xml(force_refresh=True) or ""
+            root = ET.fromstring(xml)
+            for node in root.iter():
+                if require_clickable and (node.get("clickable") or "").lower() != "true":
+                    continue
+                value = node.get(attr) or ""
+                if equals and value != equals:
+                    continue
+                if contains and contains not in value:
+                    continue
+                raw_bounds = node.get("bounds") or ""
+                center = _bounds_center(raw_bounds)
+                if center is None:
+                    continue
+                x, y = center
+                sc.device.tap(x, y)
+                result["message"] = (
+                    f"tap_xml_match {attr} contains={contains!r} "
+                    f"tap=({x},{y}) bounds={raw_bounds}"
+                )
+                left, top, right, bottom = _bounds_tuple(raw_bounds) or (x, y, x, y)
+                result["_bounds"] = {"left": left, "top": top, "right": right, "bottom": bottom}
+                if _wait_or_cancel(sc, 0.3):
+                    _mark_cancelled(result, "tap_xml_match: cancelled by user")
+                return
+        except Exception as exc:
+            last_error = str(exc)
+        if sc.cancel_event is not None:
+            sc.cancel_event.wait(poll)
+        else:
+            time.sleep(poll)
+
+    result["ok"] = False
+    needle = f"{attr} contains={contains!r}" if contains else f"{attr} equals={equals!r}"
+    suffix = f": {last_error}" if last_error else ""
+    result["message"] = f"tap_xml_match: {needle} not found{suffix}"
 
 
 @register_step("tap")
@@ -400,4 +493,3 @@ def handle_take_screenshot(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"take_screenshot failed: {exc}"
-

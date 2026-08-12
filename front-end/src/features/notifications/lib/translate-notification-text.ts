@@ -25,9 +25,26 @@ export function translateNotificationItem(
   if (payload.test) {
     return { title: t('testTitle'), body: t('testBody') };
   }
-  if (item.event === 'device.disconnect') {
+  if (item.event === 'device.disconnect' || item.event === 'device.offline') {
+    const count = Number(payload.occurrence_count ?? 1);
+    const firstAt = String(payload.first_occurred_at ?? item.created_at);
+    const lastAt = String(payload.last_occurred_at ?? item.created_at);
+    const durationDays = Math.max(
+      1,
+      Math.ceil(
+        Math.abs(new Date(lastAt).getTime() - new Date(firstAt).getTime()) /
+          (24 * 60 * 60 * 1000)
+      )
+    );
     return {
-      title: t('eventTitles.deviceDisconnect', { label }),
+      title:
+        count > 1
+          ? t('eventTitles.deviceDisconnectGrouped', {
+              label,
+              count,
+              days: durationDays
+            })
+          : t('eventTitles.deviceDisconnect', { label }),
       body:
         sanitizeNotificationBody(item.body) ?? t('eventBodies.deviceDisconnect')
     };

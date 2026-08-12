@@ -1,6 +1,12 @@
 'use client';
 
-import { useState, useCallback, useMemo, type ReactNode } from 'react';
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  type ReactNode
+} from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
@@ -67,6 +73,7 @@ interface DeviceTileProps {
   minimalRailControls?: boolean;
   streamFetchPriority?: 'high' | 'low' | 'auto';
   streamTransport?: DeviceScreenTransport;
+  streamFit?: 'cover' | 'contain';
   scrcpyAttachOptions?: ScrcpyAttachOptions;
   scrcpyViewerRole?: ScrcpyViewerRole;
   /** Opt-in pause for preview callers; defaults to preserving the live screen. */
@@ -100,6 +107,7 @@ export function DeviceTile({
   minimalRailControls = false,
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
+  streamFit,
   scrcpyAttachOptions,
   scrcpyViewerRole,
   streamEnabled,
@@ -126,6 +134,14 @@ export function DeviceTile({
     'tap' | 'swipe' | 'double_tap' | 'drag'
   >('tap');
   const [stepsOpen, setStepsOpen] = useState(false);
+  const [streamRenderSize, setStreamRenderSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setStreamRenderSize(null);
+  }, [device.serial]);
 
   /** Screen width inside the mockup (lib adds bezel + side button padding when `frameOnly={false}`). */
   const mockupScreenWidth = useMemo(
@@ -133,8 +149,19 @@ export function DeviceTile({
     [compact, mockupScreenWidthProp]
   );
   const mirrorRowHeightPx = useMemo(
-    () => mockupOuterHeightPx(mockupScreenWidth),
-    [mockupScreenWidth]
+    () =>
+      mockupOuterHeightPx(
+        mockupScreenWidth,
+        streamRenderSize?.width ?? device.screen_width,
+        streamRenderSize?.height ?? device.screen_height
+      ),
+    [
+      device.screen_height,
+      device.screen_width,
+      mockupScreenWidth,
+      streamRenderSize?.height,
+      streamRenderSize?.width
+    ]
   );
   const studioMirror =
     mockupScreenWidthProp != null && mockupScreenWidthProp <= 260;
@@ -153,6 +180,15 @@ export function DeviceTile({
       });
     },
     [wsSend, device.serial, device.screen_width, device.screen_height]
+  );
+
+  const handleStreamSize = useCallback(
+    (size: { width: number; height: number }) => {
+      setStreamRenderSize((prev) =>
+        prev?.width === size.width && prev?.height === size.height ? prev : size
+      );
+    },
+    []
   );
 
   const handleSwipeExt = useCallback(
@@ -261,9 +297,11 @@ export function DeviceTile({
               >
                 <DeviceAndroidFrame
                   screenWidth={mockupScreenWidth}
-                  deviceWidth={device.screen_width}
-                  deviceHeight={device.screen_height}
-                  className='h-full shrink-0'
+                  deviceWidth={streamRenderSize?.width ?? device.screen_width}
+                  deviceHeight={
+                    streamRenderSize?.height ?? device.screen_height
+                  }
+                  className='shrink-0'
                 >
                   <div className='relative flex h-full min-h-0 w-full flex-col'>
                     {mountDeviceScreen ? (
@@ -280,6 +318,8 @@ export function DeviceTile({
                         interactive={!readOnlyPreview}
                         streamFetchPriority={streamFetchPriority}
                         streamTransport={streamTransport}
+                        streamFit={streamFit}
+                        onStreamSize={handleStreamSize}
                         scrcpyAttachOptions={scrcpyAttachOptions}
                         scrcpyViewerRole={scrcpyViewerRole}
                       />

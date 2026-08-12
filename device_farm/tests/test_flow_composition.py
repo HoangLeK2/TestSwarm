@@ -130,6 +130,98 @@ def test_run_scenario_by_template_name():
     assert result["success"] is True
 
 
+def test_loop_var_drives_indexed_set_variable_pairs():
+    scenario = {
+        "variables": {
+            "PAGE_TARGETS": ["Go2Joy Vietnam", "Booking.com"],
+            "PAGE_ROW_TEXTS": ["Go2Joy Vietnam", "Booking.com"],
+        },
+        "steps": [
+            {
+                "type": "loop",
+                "count": 2,
+                "loop_var": "PAGE_INDEX",
+                "steps": [
+                    {
+                        "type": "set_variable",
+                        "name": "PAGE_SEARCH_CURRENT",
+                        "from_list": "${PAGE_TARGETS}",
+                        "from_list_index": "${PAGE_INDEX}",
+                    },
+                    {
+                        "type": "set_variable",
+                        "name": "PAGE_ROW_TEXT_CURRENT",
+                        "from_list": "${PAGE_ROW_TEXTS}",
+                        "from_list_index": "${PAGE_INDEX}",
+                    },
+                    {
+                        "type": "set_variable",
+                        "name": "PAIR",
+                        "value": "${PAGE_SEARCH_CURRENT}|${PAGE_ROW_TEXT_CURRENT}",
+                    },
+                ],
+            },
+        ],
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is True
+    iterations = result["step_results"][0]["sub_results"]
+    pairs = [item["result"]["step_results"][2]["message"] for item in iterations]
+    assert pairs == [
+        "set_variable: PAIR = 'Go2Joy Vietnam|Go2Joy Vietnam'",
+        "set_variable: PAIR = 'Booking.com|Booking.com'",
+    ]
+
+
+def test_loop_count_resolves_runtime_variable():
+    scenario = {
+        "variables": {"SCAN_CYCLES": 3},
+        "steps": [
+            {
+                "type": "loop",
+                "count": "${SCAN_CYCLES}",
+                "steps": [
+                    {"type": "set_variable", "name": "TOUCHED", "value": "${_loop_iter}"}
+                ],
+            }
+        ],
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is True
+    loop_result = result["step_results"][0]
+    assert loop_result["iterations"] == 3
+    assert loop_result["sub_results"][-1]["result"]["step_results"][0]["message"] == (
+        "set_variable: TOUCHED = 2"
+    )
+
+
+def test_loop_duration_seconds_resolves_runtime_variable():
+    scenario = {
+        "variables": {"RUN_SECONDS": 0.001},
+        "steps": [
+            {
+                "type": "loop",
+                "count": 100,
+                "duration_seconds": "${RUN_SECONDS}",
+                "steps": [
+                    {"type": "set_variable", "name": "TOUCHED", "value": "${_loop_iter}"}
+                ],
+            }
+        ],
+    }
+
+    result = run_scenario_task(_make_device(), scenario)
+
+    assert result["success"] is True
+    loop_result = result["step_results"][0]
+    assert loop_result["duration_seconds"] == 0.001
+    assert 1 <= loop_result["iterations"] < 100
+
+
 def test_run_scenario_campaign_name_takes_priority_over_template():
     """by_campaign_name is checked before by_template_name."""
     campaign_steps = [{"type": "set_variable", "name": "SOURCE", "value": "campaign"}]

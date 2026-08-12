@@ -267,11 +267,25 @@ def build_campaign_fleet_router(
         meta = getattr(execution, "meta", None) or {}
         cfg = getattr(execution, "device_config", None) or {}
         campaign_id = str(getattr(execution, "campaign_id", "") or "") or None
-        scenario_ids = [
-            str(item)
-            for item in (meta.get("scenario_ids") or [])
-            if str(item or "").strip()
+        raw_refs = meta.get("org_scenario_refs") or []
+        scenario_refs = [
+            item
+            for item in raw_refs
+            if isinstance(item, dict) and str(item.get("scenario_id") or "").strip()
         ]
+        scenario_ids = list(
+            dict.fromkeys(
+                [
+                    str(item["scenario_id"])
+                    for item in scenario_refs
+                ]
+                + [
+                    str(item)
+                    for item in (meta.get("scenario_ids") or [])
+                    if str(item or "").strip()
+                ]
+            )
+        )
         scenario_id = (
             str(getattr(execution, "scenario_id", "") or "")
             or str(meta.get("org_scenario_id") or "")
@@ -296,7 +310,29 @@ def build_campaign_fleet_router(
                 sid: body if isinstance(body, dict) else {}
                 for sid, _kind, body in bodies
             }
-            if len(scenario_ids) == 1:
+            if scenario_refs:
+                sequence_index = 0
+                for ref_index, ref in enumerate(scenario_refs):
+                    sid = str(ref["scenario_id"])
+                    body = bodies_by_id.get(sid) or {}
+                    steps = list(body.get("steps") or [])
+                    repeat_count = max(1, min(20, int(ref.get("repeat_count") or 1)))
+                    for repeat_index in range(repeat_count):
+                        scenario_steps.append(
+                            {
+                                "id": f"scenario-{ref_index}-{repeat_index}",
+                                "type": "run_scenario",
+                                "scenario_id": sid,
+                                "title": names.get(sid) or sid,
+                                "scenario_ref_index": ref_index,
+                                "scenario_sequence_index": sequence_index,
+                                "repeat_index": repeat_index,
+                                "repeat_count": repeat_count,
+                                "steps": steps,
+                            }
+                        )
+                        sequence_index += 1
+            elif len(scenario_ids) == 1:
                 body = bodies_by_id.get(scenario_ids[0]) or {}
                 scenario_steps = list(body.get("steps") or [])
             else:
@@ -337,7 +373,12 @@ def build_campaign_fleet_router(
                 or None
             ),
             "scenario_steps": scenario_steps,
-            "scenario_count": int(meta.get("scenarios_count") or len(scenario_ids) or 0)
+            "scenario_count": int(
+                meta.get("scenarios_count")
+                or sum(max(1, int(ref.get("repeat_count") or 1)) for ref in scenario_refs)
+                or len(scenario_ids)
+                or 0
+            )
             or None,
             "device_serial": resolved_serial,
             "workflow_kind": "main",

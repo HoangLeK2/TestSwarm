@@ -1,6 +1,17 @@
 import { FlowNodeRegistry } from '@flowgram.ai/fixed-layout-editor';
 import { v4 as uuidv4 } from 'uuid';
 
+const EDITABLE_NODE_META = {
+  addable: true,
+  expandable: true,
+  draggable: true,
+  selectable: true,
+  deleteDisable: false,
+  copyDisable: false,
+  addDisable: false,
+  defaultExpanded: true
+} as const;
+
 /**
  * Custom node type registries for scenario flow editor.
  * We map our step categories to flowgram node extension types.
@@ -10,7 +21,7 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
   {
     type: 'action',
     extend: 'default',
-    meta: { defaultExpanded: true },
+    meta: EDITABLE_NODE_META,
     onAdd() {
       return {
         id: `action_${uuidv4().slice(0, 8)}`,
@@ -24,7 +35,7 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
   {
     type: 'sub_scenario',
     extend: 'default',
-    meta: { defaultExpanded: true },
+    meta: EDITABLE_NODE_META,
     onAdd() {
       return {
         id: `sub_${uuidv4().slice(0, 8)}`,
@@ -38,7 +49,7 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
   {
     type: 'condition',
     extend: 'dynamicSplit',
-    meta: { defaultExpanded: true },
+    meta: EDITABLE_NODE_META,
     onAdd() {
       const id = `cond_${uuidv4().slice(0, 8)}`;
       return {
@@ -75,21 +86,14 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
   {
     type: 'loop_node',
     extend: 'loop',
-    meta: { defaultExpanded: true },
+    meta: EDITABLE_NODE_META,
     onAdd() {
       const id = `loop_${uuidv4().slice(0, 8)}`;
       return {
         id,
         type: 'loop_node',
         data: { step: { type: 'repeat', count: 3, steps: [] } },
-        blocks: [
-          {
-            id: `${id}_body`,
-            type: 'block',
-            data: { title: 'Thân vòng lặp' },
-            blocks: []
-          }
-        ]
+        blocks: []
       };
     }
   }

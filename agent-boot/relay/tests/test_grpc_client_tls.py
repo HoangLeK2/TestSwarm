@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from relay.grpc_client import GrpcRelayClient, create_grpc_channel
-from relay.video_packet import VideoPacket
 
 
 def test_create_grpc_channel_uses_insecure_channel_by_default(monkeypatch):
@@ -100,35 +99,3 @@ async def test_stream_sends_attempt_registration_before_shared_queue(
     )
 
     assert received_types == ["register", "heartbeat"]
-
-
-@pytest.mark.asyncio
-async def test_frame_generator_drops_oversized_video_before_grpc_send() -> None:
-    from relay.grpc_gen import relay_pb2
-
-    send_queue: asyncio.Queue = asyncio.Queue()
-    await send_queue.put(
-        VideoPacket(
-            serial="phone-1",
-            data=b"x" * 32,
-            is_config=False,
-            is_key=True,
-            pts_us=1,
-        )
-    )
-    await send_queue.put(json.dumps({"type": "heartbeat"}))
-    client = GrpcRelayClient(
-        server_addr="farm.local:50051",
-        api_key="x",
-        agent_id="relay-1",
-        send_queue=send_queue,
-        loop=asyncio.get_running_loop(),
-        channel=object(),
-        max_video_frame_bytes=16,
-    )
-    client._running = True
-
-    message = await anext(client._frame_generator(relay_pb2))
-
-    assert message.WhichOneof("payload") == "meta"
-    assert json.loads(message.meta.decode())["type"] == "heartbeat"

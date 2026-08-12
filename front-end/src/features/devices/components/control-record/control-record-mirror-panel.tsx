@@ -55,6 +55,7 @@ type ControlRecordMirrorPanelProps = {
   onToggleRecording: () => void;
   onOpenPlayer: () => void;
   onOpenStepPicker: () => void;
+  fillWidth?: boolean;
   labels: ControlRecordMirrorPanelLabels;
 };
 
@@ -84,6 +85,7 @@ export const ControlRecordMirrorPanel = forwardRef<
     onToggleRecording,
     onOpenPlayer,
     onOpenStepPicker,
+    fillWidth = false,
     labels
   },
   ref
@@ -93,9 +95,10 @@ export const ControlRecordMirrorPanel = forwardRef<
       ref={ref}
       className={cn(
         'flex min-h-0 flex-col overflow-hidden bg-muted/20',
-        multiFocusMode
+        multiFocusMode || fillWidth
           ? 'min-w-0 flex-1'
-          : 'w-[clamp(360px,34vw,470px)] shrink-0 border-r border-border/60'
+          : 'w-[clamp(360px,34vw,470px)] shrink-0 border-r border-border/60',
+        fillWidth && !multiFocusMode && 'h-full border-r-0'
       )}
     >
       {selectedDevice ? (

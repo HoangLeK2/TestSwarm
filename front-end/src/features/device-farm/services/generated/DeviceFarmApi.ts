@@ -354,6 +354,27 @@ export interface AccountUpdate {
   account_metadata?: Record<string, any> | null;
 }
 
+/** AccountVerificationOut */
+export interface AccountVerificationOut {
+  /** Assignment Id */
+  assignment_id?: string | null;
+  /** Status */
+  status: string;
+  /** Reason */
+  reason: string;
+  /**
+   * Attempted At
+   * @format date-time
+   */
+  attempted_at: string;
+  /** Verified At */
+  verified_at?: string | null;
+  /** Attempt Id */
+  attempt_id: string;
+  /** Duration Ms */
+  duration_ms?: number | null;
+}
+
 /**
  * AccountWithLinksOut
  * Detailed account response that includes the list of device links.
@@ -643,7 +664,7 @@ export interface AssignDeviceBody {
 export interface BodyBulkImportCsvApiAccountsImportCsvPost {
   /**
    * File
-   * CSV file with columns: platform, username, password, display_name, tags, notes
+   * CSV file with columns: platform, username, password, display_name, tags, notes, email, totp_secret, cookies, token
    */
   file: string;
 }
@@ -716,6 +737,19 @@ export interface BulkImportRow {
    * @default ""
    */
   notes?: string;
+  /** Email */
+  email?: string | null;
+  /** Totp Secret */
+  totp_secret?: string | null;
+  /** Cookies */
+  cookies?: string | null;
+  /** Token */
+  token?: string | null;
+  /**
+   * Account Metadata
+   * @default {}
+   */
+  account_metadata?: Record<string, any>;
 }
 
 /** BulkScheduleToggleIn */
@@ -1110,6 +1144,13 @@ export interface CampaignScenarioRefIn {
   scenario_id: string;
   /** Scenario Version */
   scenario_version?: number | null;
+  /**
+   * Repeat Count
+   * @min 1
+   * @max 20
+   * @default 1
+   */
+  repeat_count?: number;
 }
 
 /** CampaignScenarioRefOut */
@@ -1118,6 +1159,11 @@ export interface CampaignScenarioRefOut {
   scenario_id: string;
   /** Scenario Version */
   scenario_version: number;
+  /**
+   * Repeat Count
+   * @default 1
+   */
+  repeat_count?: number;
 }
 
 /** CampaignSourcePoolIn */
@@ -1136,12 +1182,23 @@ export interface CampaignSourcePoolIn {
   entity_type: string;
   /** Search */
   search?: string | null;
+  /** Output Prefix */
+  output_prefix?: string | null;
   /**
    * Statuses
    * @maxItems 10
    * @minItems 1
    */
   statuses?: string[];
+}
+
+/** CancelFacebookLoginAttemptBody */
+export interface CancelFacebookLoginAttemptBody {
+  /**
+   * Reason
+   * @default "operator_cancelled"
+   */
+  reason?: string;
 }
 
 /** CapacityGroupBreakdownOut */
@@ -1294,6 +1351,33 @@ export interface CompileScenarioBody {
   device_context?: Record<string, any> | null;
 }
 
+/** CompleteFacebookLoginAttemptBody */
+export interface CompleteFacebookLoginAttemptBody {
+  /**
+   * Operator Confirmed
+   * @default false
+   */
+  operator_confirmed?: boolean;
+  /** Evidence */
+  evidence?: Record<string, any>;
+}
+
+/** ConfirmPlatformSessionBody */
+export interface ConfirmPlatformSessionBody {
+  /** Account Id */
+  account_id: string;
+  /** Reason */
+  reason: string;
+  /** Expected Version */
+  expected_version?: number | null;
+  /** Display Name Observed */
+  display_name_observed?: string | null;
+  /** App Version */
+  app_version?: string | null;
+  /** Evidence */
+  evidence?: Record<string, any>;
+}
+
 /**
  * ConnectByIpBody
  * Kết nối thiết bị qua ADB TCP: backend chủ động connect tới IP, không cần QR.
@@ -1443,6 +1527,129 @@ export interface ContentStatsOut {
   latest_extraction?: string | null;
 }
 
+/** ContinuousCrawlDeviceLaneOut */
+export interface ContinuousCrawlDeviceLaneOut {
+  /** Device Serial */
+  device_serial: string;
+  /** Status */
+  status: "idle" | "running" | "paused" | "offline" | "failed";
+  /** Target Id */
+  target_id?: string | null;
+  /** Target Label */
+  target_label?: string | null;
+  /**
+   * Completed
+   * @default 0
+   */
+  completed?: number;
+  /**
+   * Failed
+   * @default 0
+   */
+  failed?: number;
+  /** Message */
+  message?: string | null;
+}
+
+/** ContinuousCrawlPreflightOut */
+export interface ContinuousCrawlPreflightOut {
+  /** Ready */
+  ready: boolean;
+  /** Target Count */
+  target_count?: number | null;
+  /** Device Count */
+  device_count: number;
+  /** Max Concurrency */
+  max_concurrency: number;
+  /** Warnings */
+  warnings?: string[];
+  /** Errors */
+  errors?: string[];
+}
+
+/** ContinuousCrawlProgressOut */
+export interface ContinuousCrawlProgressOut {
+  /** Campaign Id */
+  campaign_id: string;
+  /** Dispatch Id */
+  dispatch_id?: string | null;
+  /** Status */
+  status: string;
+  /** Health */
+  health: "healthy" | "degraded" | "critical";
+  /**
+   * Loaded
+   * @default 0
+   */
+  loaded?: number;
+  /**
+   * Active
+   * @default 0
+   */
+  active?: number;
+  /**
+   * Succeeded
+   * @default 0
+   */
+  succeeded?: number;
+  /**
+   * Failed
+   * @default 0
+   */
+  failed?: number;
+  /**
+   * Consecutive Failures
+   * @default 0
+   */
+  consecutive_failures?: number;
+  /**
+   * Exhausted
+   * @default false
+   */
+  exhausted?: boolean;
+  /**
+   * Generation
+   * @default 0
+   */
+  generation?: number;
+  /** Max Targets */
+  max_targets?: number | null;
+  /** Message */
+  message?: string | null;
+  /** Updated At */
+  updated_at?: string | null;
+  /** Device Lanes */
+  device_lanes?: ContinuousCrawlDeviceLaneOut[];
+  /** Recent Targets */
+  recent_targets?: ContinuousCrawlTargetSummaryOut[];
+}
+
+/** ContinuousCrawlStartOut */
+export interface ContinuousCrawlStartOut {
+  /** Campaign Id */
+  campaign_id: string;
+  /** Dispatch Id */
+  dispatch_id: string;
+  /** Workflow Id */
+  workflow_id: string;
+  /** Status */
+  status: string;
+}
+
+/** ContinuousCrawlTargetSummaryOut */
+export interface ContinuousCrawlTargetSummaryOut {
+  /** Target Id */
+  target_id: string;
+  /** Label */
+  label?: string | null;
+  /** Status */
+  status: "queued" | "running" | "succeeded" | "failed";
+  /** Device Serial */
+  device_serial?: string | null;
+  /** Message */
+  message?: string | null;
+}
+
 /** DLQBulkRetryBody */
 export interface DLQBulkRetryBody {
   /** Execution Ids */
@@ -1576,6 +1783,17 @@ export interface DeviceAccountOut {
    * @format date-time
    */
   assigned_at: string;
+  /**
+   * Verification Status
+   * @default "unknown"
+   */
+  verification_status?: string;
+  /** Verified At */
+  verified_at?: string | null;
+  /** Verification Attempted At */
+  verification_attempted_at?: string | null;
+  /** Verification Evidence */
+  verification_evidence?: Record<string, any>;
 }
 
 /** DeviceClaimBody */
@@ -1810,6 +2028,98 @@ export interface DeviceOut {
   notes?: string;
 }
 
+/** DevicePlatformLoginAttemptOut */
+export interface DevicePlatformLoginAttemptOut {
+  /** Id */
+  id: string;
+  /** Org Id */
+  org_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Platform */
+  platform: string;
+  /** Account Id */
+  account_id: string;
+  /** State */
+  state: string;
+  /** Reason */
+  reason?: string | null;
+  /** Reserve Session Id */
+  reserve_session_id?: string | null;
+  /** Created By User Id */
+  created_by_user_id?: string | null;
+  /** Started At */
+  started_at?: string | null;
+  /** Completed At */
+  completed_at?: string | null;
+  /** Cancelled At */
+  cancelled_at?: string | null;
+  /** Evidence */
+  evidence?: Record<string, any>;
+  /** Version */
+  version: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** DevicePlatformSessionOut */
+export interface DevicePlatformSessionOut {
+  /** Id */
+  id: string;
+  /** Org Id */
+  org_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Platform */
+  platform: string;
+  /** Account Id */
+  account_id?: string | null;
+  /** State */
+  state: string;
+  /** State Reason */
+  state_reason?: string | null;
+  /** Established At */
+  established_at?: string | null;
+  /** Last Ready At */
+  last_ready_at?: string | null;
+  /** Last Checked At */
+  last_checked_at?: string | null;
+  /** Invalidated At */
+  invalidated_at?: string | null;
+  /** Login Attempt Id */
+  login_attempt_id?: string | null;
+  /** Establishment Method */
+  establishment_method?: string | null;
+  /** App Package */
+  app_package: string;
+  /** App Version */
+  app_version?: string | null;
+  /** Display Name Observed */
+  display_name_observed?: string | null;
+  /** Evidence */
+  evidence?: Record<string, any>;
+  /** Version */
+  version: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
 /** DeviceReleaseBody */
 export interface DeviceReleaseBody {
   /** Session Id */
@@ -1891,6 +2201,52 @@ export interface DeviceStateCountsOut {
    * @default 0
    */
   total?: number;
+}
+
+/** DeviceTargetGroupOut */
+export interface DeviceTargetGroupOut {
+  /** Id */
+  id: string;
+  /** External Id */
+  external_id?: string | null;
+  /** Canonical Url */
+  canonical_url?: string | null;
+  /** Display Name */
+  display_name: string;
+  /** Status */
+  status: string;
+}
+
+/** DeviceTargetGroupsOut */
+export interface DeviceTargetGroupsOut {
+  /** Device Id */
+  device_id: string;
+  /** Groups */
+  groups: DeviceTargetGroupOut[];
+  /**
+   * Added Count
+   * @default 0
+   */
+  added_count?: number;
+  /**
+   * Removed Count
+   * @default 0
+   */
+  removed_count?: number;
+  /**
+   * Unchanged Count
+   * @default 0
+   */
+  unchanged_count?: number;
+}
+
+/** DeviceTargetGroupsReplaceIn */
+export interface DeviceTargetGroupsReplaceIn {
+  /**
+   * External Entity Ids
+   * @maxItems 500
+   */
+  external_entity_ids: string[];
 }
 
 /** DoubleTapRequest */
@@ -2061,6 +2417,8 @@ export interface ExecutionOut {
   scenario_id: string | null;
   /** Scenario Version Id */
   scenario_version_id?: string | null;
+  /** Account Id */
+  account_id?: string | null;
   /** Device Config */
   device_config: Record<string, any>;
   /** Loop Config */
@@ -2473,6 +2831,16 @@ export interface HitTestRequest {
 export interface InputTextRequest {
   /** Text */
   text: string;
+}
+
+/** InvalidatePlatformSessionBody */
+export interface InvalidatePlatformSessionBody {
+  /** Reason */
+  reason: string;
+  /** Expected Version */
+  expected_version?: number | null;
+  /** Evidence */
+  evidence?: Record<string, any>;
 }
 
 /** KeyRequest */
@@ -4184,6 +4552,8 @@ export interface ScrcpyAttachRequest {
   enable_control?: boolean;
   /** Viewer Id */
   viewer_id?: string | null;
+  /** Profile */
+  profile?: string | null;
   /** Max Fps */
   max_fps?: number | null;
   /** Max Width */
@@ -4210,6 +4580,20 @@ export interface ScrollRequest {
    * @default 0.5
    */
   distance?: number;
+}
+
+/** SessionDescription */
+export interface SessionDescription {
+  /**
+   * Type
+   * @pattern ^offer$
+   */
+  type: string;
+  /**
+   * Sdp
+   * @minLength 1
+   */
+  sdp: string;
 }
 
 /** SessionListOut */
@@ -4295,6 +4679,14 @@ export interface SetRingerModeRequest {
   mode: string;
 }
 
+/** StartFacebookLoginAttemptBody */
+export interface StartFacebookLoginAttemptBody {
+  /** Account Id */
+  account_id: string;
+  /** Evidence */
+  evidence?: Record<string, any>;
+}
+
 /** StartSessionRequest */
 export interface StartSessionRequest {
   /** Device Id */
@@ -4333,6 +4725,57 @@ export interface SummaryOut {
   error: number;
   /** Total Content Items */
   total_content_items: number;
+  /** Latest Dispatch Id */
+  latest_dispatch_id?: string | null;
+  /**
+   * Latest Dispatch Target Count
+   * @default 0
+   */
+  latest_dispatch_target_count?: number;
+  /**
+   * Latest Dispatch Finished Count
+   * @default 0
+   */
+  latest_dispatch_finished_count?: number;
+  /**
+   * Latest Dispatch Running Count
+   * @default 0
+   */
+  latest_dispatch_running_count?: number;
+  /**
+   * Latest Dispatch Pending Count
+   * @default 0
+   */
+  latest_dispatch_pending_count?: number;
+  /**
+   * Latest Dispatch Failed Count
+   * @default 0
+   */
+  latest_dispatch_failed_count?: number;
+  /**
+   * Latest Dispatch Workflow Started Count
+   * @default 0
+   */
+  latest_dispatch_workflow_started_count?: number;
+  /**
+   * Latest Dispatch Fallback Count
+   * @default 0
+   */
+  latest_dispatch_fallback_count?: number;
+  /** Latest Dispatch Created At */
+  latest_dispatch_created_at?: string | null;
+  /** Latest Dispatch First Started At */
+  latest_dispatch_first_started_at?: string | null;
+  /** Latest Dispatch Latest Finished At */
+  latest_dispatch_latest_finished_at?: string | null;
+  /** Latest Dispatch Elapsed Ms */
+  latest_dispatch_elapsed_ms?: number | null;
+  /** Latest Dispatch Terminal Ms */
+  latest_dispatch_terminal_ms?: number | null;
+  /** Latest Dispatch To First Start Ms */
+  latest_dispatch_to_first_start_ms?: number | null;
+  /** Latest Dispatch To Start P95 Ms */
+  latest_dispatch_to_start_p95_ms?: number | null;
 }
 
 /** SwipeRequest */
@@ -4500,6 +4943,48 @@ export interface ValidationError {
   input?: any;
   /** Context */
   ctx?: object;
+}
+
+/** WebRTCSessionCreate */
+export interface WebRTCSessionCreate {
+  /**
+   * Serial
+   * @minLength 1
+   */
+  serial: string;
+  /**
+   * Viewer Id
+   * @minLength 1
+   */
+  viewer_id: string;
+  /**
+   * Ttl Seconds
+   * @min 1
+   * @max 1800
+   * @default 300
+   */
+  ttl_seconds?: number;
+  /** Control */
+  control?: boolean | null;
+  /** Profile */
+  profile?: string | null;
+  /** Max Fps */
+  max_fps?: number | null;
+  /** Max Width */
+  max_width?: number | null;
+  /** Bitrate */
+  bitrate?: number | null;
+}
+
+/** WebRTCSessionHeartbeat */
+export interface WebRTCSessionHeartbeat {
+  /**
+   * Ttl Seconds
+   * @min 1
+   * @max 1800
+   * @default 300
+   */
+  ttl_seconds?: number;
 }
 
 /** PairBulkBody */
@@ -6137,6 +6622,130 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags campaigns
+     * @name ContinuousCrawlPreflightApiCampaignsCampaignIdContinuousCrawlPreflightPost
+     * @summary Continuous Crawl Preflight
+     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/preflight
+     * @secure
+     */
+    continuousCrawlPreflightApiCampaignsCampaignIdContinuousCrawlPreflightPost:
+      (campaignId: string, params: RequestParams = {}) =>
+        this.request<ContinuousCrawlPreflightOut, HTTPValidationError>({
+          path: `/api/campaigns/${campaignId}/continuous-crawl/preflight`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name StartContinuousCrawlApiCampaignsCampaignIdContinuousCrawlStartPost
+     * @summary Start Continuous Crawl
+     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/start
+     * @secure
+     */
+    startContinuousCrawlApiCampaignsCampaignIdContinuousCrawlStartPost: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ContinuousCrawlStartOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/continuous-crawl/start`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name ContinuousCrawlProgressApiCampaignsCampaignIdContinuousCrawlProgressGet
+     * @summary Continuous Crawl Progress
+     * @request GET:/api/campaigns/{campaign_id}/continuous-crawl/progress
+     * @secure
+     */
+    continuousCrawlProgressApiCampaignsCampaignIdContinuousCrawlProgressGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/continuous-crawl/progress`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name PauseContinuousCrawlApiCampaignsCampaignIdContinuousCrawlPausePost
+     * @summary Pause Continuous Crawl
+     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/pause
+     * @secure
+     */
+    pauseContinuousCrawlApiCampaignsCampaignIdContinuousCrawlPausePost: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/continuous-crawl/pause`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name ResumeContinuousCrawlApiCampaignsCampaignIdContinuousCrawlResumePost
+     * @summary Resume Continuous Crawl
+     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/resume
+     * @secure
+     */
+    resumeContinuousCrawlApiCampaignsCampaignIdContinuousCrawlResumePost: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/continuous-crawl/resume`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name CancelContinuousCrawlApiCampaignsCampaignIdContinuousCrawlCancelPost
+     * @summary Cancel Continuous Crawl
+     * @request POST:/api/campaigns/{campaign_id}/continuous-crawl/cancel
+     * @secure
+     */
+    cancelContinuousCrawlApiCampaignsCampaignIdContinuousCrawlCancelPost: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ContinuousCrawlProgressOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/continuous-crawl/cancel`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
      * @name PauseCampaignApiCampaignsCampaignIdPausePost
      * @summary Pause Campaign
      * @request POST:/api/campaigns/{campaign_id}/pause
@@ -7752,7 +8361,7 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
-     * @description Stream-import accounts from a CSV file upload. Reads the upload in 64 KB chunks, parses CSV incrementally, and flushes batches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING — so memory usage stays flat regardless of file size. Expected CSV columns: platform, username, password, display_name, tags, notes
+     * @description Stream-import accounts from a CSV file upload. Reads the upload in 64 KB chunks, parses CSV incrementally, and flushes batches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING — so memory usage stays flat regardless of file size. Expected CSV columns: platform, username, password, display_name, tags, notes, email, totp_secret, cookies, token
      *
      * @tags accounts
      * @name BulkImportCsvApiAccountsImportCsvPost
@@ -8058,6 +8667,25 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * No description
+     *
+     * @tags accounts
+     * @name VerifyAccountOnDeviceEndpointApiDevicesDeviceIdAccountsAccountIdVerifyPost
+     * @summary Verify Account On Device Endpoint
+     * @request POST:/api/devices/{device_id}/accounts/{account_id}/verify
+     * @secure
+     */
+    verifyAccountOnDeviceEndpointApiDevicesDeviceIdAccountsAccountIdVerifyPost:
+      (deviceId: string, accountId: string, params: RequestParams = {}) =>
+        this.request<AccountVerificationOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/accounts/${accountId}/verify`,
+          method: "POST",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
      * @description Set the primary account for a device (demotes existing primary).
      *
      * @tags accounts
@@ -8080,6 +8708,230 @@ export class DeviceFarmHttpClient<
         format: "json",
         ...params,
       }),
+
+    /**
+     * @description List platform session provenance rows for a device.
+     *
+     * @tags accounts
+     * @name ListDevicePlatformSessionsEndpointApiDevicesDeviceIdPlatformSessionsGet
+     * @summary List Device Platform Sessions Endpoint
+     * @request GET:/api/devices/{device_id}/platform-sessions
+     * @secure
+     */
+    listDevicePlatformSessionsEndpointApiDevicesDeviceIdPlatformSessionsGet: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DevicePlatformSessionOut[], HTTPValidationError>({
+        path: `/api/devices/${deviceId}/platform-sessions`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Return the Facebook session provenance row, creating an unknown row on first read.
+     *
+     * @tags accounts
+     * @name GetFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookGet
+     * @summary Get Facebook Platform Session Endpoint
+     * @request GET:/api/devices/{device_id}/platform-sessions/facebook
+     * @secure
+     */
+    getFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookGet:
+      (deviceId: string, params: RequestParams = {}) =>
+        this.request<DevicePlatformSessionOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook`,
+          method: "GET",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * @description Operator-confirm the current Facebook session for migration only.
+     *
+     * @tags accounts
+     * @name ConfirmFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookConfirmPost
+     * @summary Confirm Facebook Platform Session Endpoint
+     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/confirm
+     * @secure
+     */
+    confirmFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookConfirmPost:
+      (
+        deviceId: string,
+        data: ConfirmPlatformSessionBody,
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformSessionOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/confirm`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * @description Invalidate the current Facebook provenance row.
+     *
+     * @tags accounts
+     * @name InvalidateFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookInvalidatePost
+     * @summary Invalidate Facebook Platform Session Endpoint
+     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/invalidate
+     * @secure
+     */
+    invalidateFacebookPlatformSessionEndpointApiDevicesDeviceIdPlatformSessionsFacebookInvalidatePost:
+      (
+        deviceId: string,
+        data: InvalidatePlatformSessionBody,
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformSessionOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/invalidate`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name ListFacebookLoginAttemptsEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsGet
+     * @summary List Facebook Login Attempts Endpoint
+     * @request GET:/api/devices/{device_id}/platform-sessions/facebook/login-attempts
+     * @secure
+     */
+    listFacebookLoginAttemptsEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsGet:
+      (
+        deviceId: string,
+        query?: {
+          /**
+           * Limit
+           * @min 1
+           * @max 100
+           * @default 20
+           */
+          limit?: number;
+        },
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformLoginAttemptOut[], HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts`,
+          method: "GET",
+          query: query,
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name StartFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsPost
+     * @summary Start Facebook Login Attempt Endpoint
+     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts
+     * @secure
+     */
+    startFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsPost:
+      (
+        deviceId: string,
+        data: StartFacebookLoginAttemptBody,
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name StartControlledFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsControlledPost
+     * @summary Start Controlled Facebook Login Attempt Endpoint
+     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts/controlled
+     * @secure
+     */
+    startControlledFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsControlledPost:
+      (
+        deviceId: string,
+        data: StartFacebookLoginAttemptBody,
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts/controlled`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name CompleteFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCompletePost
+     * @summary Complete Facebook Login Attempt Endpoint
+     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts/{attempt_id}/complete
+     * @secure
+     */
+    completeFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCompletePost:
+      (
+        deviceId: string,
+        attemptId: string,
+        data: CompleteFacebookLoginAttemptBody,
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts/${attemptId}/complete`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags accounts
+     * @name CancelFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCancelPost
+     * @summary Cancel Facebook Login Attempt Endpoint
+     * @request POST:/api/devices/{device_id}/platform-sessions/facebook/login-attempts/{attempt_id}/cancel
+     * @secure
+     */
+    cancelFacebookLoginAttemptEndpointApiDevicesDeviceIdPlatformSessionsFacebookLoginAttemptsAttemptIdCancelPost:
+      (
+        deviceId: string,
+        attemptId: string,
+        data: CancelFacebookLoginAttemptBody,
+        params: RequestParams = {},
+      ) =>
+        this.request<DevicePlatformLoginAttemptOut, HTTPValidationError>({
+          path: `/api/devices/${deviceId}/platform-sessions/facebook/login-attempts/${attemptId}/cancel`,
+          method: "POST",
+          body: data,
+          secure: true,
+          type: ContentType.Json,
+          format: "json",
+          ...params,
+        }),
 
     /**
      * No description
@@ -11148,6 +12000,51 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
+     * @tags external-entities
+     * @name ListDeviceTargetGroupsRouteApiDevicesDeviceIdTargetGroupsGet
+     * @summary List Device Target Groups Route
+     * @request GET:/api/devices/{device_id}/target-groups
+     * @secure
+     */
+    listDeviceTargetGroupsRouteApiDevicesDeviceIdTargetGroupsGet: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceTargetGroupsOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/target-groups`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags external-entities
+     * @name ReplaceDeviceTargetGroupsRouteApiDevicesDeviceIdTargetGroupsPut
+     * @summary Replace Device Target Groups Route
+     * @request PUT:/api/devices/{device_id}/target-groups
+     * @secure
+     */
+    replaceDeviceTargetGroupsRouteApiDevicesDeviceIdTargetGroupsPut: (
+      deviceId: string,
+      data: DeviceTargetGroupsReplaceIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceTargetGroupsOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/target-groups`,
+        method: "PUT",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
      * @tags device-control
      * @name ApiConnectInfoApiConnectInfoGet
      * @summary Api Connect Info
@@ -11711,6 +12608,11 @@ export class DeviceFarmHttpClient<
          * @default false
          */
         refresh?: boolean;
+        /**
+         * Priority
+         * @default "background"
+         */
+        priority?: string;
       },
       params: RequestParams = {},
     ) =>
@@ -12564,6 +13466,94 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/screenshot-b64/${serial}`,
         method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name CreateSessionApiMediaWebrtcSessionsPost
+     * @summary Create Session
+     * @request POST:/api/media/webrtc/sessions
+     * @secure
+     */
+    createSessionApiMediaWebrtcSessionsPost: (
+      data: WebRTCSessionCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/media/webrtc/sessions`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name AnswerSessionApiMediaWebrtcSessionsSessionIdAnswerPost
+     * @summary Answer Session
+     * @request POST:/api/media/webrtc/sessions/{session_id}/answer
+     * @secure
+     */
+    answerSessionApiMediaWebrtcSessionsSessionIdAnswerPost: (
+      sessionId: string,
+      data: SessionDescription,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/media/webrtc/sessions/${sessionId}/answer`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name HeartbeatSessionApiMediaWebrtcSessionsSessionIdHeartbeatPost
+     * @summary Heartbeat Session
+     * @request POST:/api/media/webrtc/sessions/{session_id}/heartbeat
+     * @secure
+     */
+    heartbeatSessionApiMediaWebrtcSessionsSessionIdHeartbeatPost: (
+      sessionId: string,
+      data: WebRTCSessionHeartbeat,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/media/webrtc/sessions/${sessionId}/heartbeat`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name CloseSessionApiMediaWebrtcSessionsSessionIdDelete
+     * @summary Close Session
+     * @request DELETE:/api/media/webrtc/sessions/{session_id}
+     * @secure
+     */
+    closeSessionApiMediaWebrtcSessionsSessionIdDelete: (
+      sessionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/media/webrtc/sessions/${sessionId}`,
+        method: "DELETE",
         secure: true,
         format: "json",
         ...params,

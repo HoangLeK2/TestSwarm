@@ -76,10 +76,11 @@ def test_resolve_comment_parent_hash_returns_none_without_explicit_tap() -> None
 
 @pytest.mark.asyncio
 async def test_persist_data_items_stops_on_first_error_and_updates_offset(monkeypatch) -> None:
-    calls = {"n": 0}
+    calls = {"n": 0, "account_ids": []}
 
     async def _fake_save_content_item(**kwargs):
         calls["n"] += 1
+        calls["account_ids"].append(kwargs.get("account_id"))
         if calls["n"] == 2:
             raise RuntimeError("boom")
         return {"saved": True, "id": f"id-{calls['n']}"}
@@ -91,9 +92,11 @@ async def test_persist_data_items_stops_on_first_error_and_updates_offset(monkey
         data_var="posts",
         offsets={"posts": 0},
         collection="x",
+        account_id="account-persist",
     )
     assert report.saved_count == 1
     assert report.error_count == 1
     assert calls["n"] == 2
+    assert calls["account_ids"] == ["account-persist", "account-persist"]
     # Only first successful item is committed in offset progression.
     assert offsets["posts"] == 1

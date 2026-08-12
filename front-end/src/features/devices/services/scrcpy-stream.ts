@@ -33,6 +33,7 @@ export type ScrcpyAttachOptions = {
   maxFps?: number;
   maxWidth?: number;
   bitrate?: number;
+  profile?: 'visible' | 'focused' | 'degraded';
 };
 
 function scrcpyAttachPayload(viewerId?: string, options?: ScrcpyAttachOptions) {
@@ -44,6 +45,7 @@ function scrcpyAttachPayload(viewerId?: string, options?: ScrcpyAttachOptions) {
   if (options?.maxFps !== undefined) payload.max_fps = options.maxFps;
   if (options?.maxWidth !== undefined) payload.max_width = options.maxWidth;
   if (options?.bitrate !== undefined) payload.bitrate = options.bitrate;
+  if (options?.profile !== undefined) payload.profile = options.profile;
   return payload;
 }
 
@@ -58,7 +60,8 @@ function scrcpyAttachKey(
     options?.enableControl ?? 'default',
     options?.maxFps ?? 'default',
     options?.maxWidth ?? 'default',
-    options?.bitrate ?? 'default'
+    options?.bitrate ?? 'default',
+    options?.profile ?? 'default'
   ].join(':');
 }
 
@@ -245,7 +248,7 @@ export function scrcpyAttachErrorMessage(error: unknown): string {
 
 export function isRecoverableScrcpyAttachError(error: unknown): boolean {
   const status = scrcpyAttachErrorStatus(error);
-  if (status === 404 || status === 503) return true;
+  if (status === 404 || status === 425 || status === 503) return true;
   if (status !== 400) return false;
 
   const message = scrcpyAttachErrorMessage(error).toLowerCase();
@@ -274,6 +277,23 @@ export function createScrcpyViewerId(prefix: string): string {
   return `${prefix}:${random}`;
 }
 
+function isPendingScrcpyAttachResponse(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || !('status' in data)) return false;
+  return (
+    String((data as { status?: unknown }).status ?? '').toLowerCase() ===
+    'pending'
+  );
+}
+
+function pendingScrcpyAttachError(): Error {
+  return Object.assign(new Error('scrcpy stream is not ready'), {
+    response: {
+      status: 425,
+      data: { detail: 'scrcpy stream is not ready' }
+    }
+  });
+}
+
 export const attachScrcpyStream = createSingleFlight(
   async (serial: string, viewerId?: string, options?: ScrcpyAttachOptions) => {
     const pendingRecovery = stopScrcpyViewerHeartbeat(serial, viewerId);
@@ -288,6 +308,9 @@ export const attachScrcpyStream = createSingleFlight(
       options,
       skip429Retry
     );
+    if (isPendingScrcpyAttachResponse(data)) {
+      throw pendingScrcpyAttachError();
+    }
     if (viewerUsesLease(viewerId)) {
       scheduleScrcpyViewerHeartbeat(serial, viewerId, options);
     }

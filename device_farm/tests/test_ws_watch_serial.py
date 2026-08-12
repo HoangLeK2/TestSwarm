@@ -225,6 +225,38 @@ def test_ws_watch_serial_reassert_cancels_pending_unwatch(monkeypatch):
         assert dev._q is not None
 
 
+def test_ws_watch_serial_ignored_when_media_stream_disabled():
+    dev = _FakeDevice(serial="SN001")
+    mgr = _FakeManager([dev])
+    ws_manager = WebSocketManager(
+        mgr,
+        db_enabled=False,
+        read_only=False,
+        media_stream_enabled=False,
+    )
+
+    app = FastAPI()
+
+    @app.websocket("/ws")
+    async def _ws(ws: WebSocket):
+        await ws_manager.connect(ws, user_id=None)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as ws:
+        _ = ws.receive_json()
+        ws.send_json({"type": "watch_serial", "serial": "SN001"})
+        disabled = ws.receive_json()
+
+        assert disabled == {
+            "type": "stream_disabled",
+            "serial": "SN001",
+            "reason": "webrtc",
+        }
+        assert dev._q is None
+        assert ws_manager.stream_runtime_status()["media_ws_active"] == 0
+        assert ws_manager.stream_runtime_status()["media_stream_enabled"] is False
+
+
 @pytest.mark.asyncio
 async def test_device_sender_keeps_live_subscription_when_bootstrap_send_fails():
     class BootstrapDevice(_FakeDevice):

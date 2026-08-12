@@ -5,21 +5,30 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import CurrentUser, DB, require_permission
 from api.schemas.external_entity import (
+    ExternalEntityAuthorSyncIn,
+    ExternalEntityAuthorSyncOut,
     ExternalEntityBulkObserveIn,
     ExternalEntityBulkObserveOut,
     ExternalEntityListOut,
     ExternalEntityObserveIn,
     ExternalEntityObserveOut,
     ExternalEntityOut,
+    DeviceTargetGroupOut,
+    DeviceTargetGroupsOut,
+    DeviceTargetGroupsReplaceIn,
 )
+from services.content_author_sync import sync_author_profiles_from_content
 from db.crud.external_entity import (
     get_external_entity,
+    list_device_target_groups,
+    replace_device_target_groups,
     list_external_entities,
     upsert_external_entity,
 )
 from db.models.external_entity import ExternalEntity
 
 router = APIRouter(prefix="/external-entities", tags=["external-entities"])
+device_target_groups_router = APIRouter(tags=["external-entities"])
 
 
 def _org_id(user: CurrentUser) -> str:
@@ -47,6 +56,18 @@ def _entity_out(entity: ExternalEntity) -> ExternalEntityOut:
         last_seen_at=entity.last_seen_at,
         created_at=entity.created_at,
         updated_at=entity.updated_at,
+    )
+
+
+def _target_group_out(entity: ExternalEntity) -> DeviceTargetGroupOut:
+    return DeviceTargetGroupOut(
+        id=entity.id,
+        platform=entity.platform,
+        entity_type=entity.entity_type,
+        external_id=entity.external_id,
+        canonical_url=entity.canonical_url,
+        display_name=entity.display_name,
+        status=entity.status,
     )
 
 
@@ -134,6 +155,38 @@ async def bulk_observe_external_entities_route(
     )
 
 
+@router.post(
+    "/sync-authors-from-content",
+    response_model=ExternalEntityAuthorSyncOut,
+    dependencies=[Depends(require_permission("content", "create"))],
+)
+async def sync_authors_from_content_route(
+    body: ExternalEntityAuthorSyncIn,
+    db: DB,
+    user: CurrentUser,
+) -> ExternalEntityAuthorSyncOut:
+    try:
+        result = await sync_author_profiles_from_content(
+            db,
+            org_id=_org_id(user),
+            collection=body.collection,
+            campaign_id=body.campaign_id,
+            execution_id=body.execution_id,
+            content_types=body.content_types,
+            dry_run=body.dry_run,
+            limit=body.limit,
+            created_by=user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_AUTHOR_SYNC", "message": str(exc)},
+        ) from exc
+    if not body.dry_run:
+        await db.commit()
+    return ExternalEntityAuthorSyncOut(**result.as_dict())
+
+
 @router.get(
     "/{entity_id}",
     response_model=ExternalEntityOut,
@@ -152,3 +205,38 @@ async def get_external_entity_route(
     if entity is None:
         raise HTTPException(status_code=404, detail={"code": "EXTERNAL_ENTITY_NOT_FOUND"})
     return _entity_out(entity)
+
+
+@device_target_groups_router.get(
+    "/devices/{device_id}/target-groups", response_model=DeviceTargetGroupsOut,
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def list_device_target_groups_route(device_id: str, db: DB, user: CurrentUser):
+    try:
+        groups = await list_device_target_groups(db, org_id=_org_id(user), device_id=device_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail={"code": "DEVICE_NOT_FOUND"}) from exc
+    return DeviceTargetGroupsOut(device_id=device_id, groups=[_target_group_out(item) for item in groups])
+
+
+@device_target_groups_router.put(
+    "/devices/{device_id}/target-groups", response_model=DeviceTargetGroupsOut,
+    dependencies=[Depends(require_permission("content", "update"))],
+)
+async def replace_device_target_groups_route(
+    device_id: str, body: DeviceTargetGroupsReplaceIn, db: DB, user: CurrentUser,
+):
+    try:
+        groups, added, removed, unchanged = await replace_device_target_groups(
+            db, org_id=_org_id(user), device_id=device_id,
+            external_entity_ids=body.external_entity_ids, assigned_by=user.id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail={"code": "DEVICE_NOT_FOUND"}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_TARGET_GROUPS", "message": str(exc)}) from exc
+    await db.commit()
+    return DeviceTargetGroupsOut(
+        device_id=device_id, groups=[_target_group_out(item) for item in groups],
+        added_count=added, removed_count=removed, unchanged_count=unchanged,
+    )

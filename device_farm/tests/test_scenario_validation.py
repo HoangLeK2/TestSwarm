@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from db.seeds.scenario_templates import BUILTIN_TEMPLATE_BY_NAME
 from services.scenario_validation.checks import (
     check_graph,
     check_lint_warnings,
@@ -176,6 +177,140 @@ def test_set_variable_in_loop_body_before_wait() -> None:
     ]
     check_variables(_idx(steps), {}, {}, result)
     assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_loop_var_declares_for_loop_body_refs() -> None:
+    result = _result()
+    steps = [
+        {
+            "type": "loop",
+            "count": "${COUNT}",
+            "loop_var": "PAGE_INDEX",
+            "steps": [
+                {
+                    "id": "open_page_${PAGE_INDEX}",
+                    "type": "set_variable",
+                    "name": "PAGE_SEARCH_CURRENT",
+                    "from_list": "${PAGE_TARGETS}",
+                    "from_list_index": "${PAGE_INDEX}",
+                },
+            ],
+        }
+    ]
+
+    check_variables(
+        _idx(steps),
+        {"COUNT": 2, "PAGE_TARGETS": ["a", "b"]},
+        {},
+        result,
+    )
+
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_org_loop_var_declares_for_loop_body_refs() -> None:
+    result = _result()
+    steps = [
+        {
+            "id": "loop_pages",
+            "type": "loop",
+            "config": {"count": "${COUNT}", "loop_var": "PAGE_INDEX"},
+            "steps": [
+                {
+                    "id": "open_page_${PAGE_INDEX}",
+                    "type": "set_variable",
+                    "config": {
+                        "name": "PAGE_SEARCH_CURRENT",
+                        "from_list": "${PAGE_TARGETS}",
+                        "from_list_index": "${PAGE_INDEX}",
+                    },
+                },
+            ],
+        }
+    ]
+
+    check_org_variables(
+        OrgStepIndex.build(steps),
+        {"COUNT": 2, "PAGE_TARGETS": ["a", "b"]},
+        {},
+        result,
+    )
+
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_fanpage_nurture_template_declares_validation_variables() -> None:
+    result = _result()
+    template = BUILTIN_TEMPLATE_BY_NAME["Nuôi Facebook - Tương tác Fanpage"]
+
+    check_variables(
+        _idx(template["steps"]),
+        template.get("variables") or {},
+        {},
+        result,
+    )
+
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_candidate_lease_declares_outputs_for_following_steps() -> None:
+    result = _result()
+    steps = [
+        {"type": "lease_connection_candidate"},
+        {
+            "type": "if_variable",
+            "name": "CANDIDATE_AVAILABLE",
+            "then": [
+                {"type": "input_text", "text": "${CANDIDATE_NAME}"},
+                {
+                    "type": "connection_request",
+                    "candidate_entity_id": "${CANDIDATE_ENTITY_ID}",
+                    "candidate_lease_token": "${CANDIDATE_LEASE_TOKEN}",
+                },
+            ],
+        },
+    ]
+    check_variables(_idx(steps), {}, {}, result)
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_org_candidate_lease_declares_outputs_for_following_steps() -> None:
+    result = _result()
+    steps = [
+        {"id": "lease", "type": "lease_connection_candidate", "config": {}},
+        {
+            "id": "candidate-available",
+            "type": "if_variable",
+            "config": {"name": "CANDIDATE_AVAILABLE"},
+            "then": [
+                {
+                    "id": "search-candidate",
+                    "type": "input_text",
+                    "config": {"text": "${CANDIDATE_NAME}"},
+                },
+                {
+                    "id": "send-request",
+                    "type": "connection_request",
+                    "config": {
+                        "candidate_entity_id": "${CANDIDATE_ENTITY_ID}",
+                        "candidate_lease_token": "${CANDIDATE_LEASE_TOKEN}",
+                    },
+                },
+            ],
+        },
+    ]
+    check_org_variables(OrgStepIndex.build(steps), {}, {}, result)
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
+def test_candidate_lease_outputs_are_undeclared_before_producer_step() -> None:
+    result = _result()
+    steps = [
+        {"type": "input_text", "text": "${CANDIDATE_NAME}"},
+        {"type": "lease_connection_candidate"},
+    ]
+    check_variables(_idx(steps), {}, {}, result)
+    assert any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
 
 
 def test_invalid_on_error_target() -> None:

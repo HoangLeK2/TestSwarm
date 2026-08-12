@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { tokenStorage } from '@/lib/token-storage';
 import { useH264Video } from '../hooks/use-h264-canvas';
+import { useWebRtcVideo } from '../hooks/use-webrtc-video';
 import {
   ensureWatchSerial,
   requestIdr,
@@ -69,7 +70,7 @@ type ObjectFitRect = {
   scale: number;
 };
 
-export type DeviceScreenTransport = 'auto' | 'h264-only';
+export type DeviceScreenTransport = 'auto' | 'h264-only' | 'webrtc';
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
@@ -236,6 +237,8 @@ interface DeviceScreenProps {
   streamCoverAlign?: 'center' | 'bottom';
   /** Stream fit strategy. `contain` avoids crop on odd aspect-ratio devices. */
   streamFit?: 'cover' | 'contain';
+  /** Reports decoded stream dimensions so parent frame can match the actual feed ratio. */
+  onStreamSize?: (size: Size) => void;
   /** Read-only preview: disable all interactions with device. */
   interactive?: boolean;
   /** Hint browser to prioritize MJPEG fetch (control-record mirror). */
@@ -260,6 +263,7 @@ export function DeviceScreen({
   captionBelowFrame = false,
   streamCoverAlign = 'bottom',
   streamFit,
+  onStreamSize,
   interactive = true,
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
@@ -272,6 +276,7 @@ export function DeviceScreen({
   const routeActive = pathname === ownerPathnameRef.current;
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const draggedRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -319,7 +324,10 @@ export function DeviceScreen({
   );
   const h264BlackStreakRef = React.useRef(0);
   const h264Only = streamTransport === 'h264-only';
-  const mjpegAllowed = !h264Only;
+  const webrtcRequested = streamTransport === 'webrtc';
+  const [scrcpyAttachReady, setScrcpyAttachReady] = useState(false);
+  const h264TransportAllowed = !webrtcRequested;
+  const mjpegAllowed = !h264Only && h264TransportAllowed;
   const [mjpegEnabled, setMjpegEnabled] = useState(mjpegAllowed);
   const [h264Stalled, setH264Stalled] = useState(false);
   const [h264Suppressed, setH264Suppressed] = useState(false);
@@ -459,19 +467,23 @@ export function DeviceScreen({
     [scrcpyViewerIdForSerial]
   );
 
-  const updateStreamSize = useCallback((width: number, height: number) => {
-    if (
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width <= 0 ||
-      height <= 0
-    )
-      return;
-    const next = { width: Math.round(width), height: Math.round(height) };
-    setStreamSize((prev) =>
-      prev?.width === next.width && prev?.height === next.height ? prev : next
-    );
-  }, []);
+  const updateStreamSize = useCallback(
+    (width: number, height: number) => {
+      if (
+        !Number.isFinite(width) ||
+        !Number.isFinite(height) ||
+        width <= 0 ||
+        height <= 0
+      )
+        return;
+      const next = { width: Math.round(width), height: Math.round(height) };
+      setStreamSize((prev) =>
+        prev?.width === next.width && prev?.height === next.height ? prev : next
+      );
+      onStreamSize?.(next);
+    },
+    [onStreamSize]
+  );
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -533,12 +545,56 @@ export function DeviceScreen({
   /** Subscribe relay H.264 + honor server detach; transport policy controls MJPEG fallback. */
   const relayH264Allowed =
     streamingFlags === null || !isContinuous || screenStreamOn;
-  const h264DecodeAllowed = relayH264Allowed && (h264Only || !h264Suppressed);
+  const h264DecodeAllowed =
+    h264TransportAllowed && relayH264Allowed && (h264Only || !h264Suppressed);
   // Keep the control-page WS watcher alive while scrcpy attach/retry is in flight.
   // Gating subscription on attach readiness can drop the only subscriber during a
   // backend restart, leaving scrcpy frames queued to 0 frontend subscribers.
-  const h264SubscriptionAllowed = relayH264Allowed;
+  const h264SubscriptionAllowed = h264TransportAllowed && relayH264Allowed;
   const h264PrimaryMode = isContinuous && h264DecodeAllowed;
+
+  useEffect(() => {
+    if (!h264SubscriptionAllowed) clearInitialFrameRefreshTimers();
+  }, [clearInitialFrameRefreshTimers, h264SubscriptionAllowed]);
+
+  useEffect(() => {
+    setScrcpyAttachReady(false);
+  }, [device.serial, streamTransport]);
+
+  const handleWebRtcFrame = useCallback(() => {
+    h264RenderedFrameVersionRef.current += 1;
+    if (!hasFrameRef.current) {
+      setHasFrame(true);
+    }
+  }, []);
+
+  const handleWebRtcError = useCallback(() => {
+    setHasFrame(false);
+  }, []);
+
+  const handleH264Size = useCallback(
+    (size: { width: number; height: number }) => {
+      updateStreamSize(size.width, size.height);
+    },
+    [updateStreamSize]
+  );
+
+  const webrtc = useWebRtcVideo(device.serial, videoRef, {
+    enabled:
+      webrtcRequested &&
+      scrcpyAttachReady &&
+      routeActive &&
+      tabActive &&
+      Boolean(isActive),
+    control: scrcpyAttachOptions?.enableControl,
+    profile: scrcpyAttachOptions?.profile,
+    maxFps: scrcpyAttachOptions?.maxFps,
+    maxWidth: scrcpyAttachOptions?.maxWidth,
+    bitrate: scrcpyAttachOptions?.bitrate,
+    onFrame: handleWebRtcFrame,
+    onSize: updateStreamSize,
+    onError: handleWebRtcError
+  });
 
   // Control is an explicit viewer: always ask the backend to attach scrcpy in
   // continuous mode. If auto-attach is disabled server-side, this starts video;
@@ -583,6 +639,21 @@ export function DeviceScreen({
   }, [clearScrcpyAttachRetryTimer, scheduleScrcpyViewerDetach]);
 
   useEffect(() => {
+    if (webrtcRequested) {
+      clearInitialFrameRefreshTimers();
+      clearScrcpyAttachRetryTimer();
+      const attachedSerial = attachedScrcpySerialRef.current;
+      const pendingSerial = pendingScrcpyAttachSerialRef.current;
+      scrcpyAttachGenerationRef.current += 1;
+      attachedScrcpySerialRef.current = null;
+      pendingScrcpyAttachSerialRef.current = null;
+      attachedScrcpyWsGenerationRef.current = null;
+      detachScrcpyViewer(attachedSerial, pendingSerial);
+      setScrcpyAttachReady(
+        routeActive && tabActive && Boolean(isActive) && screenStreamOn
+      );
+      return;
+    }
     const shouldAttach =
       routeActive &&
       tabActive &&
@@ -590,6 +661,7 @@ export function DeviceScreen({
       isActive &&
       screenStreamOn;
     if (!shouldAttach) {
+      setScrcpyAttachReady(false);
       clearInitialFrameRefreshTimers();
       clearScrcpyAttachRetryTimer();
       const attachedSerial = attachedScrcpySerialRef.current;
@@ -613,7 +685,11 @@ export function DeviceScreen({
       attachedScrcpySerialRef.current === serial &&
       pendingScrcpyAttachSerialRef.current !== serial
     ) {
-      if (attachedScrcpyWsGenerationRef.current !== wsConnectedGeneration) {
+      setScrcpyAttachReady(true);
+      if (
+        h264SubscriptionAllowed &&
+        attachedScrcpyWsGenerationRef.current !== wsConnectedGeneration
+      ) {
         attachedScrcpyWsGenerationRef.current = wsConnectedGeneration;
         ensureWatchSerial(serial);
         requestInitialFrameRefresh(serial);
@@ -626,19 +702,25 @@ export function DeviceScreen({
     if (previousSerial && previousSerial !== serial) {
       detachScrcpyViewer(previousSerial);
     }
+    setScrcpyAttachReady(false);
     const generation = scrcpyAttachGenerationRef.current + 1;
     scrcpyAttachGenerationRef.current = generation;
     pendingScrcpyAttachSerialRef.current = serial;
     attachedScrcpySerialRef.current = serial;
     attachedScrcpyWsGenerationRef.current = wsConnectedGeneration;
 
-    ensureWatchSerial(serial);
-    requestIdr(serial, 0);
+    if (h264SubscriptionAllowed) {
+      ensureWatchSerial(serial);
+      requestIdr(serial, 0);
+    }
     if (hasRecentScrcpyAttach(serial, viewerId, scrcpyAttachOptions)) {
       pendingScrcpyAttachSerialRef.current = null;
-      ensureWatchSerial(serial);
-      requestInitialFrameRefresh(serial);
-      requestIdr(serial);
+      setScrcpyAttachReady(true);
+      if (h264SubscriptionAllowed) {
+        ensureWatchSerial(serial);
+        requestInitialFrameRefresh(serial);
+        requestIdr(serial);
+      }
       return;
     }
     attachScrcpyStream(serial, viewerId, scrcpyAttachOptions)
@@ -657,19 +739,25 @@ export function DeviceScreen({
           }
           return;
         }
-        ensureWatchSerial(serial);
+        if (h264SubscriptionAllowed) {
+          ensureWatchSerial(serial);
+        }
         rememberScrcpyAttach(serial, viewerId, scrcpyAttachOptions);
+        setScrcpyAttachReady(true);
         setMjpegFailed(false);
         setMjpegAttempt((n) => n + 1);
         setH264Suppressed(false);
-        requestInitialFrameRefresh(serial);
-        requestIdr(serial);
+        if (h264SubscriptionAllowed) {
+          requestInitialFrameRefresh(serial);
+          requestIdr(serial);
+        }
       })
       .catch((err) => {
         if (
           scrcpyAttachGenerationRef.current === generation &&
           attachedScrcpySerialRef.current === serial
         ) {
+          setScrcpyAttachReady(false);
           attachedScrcpySerialRef.current = null;
           pendingScrcpyAttachSerialRef.current = null;
           attachedScrcpyWsGenerationRef.current = null;
@@ -698,6 +786,7 @@ export function DeviceScreen({
     device.serial,
     isActive,
     isContinuous,
+    h264SubscriptionAllowed,
     requestInitialFrameRefresh,
     routeActive,
     scheduleScrcpyAttachRetry,
@@ -710,12 +799,20 @@ export function DeviceScreen({
     tabActive,
     t,
     wsConnected,
-    wsConnectedGeneration
+    wsConnectedGeneration,
+    webrtcRequested
   ]);
 
   const onScreenStreamChange = useCallback(
     async (checked: boolean) => {
       if (!isContinuous || !isActive) return;
+      if (webrtcRequested) {
+        setScreenStreamOn(checked);
+        if (!checked) {
+          setHasFrame(false);
+        }
+        return;
+      }
       setStreamToggleBusy(true);
       const toggleSerial = device.serial;
       const toggleViewerId = scrcpyViewerIdForSerial(toggleSerial);
@@ -835,6 +932,7 @@ export function DeviceScreen({
       scrcpyAttachOptions,
       scrcpyViewerIdForSerial,
       t,
+      webrtcRequested,
       wsConnectedGeneration
     ]
   );
@@ -901,6 +999,7 @@ export function DeviceScreen({
         ? H264_PRIMARY_VISIBLE_RECOVERY_MIN_MS
         : 3000,
       renderedFrameStaleMs: h264PrimaryMode ? 2000 : 5000,
+      onSize: handleH264Size,
       onFrame: useCallback(
         (frame?: { mostlyBlack: boolean }) => {
           h264RenderedFrameVersionRef.current += 1;
@@ -1326,9 +1425,14 @@ export function DeviceScreen({
       ? 'object-cover object-bottom'
       : 'object-cover object-center';
   }, [resolvedAlign, resolvedStreamFit]);
-  const showH264Canvas = h264Active || (h264Only && hasFrame);
+  const showWebRtcVideo =
+    webrtcRequested && (webrtc.active || webrtc.connecting);
+  const showH264Canvas =
+    !showWebRtcVideo && (h264Active || (h264Only && hasFrame));
 
   const requestStreamRefreshAfterInput = useCallback(() => {
+    if (!h264SubscriptionAllowed) return;
+
     const requestIfStillNeeded = (frameVersionAtInput: number) => {
       const now = Date.now();
       if (
@@ -1359,7 +1463,13 @@ export function DeviceScreen({
       inputRefreshTimerRef.current = null;
       requestIfStillNeeded(frameVersionAtInput);
     }, H264_INPUT_REFRESH_WAIT_MS);
-  }, [device.serial, h264DecodeAllowed, h264Only, isActive]);
+  }, [
+    device.serial,
+    h264DecodeAllowed,
+    h264Only,
+    h264SubscriptionAllowed,
+    isActive
+  ]);
 
   const bind = useGesture(
     {
@@ -1567,6 +1677,17 @@ export function DeviceScreen({
         } ${interactive ? 'touch-none' : ''}`}
         id={`wrap-${id}`}
       >
+        {webrtcRequested && (
+          <video
+            key={`webrtc-${device.serial}`}
+            ref={videoRef}
+            muted
+            playsInline
+            autoPlay
+            className={`pointer-events-none absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-300 ${showWebRtcVideo ? 'opacity-100' : 'opacity-0'}`}
+          />
+        )}
+
         {/* MJPEG baseline for auto transport — omitted on H264-only control surfaces. */}
         {mjpegUrl && !mjpegFailed && (
           // eslint-disable-next-line @next/next/no-img-element -- MJPEG stream endpoint must stay as a native img.
@@ -1577,7 +1698,7 @@ export function DeviceScreen({
             alt={`${device.brand} ${device.model}`}
             fetchPriority={streamFetchPriority}
             decoding='async'
-            className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${showH264Canvas ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
+            className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${showH264Canvas || showWebRtcVideo ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
             onLoad={() => {
               setHasFrame(true);
               const img = imageRef.current;

@@ -896,6 +896,20 @@ def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: 
         legacy_streak = int(ctx.get("_no_new_streak", 0) or 0)
         return max(posts_streak, legacy_streak) >= threshold
 
+    elif ctype == "variable_equals" or "variable_equals" in condition:
+        spec = condition.get("variable_equals") or condition
+        name = str(spec.get("name") or "").strip()
+        if not name:
+            return False
+        variables = ctx.get("vars") if isinstance(ctx.get("vars"), dict) else {}
+        actual = variables.get(name, ctx.get(name))
+        expected = spec.get("value")
+        if isinstance(expected, bool):
+            if isinstance(actual, str):
+                actual = actual.strip().casefold() in {"1", "true", "yes", "on"}
+            return actual is expected
+        return str(actual) == str(expected)
+
     return False
 
 

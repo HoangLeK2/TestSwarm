@@ -58,6 +58,17 @@ function valueInsertRowClassName() {
   return 'flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-2';
 }
 
+function keywordInputValue(value: unknown): string {
+  return Array.isArray(value) ? value.join(', ') : String(value ?? '');
+}
+
+function keywordListFromInput(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function JsonTextarea({
   label,
   value,
@@ -773,6 +784,42 @@ export function StepDetailPanel({
                 />
               )}
 
+              {step.type === 'facebook_session_gate' && (
+                <div className='grid grid-cols-2 gap-3'>
+                  <F label='Giai đoạn'>
+                    <select
+                      className='h-8 w-full rounded border bg-background px-2 text-xs'
+                      value={step.phase ?? 'preflight'}
+                      onChange={(e) => {
+                        const phase = e.target.value;
+                        update({
+                          phase,
+                          timeout: phase === 'confirm' ? 20 : 0
+                        });
+                      }}
+                    >
+                      <option value='preflight'>Kiểm tra trước</option>
+                      <option value='confirm'>Xác nhận sau đăng nhập</option>
+                    </select>
+                  </F>
+                  <F label='Thời gian chờ (giây)'>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={30}
+                      step={1}
+                      className='h-8 text-xs'
+                      value={
+                        step.timeout ?? (step.phase === 'confirm' ? 20 : 0)
+                      }
+                      onChange={(e) =>
+                        update({ timeout: Number(e.target.value) || 0 })
+                      }
+                    />
+                  </F>
+                </div>
+              )}
+
               {step.type === 'input_text' && (
                 <>
                   <F label='Nội dung nhập'>
@@ -1045,6 +1092,406 @@ export function StepDetailPanel({
                 </F>
               )}
 
+              {['fb_select_people_profile', 'fb_select_post_target'].includes(
+                step.type
+              ) && (
+                <>
+                  <StepPanelHint>
+                    Chạy resolver trên agent-boot: dump XML, score keyword, mở
+                    đúng{' '}
+                    {step.type === 'fb_select_post_target'
+                      ? 'bài viết'
+                      : 'profile'}{' '}
+                    và lưu target proof. Step này không thực hiện
+                    like/share/comment hay gửi lời mời kết bạn.
+                  </StepPanelHint>
+                  <F label='Từ khoá search'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={step.search ?? ''}
+                      placeholder={
+                        step.type === 'fb_select_post_target'
+                          ? '${POST_SEARCH}'
+                          : '${PEOPLE_SEARCH}'
+                      }
+                      onChange={(e) =>
+                        update({ search: e.target.value || undefined })
+                      }
+                    />
+                  </F>
+                  <F
+                    label={
+                      step.type === 'fb_select_post_target'
+                        ? 'Text bài viết cần match'
+                        : 'Tên hiển thị cần match'
+                    }
+                  >
+                    <Input
+                      className='h-8 text-xs'
+                      value={
+                        step.type === 'fb_select_post_target'
+                          ? (step.display_text ?? '')
+                          : (step.display_name ?? '')
+                      }
+                      placeholder={
+                        step.type === 'fb_select_post_target'
+                          ? '${POST_ROW_TEXT}'
+                          : '${PEOPLE_ROW_TEXT}'
+                      }
+                      onChange={(e) =>
+                        update(
+                          step.type === 'fb_select_post_target'
+                            ? { display_text: e.target.value || undefined }
+                            : { display_name: e.target.value || undefined }
+                        )
+                      }
+                    />
+                  </F>
+                  <F label='Keyword bắt buộc'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={keywordInputValue(step.required_keywords)}
+                      placeholder='Hoang Le, OpenAI'
+                      onChange={(e) =>
+                        update({
+                          required_keywords: keywordListFromInput(
+                            e.target.value
+                          )
+                        })
+                      }
+                    />
+                  </F>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label='Keyword cộng điểm'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.optional_keywords)}
+                        placeholder='company, city'
+                        onChange={(e) =>
+                          update({
+                            optional_keywords: keywordListFromInput(
+                              e.target.value
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Keyword cấm'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.forbidden_keywords)}
+                        placeholder='fake, page'
+                        onChange={(e) =>
+                          update({
+                            forbidden_keywords: keywordListFromInput(
+                              e.target.value
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Điểm tối thiểu'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={200}
+                        className='h-8 text-xs'
+                        value={step.min_score ?? 80}
+                        onChange={(e) =>
+                          update({
+                            min_score: Math.max(
+                              0,
+                              Math.min(200, Number(e.target.value) || 80)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Timeout (giây)'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={60}
+                        step={0.5}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 12}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(1, Number(e.target.value) || 12)
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Lưu target'>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={
+                          step.save_as ??
+                          (step.type === 'fb_select_post_target'
+                            ? '_post_target'
+                            : '_people_target')
+                        }
+                        onChange={(e) =>
+                          update({
+                            save_as:
+                              e.target.value ||
+                              (step.type === 'fb_select_post_target'
+                                ? '_post_target'
+                                : '_people_target')
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                    <input
+                      type='checkbox'
+                      checked={step.require_unique ?? true}
+                      onChange={(e) =>
+                        update({ require_unique: e.target.checked })
+                      }
+                    />
+                    Chỉ pass khi có đúng một candidate đạt điểm
+                  </label>
+                </>
+              )}
+
+              {step.type === 'fb_connect_visible_people' && (
+                <>
+                  <StepPanelHint>
+                    Scan các row/card đang hiện có nút Thêm bạn bè, chỉ gửi lời
+                    mời khi dòng đó có điểm chung như bạn chung hoặc cùng nhóm.
+                    Step này không search tên từng người.
+                  </StepPanelHint>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label='Điểm tối thiểu'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={200}
+                        className='h-8 text-xs'
+                        value={step.min_score ?? 40}
+                        onChange={(e) =>
+                          update({
+                            min_score: Math.max(
+                              0,
+                              Math.min(200, Number(e.target.value) || 40)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Timeout (giây)'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={60}
+                        step={0.5}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 8}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(1, Number(e.target.value) || 8)
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <F label='Keyword điểm chung'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={keywordInputValue(step.common_keywords)}
+                      placeholder='bạn chung, mutual friends, cùng nhóm'
+                      onChange={(e) =>
+                        update({
+                          common_keywords: keywordListFromInput(e.target.value)
+                        })
+                      }
+                    />
+                  </F>
+                  <F label='Keyword cấm'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={keywordInputValue(step.forbidden_keywords)}
+                      placeholder='trang, page, sponsored, anonymous'
+                      onChange={(e) =>
+                        update({
+                          forbidden_keywords: keywordListFromInput(
+                            e.target.value
+                          )
+                        })
+                      }
+                    />
+                  </F>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label='Chờ verify (giây)'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={10}
+                        step={0.1}
+                        className='h-8 text-xs'
+                        value={step.verify_wait_s ?? 0.8}
+                        onChange={(e) =>
+                          update({
+                            verify_wait_s: Math.max(
+                              0,
+                              Math.min(10, Number(e.target.value) || 0.8)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Lưu kết quả'>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.save_as ?? '_visible_connection_action'}
+                        onChange={(e) =>
+                          update({
+                            save_as:
+                              e.target.value || '_visible_connection_action'
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                    <input
+                      type='checkbox'
+                      checked={step.require_common ?? true}
+                      onChange={(e) =>
+                        update({ require_common: e.target.checked })
+                      }
+                    />
+                    Yêu cầu có điểm chung trước khi gửi lời mời
+                  </label>
+                </>
+              )}
+
+              {step.type === 'fb_scan_posts_interact' && (
+                <>
+                  <StepPanelHint>
+                    Agent-boot scan XML trên màn hình Facebook hiện tại, chỉ
+                    like/comment bài post có keyword khớp. Step này không search
+                    từng bài và không nhận profile/page/group làm post.
+                  </StepPanelHint>
+                  <F label='Keyword bài viết'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={keywordInputValue(step.keywords)}
+                      placeholder='AI, tuyển dụng, công nghệ'
+                      onChange={(e) =>
+                        update({
+                          keywords: keywordListFromInput(e.target.value)
+                        })
+                      }
+                    />
+                  </F>
+                  <F label='Comment'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={step.comment_text ?? ''}
+                      placeholder='${COMMENT_TEXT}'
+                      onChange={(e) =>
+                        update({ comment_text: e.target.value || undefined })
+                      }
+                    />
+                  </F>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Số bài'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={50}
+                        className='h-8 text-xs'
+                        value={step.target_count ?? 1}
+                        onChange={(e) =>
+                          update({
+                            target_count: Math.max(
+                              1,
+                              Math.min(50, Number(e.target.value) || 1)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Max scroll'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={200}
+                        className='h-8 text-xs'
+                        value={step.max_scrolls ?? 6}
+                        onChange={(e) =>
+                          update({
+                            max_scrolls: Math.max(
+                              0,
+                              Math.min(200, Number(e.target.value) || 0)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Timeout (giây)'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={600}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 45}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(1, Number(e.target.value) || 45)
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label='Match keyword'>
+                      <select
+                        className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                        value={step.match_mode ?? 'any'}
+                        onChange={(e) => update({ match_mode: e.target.value })}
+                      >
+                        <option value='any'>Ít nhất một keyword</option>
+                        <option value='all'>Tất cả keyword</option>
+                      </select>
+                    </F>
+                    <F label='Vị trí vuốt X'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        className='h-8 text-xs'
+                        value={step.scroll_x_ratio ?? 0.5}
+                        onChange={(e) =>
+                          update({
+                            scroll_x_ratio: Math.max(
+                              0,
+                              Math.min(1, Number(e.target.value) || 0.5)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                    <input
+                      type='checkbox'
+                      checked={step.require_comment ?? true}
+                      onChange={(e) =>
+                        update({ require_comment: e.target.checked })
+                      }
+                    />
+                    Chỉ tính thành công khi comment đã được submit
+                  </label>
+                </>
+              )}
+
               {[
                 'content_interaction',
                 'connection_request',
@@ -1136,6 +1583,18 @@ export function StepDetailPanel({
                       placeholder='SOCIAL_ACTION_RESULT'
                       onChange={(e) =>
                         update({ save_as: e.target.value || undefined })
+                      }
+                    />
+                  </F>
+                  <F label='Yêu cầu target đã verify'>
+                    <Input
+                      className='h-8 font-mono text-xs'
+                      value={step.require_verified_target ?? ''}
+                      placeholder='_people_target'
+                      onChange={(e) =>
+                        update({
+                          require_verified_target: e.target.value || undefined
+                        })
                       }
                     />
                   </F>
@@ -2419,8 +2878,8 @@ export function StepDetailPanel({
               {step.type === 'use_source_pool' && (
                 <div className='space-y-3'>
                   <StepPanelHint>
-                    Node này dùng catalog nguồn đã cào để phân bổ một nguồn cho
-                    mỗi device trước khi chạy campaign.
+                    Node này chọn loại mục tiêu đã phân công cho từng điện thoại
+                    trước khi chạy campaign.
                   </StepPanelHint>
                   <div className='grid gap-3 sm:grid-cols-2'>
                     <F label='Platform'>
@@ -2432,24 +2891,41 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Loại nguồn'>
-                      <Input
-                        className='h-8 text-xs'
+                    <F label='Loại mục tiêu'>
+                      <select
+                        className='h-8 w-full rounded-md border border-input bg-background px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring'
                         value={step.entity_type ?? 'group'}
-                        onChange={(e) =>
-                          update({ entity_type: e.target.value || 'group' })
-                        }
-                      />
+                        onChange={(event) => {
+                          const entityType = event.target.value;
+                          const currentPrefix = String(
+                            step.output_prefix || 'GROUP'
+                          ).toUpperCase();
+                          update({
+                            entity_type: entityType,
+                            output_prefix: [
+                              'GROUP',
+                              'PAGE',
+                              'PROFILE'
+                            ].includes(currentPrefix)
+                              ? entityType.toUpperCase()
+                              : step.output_prefix
+                          });
+                        }}
+                      >
+                        <option value='group'>Group</option>
+                        <option value='page'>Page</option>
+                        <option value='profile'>Cá nhân</option>
+                      </select>
                     </F>
                   </div>
-                  <F label='Lọc theo tên nguồn'>
+                  <F label='Lọc theo tên mục tiêu'>
                     <Input
                       className='h-8 text-xs'
                       value={step.search ?? ''}
                       onChange={(e) =>
                         update({ search: e.target.value || undefined })
                       }
-                      placeholder='VD: Claude VN'
+                      placeholder='VD: Tuyển dụng, Nguyễn Văn A'
                     />
                   </F>
                   <F label='Prefix biến xuất ra'>
@@ -2474,6 +2950,90 @@ export function StepDetailPanel({
                           .replace(/^_+|_+$/g, '') || 'GROUP';
                       return `\${${safePrefix}_NAME} · \${${safePrefix}_URL} · \${${safePrefix}_SEARCH_QUERY} · \${${safePrefix}_SELECTOR_VALUE}`;
                     })()}
+                  </div>
+                </div>
+              )}
+
+              {step.type === 'lease_source_target' && (
+                <div className='space-y-3'>
+                  <StepPanelHint>{t('leaseTarget.sourceHint')}</StepPanelHint>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <F label={t('leaseTarget.platform')}>
+                      <Input
+                        className='h-8 text-xs'
+                        value={step.platform ?? 'facebook'}
+                        onChange={(event) =>
+                          update({ platform: event.target.value || 'facebook' })
+                        }
+                      />
+                    </F>
+                    <F label={t('leaseTarget.entityType')}>
+                      <select
+                        className='h-8 w-full rounded-md border border-input bg-background px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                        value={step.entity_type ?? 'post'}
+                        onChange={(event) =>
+                          update({ entity_type: event.target.value })
+                        }
+                      >
+                        <option value='post'>{t('leaseTarget.post')}</option>
+                        <option value='page'>{t('leaseTarget.page')}</option>
+                        <option value='profile'>
+                          {t('leaseTarget.profile')}
+                        </option>
+                      </select>
+                    </F>
+                  </div>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <F label={t('leaseTarget.action')}>
+                      <select
+                        className='h-8 w-full rounded-md border border-input bg-background px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                        value={step.action ?? 'like'}
+                        onChange={(event) =>
+                          update({ action: event.target.value })
+                        }
+                      >
+                        <option value='like'>{t('leaseTarget.like')}</option>
+                        <option value='comment'>
+                          {t('leaseTarget.comment')}
+                        </option>
+                        <option value='share'>{t('leaseTarget.share')}</option>
+                      </select>
+                    </F>
+                    <F label={t('leaseTarget.keywords')}>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.keywords)}
+                        onChange={(event) =>
+                          update({ keywords: event.target.value })
+                        }
+                        placeholder={t('leaseTarget.keywordPlaceholder')}
+                      />
+                    </F>
+                  </div>
+                  <div className='rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-5 text-muted-foreground'>
+                    TARGET_AVAILABLE · TARGET_ACTION_ID · TARGET_ENTITY_ID ·
+                    TARGET_NAME · TARGET_SEARCH_TEXT · TARGET_URL
+                  </div>
+                </div>
+              )}
+
+              {step.type === 'lease_connection_candidate' && (
+                <div className='space-y-3'>
+                  <StepPanelHint>
+                    {t('leaseTarget.connectionHint')}
+                  </StepPanelHint>
+                  <F label={t('leaseTarget.platform')}>
+                    <Input
+                      className='h-8 text-xs'
+                      value={step.platform ?? 'facebook'}
+                      onChange={(event) =>
+                        update({ platform: event.target.value || 'facebook' })
+                      }
+                    />
+                  </F>
+                  <div className='rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-5 text-muted-foreground'>
+                    CANDIDATE_AVAILABLE · CANDIDATE_NAME · CANDIDATE_LEASE_TOKEN
+                    · TARGET_ENTITY_ID
                   </div>
                 </div>
               )}

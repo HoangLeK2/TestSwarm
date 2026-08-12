@@ -5,12 +5,12 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
-    JSON,
     String,
     UniqueConstraint,
     text,
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
 from tenancy.models import TenantScopedModel
+
 from .utils import _now, _uuid
 
 _JSON_DOCUMENT = JSON().with_variant(JSONB, "postgresql")
@@ -79,6 +80,50 @@ class ExternalEntity(TenantScopedModel, Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now, onupdate=_now
+    )
+
+
+class DeviceTargetGroup(TenantScopedModel, Base):
+    """Operator-prepared Facebook target for a device."""
+
+    __tablename__ = "device_target_groups"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "external_entity_id"],
+            ["external_entities.org_id", "external_entities.id"],
+            ondelete="CASCADE",
+            name="fk_device_target_groups_org_entity",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "device_id"],
+            ["devices.org_id", "devices.id"],
+            ondelete="CASCADE",
+            name="fk_device_target_groups_org_device",
+        ),
+        UniqueConstraint(
+            "org_id", "device_id", "external_entity_id",
+            name="uq_device_target_groups_device_entity",
+        ),
+        Index("idx_device_target_groups_device", "org_id", "device_id", "position"),
+        Index("idx_device_target_groups_entity", "org_id", "external_entity_id"),
+        Index(
+            "idx_device_target_groups_frontier",
+            "org_id",
+            "position",
+            "device_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    device_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    external_entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    assigned_by: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
     )
 
 
@@ -209,8 +254,9 @@ class ExecutionEntityAssignment(TenantScopedModel, Base):
         UniqueConstraint(
             "org_id",
             "dispatch_id",
+            "device_id",
             "external_entity_id",
-            name="uq_execution_entity_assignments_dispatch_entity",
+            name="uq_execution_entity_assignments_dispatch_device_entity",
         ),
         Index(
             "idx_execution_entity_assignments_dispatch",

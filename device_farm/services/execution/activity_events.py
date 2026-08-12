@@ -116,6 +116,20 @@ async def emit_step_finished(
         "nested_failure_context",
         "scroll_to_flow_ms",
         "scroll_to_swipes",
+        "outcome",
+        "state",
+        "action",
+        "platform",
+        "action_performed",
+        "action_bounds",
+        "matched_label",
+        "account_action_id",
+        "external_entity_id",
+        "display_name",
+        "iterations",
+        "account_action_ledger",
+        "candidate_guard",
+        "candidate_completion",
     ):
         if key in step_result:
             payload[key] = step_result.get(key)

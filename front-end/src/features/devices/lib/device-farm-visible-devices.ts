@@ -34,8 +34,16 @@ function hasStrongLiveTransportEvidence(
   return Boolean(device.agent_connected || device.stf_connected);
 }
 
+function hasRunningWorkEvidence(device: DeviceWithLiveTransport): boolean {
+  const usageState = String(device.usage_state || 'idle')
+    .trim()
+    .toLowerCase();
+  return Number(device.scenario_active || 0) > 0 || usageState !== 'idle';
+}
+
 export function isVisibleDeviceFarmActiveDevice(device: Device): boolean {
   const state = normalizeDeviceFarmState(device.state);
+  if (hasRunningWorkEvidence(device)) return true;
   if (OFFLINE_DEVICE_STATES.has(state)) {
     return hasStrongLiveTransportEvidence(device);
   }

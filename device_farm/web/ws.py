@@ -269,6 +269,7 @@ class WebSocketManager:
         db_enabled: bool = False,
         *,
         read_only: bool = False,
+        media_stream_enabled: bool = True,
     ) -> None:
         self.manager = manager
         self._connections: Dict[str, WebSocket] = {}
@@ -294,6 +295,7 @@ class WebSocketManager:
         # Safe-mode: reject write-type frames. BaseHTTPMiddleware can't see
         # WS frames, so the gate must live inside the receive loop.
         self._read_only = bool(read_only)
+        self._media_stream_enabled = bool(media_stream_enabled)
         self._multi_control = MultiControlCoordinator(manager)
 
     def _record_stream_sender_started(self, serial: str) -> None:
@@ -364,6 +366,7 @@ class WebSocketManager:
         media_ws_active = len(media_ws_per_connection)
         return {
             "connections": len(self._connections),
+            "media_stream_enabled": self._media_stream_enabled,
             "media_ws_active": media_ws_active,
             "media_streams_active": active_streams,
             "media_ws_per_connection": media_ws_per_connection,
@@ -993,6 +996,24 @@ class WebSocketManager:
             # On-demand video senders (per connection + per serial).
             if msg_type in ("watch_serial", "unwatch_serial"):
                 if not serial or conn_id is None:
+                    continue
+                if not self._media_stream_enabled:
+                    if msg_type == "unwatch_serial":
+                        await self._cancel_device_sender_tasks(conn_id, serial)
+                        continue
+                    log.debug(
+                        "watch_serial ignored for %s because WebSocket media streaming is disabled",
+                        serial,
+                    )
+                    await self._send_json_locked(
+                        ws,
+                        ws_send_lock,
+                        {
+                            "type": "stream_disabled",
+                            "serial": serial,
+                            "reason": "webrtc",
+                        },
+                    )
                     continue
                 if msg_type == "watch_serial":
                     device = self.manager.get_device(serial)

@@ -32,6 +32,8 @@ import {
   Camera,
   Clipboard,
   Users,
+  UserPlus,
+  MessageCircle,
   type LucideProps
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -65,6 +67,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   assert_element: CheckCircle,
   dismiss_popup: XCircle,
   login_if_needed: CheckCircle,
+  facebook_session_gate: CheckCircle,
   fill_form: Keyboard,
   assert_app_state: CheckCircle,
   set_variable: Variable,
@@ -81,6 +84,8 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   take_screenshot: Camera,
   set_clipboard: Clipboard,
   use_source_pool: Users,
+  lease_source_target: Search,
+  lease_connection_candidate: UserPlus,
   extract_text_hierarchy: Search,
   extract_text_ocr: Search,
   extract_text_ai: Search,
@@ -92,6 +97,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   fb_find_comment_button: Search,
   fb_tap_comment_target: MousePointerClick,
   fb_apply_comment_filter: CheckCircle,
+  fb_scan_posts_interact: MessageCircle,
   extract_fb_comments: Search,
   extract_fb_posts: Search
 };
@@ -125,6 +131,7 @@ const COLOR_MAP: Record<string, string> = {
   assert_element: 'text-green-600',
   dismiss_popup: 'text-red-400',
   login_if_needed: 'text-emerald-500',
+  facebook_session_gate: 'text-emerald-600',
   fill_form: 'text-cyan-600',
   assert_app_state: 'text-green-600',
   double_tap: 'text-blue-400',
@@ -133,6 +140,8 @@ const COLOR_MAP: Record<string, string> = {
   take_screenshot: 'text-violet-500',
   set_clipboard: 'text-teal-500',
   use_source_pool: 'text-teal-600',
+  lease_source_target: 'text-cyan-600',
+  lease_connection_candidate: 'text-emerald-600',
   set_variable: 'text-purple-500',
   set_var: 'text-purple-500',
   repeat: 'text-orange-500',
@@ -152,6 +161,7 @@ const COLOR_MAP: Record<string, string> = {
   fb_find_comment_button: 'text-sky-600',
   fb_tap_comment_target: 'text-blue-600',
   fb_apply_comment_filter: 'text-emerald-600',
+  fb_scan_posts_interact: 'text-blue-600',
   extract_fb_comments: 'text-fuchsia-500',
   extract_fb_posts: 'text-fuchsia-500'
 };

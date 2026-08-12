@@ -105,6 +105,26 @@ const BUILTINS = [
     group: 'sourcePool'
   },
   {
+    name: '${PAGE_KEYWORDS}',
+    descKey: 'builtins.pageKeywords',
+    group: 'pageDiscovery'
+  },
+  {
+    name: '${PAGE_KEYWORD_COUNT}',
+    descKey: 'builtins.pageKeywordCount',
+    group: 'pageDiscovery'
+  },
+  {
+    name: '${MAX_ITEMS_PER_KEYWORD}',
+    descKey: 'builtins.maxItemsPerKeyword',
+    group: 'pageDiscovery'
+  },
+  {
+    name: '${MAX_PAGES}',
+    descKey: 'builtins.maxPages',
+    group: 'pageDiscovery'
+  },
+  {
     name: '${__ACCOUNT_ID__}',
     descKey: 'builtins.accountId',
     group: 'account'
@@ -134,6 +154,9 @@ const BUILTINS = [
 const SYSTEM_BUILTINS = BUILTINS.filter((b) => b.group === 'system');
 const ACCOUNT_BUILTINS = BUILTINS.filter((b) => b.group === 'account');
 const SOURCE_POOL_BUILTINS = BUILTINS.filter((b) => b.group === 'sourcePool');
+const PAGE_DISCOVERY_BUILTINS = BUILTINS.filter(
+  (b) => b.group === 'pageDiscovery'
+);
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
   return Object.entries(normalizeScenarioVariables(vars)).map(
@@ -167,7 +190,31 @@ function toRecord(entries: VarEntry[]): Record<string, any> {
       result[e.key] = e.strVal;
     }
   }
+  if (Array.isArray(result.PAGE_KEYWORDS)) {
+    const keywords = result.PAGE_KEYWORDS.map((item: unknown) =>
+      String(item).trim()
+    ).filter(Boolean);
+    result.PAGE_KEYWORDS = keywords;
+    result.PAGE_KEYWORD_COUNT = keywords.length;
+  }
   return result;
+}
+
+function syncDerivedEntryValues(entries: VarEntry[]): VarEntry[] {
+  const keywordEntry = entries.find(
+    (entry) => entry.key.trim() === 'PAGE_KEYWORDS' && entry.type === 'list'
+  );
+  if (!keywordEntry) return entries;
+  const count = keywordEntry.listVal.map((item) => item.trim()).filter(Boolean)
+    .length;
+  let changed = false;
+  const next = entries.map((entry) => {
+    if (entry.key.trim() !== 'PAGE_KEYWORD_COUNT') return entry;
+    if (entry.type === 'number' && entry.strVal === String(count)) return entry;
+    changed = true;
+    return { ...entry, type: 'number' as const, strVal: String(count), listVal: [] };
+  });
+  return changed ? next : entries;
 }
 
 function countDefined(entries: VarEntry[]) {
@@ -498,9 +545,10 @@ export function VariableEditor({
 
   const commit = useCallback(
     (newEntries: VarEntry[]) => {
-      setEntries(newEntries);
+      const nextEntries = syncDerivedEntryValues(newEntries);
+      setEntries(nextEntries);
       internalChange.current = true;
-      onChange(toRecord(newEntries));
+      onChange(toRecord(nextEntries));
     },
     [onChange]
   );
@@ -657,6 +705,16 @@ export function VariableEditor({
                 />
                 <p className='text-[10px] text-muted-foreground'>
                   {t('sourcePoolVariablesHint')}
+                </p>
+                <BuiltinGroup
+                  title={t('pageDiscoveryVariablesTitle')}
+                  items={PAGE_DISCOVERY_BUILTINS}
+                  copiedKey={copiedKey}
+                  onCopy={copyBuiltin}
+                  t={t}
+                />
+                <p className='text-[10px] text-muted-foreground'>
+                  {t('pageDiscoveryVariablesHint')}
                 </p>
               </PopoverContent>
             </Popover>

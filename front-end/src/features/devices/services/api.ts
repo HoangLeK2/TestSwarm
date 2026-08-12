@@ -29,6 +29,8 @@ export type PreviewScenarioResponse = {
 
 export interface AppConfig {
   wifi_densepose_url?: string;
+  webrtc_enabled?: boolean;
+  media_adapter_url_configured?: boolean;
 }
 
 const hierarchyInFlight = new Map<string, Promise<string>>();

@@ -88,10 +88,22 @@ def _run_nested(sc: ScenarioContext, nested_steps: list, extra_scenario_keys: di
 
 @register_step("loop")
 def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    count = step.get("count")
+    count = sc.var_ctx.resolve(step.get("count"), step_index=idx)
     while_cond = step.get("while")
     max_iterations = int(step.get("max_iterations", 100))
+    duration_seconds_raw = sc.var_ctx.resolve(
+        step.get("duration_seconds"),
+        step_index=idx,
+    )
+    try:
+        duration_seconds = float(duration_seconds_raw or 0)
+    except Exception:
+        duration_seconds = 0.0
+    duration_deadline = (
+        time.monotonic() + duration_seconds if duration_seconds > 0 else None
+    )
     nested_steps = step.get("steps") or []
+    loop_var = str(step.get("loop_var") or "").strip()
 
     if not nested_steps:
         result["ok"] = False
@@ -129,9 +141,14 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         if _cancelled(sc):
             _mark_cancelled(result, "loop: cancelled by user")
             break
+        if duration_deadline is not None and time.monotonic() >= duration_deadline:
+            break
         if use_while and not _evaluate_condition(sc.device, while_cond, sc.ctx):
             break
         sc.ctx["_loop_iter"] = i
+        sc.var_ctx.set("_loop_iter", i)
+        if loop_var:
+            sc.var_ctx.set(loop_var, i)
         nested_result = _run_nested(sc, nested_steps)
         _append_sub_result(
             sub_results,
@@ -159,6 +176,8 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     _finish_sub_results(sub_results, sub_result_state)
     result["iterations"] = actual_iters
     result["sub_results"] = sub_results
+    if duration_seconds > 0:
+        result["duration_seconds"] = duration_seconds
     if result.get("ok", True):
         result["message"] = f"loop: {actual_iters} iteration(s)"
 
@@ -1050,15 +1069,39 @@ def handle_set_variable(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     if "from_list" in raw_step:
         vals = raw_step.get("from_list")
         if isinstance(vals, str):
-            resolved_list = sc.var_ctx.resolve(vals, step_index=idx)
+            exact_var = vals.strip()
+            if exact_var.startswith("${") and exact_var.endswith("}"):
+                resolved_list = sc.var_ctx.lookup_raw(exact_var[2:-1], step_index=idx)
+            else:
+                resolved_list = sc.var_ctx.resolve(vals, step_index=idx)
             vals = resolved_list if isinstance(resolved_list, list) else []
         if not isinstance(vals, list) or not vals:
             result["ok"] = False
             result["message"] = "set_variable: from_list phải là list không rỗng"
         else:
             resolved_vals = [sc.var_ctx.resolve(v, step_index=idx) for v in vals]
-            chosen = sc.var_ctx.set_from_list(name, resolved_vals)
-            result["message"] = f"set_variable: {name} = {chosen!r} (from_list)"
+            if "from_list_index" in step:
+                try:
+                    list_index = int(sc.var_ctx.resolve(step["from_list_index"], step_index=idx))
+                except (TypeError, ValueError):
+                    result["ok"] = False
+                    result["message"] = "set_variable: from_list_index phải là số"
+                    return
+                if list_index < 0 or list_index >= len(resolved_vals):
+                    result["ok"] = False
+                    result["message"] = (
+                        f"set_variable: from_list_index {list_index} ngoài phạm vi "
+                        f"0..{len(resolved_vals) - 1}"
+                    )
+                    return
+                chosen = resolved_vals[list_index]
+                sc.var_ctx.set(name, chosen)
+                result["message"] = (
+                    f"set_variable: {name} = {chosen!r} (from_list_index={list_index})"
+                )
+            else:
+                chosen = sc.var_ctx.set_from_list(name, resolved_vals)
+                result["message"] = f"set_variable: {name} = {chosen!r} (from_list)"
     elif "increment" in step:
         try:
             inc = int(step["increment"])

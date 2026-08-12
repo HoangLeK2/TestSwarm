@@ -11,15 +11,19 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import {
+  useCampaign,
   useCampaignExecutions,
   useCampaignWorkflows
 } from '../../hooks/use-campaigns';
 import type { WorkflowInfo } from '../../types';
 import { WorkflowProgressCard } from './workflow-progress-card';
+import { resolveExecutionIdForWorkflow } from '../../lib/execution-event-utils';
 import { ArtifactPanel } from './artifact-panel';
 import { DlqPanel } from './dlq-panel';
 import { MonitorFailureBanner } from './monitor-failure-banner';
 import { Z_CAMPAIGN_MONITOR_FLOATING } from '@/lib/z-index';
+import { isContinuousCrawl } from '../../lib/continuous-crawl-monitor';
+import { ContinuousCrawlDashboard } from './continuous-crawl-dashboard';
 
 interface Props {
   campaignId: string;
@@ -131,18 +135,29 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [deviceFilter, setDeviceFilter] = useState('');
-  const { data, isLoading } = useCampaignWorkflows(campaignId, isRunning);
+  const { data: campaign, isLoading: isCampaignLoading } =
+    useCampaign(campaignId);
+  const continuous = isContinuousCrawl(campaign?.vars ?? campaign?.variables);
+  const pollStandardMonitor = !!campaign && isRunning && !continuous;
+  const { data, isLoading } = useCampaignWorkflows(
+    campaignId,
+    pollStandardMonitor
+  );
   const { data: executions = [] } = useCampaignExecutions(
     campaignId,
-    isRunning
+    pollStandardMonitor
+  );
+  const executionsById = useMemo(
+    () => new Map(executions.map((execution) => [execution.id, execution])),
+    [executions]
+  );
+  const filteredWorkflows = useMemo(
+    () => filterWorkflows(data?.workflows ?? [], statusFilter, deviceFilter),
+    [data?.workflows, statusFilter, deviceFilter]
   );
   const workflows = data?.workflows ?? [];
-  const filteredWorkflows = useMemo(
-    () => filterWorkflows(workflows, statusFilter, deviceFilter),
-    [workflows, statusFilter, deviceFilter]
-  );
 
-  if (isLoading) {
+  if (isCampaignLoading || (!continuous && isLoading)) {
     return (
       <div className='flex items-center justify-center py-12 text-sm text-muted-foreground'>
         {t('loading')}
@@ -159,10 +174,23 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
         onDeviceChange={setDeviceFilter}
       />
     ) : null;
+  const crawlDashboard = (
+    <ContinuousCrawlDashboard campaignId={campaignId} enabled={continuous} />
+  );
+
+  if (continuous) {
+    return (
+      <div>
+        {crawlDashboard}
+        <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
+      </div>
+    );
+  }
 
   if (!isRunning) {
     return (
       <div>
+        {crawlDashboard}
         {filterBar}
         <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
       </div>
@@ -172,6 +200,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   if (!data?.temporal_available) {
     return (
       <div>
+        {crawlDashboard}
         <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorTemporalUnavailableMessage')}
         </p>
@@ -184,6 +213,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   if (workflows.length === 0) {
     return (
       <div>
+        {crawlDashboard}
         <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorNoRunningWorkflowsMessage')}
         </p>
@@ -194,6 +224,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
 
   return (
     <div>
+      {crawlDashboard}
       <MonitorFailureBanner workflows={workflows} />
       {filterBar}
       <div className='divide-y'>
@@ -207,7 +238,11 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
               key={wf.workflow_id}
               wf={wf}
               campaignId={campaignId}
-              executions={executions}
+              execution={executionsById.get(
+                wf.execution_id ||
+                  resolveExecutionIdForWorkflow(wf.workflow_id, executions) ||
+                  ''
+              )}
             />
           ))
         )}

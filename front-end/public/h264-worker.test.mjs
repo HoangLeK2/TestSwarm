@@ -34,6 +34,7 @@ function createWorkerHarness({ rejectHardwareConfigure = false } = {}) {
   const decoders = [];
   const decoded = [];
   const posted = [];
+  const draws = [];
   const clock = { now: 1_000 };
 
   class FakeVideoDecoder {
@@ -101,7 +102,33 @@ function createWorkerHarness({ rejectHardwareConfigure = false } = {}) {
     await new Promise((resolve) => setImmediate(resolve));
   };
 
-  return { clock, configure, configured, decoded, decoders, posted, self };
+  const attachCanvas = () => {
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext() {
+        return {
+          drawImage(frame, x, y, width, height) {
+            draws.push({ frame, x, y, width, height });
+          }
+        };
+      }
+    };
+    self.onmessage({ data: { type: 'attach-canvas', canvas } });
+    return canvas;
+  };
+
+  return {
+    attachCanvas,
+    clock,
+    configure,
+    configured,
+    decoded,
+    decoders,
+    draws,
+    posted,
+    self
+  };
 }
 
 test('hardware decoder errors fall back to software acceleration', async () => {
@@ -352,5 +379,32 @@ test('malformed NAL headers are rejected before WebCodecs decode', async () => {
         message.type === 'decoder-backpressure' &&
         message.reason === 'invalid_h264_payload'
     )
+  );
+});
+
+test('attached worker canvas renders decoded frames without posting VideoFrame to main', async () => {
+  const harness = createWorkerHarness();
+  const canvas = harness.attachCanvas();
+  const closed = [];
+  await harness.configure();
+
+  harness.decoders.at(-1)?.callbacks.output({
+    displayWidth: 216,
+    displayHeight: 480,
+    close() {
+      closed.push(true);
+    }
+  });
+
+  assert.equal(canvas.width, 216);
+  assert.equal(canvas.height, 480);
+  assert.equal(harness.draws.length, 1);
+  assert.equal(closed.length, 1);
+  assert.ok(
+    harness.posted.some((message) => message.type === 'frame-rendered')
+  );
+  assert.equal(
+    harness.posted.some((message) => message.type === 'frame'),
+    false
   );
 });

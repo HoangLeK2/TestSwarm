@@ -98,6 +98,7 @@ export type ScenarioUpdate = Partial<ScenarioCreate>;
 export type CampaignScenarioRefOut = {
   scenario_id: string;
   scenario_version: number;
+  repeat_count: number;
 };
 
 export type RecoveryIncidentType =
@@ -195,7 +196,48 @@ export type CampaignDeviceOut = {
 export type CampaignScenarioRefIn = {
   scenario_id: string;
   scenario_version?: number | null;
+  repeat_count?: number | null;
 };
+
+export const CAMPAIGN_SCENARIO_REPEAT_MIN = 1;
+export const CAMPAIGN_SCENARIO_REPEAT_MAX = 20;
+
+export function normalizeCampaignScenarioRepeatCount(value: unknown): number {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : CAMPAIGN_SCENARIO_REPEAT_MIN;
+  if (!Number.isFinite(parsed)) return CAMPAIGN_SCENARIO_REPEAT_MIN;
+  return Math.min(
+    CAMPAIGN_SCENARIO_REPEAT_MAX,
+    Math.max(CAMPAIGN_SCENARIO_REPEAT_MIN, Math.trunc(parsed))
+  );
+}
+
+export function normalizeCampaignScenarioRefs(
+  refs: CampaignScenarioRefIn[] | undefined | null
+): CampaignScenarioRefIn[] {
+  return (refs ?? [])
+    .filter((ref) => ref.scenario_id)
+    .map((ref) => ({
+      scenario_id: ref.scenario_id,
+      ...(ref.scenario_version != null
+        ? { scenario_version: ref.scenario_version }
+        : {}),
+      repeat_count: normalizeCampaignScenarioRepeatCount(ref.repeat_count)
+    }));
+}
+
+export function scenarioRefRunCount(
+  refs: Array<Pick<CampaignScenarioRefIn, 'repeat_count'>>
+): number {
+  return refs.reduce(
+    (sum, ref) => sum + normalizeCampaignScenarioRepeatCount(ref.repeat_count),
+    0
+  );
+}
 
 export type CampaignCreate = {
   name: string;
@@ -275,6 +317,7 @@ export type WorkflowProgress = {
 
 export type StepLogEntry = {
   index: number;
+  occurrence_key?: string;
   step_id?: string | null;
   type?: string;
   step_type: string;
@@ -389,6 +432,7 @@ export type ExecutionOut = {
   status: string;
   campaign_id: string | null;
   scenario_id: string | null;
+  account_id?: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

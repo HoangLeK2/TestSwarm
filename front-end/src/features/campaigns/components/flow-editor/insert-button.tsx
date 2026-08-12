@@ -10,6 +10,7 @@ import { useCampaignFlowI18n } from './flow-i18n';
 
 interface Props {
   onInsert: (step: FlowStep) => void;
+  label?: string;
 }
 
 export function InsertButton({ onInsert }: Props) {
@@ -41,7 +42,8 @@ export function InsertButton({ onInsert }: Props) {
  */
 export function InsertGap({
   onInsert,
-  alignWithDragHandle = true
+  alignWithDragHandle = true,
+  label
 }: Props & { alignWithDragHandle?: boolean }) {
   const { tInsert } = useCampaignFlowI18n();
   const track = (
@@ -57,7 +59,7 @@ export function InsertGap({
         )}
         aria-hidden
       />
-      <div className='shrink-0 px-0.5'>
+      <div className='flex shrink-0 items-center gap-1 px-0.5'>
         <InsertStepPicker
           onInsert={onInsert}
           contentSide='bottom'
@@ -84,6 +86,11 @@ export function InsertGap({
             </Button>
           }
         />
+        {label && (
+          <span className='max-w-0 overflow-hidden whitespace-nowrap text-[10px] font-medium text-muted-foreground opacity-0 transition-[max-width,opacity] duration-150 group-focus-within/ig:max-w-48 group-focus-within/ig:opacity-100 group-hover/ig:max-w-48 group-hover/ig:opacity-100 max-md:max-w-48 max-md:opacity-100'>
+            {label}
+          </span>
+        )}
       </div>
       <div
         className={cn(

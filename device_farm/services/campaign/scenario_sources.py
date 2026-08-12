@@ -18,6 +18,7 @@ def org_scenario_refs_from_campaign(campaign: Campaign) -> list[dict[str, Any]]:
         {
             "scenario_id": ref.org_scenario_id,
             "scenario_version": int(ref.pinned_version or 1),
+            "repeat_count": int(getattr(ref, "repeat_count", 1) or 1),
             "source": "org_library",
         }
         for ref in ordered

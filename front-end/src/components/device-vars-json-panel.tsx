@@ -1,16 +1,31 @@
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Braces, Plus } from 'lucide-react';
+import { Braces } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { mergeCampaignScenarioVariables as mergeCampaignScenarioVariablesModel } from './device-vars-json-model';
+import { DeviceVarsFacebookTargetForm } from './device-vars-facebook-target-form';
+import {
+  DEVICE_TARGET_FORM_KEY,
+  emptyDeviceTargetFormState,
+  applyDeviceTargetFormState,
+  isDeviceTargetFormControlledKey,
+  removeDeviceTargetFormState
+} from './device-vars-target-form-model';
 
 export const DEFAULT_DEVICE_VARIABLES = {
   group_name: '',
@@ -139,6 +154,16 @@ function coerceInputToValue(raw: string, previous: unknown): unknown {
   ) {
     return Number(trimmed);
   }
+  if (
+    Array.isArray(previous) ||
+    (previous !== null && typeof previous === 'object')
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return raw;
+    }
+  }
   return raw;
 }
 
@@ -161,8 +186,8 @@ function VariablesFieldGrid({
 }: VariablesFieldGridProps) {
   if (entries.length === 0) return null;
   return (
-    <ScrollArea className='max-h-[min(42vh,320px)] w-full rounded-md border border-border/80 bg-muted/15'>
-      <div className='space-y-2.5 p-3 pr-4'>
+    <ScrollArea className='max-h-[min(36vh,260px)] w-full rounded-md border bg-background'>
+      <div className='divide-y'>
         {entries.map(([key, value]) => {
           const g = globalBaseline?.[key];
           const differs =
@@ -173,12 +198,12 @@ function VariablesFieldGrid({
           return (
             <div
               key={key}
-              className='grid gap-1.5 border-b border-border/30 pb-2.5 last:border-0 last:pb-0 sm:grid-cols-[minmax(0,11rem)_1fr] sm:items-center sm:gap-3'
+              className='grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,9.5rem)_1fr] sm:items-center'
             >
               <div className='min-w-0'>
                 <Label
                   htmlFor={id}
-                  className='block truncate font-mono text-[11px] text-muted-foreground'
+                  className='block truncate font-mono text-[11px] font-medium text-muted-foreground'
                   title={key}
                 >
                   {key}
@@ -202,7 +227,7 @@ function VariablesFieldGrid({
               ) : (
                 <Input
                   id={id}
-                  className='h-8 font-mono text-xs'
+                  className='h-8 min-w-0 font-mono text-xs'
                   readOnly={readOnly}
                   disabled={disabled && !readOnly}
                   spellCheck={false}
@@ -252,6 +277,10 @@ export function DeviceVarsJsonPanel({
   emptyClassName
 }: DeviceVarsJsonPanelProps) {
   const t = useTranslations('components.deviceVarsJson');
+  const [editorMode, setEditorMode] = useState<'form' | 'json'>('form');
+  const [specialForm, setSpecialForm] = useState<'none' | 'facebookTargets'>(
+    'none'
+  );
   const parseMsgs = useMemo(
     () => ({
       invalidJson: t('parseInvalidJson'),
@@ -266,6 +295,15 @@ export function DeviceVarsJsonPanel({
   } catch {
     parsedDraft = null;
   }
+  const hasTargetFormDraft =
+    parsedDraft !== null &&
+    Object.prototype.hasOwnProperty.call(parsedDraft, DEVICE_TARGET_FORM_KEY);
+
+  useEffect(() => {
+    if (!enabled || !hasTargetFormDraft) return;
+    setEditorMode('form');
+    setSpecialForm('facebookTargets');
+  }, [draft, enabled, hasTargetFormDraft]);
 
   const globalPreview = globalVariablesPreview ?? {};
   const effectiveDeviceVarsForTemplate = useMemo(() => {
@@ -307,6 +345,53 @@ export function DeviceVarsJsonPanel({
       }
     },
     [enabled, onDraftChange, parseMsgs]
+  );
+
+  const handleTargetFormChange = useCallback(
+    (nextVars: Record<string, unknown>) => {
+      if (!enabled) return;
+      onDraftChange(formatDeviceVarsJson(nextVars));
+    },
+    [enabled, onDraftChange]
+  );
+
+  const handleSpecialFormChange = useCallback(
+    (value: 'none' | 'facebookTargets') => {
+      if (!enabled || parsedDraft === null) return;
+      setSpecialForm(value);
+      if (value === 'none') {
+        onDraftChange(
+          formatDeviceVarsJson(removeDeviceTargetFormState(parsedDraft))
+        );
+        return;
+      }
+      onDraftChange(
+        formatDeviceVarsJson(
+          hasTargetFormDraft
+            ? parsedDraft
+            : applyDeviceTargetFormState(
+                parsedDraft,
+                emptyDeviceTargetFormState()
+              )
+        )
+      );
+    },
+    [enabled, hasTargetFormDraft, onDraftChange, parsedDraft]
+  );
+
+  const formVariableEntries = useMemo(() => {
+    if (!enabled || parsedDraft === null) return [];
+    return Object.entries(parsedDraft).filter(
+      ([key]) => !isDeviceTargetFormControlledKey(key)
+    );
+  }, [enabled, parsedDraft]);
+
+  const handleFormVariableChange = useCallback(
+    (key: string, value: unknown) => {
+      if (!enabled || parsedDraft === null) return;
+      onDraftChange(formatDeviceVarsJson({ ...parsedDraft, [key]: value }));
+    },
+    [enabled, onDraftChange, parsedDraft]
   );
 
   const globalReadOnlyBlock = (
@@ -363,37 +448,150 @@ export function DeviceVarsJsonPanel({
 
       {enabled ? (
         <div className='flex min-h-0 flex-1 flex-col space-y-2'>
-          {missingTemplateKeys.length > 0 && (
-            <div className='flex flex-wrap items-center gap-1.5'>
-              <span className='mr-1 text-[11px] text-muted-foreground'>
-                {t('addGlobalKeyLabel')}
-              </span>
-              {missingTemplateKeys.map((key) => (
-                <Button
-                  key={key}
-                  type='button'
-                  size='sm'
-                  variant='outline'
-                  className='h-6 gap-1 rounded px-2 font-mono text-[11px]'
-                  disabled={loading || parsedDraft === null}
-                  onClick={() => addTemplateKey(key)}
-                >
-                  <Plus size={11} />
-                  {key}
-                </Button>
-              ))}
-            </div>
+          <Tabs
+            value={editorMode}
+            onValueChange={(value) => setEditorMode(value as 'form' | 'json')}
+          >
+            <TabsList className='grid h-8 w-full grid-cols-2 sm:w-64'>
+              <TabsTrigger value='form' className='text-xs'>
+                {t('formMode')}
+              </TabsTrigger>
+              <TabsTrigger value='json' className='text-xs'>
+                {t('jsonMode')}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {editorMode === 'form' ? (
+            parsedDraft === null ? (
+              <div
+                role='alert'
+                className='rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive'
+              >
+                {t('formJsonInvalid')}
+              </div>
+            ) : (
+              <div className='flex min-h-0 flex-1 flex-col gap-4'>
+                <section className='min-h-0 space-y-2'>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <p className='text-xs font-medium'>
+                      {t('otherVariablesTitle')}
+                    </p>
+                    {missingTemplateKeys.length > 0 ? (
+                      <Select
+                        value=''
+                        disabled={loading || parsedDraft === null}
+                        onValueChange={addTemplateKey}
+                      >
+                        <SelectTrigger className='h-8 w-full text-xs sm:w-48'>
+                          <SelectValue placeholder={t('addGlobalKeySelect')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {missingTemplateKeys.map((key) => (
+                            <SelectItem key={key} value={key}>
+                              {key}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : null}
+                  </div>
+                  {formVariableEntries.length > 0 ? (
+                    <VariablesFieldGrid
+                      entries={formVariableEntries}
+                      readOnly={false}
+                      disabled={loading}
+                      onApply={handleFormVariableChange}
+                      globalBaseline={globalPreview}
+                      globalHint={(value) => t('globalValueHint', { value })}
+                    />
+                  ) : (
+                    <p className='rounded-md border border-dashed bg-muted/10 px-3 py-4 text-center text-xs text-muted-foreground'>
+                      {t('otherVariablesEmpty')}
+                    </p>
+                  )}
+                </section>
+
+                <section className='min-h-0 space-y-2 rounded-md border bg-muted/10 p-3'>
+                  <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-end'>
+                    <div className='min-w-0'>
+                      <p className='text-xs font-medium'>
+                        {t('targetFormTitle')}
+                      </p>
+                      <p className='mt-0.5 text-[11px] text-muted-foreground'>
+                        {specialForm === 'facebookTargets'
+                          ? t('specialFormFacebookHint')
+                          : t('specialFormNoneHint')}
+                      </p>
+                    </div>
+                    <Select
+                      value={specialForm}
+                      disabled={loading}
+                      onValueChange={(value) =>
+                        handleSpecialFormChange(
+                          value as 'none' | 'facebookTargets'
+                        )
+                      }
+                    >
+                      <SelectTrigger className='h-8'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='none'>
+                          {t('specialFormNone')}
+                        </SelectItem>
+                        <SelectItem value='facebookTargets'>
+                          {t('specialFormFacebook')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {specialForm === 'facebookTargets' ? (
+                    <DeviceVarsFacebookTargetForm
+                      vars={parsedDraft}
+                      disabled={loading}
+                      onChange={handleTargetFormChange}
+                    />
+                  ) : null}
+                </section>
+              </div>
+            )
+          ) : (
+            <>
+              {missingTemplateKeys.length > 0 && (
+                <div className='flex justify-end'>
+                  <Select
+                    value=''
+                    disabled={loading || parsedDraft === null}
+                    onValueChange={addTemplateKey}
+                  >
+                    <SelectTrigger className='h-8 w-full text-xs sm:w-48'>
+                      <SelectValue placeholder={t('addGlobalKeySelect')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {missingTemplateKeys.map((key) => (
+                        <SelectItem key={key} value={key}>
+                          {key}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <Textarea
+                className={cn(
+                  'min-h-[200px] flex-1 resize-none font-mono text-xs leading-5',
+                  editorClassName
+                )}
+                value={overrideEditorValue}
+                disabled={loading}
+                spellCheck={false}
+                onChange={(event) =>
+                  handleOverrideEditorChange(event.target.value)
+                }
+              />
+            </>
           )}
-          <Textarea
-            className={cn(
-              'min-h-[200px] flex-1 resize-none font-mono text-xs leading-5',
-              editorClassName
-            )}
-            value={overrideEditorValue}
-            disabled={loading}
-            spellCheck={false}
-            onChange={(event) => handleOverrideEditorChange(event.target.value)}
-          />
         </div>
       ) : (
         <div

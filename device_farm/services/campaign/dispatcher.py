@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -141,9 +141,6 @@ def _with_external_entity_vars(
         "TARGET_NAME": entity.display_name,
         **_prefixed_entity_vars(output_prefix, entity),
     }
-    if entity.platform != "facebook" or entity.entity_type != "group":
-        return target_vars
-
     attributes = (
         entity.current_attributes
         if isinstance(entity.current_attributes, dict)
@@ -165,17 +162,21 @@ def _with_external_entity_vars(
         else {}
     )
     name = entity.display_name
-    prefixed_group_vars = (
+    is_facebook_group = entity.platform == "facebook" and entity.entity_type == "group"
+    default_selector_by = "descriptionStartsWith" if is_facebook_group else "text"
+    default_selector_value = f"{name}," if is_facebook_group else name
+    default_fallback_by = "descriptionContains" if is_facebook_group else "textContains"
+    prefixed_locator_vars = (
         {
             f"{output_prefix}_SEARCH_QUERY": str(locator.get("search_query") or name),
             f"{output_prefix}_SELECTOR_BY": str(
-                selector.get("by") or "descriptionStartsWith"
+                selector.get("by") or default_selector_by
             ),
             f"{output_prefix}_SELECTOR_VALUE": str(
-                selector.get("value") or f"{name},"
+                selector.get("value") or default_selector_value
             ),
             f"{output_prefix}_FALLBACK_SELECTOR_BY": str(
-                fallback_selector.get("by") or "descriptionContains"
+                fallback_selector.get("by") or default_fallback_by
             ),
             f"{output_prefix}_FALLBACK_SELECTOR_VALUE": str(
                 fallback_selector.get("value") or name
@@ -186,22 +187,70 @@ def _with_external_entity_vars(
     )
     return {
         **target_vars,
-        "GROUP_NAME": name,
-        "TARGET_GROUP_NAME": name,
         "TARGET_SEARCH_QUERY": str(locator.get("search_query") or name),
-        "TARGET_SELECTOR_BY": str(
-            selector.get("by") or "descriptionStartsWith"
-        ),
-        "TARGET_SELECTOR_VALUE": str(selector.get("value") or f"{name},"),
+        "TARGET_SELECTOR_BY": str(selector.get("by") or default_selector_by),
+        "TARGET_SELECTOR_VALUE": str(selector.get("value") or default_selector_value),
         "TARGET_FALLBACK_SELECTOR_BY": str(
-            fallback_selector.get("by") or "descriptionContains"
+            fallback_selector.get("by") or default_fallback_by
         ),
         "TARGET_FALLBACK_SELECTOR_VALUE": str(
             fallback_selector.get("value") or name
         ),
         "TARGET_LOCATOR": locator,
-        **prefixed_group_vars,
+        **prefixed_locator_vars,
+        **(
+            {"GROUP_NAME": name, "TARGET_GROUP_NAME": name}
+            if is_facebook_group
+            else {}
+        ),
     }
+
+
+async def _apply_facebook_session_guard_to_accounts(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    account_by_device: dict[str, ResolvedDeviceAccount],
+    device_map: dict[str, Device],
+    allow_login_recovery: bool = False,
+) -> dict[str, ResolvedDeviceAccount]:
+    guarded: dict[str, ResolvedDeviceAccount] = dict(account_by_device)
+    from services.facebook_session_guard import guard_facebook_session
+    from services.facebook_session_runtime import guard_reason_allows_login_recovery
+
+    for device_id, resolved in account_by_device.items():
+        if not resolved.account_id:
+            continue
+        decision = await guard_facebook_session(
+            db,
+            org_id=org_id,
+            device_id=device_id,
+            account_id=resolved.account_id,
+            device_serial=getattr(device_map.get(device_id), "serial", None),
+            live_check=False,
+        )
+        deferred_to_login = (
+            allow_login_recovery
+            and decision.blocks_execution
+            and guard_reason_allows_login_recovery(decision.reason)
+        )
+        session_guard = {
+            **decision.to_meta(),
+            **({"deferred_to_scenario_login": True} if deferred_to_login else {}),
+        }
+        guarded[device_id] = replace(
+            resolved,
+            unavailable=resolved.unavailable or (decision.blocks_execution and not deferred_to_login),
+            failure_reason=(
+                resolved.failure_reason
+                if resolved.unavailable
+                else decision.reason
+                if decision.blocks_execution and not deferred_to_login
+                else resolved.failure_reason
+            ),
+            session_guard=session_guard,
+        )
+    return guarded
 
 
 def _assignment_values(
@@ -269,6 +318,11 @@ class FanOutResult:
     campaign_id: str
     dispatch_strategy: DispatchStrategy
     executions: list[FanOutExecutionView]
+    # Carried forward so start_execution_runtime does not re-resolve and
+    # re-build the very same scenario bodies in the same request. Both stay
+    # out of to_dict() — they are internal handoff state, not API payload.
+    scenario_refs: list[dict[str, Any]] | None = None
+    scenario_registry: dict[str, Any] | None = None
 
     def to_dict(self, *, include_vars: bool = True) -> dict[str, Any]:
         return {
@@ -533,14 +587,25 @@ class CampaignDispatcher:
             )
 
         scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
-        effective_source_pool = source_pool
-        if effective_source_pool is None and not external_entity_ids:
-            effective_source_pool = await _derive_source_pool_from_scenarios(
+        scenario_registry = (
+            await build_campaign_scenario_registry(
                 db,
                 campaign=campaign,
                 org_id=org_id,
                 scenario_refs=scenario_refs,
             )
+            if scenario_refs
+            else {"by_id": {}, "by_campaign_name": {}, "by_template_name": {}}
+        )
+        from services.facebook_session_runtime import scenario_registry_has_facebook_login_gate
+
+        allows_facebook_login_recovery = scenario_registry_has_facebook_login_gate(
+            scenario_registry,
+            scenario_refs,
+        )
+        effective_source_pool = source_pool
+        if effective_source_pool is None and not external_entity_ids:
+            effective_source_pool = source_pool_from_scenario_registry(scenario_registry)
 
         allocation = await _plan_entity_assignments(
             db,
@@ -567,6 +632,14 @@ class CampaignDispatcher:
             org_id=org_id,
             device_ids=device_ids_ordered,
         )
+        device_map = devices_by_id if devices_by_id is not None else validation.devices_by_id
+        account_by_device = await _apply_facebook_session_guard_to_accounts(
+            db,
+            org_id=org_id,
+            account_by_device=account_by_device,
+            device_map=device_map,
+            allow_login_recovery=allows_facebook_login_recovery,
+        )
         try:
             from web.metrics import campaign_account_resolve_batch_size
 
@@ -577,7 +650,6 @@ class CampaignDispatcher:
         except Exception:
             pass
 
-        device_map = devices_by_id if devices_by_id is not None else validation.devices_by_id
         dispatch_id = str(uuid.uuid4())
         campaign_dispatch_targets_count.inc(len(valid_entries))
         if not scenario_refs:
@@ -766,6 +838,8 @@ class CampaignDispatcher:
             campaign_id=campaign.id,
             dispatch_strategy=dispatch_strategy,
             executions=executions,
+            scenario_refs=scenario_refs,
+            scenario_registry=scenario_registry,
         )
 
     @staticmethod
@@ -1043,6 +1117,11 @@ class CampaignDispatcher:
             "started_at": None,
             "finished_at": None,
         }
+        if resolved_account and resolved_account.session_guard:
+            execution_values["meta"] = {
+                **execution_values["meta"],
+                "facebook_session_guard": resolved_account.session_guard,
+            }
 
         active_claim_session_id = claim_session_id
         failure_reason: str | None = None
@@ -1361,6 +1440,21 @@ class CampaignDispatcher:
         scenario_refs = meta.get("org_scenario_refs")
         if not isinstance(scenario_refs, list) or not scenario_refs:
             scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
+        scenario_registry = await build_campaign_scenario_registry(
+            db,
+            campaign=campaign,
+            org_id=org_id,
+            scenario_refs=scenario_refs,
+        )
+        from services.facebook_session_runtime import (
+            guard_reason_allows_login_recovery,
+            scenario_registry_has_facebook_login_gate,
+        )
+
+        allows_facebook_login_recovery = scenario_registry_has_facebook_login_gate(
+            scenario_registry,
+            scenario_refs,
+        )
 
         from services.campaign.account_resolver import (
             campaign_has_account_binding,
@@ -1373,6 +1467,39 @@ class CampaignDispatcher:
             org_id=org_id,
             required=campaign_has_account_binding(campaign),
         )
+        if resolved.account_id:
+            from services.facebook_session_guard import guard_facebook_session
+
+            decision = await guard_facebook_session(
+                db,
+                org_id=org_id,
+                device_id=device_id,
+                account_id=resolved.account_id,
+                device_serial=devices[0].serial,
+                live_check=False,
+            )
+            deferred_to_login = (
+                allows_facebook_login_recovery
+                and decision.blocks_execution
+                and guard_reason_allows_login_recovery(decision.reason)
+            )
+            meta = {
+                **meta,
+                "facebook_session_guard": {
+                    **decision.to_meta(),
+                    **({"deferred_to_scenario_login": True} if deferred_to_login else {}),
+                },
+            }
+            execution.meta = meta
+            if decision.blocks_execution and not deferred_to_login and not resolved.unavailable:
+                resolved = replace(
+                    resolved,
+                    unavailable=True,
+                    failure_reason=decision.reason,
+                    session_guard=decision.to_meta(),
+                )
+            elif not resolved.session_guard:
+                resolved = replace(resolved, session_guard=decision.to_meta())
 
         cfg = execution.device_config or {}
         effective_vars = dict(cfg.get("effective_vars") or {})

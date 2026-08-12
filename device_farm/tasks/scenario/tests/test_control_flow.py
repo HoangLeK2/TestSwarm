@@ -50,6 +50,149 @@ def test_loop_step_propagates_nested_failure():
     assert result["iterations"] == 2
 
 
+def test_loop_exposes_loop_iter_to_runtime_variables():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    observed: list[tuple[int, int]] = []
+
+    def nested(_sc, _steps):
+        observed.append(
+            (
+                _sc.var_ctx.resolve("${_loop_iter}"),
+                _sc.var_ctx.resolve("${PAGE_INDEX}"),
+            )
+        )
+        return {"success": True}
+
+    step = {
+        "type": "loop",
+        "count": 3,
+        "loop_var": "PAGE_INDEX",
+        "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch("tasks.scenario.steps.control_flow._run_nested", side_effect=nested):
+        handle_loop(sc, step, 0, result)
+
+    assert observed == [(0, 0), (1, 1), (2, 2)]
+    assert result["iterations"] == 3
+
+
+def test_set_variable_selects_list_item_by_resolved_index():
+    from tasks.scenario.steps.control_flow import handle_set_variable
+
+    sc = _make_sc()
+    sc.var_ctx.set("PAGE_INDEX", 1)
+    sc.var_ctx.set(
+        "PAGE_TARGETS",
+        ["Go2Joy Vietnam", "Booking.com"],
+    )
+    step = {
+        "type": "set_variable",
+        "name": "PAGE_CONTEXT",
+        "from_list": "${PAGE_TARGETS}",
+        "from_list_index": "${PAGE_INDEX}",
+    }
+    sc.steps = [step]
+    result = {"index": 0, "type": "set_variable", "ok": True}
+
+    handle_set_variable(sc, step, 0, result)
+
+    assert sc.var_ctx.resolve("${PAGE_CONTEXT}") == "Booking.com"
+    assert "from_list_index=1" in result["message"]
+
+
+def test_loop_page_index_walks_attached_pages_in_order():
+    from tasks.scenario.steps.control_flow import handle_loop, handle_set_variable
+
+    sc = _make_sc()
+    sc.var_ctx.set("PAGE_TARGETS", ["Go2Joy Vietnam", "Booking.com"])
+    observed: list[str] = []
+    nested_steps = [
+        {
+            "type": "set_variable",
+            "name": "PAGE_SEARCH_CURRENT",
+            "from_list": "${PAGE_TARGETS}",
+            "from_list_index": "${PAGE_INDEX}",
+        }
+    ]
+
+    def nested(_sc, steps):
+        step = steps[0]
+        result = {"index": 0, "type": "set_variable", "ok": True}
+        handle_set_variable(_sc, step, 0, result)
+        observed.append(_sc.var_ctx.resolve("${PAGE_SEARCH_CURRENT}"))
+        return {"success": True}
+
+    result = {"index": 0, "type": "loop", "ok": True}
+    step = {
+        "type": "loop",
+        "count": 2,
+        "loop_var": "PAGE_INDEX",
+        "steps": nested_steps,
+    }
+
+    with patch("tasks.scenario.steps.control_flow._run_nested", side_effect=nested):
+        handle_loop(sc, step, 0, result)
+
+    assert observed == ["Go2Joy Vietnam", "Booking.com"]
+    assert result["iterations"] == 2
+
+
+def test_if_variable_preserves_loop_branch_variables_until_runtime():
+    from tasks.scenario.context import ScenarioContext
+    from tasks.scenario.executor import ScenarioExecutor
+    from unittest.mock import MagicMock
+
+    device = MagicMock()
+    device.serial = "test"
+    device.screen_width = 1080
+    device.screen_height = 1920
+    sc = ScenarioContext.from_args(
+        device,
+        {
+            "variables": {
+                "FACEBOOK_SESSION_READY": True,
+                "PAGE_COUNT": 2,
+                "PAGE_TARGETS": ["Go2Joy Vietnam", "Booking.com"],
+            },
+            "steps": [
+                {
+                    "type": "if_variable",
+                    "name": "FACEBOOK_SESSION_READY",
+                    "then": [
+                        {
+                            "type": "loop",
+                            "count": "${PAGE_COUNT}",
+                            "loop_var": "PAGE_INDEX",
+                            "steps": [
+                                {
+                                    "type": "set_variable",
+                                    "name": "PAGE_SEARCH_CURRENT",
+                                    "from_list": "${PAGE_TARGETS}",
+                                    "from_list_index": "${PAGE_INDEX}",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    result = ScenarioExecutor(sc).run()
+
+    loop_result = result["step_results"][0]["sub_result"]["step_results"][0]
+    observed = [
+        iteration["result"]["step_results"][0]["message"]
+        for iteration in loop_result["sub_results"]
+    ]
+    assert "PAGE_SEARCH_CURRENT = 'Go2Joy Vietnam' (from_list_index=0)" in observed[0]
+    assert "PAGE_SEARCH_CURRENT = 'Booking.com' (from_list_index=1)" in observed[1]
+
+
 def test_loop_step_bubbles_nested_edge_extra_summary():
     from tasks.scenario.steps.control_flow import handle_loop
 

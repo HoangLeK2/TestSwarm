@@ -94,6 +94,7 @@ def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     if strategy in {
         "fb_posts",
         "fb_comments",
+        "fb_pages",
         "text_nodes",
         "ig_posts",
         "tiktok_posts",

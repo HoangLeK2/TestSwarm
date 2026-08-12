@@ -52,14 +52,6 @@ class StreamTelemetry:
 
     def reset(self) -> None:
         with getattr(self, "_lock", threading.Lock()):
-            self.grpc_video_frames = 0
-            self.grpc_video_bytes = 0
-            self.grpc_video_max_bytes = 0
-            self.grpc_video_config_frames = 0
-            self.grpc_video_keyframes = 0
-            self.grpc_video_agents: set[str] = set()
-            self.grpc_video_shard_agents: set[str] = set()
-
             self.dispatch_frames = 0
             self.dispatch_no_receiver = 0
             self.dispatch_push_errors = 0
@@ -79,24 +71,6 @@ class StreamTelemetry:
             self.ws_dropped = 0
             self.ws_send_wait_ms = _Latency()
             self.ws_send_ms = _Latency()
-
-    def record_grpc_video(
-        self,
-        *,
-        agent_id: str,
-        frame_bytes: int,
-        is_config: bool,
-        is_key: bool,
-    ) -> None:
-        with self._lock:
-            self.grpc_video_frames += 1
-            self.grpc_video_bytes += max(0, frame_bytes)
-            self.grpc_video_max_bytes = max(self.grpc_video_max_bytes, max(0, frame_bytes))
-            self.grpc_video_config_frames += 1 if is_config else 0
-            self.grpc_video_keyframes += 1 if is_key else 0
-            self.grpc_video_agents.add(agent_id)
-            if ":video:" in agent_id:
-                self.grpc_video_shard_agents.add(agent_id)
 
     def record_dispatch(
         self,
@@ -156,13 +130,6 @@ class StreamTelemetry:
                 else 0.0
             )
             data: dict[str, int | float] = {
-                "grpc_video_frames": self.grpc_video_frames,
-                "grpc_video_bytes": self.grpc_video_bytes,
-                "grpc_video_max_bytes": self.grpc_video_max_bytes,
-                "grpc_video_config_frames": self.grpc_video_config_frames,
-                "grpc_video_keyframes": self.grpc_video_keyframes,
-                "grpc_video_agents": len(self.grpc_video_agents),
-                "grpc_video_shard_agents": len(self.grpc_video_shard_agents),
                 "dispatch_frames": self.dispatch_frames,
                 "dispatch_no_receiver": self.dispatch_no_receiver,
                 "dispatch_push_errors": self.dispatch_push_errors,

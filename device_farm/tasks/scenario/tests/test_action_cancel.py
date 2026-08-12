@@ -71,6 +71,49 @@ def test_input_text_stops_before_fallback_strategy_when_cancelled():
     assert result["cancelled"] is True
 
 
+def test_input_text_clear_first_replaces_focused_field_when_supported():
+    from tasks.scenario.steps.input import handle_input_text
+
+    device = MagicMock()
+    u2 = MagicMock()
+    device.u2 = u2
+    sc = _make_sc(device)
+    result = {"index": 0, "type": "input_text", "ok": True}
+
+    handle_input_text(
+        sc,
+        {"type": "input_text", "text": "Booking.com", "clear_first": True},
+        0,
+        result,
+    )
+
+    u2.adb_keyboard_replace_text.assert_called_once_with("Booking.com")
+    u2.clear_text.assert_not_called()
+    u2.send_keys.assert_not_called()
+    assert result["ok"] is True
+
+
+def test_input_text_clear_first_clears_focused_field_before_typing_without_replace():
+    from tasks.scenario.steps.input import handle_input_text
+
+    device = MagicMock()
+    u2 = MagicMock(spec=["clear_text", "send_keys"])
+    device.u2 = u2
+    sc = _make_sc(device)
+    result = {"index": 0, "type": "input_text", "ok": True}
+
+    handle_input_text(
+        sc,
+        {"type": "input_text", "text": "Booking.com", "clear_first": True},
+        0,
+        result,
+    )
+
+    u2.clear_text.assert_called_once()
+    u2.send_keys.assert_called_once_with("Booking.com")
+    assert result["ok"] is True
+
+
 def test_launch_app_marks_cancelled_during_wait_after():
     from tasks.scenario.steps.navigation import handle_launch_app
 

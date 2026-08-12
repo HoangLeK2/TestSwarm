@@ -90,7 +90,33 @@ class AccountEventType(StrEnum):
     COOLDOWN_ENTERED = "account.cooldown_entered"
     COOLDOWN_CLEARED = "account.cooldown_cleared"
     SESSION_DEATH = "account.session_death"
+    SESSION_LOGIN_REQUIRED = "account.session.login_required"
+    SESSION_CONFIRMED = "account.session.confirmed"
+    SESSION_INVALIDATED = "account.session.invalidated"
     BANNED = "account.banned"
+
+
+class DevicePlatformSessionState(StrEnum):
+    UNKNOWN = "unknown"
+    LOGGED_OUT = "logged_out"
+    LOGIN_REQUIRED = "login_required"
+    LOGGING_IN = "logging_in"
+    ACTIVE = "active"
+    SUSPECTED_MISMATCH = "suspected_mismatch"
+    CHECKPOINT = "checkpoint"
+    EXPIRED = "expired"
+    FAILED = "failed"
+
+
+class DevicePlatformLoginAttemptState(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    READY_TO_CONFIRM = "ready_to_confirm"
+    COMPLETED = "completed"
+    CHECKPOINT = "checkpoint"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
 
 
 class DLQStatus(StrEnum):
@@ -180,6 +206,7 @@ class DeviceReserveOwnerType(StrEnum):
     SCENARIO = "scenario"
     MCP = "mcp"
     CAMPAIGN = "campaign"
+    LOGIN = "login"
 
 
 class CampaignTargetSourceKind(StrEnum):

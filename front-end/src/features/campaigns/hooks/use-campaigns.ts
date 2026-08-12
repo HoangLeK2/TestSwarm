@@ -8,6 +8,7 @@ import {
 import { useEffect, useRef } from 'react';
 import {
   campaignsApi,
+  continuousCrawlApi,
   dlqApi,
   executionRuntimeApi,
   executionsApi,
@@ -18,6 +19,12 @@ import {
   type CampaignDispatchIn,
   type CampaignEntityUpdate
 } from '../services/api';
+import {
+  continuousCrawlPollInterval,
+  reduceContinuousCrawlProgress,
+  type ContinuousCrawlControl,
+  type ContinuousCrawlProgress
+} from '../lib/continuous-crawl-monitor';
 import type { CampaignAccountBindIn } from '../../device-farm/services/generated/DeviceFarmApi';
 import {
   isCampaignActiveExecution,
@@ -537,6 +544,45 @@ export function useCampaignExecutions(campaignId: string, enabled: boolean) {
     staleTime: 10_000,
     ...monitorQueryDefaults,
     refetchInterval: enabled ? MONITOR_EXECUTION_POLL_MS : false
+  });
+}
+
+export function useContinuousCrawlProgress(
+  campaignId: string,
+  enabled: boolean
+) {
+  const qc = useQueryClient();
+  const queryKey = ['continuous-crawl-progress', campaignId] as const;
+  return useQuery({
+    queryKey,
+    queryFn: async () => {
+      const incoming = await continuousCrawlApi.progress(campaignId);
+      return reduceContinuousCrawlProgress(
+        qc.getQueryData<ContinuousCrawlProgress>(queryKey),
+        incoming
+      );
+    },
+    enabled: enabled && !!campaignId,
+    ...monitorQueryDefaults,
+    refetchInterval: (query) =>
+      continuousCrawlPollInterval(query.state.data?.status)
+  });
+}
+
+export function useContinuousCrawlControl() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      campaignId,
+      control
+    }: {
+      campaignId: string;
+      control: ContinuousCrawlControl;
+    }) => continuousCrawlApi.control(campaignId, control),
+    onSuccess: (progress, { campaignId }) => {
+      qc.setQueryData(['continuous-crawl-progress', campaignId], progress);
+      qc.invalidateQueries({ queryKey: KEYS.detail(campaignId) });
+    }
   });
 }
 

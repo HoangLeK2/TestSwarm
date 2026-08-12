@@ -18,6 +18,7 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { RunCampaignDialog } from '../run-campaign-dialog';
 import { DispatchCampaignDialog } from '../dispatch-campaign-dialog';
+import { ContinuousCrawlStartDialog } from '../continuous-crawl-start-dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -65,6 +66,13 @@ import {
 } from '../../types';
 import { summarizeDispatchResult } from '../../lib/campaign-dispatch-result';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { isContinuousCrawl } from '../../lib/continuous-crawl-monitor';
+import {
+  automationPrimaryAction,
+  automationRunState,
+  campaignRunJourney,
+  shouldResumeAutomationReview
+} from '../../lib/automation-start';
 import { useConfirm } from '@/providers/modal-provider';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
@@ -83,11 +91,17 @@ export function CampaignRowActions({
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [dispatchDialogOpen, setDispatchDialogOpen] = useState(false);
+  const [automationDialogOpen, setAutomationDialogOpen] = useState(false);
+  const [resumeAutomationReview, setResumeAutomationReview] = useState(false);
   const [addDevicesOpen, setAddDevicesOpen] = useState(false);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [entityEditOpen, setEntityEditOpen] = useState(false);
   const detailNeeded =
-    runDialogOpen || dispatchDialogOpen || scenarioOpen || entityEditOpen;
+    runDialogOpen ||
+    dispatchDialogOpen ||
+    automationDialogOpen ||
+    scenarioOpen ||
+    entityEditOpen;
 
   const { data: campaignDetail, isFetching: detailFetching } = useCampaign(
     campaign.id,
@@ -101,16 +115,22 @@ export function CampaignRowActions({
     const row = effectiveCampaign;
     return isCampaignEntityOut(row) ? row : null;
   })();
+  const effectiveVariables = campaignVariables(effectiveCampaign);
+  const continuous = isContinuousCrawl(effectiveVariables);
+  const runJourney = campaignRunJourney(isEntityCampaign, continuous);
+  const automationAction = automationPrimaryAction(
+    automationRunState(effectiveVariables)
+  );
   const scenarioRefIds = useMemo(
     () => (entityDetail?.scenario_refs ?? []).map((ref) => ref.scenario_id),
     [entityDetail?.scenario_refs]
   );
   const { data: orgScenarios = [] } = useOrgScenarios({
-    enabled: dispatchDialogOpen && isEntityCampaign
+    enabled: (dispatchDialogOpen || automationDialogOpen) && isEntityCampaign
   });
   const orgScenarioBodies = useOrgScenarioBodies(
     scenarioRefIds,
-    dispatchDialogOpen && isEntityCampaign
+    (dispatchDialogOpen || automationDialogOpen) && isEntityCampaign
   );
   const dispatchScenarios = useMemo(
     () =>
@@ -140,7 +160,10 @@ export function CampaignRowActions({
 
   const { data: fetchedDevices } = useCampaignDevices(
     campaign.id,
-    runDialogOpen || dispatchDialogOpen || addDevicesOpen
+    runDialogOpen ||
+      dispatchDialogOpen ||
+      automationDialogOpen ||
+      addDevicesOpen
   );
   const { data: fetchedScenarios } = useScenarios(
     campaign.id,
@@ -237,10 +260,27 @@ export function CampaignRowActions({
     const canRun = isEntityCampaign
       ? hasScenario
       : (!deviceAssignmentsKnown || devices.length > 0) && hasScenario;
+    if (runJourney === 'automation' && automationAction !== 'setup') {
+      return {
+        label: t(`automationActions.${automationAction}`),
+        onClick: () => router.push(ROUTES.CAMPAIGNS.MONITOR(campaign.id)),
+        disabled: !perms.canExecute
+      };
+    }
     return {
-      label: t('titleRun'),
+      label:
+        runJourney === 'automation'
+          ? t('automationActions.setup')
+          : t('titleRun'),
       onClick: () =>
-        isEntityCampaign ? setDispatchDialogOpen(true) : setRunDialogOpen(true),
+        runJourney === 'automation'
+          ? (() => {
+              setResumeAutomationReview(false);
+              setAutomationDialogOpen(true);
+            })()
+          : runJourney === 'dispatch'
+            ? setDispatchDialogOpen(true)
+            : setRunDialogOpen(true),
       disabled: !canRun || !perms.canExecute,
       tooltip: !hasScenario
         ? t('missingScenario')
@@ -390,74 +430,108 @@ export function CampaignRowActions({
             />
 
             {isEntityCampaign ? (
-              <DispatchCampaignDialog
-                open={dispatchDialogOpen}
-                campaignId={campaign.id}
-                onClose={() => setDispatchDialogOpen(false)}
-                devices={devices}
-                scenarios={dispatchScenarios}
-                campaignVariables={
-                  entityDetail ? campaignVariables(entityDetail) : {}
-                }
-                perDeviceOverrides={entityDetail?.per_device_overrides ?? {}}
-                isDispatching={isDispatching}
-                onConfirm={(body) => {
-                  setDispatchDialogOpen(false);
-                  dispatchCampaign(
-                    { id: campaign.id, body },
-                    {
-                      onSuccess: (data) => {
-                        const summary = summarizeDispatchResult(data);
-                        const usedFallback =
-                          executionRuntime?.campaign_run
-                            ?.fallback_mode_active ||
-                          data.executions?.some(
-                            (e) => e.dispatch_source === 'fallback'
-                          );
-                        if (usedFallback) {
-                          toast.warning(t('fallbackDispatchActive'), {
-                            duration: 8000
-                          });
-                        }
-                        if (summary.allFailed) {
-                          toast.error(
-                            summary.allFailuresAreDeviceClaim
-                              ? t('dispatchAllDevicesBusy', {
-                                  count: summary.deviceClaimFailed
-                                })
-                              : t('dispatchAllFailed', {
-                                  count: summary.failed
-                                }),
-                            {
-                              description: campaign.name,
+              continuous ? (
+                <ContinuousCrawlStartDialog
+                  open={automationDialogOpen}
+                  campaignName={campaign.name}
+                  campaignId={campaign.id}
+                  initialStep={resumeAutomationReview ? 'review' : 'goal'}
+                  onClose={() => {
+                    setAutomationDialogOpen(false);
+                    setResumeAutomationReview(false);
+                  }}
+                  onManageDevices={() => {
+                    setResumeAutomationReview(true);
+                    setAutomationDialogOpen(false);
+                    setAddDevicesOpen(true);
+                  }}
+                  onManageTargets={() => {
+                    setResumeAutomationReview(true);
+                    setAutomationDialogOpen(false);
+                    setEntityEditOpen(true);
+                  }}
+                  onEditConfiguration={() => {
+                    setResumeAutomationReview(true);
+                    setAutomationDialogOpen(false);
+                    setEntityEditOpen(true);
+                  }}
+                  devices={devices}
+                  scenarios={dispatchScenarios}
+                  onStarted={() => {
+                    setAutomationDialogOpen(false);
+                    router.push(ROUTES.CAMPAIGNS.MONITOR(campaign.id));
+                  }}
+                />
+              ) : (
+                <DispatchCampaignDialog
+                  open={dispatchDialogOpen}
+                  campaignId={campaign.id}
+                  onClose={() => setDispatchDialogOpen(false)}
+                  devices={devices}
+                  scenarios={dispatchScenarios}
+                  campaignVariables={
+                    entityDetail ? campaignVariables(entityDetail) : {}
+                  }
+                  perDeviceOverrides={entityDetail?.per_device_overrides ?? {}}
+                  isDispatching={isDispatching}
+                  onConfirm={(body) => {
+                    setDispatchDialogOpen(false);
+                    dispatchCampaign(
+                      { id: campaign.id, body },
+                      {
+                        onSuccess: (data) => {
+                          const summary = summarizeDispatchResult(data);
+                          const usedFallback =
+                            executionRuntime?.campaign_run
+                              ?.fallback_mode_active ||
+                            data.executions?.some(
+                              (e) => e.dispatch_source === 'fallback'
+                            );
+                          if (usedFallback) {
+                            toast.warning(t('fallbackDispatchActive'), {
                               duration: 8000
+                            });
+                          }
+                          if (summary.allFailed) {
+                            toast.error(
+                              summary.allFailuresAreDeviceClaim
+                                ? t('dispatchAllDevicesBusy', {
+                                    count: summary.deviceClaimFailed
+                                  })
+                                : t('dispatchAllFailed', {
+                                    count: summary.failed
+                                  }),
+                              {
+                                description: campaign.name,
+                                duration: 8000
+                              }
+                            );
+                            return;
+                          }
+                          toast.success(
+                            t('dispatchStarted', { count: data.target_count }),
+                            {
+                              description:
+                                summary.failed > 0
+                                  ? t('dispatchPartialFailures', {
+                                      count: summary.failed
+                                    })
+                                  : campaign.name,
+                              duration: 5000
                             }
                           );
-                          return;
+                          router.push(ROUTES.DEVICES.ROOT);
+                        },
+                        onError: (err) => {
+                          toast.error(
+                            formatFarmApiError(err, t('dispatchFailed'))
+                          );
                         }
-                        toast.success(
-                          t('dispatchStarted', { count: data.target_count }),
-                          {
-                            description:
-                              summary.failed > 0
-                                ? t('dispatchPartialFailures', {
-                                    count: summary.failed
-                                  })
-                                : campaign.name,
-                            duration: 5000
-                          }
-                        );
-                        router.push(ROUTES.DEVICES.ROOT);
-                      },
-                      onError: (err) => {
-                        toast.error(
-                          formatFarmApiError(err, t('dispatchFailed'))
-                        );
                       }
-                    }
-                  );
-                }}
-              />
+                    );
+                  }}
+                />
+              )
             ) : null}
           </>
         )}
@@ -604,7 +678,12 @@ export function CampaignRowActions({
         campaignName={campaign.name}
         deviceCount={devices.length}
         open={addDevicesOpen}
-        onOpenChange={setAddDevicesOpen}
+        onOpenChange={(open) => {
+          setAddDevicesOpen(open);
+          if (shouldResumeAutomationReview(open, resumeAutomationReview)) {
+            setAutomationDialogOpen(true);
+          }
+        }}
       >
         {null}
       </AddDevicesToCampaignDialog>
@@ -620,7 +699,12 @@ export function CampaignRowActions({
       <EditCampaignEntityDialog
         campaign={effectiveCampaign}
         open={entityEditOpen}
-        onOpenChange={setEntityEditOpen}
+        onOpenChange={(open) => {
+          setEntityEditOpen(open);
+          if (shouldResumeAutomationReview(open, resumeAutomationReview)) {
+            setAutomationDialogOpen(true);
+          }
+        }}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FileText, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
@@ -38,8 +38,15 @@ import {
   useCampaign,
   useScenarios
 } from '../../hooks/use-campaigns';
-import type { CampaignOut, ScenarioOut } from '../../types';
-import { isCampaignBodyEditable } from '../../types';
+import type {
+  CampaignOut,
+  CampaignScenarioRefIn,
+  ScenarioOut
+} from '../../types';
+import {
+  isCampaignBodyEditable,
+  normalizeCampaignScenarioRefs
+} from '../../types';
 import {
   isCampaignEntityOut,
   type CampaignEntityOut
@@ -83,8 +90,15 @@ export function ScenarioListDialog({
     const row = campaignDetail ?? campaign;
     return isCampaignEntityOut(row) ? row : null;
   })();
-  const entityRefs =
-    entityDetail?.scenario_refs ?? campaign.scenario_refs ?? [];
+  const entityRefs = useMemo(
+    () =>
+      normalizeCampaignScenarioRefs(
+        (entityDetail?.scenario_refs ??
+          campaign.scenario_refs ??
+          []) as CampaignScenarioRefIn[]
+      ),
+    [campaign.scenario_refs, entityDetail?.scenario_refs]
+  );
   const isEntityCampaign =
     entityDetail != null ||
     entityRefs.length > 0 ||
@@ -92,21 +106,24 @@ export function ScenarioListDialog({
   const campaignStatus = entityDetail?.status ?? campaign.status;
   const bodyEditable = isCampaignBodyEditable(campaignStatus);
   const { data: orgScenarios = [] } = useOrgScenarios();
-  const [selectedRefIds, setSelectedRefIds] = useState<string[]>([]);
+  const [selectedRefs, setSelectedRefs] = useState<CampaignScenarioRefIn[]>([]);
   const { mutate: createScenario, isPending: isCreating } = useCreateScenario();
   const { mutate: patchEntity, isPending: isSavingRefs } =
     usePatchCampaignEntity();
   const { mutateAsync: reorderScenarios, isPending: isReordering } =
     useReorderScenarios();
 
-  const entityRefIdsKey = entityRefs.map((ref) => ref.scenario_id).join(',');
+  const entityRefsKey = entityRefs
+    .map(
+      (ref) =>
+        `${ref.scenario_id}:${ref.scenario_version ?? ''}:${ref.repeat_count ?? 1}`
+    )
+    .join(',');
 
   useEffect(() => {
     if (!finalOpen) return;
-    setSelectedRefIds(
-      entityRefIdsKey ? entityRefIdsKey.split(',').filter(Boolean) : []
-    );
-  }, [finalOpen, entityRefIdsKey]);
+    setSelectedRefs(normalizeCampaignScenarioRefs(entityRefs));
+  }, [entityRefs, entityRefsKey, finalOpen]);
 
   const totalSteps = scenarios.reduce((sum, s) => sum + s.steps.length, 0);
 
@@ -142,11 +159,11 @@ export function ScenarioListDialog({
     });
     if (!ok) return;
 
-    const nextIds = entityRefs
-      .map((ref) => ref.scenario_id)
-      .filter((id) => id !== scenarioId);
-    const sequenceIds = nextIds.filter((id) => {
-      const row = orgScenarios.find((s) => s.id === id);
+    const nextRefs = normalizeCampaignScenarioRefs(entityRefs).filter(
+      (ref) => ref.scenario_id !== scenarioId
+    );
+    const sequenceRefs = nextRefs.filter((ref) => {
+      const row = orgScenarios.find((s) => s.id === ref.scenario_id);
       return row && !isGraphOrgScenario(row);
     });
 
@@ -154,12 +171,12 @@ export function ScenarioListDialog({
       {
         id: campaign.id,
         data: {
-          scenario_refs: sequenceIds.map((scenario_id) => ({ scenario_id }))
+          scenario_refs: sequenceRefs
         }
       },
       {
         onSuccess: () => {
-          setSelectedRefIds(sequenceIds);
+          setSelectedRefs(sequenceRefs);
           toast.success(t('entityRemoveSuccess'));
         },
         onError: (err) =>
@@ -169,14 +186,15 @@ export function ScenarioListDialog({
   };
 
   const handleSaveEntityRefs = () => {
-    const sequenceIds = selectedRefIds.filter((id) => {
-      const row = orgScenarios.find((s) => s.id === id);
+    const normalizedRefs = normalizeCampaignScenarioRefs(selectedRefs);
+    const sequenceRefs = normalizedRefs.filter((ref) => {
+      const row = orgScenarios.find((s) => s.id === ref.scenario_id);
       return row && !isGraphOrgScenario(row);
     });
-    if (selectedRefIds.length > sequenceIds.length) {
+    if (normalizedRefs.length > sequenceRefs.length) {
       toast.warning(t('entityGraphSkipped'));
     }
-    if (!sequenceIds.length) {
+    if (!sequenceRefs.length) {
       toast.error(t('entityRefsRequired'));
       return;
     }
@@ -184,7 +202,7 @@ export function ScenarioListDialog({
       {
         id: campaign.id,
         data: {
-          scenario_refs: sequenceIds.map((scenario_id) => ({ scenario_id }))
+          scenario_refs: sequenceRefs
         }
       },
       {
@@ -284,6 +302,11 @@ export function ScenarioListDialog({
                           <div className='text-sm font-medium'>{name}</div>
                           <div className='text-[11px] text-muted-foreground'>
                             {ref.scenario_id} · v{ref.scenario_version}
+                            {ref.repeat_count && ref.repeat_count > 1
+                              ? ` · ${t('entityRepeatCount', {
+                                  count: ref.repeat_count
+                                })}`
+                              : ''}
                             {isGraph ? ` · ${t('entityGraphKind')}` : ''}
                             {orgRow && !orgRow.is_runnable
                               ? ` · ${t('entityNotRunnable')}`
@@ -345,9 +368,12 @@ export function ScenarioListDialog({
                     {t('entityManageHint')}
                   </p>
                   <CampaignOrgScenarioPicker
-                    selectedIds={selectedRefIds}
-                    onSelectedIdsChange={setSelectedRefIds}
+                    selectedRefs={selectedRefs}
+                    onSelectedRefsChange={(refs) =>
+                      setSelectedRefs(normalizeCampaignScenarioRefs(refs))
+                    }
                     messagesNs='entityDialog'
+                    showRepeatConfig
                   />
                   <Button
                     type='button'

@@ -86,6 +86,8 @@ async def test_ac1_create_campaign_pins_current_versions(session_factory):
     refs = {r["scenario_id"]: r["scenario_version"] for r in data["scenario_refs"]}
     assert refs[s1] == v1
     assert refs[s2] == v2
+    repeat_counts = {r["scenario_id"]: r["repeat_count"] for r in data["scenario_refs"]}
+    assert repeat_counts == {s1: 1, s2: 1}
 
     async with session_factory() as db:
         events = (
@@ -122,6 +124,61 @@ async def test_ac2_explicit_pin_version(session_factory):
         )
     assert resp.status_code == 201
     assert resp.json()["scenario_refs"][0]["scenario_version"] == pinned
+    assert resp.json()["scenario_refs"][0]["repeat_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_campaign_scenario_repeat_count_round_trips(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        s1 = await _create_org_scenario(
+            client,
+            name="RepeatA",
+            steps=[_sequence_step("w1", "input_wait.wait", seconds=1)],
+        )
+        s2 = await _create_org_scenario(
+            client,
+            name="RepeatB",
+            steps=[_sequence_step("w2", "input_wait.wait", seconds=2)],
+        )
+        created = await client.post(
+            "/api/campaigns",
+            json={
+                "name": "RepeatCampaign",
+                "scenario_refs": [
+                    {"scenario_id": s1},
+                    {"scenario_id": s2, "repeat_count": 2},
+                ],
+            },
+        )
+        campaign_id = created.json()["id"]
+        fetched = await client.get(f"/api/campaigns/{campaign_id}")
+        patched = await client.patch(
+            f"/api/campaigns/{campaign_id}",
+            json={
+                "scenario_refs": [
+                    {"scenario_id": s1, "repeat_count": 3},
+                    {"scenario_id": s2, "repeat_count": 1},
+                ]
+            },
+        )
+
+    assert created.status_code == 201
+    assert [
+        (ref["scenario_id"], ref["repeat_count"])
+        for ref in created.json()["scenario_refs"]
+    ] == [(s1, 1), (s2, 2)]
+    assert [
+        (ref["scenario_id"], ref["repeat_count"])
+        for ref in fetched.json()["scenario_refs"]
+    ] == [(s1, 1), (s2, 2)]
+    assert patched.status_code == 200
+    assert [
+        (ref["scenario_id"], ref["repeat_count"])
+        for ref in patched.json()["scenario_refs"]
+    ] == [(s1, 3), (s2, 1)]
 
 
 @pytest.mark.asyncio
@@ -199,6 +256,36 @@ async def test_ac5_invalid_pinned_version(session_factory):
         )
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "SCENARIO_VERSION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_invalid_scenario_repeat_count_rejected(session_factory):
+    await _seed_orgs(session_factory)
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        s1 = await _create_org_scenario(
+            client,
+            name="BadRepeat",
+            steps=[_sequence_step("w", "input_wait.wait", seconds=1)],
+        )
+        too_low = await client.post(
+            "/api/campaigns",
+            json={
+                "name": "BadRepeatLow",
+                "scenario_refs": [{"scenario_id": s1, "repeat_count": 0}],
+            },
+        )
+        too_high = await client.post(
+            "/api/campaigns",
+            json={
+                "name": "BadRepeatHigh",
+                "scenario_refs": [{"scenario_id": s1, "repeat_count": 21}],
+            },
+        )
+
+    assert too_low.status_code == 422
+    assert too_high.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -160,10 +160,10 @@ async def test_adb_connect_backoff_suppresses_retry_until_deadline(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
+async def test_grpc_relay_failure_reconnects_without_stopping_control_plane(
     monkeypatch,
 ) -> None:
-    """A transient H264 stream failure must not take campaign control offline."""
+    """A transient relay-stream failure must not take campaign control offline."""
 
     class _ChannelContext:
         async def __aenter__(self):
@@ -172,8 +172,8 @@ async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    video_attempts = 0
-    second_video_attempt = asyncio.Event()
+    relay_attempts = 0
+    second_relay_attempt = asyncio.Event()
     control_started = asyncio.Event()
     control_stopped = 0
 
@@ -182,12 +182,12 @@ async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
             self.ctrl_q: asyncio.Queue = asyncio.Queue()
 
         async def _stream_once(self, channel, *, initial_meta=None) -> None:
-            nonlocal video_attempts
-            video_attempts += 1
-            if video_attempts == 1:
+            nonlocal relay_attempts
+            relay_attempts += 1
+            if relay_attempts == 1:
                 await asyncio.sleep(0)
-                raise RuntimeError("simulated execute_batch video failure")
-            second_video_attempt.set()
+                raise RuntimeError("simulated execute_batch relay failure")
+            second_relay_attempt.set()
             await asyncio.Event().wait()
 
         def stop(self) -> None:
@@ -239,7 +239,7 @@ async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
     stream_task = asyncio.create_task(agent._connect_and_stream_grpc())
     try:
         await asyncio.wait_for(control_started.wait(), timeout=0.5)
-        await asyncio.wait_for(second_video_attempt.wait(), timeout=1.0)
+        await asyncio.wait_for(second_relay_attempt.wait(), timeout=1.0)
         assert control_stopped == 0
     finally:
         stream_task.cancel()
@@ -247,7 +247,7 @@ async def test_grpc_video_failure_reconnects_without_stopping_control_plane(
 
 
 @pytest.mark.asyncio
-async def test_grpc_video_retry_does_not_replay_stale_registration(
+async def test_grpc_relay_retry_does_not_replay_stale_registration(
     monkeypatch,
 ) -> None:
     """A failed RPC attempt must not leave registration in the shared queue."""
@@ -259,8 +259,8 @@ async def test_grpc_video_retry_does_not_replay_stale_registration(
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    video_attempts = 0
-    second_video_attempt = asyncio.Event()
+    relay_attempts = 0
+    second_relay_attempt = asyncio.Event()
     received_message_types: list[str] = []
 
     class _GrpcClient:
@@ -269,9 +269,9 @@ async def test_grpc_video_retry_does_not_replay_stale_registration(
             self._send_queue = kwargs["send_queue"]
 
         async def _stream_once(self, channel, *, initial_meta=None) -> None:
-            nonlocal video_attempts
-            video_attempts += 1
-            if video_attempts == 1:
+            nonlocal relay_attempts
+            relay_attempts += 1
+            if relay_attempts == 1:
                 raise RuntimeError("failed before request generator consumption")
 
             if initial_meta is not None:
@@ -284,7 +284,7 @@ async def test_grpc_video_retry_does_not_replay_stale_registration(
                     received_message_types.append(
                         relay_agent_module.json.loads(item)["type"]
                     )
-            second_video_attempt.set()
+            second_relay_attempt.set()
             await asyncio.Event().wait()
 
         def stop(self) -> None:
@@ -342,7 +342,7 @@ async def test_grpc_video_retry_does_not_replay_stale_registration(
 
     stream_task = asyncio.create_task(agent._connect_and_stream_grpc())
     try:
-        await asyncio.wait_for(second_video_attempt.wait(), timeout=1.0)
+        await asyncio.wait_for(second_relay_attempt.wait(), timeout=1.0)
         assert received_message_types.count("register") == 1
     finally:
         stream_task.cancel()

@@ -88,6 +88,22 @@ device_state_count = Gauge(
     ["state"],
 )
 
+# ── Account action ledger reconciliation ──
+account_action_reconcile_runs_total = Counter(
+    "device_farm_account_action_reconcile_runs_total",
+    "Account action reconciliation runs by outcome",
+    ["status"],
+)
+account_actions_reconciled_total = Counter(
+    "device_farm_account_actions_reconciled_total",
+    "Account actions marked stale by reconciliation",
+)
+account_action_reconcile_duration_seconds = Histogram(
+    "device_farm_account_action_reconcile_duration_seconds",
+    "Account action reconciliation pass duration",
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+)
+
 # ── Fleet stats (DF-T-02-013) ──
 fleet_stats_duration_seconds = Histogram(
     "device_farm_fleet_stats_duration_seconds",
@@ -189,6 +205,21 @@ campaign_account_resolve_batch_size = Histogram(
     "campaign_account_resolve_batch_size",
     "Distinct accounts loaded per campaign dispatch fan-out",
     buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
+)
+facebook_session_guard_decisions_total = Counter(
+    "facebook_session_guard_decisions_total",
+    "Facebook session guard decisions",
+    ["mode", "outcome", "reason"],
+)
+facebook_readiness_checks_total = Counter(
+    "facebook_readiness_checks_total",
+    "Facebook readiness checks",
+    ["status", "reason"],
+)
+facebook_login_attempts_total = Counter(
+    "facebook_login_attempts_total",
+    "Facebook login attempt state transitions",
+    ["state", "reason"],
 )
 
 # ── Step retry (DF-T-04-011) ──

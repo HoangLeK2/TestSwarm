@@ -1,14 +1,85 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from api.routes.public import (
+    _apply_media_adapter_status,
     _apply_realtime_connectivity,
     _build_live_device_alias_index,
     _live_device_realtime_aliases,
     _live_device_aliases,
     _match_live_device,
+    _media_adapter_status_for_aliases,
     _relay_online_for_live_device,
+    _synthesize_live_device_from_media_adapter,
     _synthesize_live_device_from_relay,
+    _device_health_projection,
 )
+
+
+def test_device_health_projection_separates_agent_stream_and_command():
+    health = _device_health_projection(
+        {
+            "state": "READY",
+            "agent_connected": True,
+            "media_adapter_connected": True,
+            "media_stream_active": False,
+            "media_stream_connected": False,
+            "usage_state": "idle",
+        }
+    )
+
+    assert health["overall"] == "ready"
+    assert health["agent"]["status"] == "online"
+    assert health["stream"] == {
+        "status": "starting",
+        "observed_at": None,
+        "reason": "waiting_first_frame",
+    }
+    assert health["command"]["status"] == "ready"
+
+
+def test_device_health_projection_distinguishes_live_observation_from_db_heartbeat():
+    health = _device_health_projection(
+        {"state": "READY", "agent_connected": True},
+        heartbeat_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        evaluated_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+    )
+
+    assert health["heartbeat_at"] == "2026-08-01T00:00:00+00:00"
+    assert health["last_signal_at"] == "2026-08-09T00:00:00+00:00"
+    assert health["last_signal_source"] == "live_transport"
+
+
+def test_device_health_projection_marks_busy_without_calling_it_offline():
+    health = _device_health_projection(
+        {
+            "state": "BUSY",
+            "agent_connected": True,
+            "media_stream_active": True,
+            "media_stream_connected": True,
+        }
+    )
+
+    assert health["overall"] == "busy"
+    assert health["agent"]["status"] == "online"
+    assert health["command"] == {"status": "busy", "reason": "device_busy"}
+
+
+def test_device_health_projection_does_not_trust_stale_ready_state_without_transport():
+    health = _device_health_projection(
+        {
+            "state": "READY",
+            "agent_connected": False,
+            "stf_connected": False,
+            "media_stream_active": True,
+            "media_stream_connected": True,
+        }
+    )
+
+    assert health["overall"] == "offline"
+    assert health["command"]["status"] == "unavailable"
+    assert health["stream"]["status"] == "ready"
 
 
 def test_live_device_status_marks_stale_runtime_entry_disconnected_without_transport():
@@ -166,6 +237,115 @@ def test_live_device_status_promotes_connecting_relay_device_when_agent_boot_con
 
     assert device["state"] == "READY"
     assert device["touch_method"] == "none"
+
+
+class _FakeMediaAdapterControl:
+    def __init__(self, streams: dict[str, dict] | None = None) -> None:
+        self.streams = streams or {}
+
+    def has_serial(self, serial: str) -> bool:
+        return serial in self.streams
+
+    def stream_for_serial(self, serial: str) -> dict | None:
+        return self.streams.get(serial)
+
+
+def test_live_device_status_exposes_media_plane_independently_from_control_plane():
+    media_ctrl = _FakeMediaAdapterControl(
+        {
+            "serial-1": {
+                "serial": "serial-1",
+                "stream_name": "device-serial-1",
+                "active": True,
+                "connected": True,
+                "width": 216,
+                "height": 480,
+                "last_frame_unix_ms": 1234,
+            }
+        }
+    )
+
+    connected, stream = _media_adapter_status_for_aliases(
+        ["serial-1"],
+        media_ctrl=media_ctrl,
+    )
+    device = {
+        "serial": "serial-1",
+        "state": "DISCONNECTED",
+        "agent_connected": False,
+        "u2_ready": False,
+        "touch_method": "none",
+    }
+    _apply_media_adapter_status(device, media_connected=connected, stream=stream)
+
+    assert device["media_adapter_connected"] is True
+    assert device["media_stream_active"] is True
+    assert device["media_stream_connected"] is True
+    assert device["media_stream_name"] == "device-serial-1"
+    assert device["media_stream_last_frame_unix_ms"] == 1234
+    assert device["agent_connected"] is False
+
+
+def test_live_device_status_uses_media_snapshot_without_per_alias_calls():
+    media_ctrl = _FakeMediaAdapterControl()
+    media_ctrl.has_serial = lambda _serial: (_ for _ in ()).throw(
+        AssertionError("no per-alias has_serial")
+    )
+    media_ctrl.stream_for_serial = lambda _serial: (_ for _ in ()).throw(
+        AssertionError("no per-alias stream_for_serial")
+    )
+
+    connected, stream = _media_adapter_status_for_aliases(
+        ["serial-1"],
+        media_ctrl=media_ctrl,
+        online_serials={"serial-1"},
+        streams={
+            "serial-1": {
+                "serial": "serial-1",
+                "stream_name": "device-serial-1",
+                "active": True,
+                "connected": True,
+            }
+        },
+    )
+
+    assert connected is True
+    assert stream["stream_name"] == "device-serial-1"
+
+
+def test_live_device_status_can_synthesize_media_only_device():
+    media_ctrl = _FakeMediaAdapterControl(
+        {
+            "adb-serial-1": {
+                "serial": "adb-serial-1",
+                "active": False,
+                "connected": False,
+                "width": 320,
+                "height": 640,
+            }
+        }
+    )
+    info = {
+        "name": "Phone 1",
+        "display_name": "Phone 1",
+        "brand": "Google",
+        "model": "Pixel",
+        "relay_aliases": ["registered-1", "adb-serial-1"],
+    }
+
+    device = _synthesize_live_device_from_media_adapter(
+        "registered-1",
+        info,
+        media_ctrl=media_ctrl,
+    )
+
+    assert device is not None
+    assert device["serial"] == "adb-serial-1"
+    assert device["registered_serial"] == "registered-1"
+    assert device["state"] == "MEDIA_READY"
+    assert device["agent_connected"] is False
+    assert device["screen_width"] == 320
+    assert device["screen_height"] == 640
 
 
 def test_live_device_alias_index_matches_runtime_alias_without_rewriting_serial():
@@ -379,3 +559,55 @@ def test_live_device_status_synthesizes_relay_device_after_runtime_serial_change
     assert device["registered_serial"] == "HW123"
     assert device["state"] == "READY"
     assert device["u2_ready"] is True
+
+
+def test_live_device_status_synthesizes_relay_device_from_snapshots_without_hot_loop_calls():
+    class _SnapshotOnlyRelay(_FakeRelayCaps):
+        def relay_for_serial(self, _serial: str) -> object | None:
+            raise AssertionError("no per-serial relay lookup")
+
+        def list_devices(self) -> list[dict[str, object]]:
+            raise AssertionError("relay devices should be snapshotted once")
+
+    class _SnapshotOnlyCtrl:
+        def conn_for_serial(self, _serial: str) -> object | None:
+            raise AssertionError("no per-serial control lookup")
+
+    relay = _SnapshotOnlyRelay(
+        {
+            "10.0.0.9:41111": {
+                "hardware_serial": "HW123",
+                "brand": "Google",
+                "model": "Pixel",
+                "has_u2": True,
+            }
+        }
+    )
+
+    device = _synthesize_live_device_from_relay(
+        "HW123",
+        {
+            "name": "Pixel",
+            "display_name": "Pixel Lab",
+            "requires_relay": True,
+            "relay_aliases": ["HW123", "10.0.0.2:5555"],
+        },
+        relay=relay,
+        ctrl=_SnapshotOnlyCtrl(),
+        relay_devices=[
+            {
+                "serial": "10.0.0.9:41111",
+                "hardware_serial": "HW123",
+                "brand": "Google",
+                "model": "Pixel",
+                "has_u2": True,
+            }
+        ],
+        relay_online_serials={"10.0.0.9:41111"},
+        control_online_serials={"10.0.0.9:41111"},
+    )
+
+    assert device is not None
+    assert device["serial"] == "10.0.0.9:41111"
+    assert device["state"] == "READY"
+    assert device["agent_connected"] is True

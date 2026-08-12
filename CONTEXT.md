@@ -134,6 +134,22 @@ _Avoid_: hardcoded script, one-off macro
 The coverage level where one AI agent uses MCP tools to control one device/session flexibly.
 _Avoid_: unbounded autonomous control
 
+**Media Source**:
+A device-identified producer of encoded screen media, usually one Android device serial emitting H.264 frames.
+_Avoid_: viewer, WebRTC session
+
+**Media Session**:
+A short-lived viewer authorization to receive one **Media Source** through a selected media transport.
+_Avoid_: device session, scenario session, peer connection as the domain object
+
+**Media Viewer**:
+The user/browser-side consumer attached to a **Media Session**.
+_Avoid_: device, relay, source
+
+**Media Transport**:
+The delivery mechanism used by a **Media Session**, such as WebRTC or the legacy WebSocket H.264 path.
+_Avoid_: treating WebRTC implementation objects as domain language
+
 **Independent Device Session**:
 A device-bound work context that can progress separately from other devices while sharing campaign or operator coordination.
 _Avoid_: shared global session
@@ -206,6 +222,9 @@ _Avoid_: core product focus
 - **L2 Scenario Automation** and **L3 MCP Agent Tools** depend on **L1 Independent Device-Session Control** primitives.
 - An **Independent Device Session** belongs to exactly one device at a time.
 - An **Independent Device Session** always has **Device Context**.
+- A **Media Source** is identified by device serial but is not itself an **Independent Device Session**.
+- A **Media Session** grants one **Media Viewer** access to one **Media Source** through one **Media Transport**.
+- A **Media Session** must not authorize control actions; control remains part of **L1 Independent Device-Session Control**.
 - A **Scenario Config** provides default values for every independent run of that scenario.
 - A **Device Config Override** wins over a matching **Scenario Config** value.
 - An **Effective Runtime Config** is produced from **Scenario Config** plus **Device Context** and runtime variables.

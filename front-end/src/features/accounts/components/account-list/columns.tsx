@@ -26,6 +26,7 @@ import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
 import { AccountHistoryDialog } from '../account-history-dialog';
 import { AccountStateTransitionDialog } from '../account-state-transition-dialog';
+import { AccountDevicesDialog } from '../account-devices-dialog';
 import type { ResourcePermissionFlags } from '@/features/auth/types/resource-permissions';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
@@ -193,6 +194,10 @@ export function getAccountColumns(
         return (
           <div className='flex items-center gap-1'>
             <AccountHistoryDialog account={account} />
+            <AccountDevicesDialog
+              account={account}
+              canUpdate={perms.canUpdate}
+            />
             {perms.canUpdate ? <EditAccountDialog account={account} /> : null}
             {perms.canUpdate && targets.length > 0 ? (
               <AccountStateTransitionDialog account={account} />

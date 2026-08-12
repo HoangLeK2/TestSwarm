@@ -19,10 +19,16 @@ import {
   DeviceAndroidFrame,
   mockupOuterHeightPx
 } from './device-android-frame';
+import type { DeviceScreenTransport } from './device-screen';
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 import { DeviceStepMonitorButton } from './device-step-monitor';
 import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
 import { useTabNetworkActive } from '../hooks/use-tab-network-active';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
 import { DEVICE_GRID_TILE_WIDTH_PX } from '../lib/device-farm-virtual-grid';
@@ -30,11 +36,14 @@ import {
   acquireSnapshotPreviewWarmup,
   type SnapshotPreviewWarmupHandle
 } from '../services/snapshot-preview-warmup';
+import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import { useH264Video } from '../hooks/use-h264-canvas';
+import { useWebRtcVideo } from '../hooks/use-webrtc-video';
 import { requestIdr } from '../services/ws';
 import { deviceFarmMediaBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import {
+  isDevicePreviewStreamEligible,
   isGridH264Enabled,
   nextSnapshotRetryDelayMs,
   selectDeviceTilePreviewMode,
@@ -65,22 +74,201 @@ const DASHBOARD_PREVIEW_MAX_AGE_MS = (() => {
   return Math.max(500, Math.min(10_000, Math.round(raw)));
 })();
 
+function dashboardWebRtcInt(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number
+) {
+  const raw = Number(process.env[name] ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(raw)));
+}
+
+const DASHBOARD_WEBRTC_PREVIEW_OPTIONS: ScrcpyAttachOptions = {
+  enableControl: false,
+  profile: 'visible',
+  maxFps: dashboardWebRtcInt(
+    'NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_WEBRTC_FPS',
+    3,
+    1,
+    8
+  ),
+  maxWidth: dashboardWebRtcInt(
+    'NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_WEBRTC_WIDTH',
+    360,
+    160,
+    540
+  ),
+  bitrate: dashboardWebRtcInt(
+    'NEXT_PUBLIC_DEVICE_FARM_DASHBOARD_WEBRTC_BITRATE',
+    260_000,
+    80_000,
+    600_000
+  )
+};
+
 interface DeviceTilePreviewProps {
   device: Device;
   onOpenSteps?: (serial: string) => void;
   previewEnabled?: boolean;
+  streamTransport?: DeviceScreenTransport;
+}
+
+function HealthIndicator({
+  label,
+  value,
+  hint,
+  ok
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  ok: boolean;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className='inline-flex h-6 min-w-0 items-center gap-1 rounded border px-1.5 text-[10px]'>
+          <span
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              ok ? 'bg-emerald-500' : 'bg-amber-500'
+            )}
+            aria-hidden
+          />
+          <span className='truncate'>
+            {label}: {value}
+          </span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side='bottom' className='max-w-64 text-xs'>
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
 
+function DashboardWebRtcPreview({
+  device,
+  active
+}: {
+  device: Device;
+  active: boolean;
+}) {
+  const t = useTranslations('devicesFarm');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const retryTimerRef = useRef<number | undefined>(undefined);
+  const [hasFrame, setHasFrame] = useState(false);
+  const [restartKey, setRestartKey] = useState(0);
+
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current === undefined) return;
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = undefined;
+  }, []);
+
+  const handleFrame = useCallback(() => {
+    clearRetryTimer();
+    setHasFrame(true);
+  }, [clearRetryTimer]);
+
+  const handleError = useCallback(() => {
+    setHasFrame(false);
+    if (!active || retryTimerRef.current !== undefined) return;
+    retryTimerRef.current = window.setTimeout(() => {
+      retryTimerRef.current = undefined;
+      setRestartKey((value) => value + 1);
+    }, 1200);
+  }, [active]);
+
+  const retryNow = useCallback(() => {
+    clearRetryTimer();
+    setHasFrame(false);
+    setRestartKey((value) => value + 1);
+  }, [clearRetryTimer]);
+
+  const webrtc = useWebRtcVideo(device.serial, videoRef, {
+    enabled: active,
+    restartKey,
+    control: DASHBOARD_WEBRTC_PREVIEW_OPTIONS.enableControl,
+    profile: DASHBOARD_WEBRTC_PREVIEW_OPTIONS.profile,
+    maxFps: DASHBOARD_WEBRTC_PREVIEW_OPTIONS.maxFps,
+    maxWidth: DASHBOARD_WEBRTC_PREVIEW_OPTIONS.maxWidth,
+    bitrate: DASHBOARD_WEBRTC_PREVIEW_OPTIONS.bitrate,
+    onFrame: handleFrame,
+    onError: handleError
+  });
+
+  useEffect(() => {
+    setHasFrame(false);
+    setRestartKey(0);
+    clearRetryTimer();
+    return clearRetryTimer;
+  }, [clearRetryTimer, device.serial]);
+
+  return (
+    <>
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        autoPlay
+        className={cn(
+          'pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300',
+          hasFrame ? 'opacity-100' : 'opacity-0'
+        )}
+      />
+      <div
+        className={cn(
+          'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-300',
+          hasFrame ? 'pointer-events-none opacity-0' : 'opacity-100'
+        )}
+        aria-live='polite'
+        aria-hidden={hasFrame}
+      >
+        {!webrtc.failed || webrtc.connecting ? (
+          <>
+            <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
+            <p className='mt-2 text-[10px] text-muted-foreground'>
+              {t('streamWaitingFirstFrame')}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className='px-2 text-center text-[10px] text-amber-200/90'>
+              {t('streamUnresponsive')}
+            </p>
+            <Button
+              type='button'
+              variant='secondary'
+              size='sm'
+              className='mt-2 h-7 text-xs'
+              onClick={retryNow}
+            >
+              {t('retry')}
+            </Button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 function DeviceTilePreviewInner({
   device,
   onOpenSteps,
-  previewEnabled = true
+  previewEnabled = true,
+  streamTransport = 'auto'
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
   const isActive = isVisibleDeviceFarmActiveDevice(device);
+  const health = device.health;
+  const commandReady = health ? health.command.status === 'ready' : isActive;
+  const previewStreamEligible = isDevicePreviewStreamEligible(device, isActive);
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -152,16 +340,26 @@ function DeviceTilePreviewInner({
   const loadStream =
     previewEnabled &&
     tabActive &&
-    (GRID_PREVIEW_EAGER ? isActive : lazyLoadStream);
+    (GRID_PREVIEW_EAGER ? previewStreamEligible : lazyLoadStream);
   const previewMode = selectDeviceTilePreviewMode({
     h264Enabled: GRID_PREVIEW_H264,
     webCodecsSupport,
     h264Stalled
   });
-  const shouldUseH264Preview = previewMode.useH264 && isActive && loadStream;
+  const shouldUseWebRtcPreview =
+    streamTransport === 'webrtc' && previewStreamEligible && loadStream;
+  const shouldUseH264Preview =
+    !shouldUseWebRtcPreview &&
+    previewMode.useH264 &&
+    previewStreamEligible &&
+    loadStream;
   const shouldUseSnapshotPreview =
-    previewMode.useSnapshot && isActive && loadStream;
-  const shouldWarmupPreview = isActive && loadStream;
+    !shouldUseWebRtcPreview &&
+    previewMode.useSnapshot &&
+    previewStreamEligible &&
+    loadStream;
+  const shouldWarmupPreview =
+    !shouldUseWebRtcPreview && previewStreamEligible && loadStream;
   const h264PreviewActive =
     shouldUseH264Preview &&
     (previewWarmupState === 'attaching' || previewWarmupState === 'live');
@@ -188,8 +386,9 @@ function DeviceTilePreviewInner({
   const isPreviewQueued =
     shouldUseH264Preview && previewWarmupState === 'queued';
   const isUnresponsive =
-    isActive &&
+    previewStreamEligible &&
     loadStream &&
+    !shouldUseWebRtcPreview &&
     !isPreviewQueued &&
     !hasFrame &&
     loadingElapsedSec >= 12;
@@ -216,6 +415,8 @@ function DeviceTilePreviewInner({
   }, [device.serial]);
 
   useH264Video(h264PreviewActive ? device.serial : '', previewCanvasRef, {
+    inspectFramesForBlack: false,
+    renderInWorker: true,
     onFrame: useCallback(() => {
       setHasFrame(true);
       setH264Stalled(false);
@@ -335,7 +536,7 @@ function DeviceTilePreviewInner({
   }, [device.serial]);
 
   useEffect(() => {
-    if (!isActive || !loadStream || hasFrame) {
+    if (!previewStreamEligible || !loadStream || hasFrame) {
       setLoadingElapsedSec(0);
       return;
     }
@@ -344,7 +545,7 @@ function DeviceTilePreviewInner({
       setLoadingElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
     }, 500);
     return () => window.clearInterval(timer);
-  }, [device.serial, hasFrame, isActive, loadStream]);
+  }, [device.serial, hasFrame, previewStreamEligible, loadStream]);
 
   return (
     <Card
@@ -391,7 +592,7 @@ function DeviceTilePreviewInner({
                 onOpen={onOpenSteps}
               />
             ) : null}
-            {isActive ? (
+            {commandReady ? (
               <Button
                 asChild
                 size='sm'
@@ -414,7 +615,59 @@ function DeviceTilePreviewInner({
                 {t('controlDevice')}
               </Button>
             )}
+            <Button
+              asChild
+              size='sm'
+              variant='outline'
+              className='h-8 min-w-0 flex-1 px-3 text-xs font-semibold'
+            >
+              <Link href={`${ROUTES.DEVICES.DETAIL(device.serial)}#accounts`}>
+                {t('deviceAccounts')}
+              </Link>
+            </Button>
           </div>
+          <div className='mt-2 grid grid-cols-3 gap-1'>
+            <HealthIndicator
+              label={t('health.agentLabel')}
+              value={t(
+                `health.agent.${health?.agent.status ?? (isActive ? 'online' : 'offline')}`
+              )}
+              hint={t('health.agentHint')}
+              ok={
+                (health?.agent.status ?? (isActive ? 'online' : 'offline')) ===
+                'online'
+              }
+            />
+            <HealthIndicator
+              label={t('health.streamLabel')}
+              value={t(
+                `health.stream.${health?.stream.status ?? 'unavailable'}`
+              )}
+              hint={t('health.streamHint')}
+              ok={health?.stream.status === 'ready'}
+            />
+            <HealthIndicator
+              label={t('health.commandLabel')}
+              value={t(
+                `health.command.${health?.command.status ?? (commandReady ? 'ready' : 'unavailable')}`
+              )}
+              hint={t('health.commandHint')}
+              ok={commandReady}
+            />
+          </div>
+          <p className='mt-1 truncate text-[10px] text-muted-foreground'>
+            {t('health.heartbeat')}:{' '}
+            {(health?.last_signal_at ?? health?.agent.observed_at)
+              ? new Intl.DateTimeFormat(undefined, {
+                  dateStyle: 'short',
+                  timeStyle: 'short'
+                }).format(
+                  new Date(
+                    health?.last_signal_at ?? health?.agent.observed_at ?? ''
+                  )
+                )
+              : t('health.unknownTime')}
+          </p>
         </div>
 
         <div className='flex flex-1 flex-col items-center bg-background/25'>
@@ -434,6 +687,12 @@ function DeviceTilePreviewInner({
                 ref={previewZoneRef}
                 className='relative h-full min-h-0 w-full overflow-hidden bg-zinc-950'
               >
+                {shouldUseWebRtcPreview && (
+                  <DashboardWebRtcPreview
+                    device={device}
+                    active={shouldUseWebRtcPreview}
+                  />
+                )}
                 {showPreviewImg && (
                   // eslint-disable-next-line @next/next/no-img-element -- dashboard preview uses cached screenshot polling.
                   <img
@@ -458,7 +717,7 @@ function DeviceTilePreviewInner({
                     )}
                   />
                 )}
-                {!isActive ? (
+                {!isActive && !previewStreamEligible ? (
                   <div className='absolute inset-0 z-10 flex items-center justify-center bg-zinc-950 px-2 text-center text-[11px] text-muted-foreground'>
                     {t('deviceInactive')}
                   </div>
@@ -473,7 +732,7 @@ function DeviceTilePreviewInner({
                         : t('previewDeferred')}
                     </p>
                   </div>
-                ) : (
+                ) : shouldUseWebRtcPreview ? null : (
                   <div
                     className={cn(
                       'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-500',
@@ -482,11 +741,6 @@ function DeviceTilePreviewInner({
                     aria-live='polite'
                     aria-hidden={hasFrame}
                   >
-                    <span className='sr-only'>
-                      {isUnresponsive
-                        ? t('streamUnresponsive')
-                        : t('streamWaitingFirstFrame')}
-                    </span>
                     {!isUnresponsive ? (
                       <>
                         <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
@@ -517,6 +771,7 @@ function tilePreviewPropsEqual(
   if (prev.device.serial !== next.device.serial) return false;
   if (prev.onOpenSteps !== next.onOpenSteps) return false;
   if (prev.previewEnabled !== next.previewEnabled) return false;
+  if (prev.streamTransport !== next.streamTransport) return false;
   const pd = prev.device;
   const nd = next.device;
   return (
@@ -525,6 +780,10 @@ function tilePreviewPropsEqual(
     pd.model === nd.model &&
     pd.battery === nd.battery &&
     pd.scenario_active === nd.scenario_active &&
+    pd.media_adapter_connected === nd.media_adapter_connected &&
+    pd.media_stream_active === nd.media_stream_active &&
+    pd.media_stream_connected === nd.media_stream_connected &&
+    pd.health?.evaluated_at === nd.health?.evaluated_at &&
     pd.screen_width === nd.screen_width &&
     pd.screen_height === nd.screen_height
   );

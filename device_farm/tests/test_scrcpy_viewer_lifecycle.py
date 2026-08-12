@@ -29,8 +29,8 @@ class _FakeScrcpyDevice:
         self._frame_lock = threading.Lock()
         self.attach_started = threading.Event()
         self.allow_attach = threading.Event()
-        self.last_attach_options: dict[str, int | None] = {}
-        self._scrcpy_params: tuple[str, int, bool, int | None, int | None, int | None] | None = None
+        self.last_attach_options: dict[str, int | str | None] = {}
+        self._scrcpy_params: tuple[str, int, bool, int | None, int | None, int | None, str | None] | None = None
 
     def attach_scrcpy_stream(
         self,
@@ -38,6 +38,7 @@ class _FakeScrcpyDevice:
         adb_port: int = 5555,
         enable_control: bool = True,
         *,
+        profile: str | None = None,
         max_fps: int | None = None,
         max_width: int | None = None,
         bitrate: int | None = None,
@@ -47,6 +48,7 @@ class _FakeScrcpyDevice:
             "max_fps": max_fps,
             "max_width": max_width,
             "bitrate": bitrate,
+            "profile": profile,
         }
         self._scrcpy_params = (
             device_ip,
@@ -55,6 +57,7 @@ class _FakeScrcpyDevice:
             max_fps,
             max_width,
             bitrate,
+            profile,
         )
         if self.block_attach:
             self.allow_attach.wait(timeout=2)
@@ -94,6 +97,7 @@ def _build_app(
     device: _FakeScrcpyDevice,
     serial: str = "serial-1",
     *,
+    stream_owned_by_adapter: bool = False,
     detach_grace_s: float = 0,
     preview_detach_grace_s: float = 0,
     viewer_lease_ttl_s: float = 0,
@@ -103,6 +107,7 @@ def _build_app(
         build_scrcpy_router(
             _FakeManager(device, serial=serial),
             db_enabled=False,
+            stream_owned_by_adapter=stream_owned_by_adapter,
             scrcpy_detach_grace_s=detach_grace_s,
             scrcpy_preview_detach_grace_s=preview_detach_grace_s,
             scrcpy_viewer_lease_ttl_s=viewer_lease_ttl_s,
@@ -110,6 +115,35 @@ def _build_app(
         prefix="/api",
     )
     return app
+
+
+@pytest.mark.anyio
+async def test_scrcpy_routes_are_noop_when_media_adapter_owns_stream() -> None:
+    device = _FakeScrcpyDevice()
+    app = _build_app(device, stream_owned_by_adapter=True)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        attach = await client.post(
+            "/api/devices/serial-1/scrcpy/attach",
+            json={"viewer_id": "control-screen:viewer-1", "max_fps": 15},
+        )
+        heartbeat = await client.post(
+            "/api/devices/serial-1/scrcpy/heartbeat",
+            json={"viewer_id": "control-screen:viewer-1"},
+        )
+        detach = await client.post(
+            "/api/devices/serial-1/scrcpy/detach",
+            json={"viewer_id": "control-screen:viewer-1"},
+        )
+
+    assert attach.status_code == 200
+    assert heartbeat.status_code == 200
+    assert detach.status_code == 200
+    assert attach.json()["status"] == "webrtc_adapter_owned"
+    assert heartbeat.json()["status"] == "webrtc_adapter_owned"
+    assert detach.json()["status"] == "webrtc_adapter_owned"
+    assert device.attach_calls == 0
+    assert device.detach_calls == 0
 
 
 class _FakeRegistrationResult:
@@ -424,6 +458,7 @@ async def test_expired_control_viewer_downgrades_to_live_preview_profile() -> No
             "max_fps": 1,
             "max_width": 360,
             "bitrate": 100_000,
+            "profile": "degraded",
         }
 
         await client.post(
@@ -489,6 +524,7 @@ async def test_expired_control_viewer_downgrades_after_grace_when_preview_remain
             "max_fps": 1,
             "max_width": 360,
             "bitrate": 100_000,
+            "profile": "degraded",
         }
 
         await client.post(
@@ -655,6 +691,7 @@ async def test_control_replaces_lower_priority_pending_preview_profile() -> None
         "max_fps": 10,
         "max_width": 720,
         "bitrate": 800000,
+        "profile": "focused",
     }
 
 
@@ -869,6 +906,7 @@ async def test_scrcpy_attach_forwards_preview_profile_options() -> None:
         "max_fps": 5,
         "max_width": 360,
         "bitrate": 350000,
+        "profile": "degraded",
     }
 
 
@@ -906,6 +944,7 @@ async def test_control_attach_reapplies_profile_after_low_fps_preview() -> None:
         "max_fps": None,
         "max_width": None,
         "bitrate": None,
+        "profile": "focused",
     }
 
 
@@ -943,6 +982,7 @@ async def test_control_attach_reapplies_requested_profile_after_default_stream()
         "max_fps": 8,
         "max_width": 540,
         "bitrate": 900000,
+        "profile": "focused",
     }
 
 
@@ -988,6 +1028,7 @@ async def test_low_fps_preview_reapplies_profile_during_control_detach_grace() -
         "max_fps": 1,
         "max_width": 480,
         "bitrate": 180000,
+        "profile": "degraded",
     }
 
 
@@ -1032,6 +1073,7 @@ async def test_low_fps_preview_starts_light_profile_after_control_fully_stops() 
         "max_fps": 1,
         "max_width": 480,
         "bitrate": 180000,
+        "profile": "degraded",
     }
 
 
@@ -1152,6 +1194,7 @@ async def test_low_fps_preview_does_not_downgrade_active_control_viewer() -> Non
         "max_fps": None,
         "max_width": None,
         "bitrate": None,
+        "profile": "focused",
     }
 
 
@@ -1193,6 +1236,7 @@ async def test_follower_preview_does_not_downgrade_active_control_viewer() -> No
         "max_fps": 10,
         "max_width": 480,
         "bitrate": 800000,
+        "profile": "focused",
     }
 
 
@@ -1234,6 +1278,7 @@ async def test_snapshot_preview_does_not_downgrade_active_follower_profile() -> 
         "max_fps": 4,
         "max_width": 360,
         "bitrate": 120000,
+        "profile": "degraded",
     }
 
 
@@ -1281,6 +1326,7 @@ async def test_control_detach_reapplies_remaining_preview_profile() -> None:
         "max_fps": 1,
         "max_width": 360,
         "bitrate": 100000,
+        "profile": "degraded",
     }
 
 
@@ -1372,6 +1418,7 @@ async def test_control_detach_reapplies_remaining_lower_control_profile() -> Non
         "max_fps": 4,
         "max_width": 360,
         "bitrate": 200000,
+        "profile": "focused",
     }
 
 
@@ -1476,6 +1523,7 @@ async def test_legacy_viewer_cancels_pending_preview_downgrade_and_reapplies_pro
         "max_fps": None,
         "max_width": None,
         "bitrate": None,
+        "profile": "visible",
     }
     assert device.detach_calls == 0
 
@@ -1523,6 +1571,7 @@ async def test_control_to_preview_downgrade_applies_after_grace() -> None:
         "max_fps": 1,
         "max_width": 360,
         "bitrate": 100000,
+        "profile": "degraded",
     }
 
 
@@ -1574,6 +1623,7 @@ async def test_preview_detach_keeps_existing_control_downgrade_grace() -> None:
 
     assert device.attach_calls == 2
     assert device.last_attach_options["max_fps"] == 1
+    assert device.last_attach_options["profile"] == "degraded"
 
 
 def test_device_client_reconfigures_when_preview_downgrades_existing_stream(monkeypatch) -> None:
@@ -1627,6 +1677,7 @@ def test_device_client_reconfigures_when_preview_downgrades_existing_stream(monk
             port: int,
             bitrate: int = 2_000_000,
             low_latency: bool = False,
+            profile: str | None = None,
         ) -> bool:
             self.calls.append("start")
             self.running.add(serial)
@@ -1714,8 +1765,9 @@ def test_device_client_reconfigures_stale_preview_even_when_frames_are_fresh(mon
             port: int,
             bitrate: int = 2_000_000,
             low_latency: bool = False,
+            profile: str | None = None,
         ) -> bool:
-            self.calls.append(f"start:{max_fps}:{max_width}:{bitrate}")
+            self.calls.append(f"start:{max_fps}:{max_width}:{bitrate}:{profile}")
             return True
 
     device = DeviceClient(serial="serial-profile-fresh", index=0, config=Config())
@@ -1741,7 +1793,7 @@ def test_device_client_reconfigures_stale_preview_even_when_frames_are_fresh(mon
 
     assert status == "active"
     assert "register" in relay.calls
-    assert "start:30:800:2000000" in relay.calls
+    assert "start:30:800:2000000:visible" in relay.calls
     assert device._scrcpy_active is True
 
 

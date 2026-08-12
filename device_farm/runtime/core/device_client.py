@@ -1775,6 +1775,72 @@ class DeviceClient:
             return svc.get_properties()
         return None
 
+    @staticmethod
+    def _adb_keyevent_name(key_name: str) -> Optional[str]:
+        key = (key_name or "").strip()
+        if not key:
+            return None
+        key_map = {
+            "home": "KEYCODE_HOME",
+            "back": "KEYCODE_BACK",
+            "recent": "KEYCODE_APP_SWITCH",
+            "app_switch": "KEYCODE_APP_SWITCH",
+            "menu": "KEYCODE_MENU",
+            "power": "KEYCODE_POWER",
+            "enter": "KEYCODE_ENTER",
+            "tab": "KEYCODE_TAB",
+            "delete": "KEYCODE_DEL",
+            "del": "KEYCODE_DEL",
+            "volume_up": "KEYCODE_VOLUME_UP",
+            "volume_down": "KEYCODE_VOLUME_DOWN",
+        }
+        lower = key.lower()
+        if lower in key_map:
+            return key_map[lower]
+        upper = key.upper()
+        if upper.startswith("KEYCODE_"):
+            return upper
+        if key.isdigit():
+            return key
+        return None
+
+    @classmethod
+    def _adb_key_command(cls, key_name: str) -> Optional[str]:
+        key = (key_name or "").strip()
+        if not key:
+            return None
+        if key.lower() == "home":
+            return "am start -a android.intent.action.MAIN -c android.intent.category.HOME"
+        keyevent = cls._adb_keyevent_name(key)
+        if keyevent:
+            return f"input keyevent {keyevent}"
+        return None
+
+    def _key_via_adb_relay(self, key_name: str, timeout: float = 5.0) -> bool:
+        cmd = self._adb_key_command(key_name)
+        if not cmd or not self._loop:
+            return False
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial()
+            if not relay or not relay.relay_for_serial(serial):
+                return False
+
+            import asyncio
+
+            fut = asyncio.run_coroutine_threadsafe(
+                relay.adb_shell(serial, cmd, timeout=timeout),
+                self._loop,
+            )
+            fut.result(timeout=timeout + 5.0)
+            self._log(f"key via adb relay ({key_name})")
+            return True
+        except Exception as exc:
+            self._log(f"key via adb relay failed ({key_name}): {exc}", level=logging.WARNING)
+            return False
+
     def key(self, key_name: str) -> None:
         """
         Key press (home, back, power, enter).
@@ -1807,6 +1873,8 @@ class DeviceClient:
             if self._agent_send is not None:
                 self._send_to_agent({"type": "key", "key": key_l})
                 return
+            if self._key_via_adb_relay(key_l):
+                return
 
         # Non-nav keys: u2 → APK injectKey (InputManager reflection).
         with self._u2_lock:
@@ -1828,6 +1896,9 @@ class DeviceClient:
 
         if self._agent_send is not None:
             self._send_to_agent({"type": "key", "key": key_l})
+            return
+
+        if self._key_via_adb_relay(key_l):
             return
 
         self._log(f"key skipped ({k}): no agent and no u2", level=logging.WARNING)
@@ -3208,6 +3279,7 @@ class DeviceClient:
         adb_port: int = 5555,
         enable_control: bool = True,
         *,
+        profile: str | None = None,
         max_fps: int | None = None,
         max_width: int | None = None,
         bitrate: int | None = None,
@@ -3234,6 +3306,7 @@ class DeviceClient:
         requested_max_fps = _positive_int(max_fps)
         requested_max_width = _positive_int(max_width)
         requested_bitrate = _positive_int(bitrate)
+        effective_profile = str(profile or "visible").strip().lower() or "visible"
         effective_max_fps = requested_max_fps or int(self.config.device.scrcpy_max_fps or 0)
         effective_max_width = requested_max_width or int(self.config.device.scrcpy_max_width or 0)
         effective_bitrate = requested_bitrate or int(self.config.device.scrcpy_relay_bitrate or 0)
@@ -3244,6 +3317,7 @@ class DeviceClient:
             requested_max_fps,
             requested_max_width,
             requested_bitrate,
+            effective_profile,
         )
 
         # If relay scrcpy is already streaming for the same device IP, don't tear it down.
@@ -3275,8 +3349,14 @@ class DeviceClient:
                     if len(current_params) >= 6
                     else None
                 ) or int(self.config.device.scrcpy_relay_bitrate or 0)
+                current_profile = (
+                    str(current_params[6]).strip().lower()
+                    if len(current_params) >= 7 and current_params[6]
+                    else "visible"
+                )
                 needs_reconfigure = (
                     enable_control != current_enable_control
+                    or effective_profile != current_profile
                     or effective_max_fps != current_max_fps
                     or effective_max_width != current_max_width
                     or effective_bitrate != current_bitrate
@@ -3318,6 +3398,7 @@ class DeviceClient:
                         f"fps {current_max_fps}->{effective_max_fps}, "
                         f"width {current_max_width}->{effective_max_width}, "
                         f"bitrate {current_bitrate}->{effective_bitrate}, "
+                        f"profile {current_profile}->{effective_profile}, "
                         f"control {current_enable_control}->{enable_control}",
                         level=logging.INFO,
                     )
@@ -3566,6 +3647,7 @@ class DeviceClient:
                             port=scrcpy_port,
                             bitrate=effective_bitrate,
                             low_latency=_low_latency,
+                            profile=effective_profile,
                         ),
                         self._loop,
                     )

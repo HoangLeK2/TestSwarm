@@ -136,10 +136,11 @@ def test_u2_atx_health_rejects_wedged_http_even_when_ports_listen(monkeypatch) -
     assert checked_ports == []
 
 
-def test_u2_atx_health_falls_back_to_ports_when_lan_ip_unavailable(monkeypatch) -> None:
+def test_u2_atx_health_uses_jsonrpc_device_info_when_lan_ip_unavailable(monkeypatch) -> None:
     checked_ports: list[int] = []
 
     monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "")
+    monkeypatch.setattr(relay_adb, "_atx_jsonrpc_device_info", lambda *args, **kwargs: (True, "deviceInfo OK"))
     monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (False, "device LAN IP unavailable"))
 
     def fake_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
@@ -149,7 +150,7 @@ def test_u2_atx_health_falls_back_to_ports_when_lan_ip_unavailable(monkeypatch) 
     monkeypatch.setattr(relay_adb, "_device_port_listening", fake_port_listening)
 
     assert relay_adb._u2_atx_healthy("serial-1") is True
-    assert checked_ports == [7912, 9008]
+    assert checked_ports == []
 
 
 def test_atx_http_ping_falls_back_to_adb_forward_when_lan_times_out(monkeypatch) -> None:
@@ -490,23 +491,21 @@ def test_device_port_listening_requires_listen_state(monkeypatch) -> None:
 
     monkeypatch.setattr(relay_adb, "_adb_shell", fake_shell)
 
-    assert relay_adb._device_port_listening("serial-1", 9008) is False
+    assert relay_adb._device_port_listening("serial-1", 7912) is False
     assert '$4 == "0A"' in commands[0]
 
 
 def test_restart_u2_waits_for_old_port_to_close_before_direct_start(monkeypatch) -> None:
     calls: list[str] = []
-    port_states = iter([True, False, False, True])
+    rpc_states = iter([(False, "down"), (False, "down"), (True, "deviceInfo OK")])
 
+    monkeypatch.setattr(relay_adb, "_U2_RESTART_HEALTHY_UNTIL", {})
+    monkeypatch.setattr(relay_adb, "_u2_atx_healthy", lambda serial: False)
     monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: None)
     monkeypatch.setattr(relay_adb, "lock_portrait_rotation", lambda serial: calls.append("lock"))
     monkeypatch.setattr(relay_adb.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (False, "down"))
-    monkeypatch.setattr(
-        relay_adb,
-        "_device_port_listening",
-        lambda serial, port: next(port_states),
-    )
+    monkeypatch.setattr(relay_adb, "_atx_jsonrpc_device_info", lambda *args, **kwargs: next(rpc_states))
 
     def fake_adb_shell(serial: str, cmd: str, timeout: int = 30):
         calls.append(cmd)
@@ -528,17 +527,14 @@ def test_restart_u2_waits_for_old_port_to_close_before_direct_start(monkeypatch)
 
 def test_restart_u2_uses_atx_managed_restart_without_duplicate_instrument(monkeypatch) -> None:
     calls: list[str] = []
-    port_states = iter([True, False, False, True])
 
+    monkeypatch.setattr(relay_adb, "_U2_RESTART_HEALTHY_UNTIL", {})
+    monkeypatch.setattr(relay_adb, "_u2_atx_healthy", lambda serial: False)
     monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: None)
     monkeypatch.setattr(relay_adb, "lock_portrait_rotation", lambda serial: calls.append("lock"))
     monkeypatch.setattr(relay_adb.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (True, "pong"))
-    monkeypatch.setattr(
-        relay_adb,
-        "_device_port_listening",
-        lambda serial, port: next(port_states),
-    )
+    monkeypatch.setattr(relay_adb, "_wait_for_atx_jsonrpc_device_info", lambda *args, **kwargs: (True, "deviceInfo OK"))
 
     def fake_adb_shell(serial: str, cmd: str, timeout: int = 30):
         calls.append(cmd)
@@ -552,6 +548,82 @@ def test_restart_u2_uses_atx_managed_restart_without_duplicate_instrument(monkey
     assert msg == "u2 started via atx-agent"
     assert not any("am instrument" in cmd for cmd in calls)
     assert calls[-1] == "lock"
+
+
+def test_restart_u2_skips_when_atx_and_u2_are_healthy(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(relay_adb, "_U2_RESTART_HEALTHY_UNTIL", {})
+    monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: calls.append("settings"))
+    monkeypatch.setattr(relay_adb, "_u2_atx_healthy", lambda serial: True)
+    monkeypatch.setattr(relay_adb, "lock_portrait_rotation", lambda serial: calls.append("lock"))
+    monkeypatch.setattr(relay_adb, "_run_u2_recovery_cleanup", lambda *args, **kwargs: calls.append("cleanup"))
+    monkeypatch.setattr(relay_adb, "_adb_shell", lambda *args, **kwargs: calls.append("shell") or ("", 0))
+
+    msg, rc = relay_adb._restart_u2("serial-healthy", timeout=5)
+
+    assert rc == 0
+    assert msg == "u2 already healthy; skipped restart"
+    assert calls == ["settings", "lock"]
+
+
+def test_restart_u2_skips_duplicate_after_recent_healthy_result(monkeypatch) -> None:
+    calls: list[str] = []
+    now = 100.0
+
+    monkeypatch.setattr(relay_adb, "_U2_RESTART_HEALTHY_CACHE_SECONDS", 15)
+    monkeypatch.setattr(relay_adb, "_U2_RESTART_HEALTHY_UNTIL", {})
+    monkeypatch.setattr(relay_adb.time, "monotonic", lambda: now)
+    monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: calls.append("settings"))
+    monkeypatch.setattr(relay_adb, "_u2_atx_healthy", lambda serial: calls.append("health") or True)
+    monkeypatch.setattr(relay_adb, "lock_portrait_rotation", lambda serial: calls.append("lock"))
+    monkeypatch.setattr(relay_adb, "_run_u2_recovery_cleanup", lambda *args, **kwargs: calls.append("cleanup"))
+
+    assert relay_adb._restart_u2("serial-healthy", timeout=5) == (
+        "u2 already healthy; skipped restart",
+        0,
+    )
+    assert relay_adb._restart_u2("serial-healthy", timeout=5) == (
+        "u2 recently healthy; skipped duplicate restart",
+        0,
+    )
+    assert calls == ["settings", "health", "lock"]
+
+
+def test_restart_atx_skips_when_atx_and_u2_are_healthy(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(relay_adb, "_U2_RESTART_HEALTHY_UNTIL", {})
+    monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: calls.append("settings"))
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "192.0.2.10")
+    monkeypatch.setattr(relay_adb, "_atx_jsonrpc_device_info", lambda *args, **kwargs: (True, "deviceInfo OK"))
+    monkeypatch.setattr(relay_adb, "lock_portrait_rotation", lambda serial: calls.append("lock"))
+    monkeypatch.setattr(relay_adb, "_run_u2_recovery_cleanup", lambda *args, **kwargs: calls.append("cleanup"))
+    monkeypatch.setattr(relay_adb, "_adb_shell", lambda *args, **kwargs: calls.append("shell") or ("", 0))
+
+    msg, rc = relay_adb._restart_atx("serial-healthy", timeout=5)
+
+    assert rc == 0
+    assert msg == "atx-agent and u2 already healthy; skipped restart"
+    assert calls == ["settings", "lock"]
+
+
+def test_restart_atx_delegates_to_u2_restart_when_atx_is_healthy(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(relay_adb, "_apply_u2_stability_settings", lambda serial: calls.append("settings"))
+    monkeypatch.setattr(relay_adb, "_resolve_device_lan_ip", lambda serial: "192.0.2.10")
+    monkeypatch.setattr(relay_adb, "_atx_jsonrpc_device_info", lambda *args, **kwargs: (False, "u2 down"))
+    monkeypatch.setattr(relay_adb, "_atx_http_ping", lambda *args, **kwargs: (True, "pong"))
+    monkeypatch.setattr(relay_adb, "_restart_u2", lambda serial, timeout=60: calls.append("restart_u2") or ("u2 started", 0))
+    monkeypatch.setattr(relay_adb, "_run_u2_recovery_cleanup", lambda *args, **kwargs: calls.append("cleanup"))
+    monkeypatch.setattr(relay_adb, "_adb_shell", lambda *args, **kwargs: calls.append("shell") or ("", 0))
+
+    msg, rc = relay_adb._restart_atx("serial-u2-missing", timeout=5)
+
+    assert rc == 0
+    assert msg == "atx-agent healthy; u2 started"
+    assert calls == ["settings", "restart_u2"]
 
 
 def _raise(message: str):

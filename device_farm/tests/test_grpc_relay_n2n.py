@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 import grpc
 import pytest
 
-from runtime.stream_telemetry import stream_telemetry
 from runtime.transports.grpc_gen import relay_pb2
 from runtime.transports.grpc_relay_server import RelayServicer
 from tests.perf_assertions import (
@@ -49,7 +48,6 @@ class _FakeRelayManager:
     relay_unregister_calls: list[str] = field(default_factory=list)
     serial_updates: list[tuple[str, set[str]]] = field(default_factory=list)
     caps_updates: list[dict] = field(default_factory=list)
-    video_frames: list[tuple[str, int]] = field(default_factory=list)
     register_errors: int = 0
 
     def register_grpc_agent(self, agent_id: str, ctrl_q: asyncio.Queue) -> None:
@@ -85,9 +83,6 @@ class _FakeRelayManager:
 
     def update_capabilities(self, caps: dict) -> None:
         self.caps_updates.append(caps)
-
-    def dispatch_grpc_video_frame(self, frame) -> None:
-        self.video_frames.append((frame.serial, int(frame.pts_us)))
 
 
 async def _iter_msgs(msgs: list[relay_pb2.AgentMsg]):
@@ -133,7 +128,7 @@ async def test_grpc_stream_n_to_n_load_local_mock():
     """
     N-to-N load contract (local + mock):
     - N agents connect concurrently
-    - each agent registers 1 relay, sends M video frames, heartbeat update
+    - each agent registers 1 relay and sends heartbeat updates
     - server must fan-in all frames and fan-out at least one control message per agent
     """
     rm = _FakeRelayManager()
@@ -166,15 +161,13 @@ async def test_grpc_stream_n_to_n_load_local_mock():
 
     assert len(rm.relay_register_calls) == agent_count
     assert len(rm.relay_unregister_calls) == agent_count
-    assert len(rm.video_frames) == agent_count * frames_per_agent
     assert len(rm.serial_updates) == agent_count
     # each stream should have written at least the synthetic ping control frame
     assert all(len(c.writes) >= 1 for c in contexts)
 
 
 @pytest.mark.asyncio
-async def test_grpc_video_stream_records_backend_telemetry():
-    stream_telemetry.reset()
+async def test_grpc_stream_ignores_deprecated_video_frames():
     rm = _FakeRelayManager()
     svc = RelayServicer(rm, api_key="k-secret")
     ctx = _FakeContext(
@@ -186,21 +179,15 @@ async def test_grpc_video_stream_records_backend_telemetry():
 
     await svc.Stream(_iter_msgs([_video_msg("SN001", 1), _video_msg("SN001", 2)]), ctx)
 
-    snapshot = stream_telemetry.snapshot(reset=True)
-    assert len(rm.video_frames) == 2
-    assert snapshot["grpc_video_frames"] == 2
-    assert snapshot["grpc_video_bytes"] == 8
-    assert snapshot["grpc_video_keyframes"] == 2
-    assert snapshot["grpc_video_agents"] == 1
-    assert snapshot["grpc_video_shard_agents"] == 1
+    assert rm.grpc_agents == {}
 
 
 @pytest.mark.asyncio
 async def test_grpc_stream_n_to_n_tier2_64x200_with_fault_injection():
     """
     Stress tier 2:
-    - 64 agents x 200 frames/agent (12,800 total)
-    - Inject queue-full, write-error, malformed meta/video interleaving
+    - 64 agents x 200 metadata/video-legacy messages
+    - Inject queue-full, write-error, malformed meta/deprecated video interleaving
     - Stream must remain resilient (no crash), and still process healthy data
     """
     rm = _FakeRelayManager()
@@ -267,8 +254,7 @@ async def test_grpc_stream_n_to_n_tier2_64x200_with_fault_injection():
     assert len(rm.relay_unregister_calls) == agent_count
     # Queue growth / leak guard: all grpc agent queues must be released.
     assert len(rm.grpc_agents) == 0
-    # Healthy video path should still ingest full base frame count.
-    assert len(rm.video_frames) >= agent_count * frames_per_agent
+    # Deprecated video payloads are ignored; lifecycle and heartbeat still work.
     # Heartbeat updates should happen for all registered agents.
     assert len(rm.serial_updates) == agent_count
     # Even with write errors, some controls should be attempted.
@@ -315,4 +301,3 @@ async def test_grpc_stream_handles_register_ack_queue_full_without_crash():
 
     assert "relay-qfull" in rm.relay_register_calls
     assert "relay-qfull" in rm.relay_unregister_calls
-    assert len(rm.video_frames) >= 1

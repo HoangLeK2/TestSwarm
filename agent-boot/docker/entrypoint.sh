@@ -67,6 +67,9 @@ else
   export ANDROID_ADB_SERVER_HOST="${ADB_HOST}"
   export ANDROID_ADB_SERVER_PORT="${ADB_PORT}"
   echo "== ADB mode: host server ${ADB_HOST}:${ADB_PORT} =="
+  if [[ -n "${ADB_SERVER_SOCKETS:-}" ]]; then
+    echo "== ADB multi-server sockets: ${ADB_SERVER_SOCKETS} =="
+  fi
 fi
 
 if [[ "$wait_for_adb" == true ]]; then

@@ -36,37 +36,110 @@ logger = logging.getLogger("relay.adb")
 # ── adb binary ────────────────────────────────────────────────────────────────
 
 _ADB: str = shutil.which("adb") or "adb"
+_SERIAL_ADB_SERVER: dict[str, tuple[str, str]] = {}
 
 
-def _adb_server_flags_from_env() -> list[str]:
+def _parse_adb_server(value: str) -> tuple[str, str] | None:
+    value = value.strip()
+    if value.startswith("tcp:"):
+        value = value[4:]
+    if ":" not in value:
+        return None
+    host, port = value.rsplit(":", 1)
+    host = host.strip()
+    port = port.strip()
+    if not host or not port.isdigit():
+        return None
+    return host, port
+
+
+def adb_server_specs_from_env() -> list[tuple[str, str]]:
+    raw = (
+        _os.environ.get("ADB_SERVER_SOCKETS", "").strip()
+        or _os.environ.get("AGENT_BOOT_ADB_SERVER_SOCKETS", "").strip()
+    )
+    if raw:
+        specs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in re.split(r"[,;\s]+", raw):
+            spec = _parse_adb_server(item)
+            if spec and spec not in seen:
+                specs.append(spec)
+                seen.add(spec)
+        if specs:
+            return specs
+
+    host = _os.environ.get("ADB_HOST", "").strip()
+    port = _os.environ.get("ADB_PORT", "").strip()
+    spec = _parse_adb_server(_os.environ.get("ADB_SERVER_SOCKET", "").strip())
+    if spec:
+        return [spec]
+    if host and port:
+        return [(host, port)]
+    return []
+
+
+def _remember_serial_adb_server(serial: str, host: str, port: str) -> None:
+    serial = str(serial or "").strip()
+    if not serial:
+        return
+    with _ADB_CACHE_LOCK:
+        _SERIAL_ADB_SERVER[serial] = (host, port)
+
+
+def _adb_server_flags_from_env(serial: Optional[str] = None) -> list[str]:
     """Return explicit adb server flags for Docker/remote-ADB mode.
 
     Some adb client builds do not reliably honor ADB_SERVER_SOCKET for every
     subprocess invocation. Passing -H/-P keeps recovery commands on the same
     host ADB server that the Docker entrypoint already checked.
     """
-    host = _os.environ.get("ADB_HOST", "").strip()
-    port = _os.environ.get("ADB_PORT", "").strip()
-    sock = _os.environ.get("ADB_SERVER_SOCKET", "").strip()
-    if sock.startswith("tcp:"):
-        rest = sock[4:]
-        if ":" in rest:
-            sock_host, sock_port = rest.rsplit(":", 1)
-            host = sock_host.strip() or host
-            port = sock_port.strip() or port
-        elif rest.isdigit():
-            port = rest
-    if host and port:
+    if serial:
+        with _ADB_CACHE_LOCK:
+            cached = _SERIAL_ADB_SERVER.get(serial)
+        if cached:
+            return ["-H", cached[0], "-P", cached[1]]
+
+    specs = adb_server_specs_from_env()
+    if specs:
+        host, port = specs[0]
         return ["-H", host, "-P", port]
     return []
 
 
 def _adb_command(*args: str, serial: Optional[str] = None) -> list[str]:
-    cmd = [_ADB, *_adb_server_flags_from_env()]
+    cmd = [_ADB, *_adb_server_flags_from_env(serial)]
     if serial:
         cmd += ["-s", serial]
     cmd += list(args)
     return cmd
+
+
+def _run_raw(args: list[str], *, timeout: int = 5) -> tuple[str, int]:
+    env = _os.environ.copy()
+    env.pop("MallocStackLogging", None)
+    env.pop("MallocStackLoggingDirectory", None)
+    try:
+        result = subprocess.run(
+            [_ADB, *args],
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+            env=env,
+        )
+        out = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+        return out, result.returncode
+    except Exception as exc:
+        return str(exc), -1
+
+
+def _parse_adb_devices_output(out: str) -> list[str]:
+    serials: list[str] = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[1].strip() == "device":
+            serials.append(parts[0].strip())
+    return serials
 
 # ── Asset resolution ──────────────────────────────────────────────────────────
 # agent-boot/relay/adb.py lives here; assets are looked up in this order:
@@ -343,12 +416,20 @@ def dedupe_adb_serials_prefer_usb(serials: list[str]) -> list[str]:
 def _list_serials() -> list[str]:
     """Snapshot of currently connected serials (startup / fallback only).
     Real-time tracking is handled by AdbDeviceWatcher (adb track-devices)."""
-    out, _ = _run("devices", timeout=5)
-    serials = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) == 2 and parts[1].strip() == "device":
-            serials.append(parts[0].strip())
+    specs = adb_server_specs_from_env()
+    if not specs:
+        out, _ = _run("devices", timeout=5)
+        return dedupe_adb_serials_prefer_usb(_parse_adb_devices_output(out))
+
+    serials: list[str] = []
+    for host, port in specs:
+        out, rc = _run_raw(["-H", host, "-P", port, "devices"], timeout=5)
+        if rc != 0:
+            logger.debug("adb devices failed host=%s port=%s output=%s", host, port, out)
+            continue
+        for serial in _parse_adb_devices_output(out):
+            _remember_serial_adb_server(serial, host, port)
+            serials.append(serial)
     return dedupe_adb_serials_prefer_usb(serials)
 
 

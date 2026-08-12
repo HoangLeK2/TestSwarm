@@ -10,19 +10,21 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import inspect
 import json
 import logging
 import os
 import re
 import time
+import unicodedata
 from collections import deque
 from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from lxml import etree as LET
 
-from relay.adb import lock_portrait_rotation, lock_rotation_after_shell_enabled
+from relay.adb import _adb_shell, lock_portrait_rotation, lock_rotation_after_shell_enabled
 from relay.u2_session_pool import U2SessionPool
 from relay.u2_xpath_util import normalize_u2_xpath
 
@@ -132,6 +134,20 @@ _DEAD_SESSION_MARKERS = (
 
 _VISIBLE_PRIORITIES = frozenset({"0", "1", "high", "visible", "focused", "interactive", "control"})
 _HTTP_DIRECT_TOUCH_OPS = frozenset({"click", "swipe", "long_click", "u2_swipe_batch", "sleep", "click_spec"})
+_KEYEVENTS = {
+    "home": "KEYCODE_HOME",
+    "back": "KEYCODE_BACK",
+    "recent": "KEYCODE_APP_SWITCH",
+    "app_switch": "KEYCODE_APP_SWITCH",
+    "menu": "KEYCODE_MENU",
+    "power": "KEYCODE_POWER",
+    "enter": "KEYCODE_ENTER",
+    "tab": "KEYCODE_TAB",
+    "delete": "KEYCODE_DEL",
+    "del": "KEYCODE_DEL",
+    "volume_up": "KEYCODE_VOLUME_UP",
+    "volume_down": "KEYCODE_VOLUME_DOWN",
+}
 _XML_BOUNDS_RE = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 _XPATH_BOUNDS_RE = re.compile(r"@?bounds\s*=\s*['\"](\[\d+,\d+\]\[\d+,\d+\])['\"]")
 _XML_SELECTOR_ATTRS = {
@@ -341,6 +357,16 @@ def _bounds_center_from_string(raw: str) -> tuple[int, int] | None:
         return None
     left, top, right, bottom = (int(group) for group in match.groups())
     return _bounds_center_from_parts(left, top, right, bottom)
+
+
+def _bounds_tuple_from_string(raw: str) -> tuple[int, int, int, int] | None:
+    match = _XML_BOUNDS_RE.match(str(raw or ""))
+    if match is None:
+        return None
+    left, top, right, bottom = (int(group) for group in match.groups())
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
 
 
 def _bounds_center_from_xpath(xpath: str) -> tuple[int, int] | None:
@@ -703,8 +729,56 @@ def _op_set_text(dev: Any, act: dict) -> None:
     _resolve(dev, act.get("selector", {})).set_text(act.get("text", ""))
 
 
+def _adb_keyevent_name(key: Any) -> str | None:
+    raw = str(key or "").strip()
+    if not raw:
+        return None
+    lower = raw.lower()
+    if lower in _KEYEVENTS:
+        return _KEYEVENTS[lower]
+    upper = raw.upper()
+    if upper.startswith("KEYCODE_"):
+        return upper
+    if raw.isdigit():
+        return raw
+    return None
+
+
+def _adb_key_command(key: Any) -> str | None:
+    raw = str(key or "").strip().lower()
+    if raw == "home":
+        return "am start -a android.intent.action.MAIN -c android.intent.category.HOME"
+    keyevent = _adb_keyevent_name(key)
+    if keyevent:
+        return f"input keyevent {keyevent}"
+    return None
+
+
+def _press_key_via_adb(serial: str, key: Any) -> bool:
+    cmd = _adb_key_command(key)
+    if not serial or not cmd:
+        return False
+    output, rc = _adb_shell(serial, cmd, timeout=5)
+    if rc != 0:
+        logger.warning(
+            "u2_batch: adb key fallback failed serial=%s key=%s output=%s",
+            serial,
+            key,
+            str(output)[-300:],
+        )
+        return False
+    return True
+
+
 def _op_press_key(dev: Any, act: dict) -> None:
-    dev.press(act["key"])
+    key = act["key"]
+    try:
+        dev.press(key)
+    except Exception:
+        serial = str(act.get("_serial") or "")
+        if _press_key_via_adb(serial, key):
+            return
+        raise
 
 
 def _op_sleep(dev: Any, act: dict) -> None:
@@ -979,6 +1053,2334 @@ def _flow_input_and_confirm(dev: Any, p: dict) -> dict:
     return {"found_input": True, "found_confirm": True, "clicked": True}
 
 
+def _fb_fold(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.casefold()
+    text = text.replace("đ", "d")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _fb_keyword_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    values = raw if isinstance(raw, list) else str(raw).split(",")
+    out: list[str] = []
+    for value in values:
+        clean = str(value or "").strip()
+        if not clean or (clean.startswith("${") and clean.endswith("}")):
+            continue
+        out.append(clean)
+    return out
+
+
+def _fb_node_label(node: Any) -> str:
+    parts = [
+        str(node.attrib.get("text", "") or ""),
+        str(node.attrib.get("content-desc", "") or ""),
+    ]
+    return " ".join(dict.fromkeys(part for part in parts if part)).strip()
+
+
+def _fb_all_labels(root: Any) -> list[str]:
+    labels: list[str] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        if label:
+            labels.append(label)
+    return labels
+
+
+def _fb_is_clickable(node: Any) -> bool:
+    return str(node.attrib.get("clickable", "") or "").casefold() == "true"
+
+
+def _fb_is_add_friend_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return any(
+        token in folded
+        for token in (
+            "them ban be",
+            "nut them ban be",
+            "add friend",
+            "nut add friend",
+        )
+    ) and not any(token in folded for token in ("huy loi moi", "cancel request"))
+
+
+def _fb_is_connection_action_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return _fb_is_add_friend_label(label) or any(
+        token in folded
+        for token in (
+            "huy loi moi",
+            "huy yeu cau",
+            "cancel request",
+            "cancel friend request",
+            "request sent",
+            "da gui loi moi",
+        )
+    )
+
+
+def _fb_same_row_labels(root: Any, bounds: tuple[int, int, int, int]) -> list[str]:
+    _left, top, _right, bottom = bounds
+    center_y = (top + bottom) // 2
+    row_labels: list[str] = []
+    for node in root.iter("node"):
+        node_bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if node_bounds is None:
+            continue
+        n_top, n_bottom = node_bounds[1], node_bounds[3]
+        node_center_y = (n_top + n_bottom) // 2
+        if abs(node_center_y - center_y) > 180:
+            continue
+        label = _fb_node_label(node)
+        if label:
+            row_labels.append(label)
+    return row_labels
+
+
+def _fb_nearby_labels(
+    root: Any,
+    bounds: tuple[int, int, int, int],
+    *,
+    y_padding: int,
+) -> list[str]:
+    _left, top, _right, bottom = bounds
+    labels: list[str] = []
+    for node in root.iter("node"):
+        node_bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if node_bounds is None:
+            continue
+        if node_bounds[3] < top - y_padding or node_bounds[1] > bottom + y_padding:
+            continue
+        label = _fb_node_label(node)
+        if label:
+            labels.append(label)
+    return labels
+
+
+def _fb_bool_param(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    folded = _fb_fold(value)
+    if folded in {"1", "true", "yes", "y", "on", "enabled"}:
+        return True
+    if folded in {"0", "false", "no", "n", "off", "disabled"}:
+        return False
+    return bool(value)
+
+
+def _fb_contains_any(root: Any, tokens: tuple[str, ...]) -> bool:
+    folded = _fb_fold(" ".join(_fb_all_labels(root)))
+    return any(token and token in folded for token in tokens)
+
+
+def _fb_click_label(
+    dev: Any,
+    root: Any,
+    labels: tuple[str, ...],
+    *,
+    contains: bool = False,
+) -> bool:
+    folded_labels = tuple(_fb_fold(label) for label in labels if _fb_fold(label))
+    matches: list[tuple[int, int, int, int]] = []
+    for node in root.iter("node"):
+        node_label = _fb_node_label(node)
+        folded = _fb_fold(node_label)
+        if not folded:
+            continue
+        matched = (
+            any(label in folded for label in folded_labels)
+            if contains
+            else any(
+                label == folded or f"{label} {label}" == folded
+                for label in folded_labels
+            )
+        )
+        if not matched:
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds is not None:
+            matches.append(bounds)
+    if not matches:
+        return False
+    left, top, right, bottom = sorted(matches, key=lambda item: (item[1], item[0]))[0]
+    dev.click((left + right) // 2, (top + bottom) // 2)
+    return True
+
+
+def _fb_friend_suggestions_ready(root: Any) -> bool:
+    labels = _fb_fold(" ".join(_fb_all_labels(root)))
+    has_suggestion_context = any(
+        token in labels
+        for token in (
+            "nhung nguoi ban co the biet",
+            "people you may know",
+            "goi y",
+            "suggestions",
+        )
+    )
+    has_friend_header = any(token in labels for token in ("ban be", "friends"))
+    has_add_button = any(token in labels for token in ("them ban be", "add friend"))
+    return has_suggestion_context and (has_add_button or has_friend_header)
+
+
+def _fb_dismiss_friend_suggestion_prompt(dev: Any, root: Any) -> bool:
+    if not _fb_contains_any(
+        root,
+        (
+            "nhan goi y ket ban tot hon",
+            "get better friend suggestions",
+            "improve friend suggestions",
+        ),
+    ):
+        return False
+
+    close_like: list[tuple[int, int, int, int]] = []
+    for node in root.iter("node"):
+        if not _fb_is_clickable(node):
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds is None:
+            continue
+        left, top, right, bottom = bounds
+        width = right - left
+        height = bottom - top
+        label = _fb_fold(_fb_node_label(node))
+        if label and not any(token in label for token in ("dong", "close", "x")):
+            continue
+        if right < 700 or top < 500 or width > 220 or height > 220:
+            continue
+        close_like.append(bounds)
+    if not close_like:
+        return False
+    left, top, right, bottom = sorted(close_like, key=lambda item: (-item[2], item[1]))[0]
+    dev.click((left + right) // 2, (top + bottom) // 2)
+    return True
+
+
+def _fb_open_friend_suggestions_surface(dev: Any, p: dict) -> dict[str, Any]:
+    attempts: list[str] = []
+    wait_s = max(0.0, min(float(p.get("surface_wait_s", 0.8) or 0.8), 4.0))
+    max_menu_scrolls = max(0, int(p.get("surface_menu_scrolls", 4) or 4))
+
+    def _dump_root() -> tuple[str, Any]:
+        xml = dev.dump_hierarchy(compressed=False)
+        return xml, _xml_parse_root(xml)
+
+    xml, root = _dump_root()
+    if _fb_friend_suggestions_ready(root):
+        return {"ready": True, "opened": False, "attempts": attempts, "xml": xml}
+
+    for _ in range(2):
+        close_bounds: tuple[int, int, int, int] | None = None
+        for node in root.iter("node"):
+            if not _fb_is_clickable(node):
+                continue
+            bounds = _bounds_tuple_from_string(
+                str(node.attrib.get("bounds", "") or "")
+            )
+            if bounds is None:
+                continue
+            left, top, right, bottom = bounds
+            if left > 260 or top > 420 or right - left > 220 or bottom - top > 220:
+                continue
+            folded = _fb_fold(_fb_node_label(node))
+            if folded in {"dong", "close", "quay lai", "back", "x"}:
+                close_bounds = bounds
+                break
+        if close_bounds is None:
+            break
+        left, top, right, bottom = close_bounds
+        dev.click((left + right) // 2, (top + bottom) // 2)
+        attempts.append("close_detail_overlay")
+        time.sleep(wait_s)
+        xml, root = _dump_root()
+        if _fb_friend_suggestions_ready(root):
+            return {"ready": True, "opened": True, "attempts": attempts, "xml": xml}
+
+    menu_tap = p.get("menu_tap") or [90, 208]
+    try:
+        menu_x, menu_y = int(menu_tap[0]), int(menu_tap[1])
+    except (TypeError, ValueError, IndexError):
+        menu_x, menu_y = 90, 208
+    dev.click(menu_x, menu_y)
+    attempts.append("tap_menu")
+    time.sleep(wait_s)
+
+    for i in range(max_menu_scrolls + 1):
+        xml, root = _dump_root()
+        if _fb_friend_suggestions_ready(root):
+            return {"ready": True, "opened": True, "attempts": attempts, "xml": xml}
+        if _fb_click_label(dev, root, ("Tìm bạn bè", "Find friends"), contains=False):
+            attempts.append("tap_find_friends")
+            time.sleep(wait_s)
+            xml, root = _dump_root()
+            if _fb_friend_suggestions_ready(root):
+                return {"ready": True, "opened": True, "attempts": attempts, "xml": xml}
+        if _fb_click_label(dev, root, ("Xem thêm", "See more"), contains=False):
+            attempts.append("tap_see_more")
+            time.sleep(wait_s)
+            continue
+        if i < max_menu_scrolls:
+            try:
+                dev.swipe(650, 2100, 650, 900, duration=0.45)
+                attempts.append("scroll_menu")
+                time.sleep(wait_s)
+            except Exception as exc:
+                attempts.append(f"scroll_menu_failed:{exc}")
+                break
+
+    return {
+        "ready": False,
+        "opened": False,
+        "attempts": attempts,
+        "xml": xml,
+        "reason": "friend_surface_not_ready",
+    }
+
+
+def _fb_visible_person_row_labels(
+    root: Any,
+    bounds: tuple[int, int, int, int],
+) -> list[str]:
+    _left, top, right, bottom = bounds
+    labels: list[str] = []
+    for node in root.iter("node"):
+        node_bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if node_bounds is None:
+            continue
+        n_left, n_top, n_right, n_bottom = node_bounds
+        if n_bottom < top - 200 or n_top > bottom + 70:
+            continue
+        if n_right < 0 or n_left > right + 80:
+            continue
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        if not folded:
+            continue
+        if (
+            ("ban chung" in folded or "mutual friend" in folded)
+            and n_bottom < top - 80
+        ):
+            continue
+        package_name = str(node.attrib.get("package", "") or "")
+        if package_name and not package_name.startswith("com.facebook"):
+            continue
+        if _fb_is_connection_action_label(label):
+            continue
+        compact = folded.replace(" ", "")
+        if compact in {
+            "go",
+            "gogo",
+            "banbebanbe",
+            "friendsfriends",
+        } or folded.startswith("xoa "):
+            continue
+        if folded in {
+            "quay lai",
+            "ban be",
+            "friends",
+            "goi y",
+            "suggestions",
+            "loi moi ket ban",
+            "friend requests",
+            "ban be cua ban",
+            "your friends",
+            "tim kiem",
+            "search",
+            "quan ly",
+            "manage",
+        }:
+            continue
+        labels.append(label)
+    return list(dict.fromkeys(labels))
+
+
+def _fb_mutual_count_from_text(text: str) -> int:
+    folded = _fb_fold(text)
+    for pattern in (r"(\d+)\s+ban chung", r"(\d+)\s+mutual friend"):
+        match = re.search(pattern, folded)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+def _fb_display_name_from_row(labels: list[str], row_text: str) -> str:
+    prioritized = sorted(
+        labels,
+        key=lambda item: (
+            1
+            if any(token in _fb_fold(item) for token in ("ban chung", "mutual friend"))
+            else 0
+        ),
+    )
+    for label in prioritized:
+        clean = str(label or "").strip()
+        if not clean:
+            continue
+        folded_clean = _fb_fold(clean)
+        if any(token in folded_clean for token in ("ban chung", "mutual friend")):
+            continue
+        clean = re.split(
+            r"\s*,\s*\d+\s+b",
+            clean,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        clean = re.split(
+            r"\s*,\s*\d+\s+mutual",
+            clean,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        clean = clean.strip(" ,")
+        if clean:
+            return clean[:120]
+    return row_text[:120]
+
+
+def _fb_pending_request_near(hierarchy_xml: str, tap_y: int) -> bool:
+    after_root = _xml_parse_root(hierarchy_xml)
+    for node in after_root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds:
+            continue
+        folded = _fb_fold(label)
+        if not any(
+            token in folded
+            for token in ("huy loi moi", "huy yeu cau", "cancel request", "request sent")
+        ):
+            continue
+        if abs(((bounds[1] + bounds[3]) // 2) - tap_y) <= 260:
+            return True
+    return False
+
+
+def _fb_scroll_people_surface(dev: Any, p: dict) -> bool:
+    try:
+        width, height = dev.window_size()
+    except Exception:
+        width, height = 1080, 2400
+    x = int(width * float(p.get("scroll_x_ratio", 0.5) or 0.5))
+    y1 = int(height * float(p.get("scroll_y1_ratio", 0.78) or 0.78))
+    y2 = int(height * float(p.get("scroll_y2_ratio", 0.34) or 0.34))
+    duration = max(0.1, min(float(p.get("scroll_duration_s", 0.45) or 0.45), 2.0))
+    try:
+        dev.swipe(x, y1, x, y2, duration=duration)
+        return True
+    except Exception:
+        return False
+
+
+def _fb_score_text(
+    text: str,
+    *,
+    display_name: str,
+    search: str,
+    required: list[str],
+    optional: list[str],
+    forbidden: list[str],
+) -> tuple[int, list[str], list[str], bool]:
+    folded = _fb_fold(text)
+    if any(_fb_fold(token) and _fb_fold(token) in folded for token in forbidden):
+        return 0, [], [], True
+
+    matched: list[str] = []
+    missing: list[str] = []
+    score = 0
+
+    display_folded = _fb_fold(display_name)
+    if display_folded and display_folded in folded:
+        score += 70
+        matched.append(display_name)
+
+    search_folded = _fb_fold(search)
+    if search_folded and search_folded in folded and search_folded != display_folded:
+        score += 15
+        matched.append(search)
+
+    for token in required:
+        folded_token = _fb_fold(token)
+        if folded_token and folded_token in folded:
+            score += 25
+            matched.append(token)
+        else:
+            missing.append(token)
+
+    for token in optional:
+        folded_token = _fb_fold(token)
+        if folded_token and folded_token in folded:
+            score += 8
+            matched.append(token)
+
+    return score, matched, missing, False
+
+
+_FB_POST_STOPWORDS = frozenset(
+    {
+        "anh",
+        "ban",
+        "bac",
+        "bai",
+        "cai",
+        "cac",
+        "cho",
+        "cua",
+        "duoc",
+        "hay",
+        "hon",
+        "la",
+        "lam",
+        "minh",
+        "mot",
+        "moi",
+        "nen",
+        "nguoi",
+        "nhi",
+        "thi",
+        "the",
+        "toi",
+        "voi",
+        "you",
+        "the",
+        "and",
+        "for",
+        "that",
+        "this",
+        "with",
+        "from",
+    }
+)
+
+
+def _fb_post_terms(*values: Any) -> list[str]:
+    terms: list[str] = []
+    for value in values:
+        folded = _fb_fold(value)
+        for term in re.findall(r"[a-z0-9]{3,}", folded):
+            if term in _FB_POST_STOPWORDS:
+                continue
+            terms.append(term)
+    return list(dict.fromkeys(terms))
+
+
+def _fb_post_partial_score(
+    text: str,
+    *,
+    display_text: str,
+    search: str,
+    required: list[str],
+) -> tuple[int, list[str]]:
+    terms = _fb_post_terms(display_text, search, *required)
+    if not terms:
+        return 0, []
+    folded = _fb_fold(text)
+    matched_terms = [term for term in terms if term in folded]
+    if not matched_terms:
+        return 0, []
+    required_count = max(2, min(5, (len(terms) + 1) // 2))
+    if len(matched_terms) < required_count:
+        return 0, matched_terms
+    score = 65 + min(35, len(matched_terms) * 8)
+    return score, matched_terms
+
+
+def _fb_dedupe_post_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    for candidate in sorted(
+        candidates,
+        key=lambda item: (
+            (int(item["bounds"][1]) + int(item["bounds"][3])) // 2,
+            -int(item["score"]),
+        ),
+    ):
+        center_y = (int(candidate["bounds"][1]) + int(candidate["bounds"][3])) // 2
+        merged = False
+        for idx, existing in enumerate(deduped):
+            existing_center_y = (
+                int(existing["bounds"][1]) + int(existing["bounds"][3])
+            ) // 2
+            if abs(center_y - existing_center_y) > 220:
+                continue
+            if int(candidate["score"]) > int(existing["score"]) or (
+                int(candidate["score"]) == int(existing["score"])
+                and bool(candidate.get("clickable"))
+                and not bool(existing.get("clickable"))
+            ):
+                deduped[idx] = candidate
+            merged = True
+            break
+        if not merged:
+            deduped.append(candidate)
+    return deduped
+
+
+def _fb_is_post_search_chrome_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    if not folded:
+        return True
+    if any(
+        token in folded
+        for token in (
+            "anh dai dien",
+            "hinh minh hoa",
+            "hinh nen",
+            "lua chon khac",
+            "nut thich",
+            "nut binh luan",
+            "nut chia se",
+        )
+    ):
+        return True
+    return bool(re.fullmatch(r"\d+\s+(binh luan|comments?|shares?)", folded))
+
+
+def _fb_search_input_focused(root: Any) -> bool:
+    for node in root.iter("node"):
+        if str(node.attrib.get("class", "") or "") != "android.widget.EditText":
+            continue
+        if str(node.attrib.get("focused", "") or "").casefold() != "true":
+            continue
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        if "tim kiem" in folded or "search" in folded:
+            return True
+    return False
+
+
+def _fb_search_suggestion_bounds(
+    root: Any,
+    *,
+    display_text: str,
+    search: str,
+    required: list[str],
+) -> tuple[int, int, int, int] | None:
+    candidates: list[tuple[int, tuple[int, int, int, int]]] = []
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds or not _fb_is_clickable(node):
+            continue
+        if bounds[1] < 280:
+            continue
+        row_text = " ".join(dict.fromkeys(_fb_nearby_labels(root, bounds, y_padding=24)))
+        if not row_text:
+            continue
+        score, _matched, missing, forbidden_hit = _fb_score_text(
+            row_text,
+            display_name=display_text,
+            search=search,
+            required=required,
+            optional=[],
+            forbidden=[],
+        )
+        partial_score, _partial_matches = _fb_post_partial_score(
+            row_text,
+            display_text=display_text,
+            search=search,
+            required=required,
+        )
+        if forbidden_hit:
+            continue
+        if missing and partial_score <= 0:
+            continue
+        confidence = max(score, partial_score)
+        if confidence <= 0:
+            continue
+        candidates.append((confidence, bounds))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1][1], item[1][0]))
+    return candidates[0][1]
+
+
+def _fb_profile_display_name(display_name: str) -> str:
+    """Strip a search-only trailing alias that Facebook omits on profiles."""
+    base_name = re.sub(r"\s*\([^()]+\)\s*$", "", display_name).strip()
+    return base_name or display_name
+
+
+def _fb_is_content_action_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return any(
+        token in folded
+        for token in (
+            "thich",
+            "binh luan",
+            "chia se",
+            "like",
+            "comment",
+            "share",
+        )
+    )
+
+
+def _fb_is_like_available_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    if any(token in folded for token in ("bo thich", "unlike", "remove like")):
+        return False
+    return any(token in folded for token in ("nut thich", "thich", "like"))
+
+
+def _fb_is_like_active_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return any(token in folded for token in ("bo thich", "da thich", "unlike"))
+
+
+def _fb_is_comment_action_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return any(
+        token in folded
+        for token in ("nut binh luan", "binh luan", "comment")
+    )
+
+
+def _fb_is_comment_input_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return any(
+        token in folded
+        for token in (
+            "viet binh luan",
+            "binh luan cong khai",
+            "write a comment",
+            "comment as",
+        )
+    )
+
+
+def _fb_is_comment_submit_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return folded in {"dang", "post", "send", "gui"} or any(
+        token in folded
+        for token in (
+            "nut dang",
+            "nut gui",
+            "post comment",
+            "send comment",
+        )
+    )
+
+
+def _fb_is_comment_overlay_close_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    return folded in {"dong", "close"} or any(
+        token in folded
+        for token in (
+            "nut dong",
+            "close comments",
+            "close comment",
+        )
+    )
+
+
+_DEFAULT_SOCIAL_POST_TERMS: dict[str, list[str]] = {
+    "like_terms": ["nut thich", "thich", "like"],
+    "liked_terms": ["bo thich", "da thich", "unlike", "remove like"],
+    "comment_terms": ["nut binh luan", "binh luan", "comment"],
+    "comment_input_terms": [
+        "viet binh luan",
+        "binh luan cong khai",
+        "write a comment",
+        "comment as",
+    ],
+    "comment_submit_terms": [
+        "dang",
+        "post",
+        "send",
+        "gui",
+        "nut dang",
+        "nut gui",
+        "post comment",
+        "send comment",
+    ],
+    "overlay_close_terms": ["dong", "close", "nut dong", "close comments", "close comment"],
+    "forbidden_context_terms": [
+        "them ban be",
+        "add friend",
+        "chia se trang ca nhan",
+        "share profile",
+        "cover photo",
+        "anh dai dien",
+    ],
+}
+_DEFAULT_SOCIAL_INPUT_CLASSES = [
+    "android.widget.EditText",
+    "android.widget.AutoCompleteTextView",
+]
+
+
+def _social_folded_terms(raw: Any, defaults: list[str]) -> list[str]:
+    values = _fb_keyword_list(raw) if raw is not None else defaults
+    terms = [_fb_fold(item) for item in values]
+    return [term for term in terms if term]
+
+
+def _social_post_terms(p: dict) -> dict[str, list[str]]:
+    return {
+        key: _social_folded_terms(p.get(key), defaults)
+        for key, defaults in _DEFAULT_SOCIAL_POST_TERMS.items()
+    }
+
+
+def _social_input_classes(p: dict) -> list[str]:
+    raw = p.get("comment_input_classes") or p.get("input_classes")
+    if raw is None:
+        return list(_DEFAULT_SOCIAL_INPUT_CLASSES)
+    if isinstance(raw, str):
+        values = [item.strip() for item in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip() for item in raw]
+    else:
+        values = []
+    return [item for item in values if item] or list(_DEFAULT_SOCIAL_INPUT_CLASSES)
+
+
+def _social_label_matches(label: str, terms: list[str]) -> bool:
+    folded = _fb_fold(label)
+    return any(term and term in folded for term in terms)
+
+
+def _social_label_exact_or_matches(label: str, terms: list[str]) -> bool:
+    folded = _fb_fold(label)
+    return folded in set(terms) or any(term and term in folded for term in terms)
+
+
+def _fb_scan_keyword_terms(raw: Any) -> list[str]:
+    terms = _fb_keyword_list(raw)
+    return [term for term in (_fb_fold(item) for item in terms) if term]
+
+
+def _fb_scan_post_keyword_match(
+    text: str,
+    *,
+    terms: list[str],
+    match_mode: str,
+) -> tuple[bool, list[str]]:
+    if not terms:
+        return True, []
+    folded = _fb_fold(text)
+    matched = [term for term in terms if term in folded]
+    if match_mode == "all":
+        return len(matched) == len(terms), matched
+    return bool(matched), matched
+
+
+def _fb_find_comment_submit_bounds(
+    root: Any,
+    *,
+    submit_terms: list[str],
+    input_bounds: tuple[int, int, int, int] | None = None,
+) -> tuple[int, int, int, int] | None:
+    candidates: list[tuple[int, tuple[int, int, int, int]]] = []
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds or not _fb_is_clickable(node):
+            continue
+        label = _fb_node_label(node)
+        if not _fb_is_comment_submit_label(label) and not _social_submit_label_matches(
+            label,
+            submit_terms,
+        ):
+            continue
+        if input_bounds is not None:
+            in_left, in_top, in_right, in_bottom = input_bounds
+            left, top, right, bottom = bounds
+            center_x = (left + right) // 2
+            center_y = (top + bottom) // 2
+            near_input_y = in_top - 180 <= center_y <= in_bottom + 220
+            near_or_right_of_input = center_x >= in_left or left >= in_right - 160
+            if not near_input_y or not near_or_right_of_input:
+                continue
+            score = abs(center_y - ((in_top + in_bottom) // 2)) + max(0, in_right - center_x)
+        else:
+            score = bounds[1]
+        candidates.append((score, bounds))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[0], item[1][1], item[1][0]))[1]
+
+
+def _social_submit_label_matches(label: str, terms: list[str]) -> bool:
+    folded = _fb_fold(label)
+    for term in terms:
+        term = str(term or "").strip()
+        if not term:
+            continue
+        folded_term = _fb_fold(term)
+        if folded == folded_term:
+            return True
+        if folded_term in {"dang", "gui", "post", "send"}:
+            continue
+        if folded_term and folded_term in folded:
+            return True
+    return False
+
+
+def _fb_comment_filter_sheet_open(root: Any) -> bool:
+    matched_options: set[str] = set()
+    radio_count = 0
+    for node in root.iter("node"):
+        label = _fb_fold(_fb_node_label(node))
+        class_name = str(node.attrib.get("class", "") or "")
+        if class_name == "android.widget.RadioButton":
+            radio_count += 1
+        if "phu hop nhat" in label:
+            matched_options.add("best")
+        if "moi nhat" in label:
+            matched_options.add("newest")
+        if "tat ca binh luan" in label:
+            matched_options.add("all")
+    return radio_count >= 2 and len(matched_options) >= 2
+
+
+def _fb_comments_overlay_visible(root: Any) -> bool:
+    for node in root.iter("node"):
+        label = _fb_fold(_fb_node_label(node))
+        if (
+            "dang hien thi" in label
+            and "binh luan" in label
+        ) or "viet binh luan" in label or "tra loi binh luan" in label:
+            return True
+    return False
+
+
+def _fb_close_comment_filter_sheet_if_needed(dev: Any, root: Any) -> bool:
+    if not _fb_comment_filter_sheet_open(root):
+        return False
+    press = getattr(dev, "press", None)
+    if callable(press):
+        press("back")
+        return True
+    return False
+
+
+def _fb_close_comment_overlay_if_needed(
+    dev: Any,
+    hierarchy_xml: str,
+    *,
+    input_terms: list[str],
+    input_classes: list[str],
+    close_terms: list[str],
+) -> bool:
+    root = _xml_parse_root(hierarchy_xml)
+    if _fb_close_comment_filter_sheet_if_needed(dev, root):
+        return True
+    has_comment_input = False
+    close_candidates: list[tuple[int, int, int, int]] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        class_name = str(node.attrib.get("class", "") or "")
+        if class_name in input_classes or _social_label_matches(label, input_terms):
+            has_comment_input = True
+        if (
+            bounds
+            and _fb_is_clickable(node)
+            and _social_label_exact_or_matches(label, close_terms)
+        ):
+            close_candidates.append(bounds)
+    if not has_comment_input:
+        return False
+    if close_candidates:
+        left, top, right, bottom = min(close_candidates, key=lambda item: (item[1], item[0]))
+        dev.click((left + right) // 2, (top + bottom) // 2)
+        return True
+    press = getattr(dev, "press", None)
+    if callable(press):
+        press("back")
+        return True
+    return False
+
+
+def _u2_selector_kwargs_from_xml_node(node: Any) -> dict[str, str]:
+    kwargs: dict[str, str] = {}
+    class_name = str(node.attrib.get("class", "") or "").strip()
+    resource_id = str(node.attrib.get("resource-id", "") or "").strip()
+    content_desc = str(node.attrib.get("content-desc", "") or "").strip()
+    text = str(node.attrib.get("text", "") or "").strip()
+    if class_name:
+        kwargs["className"] = class_name
+    if resource_id:
+        kwargs["resourceId"] = resource_id
+    if content_desc:
+        kwargs["description"] = content_desc
+    if text:
+        kwargs["text"] = text
+    return kwargs
+
+
+def _u2_set_text_from_visible_xml_node(dev: Any, node: Any, text: str) -> bool:
+    selector_kwargs = _u2_selector_kwargs_from_xml_node(node)
+    class_name = selector_kwargs.get("className", "")
+    bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+    if bounds is not None:
+        left, top, right, bottom = bounds
+        dev.click((left + right) // 2, (top + bottom) // 2)
+    for kwargs in (
+        selector_kwargs,
+        {"className": class_name} if class_name else {},
+        {"className": "android.widget.EditText"},
+        {"className": "android.widget.AutoCompleteTextView"},
+    ):
+        if not kwargs:
+            continue
+        try:
+            dev(**kwargs).set_text(text)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _fb_find_visible_comment_input_node(
+    root: Any,
+    *,
+    input_terms: list[str],
+    input_classes: list[str],
+) -> tuple[Any, tuple[int, int, int, int]] | None:
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds:
+            continue
+        class_name = str(node.attrib.get("class", "") or "")
+        if class_name in input_classes or _social_label_matches(label, input_terms):
+            return node, bounds
+    return None
+
+
+def _fb_set_visible_comment_text(
+    dev: Any,
+    root: Any,
+    comment_text: str,
+    *,
+    input_terms: list[str],
+    input_classes: list[str],
+) -> tuple[bool, tuple[int, int, int, int] | None]:
+    found = _fb_find_visible_comment_input_node(
+        root,
+        input_terms=input_terms,
+        input_classes=input_classes,
+    )
+    if found is None:
+        return False, None
+    node, bounds = found
+    if _u2_set_text_from_visible_xml_node(dev, node, comment_text):
+        return True, bounds
+    return False, bounds
+
+
+def _fb_scroll_comment_overlay_toward_input(dev: Any, hierarchy_xml: str) -> bool:
+    try:
+        from relay.extra_data.parsers.facebook.comment_pipeline import (
+            resolve_comment_scroll_swipe_from_xml,
+        )
+    except Exception:
+        resolve_comment_scroll_swipe_from_xml = None
+    swipe: tuple[int, int, int, int] | None = None
+    if resolve_comment_scroll_swipe_from_xml is not None:
+        try:
+            swipe = resolve_comment_scroll_swipe_from_xml(hierarchy_xml, distance_ratio=0.28)
+        except Exception:
+            swipe = None
+    if swipe is None:
+        try:
+            width, height = dev.window_size()
+        except Exception:
+            width, height = 1080, 2400
+        x = int(width * 0.78)
+        swipe = (x, int(height * 0.70), x, int(height * 0.42))
+    fx, fy, tx, ty = swipe
+    try:
+        dev.swipe(fx, fy, tx, ty, duration=0.16)
+        return True
+    except Exception:
+        return False
+
+
+def _fb_screen_right(root: Any) -> int:
+    right = 0
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds is not None:
+            right = max(right, bounds[2])
+    return right or 1260
+
+
+def _fb_visible_post_candidates(
+    hierarchy_xml: str,
+    *,
+    keywords: list[str],
+    match_mode: str,
+    seen_fingerprints: set[str],
+    seen_expand_keys: set[str],
+    like_terms: list[str],
+    liked_terms: list[str],
+    comment_terms: list[str],
+    forbidden_context_terms: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    root = _xml_parse_root(hierarchy_xml)
+    screen_right = _fb_screen_right(root)
+    like_nodes: list[tuple[tuple[int, int, int, int], str, bool]] = []
+    comment_nodes: list[tuple[tuple[int, int, int, int], str]] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds or not _fb_is_clickable(node):
+            continue
+        is_like = _social_label_matches(label, like_terms) or _social_label_matches(
+            label,
+            liked_terms,
+        )
+        if is_like:
+            like_nodes.append((bounds, label, _social_label_matches(label, liked_terms)))
+        if not is_like and _social_label_matches(label, comment_terms):
+            comment_nodes.append((bounds, label))
+
+    candidates: list[dict[str, Any]] = []
+    expand_requests: list[dict[str, Any]] = []
+    for comment_bounds, comment_label in comment_nodes:
+        comment_center_y = (comment_bounds[1] + comment_bounds[3]) // 2
+        nearby_likes = [
+            (bounds, label, active)
+            for bounds, label, active in like_nodes
+            if abs(((bounds[1] + bounds[3]) // 2) - comment_center_y) <= 180
+        ]
+        if not nearby_likes:
+            continue
+        like_bounds, like_label, already_liked = min(
+            nearby_likes,
+            key=lambda item: (abs(item[0][0] - comment_bounds[0]), item[0][0]),
+        )
+        action_top = min(like_bounds[1], comment_bounds[1])
+        expand_search_bounds = (
+            0,
+            max(0, action_top - 900),
+            screen_right,
+            action_top + 80,
+        )
+        expand_bounds = _fb_see_more_bounds_near(root, expand_search_bounds)
+        if expand_bounds is not None:
+            expand_key = ":".join(str(part) for part in expand_bounds)
+            if expand_key not in seen_expand_keys:
+                expand_requests.append(
+                    {
+                        "expand_bounds": list(expand_bounds),
+                        "expand_key": expand_key,
+                        "like_bounds": list(like_bounds),
+                        "comment_bounds": list(comment_bounds),
+                    }
+                )
+                continue
+        context_bounds = (
+            min(like_bounds[0], comment_bounds[0]),
+            min(like_bounds[1], comment_bounds[1]),
+            max(like_bounds[2], comment_bounds[2]),
+            max(like_bounds[3], comment_bounds[3]),
+        )
+        context_labels = _fb_nearby_labels(root, context_bounds, y_padding=760)
+        context_text = " ".join(dict.fromkeys(context_labels))
+        folded_context = _fb_fold(context_text)
+        if any(token in folded_context for token in forbidden_context_terms):
+            continue
+        matched, matched_terms = _fb_scan_post_keyword_match(
+            context_text,
+            terms=keywords,
+            match_mode=match_mode,
+        )
+        if not matched:
+            continue
+        fingerprint = hashlib.sha256(
+            _fb_fold(context_text[:512]).encode("utf-8")
+        ).hexdigest()
+        if fingerprint in seen_fingerprints:
+            continue
+        candidates.append(
+            {
+                "score": 80 + min(len(matched_terms) * 10, 40),
+                "row_text": context_text[:700],
+                "matched_keywords": matched_terms,
+                "like_bounds": list(like_bounds),
+                "comment_bounds": list(comment_bounds),
+                "like_label": like_label,
+                "comment_label": comment_label,
+                "already_liked": already_liked,
+                "target_id": f"ui_post:{fingerprint}",
+                "fingerprint": fingerprint,
+            }
+        )
+
+    qualified = sorted(
+        candidates,
+        key=lambda item: (int(item["comment_bounds"][1]), -int(item["score"])),
+    )
+    return candidates, qualified, expand_requests
+
+
+def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
+    """Scan visible social posts and like/comment only keyword matches."""
+    keywords = _fb_scan_keyword_terms(p.get("keywords") or p.get("post_keywords"))
+    terms = _social_post_terms(p)
+    input_classes = _social_input_classes(p)
+    match_mode = str(p.get("match_mode") or "any").strip().casefold()
+    if match_mode not in {"any", "all"}:
+        match_mode = "any"
+    comment_text = str(p.get("comment_text") or "").strip()
+    target_count = max(1, int(p.get("target_count", p.get("batch_size", 1)) or 1))
+    max_scrolls = max(0, int(p.get("max_scrolls", 0) or 0))
+    comment_wait_s = max(0.0, min(float(p.get("comment_wait_s", 0.8) or 0.8), 5.0))
+    submit_wait_s = max(0.0, min(float(p.get("submit_wait_s", 0.6) or 0.6), 5.0))
+    scroll_wait_s = max(0.0, min(float(p.get("scroll_wait_s", 0.7) or 0.7), 5.0))
+    require_comment = _fb_bool_param(p.get("require_comment"), bool(comment_text))
+    seen_fingerprints: set[str] = set()
+    seen_expand_keys: set[str] = set()
+    actions: list[dict[str, Any]] = []
+    total_candidates = 0
+    screens_scanned = 0
+    scrolls = 0
+    overlay_closes = 0
+    expanded_more_count = 0
+    last_xml = ""
+
+    for screen_index in range(max_scrolls + 1):
+        xml = dev.dump_hierarchy(compressed=False)
+        if _fb_close_comment_overlay_if_needed(
+            dev,
+            xml,
+            input_terms=terms["comment_input_terms"],
+            input_classes=input_classes,
+            close_terms=terms["overlay_close_terms"],
+        ):
+            overlay_closes += 1
+            time.sleep(min(max(comment_wait_s, 0.2), 0.8))
+            xml = dev.dump_hierarchy(compressed=False)
+        last_xml = xml
+        screen_expands = 0
+        while True:
+            candidates, qualified, expand_requests = _fb_visible_post_candidates(
+                xml,
+                keywords=keywords,
+                match_mode=match_mode,
+                seen_fingerprints=seen_fingerprints,
+                seen_expand_keys=seen_expand_keys,
+                like_terms=terms["like_terms"],
+                liked_terms=terms["liked_terms"],
+                comment_terms=terms["comment_terms"],
+                forbidden_context_terms=terms["forbidden_context_terms"],
+            )
+            if not expand_requests or screen_expands >= 2:
+                break
+            request = expand_requests[0]
+            seen_expand_keys.add(str(request["expand_key"]))
+            left, top, right, bottom = request["expand_bounds"]
+            dev.click((left + right) // 2, (top + bottom) // 2)
+            expanded_more_count += 1
+            screen_expands += 1
+            time.sleep(0.2)
+            xml = dev.dump_hierarchy(compressed=False)
+            last_xml = xml
+        total_candidates += len(candidates)
+        screens_scanned += 1
+
+        for candidate in qualified:
+            seen_fingerprints.add(str(candidate["fingerprint"]))
+            liked = bool(candidate.get("already_liked"))
+            if not liked:
+                left, top, right, bottom = candidate["like_bounds"]
+                dev.click((left + right) // 2, (top + bottom) // 2)
+                time.sleep(submit_wait_s)
+                liked = True
+
+            commented = False
+            comment_error = ""
+            if comment_text:
+                left, top, right, bottom = candidate["comment_bounds"]
+                dev.click((left + right) // 2, (top + bottom) // 2)
+                time.sleep(comment_wait_s)
+                comment_xml = dev.dump_hierarchy(compressed=False)
+                comment_root = _xml_parse_root(comment_xml)
+                if _fb_close_comment_filter_sheet_if_needed(dev, comment_root):
+                    time.sleep(min(max(comment_wait_s, 0.2), 0.8))
+                    comment_xml = dev.dump_hierarchy(compressed=False)
+                    comment_root = _xml_parse_root(comment_xml)
+                input_ok, input_bounds = _fb_set_visible_comment_text(
+                    dev,
+                    comment_root,
+                    comment_text,
+                    input_terms=terms["comment_input_terms"],
+                    input_classes=input_classes,
+                )
+                if not input_ok:
+                    if _fb_comments_overlay_visible(comment_root):
+                        if _fb_scroll_comment_overlay_toward_input(dev, comment_xml):
+                            time.sleep(min(max(comment_wait_s, 0.2), 0.8))
+                            comment_xml = dev.dump_hierarchy(compressed=False)
+                            comment_root = _xml_parse_root(comment_xml)
+                            if _fb_close_comment_filter_sheet_if_needed(dev, comment_root):
+                                time.sleep(min(max(comment_wait_s, 0.2), 0.8))
+                                comment_xml = dev.dump_hierarchy(compressed=False)
+                                comment_root = _xml_parse_root(comment_xml)
+                            input_ok, input_bounds = _fb_set_visible_comment_text(
+                                dev,
+                                comment_root,
+                                comment_text,
+                                input_terms=terms["comment_input_terms"],
+                                input_classes=input_classes,
+                            )
+                        if not input_ok:
+                            comment_error = "comment input not found"
+                    else:
+                        dev.click((left + right) // 2, (top + bottom) // 2)
+                        time.sleep(comment_wait_s)
+                        comment_xml = dev.dump_hierarchy(compressed=False)
+                        comment_root = _xml_parse_root(comment_xml)
+                        if _fb_close_comment_filter_sheet_if_needed(dev, comment_root):
+                            time.sleep(min(max(comment_wait_s, 0.2), 0.8))
+                            comment_xml = dev.dump_hierarchy(compressed=False)
+                            comment_root = _xml_parse_root(comment_xml)
+                        input_ok, input_bounds = _fb_set_visible_comment_text(
+                            dev,
+                            comment_root,
+                            comment_text,
+                            input_terms=terms["comment_input_terms"],
+                            input_classes=input_classes,
+                        )
+                        if not input_ok:
+                            comment_error = "comment input not found"
+                if input_ok:
+                    comment_error = ""
+                if not comment_error:
+                    time.sleep(0.2)
+                    submit_xml = dev.dump_hierarchy(compressed=False)
+                    submit_root = _xml_parse_root(submit_xml)
+                    found_input = _fb_find_visible_comment_input_node(
+                        submit_root,
+                        input_terms=terms["comment_input_terms"],
+                        input_classes=input_classes,
+                    )
+                    if found_input is not None:
+                        _node, input_bounds = found_input
+                    submit_bounds = _fb_find_comment_submit_bounds(
+                        submit_root,
+                        submit_terms=terms["comment_submit_terms"],
+                        input_bounds=input_bounds,
+                    )
+                    if submit_bounds is None:
+                        comment_error = "comment submit button not found"
+                    else:
+                        left, top, right, bottom = submit_bounds
+                        dev.click((left + right) // 2, (top + bottom) // 2)
+                        time.sleep(submit_wait_s)
+                        commented = True
+
+            if require_comment and comment_text and not commented:
+                actions.append(
+                    {
+                        "verified": False,
+                        "target_type": "post",
+                        "source": "visible_feed",
+                        "target_id": candidate["target_id"],
+                        "matched_keywords": candidate["matched_keywords"],
+                        "row_text": candidate["row_text"],
+                        "like_bounds": candidate["like_bounds"],
+                        "comment_bounds": candidate["comment_bounds"],
+                        "liked": liked,
+                        "commented": False,
+                        "error": comment_error or "comment not submitted",
+                    }
+                )
+                continue
+
+            actions.append(
+                {
+                    "verified": True,
+                    "target_type": "post",
+                    "source": "visible_feed",
+                    "target_id": candidate["target_id"],
+                    "matched_keywords": candidate["matched_keywords"],
+                    "row_text": candidate["row_text"],
+                    "like_bounds": candidate["like_bounds"],
+                    "comment_bounds": candidate["comment_bounds"],
+                    "liked": liked,
+                    "commented": commented,
+                }
+            )
+            verified_count = len([item for item in actions if item.get("verified") is True])
+            if verified_count >= target_count:
+                break
+
+        verified_actions = [item for item in actions if item.get("verified") is True]
+        if len(verified_actions) >= target_count:
+            break
+        if screen_index >= max_scrolls:
+            break
+        if not _fb_scroll_people_surface(dev, p):
+            break
+        scrolls += 1
+        time.sleep(scroll_wait_s)
+
+    verified_actions = [item for item in actions if item.get("verified") is True]
+    if not verified_actions:
+        return {
+            "verified": False,
+            "batch": True,
+            "reason": "no_matching_post",
+            "message": "no visible social post matched configured keywords",
+            "target_count": target_count,
+            "interacted_count": 0,
+            "candidate_count": total_candidates,
+            "screens_scanned": screens_scanned,
+            "scrolls": scrolls,
+            "overlay_closes": overlay_closes,
+            "expanded_more_count": expanded_more_count,
+            "keywords": keywords,
+            "actions": actions[:5],
+            "xml_chars": len(last_xml or ""),
+        }
+
+    return {
+        "verified": True,
+        "batch": True,
+        "target_type": "post",
+        "source": "visible_feed",
+        "target_count": target_count,
+        "interacted_count": len(verified_actions),
+        "liked_count": len([item for item in verified_actions if item.get("liked")]),
+        "commented_count": len(
+            [item for item in verified_actions if item.get("commented")]
+        ),
+        "candidate_count": total_candidates,
+        "screens_scanned": screens_scanned,
+        "scrolls": scrolls,
+        "overlay_closes": overlay_closes,
+        "expanded_more_count": expanded_more_count,
+        "keywords": keywords,
+        "actions": verified_actions,
+        "message": f"interacted with {len(verified_actions)} matching feed posts",
+    }
+
+
+def _flow_fb_scan_posts_interact(dev: Any, p: dict) -> dict:
+    """Backward-compatible Facebook preset for visible post interaction."""
+    return _flow_social_scan_posts_interact(dev, p)
+
+
+def _fb_see_more_bounds_near(
+    root: Any,
+    bounds: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    left, top, right, bottom = bounds
+    matches: list[tuple[int, int, int, int]] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        node_bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        folded = _fb_fold(label)
+        if node_bounds is None:
+            continue
+        if folded == "xem them" or folded == "see more":
+            tap_bounds = node_bounds
+        elif "xem them" in folded or "see more" in folded:
+            node_left, node_top, node_right, node_bottom = node_bounds
+            tap_bounds = (
+                max(node_left, node_right - 320),
+                node_top,
+                node_right,
+                node_bottom,
+            )
+        else:
+            continue
+        if tap_bounds[2] < left or tap_bounds[0] > right:
+            continue
+        if tap_bounds[3] < top - 80 or tap_bounds[1] > bottom + 80:
+            continue
+        matches.append(tap_bounds)
+    if not matches:
+        return None
+    return min(matches, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+
+
+def _fb_people_candidates(
+    hierarchy_xml: str,
+    *,
+    display_name: str,
+    search: str,
+    required: list[str],
+    optional: list[str],
+    forbidden: list[str],
+    min_score: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    root = _xml_parse_root(hierarchy_xml)
+    candidates: list[dict[str, Any]] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if (
+            not bounds
+            or not _fb_is_clickable(node)
+            or not _fb_is_connection_action_label(label)
+        ):
+            continue
+        row_labels = _fb_same_row_labels(root, bounds)
+        row_text = " ".join(dict.fromkeys(row_labels))
+        score, matched, missing, forbidden_hit = _fb_score_text(
+            row_text,
+            display_name=display_name,
+            search=search,
+            required=required,
+            optional=optional,
+            forbidden=forbidden,
+        )
+        if forbidden_hit or missing:
+            continue
+        display_folded = _fb_fold(display_name)
+        label_bounds: list[tuple[int, int, int, int]] = []
+        action_center_y = (bounds[1] + bounds[3]) // 2
+        for label_node in root.iter("node"):
+            candidate_label = _fb_node_label(label_node)
+            candidate_bounds = _bounds_tuple_from_string(
+                str(label_node.attrib.get("bounds", "") or "")
+            )
+            if not candidate_bounds or not display_folded:
+                continue
+            if display_folded not in _fb_fold(candidate_label):
+                continue
+            candidate_center_y = (candidate_bounds[1] + candidate_bounds[3]) // 2
+            if abs(candidate_center_y - action_center_y) <= 180:
+                label_bounds.append(candidate_bounds)
+        target_label_bounds = (
+            min(
+                label_bounds,
+                key=lambda item: (
+                    item[3] - item[1],
+                    (item[2] - item[0]) * (item[3] - item[1]),
+                ),
+            )
+            if label_bounds
+            else None
+        )
+        candidates.append(
+            {
+                "score": score + 5,
+                "matched_keywords": matched,
+                "row_text": row_text[:512],
+                "bounds": list(bounds),
+                "label_bounds": list(target_label_bounds) if target_label_bounds else None,
+            }
+        )
+
+    qualified = [c for c in candidates if int(c["score"]) >= min_score]
+    qualified.sort(key=lambda item: int(item["score"]), reverse=True)
+    return candidates, qualified
+
+
+def _flow_fb_select_people_profile(dev: Any, p: dict) -> dict:
+    """Open one verified Facebook People profile without sending a friend request."""
+    min_score = max(0, int(p.get("min_score", 80) or 80))
+    require_unique = bool(p.get("require_unique", True))
+    search = str(p.get("search") or "")
+    display_name = str(p.get("display_name") or p.get("row_text") or search)
+    required = _fb_keyword_list(p.get("required_keywords"))
+    optional = _fb_keyword_list(p.get("optional_keywords"))
+    forbidden = _fb_keyword_list(p.get("forbidden_keywords"))
+    if display_name and display_name not in required:
+        required = [display_name, *required]
+
+    search_xml = dev.dump_hierarchy(compressed=False)
+    candidates, qualified = _fb_people_candidates(
+        search_xml,
+        display_name=display_name,
+        search=search,
+        required=required,
+        optional=optional,
+        forbidden=forbidden,
+        min_score=min_score,
+    )
+    if not qualified:
+        return {
+            "verified": False,
+            "reason": "target_not_found",
+            "message": "no Facebook People row matched required keywords",
+            "candidate_count": len(candidates),
+            "search_xml_chars": len(search_xml or ""),
+        }
+    if require_unique and len(qualified) > 1:
+        return {
+            "verified": False,
+            "reason": "ambiguous_target",
+            "message": "multiple Facebook People rows matched required keywords",
+            "candidate_count": len(candidates),
+            "ambiguous_count": len(qualified),
+            "top_candidates": qualified[:3],
+            "search_xml_chars": len(search_xml or ""),
+        }
+
+    confirmation_xml = dev.dump_hierarchy(compressed=False)
+    confirmed_candidates, confirmed_qualified = _fb_people_candidates(
+        confirmation_xml,
+        display_name=display_name,
+        search=search,
+        required=required,
+        optional=optional,
+        forbidden=forbidden,
+        min_score=min_score,
+    )
+    if not confirmed_qualified:
+        return {
+            "verified": False,
+            "reason": "target_changed",
+            "message": "Facebook People target changed before click",
+            "candidate_count": len(confirmed_candidates),
+            "search_xml_chars": len(search_xml or ""),
+            "confirmation_xml_chars": len(confirmation_xml or ""),
+        }
+    if require_unique and len(confirmed_qualified) > 1:
+        return {
+            "verified": False,
+            "reason": "ambiguous_target",
+            "message": "multiple Facebook People rows matched before click",
+            "candidate_count": len(confirmed_candidates),
+            "ambiguous_count": len(confirmed_qualified),
+            "top_candidates": confirmed_qualified[:3],
+            "search_xml_chars": len(search_xml or ""),
+            "confirmation_xml_chars": len(confirmation_xml or ""),
+        }
+
+    selected = confirmed_qualified[0]
+    label_bounds = selected.get("label_bounds")
+    if isinstance(label_bounds, list) and len(label_bounds) == 4:
+        left, top, right, bottom = label_bounds
+        tap_x = min(right - 1, left + 40)
+        tap_y = min(bottom - 1, top + 30)
+    else:
+        left, top, _right, bottom = selected["bounds"]
+        tap_x = max(1, left - 220)
+        tap_y = (top + bottom) // 2
+    dev.click(tap_x, tap_y)
+    time.sleep(max(0.0, min(float(p.get("profile_wait_s", 1.0) or 1.0), 10.0)))
+
+    profile_xml = dev.dump_hierarchy(compressed=False)
+    profile_root = _xml_parse_root(profile_xml)
+    profile_text = " ".join(_fb_all_labels(profile_root))
+    profile_display_name = _fb_profile_display_name(display_name)
+    profile_required = [
+        profile_display_name
+        if _fb_fold(token) == _fb_fold(display_name)
+        else token
+        for token in required
+    ]
+    profile_score, matched, missing, forbidden_hit = _fb_score_text(
+        profile_text,
+        display_name=profile_display_name,
+        search=search,
+        required=profile_required,
+        optional=optional,
+        forbidden=forbidden,
+    )
+    action_buttons: list[dict[str, Any]] = []
+    for node in profile_root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if (
+            bounds
+            and _fb_is_clickable(node)
+            and _fb_is_connection_action_label(label)
+        ):
+            action_buttons.append({"label": label, "bounds": list(bounds)})
+
+    if forbidden_hit or missing or profile_score < min_score:
+        return {
+            "verified": False,
+            "reason": "profile_not_verified",
+            "message": "opened profile did not satisfy required keywords",
+            "candidate_count": len(candidates),
+            "missing_keywords": missing,
+            "matched_keywords": matched,
+            "confidence": profile_score,
+            "selected_bounds": selected["bounds"],
+            "profile_xml_chars": len(profile_xml or ""),
+        }
+    if len(action_buttons) != 1:
+        return {
+            "verified": False,
+            "reason": "ambiguous_profile_action",
+            "message": "profile does not expose exactly one Add Friend button",
+            "candidate_count": len(candidates),
+            "action_count": len(action_buttons),
+            "selected_bounds": selected["bounds"],
+            "action_buttons": action_buttons[:3],
+            "profile_xml_chars": len(profile_xml or ""),
+        }
+
+    return {
+        "verified": True,
+        "target_type": "person",
+        "source": "agent_boot",
+        "confidence": max(int(selected["score"]), profile_score),
+        "matched_keywords": list(dict.fromkeys([*selected["matched_keywords"], *matched])),
+        "selected_bounds": selected["bounds"],
+        "selected_label_bounds": selected.get("label_bounds"),
+        "selected_tap": [tap_x, tap_y],
+        "action_bounds": action_buttons[0]["bounds"],
+        "candidate_count": len(candidates),
+        "search_xml_chars": len(search_xml or ""),
+        "confirmation_xml_chars": len(confirmation_xml or ""),
+        "profile_xml_chars": len(profile_xml or ""),
+    }
+
+
+_FB_COMMON_CONTEXT_TOKENS = (
+    "ban chung",
+    "mutual friend",
+    "mutual friends",
+    "cung nhom",
+    "same group",
+)
+_FB_NON_PERSON_CONTEXT_TOKENS = (
+    "trang",
+    "page",
+    "tham gia",
+    "join",
+    "follow",
+    "theo doi",
+    "like page",
+    "advertisement",
+    "duoc tai tro",
+    "sponsored",
+    "anonymous",
+    "nguoi tham gia an danh",
+)
+
+
+def _fb_visible_connectable_people(
+    hierarchy_xml: str,
+    *,
+    common_keywords: list[str],
+    forbidden_keywords: list[str],
+    min_score: int,
+    require_common: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    root = _xml_parse_root(hierarchy_xml)
+    candidates: list[dict[str, Any]] = []
+    common_tokens = tuple(
+        token for token in (_fb_fold(item) for item in common_keywords) if token
+    )
+    forbidden_tokens = tuple(
+        token for token in (_fb_fold(item) for item in forbidden_keywords) if token
+    )
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds or not _fb_is_clickable(node) or not _fb_is_add_friend_label(label):
+            continue
+        package_name = str(node.attrib.get("package", "") or "")
+        if package_name and not package_name.startswith("com.facebook"):
+            continue
+
+        row_labels = _fb_visible_person_row_labels(root, bounds)
+        row_text = " ".join(dict.fromkeys(row_labels))
+        folded = _fb_fold(row_text)
+        if any(token and token in folded for token in forbidden_tokens):
+            continue
+        if any(token in folded for token in _FB_NON_PERSON_CONTEXT_TOKENS):
+            continue
+
+        matched_common: list[str] = []
+        score = 0
+        mutual_count = _fb_mutual_count_from_text(row_text)
+        for token in _FB_COMMON_CONTEXT_TOKENS:
+            if token in folded:
+                matched_common.append(token)
+                score += 40 if "mutual" in token or "ban chung" in token else 30
+        if mutual_count > 0:
+            score += min(mutual_count, 10) * 5
+        for token in common_tokens:
+            if token in folded:
+                matched_common.append(token)
+                score += 20
+        matched_common = list(dict.fromkeys(matched_common))
+        if require_common and not matched_common:
+            continue
+
+        display_name = _fb_display_name_from_row(row_labels, row_text)
+        folded_name = _fb_fold(display_name)
+        if not folded_name or folded_name.replace(" ", "") in {"go", "gogo"}:
+            continue
+        fingerprint_src = (
+            f"{folded_name}|{mutual_count}|{'|'.join(sorted(matched_common))}"
+        )
+        candidates.append(
+            {
+                "score": score,
+                "row_text": row_text[:512],
+                "display_name": display_name,
+                "matched_common": matched_common,
+                "mutual_count": mutual_count,
+                "action_bounds": list(bounds),
+                "target_id": "ui:" + hashlib.sha256(
+                    fingerprint_src.encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+
+    qualified = [item for item in candidates if int(item["score"]) >= min_score]
+    qualified.sort(
+        key=lambda item: (
+            -int(item.get("mutual_count") or 0),
+            -int(item["score"]),
+            int(item["action_bounds"][1]),
+            int(item["action_bounds"][0]),
+        )
+    )
+    return candidates, qualified
+
+
+def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
+    """Send connection requests from visible suggestion rows with common context."""
+    min_score = max(0, int(p.get("min_score", 40) or 40))
+    require_common = _fb_bool_param(p.get("require_common"), True)
+    common_keywords = _fb_keyword_list(p.get("common_keywords"))
+    forbidden_keywords = _fb_keyword_list(p.get("forbidden_keywords"))
+    open_surface = _fb_bool_param(p.get("open_surface"), False)
+    dry_run = _fb_bool_param(p.get("dry_run"), False)
+    batch_mode = (
+        open_surface
+        or dry_run
+        or p.get("target_count") is not None
+        or p.get("max_scrolls") is not None
+        or _fb_bool_param(p.get("batch"), False)
+    )
+    target_count = max(1, int(p.get("target_count", 1) or 1))
+    max_scrolls = max(0, int(p.get("max_scrolls", 0) or 0))
+    no_more_common_limit = max(
+        1, int(p.get("no_more_common_limit", 3) or 3)
+    )
+    stop_on_unverified = _fb_bool_param(p.get("stop_on_unverified"), True)
+    wait_s = max(0.0, min(float(p.get("verify_wait_s", 0.8) or 0.8), 5.0))
+    scroll_wait_s = max(0.0, min(float(p.get("scroll_wait_s", 0.7) or 0.7), 4.0))
+
+    surface_result: dict[str, Any] | None = None
+    initial_xml: str | None = None
+    if open_surface:
+        surface_result = _fb_open_friend_suggestions_surface(dev, p)
+        initial_xml = str(surface_result.get("xml") or "")
+        if not surface_result.get("ready"):
+            return {
+                "verified": False,
+                "batch": batch_mode,
+                "reason": surface_result.get("reason") or "friend_surface_not_ready",
+                "message": "Facebook friend suggestions surface was not ready",
+                "surface": surface_result,
+                "before_xml_chars": len(initial_xml or ""),
+            }
+
+    if batch_mode:
+        sent: list[dict[str, Any]] = []
+        eligible: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        seen_target_ids: set[str] = set()
+        screens_scanned = 0
+        scrolls = 0
+        total_candidates = 0
+        total_qualified = 0
+        no_more_common_screens = 0
+        last_xml = initial_xml
+
+        for screen_index in range(max_scrolls + 1):
+            made_progress_on_screen = False
+            while len(sent) < target_count:
+                before_xml = (
+                    last_xml
+                    if last_xml is not None
+                    else dev.dump_hierarchy(compressed=False)
+                )
+                last_xml = None
+                root = _xml_parse_root(before_xml)
+                if _fb_dismiss_friend_suggestion_prompt(dev, root):
+                    time.sleep(wait_s)
+                    before_xml = dev.dump_hierarchy(compressed=False)
+                    root = _xml_parse_root(before_xml)
+                candidates, qualified = _fb_visible_connectable_people(
+                    before_xml,
+                    common_keywords=common_keywords,
+                    forbidden_keywords=forbidden_keywords,
+                    min_score=min_score,
+                    require_common=require_common,
+                )
+                total_candidates += len(candidates)
+                total_qualified += len(qualified)
+                next_candidate = next(
+                    (
+                        item
+                        for item in qualified
+                        if str(item.get("target_id") or "") not in seen_target_ids
+                    ),
+                    None,
+                )
+                if next_candidate is None:
+                    if not made_progress_on_screen:
+                        no_more_common_screens += 1
+                    break
+
+                seen_target_ids.add(str(next_candidate.get("target_id") or ""))
+                eligible.append(next_candidate)
+                made_progress_on_screen = True
+                if dry_run:
+                    if len(eligible) >= target_count:
+                        break
+                    continue
+
+                left, top, right, bottom = next_candidate["action_bounds"]
+                tap_x = (left + right) // 2
+                tap_y = (top + bottom) // 2
+                dev.click(tap_x, tap_y)
+                time.sleep(wait_s)
+
+                after_xml = dev.dump_hierarchy(compressed=False)
+                if not _fb_pending_request_near(after_xml, tap_y):
+                    skipped.append(
+                        {
+                            "reason": "request_not_verified",
+                            "target_id": next_candidate.get("target_id"),
+                            "display_name": next_candidate.get("display_name"),
+                            "action_bounds": next_candidate.get("action_bounds"),
+                        }
+                    )
+                    last_xml = after_xml
+                    if stop_on_unverified:
+                        return {
+                            "verified": False,
+                            "batch": True,
+                            "reason": "request_not_verified",
+                            "message": (
+                                "Add Friend tap did not verify as pending request; "
+                                "stopped before tapping another candidate"
+                            ),
+                            "target_count": target_count,
+                            "sent_count": len(sent),
+                            "sent": sent,
+                            "eligible_count": len(eligible),
+                            "candidate_count": total_candidates,
+                            "qualified_count": total_qualified,
+                            "skipped": skipped,
+                            "screens_scanned": screens_scanned + 1,
+                            "scrolls": scrolls,
+                            "surface": surface_result,
+                        }
+                    continue
+
+                sent.append(
+                    {
+                        "verified": True,
+                        "target_type": "person",
+                        "source": "visible_people_surface",
+                        "confidence": int(next_candidate["score"]),
+                        "target_id": next_candidate["target_id"],
+                        "display_name": next_candidate.get("display_name")
+                        or next_candidate.get("row_text", "")[:120],
+                        "matched_common": next_candidate["matched_common"],
+                        "mutual_count": next_candidate.get("mutual_count", 0),
+                        "row_text": next_candidate["row_text"],
+                        "action_bounds": next_candidate["action_bounds"],
+                        "selected_tap": [tap_x, tap_y],
+                    }
+                )
+                last_xml = after_xml
+
+            screens_scanned += 1
+            if len(sent) >= target_count or (dry_run and len(eligible) >= target_count):
+                break
+            if no_more_common_screens >= no_more_common_limit:
+                break
+            if screen_index >= max_scrolls:
+                break
+            if not _fb_scroll_people_surface(dev, p):
+                break
+            scrolls += 1
+            time.sleep(scroll_wait_s)
+
+        action_count = len(sent)
+        if dry_run:
+            return {
+                "verified": False,
+                "batch": True,
+                "dry_run": True,
+                "reason": "dry_run",
+                "message": "dry-run scanned visible friend suggestions without sending requests",
+                "target_count": target_count,
+                "eligible_count": len(eligible),
+                "sent_count": 0,
+                "sent": [],
+                "eligible": eligible[:target_count],
+                "candidate_count": total_candidates,
+                "qualified_count": total_qualified,
+                "skipped": skipped,
+                "screens_scanned": screens_scanned,
+                "scrolls": scrolls,
+                "surface": surface_result,
+            }
+
+        if action_count <= 0:
+            return {
+                "verified": False,
+                "batch": True,
+                "reason": "no_common_connectable_people",
+                "message": "no Add Friend row with common context was sent after batch scan",
+                "target_count": target_count,
+                "sent_count": 0,
+                "sent": [],
+                "eligible_count": len(eligible),
+                "candidate_count": total_candidates,
+                "qualified_count": total_qualified,
+                "skipped": skipped,
+                "screens_scanned": screens_scanned,
+                "scrolls": scrolls,
+                "surface": surface_result,
+            }
+
+        return {
+            "verified": True,
+            "batch": True,
+            "target_type": "person",
+            "source": "visible_people_surface",
+            "target_count": target_count,
+            "sent_count": action_count,
+            "sent": sent,
+            "eligible_count": len(eligible),
+            "candidate_count": total_candidates,
+            "qualified_count": total_qualified,
+            "skipped": skipped,
+            "screens_scanned": screens_scanned,
+            "scrolls": scrolls,
+            "surface": surface_result,
+            "message": f"sent {action_count} visible friend requests with common context",
+        }
+
+    before_xml = dev.dump_hierarchy(compressed=False)
+    candidates, qualified = _fb_visible_connectable_people(
+        before_xml,
+        common_keywords=common_keywords,
+        forbidden_keywords=forbidden_keywords,
+        min_score=min_score,
+        require_common=require_common,
+    )
+    if not qualified:
+        return {
+            "verified": False,
+            "reason": "no_common_connectable_people",
+            "message": "no visible Add Friend row satisfied common-context score",
+            "candidate_count": len(candidates),
+            "before_xml_chars": len(before_xml or ""),
+        }
+
+    selected = qualified[0]
+    left, top, right, bottom = selected["action_bounds"]
+    tap_x = (left + right) // 2
+    tap_y = (top + bottom) // 2
+    dev.click(tap_x, tap_y)
+    time.sleep(wait_s)
+
+    after_xml = dev.dump_hierarchy(compressed=False)
+    if not _fb_pending_request_near(after_xml, tap_y):
+        return {
+            "verified": False,
+            "reason": "request_not_verified",
+            "message": "Add Friend tap did not verify as pending request",
+            "candidate_count": len(candidates),
+            "selected": selected,
+            "selected_tap": [tap_x, tap_y],
+            "before_xml_chars": len(before_xml or ""),
+            "after_xml_chars": len(after_xml or ""),
+        }
+
+    return {
+        "verified": True,
+        "target_type": "person",
+        "source": "visible_people_surface",
+        "confidence": int(selected["score"]),
+        "target_id": selected["target_id"],
+        "display_name": selected.get("display_name")
+        or selected["row_text"].split("  ")[0][:120],
+        "matched_common": selected["matched_common"],
+        "mutual_count": selected.get("mutual_count", 0),
+        "row_text": selected["row_text"],
+        "action_bounds": selected["action_bounds"],
+        "selected_tap": [tap_x, tap_y],
+        "candidate_count": len(candidates),
+        "before_xml_chars": len(before_xml or ""),
+        "after_xml_chars": len(after_xml or ""),
+    }
+
+
+def _flow_fb_select_post_target(dev: Any, p: dict) -> dict:
+    """Open one verified Facebook post target before content interaction."""
+    min_score = max(0, int(p.get("min_score", 80) or 80))
+    require_unique = bool(p.get("require_unique", True))
+    current_detail = bool(p.get("current_detail", False))
+    search = str(p.get("search") or "")
+    display_text = str(p.get("display_text") or p.get("row_text") or search)
+    required = _fb_keyword_list(p.get("required_keywords"))
+    optional = _fb_keyword_list(p.get("optional_keywords"))
+    forbidden = _fb_keyword_list(p.get("forbidden_keywords"))
+    if display_text and display_text not in required:
+        required = [display_text, *required]
+    primary_anchor = _fb_fold(display_text or (required[0] if required else search))
+
+    search_xml = dev.dump_hierarchy(compressed=False)
+    root = _xml_parse_root(search_xml)
+    search_suggestion_bounds = (
+        _fb_search_suggestion_bounds(
+            root,
+            display_text=display_text,
+            search=search,
+            required=required,
+        )
+        if _fb_search_input_focused(root)
+        else None
+    )
+    if search_suggestion_bounds is not None:
+        left, top, right, bottom = search_suggestion_bounds
+        dev.click((left + right) // 2, (top + bottom) // 2)
+        time.sleep(max(0.0, min(float(p.get("search_wait_s", 1.0) or 1.0), 10.0)))
+        search_xml = dev.dump_hierarchy(compressed=False)
+        root = _xml_parse_root(search_xml)
+
+    candidates: list[dict[str, Any]] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not label or not bounds:
+            continue
+        if str(node.attrib.get("class", "") or "") == "android.widget.EditText":
+            continue
+        if _fb_is_post_search_chrome_label(label):
+            continue
+        context_labels = _fb_nearby_labels(root, bounds, y_padding=420)
+        context_text = " ".join(dict.fromkeys(context_labels))
+        direct_partial_score, direct_partial_matches = _fb_post_partial_score(
+            label,
+            display_text=display_text,
+            search=search,
+            required=required,
+        )
+        partial_score, partial_matches = _fb_post_partial_score(
+            context_text,
+            display_text=display_text,
+            search=search,
+            required=required,
+        )
+        if primary_anchor and primary_anchor not in _fb_fold(label):
+            if direct_partial_score <= 0:
+                continue
+        if direct_partial_score > partial_score:
+            partial_score = direct_partial_score
+            partial_matches = direct_partial_matches
+        score, matched, missing, forbidden_hit = _fb_score_text(
+            context_text,
+            display_name=display_text,
+            search=search,
+            required=required,
+            optional=optional,
+            forbidden=forbidden,
+        )
+        if forbidden_hit:
+            continue
+        if missing and partial_score <= 0:
+            continue
+        if partial_score > score:
+            score = partial_score
+            matched = [*matched, *partial_matches]
+        candidates.append(
+            {
+                "score": score,
+                "matched_keywords": list(dict.fromkeys(matched)),
+                "text": label[:512],
+                "bounds": list(bounds),
+                "clickable": _fb_is_clickable(node),
+            }
+        )
+
+    candidates = _fb_dedupe_post_candidates(candidates)
+    qualified = [c for c in candidates if int(c["score"]) >= min_score]
+    qualified.sort(key=lambda item: int(item["score"]), reverse=True)
+    if not qualified:
+        return {
+            "verified": False,
+            "reason": "target_not_found",
+            "message": "no Facebook post candidate matched required keywords",
+            "candidate_count": len(candidates),
+            "search_xml_chars": len(search_xml or ""),
+        }
+    if require_unique and len(qualified) > 1:
+        return {
+            "verified": False,
+            "reason": "ambiguous_target",
+            "message": "multiple Facebook post candidates matched required keywords",
+            "candidate_count": len(candidates),
+            "ambiguous_count": len(qualified),
+            "top_candidates": qualified[:3],
+            "search_xml_chars": len(search_xml or ""),
+        }
+
+    selected = qualified[0]
+    if current_detail:
+        detail_text = " ".join(_fb_all_labels(root))
+        detail_score, matched, missing, forbidden_hit = _fb_score_text(
+            detail_text,
+            display_name=display_text,
+            search=search,
+            required=required,
+            optional=optional,
+            forbidden=forbidden,
+        )
+        action_buttons: list[dict[str, Any]] = []
+        for node in root.iter("node"):
+            label = _fb_node_label(node)
+            bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+            if bounds and _fb_is_clickable(node) and _fb_is_content_action_label(label):
+                action_buttons.append({"label": label, "bounds": list(bounds)})
+        partial_detail_score, partial_detail_matches = _fb_post_partial_score(
+            detail_text,
+            display_text=display_text,
+            search=search,
+            required=required,
+        )
+        if forbidden_hit or (
+            (missing or detail_score < min_score)
+            and partial_detail_score < min_score
+        ):
+            return {
+                "verified": False,
+                "reason": "post_not_verified",
+                "message": "current post detail did not satisfy required keywords",
+                "candidate_count": len(candidates),
+                "missing_keywords": missing,
+                "matched_keywords": list(dict.fromkeys([*matched, *partial_detail_matches])),
+                "confidence": max(detail_score, partial_detail_score),
+                "detail_xml_chars": len(search_xml or ""),
+            }
+        if not action_buttons:
+            return {
+                "verified": False,
+                "reason": "post_action_unavailable",
+                "message": "current post detail did not expose content interaction buttons",
+                "candidate_count": len(candidates),
+                "detail_xml_chars": len(search_xml or ""),
+            }
+        return {
+            "verified": True,
+            "target_type": "post",
+            "source": "agent_boot",
+            "confidence": max(int(selected["score"]), detail_score, partial_detail_score),
+            "matched_keywords": list(
+                dict.fromkeys(
+                    [
+                        *selected["matched_keywords"],
+                        *matched,
+                        *partial_detail_matches,
+                    ]
+                )
+            ),
+            "selected_bounds": selected["bounds"],
+            "already_open": True,
+            "action_count": len(action_buttons),
+            "action_bounds": action_buttons[0]["bounds"],
+            "candidate_count": len(candidates),
+            "search_xml_chars": len(search_xml or ""),
+            "detail_xml_chars": len(search_xml or ""),
+        }
+
+    left, top, right, bottom = selected["bounds"]
+    expand_bounds = _fb_see_more_bounds_near(root, (left, top, right, bottom))
+    if expand_bounds is not None:
+        tap_left, tap_top, tap_right, tap_bottom = expand_bounds
+        selected["expand_bounds"] = list(expand_bounds)
+    else:
+        tap_left, tap_top, tap_right, tap_bottom = left, top, right, bottom
+    tap_x = (tap_left + tap_right) // 2
+    tap_y = (tap_top + tap_bottom) // 2
+    dev.click(tap_x, tap_y)
+    time.sleep(max(0.0, min(float(p.get("detail_wait_s", 1.0) or 1.0), 10.0)))
+
+    detail_xml = dev.dump_hierarchy(compressed=False)
+    detail_root = _xml_parse_root(detail_xml)
+    detail_text = " ".join(_fb_all_labels(detail_root))
+    detail_score, matched, missing, forbidden_hit = _fb_score_text(
+        detail_text,
+        display_name=display_text,
+        search=search,
+        required=required,
+        optional=optional,
+        forbidden=forbidden,
+    )
+    action_buttons: list[dict[str, Any]] = []
+    for node in detail_root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds and _fb_is_clickable(node) and _fb_is_content_action_label(label):
+            action_buttons.append({"label": label, "bounds": list(bounds)})
+
+    partial_detail_score, partial_detail_matches = _fb_post_partial_score(
+        detail_text,
+        display_text=display_text,
+        search=search,
+        required=required,
+    )
+    if forbidden_hit or (
+        (missing or detail_score < min_score)
+        and partial_detail_score < min_score
+    ):
+        return {
+            "verified": False,
+            "reason": "post_not_verified",
+            "message": "opened post did not satisfy required keywords",
+            "candidate_count": len(candidates),
+            "missing_keywords": missing,
+            "matched_keywords": list(dict.fromkeys([*matched, *partial_detail_matches])),
+            "confidence": max(detail_score, partial_detail_score),
+            "selected_bounds": selected["bounds"],
+            "detail_xml_chars": len(detail_xml or ""),
+        }
+    if not action_buttons:
+        return {
+            "verified": False,
+            "reason": "post_action_unavailable",
+            "message": "opened post did not expose content interaction buttons",
+            "candidate_count": len(candidates),
+            "selected_bounds": selected["bounds"],
+            "detail_xml_chars": len(detail_xml or ""),
+        }
+
+    return {
+        "verified": True,
+        "target_type": "post",
+        "source": "agent_boot",
+        "confidence": max(int(selected["score"]), detail_score, partial_detail_score),
+        "matched_keywords": list(
+            dict.fromkeys(
+                [
+                    *selected["matched_keywords"],
+                    *matched,
+                    *partial_detail_matches,
+                ]
+            )
+        ),
+        "selected_bounds": selected["bounds"],
+        "expand_bounds": selected.get("expand_bounds"),
+        "expanded_more": expand_bounds is not None,
+        "selected_tap": [tap_x, tap_y],
+        "action_count": len(action_buttons),
+        "action_bounds": action_buttons[0]["bounds"],
+        "candidate_count": len(candidates),
+        "search_xml_chars": len(search_xml or ""),
+        "detail_xml_chars": len(detail_xml or ""),
+    }
+
+
 _FLOW_TABLE: dict[str, Any] = {
     "find_click_wait":   _flow_find_click_wait,
     "wait_and_click":    _flow_wait_and_click,
@@ -986,6 +3388,11 @@ _FLOW_TABLE: dict[str, Any] = {
     "find_get_text":     _flow_find_get_text,
     "swipe_until_found": _flow_swipe_until_found,
     "input_and_confirm": _flow_input_and_confirm,
+    "fb_select_people_profile": _flow_fb_select_people_profile,
+    "fb_connect_visible_people": _flow_fb_connect_visible_people,
+    "fb_select_post_target": _flow_fb_select_post_target,
+    "social_scan_posts_interact": _flow_social_scan_posts_interact,
+    "fb_scan_posts_interact": _flow_fb_scan_posts_interact,
 }
 
 
@@ -2730,6 +5137,8 @@ class U2Executor:
                         "cancelled": True,
                     })
                 op = act.get("op", "")
+                action = dict(act)
+                action["_serial"] = serial
                 fn = None if op == "u2_swipe_batch" else _OP_TABLE.get(op)
                 if op != "u2_swipe_batch" and fn is None:
                     results.append({
@@ -2749,10 +5158,10 @@ class U2Executor:
                 action_started = time.perf_counter()
                 try:
                     if op == "u2_swipe_batch":
-                        value = self._run_u2_swipe_batch(serial, act)
+                        value = self._run_u2_swipe_batch(serial, action)
                     elif op == "dump_hierarchy" and self._http_dump is not None:
-                        timeout = float(act.get("timeout") or act.get("timeout_s") or 5.0)
-                        compressed = bool(act.get("compressed", False))
+                        timeout = float(action.get("timeout") or action.get("timeout_s") or 5.0)
+                        compressed = bool(action.get("compressed", False))
                         value = self._http_dump(serial, timeout, compressed)
                         if value:
                             self._mark_direct_http_healthy(serial)
@@ -2762,12 +5171,12 @@ class U2Executor:
                                 "fallback to u2 dump_hierarchy",
                                 serial,
                             )
-                            value = fn(dev, act)
+                            value = fn(dev, action)
                     else:
-                        value = fn(dev, act)
+                        value = fn(dev, action)
                     if (
                         op == "app_start"
-                        and act.get("use_monkey")
+                        and action.get("use_monkey")
                         and lock_rotation_after_shell_enabled()
                     ):
                         lock_portrait_rotation(serial)

@@ -1,8 +1,18 @@
-# Linux only: mount USB bus, ADB chạy trong container (không cần host.docker.internal).
-# Usage: docker compose -f docker-compose.yml -f docker-compose.linux-usb.yml up -d --build
+# Linux only: mount USB bus into both containers and run ADB locally in each
+# container instead of connecting to host.docker.internal.
 
 services:
   agent-boot:
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      ADB_HOST: ""
+      ADB_PORT: ""
+      ADB_SERVER_SOCKET: ""
+    extra_hosts: []
+
+  media-adapter:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb

@@ -61,6 +61,35 @@ def test_dedupe_multiple_usb_devices_sorted(monkeypatch):
     assert out == ["10.1.1.1:5555", "ALPHA", "ZEBRA"]
 
 
+def test_list_serials_scans_all_configured_adb_servers(monkeypatch):
+    monkeypatch.setenv(
+        "ADB_SERVER_SOCKETS",
+        "tcp:host.docker.internal:5037,tcp:host.docker.internal:5038",
+    )
+    adb_mod._SERIAL_ADB_SERVER.clear()
+
+    def fake_run_raw(args, timeout=5):
+        joined = " ".join(args)
+        if "-P 5037" in joined:
+            return "List of devices attached\nPHONE1\tdevice\n", 0
+        if "-P 5038" in joined:
+            return "List of devices attached\nPHONE2\tdevice\nOFF\toffline\n", 0
+        return "", 1
+
+    monkeypatch.setattr(adb_mod, "_run_raw", fake_run_raw)
+    monkeypatch.setattr(adb_mod, "_run", lambda *args, **kwargs: ("", 0))
+
+    assert adb_mod._list_serials() == ["PHONE1", "PHONE2"]
+    assert adb_mod._adb_command("shell", "true", serial="PHONE2")[:6] == [
+        adb_mod._ADB,
+        "-H",
+        "host.docker.internal",
+        "-P",
+        "5038",
+        "-s",
+    ]
+
+
 def test_reconcile_disconnects_tcp_when_usb_shares_hardware_serial(monkeypatch):
     calls: list[tuple[str, ...]] = []
 

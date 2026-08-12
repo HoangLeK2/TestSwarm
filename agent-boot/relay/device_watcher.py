@@ -17,6 +17,8 @@ import logging
 import re
 from typing import Awaitable, Callable
 
+from relay.adb import _remember_serial_adb_server, adb_server_specs_from_env
+
 logger = logging.getLogger("relay.watcher")
 
 _DEVICE_LINE_RE = re.compile(
@@ -40,31 +42,73 @@ class AdbDeviceWatcher:
     def __init__(self, on_device_event: DeviceEventCb) -> None:
         self._cb       = on_device_event
         self._snapshot: dict[str, str] = {}
+        self._snapshots: dict[str, dict[str, str]] = {}
         self._proc: asyncio.subprocess.Process | None = None
+        self._procs: list[asyncio.subprocess.Process] = []
 
     async def run(self) -> None:
         """Loop forever; restarts subprocess on failure."""
+        servers = adb_server_specs_from_env()
+        if len(servers) > 1:
+            await asyncio.gather(
+                *[
+                    self._run_server(host, port)
+                    for host, port in servers
+                ],
+            )
+            return
         while True:
             try:
-                await self._track_loop()
+                server = servers[0] if servers else None
+                await self._track_loop(server=server)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.warning("device_watcher crashed (%s) — restarting in 2s", exc)
                 await asyncio.sleep(2)
 
+    async def _run_server(self, host: str, port: str) -> None:
+        key = f"{host}:{port}"
+        while True:
+            try:
+                await self._track_loop(server=(host, port), key=key)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "device_watcher crashed host=%s port=%s (%s) — restarting in 2s",
+                    host,
+                    port,
+                    exc,
+                )
+                await asyncio.sleep(2)
+
     def stop(self) -> None:
         if self._proc and self._proc.returncode is None:
             self._proc.kill()
+        for proc in list(self._procs):
+            if proc.returncode is None:
+                proc.kill()
 
-    async def _track_loop(self) -> None:
-        self._proc = await asyncio.create_subprocess_exec(
-            "adb", "track-devices",
+    async def _track_loop(
+        self,
+        *,
+        server: tuple[str, str] | None = None,
+        key: str = "default",
+    ) -> None:
+        argv = ["adb"]
+        if server:
+            argv += ["-H", server[0], "-P", server[1]]
+        argv.append("track-devices")
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        assert self._proc.stdout
-        reader = self._proc.stdout
+        self._proc = proc
+        self._procs.append(proc)
+        assert proc.stdout
+        reader = proc.stdout
 
         try:
             while True:
@@ -86,13 +130,13 @@ class AdbDeviceWatcher:
                         m = _DEVICE_LINE_RE.match(line)
                         if m:
                             pending[m.group(1)] = m.group(2)
-                    await self._apply(pending)
+                    await self._apply(pending, key=key)
                     continue
 
                 # Format B (standard raw protocol): read exactly `length` bytes of payload
                 length = int(header_str, 16)
                 if length == 0:
-                    await self._apply({})
+                    await self._apply({}, key=key)
                     continue
 
                 payload = await reader.readexactly(length)
@@ -104,24 +148,46 @@ class AdbDeviceWatcher:
                     if m:
                         snapshot[m.group(1)] = m.group(2)
 
-                await self._apply(snapshot)
+                await self._apply(snapshot, key=key)
 
         except asyncio.IncompleteReadError:
             # adb process closed stdout (e.g., daemon restart) — outer loop retries
             pass
         finally:
-            if self._proc.returncode is None:
-                self._proc.kill()
+            if proc.returncode is None:
+                proc.kill()
+            try:
+                self._procs.remove(proc)
+            except ValueError:
+                pass
 
-    async def _apply(self, new_snapshot: dict[str, str]) -> None:
-        old = self._snapshot
-        for serial, state in new_snapshot.items():
+    async def _apply(self, new_snapshot: dict[str, str], *, key: str = "default") -> None:
+        if key != "default" and ":" in key:
+            host, port = key.rsplit(":", 1)
+            for serial, state in new_snapshot.items():
+                if state == "device":
+                    _remember_serial_adb_server(serial, host, port)
+        old = dict(self._snapshot)
+        if key == "default":
+            self._snapshot = dict(new_snapshot)
+        else:
+            self._snapshots[key] = dict(new_snapshot)
+            self._snapshot = self._aggregate_snapshots()
+        for serial, state in self._snapshot.items():
             if old.get(serial) != state:
                 await self._cb(serial, state)
         for serial in old:
-            if serial not in new_snapshot:
+            if serial not in self._snapshot:
                 await self._cb(serial, "offline")
-        self._snapshot = dict(new_snapshot)
+
+    def _aggregate_snapshots(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for snapshot in self._snapshots.values():
+            for serial, state in snapshot.items():
+                if out.get(serial) == "device":
+                    continue
+                out[serial] = state
+        return out
 
     @property
     def current_serials(self) -> list[str]:

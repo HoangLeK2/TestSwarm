@@ -33,6 +33,326 @@ def executor(event_loop, mock_device):
     return exc, mock_device, pool
 
 
+class _FlowDevice:
+    def __init__(self, *hierarchies: str) -> None:
+        self._hierarchies = list(hierarchies)
+        self.clicks: list[tuple[int, int]] = []
+        self.swipes: list[tuple[int, int, int, int, float]] = []
+        self.advance_on_click = False
+
+    def dump_hierarchy(self, compressed: bool = False) -> str:
+        assert compressed is False
+        if len(self._hierarchies) > 1:
+            return self._hierarchies.pop(0)
+        return self._hierarchies[0]
+
+    def click(self, x: int, y: int) -> None:
+        self.clicks.append((x, y))
+        if self.advance_on_click and len(self._hierarchies) > 1:
+            self._hierarchies.pop(0)
+
+    def swipe(
+        self,
+        fx: int,
+        fy: int,
+        tx: int,
+        ty: int,
+        duration: float = 0.5,
+    ) -> None:
+        self.swipes.append((fx, fy, tx, ty, duration))
+
+    def window_size(self) -> tuple[int, int]:
+        return (1080, 2400)
+
+
+def _fb_xml(*nodes: str) -> str:
+    return f"<hierarchy>{''.join(nodes)}</hierarchy>"
+
+
+def _fb_node(
+    label: str,
+    *,
+    bounds: str,
+    clickable: bool = False,
+) -> str:
+    return (
+        f'<node text="{label}" content-desc="{label}" '
+        f'clickable="{str(clickable).lower()}" bounds="{bounds}" />'
+    )
+
+
+def test_flow_fb_connect_visible_people_clicks_only_common_context_row(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("3 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    after = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("Hủy lời mời", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(before, after)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "min_score": 40,
+            "require_common": True,
+            "common_keywords": ["bạn chung", "cùng nhóm"],
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["source"] == "visible_people_surface"
+    assert result["target_id"].startswith("ui:")
+    assert "ban chung" in result["matched_common"]
+    assert result["selected_tap"] == [750, 160]
+    assert dev.clicks == [(750, 160)]
+
+
+def test_flow_fb_connect_visible_people_does_not_click_without_common_context():
+    before = _fb_xml(
+        _fb_node("Random Name", bounds="[40,100][400,145]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(before)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"min_score": 40, "require_common": True},
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "no_common_connectable_people"
+    assert dev.clicks == []
+
+
+def test_flow_fb_connect_visible_people_batch_sends_multiple_common_rows(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Gợi ý", bounds="[20,90][250,150]"),
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("3 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+        _fb_node("Tran Van B", bounds="[40,320][400,365]"),
+        _fb_node("1 bạn chung", bounds="[40,366][400,410]"),
+        _fb_node("Thêm bạn bè", bounds="[600,340][900,420]", clickable=True),
+        _fb_node("No Mutual", bounds="[40,540][400,585]"),
+        _fb_node("Thêm bạn bè", bounds="[600,560][900,640]", clickable=True),
+    )
+    after_a = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Gợi ý", bounds="[20,90][250,150]"),
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("Hủy lời mời", bounds="[600,120][900,200]", clickable=True),
+        _fb_node("Tran Van B", bounds="[40,320][400,365]"),
+        _fb_node("1 bạn chung", bounds="[40,366][400,410]"),
+        _fb_node("Thêm bạn bè", bounds="[600,340][900,420]", clickable=True),
+    )
+    after_b = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Gợi ý", bounds="[20,90][250,150]"),
+        _fb_node("Tran Van B", bounds="[40,320][400,365]"),
+        _fb_node("Hủy lời mời", bounds="[600,340][900,420]", clickable=True),
+    )
+    dev = _FlowDevice(before, after_a, after_b)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 2,
+            "max_scrolls": 0,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["batch"] is True
+    assert result["sent_count"] == 2
+    assert [item["mutual_count"] for item in result["sent"]] == [3, 1]
+    assert dev.clicks == [(750, 160), (750, 380)]
+
+
+def test_flow_fb_connect_visible_people_batch_dry_run_does_not_click(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Gợi ý", bounds="[20,90][250,150]"),
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("3 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+        _fb_node("Tran Van B", bounds="[40,320][400,365]"),
+        _fb_node("1 bạn chung", bounds="[40,366][400,410]"),
+        _fb_node("Thêm bạn bè", bounds="[600,340][900,420]", clickable=True),
+    )
+    dev = _FlowDevice(before)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 2,
+            "max_scrolls": 0,
+            "dry_run": True,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "dry_run"
+    assert result["eligible_count"] == 2
+    assert result["sent_count"] == 0
+    assert dev.clicks == []
+
+
+def test_flow_fb_connect_visible_people_dedupes_same_person_after_scroll(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    first_screen = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Cu Minh", bounds="[40,100][400,145]"),
+        _fb_node("1 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    overlapped_scroll = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Cu Minh", bounds="[40,260][400,305]"),
+        _fb_node("1 bạn chung", bounds="[40,306][400,350]"),
+        _fb_node("Bạn bè Bạn bè", bounds="[40,351][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,280][900,360]", clickable=True),
+    )
+    dev = _FlowDevice(first_screen, overlapped_scroll)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 2,
+            "max_scrolls": 1,
+            "dry_run": True,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["reason"] == "dry_run"
+    assert result["eligible_count"] == 1
+    assert [item["display_name"] for item in result["eligible"]] == ["Cu Minh"]
+    assert dev.clicks == []
+
+
+def test_flow_fb_connect_visible_people_stops_after_unverified_tap(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("3 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+        _fb_node("Tran Van B", bounds="[40,320][400,365]"),
+        _fb_node("1 bạn chung", bounds="[40,366][400,410]"),
+        _fb_node("Thêm bạn bè", bounds="[600,340][900,420]", clickable=True),
+    )
+    unchanged_after_tap = before
+    dev = _FlowDevice(before, unchanged_after_tap)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 2,
+            "max_scrolls": 0,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "request_not_verified"
+    assert result["sent_count"] == 0
+    assert result["eligible_count"] == 1
+    assert len(result["skipped"]) == 1
+    assert dev.clicks == [(750, 160)]
+
+
+def test_flow_fb_connect_visible_people_opens_find_friends_surface(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    home = _fb_xml(_fb_node("Menu", bounds="[40,180][140,260]"))
+    menu = _fb_xml(
+        _fb_node("Menu", bounds="[20,20][200,80]"),
+        _fb_node("Xem thêm", bounds="[70,900][440,980]"),
+    )
+    expanded = _fb_xml(
+        _fb_node("Menu", bounds="[20,20][200,80]"),
+        _fb_node("Tìm bạn bè", bounds="[70,1180][500,1260]"),
+    )
+    suggestions = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Gợi ý", bounds="[20,90][250,150]"),
+        _fb_node("Nguyen Van A", bounds="[40,300][400,345]"),
+        _fb_node("2 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    dev = _FlowDevice(home, menu, expanded, suggestions)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "open_surface": True,
+            "target_count": 1,
+            "dry_run": True,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["reason"] == "dry_run"
+    assert result["eligible_count"] == 1
+    assert result["surface"]["ready"] is True
+    assert dev.clicks[:3] == [(90, 208), (255, 940), (285, 1220)]
+
+
+def test_flow_fb_connect_visible_people_closes_detail_before_opening_surface(
+    monkeypatch,
+):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    detail = _fb_xml(
+        _fb_node("Đóng", bounds="[35,147][161,273]", clickable=True),
+        _fb_node("Bài viết của Some Page", bounds="[60,360][700,430]"),
+    )
+    home = _fb_xml(_fb_node("Menu", bounds="[40,180][140,260]"))
+    menu = _fb_xml(
+        _fb_node("Menu", bounds="[20,20][200,80]"),
+        _fb_node("Tìm bạn bè", bounds="[70,1180][500,1260]"),
+    )
+    suggestions = _fb_xml(
+        _fb_node("Bạn bè", bounds="[20,20][300,80]"),
+        _fb_node("Gợi ý", bounds="[20,90][250,150]"),
+        _fb_node("Nguyen Van A", bounds="[40,300][400,345]"),
+        _fb_node("2 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    dev = _FlowDevice(detail, home, menu, suggestions)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "open_surface": True,
+            "target_count": 1,
+            "dry_run": True,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["reason"] == "dry_run"
+    assert result["eligible_count"] == 1
+    assert result["surface"]["attempts"][:3] == [
+        "close_detail_overlay",
+        "tap_menu",
+        "tap_find_friends",
+    ]
+    assert dev.clicks[:3] == [(98, 210), (90, 208), (285, 1220)]
+
+
 # ── Batch tests ───────────────────────────────────────────────────────────────
 
 
@@ -61,6 +381,31 @@ async def test_run_batch_click_success(executor):
     dev.click.assert_called_once_with(100, 200)
     assert exc.ui_generation("serial") == 2
     assert exc.ui_mutation_in_flight("serial") == 0
+
+
+@pytest.mark.asyncio
+async def test_run_batch_press_key_falls_back_to_adb_home_intent(executor, monkeypatch):
+    exc, dev, pool = executor
+    dev.press.side_effect = RuntimeError("JSON-RPC HTTP 502")
+    adb_calls: list[tuple[str, str, int]] = []
+
+    def fake_adb_shell(serial: str, cmd: str, timeout: int = 5):
+        adb_calls.append((serial, cmd, timeout))
+        return "", 0
+
+    monkeypatch.setattr(u2_exec_mod, "_adb_shell", fake_adb_shell)
+
+    result = await exc.run_batch("serial-1", [
+        {"op": "press_key", "key": "home"},
+    ])
+
+    assert result["ok"] is True
+    assert result["results"][0]["ok"] is True
+    dev.press.assert_called_once_with("home")
+    assert adb_calls == [
+        ("serial-1", "am start -a android.intent.action.MAIN -c android.intent.category.HOME", 5)
+    ]
+    assert exc.ui_mutation_in_flight("serial-1") == 0
 
 
 @pytest.mark.asyncio

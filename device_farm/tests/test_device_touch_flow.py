@@ -349,6 +349,27 @@ class TestKeyFallbackFlow:
         d.key("home")
         mock_u2.press.assert_called_once_with("home")
 
+    def test_nav_key_falls_back_to_adb_relay_when_u2_fails(self):
+        d = _make_device()
+        d._scrcpy_receiver = None
+        mock_u2 = MagicMock()
+        mock_u2.press.side_effect = RuntimeError("JSON-RPC HTTP 502")
+        d._u2 = mock_u2
+        d._agent_send = None
+        d._key_via_adb_relay = MagicMock(return_value=True)
+
+        d.key("home")
+
+        mock_u2.press.assert_called_once_with("home")
+        d._key_via_adb_relay.assert_called_once_with("home")
+
+    def test_adb_key_command_uses_home_intent(self):
+        assert (
+            DeviceClient._adb_key_command("home")
+            == "am start -a android.intent.action.MAIN -c android.intent.category.HOME"
+        )
+        assert DeviceClient._adb_key_command("back") == "input keyevent KEYCODE_BACK"
+
     def test_key_falls_back_to_agent_shell(self):
         d = _make_device()
         d._scrcpy_receiver = None

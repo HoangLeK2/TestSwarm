@@ -213,6 +213,9 @@ class AgentControlServicer:
         rid = self._serial_index.get(serial)
         return self._conns.get(rid) if rid else None
 
+    def online_serials_snapshot(self) -> set[str]:
+        return set(self._serial_index.keys())
+
     def find_serial_by_ip(self, ip: str) -> Optional[str]:
         """Return first registered serial whose IP part matches, ignoring port.
         Used when mDNS connects on a dynamic port different from what's in the DB.

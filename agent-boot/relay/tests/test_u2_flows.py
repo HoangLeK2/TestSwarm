@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
@@ -578,6 +579,1044 @@ async def test_input_and_confirm_no_confirm(executor_with_device):
 
     assert result["value"]["found_input"] is True
     assert result["value"]["found_confirm"] is False
+
+
+# ── Facebook people target resolver ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fb_select_people_profile_verifies_target_before_friend_request(executor_with_device):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Hoang Le" clickable="false" bounds="[42,512][420,573]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[584,512][921,573]" />
+        <node text="Nguyen Van A" clickable="false" bounds="[42,704][420,765]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[584,704][921,765]" />
+      </node>
+    </hierarchy>
+    """
+    profile_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Hoang Le" clickable="false" bounds="[42,180][600,248]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[42,988][655,1114]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [search_xml, search_xml, profile_xml]
+
+    result = await exc.execute_flow("serial", "fb_select_people_profile", {
+        "display_name": "Hoang Le",
+        "required_keywords": ["Hoang Le"],
+        "min_score": 80,
+    })
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["target_type"] == "person"
+    assert value["action_bounds"] == [42, 988, 655, 1114]
+    dev.click.assert_called_once_with(82, 542)
+
+
+@pytest.mark.asyncio
+async def test_fb_select_people_profile_rechecks_bounds_before_click(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    initial_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Hoang Le" clickable="false" bounds="[42,512][420,573]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[584,512][921,573]" />
+      </node>
+    </hierarchy>
+    """
+    shifted_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Sponsored" clickable="true" bounds="[0,480][1080,650]" />
+        <node text="Hoang Le" clickable="false" bounds="[42,704][420,765]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[584,704][921,765]" />
+      </node>
+    </hierarchy>
+    """
+    profile_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Hoang Le" clickable="false" bounds="[42,180][600,248]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[42,988][655,1114]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [initial_xml, shifted_xml, profile_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_select_people_profile",
+        {
+            "display_name": "Hoang Le",
+            "required_keywords": ["Hoang Le"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["verified"] is True
+    assert result["value"]["selected_bounds"] == [584, 704, 921, 765]
+    dev.click.assert_called_once_with(82, 734)
+
+
+@pytest.mark.asyncio
+async def test_fb_select_people_profile_accepts_base_name_on_opened_profile(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Tuan Vu (Tuấn Tattoo Piercing) · Thêm bạn bè" clickable="false" bounds="[294,504][1218,636]" />
+        <node text="Thêm bạn bè" clickable="true" bounds="[294,570][631,631]" />
+      </node>
+    </hierarchy>
+    """
+    profile_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Tuan Vu" clickable="true" bounds="[420,505][698,584]" />
+        <node text="Thêm bạn bè" clickable="true" bounds="[42,1055][655,1181]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [search_xml, search_xml, profile_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_select_people_profile",
+        {
+            "display_name": "Tuan Vu (Tuấn Tattoo Piercing)",
+            "required_keywords": ["Tuan Vu (Tuấn Tattoo Piercing)"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["verified"] is True
+    assert result["value"]["action_bounds"] == [42, 1055, 655, 1181]
+
+
+@pytest.mark.asyncio
+async def test_fb_select_people_profile_verifies_already_pending_target(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Nguyễn Tuấn Anh Osana (tũn)" clickable="false" bounds="[42,512][520,573]" />
+        <node text="" content-desc="Hủy yêu cầu" clickable="true" bounds="[584,512][921,573]" />
+      </node>
+    </hierarchy>
+    """
+    profile_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Nguyễn Tuấn Anh Osana" clickable="false" bounds="[42,180][700,248]" />
+        <node text="" content-desc="Hủy yêu cầu" clickable="true" bounds="[42,988][655,1114]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [search_xml, search_xml, profile_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_select_people_profile",
+        {
+            "display_name": "Nguyễn Tuấn Anh Osana",
+            "required_keywords": ["Nguyễn Tuấn Anh Osana"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["verified"] is True
+    assert result["value"]["action_bounds"] == [42, 988, 655, 1114]
+    dev.click.assert_called_once_with(82, 542)
+
+
+@pytest.mark.asyncio
+async def test_fb_select_people_profile_rejects_ambiguous_people_rows(executor_with_device):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1080,1920]">
+        <node text="Hoang Le" clickable="false" bounds="[42,512][420,573]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[584,512][921,573]" />
+        <node text="Hoang Le" clickable="false" bounds="[42,704][420,765]" />
+        <node text="" content-desc="Nút Thêm bạn bè" clickable="true" bounds="[584,704][921,765]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = search_xml
+
+    result = await exc.execute_flow("serial", "fb_select_people_profile", {
+        "display_name": "Hoang Le",
+        "required_keywords": ["Hoang Le"],
+        "min_score": 80,
+        "require_unique": True,
+    })
+
+    assert result["ok"] is True
+    assert result["value"]["verified"] is False
+    assert result["value"]["reason"] == "ambiguous_target"
+    dev.click.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fb_select_post_target_uses_dump_xml_fixture(executor_with_device):
+    exc, dev = executor_with_device
+    search_xml = (
+        Path(__file__).parent
+        / "fixtures"
+        / "facebook"
+        / "codex_vn_two_post_feed.xml"
+    ).read_text(encoding="utf-8")
+    detail_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Các bác cho hỏi claude thì nên dùng opus 4.8 hay sonet 4.6 hơn nhỉ" clickable="true" bounds="[42,400][1218,560]" />
+        <node text="" content-desc="Nút Thích" clickable="true" bounds="[42,1505][227,1659]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,1505][457,1659]" />
+        <node text="" content-desc="Nút Chia sẻ" clickable="true" bounds="[457,1505][690,1659]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [search_xml, detail_xml]
+
+    result = await exc.execute_flow("serial", "fb_select_post_target", {
+        "display_text": "Các bác cho hỏi claude",
+        "required_keywords": ["Các bác cho hỏi claude"],
+        "min_score": 80,
+    })
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["target_type"] == "post"
+    assert value["action_count"] == 3
+    assert value["selected_bounds"] == [105, 840, 1155, 1320]
+    assert value["expanded_more"] is False
+    assert value["expand_bounds"] is None
+    dev.click.assert_called_once_with(630, 1080)
+
+
+@pytest.mark.asyncio
+async def test_fb_select_post_target_matches_split_vietnamese_result_without_posts_tab(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Tất cả" clickable="true" bounds="[42,302][214,392]" />
+        <node text="Video" clickable="true" bounds="[238,302][410,392]" />
+        <node text="Chào mọi người, mình là" clickable="false" bounds="[88,640][1110,710]" />
+        <node text="thành viên mới, mình đang tìm hiểu Claude Code" clickable="true" bounds="[88,712][1110,806]" />
+        <node text="12 bình luận" clickable="false" bounds="[88,1110][340,1170]" />
+      </node>
+    </hierarchy>
+    """
+    detail_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Chào mọi người, mình là thành viên mới, mình đang tìm hiểu Claude Code" clickable="false" bounds="[42,400][1218,560]" />
+        <node text="" content-desc="Nút Thích" clickable="true" bounds="[42,1505][227,1659]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,1505][457,1659]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [search_xml, detail_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_select_post_target",
+        {
+            "display_text": "Chào mọi người, mình là thành viên mới",
+            "required_keywords": ["Chào mọi người, mình là thành viên mới"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["target_type"] == "post"
+    assert value["action_count"] == 2
+    assert value["selected_bounds"] == [88, 712, 1110, 806]
+    dev.click.assert_called_once_with(599, 759)
+
+
+@pytest.mark.asyncio
+async def test_fb_select_post_target_submits_focused_search_suggestion(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    suggestion_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="" content-desc="" class="android.widget.Button" clickable="true" bounds="[0,288][1260,428]">
+          <node text="anh chị em dùng ai cho những công" content-desc="anh chị em dùng ai cho những công" clickable="false" bounds="[196,329][1204,391]" />
+        </node>
+        <node text="anh chị em dùng ai cho những công" class="android.widget.EditText" content-desc="Tìm kiếm" clickable="true" focused="true" bounds="[210,133][1064,287]" />
+      </node>
+    </hierarchy>
+    """
+    results_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Anh chị em dùng AI cho những công" clickable="true" bounds="[88,640][1110,734]" />
+        <node text="việc nào trong quy trình nhân sự rồi ạ?" clickable="false" bounds="[88,736][1110,806]" />
+      </node>
+    </hierarchy>
+    """
+    detail_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Anh chị em dùng AI cho những công việc nào trong quy trình nhân sự rồi ạ?" clickable="false" bounds="[42,400][1218,560]" />
+        <node text="" content-desc="Nút Thích" clickable="true" bounds="[42,1505][227,1659]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,1505][457,1659]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [suggestion_xml, results_xml, detail_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_select_post_target",
+        {
+            "display_text": "Anh chị em dùng AI cho những công",
+            "required_keywords": ["Anh chị em dùng AI cho những công"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["target_type"] == "post"
+    assert value["selected_bounds"] == [88, 640, 1110, 734]
+    assert dev.click.call_args_list == [call(630, 358), call(599, 687)]
+
+
+@pytest.mark.asyncio
+async def test_fb_select_post_target_accepts_current_post_detail(executor_with_device):
+    exc, dev = executor_with_device
+    detail_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Introducing a new way to edit videos with Meta AI" clickable="false" bounds="[42,400][1218,560]" />
+        <node text="" content-desc="Nút Thích" clickable="true" bounds="[42,1505][227,1659]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,1505][457,1659]" />
+        <node text="" content-desc="Nút Chia sẻ" clickable="true" bounds="[457,1505][690,1659]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = detail_xml
+
+    result = await exc.execute_flow("serial", "fb_select_post_target", {
+        "display_text": "Introducing a new way to edit videos with Meta AI",
+        "required_keywords": ["Introducing a new way to edit videos with Meta AI"],
+        "min_score": 80,
+        "current_detail": True,
+    })
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["target_type"] == "post"
+    assert value["already_open"] is True
+    assert value["action_count"] == 3
+    dev.click.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fb_select_post_target_clicks_current_post_see_more_bounds(executor_with_device):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Chắc sẽ có anh em cần cái này… xem thêm" content-desc="Chắc sẽ có anh em cần cái này… xem thêm" clickable="true" bounds="[42,841][1218,926]">
+          <node text="xem thêm" content-desc="" clickable="true" bounds="[906,832][1170,898]" />
+        </node>
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[0,2476][225,2630]" />
+        <node text="Bình luận" clickable="true" bounds="[225,2476][429,2630]" />
+        <node text="" content-desc="Nút Chia sẻ. Nhấn đúp để chia sẻ bài viết." clickable="true" bounds="[429,2476][626,2630]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [search_xml, search_xml]
+
+    result = await exc.execute_flow("serial", "fb_select_post_target", {
+        "display_text": "Chắc sẽ có anh em cần cái này",
+        "required_keywords": ["Chắc sẽ có anh em cần cái này"],
+        "min_score": 80,
+    })
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["expanded_more"] is True
+    assert value["expand_bounds"] == [906, 832, 1170, 898]
+    dev.click.assert_called_once_with(1038, 865)
+
+
+@pytest.mark.asyncio
+async def test_fb_select_post_target_rejects_ambiguous_post_rows(executor_with_device):
+    exc, dev = executor_with_device
+    search_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="same launch text" clickable="true" bounds="[100,400][1000,520]" />
+        <node text="same launch text" clickable="true" bounds="[100,900][1000,1020]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = search_xml
+
+    result = await exc.execute_flow("serial", "fb_select_post_target", {
+        "display_text": "same launch text",
+        "required_keywords": ["same launch text"],
+        "min_score": 80,
+        "require_unique": True,
+    })
+
+    assert result["ok"] is True
+    assert result["value"]["verified"] is False
+    assert result["value"]["reason"] == "ambiguous_target"
+    dev.click.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_likes_and_comments_keyword_post(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Một bài viết về tuyển dụng AI trong doanh nghiệp" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="Quan điểm rất hữu ích" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+        <node text="Đăng" clickable="true" bounds="[1030,2470][1218,2590]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [feed_xml, comment_xml, submit_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["tuyển dụng", "AI"],
+            "comment_text": "Quan điểm rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["interacted_count"] == 1
+    assert value["liked_count"] == 1
+    assert value["commented_count"] == 1
+    assert value["actions"][0]["matched_keywords"] == ["tuyen dung", "ai"]
+    assert dev.click.call_args_list == [
+        call(134, 865),
+        call(342, 865),
+        call(511, 2530),
+        call(1124, 2530),
+    ]
+    dev.shell.assert_not_called()
+    dev.assert_any_call(
+        className="android.widget.EditText",
+        description="Viết bình luận công khai",
+    )
+    dev.return_value.set_text.assert_called_once_with("Quan điểm rất hữu ích")
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_closes_comment_overlay_before_scan(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    overlay_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Đóng" clickable="true" bounds="[560,133][700,175]" />
+        <node class="android.widget.AutoCompleteTextView" text="" content-desc="Viết bình luận..." clickable="true" bounds="[42,2647][1218,2779]" />
+      </node>
+    </hierarchy>
+    """
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Một bài viết về tuyển dụng AI trong doanh nghiệp" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.AutoCompleteTextView" text="" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="Quan điểm rất hữu ích" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+        <node text="Đăng" clickable="true" bounds="[1030,2470][1218,2590]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [overlay_xml, feed_xml, comment_xml, submit_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["AI"],
+            "comment_text": "Quan điểm rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["overlay_closes"] == 1
+    assert value["interacted_count"] == 1
+    assert value["commented_count"] == 1
+    assert dev.click.call_args_list == [
+        call(630, 154),
+        call(134, 865),
+        call(342, 865),
+        call(511, 2530),
+        call(1124, 2530),
+    ]
+    dev.shell.assert_not_called()
+    dev.assert_any_call(
+        className="android.widget.AutoCompleteTextView",
+        description="Viết bình luận công khai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_closes_comment_filter_sheet_before_input(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="OpenClaw chia sẻ một ghi chú AI mới" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    filter_sheet_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.RadioButton" content-desc="Phù hợp nhất, Hiển thị bình luận của bạn bè trước tiên." clickable="true" bounds="[0,1877][1260,2236]" />
+        <node class="android.widget.RadioButton" content-desc="Mới nhất, Hiển thị tất cả bình luận, mới nhất trước tiên." clickable="true" bounds="[0,2236][1260,2518]" />
+        <node class="android.view.ViewGroup" content-desc="Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam., hiện được chọn" bounds="[0,2518][1260,2800]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="" content-desc="Đang hiển thị Tất cả bình luận bình luận. Nhấn để thay đổi bộ lọc bình luận." clickable="true" bounds="[0,302][1260,470]" />
+        <node class="android.widget.AutoCompleteTextView" text="" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.AutoCompleteTextView" text="Thông tin hữu ích" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+        <node text="" content-desc="Gửi" clickable="true" bounds="[1106,2501][1246,2641]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [
+        feed_xml,
+        filter_sheet_xml,
+        comment_xml,
+        submit_xml,
+    ]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["AI"],
+            "comment_text": "Thông tin hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["interacted_count"] == 1
+    assert value["liked_count"] == 1
+    assert value["commented_count"] == 1
+    dev.press.assert_called_once_with("back")
+    assert dev.click.call_args_list == [
+        call(134, 865),
+        call(342, 865),
+        call(630, 2428),
+        call(1176, 2571),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_closes_existing_comment_filter_sheet_before_scan(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    filter_sheet_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.view.ViewGroup" content-desc="Phù hợp nhất, Hiển thị bình luận của bạn bè trước tiên., hiện được chọn" bounds="[0,1877][1260,2236]" />
+        <node class="android.widget.RadioButton" content-desc="Mới nhất, Hiển thị tất cả bình luận, mới nhất trước tiên." clickable="true" bounds="[0,2236][1260,2518]" />
+        <node class="android.widget.RadioButton" content-desc="Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam." clickable="true" bounds="[0,2518][1260,2800]" />
+      </node>
+    </hierarchy>
+    """
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="OpenClaw chia sẻ một ghi chú AI mới" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.AutoCompleteTextView" text="" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.AutoCompleteTextView" text="Thông tin hữu ích" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+        <node text="" content-desc="Gửi" clickable="true" bounds="[1106,2501][1246,2641]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [
+        filter_sheet_xml,
+        feed_xml,
+        comment_xml,
+        submit_xml,
+    ]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["AI"],
+            "comment_text": "Thông tin hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["overlay_closes"] == 1
+    assert value["commented_count"] == 1
+    dev.press.assert_called_once_with("back")
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_ignores_subscribe_text_when_submitting_comment(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="OpenClaw chia sẻ một ghi chú AI mới" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.AutoCompleteTextView" text="" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Đăng ký theo dõi Maid in Newquay" content-desc="Đăng ký theo dõi Maid in Newquay" clickable="true" bounds="[644,1367][1176,1495]" />
+        <node class="android.widget.AutoCompleteTextView" text="Thông tin hữu ích" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+        <node text="" content-desc="Gửi" clickable="true" bounds="[1106,2501][1246,2641]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [feed_xml, comment_xml, submit_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["AI"],
+            "comment_text": "Thông tin hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["commented_count"] == 1
+    assert dev.click.call_args_list[-1] == call(1176, 2571)
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_scrolls_comment_sheet_to_input_node(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="OpenClaw chia sẻ một ghi chú AI mới" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_without_input_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="" content-desc="Đang hiển thị Tất cả bình luận bình luận. Nhấn để thay đổi bộ lọc bình luận." clickable="true" bounds="[0,302][1260,470]" />
+        <node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,470][1260,2400]">
+          <node text="Một bình luận dài" bounds="[42,620][1218,900]" />
+        </node>
+      </node>
+    </hierarchy>
+    """
+    comment_with_input_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="" content-desc="Đang hiển thị Tất cả bình luận bình luận. Nhấn để thay đổi bộ lọc bình luận." clickable="true" bounds="[0,302][1260,470]" />
+        <node class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,470][1260,2400]" />
+        <node class="android.widget.AutoCompleteTextView" text="" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.AutoCompleteTextView" text="Thông tin hữu ích" content-desc="Viết bình luận..." clickable="true" bounds="[42,2362][1218,2494]" />
+        <node text="" content-desc="Gửi" clickable="true" bounds="[1106,2501][1246,2641]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [
+        feed_xml,
+        comment_without_input_xml,
+        comment_with_input_xml,
+        submit_xml,
+    ]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["AI"],
+            "comment_text": "Thông tin hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["commented_count"] == 1
+    dev.swipe.assert_called()
+    assert dev.click.call_args_list[-1] == call(1176, 2571)
+
+
+@pytest.mark.asyncio
+async def test_social_scan_posts_interact_uses_configured_node_terms(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    feed_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Release notes for AI workflow automation" clickable="false" bounds="[42,520][1218,690]" />
+        <node text="Heart" clickable="true" bounds="[42,820][227,910]" />
+        <node text="Reply" clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="" content-desc="Say something" clickable="true" bounds="[42,2470][980,2590]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="Useful note" content-desc="Say something" clickable="true" bounds="[42,2470][980,2590]" />
+        <node text="Publish" clickable="true" bounds="[1030,2470][1218,2590]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [feed_xml, comment_xml, submit_xml]
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "keywords": ["workflow"],
+            "comment_text": "Useful note",
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_terms": ["Heart"],
+            "comment_terms": ["Reply"],
+            "comment_input_terms": ["Say something"],
+            "comment_submit_terms": ["Publish"],
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["interacted_count"] == 1
+    assert value["liked_count"] == 1
+    assert value["commented_count"] == 1
+    assert value["actions"][0]["matched_keywords"] == ["workflow"]
+    assert dev.click.call_args_list == [
+        call(134, 865),
+        call(342, 865),
+        call(511, 2530),
+        call(1124, 2530),
+    ]
+    dev.shell.assert_not_called()
+    dev.assert_any_call(
+        className="android.widget.EditText",
+        description="Say something",
+    )
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_expands_see_more_before_keyword_match(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    truncated_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Mình đang chia sẻ vài ghi chú dài… xem thêm" clickable="true" bounds="[42,620][1218,720]">
+          <node text="xem thêm" clickable="true" bounds="[940,650][1150,710]" />
+        </node>
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    expanded_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Mình đang chia sẻ vài ghi chú dài về tuyển dụng AI trong doanh nghiệp" clickable="false" bounds="[42,520][1218,720]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="Quan điểm rất hữu ích" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+        <node text="Đăng" clickable="true" bounds="[1030,2470][1218,2590]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [
+        truncated_xml,
+        expanded_xml,
+        comment_xml,
+        submit_xml,
+    ]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["tuyển dụng AI"],
+            "comment_text": "Quan điểm rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["expanded_more_count"] == 1
+    assert value["interacted_count"] == 1
+    assert value["actions"][0]["matched_keywords"] == ["tuyen dung ai"]
+    assert dev.click.call_args_list == [
+        call(1045, 680),
+        call(134, 865),
+        call(342, 865),
+        call(511, 2530),
+        call(1124, 2530),
+    ]
+    dev.shell.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_expands_parent_see_more_label(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    truncated_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Mình đang chia sẻ vài ghi chú dài… Xem thêm" content-desc="Mình đang chia sẻ vài ghi chú dài… Xem thêm" clickable="true" bounds="[42,620][1218,720]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    expanded_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Mình đang chia sẻ vài ghi chú dài về tuyển dụng AI trong doanh nghiệp" clickable="false" bounds="[42,520][1218,720]" />
+        <node text="" content-desc="Nút Thích. Hãy nhấn đúp và giữ để bày tỏ cảm xúc về bình luận." clickable="true" bounds="[42,820][227,910]" />
+        <node text="" content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." clickable="true" bounds="[227,820][457,910]" />
+      </node>
+    </hierarchy>
+    """
+    comment_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+      </node>
+    </hierarchy>
+    """
+    submit_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node class="android.widget.EditText" text="Quan điểm rất hữu ích" content-desc="Viết bình luận công khai" clickable="true" bounds="[42,2470][980,2590]" />
+        <node text="Đăng" clickable="true" bounds="[1030,2470][1218,2590]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.side_effect = [
+        truncated_xml,
+        expanded_xml,
+        comment_xml,
+        submit_xml,
+    ]
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["tuyển dụng AI"],
+            "comment_text": "Quan điểm rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    value = result["value"]
+    assert value["verified"] is True
+    assert value["expanded_more_count"] == 1
+    assert value["interacted_count"] == 1
+    assert dev.click.call_args_list[0] == call(1058, 670)
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_rejects_profile_surface(
+    executor_with_device,
+):
+    exc, dev = executor_with_device
+    profile_xml = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Cover Photo" clickable="false" bounds="[0,0][1260,524]" />
+        <node text="Chip AI đang được sản xuất nhanh hơn" clickable="false" bounds="[420,503][1218,2306]" />
+        <node text="Thêm bạn bè" clickable="true" bounds="[42,2547][1218,2673]" />
+        <node text="Chia sẻ trang cá nhân" clickable="true" bounds="[1106,133][1260,287]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = profile_xml
+
+    result = await exc.execute_flow(
+        "serial",
+        "fb_scan_posts_interact",
+        {
+            "keywords": ["Chip AI"],
+            "comment_text": "Quan điểm rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["verified"] is False
+    assert result["value"]["reason"] == "no_matching_post"
+    assert result["value"]["interacted_count"] == 0
+    dev.click.assert_not_called()
 
 
 # ── Unknown flow ──────────────────────────────────────────────────────────────

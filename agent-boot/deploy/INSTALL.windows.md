@@ -18,6 +18,7 @@ copy .env.example .env
 notepad .env
 scripts\docker-up.cmd up -d
 scripts\docker-up.cmd logs -f
+docker compose logs -f media-adapter
 ```
 
 Trong `.env`, bắt buộc điền ba giá trị đang để trống:
@@ -38,6 +39,13 @@ Mặc định media adapter publish H264 tại
 `http://host.docker.internal:1984`. Nếu go2rtc không chạy trên cùng máy Windows,
 sửa `MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE` và `MEDIA_ADAPTER_GO2RTC_URL`
 trong `.env`.
+
+Chính sách media hiện tại là **ICE/STUN only**, không dùng TURN. Nếu backend
+`device_farm` chạy trên cloud, cloud backend không gọi trực tiếp được adapter
+trên máy Windows qua `127.0.0.1`, `host.docker.internal` hoặc IP LAN. Browser
+cần tới được WebRTC endpoint của go2rtc qua LAN, port-forward UDP/TCP `8555`,
+hoặc VPN/edge network. RTSP `8556` và go2rtc API `1984` chỉ dùng nội bộ giữa
+adapter và go2rtc, không publish công khai.
 
 (TLS cert đã có trong image.)
 
@@ -85,9 +93,18 @@ scripts\docker-up.cmd down
 
 Relay ID tự sinh được lưu trong Docker volume `agent-boot-state`, nên vẫn giữ
 nguyên sau `down`/`up`. Chỉ `docker compose down -v` mới xóa identity này.
-Go media adapter chạy cùng container khi `MEDIA_ADAPTER_ENABLED=1`; adapter đọc
-scrcpy video socket và publish sang go2rtc. Backend không còn nhận video qua
-gRPC.
+Compose dùng **1 image / 2 container**:
+
+- `agent-boot`: relay control/u2/gRPC.
+- `media-adapter`: scrcpy/WebRTC media hot path, đọc scrcpy video socket và publish sang go2rtc.
+
+Backend không còn nhận video qua gRPC. Xem log riêng:
+
+```bat
+docker compose logs -f agent-boot
+docker compose logs -f media-adapter
+docker compose restart media-adapter
+```
 
 Luôn dùng `scripts\docker-up.cmd` để `up`/`restart`, vì wrapper kiểm tra secret
 và ADB trước khi khởi động. Có thể dùng Docker Compose trực tiếp cho các lệnh

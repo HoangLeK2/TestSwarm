@@ -7,7 +7,6 @@ import {
   ChevronDown,
   Copy,
   Download,
-  ExternalLink,
   Play,
   ShieldCheck
 } from 'lucide-react';
@@ -426,19 +425,7 @@ export function ScenarioDetailSheet({
                     <Can object='scenarios' action='create'>
                       <CloneTemplateDialog template={item} />
                     </Can>
-                  ) : isTemplate && isSuperadmin && item ? (
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      onClick={() =>
-                        router.push(ROUTES.SCENARIO_TEMPLATES.FLOW(item.id))
-                      }
-                    >
-                      <ExternalLink className='size-4' />
-                      {t('editTemplateFlow')}
-                    </Button>
-                  ) : (
+                  ) : isTemplate && isSuperadmin && item ? null : (
                     <Can object='scenarios' action='update'>
                       <Button
                         type='button'

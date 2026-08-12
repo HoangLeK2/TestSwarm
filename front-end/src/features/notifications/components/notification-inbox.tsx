@@ -17,9 +17,11 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
+  collapseRepeatedDeviceDisconnects,
   getNotificationToneClasses,
   getNotificationVisual,
   groupNotificationsByDay,
+  notificationMemberIds,
   resolveNotificationHref,
   sanitizeNotificationBody,
   timeAgo
@@ -44,8 +46,9 @@ function InboxRow({
   item: NotificationItem;
   title: string;
   body?: string | null;
-  onRead: (id: string) => void;
+  onRead: (ids: string[]) => void;
 }) {
+  const t = useTranslations('notificationsFeature');
   const visual = getNotificationVisual(item.event);
   const toneClasses = getNotificationToneClasses(visual.tone);
   const { Icon } = visual;
@@ -71,7 +74,7 @@ function InboxRow({
         type='button'
         className='min-w-0 flex-1 text-left'
         onClick={() => {
-          if (!item.is_read) onRead(item.id);
+          if (!item.is_read) onRead(notificationMemberIds(item));
         }}
       >
         <div className='flex items-start justify-between gap-2'>
@@ -95,6 +98,7 @@ function InboxRow({
         <Button variant='ghost' size='icon' className='size-8 shrink-0' asChild>
           <Link href={href}>
             <ExternalLink className='size-3.5' />
+            <span className='sr-only'>{t('openRelated')}</span>
           </Link>
         </Button>
       ) : null}
@@ -116,10 +120,11 @@ export function NotificationInbox() {
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllNotificationsRead();
   const notifications = data?.notifications ?? [];
+  const visibleNotifications = collapseRepeatedDeviceDisconnects(notifications);
   const total = data?.total ?? 0;
   const hasMore = offset + notifications.length < total;
 
-  const { today, earlier } = groupNotificationsByDay(notifications);
+  const { today, earlier } = groupNotificationsByDay(visibleNotifications);
 
   const renderGroup = (label: string, items: NotificationItem[]) =>
     items.length > 0 ? (
@@ -135,7 +140,7 @@ export function NotificationInbox() {
               item={item}
               title={translated.title}
               body={translated.body}
-              onRead={(id) => markRead.mutate(id)}
+              onRead={(ids) => ids.forEach((id) => markRead.mutate(id))}
             />
           );
         })}
@@ -181,12 +186,12 @@ export function NotificationInbox() {
       <Card className='gap-0 py-0'>
         <CardContent className='p-0'>
           <ScrollArea className='h-[min(560px,calc(100dvh-280px))]'>
-            {isLoading && notifications.length === 0 ? (
+            {isLoading && visibleNotifications.length === 0 ? (
               <div className='flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground'>
                 <Loader2 className='size-4 animate-spin' />
                 {t('loading')}
               </div>
-            ) : notifications.length === 0 ? (
+            ) : visibleNotifications.length === 0 ? (
               <div className='flex flex-col items-center gap-2 py-16 text-center'>
                 <BellOff className='size-8 text-muted-foreground' />
                 <p className='text-sm font-medium'>{t('empty')}</p>

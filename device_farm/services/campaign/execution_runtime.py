@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any
 
 from sqlalchemy import select
@@ -32,6 +33,7 @@ log = logging.getLogger(__name__)
 DISPATCH_SOURCE_TEMPORAL = "temporal"
 DISPATCH_SOURCE_FALLBACK = "fallback"
 DEFAULT_RUNTIME_START_CONCURRENCY = 100
+DEFAULT_READINESS_PROBE_CONCURRENCY = 8
 
 
 def workflow_id_for_execution(execution_id: str) -> str:
@@ -68,6 +70,87 @@ def _runtime_start_concurrency_limit() -> int:
     except ValueError:
         return DEFAULT_RUNTIME_START_CONCURRENCY
     return max(1, min(value, 200))
+
+
+def _readiness_probe_concurrency_limit() -> int:
+    """Fan-out cap for the pre-dispatch Facebook readiness probes.
+
+    Each probe launches an app and dumps the UI hierarchy on a real device, so
+    this is deliberately far below CAMPAIGN_RUNTIME_START_CONCURRENCY.
+    """
+    raw = os.getenv("CAMPAIGN_READINESS_PROBE_CONCURRENCY", "").strip()
+    if not raw:
+        return DEFAULT_READINESS_PROBE_CONCURRENCY
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_READINESS_PROBE_CONCURRENCY
+    return max(1, min(value, 64))
+
+
+async def _prefetch_facebook_readiness(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    probe_plan: list[tuple[str, str, str]],
+    manager: Any,
+) -> dict[str, Any]:
+    """Probe Facebook readiness for many devices concurrently, keyed by serial.
+
+    The guard itself writes to the shared AsyncSession, which is not
+    concurrency-safe, so only the device-bound half is parallelised here. The
+    caller then feeds these results back into guard_facebook_session so its
+    sequential DB pass never touches a device.
+    """
+    if manager is None or not probe_plan:
+        return {}
+
+    from services.facebook_session_guard import (
+        facebook_session_live_probe_required,
+        observe_facebook_readiness_for_device,
+    )
+
+    # Sequential, but these are cheap indexed reads — the point is to avoid
+    # probing devices whose provenance already settles the guard.
+    serials: list[str] = []
+    for device_id, account_id, device_serial in probe_plan:
+        try:
+            needed = await facebook_session_live_probe_required(
+                db, org_id=org_id, device_id=device_id, account_id=account_id
+            )
+        except Exception as exc:
+            log.warning(
+                "facebook readiness pre-plan failed device=%s: %s", device_id, exc
+            )
+            continue
+        if needed and device_serial not in serials:
+            serials.append(device_serial)
+
+    if not serials:
+        return {}
+
+    sem = asyncio.Semaphore(_readiness_probe_concurrency_limit())
+
+    async def _probe(serial: str) -> tuple[str, Any]:
+        async with sem:
+            try:
+                return serial, await observe_facebook_readiness_for_device(
+                    device_serial=serial, manager=manager
+                )
+            except Exception as exc:
+                log.warning(
+                    "facebook readiness probe failed serial=%s: %s", serial, exc
+                )
+                return serial, None
+
+    started = time.perf_counter()
+    probed = dict(await asyncio.gather(*(_probe(serial) for serial in serials)))
+    log.info(
+        "facebook readiness prefetch devices=%d elapsed_ms=%d",
+        len(serials),
+        int((time.perf_counter() - started) * 1000),
+    )
+    return {serial: result for serial, result in probed.items() if result is not None}
 
 
 async def build_org_scenario_registry(
@@ -248,6 +331,7 @@ async def prepare_scenario_input(
     effective_vars: dict[str, Any],
     account_vars: dict[str, Any],
     scenario_refs: list[dict[str, Any]] | None = None,
+    scenario_registry: dict[str, Any] | None = None,
     device_id: str | None = None,
     device_index: int = 0,
 ) -> ScenarioInput | None:
@@ -258,12 +342,14 @@ async def prepare_scenario_input(
         return None
     recovery_policy = dict(getattr(campaign, "recovery_policy", None) or {})
     registry_refs = _scenario_refs_with_recovery_refs(refs, recovery_policy)
-    registry = await build_campaign_scenario_registry(
-        db,
-        campaign=campaign,
-        org_id=org_id,
-        scenario_refs=registry_refs,
-    )
+    registry = scenario_registry
+    if registry is None:
+        registry = await build_campaign_scenario_registry(
+            db,
+            campaign=campaign,
+            org_id=org_id,
+            scenario_refs=registry_refs,
+        )
     return _build_prepared_scenario_input(
         execution=execution,
         campaign=campaign,
@@ -587,7 +673,11 @@ async def start_execution_runtime(
     commit_before_start: bool = False,
 ) -> dict[str, Any]:
     """Start Temporal (or fallback) runtime for each running fan-out execution."""
-    scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
+    # fan_out already resolved these in the same request; reuse instead of
+    # re-querying every scenario body a second time.
+    scenario_refs = getattr(fan_out, "scenario_refs", None)
+    if scenario_refs is None:
+        scenario_refs = await resolve_campaign_scenario_refs(db, campaign)
     stats: dict[str, Any] = {
         "temporal": 0,
         "fallback": 0,
@@ -614,11 +704,27 @@ async def start_execution_runtime(
     linked_serials = await _load_runtime_device_serials_by_execution(db, execution_ids)
     recovery_policy = dict(getattr(campaign, "recovery_policy", None) or {})
     registry_refs = _scenario_refs_with_recovery_refs(scenario_refs, recovery_policy)
-    scenario_registry = await build_campaign_scenario_registry(
-        db,
-        campaign=campaign,
-        org_id=org_id,
-        scenario_refs=registry_refs,
+    # fan_out built its registry from scenario_refs alone. Only reuse it when the
+    # recovery policy contributed no extra scenario ids, otherwise the registry
+    # would be missing the recovery scenarios' step bodies.
+    prefetched_registry = getattr(fan_out, "scenario_registry", None)
+    if prefetched_registry is not None and len(registry_refs) == len(scenario_refs):
+        scenario_registry = prefetched_registry
+    else:
+        scenario_registry = await build_campaign_scenario_registry(
+            db,
+            campaign=campaign,
+            org_id=org_id,
+            scenario_refs=registry_refs,
+        )
+    from services.facebook_session_runtime import (
+        guard_reason_allows_login_recovery,
+        scenario_registry_has_facebook_login_gate,
+    )
+
+    allows_facebook_login_recovery = scenario_registry_has_facebook_login_gate(
+        scenario_registry,
+        scenario_refs,
     )
     campaign_vars = _runtime_campaign_vars(campaign)
     scenario_ids = [
@@ -642,6 +748,47 @@ async def start_execution_runtime(
 
     device_index = 0
     prepared: list[tuple[FanOutExecutionView, Execution, ScenarioInput]] = []
+    from services.account_verification import (
+        VerificationMode,
+        VerificationStatus,
+        load_verification_targets,
+        persist_verification_results,
+        verification_mode,
+        verify_targets,
+    )
+
+    mode = verification_mode()
+    assignment_pairs = [
+        (view.device_id, str(getattr(executions_by_id.get(view.execution_id), "account_id", "")))
+        for view in running_views
+        if getattr(executions_by_id.get(view.execution_id), "account_id", None)
+    ]
+    targets = await load_verification_targets(db, assignments=assignment_pairs, org_id=org_id)
+    if commit_before_start and db.in_transaction():
+        await db.commit()
+    verification_results = (
+        await verify_targets(targets.values(), manager)
+        if mode != VerificationMode.OFF
+        else {}
+    )
+    await persist_verification_results(db, verification_results.values())
+
+    # Probe every device that still needs a live Facebook readiness check up
+    # front and in parallel. Without this the guard call inside the loop below
+    # serialises one app-launch + UI dump (up to 6s) per device.
+    probe_plan: list[tuple[str, str, str]] = []
+    for view in running_views:
+        execution = executions_by_id.get(view.execution_id)
+        if execution is None:
+            continue
+        account_id = getattr(execution, "account_id", None)
+        device_serial = _runtime_device_serial(execution, linked_serials)
+        if account_id and device_serial and view.device_id:
+            probe_plan.append((view.device_id, str(account_id), device_serial))
+    readiness_by_serial = await _prefetch_facebook_readiness(
+        db, org_id=org_id, probe_plan=probe_plan, manager=manager
+    )
+
     for view in running_views:
         execution = executions_by_id.get(view.execution_id)
         if execution is None:
@@ -652,6 +799,92 @@ async def start_execution_runtime(
         if not device_serial:
             stats["failed"] += 1
             continue
+
+        account_id = getattr(execution, "account_id", None)
+        target = targets.get((view.device_id, account_id)) if account_id else None
+        verification = verification_results.get(target.assignment_id) if target else None
+        if account_id and mode != VerificationMode.OFF:
+            if verification is None:
+                from services.account_verification import AccountVerificationResult
+                from datetime import datetime, timezone
+                import uuid
+                verification = AccountVerificationResult(
+                    None, VerificationStatus.INCONCLUSIVE, "assignment_not_found",
+                    datetime.now(timezone.utc), str(uuid.uuid4()),
+                )
+            execution.meta = {
+                **(execution.meta or {}),
+                "account_verification": {
+                    "mode": mode.value,
+                    **verification.evidence(detailed=False),
+                    **(
+                        {"deferred_to_scenario_login": True}
+                        if allows_facebook_login_recovery
+                        and verification.status == VerificationStatus.INCONCLUSIVE
+                        else {}
+                    ),
+                },
+            }
+            verification_deferred = (
+                allows_facebook_login_recovery
+                and verification.status == VerificationStatus.INCONCLUSIVE
+            )
+            if (
+                mode == VerificationMode.ENFORCE
+                and not verification.allows_enforce
+                and not verification_deferred
+            ):
+                await finish_fan_out_execution(
+                    db,
+                    execution,
+                    org_id=org_id,
+                    actor_user_id=actor_user_id,
+                    status=ExecutionStatus.FAILED.value,
+                    device_id=view.device_id,
+                )
+                stats["failed"] += 1
+                continue
+
+        if account_id:
+            from services.facebook_session_guard import guard_facebook_session
+
+            guard = await guard_facebook_session(
+                db,
+                org_id=org_id,
+                device_id=view.device_id,
+                account_id=str(account_id),
+                manager=manager,
+                device_serial=device_serial,
+                live_check=True,
+                readiness=readiness_by_serial.get(device_serial),
+            )
+            session_guard_deferred = (
+                allows_facebook_login_recovery
+                and guard.blocks_execution
+                and guard_reason_allows_login_recovery(guard.reason)
+            )
+            execution.meta = {
+                **(execution.meta or {}),
+                "facebook_session_guard": {
+                    **guard.to_meta(),
+                    **(
+                        {"deferred_to_scenario_login": True}
+                        if session_guard_deferred
+                        else {}
+                    ),
+                },
+            }
+            if guard.blocks_execution and not session_guard_deferred:
+                await finish_fan_out_execution(
+                    db,
+                    execution,
+                    org_id=org_id,
+                    actor_user_id=actor_user_id,
+                    status=ExecutionStatus.FAILED.value,
+                    device_id=view.device_id,
+                )
+                stats["failed"] += 1
+                continue
 
         effective_vars = view.effective_vars or dict((execution.device_config or {}).get("effective_vars") or {})
         account_vars = dict((execution.device_config or {}).get("account_vars") or {})

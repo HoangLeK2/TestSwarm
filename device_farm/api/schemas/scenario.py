@@ -433,6 +433,13 @@ class LoginIfNeededStep(StepBase):
     implicit_wait: Optional[ImplicitWait] = None
 
 
+class FacebookSessionGateStep(StepBase):
+    type: Literal["facebook_session_gate"]
+    phase: Literal["preflight", "confirm"] = "preflight"
+    timeout: float = Field(15.0, ge=0.0, le=30.0)
+    poll_interval: float = Field(0.5, ge=0.1, le=2.0)
+
+
 class FillFormStep(StepBase):
     type: Literal["fill_form"]
     profile: Dict[str, Any] = Field(default_factory=dict)
@@ -631,6 +638,7 @@ class ExtractStep(StepBase):
         "text_nodes",
         "fb_comments",
         "fb_groups",
+        "fb_pages",
         "ig_posts",
         "tiktok_posts",
         "linkedin_posts",
@@ -705,6 +713,94 @@ class SocialActionStepBase(StepBase):
     poll: float = Field(0.4, ge=0.05, le=10.0)
     verify_timeout: float = Field(5.0, ge=0.1, le=60.0)
     settle_seconds: float = Field(0.35, ge=0.0, le=10.0)
+    save_as: Optional[str] = Field(None, min_length=1, max_length=128)
+    require_verified_target: Optional[str] = Field(None, min_length=1, max_length=128)
+    require_completion: bool = False
+    completion_steps: List[Dict[str, Any]] = Field(default_factory=list, max_length=8)
+    completion_verify: Optional[Dict[str, Any]] = None
+    candidate_entity_id: Optional[str] = Field(None, min_length=1, max_length=128)
+    require_candidate_status: Optional[str] = Field(None, min_length=1, max_length=32)
+    candidate_lease_token: Optional[str] = Field(None, min_length=1, max_length=64)
+    account_action_id: Optional[str] = Field(None, min_length=1, max_length=128)
+
+
+class LeaseConnectionCandidateStep(StepBase):
+    type: Literal["lease_connection_candidate"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+
+
+class LeaseSourceTargetStep(StepBase):
+    type: Literal["lease_source_target"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    entity_type: str = Field("post", min_length=1, max_length=32)
+    action_type: str = Field("content_interaction", min_length=1, max_length=64)
+    action: str = Field("like", min_length=1, max_length=64)
+    statuses: Union[List[str], str] = Field(default_factory=lambda: ["approved", "active"])
+    keywords: Optional[Union[List[str], str]] = None
+    search: Optional[str] = Field(None, max_length=1000)
+
+
+class FbSelectPeopleProfileStep(StepBase):
+    type: Literal["fb_select_people_profile"]
+    search: Optional[str] = Field(None, max_length=512)
+    display_name: Optional[str] = Field(None, max_length=256)
+    row_text: Optional[str] = Field(None, max_length=256)
+    required_keywords: Optional[List[str]] = None
+    optional_keywords: Optional[List[str]] = None
+    forbidden_keywords: Optional[List[str]] = None
+    min_score: int = Field(80, ge=0, le=200)
+    require_unique: bool = True
+    timeout: float = Field(12.0, ge=1.0, le=60.0)
+    profile_wait_s: float = Field(1.0, ge=0.0, le=10.0)
+    save_as: str = Field("_people_target", min_length=1, max_length=128)
+
+
+class FbConnectVisiblePeopleStep(StepBase):
+    type: Literal["fb_connect_visible_people"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    min_score: Union[int, str] = 40
+    require_common: bool = True
+    common_keywords: Optional[Union[List[str], str]] = None
+    forbidden_keywords: Optional[Union[List[str], str]] = None
+    timeout: float = Field(8.0, ge=1.0, le=600.0)
+    verify_wait_s: float = Field(0.8, ge=0.0, le=10.0)
+    save_as: Optional[str] = Field(None, min_length=1, max_length=128)
+    account_action_id: Optional[str] = Field(None, min_length=1, max_length=128)
+
+
+class FbSelectPostTargetStep(StepBase):
+    type: Literal["fb_select_post_target"]
+    search: Optional[str] = Field(None, max_length=512)
+    display_text: Optional[str] = Field(None, max_length=512)
+    row_text: Optional[str] = Field(None, max_length=512)
+    required_keywords: Optional[List[str]] = None
+    optional_keywords: Optional[List[str]] = None
+    forbidden_keywords: Optional[List[str]] = None
+    min_score: int = Field(80, ge=0, le=200)
+    require_unique: bool = True
+    timeout: float = Field(12.0, ge=1.0, le=60.0)
+    detail_wait_s: float = Field(1.0, ge=0.0, le=10.0)
+    save_as: str = Field("_post_target", min_length=1, max_length=128)
+
+
+class FbScanPostsInteractStep(StepBase):
+    type: Literal["fb_scan_posts_interact"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    keywords: Optional[Union[List[str], str]] = None
+    match_mode: Union[Literal["any", "all"], str] = "any"
+    comment_text: Optional[str] = Field(None, max_length=2000)
+    target_count: Union[int, str] = 1
+    batch_size: Optional[Union[int, str]] = None
+    max_scrolls: Union[int, str] = 0
+    timeout: Union[float, str] = 30.0
+    scroll_x_ratio: Union[float, str] = 0.5
+    scroll_y1_ratio: Union[float, str] = 0.78
+    scroll_y2_ratio: Union[float, str] = 0.34
+    scroll_duration_s: Union[float, str] = 0.45
+    scroll_wait_s: Union[float, str] = 0.7
+    comment_wait_s: Union[float, str] = 0.8
+    submit_wait_s: Union[float, str] = 0.6
+    require_comment: Union[bool, str] = True
     save_as: Optional[str] = Field(None, min_length=1, max_length=128)
 
 
@@ -806,6 +902,7 @@ StepModel = Annotated[
         Annotated[ScrollToStep, Tag("scroll_to")],
         Annotated[InputTextStep, Tag("input_text")],
         Annotated[LoginIfNeededStep, Tag("login_if_needed")],
+        Annotated[FacebookSessionGateStep, Tag("facebook_session_gate")],
         Annotated[FillFormStep, Tag("fill_form")],
         Annotated[AssertAppStateStep, Tag("assert_app_state")],
         Annotated[KeyStep, Tag("key")],
@@ -824,8 +921,14 @@ StepModel = Annotated[
         Annotated[FbFindCommentButtonStep, Tag("fb_find_comment_button")],
         Annotated[FbTapCommentTargetStep, Tag("fb_tap_comment_target")],
         Annotated[FbApplyCommentFilterStep, Tag("fb_apply_comment_filter")],
+        Annotated[FbSelectPeopleProfileStep, Tag("fb_select_people_profile")],
+        Annotated[FbConnectVisiblePeopleStep, Tag("fb_connect_visible_people")],
+        Annotated[FbSelectPostTargetStep, Tag("fb_select_post_target")],
+        Annotated[FbScanPostsInteractStep, Tag("fb_scan_posts_interact")],
         Annotated[ContentInteractionStep, Tag("content_interaction")],
         Annotated[ConnectionRequestStep, Tag("connection_request")],
+        Annotated[LeaseConnectionCandidateStep, Tag("lease_connection_candidate")],
+        Annotated[LeaseSourceTargetStep, Tag("lease_source_target")],
         Annotated[CommunityMembershipStep, Tag("community_membership")],
         Annotated[RandomPickStep, Tag("random_pick")],
         Annotated[LoopStep, Tag("loop")],

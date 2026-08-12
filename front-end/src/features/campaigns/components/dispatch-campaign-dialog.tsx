@@ -1,7 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { CheckSquare, Eye, Loader2, Smartphone, Square } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  CheckSquare,
+  Eye,
+  Loader2,
+  Smartphone,
+  Square
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -220,6 +226,28 @@ export function DispatchCampaignDialog({
     [backendCampaign, open, perDeviceOverrides]
   );
 
+  const applyExternalEntityList = useCallback(
+    (items: ExternalEntityCatalogItem[]) => {
+      const available = items.filter((item) =>
+        isAllocatableSourceStatus(item.status)
+      );
+      setExternalEntities(available);
+      const options = listSourcePoolOptions(available);
+      setSourcePoolKey((current) => {
+        if (sourcePoolFromScenarioKey) return sourcePoolFromScenarioKey;
+        return options.some((option) => option.key === current)
+          ? current
+          : options[0]?.key || '';
+      });
+    },
+    [sourcePoolFromScenarioKey]
+  );
+
+  const loadExternalEntities = useCallback(async () => {
+    const result = await externalEntitiesApi.list({ limit: 500 });
+    return result.items;
+  }, []);
+
   useEffect(() => {
     if (!open || !campaignId) {
       setBackendCampaign(null);
@@ -255,22 +283,9 @@ export function DispatchCampaignDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    externalEntitiesApi
-      .list({ limit: 500 })
-      .then((result) => {
-        if (!cancelled) {
-          const available = result.items.filter((item) =>
-            isAllocatableSourceStatus(item.status)
-          );
-          setExternalEntities(available);
-          const options = listSourcePoolOptions(available);
-          setSourcePoolKey((current) => {
-            if (sourcePoolFromScenarioKey) return sourcePoolFromScenarioKey;
-            return options.some((option) => option.key === current)
-              ? current
-              : options[0]?.key || '';
-          });
-        }
+    loadExternalEntities()
+      .then((items) => {
+        if (!cancelled) applyExternalEntityList(items);
       })
       .catch(() => {
         if (!cancelled) setExternalEntities([]);
@@ -278,7 +293,7 @@ export function DispatchCampaignDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, sourcePoolFromScenarioKey]);
+  }, [applyExternalEntityList, loadExternalEntities, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -872,25 +887,27 @@ export function DispatchCampaignDialog({
                       <p className='text-[11px] text-muted-foreground'>
                         {t('sourcePolicyHelp')}
                       </p>
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='outline'
-                        className='h-7 gap-1.5 text-xs'
-                        disabled={
-                          sourcePreviewLoading ||
-                          !hasTarget ||
-                          !selectedSourcePool
-                        }
-                        onClick={() => void handleSourcePreview()}
-                      >
-                        {sourcePreviewLoading ? (
-                          <Loader2 size={12} className='animate-spin' />
-                        ) : (
-                          <Eye size={12} />
-                        )}
-                        {t('previewAllocation')}
-                      </Button>
+                      <div className='flex flex-wrap gap-2'>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          className='h-7 gap-1.5 text-xs'
+                          disabled={
+                            sourcePreviewLoading ||
+                            !hasTarget ||
+                            !selectedSourcePool
+                          }
+                          onClick={() => void handleSourcePreview()}
+                        >
+                          {sourcePreviewLoading ? (
+                            <Loader2 size={12} className='animate-spin' />
+                          ) : (
+                            <Eye size={12} />
+                          )}
+                          {t('previewAllocation')}
+                        </Button>
+                      </div>
                       {sourcePreviewError ? (
                         <p className='text-[11px] text-destructive'>
                           {sourcePreviewError}

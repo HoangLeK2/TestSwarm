@@ -167,6 +167,10 @@ async def evaluate_campaign_status(
     if current not in _AGGREGATOR_ELIGIBLE:
         return None
 
+    crawl_metadata = (row.variables or {}).get("_continuous_crawl")
+    if isinstance(crawl_metadata, dict) and crawl_metadata.get("active", True):
+        return None
+
     dispatch_id = await _latest_dispatch_id_for_campaign(db, campaign_id)
     status_counts = await _execution_status_counts(
         db,

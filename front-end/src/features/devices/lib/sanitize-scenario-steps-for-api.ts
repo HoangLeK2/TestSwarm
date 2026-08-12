@@ -53,11 +53,6 @@ export function sanitizeScenarioStep(step: any): any {
     const c = Number(next.count);
     if (!Number.isFinite(c) || c < 1) next.count = 3;
   }
-  if (next.type === 'random_pick' && Array.isArray(next.branches)) {
-    next.branches = next.branches.filter(
-      (br: any) => Array.isArray(br?.steps) && br.steps.length > 0
-    );
-  }
   if (next.selector && typeof next.selector === 'object') {
     next.selector = {
       ...next.selector,

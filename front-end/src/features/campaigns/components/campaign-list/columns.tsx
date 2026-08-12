@@ -13,6 +13,7 @@ import { useQuery } from '@tanstack/react-query';
 import { executionsApi } from '../../services/api';
 import { CampaignRunStats } from './CampaignRunStats';
 import { CampaignStatusBadge } from './CampaignStatusBadge';
+import { AutomationBadge } from './AutomationBadge';
 import type { CampaignStatus } from '../../types';
 import { cn } from '@/lib/utils';
 import {
@@ -110,6 +111,7 @@ export function getCampaignColumns(
               statusLabels={statusLabel as Record<CampaignStatus, string>}
               className='mt-1 inline-flex xl:hidden'
             />
+            <AutomationBadge campaign={c} />
           </div>
         );
       }

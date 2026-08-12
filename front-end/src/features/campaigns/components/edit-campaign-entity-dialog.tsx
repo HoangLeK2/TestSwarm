@@ -21,6 +21,7 @@ import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import {
   useCampaign,
   useBindCampaignAccounts,
+  useCampaignDevices,
   usePatchCampaignEntity,
   useUnbindCampaignAccounts
 } from '../hooks/use-campaigns';
@@ -41,6 +42,11 @@ import {
   campaignBindingToPayload,
   type CampaignAccountBindingValue
 } from './campaign-account-binding-fields';
+import { ContinuousCrawlSettings } from './continuous-crawl-settings';
+import {
+  campaignVariablesForEditor,
+  mergeCampaignEditorVariables
+} from '../lib/continuous-crawl-monitor';
 
 export function EditCampaignEntityDialog({
   campaign,
@@ -53,6 +59,7 @@ export function EditCampaignEntityDialog({
 }) {
   const t = useTranslations('campaignsFeature.entityDialog');
   const { data: detail } = useCampaign(campaign.id, open);
+  const { data: campaignDevices = [] } = useCampaignDevices(campaign.id, open);
   const {
     mutate: patchEntity,
     mutateAsync: patchEntityAsync,
@@ -78,7 +85,8 @@ export function EditCampaignEntityDialog({
     useState<CampaignAccountBindingValue>({
       mode: 'none',
       accountGroupId: '',
-      scenarioAccountId: ''
+      scenarioAccountId: '',
+      perDeviceAccounts: {}
     });
 
   useEffect(() => {
@@ -91,6 +99,21 @@ export function EditCampaignEntityDialog({
     setSelectedRefs(normalizeCampaignScenarioRefs(entity.scenario_refs ?? []));
     setAccountBinding(campaignBindingFromEntity(entity));
   }, [entity]);
+
+  useEffect(() => {
+    if (!entity || !campaignDevices.length) return;
+    const currentDeviceIds = new Set(
+      campaignDevices.map((device) => device.id)
+    );
+    setAccountBinding((current) => ({
+      ...current,
+      perDeviceAccounts: Object.fromEntries(
+        Object.entries(current.perDeviceAccounts).filter(([deviceId]) =>
+          currentDeviceIds.has(deviceId)
+        )
+      )
+    }));
+  }, [campaignDevices, entity]);
 
   const isSaving = isPatching || isBinding || isUnbinding;
 
@@ -124,7 +147,10 @@ export function EditCampaignEntityDialog({
           try {
             if (!bodyLocked) {
               const payload = campaignBindingToPayload(accountBinding);
-              if (accountBinding.mode === 'none') {
+              if (
+                accountBinding.mode === 'none' &&
+                Object.keys(accountBinding.perDeviceAccounts).length === 0
+              ) {
                 await unbindAccounts(campaign.id);
               } else {
                 await bindAccounts({
@@ -232,10 +258,24 @@ export function EditCampaignEntityDialog({
               bodyLocked && 'pointer-events-none opacity-60'
             )}
           >
+            <ContinuousCrawlSettings
+              variables={variables}
+              onChange={setVariables}
+              disabled={bodyLocked}
+            />
+          </div>
+          <div
+            className={cn(
+              'space-y-1.5',
+              bodyLocked && 'pointer-events-none opacity-60'
+            )}
+          >
             <Label>{t('variablesLabel')}</Label>
             <VariableEditor
-              variables={variables}
-              onChange={(next) => setVariables(next)}
+              variables={campaignVariablesForEditor(variables)}
+              onChange={(next) =>
+                setVariables(mergeCampaignEditorVariables(variables, next))
+              }
             />
           </div>
           <div
@@ -251,6 +291,8 @@ export function EditCampaignEntityDialog({
             <CampaignAccountBindingFields
               value={accountBinding}
               onChange={setAccountBinding}
+              devices={campaignDevices}
+              showPerDevice
             />
           </div>
           <RecoveryPolicyEditor

@@ -54,6 +54,11 @@ import {
 import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import type { CampaignScenarioRefIn, RecoveryPolicy } from '../types';
 import { normalizeCampaignScenarioRefs, scenarioRefRunCount } from '../types';
+import { ContinuousCrawlSettings } from './continuous-crawl-settings';
+import {
+  campaignVariablesForEditor,
+  mergeCampaignEditorVariables
+} from '../lib/continuous-crawl-monitor';
 
 type FormData = {
   name: string;
@@ -241,7 +246,8 @@ export function CreateCampaignDialog({
     useState<CampaignAccountBindingValue>({
       mode: 'none',
       accountGroupId: '',
-      scenarioAccountId: ''
+      scenarioAccountId: '',
+      perDeviceAccounts: {}
     });
   const { mutate, isPending, error } = useCreateCampaign();
   const {
@@ -272,7 +278,8 @@ export function CreateCampaignDialog({
       setAccountBinding({
         mode: 'none',
         accountGroupId: '',
-        scenarioAccountId: ''
+        scenarioAccountId: '',
+        perDeviceAccounts: {}
       });
       lastMergedSelectionRef.current = '';
     }
@@ -387,7 +394,8 @@ export function CreateCampaignDialog({
           setAccountBinding({
             mode: 'none',
             accountGroupId: '',
-            scenarioAccountId: ''
+            scenarioAccountId: '',
+            perDeviceAccounts: {}
           });
           setOpen(false);
           toast.success(t('createSuccess'));
@@ -542,6 +550,14 @@ export function CreateCampaignDialog({
 
                 <TabsContent value='settings' className='m-0'>
                   <div className='space-y-5'>
+                    <Section icon={Settings2} title={t('automationLabel')}>
+                      <ContinuousCrawlSettings
+                        variables={variables}
+                        onChange={handleVariablesChange}
+                        disabled={effectiveScenarioIds.length === 0}
+                      />
+                    </Section>
+                    <Separator />
                     <Section icon={Variable} title={t('tagsLabel')}>
                       <Input
                         value={tags}
@@ -555,8 +571,12 @@ export function CreateCampaignDialog({
                         {t('libraryVariablesHint')}
                       </p>
                       <VariableEditor
-                        variables={variables}
-                        onChange={handleVariablesChange}
+                        variables={campaignVariablesForEditor(variables)}
+                        onChange={(next) =>
+                          handleVariablesChange(
+                            mergeCampaignEditorVariables(variables, next)
+                          )
+                        }
                         allowAdd={false}
                         lockKeys
                         allowRemove={false}

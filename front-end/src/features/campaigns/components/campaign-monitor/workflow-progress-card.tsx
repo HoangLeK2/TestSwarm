@@ -161,14 +161,10 @@ function StepDots({ current, total }: { current: number; total: number }) {
 interface Props {
   wf: WorkflowInfo;
   campaignId: string;
-  executions?: ExecutionOut[];
+  execution?: ExecutionOut;
 }
 
-export function WorkflowProgressCard({
-  wf,
-  campaignId,
-  executions = []
-}: Props) {
+export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
@@ -188,18 +184,29 @@ export function WorkflowProgressCard({
   const executionId = useMemo(
     () =>
       wf.execution_id ||
-      resolveExecutionIdForWorkflow(wf.workflow_id, executions),
-    [wf.execution_id, wf.workflow_id, executions]
+      execution?.id ||
+      resolveExecutionIdForWorkflow(
+        wf.workflow_id,
+        execution ? [execution] : []
+      ),
+    [wf.execution_id, wf.workflow_id, execution]
   );
 
   const serial = useMemo(() => {
     if (wf.device_serial) return wf.device_serial;
     const fromWorkflow = parseSerial(wf.workflow_id);
     if (!wf.workflow_id.startsWith('exec_')) return fromWorkflow;
-    const ex = executions.find((e) => e.id === executionId);
-    const cfg = (ex?.device_config ?? {}) as Record<string, unknown>;
+    const cfg = (execution?.device_config ?? {}) as Record<string, unknown>;
     return String(cfg.device_serial ?? fromWorkflow);
-  }, [wf.device_serial, wf.workflow_id, executions, executionId]);
+  }, [wf.device_serial, wf.workflow_id, execution, executionId]);
+  const verification = (execution?.meta?.account_verification ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const accountLabel = execution?.account_id
+    ? `Account #${execution.account_id.slice(0, 8)}`
+    : '';
+  const verificationStatus = String(verification.status ?? '');
 
   const showLiveMirror = expanded && liveMirrorSerial === serial;
 
@@ -432,6 +439,24 @@ export function WorkflowProgressCard({
             {message && (
               <span className='flex-1 truncate italic' title={message}>
                 {message}
+              </span>
+            )}
+          </div>
+        )}
+
+        {accountLabel && (
+          <div className='mt-1 flex items-center gap-1.5 pl-[26px] text-[9px] text-muted-foreground'>
+            <span>{accountLabel}</span>
+            {verificationStatus && (
+              <span
+                className={cn(
+                  'rounded px-1.5 py-0.5 font-semibold',
+                  verificationStatus === 'verified'
+                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                )}
+              >
+                {verificationStatus}
               </span>
             )}
           </div>

@@ -65,6 +65,206 @@ async def _poll_until(condition, *, timeout: float = 5.0, interval: float = 0.05
     raise AssertionError(f"poll timeout after {timeout}s")
 
 
+@pytest.mark.asyncio
+async def test_leaf_activity_context_vars_drive_following_if_variable():
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow
+
+    executed_types: list[str] = []
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(inp):
+        steps = inp.get("steps", []) if isinstance(inp, dict) else inp.steps
+        indices = (
+            inp.get("step_indices", []) if isinstance(inp, dict) else inp.step_indices
+        )
+        raw_context = inp.get("context", {}) if isinstance(inp, dict) else inp.context
+        executed_types.extend(str(step.get("type") or "") for step in steps)
+        context = dict(raw_context)
+        if steps[0].get("type") == "facebook_session_gate":
+            context["vars"] = {"FACEBOOK_SESSION_READY": True}
+        return DeviceActionBatchResult(
+            results=[
+                {
+                    "index": index,
+                    "type": step.get("type"),
+                    "ok": True,
+                    "message": "ok",
+                }
+                for index, step in zip(indices, steps, strict=True)
+            ],
+            context=context,
+        )
+
+    steps_inp = StepsInput(
+        device_serial="V2352A",
+        steps=[
+            {"type": "facebook_session_gate", "phase": "preflight"},
+            {
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [{"type": "wait", "seconds": 0}],
+                "else": [{"type": "key", "key": "back"}],
+            },
+        ],
+        scenario_config={"batch_size": 1},
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioStepsWorkflow],
+            activities=[mock_batch],
+        ):
+            result = await env.client.execute_workflow(
+                ScenarioStepsWorkflow.run,
+                steps_inp,
+                id="test-context-vars-drive-if-variable",
+                task_queue=TASK_QUEUE_NAME,
+            )
+
+    assert result.success is True
+    assert executed_types == ["facebook_session_gate", "wait"]
+
+
+@pytest.mark.asyncio
+async def test_unchanged_context_vars_do_not_override_scenario_variables():
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow
+
+    executed_types: list[str] = []
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(inp):
+        steps = inp.get("steps", []) if isinstance(inp, dict) else inp.steps
+        indices = (
+            inp.get("step_indices", []) if isinstance(inp, dict) else inp.step_indices
+        )
+        context = dict(inp.get("context", {}) if isinstance(inp, dict) else inp.context)
+        executed_types.extend(str(step.get("type") or "") for step in steps)
+        return DeviceActionBatchResult(
+            results=[
+                {
+                    "index": index,
+                    "type": step.get("type"),
+                    "ok": True,
+                    "message": "ok",
+                }
+                for index, step in zip(indices, steps, strict=True)
+            ],
+            context=context,
+        )
+
+    steps_inp = StepsInput(
+        device_serial="V2352A",
+        steps=[
+            {"type": "use_source_pool", "entity_type": "post"},
+            {
+                "type": "if_variable",
+                "name": "TARGET_ENTITY_ID",
+                "then": [{"type": "wait", "seconds": 0}],
+                "else": [{"type": "key", "key": "back"}],
+            },
+        ],
+        variables={"TARGET_ENTITY_ID": "post-1"},
+        context={"vars": {"TARGET_ENTITY_ID": ""}},
+        scenario_config={"batch_size": 1},
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioStepsWorkflow],
+            activities=[mock_batch],
+        ):
+            result = await env.client.execute_workflow(
+                ScenarioStepsWorkflow.run,
+                steps_inp,
+                id="test-stale-context-vars-do-not-override-scenario-vars",
+                task_queue=TASK_QUEUE_NAME,
+            )
+
+    assert result.success is True
+    assert executed_types == ["use_source_pool", "wait"]
+
+
+@pytest.mark.asyncio
+async def test_preexisting_context_vars_drive_nested_if_variable():
+    try:
+        from temporalio import activity as temporal_activity
+        from temporalio.testing import WorkflowEnvironment
+        from temporalio.worker import Worker as TemporalWorker
+    except ImportError:
+        pytest.skip("temporalio not installed")
+
+    from temporal.workflows import ScenarioStepsWorkflow
+
+    executed_types: list[str] = []
+
+    @temporal_activity.defn(name="execute_device_action_batch")
+    async def mock_batch(inp):
+        steps = inp.get("steps", []) if isinstance(inp, dict) else inp.steps
+        indices = (
+            inp.get("step_indices", []) if isinstance(inp, dict) else inp.step_indices
+        )
+        executed_types.extend(str(step.get("type") or "") for step in steps)
+        return DeviceActionBatchResult(
+            results=[
+                {
+                    "index": index,
+                    "type": step.get("type"),
+                    "ok": True,
+                    "message": "ok",
+                }
+                for index, step in zip(indices, steps, strict=True)
+            ],
+        )
+
+    steps_inp = StepsInput(
+        device_serial="V2352A",
+        steps=[
+            {
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [{"type": "wait", "seconds": 0}],
+                "else": [{"type": "key", "key": "back"}],
+            }
+        ],
+        context={"vars": {"FACEBOOK_SESSION_READY": True}},
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with TemporalWorker(
+            env.client,
+            task_queue=TASK_QUEUE_NAME,
+            workflows=[ScenarioStepsWorkflow],
+            activities=[mock_batch],
+        ):
+            result = await env.client.execute_workflow(
+                ScenarioStepsWorkflow.run,
+                steps_inp,
+                id="test-preexisting-context-vars-drive-if-variable",
+                task_queue=TASK_QUEUE_NAME,
+            )
+
+    assert result.success is True
+    assert executed_types == ["wait"]
+
+
 @pytest.fixture
 def pause_coord():
     """Mutable coordination state reset per test."""

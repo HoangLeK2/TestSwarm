@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -13,6 +13,7 @@ from .utils import _now, _uuid, _api_key
 
 class Device(TenantScopedModel, Base):
     __tablename__ = "devices"
+    __table_args__ = (UniqueConstraint("org_id", "id", name="uq_devices_org_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     serial: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
@@ -80,4 +81,3 @@ class DeviceSession(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - repr
         return f"<DeviceSession device={self.device_id} ip={self.client_ip}>"
-

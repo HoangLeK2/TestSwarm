@@ -33,7 +33,17 @@ _ACCOUNT_BINDING_TYPE_HINTS = (
     ".share",
 )
 _ACCOUNT_BINDING_EXACT_TYPES = frozenset(
-    {"content_interaction", "connection_request", "community_membership"}
+    {
+        "content_interaction",
+        "connection_request",
+        "lease_connection_candidate",
+        "lease_source_target",
+        "community_membership",
+        "fb_select_people_profile",
+        "fb_connect_visible_people",
+        "fb_select_post_target",
+        "fb_scan_posts_interact",
+    }
 )
 
 
@@ -50,6 +60,7 @@ class ResolvedDeviceAccount:
     account_vars: dict[str, Any]
     unavailable: bool = False
     failure_reason: str | None = None
+    session_guard: dict[str, Any] | None = None
 
 
 def account_to_vars(account: Account) -> dict[str, Any]:

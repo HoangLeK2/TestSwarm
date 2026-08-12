@@ -115,6 +115,11 @@ function DeviceActionsCell({
           {t('connect')}
         </Button>
       ) : null}
+      <Button asChild size='sm' variant='outline'>
+        <Link href={`${ROUTES.DEVICES.DETAIL(device.serial)}#accounts`}>
+          {t('accounts')}
+        </Link>
+      </Button>
       {perms.canDelete ? (
         <Tooltip delayDuration={400}>
           <TooltipTrigger asChild>

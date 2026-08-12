@@ -1,11 +1,7 @@
 'use client';
 
-import { AccountList } from '@/features/accounts/components/account-list';
+import { AccountWorkspace } from '@/features/accounts/components/account-workspace';
 
 export default function AccountsPage() {
-  return (
-    <div>
-      <AccountList />
-    </div>
-  );
+  return <AccountWorkspace />;
 }

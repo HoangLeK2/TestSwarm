@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.models.device_platform_session import DevicePlatformSession
+from db.models.enums import DevicePlatformSessionState
+
+FACEBOOK_PLATFORM = "facebook"
+FACEBOOK_APP_PACKAGE = "com.facebook.katana"
+
+_SENSITIVE_EVIDENCE_KEYS = frozenset(
+    {
+        "password",
+        "password_encrypted",
+        "password_plain",
+        "cookie",
+        "cookies",
+        "token",
+        "access_token",
+        "refresh_token",
+        "totp",
+        "totp_code",
+        "totp_secret",
+        "2fa_secret",
+        "two_factor_secret",
+        "screenshot",
+        "screenshot_b64",
+        "hierarchy",
+        "hierarchy_xml",
+        "xml",
+    }
+)
+_MAX_EVIDENCE_STRING = 512
+_MAX_EVIDENCE_ITEMS = 32
+
+
+class DevicePlatformSessionError(Exception):
+    code = "device_platform_session_error"
+
+
+class DevicePlatformSessionConflict(DevicePlatformSessionError):
+    code = "device_platform_session_conflict"
+
+
+class InvalidDevicePlatformSessionTransition(DevicePlatformSessionError):
+    code = "invalid_device_platform_session_transition"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def sanitize_session_evidence(value: Any, *, depth: int = 0) -> Any:
+    if depth > 4:
+        return "[truncated]"
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for index, (key, nested) in enumerate(value.items()):
+            if index >= _MAX_EVIDENCE_ITEMS:
+                out["truncated"] = True
+                break
+            raw_key = str(key)
+            lowered = raw_key.lower()
+            if lowered in _SENSITIVE_EVIDENCE_KEYS or any(
+                needle in lowered for needle in ("password", "token", "cookie", "secret")
+            ):
+                continue
+            cleaned = sanitize_session_evidence(nested, depth=depth + 1)
+            if cleaned not in (None, "", {}, []):
+                out[raw_key] = cleaned
+        return out
+    if isinstance(value, list):
+        return [sanitize_session_evidence(item, depth=depth + 1) for item in value[:_MAX_EVIDENCE_ITEMS]]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if len(stripped) > _MAX_EVIDENCE_STRING:
+            return stripped[:_MAX_EVIDENCE_STRING] + "...[truncated]"
+        return stripped
+    return value
+
+
+async def get_platform_session(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+) -> DevicePlatformSession | None:
+    result = await db.execute(
+        select(DevicePlatformSession).where(
+            DevicePlatformSession.org_id == org_id,
+            DevicePlatformSession.device_id == device_id,
+            DevicePlatformSession.platform == platform,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_platform_sessions(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+) -> list[DevicePlatformSession]:
+    result = await db.execute(
+        select(DevicePlatformSession)
+        .where(
+            DevicePlatformSession.org_id == org_id,
+            DevicePlatformSession.device_id == device_id,
+        )
+        .order_by(DevicePlatformSession.platform)
+    )
+    return list(result.scalars().all())
+
+
+async def get_or_create_platform_session(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+    app_package: str = FACEBOOK_APP_PACKAGE,
+) -> DevicePlatformSession:
+    existing = await get_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    if existing is not None:
+        return existing
+    row = DevicePlatformSession(
+        org_id=org_id,
+        device_id=device_id,
+        platform=platform,
+        state=DevicePlatformSessionState.UNKNOWN.value,
+        app_package=app_package,
+        evidence={},
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+def _check_expected_version(row: DevicePlatformSession, expected_version: int | None) -> None:
+    if expected_version is not None and row.version != expected_version:
+        raise DevicePlatformSessionConflict(
+            f"session version conflict: expected {expected_version}, got {row.version}"
+        )
+
+
+def _bump(row: DevicePlatformSession) -> None:
+    row.version = int(row.version or 0) + 1
+    row.updated_at = _utcnow()
+
+
+async def mark_login_required(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+    reason: str,
+    expected_account_id: str | None = None,
+    expected_version: int | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> DevicePlatformSession:
+    row = await get_or_create_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    _check_expected_version(row, expected_version)
+    row.account_id = None
+    row.state = DevicePlatformSessionState.LOGIN_REQUIRED.value
+    row.state_reason = reason
+    row.invalidated_at = _utcnow()
+    row.established_at = None
+    row.establishment_method = None
+    row.evidence = sanitize_session_evidence(
+        {
+            **(evidence or {}),
+            "expected_account_id": expected_account_id,
+        }
+    )
+    _bump(row)
+    await db.flush()
+    return row
+
+
+async def mark_active(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    account_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+    establishment_method: str,
+    reason: str,
+    expected_version: int | None = None,
+    app_package: str = FACEBOOK_APP_PACKAGE,
+    app_version: str | None = None,
+    display_name_observed: str | None = None,
+    login_attempt_id: str | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> DevicePlatformSession:
+    if not account_id or not establishment_method:
+        raise InvalidDevicePlatformSessionTransition("active session requires account and establishment method")
+    row = await get_or_create_platform_session(
+        db, org_id=org_id, device_id=device_id, platform=platform, app_package=app_package
+    )
+    _check_expected_version(row, expected_version)
+    now = _utcnow()
+    row.account_id = account_id
+    row.state = DevicePlatformSessionState.ACTIVE.value
+    row.state_reason = reason
+    row.established_at = now
+    row.last_ready_at = now
+    row.last_checked_at = now
+    row.invalidated_at = None
+    row.login_attempt_id = login_attempt_id
+    row.establishment_method = establishment_method
+    row.app_package = app_package
+    row.app_version = app_version
+    row.display_name_observed = display_name_observed
+    row.evidence = sanitize_session_evidence(evidence or {})
+    _bump(row)
+    await db.flush()
+    return row
+
+
+async def mark_logging_in(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    account_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+    reason: str,
+    login_attempt_id: str,
+    evidence: dict[str, Any] | None = None,
+) -> DevicePlatformSession:
+    row = await get_or_create_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    row.account_id = account_id
+    row.state = DevicePlatformSessionState.LOGGING_IN.value
+    row.state_reason = reason
+    row.login_attempt_id = login_attempt_id
+    row.evidence = sanitize_session_evidence(evidence or {})
+    _bump(row)
+    await db.flush()
+    return row
+
+
+async def mark_readiness_observed(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    state: DevicePlatformSessionState,
+    reason: str,
+    account_id: str | None = None,
+    platform: str = FACEBOOK_PLATFORM,
+    evidence: dict[str, Any] | None = None,
+) -> DevicePlatformSession:
+    row = await get_or_create_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    now = _utcnow()
+    if account_id is not None:
+        row.account_id = account_id
+    row.state = state.value
+    row.state_reason = reason
+    row.last_checked_at = now
+    if state == DevicePlatformSessionState.ACTIVE:
+        row.last_ready_at = now
+        row.invalidated_at = None
+    elif state in {
+        DevicePlatformSessionState.LOGGED_OUT,
+        DevicePlatformSessionState.LOGIN_REQUIRED,
+        DevicePlatformSessionState.CHECKPOINT,
+        DevicePlatformSessionState.EXPIRED,
+        DevicePlatformSessionState.FAILED,
+    }:
+        row.last_ready_at = None
+        row.invalidated_at = now
+    row.evidence = sanitize_session_evidence(evidence or {})
+    _bump(row)
+    await db.flush()
+    return row
+
+
+async def invalidate_platform_session(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+    reason: str,
+    expected_version: int | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> DevicePlatformSession:
+    row = await get_or_create_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    _check_expected_version(row, expected_version)
+    row.account_id = None
+    row.state = DevicePlatformSessionState.LOGIN_REQUIRED.value
+    row.state_reason = reason
+    row.invalidated_at = _utcnow()
+    row.established_at = None
+    row.last_ready_at = None
+    row.establishment_method = None
+    row.evidence = sanitize_session_evidence(evidence or {})
+    _bump(row)
+    await db.flush()
+    return row
+
+
+async def mark_login_required_for_primary_change(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    account_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+) -> DevicePlatformSession:
+    current = await get_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    if (
+        current is not None
+        and current.state == DevicePlatformSessionState.ACTIVE.value
+        and current.account_id == account_id
+    ):
+        return current
+    return await mark_login_required(
+        db,
+        org_id=org_id,
+        device_id=device_id,
+        platform=platform,
+        reason="primary_account_changed",
+        expected_account_id=account_id,
+    )
+
+
+async def invalidate_if_account_holds_provenance(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    device_id: str,
+    account_id: str,
+    platform: str = FACEBOOK_PLATFORM,
+    reason: str = "provenance_account_unassigned",
+) -> DevicePlatformSession | None:
+    current = await get_platform_session(db, org_id=org_id, device_id=device_id, platform=platform)
+    if current is None or current.account_id != account_id:
+        return current
+    return await invalidate_platform_session(
+        db,
+        org_id=org_id,
+        device_id=device_id,
+        platform=platform,
+        reason=reason,
+        evidence={"removed_account_id": account_id},
+    )

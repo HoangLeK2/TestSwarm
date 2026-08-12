@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 _VALID_STATUSES = {"active", "banned", "cooldown", "suspended", "retired", "disabled"}
 _VALID_PLATFORMS = {"facebook", "tiktok", "google", "instagram", "twitter", "youtube"}
@@ -88,6 +88,20 @@ class DeviceAccountOut(BaseModel):
     account_id: str
     is_primary: bool
     assigned_at: datetime
+    verification_status: str = "unknown"
+    verified_at: Optional[datetime] = None
+    verification_attempted_at: Optional[datetime] = None
+    verification_evidence: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AccountVerificationOut(BaseModel):
+    assignment_id: Optional[str] = None
+    status: str
+    reason: str
+    attempted_at: datetime
+    verified_at: Optional[datetime] = None
+    attempt_id: str
+    duration_ms: Optional[float] = None
 
 
 class AccountWithLinksOut(AccountOut):

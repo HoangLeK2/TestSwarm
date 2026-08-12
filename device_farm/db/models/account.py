@@ -103,7 +103,7 @@ class DeviceAccount(Base):
     Many-to-many link between Device and Account.
 
     One device can have multiple accounts (e.g. several FB accounts in rotation),
-    but only one is marked is_primary=True per device (per platform, enforced in CRUD).
+    but only one is marked is_primary=True per device (enforced in CRUD).
     Both sides CASCADE-delete their links, leaving the other entity intact.
     """
 
@@ -123,6 +123,14 @@ class DeviceAccount(Base):
     )
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    verification_status: Mapped[str] = mapped_column(String(20), default="unknown")
+    verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    verification_attempted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    verification_evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
     account: Mapped["Account"] = relationship("Account", back_populates="device_links")
 

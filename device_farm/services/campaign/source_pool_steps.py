@@ -1,4 +1,5 @@
 """Derive campaign source-pool allocation from declarative scenario steps."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -50,7 +51,9 @@ def source_pool_from_step(step: dict[str, Any]) -> SourcePoolSpec | None:
         entity_type=entity_type,
         search=str(step.get("search") or "").strip() or None,
         statuses=statuses or DEFAULT_POOL_STATUSES,
-        output_prefix=str(step.get("output_prefix") or "GROUP").strip() or None,
+        output_prefix=(
+            str(step.get("output_prefix") or entity_type.upper()).strip() or None
+        ),
     )
 
 

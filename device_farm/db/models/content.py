@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint
+from sqlalchemy import Boolean, BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint, desc, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -143,6 +143,23 @@ class ContentItem(TenantScopedModel, Base):
         Index("idx_ci_hash_collection_user", "content_hash", "collection", "user_id", unique=True),
         Index("idx_ci_extracted_at", "extracted_at"),
         Index("idx_ci_parent_level", "parent_id", "item_level"),
+        Index(
+            "idx_ci_discovery_account",
+            "org_id",
+            "account_id",
+            "platform",
+            desc("extracted_at"),
+            postgresql_where=text("deleted_at IS NULL AND author IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND author IS NOT NULL"),
+        ),
+        Index(
+            "idx_ci_discovery_org",
+            "org_id",
+            "platform",
+            desc("extracted_at"),
+            postgresql_where=text("deleted_at IS NULL AND author IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND author IS NOT NULL"),
+        ),
     )
 
     def to_dict(self) -> dict:
@@ -189,5 +206,4 @@ class ContentCollection(TenantScopedModel, Base):
     __table_args__ = (
         UniqueConstraint("org_id", "name", "user_id", name="uq_content_collections_org_name_user"),
     )
-
 

@@ -59,8 +59,54 @@ class ExternalEntityBulkObserveOut(BaseModel):
     created_count: int
 
 
+class ExternalEntityAuthorSyncIn(BaseModel):
+    collection: str | None = Field(default=None, max_length=100)
+    campaign_id: str | None = Field(default=None, max_length=36)
+    execution_id: str | None = Field(default=None, max_length=36)
+    content_types: list[str] = Field(
+        default_factory=lambda: ["fb_post", "fb_comment"],
+        min_length=1,
+        max_length=10,
+    )
+    dry_run: bool = False
+    limit: int = Field(default=2000, ge=1, le=5000)
+
+
+class ExternalEntityAuthorSyncOut(BaseModel):
+    scanned_count: int
+    valid_count: int
+    created_count: int
+    existing_count: int
+    skipped_existing_count: int
+    skipped_count: int
+    skipped_anonymous_count: int
+    skipped_invalid_count: int
+
+
 class ExternalEntityListOut(BaseModel):
     items: list[ExternalEntityOut]
     total: int
     limit: int
     offset: int
+
+
+class DeviceTargetGroupsReplaceIn(BaseModel):
+    external_entity_ids: list[str] = Field(max_length=500)
+
+
+class DeviceTargetGroupOut(BaseModel):
+    id: str
+    platform: str
+    entity_type: str
+    external_id: str | None = None
+    canonical_url: str | None = None
+    display_name: str
+    status: str
+
+
+class DeviceTargetGroupsOut(BaseModel):
+    device_id: str
+    groups: list[DeviceTargetGroupOut]
+    added_count: int = 0
+    removed_count: int = 0
+    unchanged_count: int = 0

@@ -20,9 +20,9 @@ export function useGroupCatalog(filters: GroupCatalogFilters) {
 
   const query = useQuery({
     queryKey: ['external-entities', 'facebook', 'group', orgId, params],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (!orgId) throw new Error('Organization is required');
-      return externalEntitiesApi.list(params, orgId);
+      return externalEntitiesApi.list(params, orgId, signal);
     },
     enabled: Boolean(orgId)
   });

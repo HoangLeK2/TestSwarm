@@ -8,22 +8,107 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import func, select
+from sqlalchemy import bindparam, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.external_entity import (
     ExternalEntity,
+    DeviceTargetGroup,
     ExternalEntityDiscovery,
     ExternalEntityObservation,
 )
+from db.models.device import Device
 from db.models.account import Account
 from db.models.execution import Execution
 from tenancy.context import use_tenant_scope
 
+SUPPORTED_DEVICE_TARGET_TYPES = frozenset({"group", "page", "profile"})
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def replace_device_target_groups(
+    db: AsyncSession, *, org_id: str, device_id: str,
+    external_entity_ids: list[str], assigned_by: str | None,
+) -> tuple[list[ExternalEntity], int, int, int]:
+    """Atomically replace one device's ordered Facebook target set."""
+    if await db.scalar(select(Device.id).where(
+        Device.id == device_id, Device.org_id == org_id,
+    ).with_for_update()) is None:
+        raise LookupError("device")
+    ids = list(dict.fromkeys(external_entity_ids))
+    entities = list((await db.scalars(select(ExternalEntity).where(
+        ExternalEntity.org_id == org_id,
+        ExternalEntity.id.in_(ids),
+        ExternalEntity.platform == "facebook",
+        ExternalEntity.entity_type.in_(SUPPORTED_DEVICE_TARGET_TYPES),
+    ))).all()) if ids else []
+    by_id = {entity.id: entity for entity in entities}
+    if len(by_id) != len(ids):
+        raise ValueError(
+            "All targets must be Facebook groups, pages, or profiles in this organization"
+        )
+    current_rows = list((await db.scalars(select(DeviceTargetGroup).where(
+        DeviceTargetGroup.org_id == org_id, DeviceTargetGroup.device_id == device_id,
+    ))).all())
+    current = {row.external_entity_id for row in current_rows}
+    requested = set(ids)
+    removed_ids = current - requested
+    if removed_ids:
+        await db.execute(delete(DeviceTargetGroup).where(
+            DeviceTargetGroup.org_id == org_id,
+            DeviceTargetGroup.device_id == device_id,
+            DeviceTargetGroup.external_entity_id.in_(removed_ids),
+        ))
+    position_by_id = {entity_id: position for position, entity_id in enumerate(ids)}
+    moved_rows = [
+        row for row in current_rows
+        if row.external_entity_id in position_by_id
+        and row.position != position_by_id[row.external_entity_id]
+    ]
+    if moved_rows:
+        connection = await db.connection()
+        await connection.execute(
+            update(DeviceTargetGroup.__table__)
+            .where(DeviceTargetGroup.id == bindparam("target_group_id"))
+            .values(position=bindparam("target_position"))
+            .execution_options(synchronize_session=False),
+            [
+                {
+                    "target_group_id": row.id,
+                    "target_position": position_by_id[row.external_entity_id],
+                }
+                for row in moved_rows
+            ],
+        )
+    db.add_all([
+        DeviceTargetGroup(org_id=org_id, device_id=device_id, external_entity_id=entity_id,
+                          position=position, assigned_by=assigned_by)
+        for position, entity_id in enumerate(ids) if entity_id not in current
+    ])
+    await db.flush()
+    return [by_id[item] for item in ids], len(requested-current), len(current-requested), len(current&requested)
+
+
+async def list_device_target_groups(
+    db: AsyncSession, *, org_id: str, device_id: str,
+) -> list[ExternalEntity]:
+    if await db.scalar(select(Device.id).where(Device.id == device_id, Device.org_id == org_id)) is None:
+        raise LookupError("device")
+    result = await db.scalars(
+        select(ExternalEntity).join(
+            DeviceTargetGroup,
+            (DeviceTargetGroup.external_entity_id == ExternalEntity.id)
+            & (DeviceTargetGroup.org_id == ExternalEntity.org_id),
+        ).where(
+            DeviceTargetGroup.org_id == org_id,
+            DeviceTargetGroup.device_id == device_id,
+        ).order_by(DeviceTargetGroup.position)
+    )
+    return list(result.all())
 
 
 def _as_utc(value: datetime) -> datetime:

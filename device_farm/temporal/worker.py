@@ -21,6 +21,16 @@ from temporal.account_state_activities import AccountStateActivities
 from temporal.account_state_workflows import AccountCooldownTickWorkflow
 from temporal.capacity_probe import capacity_probe, db_hold_probe
 from temporal.capacity_probe_workflows import CapacityProbeWorkflow, DbHoldProbeWorkflow
+from temporal.continuous_crawl_workflows import (
+    ContinuousCrawlTargetWorkflow,
+    ContinuousCrawlWorkflow,
+)
+from temporal.continuous_crawl_activities import (
+    cleanup_continuous_crawl_target,
+    finalize_continuous_crawl,
+    load_continuous_crawl_source_page,
+    prepare_continuous_crawl_target,
+)
 from temporal.trace import TemporalTraceInterceptor
 from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
@@ -65,6 +75,10 @@ async def create_temporal_worker(
     _shared_tail = [
         capacity_probe,
         db_hold_probe,
+        load_continuous_crawl_source_page,
+        prepare_continuous_crawl_target,
+        finalize_continuous_crawl,
+        cleanup_continuous_crawl_target,
         _account_state_activities.process_expired_account_cooldowns,
         _relay_onboarding_activities.prepare_relay_onboarding_job,
         _relay_onboarding_activities.run_relay_onboarding_item,
@@ -118,6 +132,8 @@ async def create_temporal_worker(
                 AccountCooldownTickWorkflow,
                 CapacityProbeWorkflow,
                 DbHoldProbeWorkflow,
+                ContinuousCrawlWorkflow,
+                ContinuousCrawlTargetWorkflow,
             ],
             activities=activity_list,
             interceptors=[TemporalTraceInterceptor()],

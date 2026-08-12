@@ -110,6 +110,7 @@ class ExecutionOut(BaseModel):
     campaign_id: Optional[str]
     scenario_id: Optional[str]
     scenario_version_id: Optional[str] = None
+    account_id: Optional[str] = None
     device_config: dict[str, Any]
     loop_config: dict[str, Any]
     error_config: dict[str, Any]

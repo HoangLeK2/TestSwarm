@@ -96,6 +96,41 @@ def _finalize_is_cancelled(
     return any("cancelled" in text.lower() or "canceled" in text.lower() for text in texts)
 
 
+async def _release_terminal_candidate_leases(
+    *,
+    org_id: str,
+    execution_id: str,
+) -> None:
+    """Best-effort cleanup kept outside the execution finalization transaction."""
+    if not org_id or not execution_id:
+        return
+    try:
+        from db.database import activity_session
+        from services.facebook_candidates import release_candidate_leases_for_execution
+        from tenancy.context import tenant_context
+
+        async with activity_session() as db:
+            with tenant_context(org_id):
+                released = await release_candidate_leases_for_execution(
+                    db,
+                    org_id=org_id,
+                    execution_id=execution_id,
+                )
+                await db.commit()
+        if released:
+            log.info(
+                "finalize_campaign: released %s candidate lease(s) for execution %s",
+                released,
+                execution_id,
+            )
+    except Exception as exc:
+        log.warning(
+            "finalize_campaign: candidate lease cleanup failed (%s): %s",
+            execution_id,
+            exc,
+        )
+
+
 def _checkpoint_next_step_from_results(step_results: list[dict[str, Any]]) -> int:
     next_step = 0
     for entry in step_results:
@@ -1953,6 +1988,7 @@ class DeviceActivities:
                 device_serial=inp.device_serial,
                 campaign_id=persist_campaign_id,
                 execution_id=inp.execution_id,
+                account_id=getattr(inp, "account_id", None),
                 parent_id=parent_id,
                 item_level=item_level,
                 user_id=inp.user_id,
@@ -2300,8 +2336,16 @@ class DeviceActivities:
                                         manager=None,
                                     )
                                 await db.commit()
+                                await _release_terminal_candidate_leases(
+                                    org_id=org_id_epic,
+                                    execution_id=execution_id,
+                                )
                                 return
                             await db.commit()
+                    await _release_terminal_candidate_leases(
+                        org_id=org_id_epic,
+                        execution_id=execution_id,
+                    )
                     # Account usage end + timeline event
                     if device_serial:
                         try:

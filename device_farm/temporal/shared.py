@@ -227,5 +227,6 @@ class SaveExtractionInput:
     campaign_id: str | None = None
     run_id: str | None = None  # Legacy alias for execution_id
     execution_id: str | None = None
+    account_id: str | None = None
     user_id: str | None = None
     campaign_vars: dict[str, Any] = field(default_factory=dict)

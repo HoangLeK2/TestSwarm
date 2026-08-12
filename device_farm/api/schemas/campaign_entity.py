@@ -155,6 +155,67 @@ class CampaignForceTransitionOut(BaseModel):
     reason: Optional[str] = None
 
 
+class ContinuousCrawlDeviceLaneOut(BaseModel):
+    device_serial: str
+    status: Literal["idle", "running", "paused", "offline", "failed"]
+    target_id: Optional[str] = None
+    target_label: Optional[str] = None
+    completed: int = 0
+    failed: int = 0
+    message: Optional[str] = None
+
+
+class ContinuousCrawlTargetSummaryOut(BaseModel):
+    target_id: str
+    label: Optional[str] = None
+    status: Literal["queued", "running", "succeeded", "failed"]
+    device_serial: Optional[str] = None
+    message: Optional[str] = None
+
+
+class ContinuousCrawlDeviceTargetsOut(BaseModel):
+    device_id: str
+    device_serial: str
+    device_name: str
+    target_count: int
+
+
+class ContinuousCrawlPreflightOut(BaseModel):
+    ready: bool
+    target_count: Optional[int] = None
+    device_count: int
+    max_concurrency: int
+    device_targets: list[ContinuousCrawlDeviceTargetsOut] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ContinuousCrawlStartOut(BaseModel):
+    campaign_id: str
+    dispatch_id: str
+    workflow_id: str
+    status: str
+
+
+class ContinuousCrawlProgressOut(BaseModel):
+    campaign_id: str
+    dispatch_id: Optional[str] = None
+    status: str
+    health: Literal["healthy", "degraded", "critical"]
+    loaded: int = 0
+    active: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    consecutive_failures: int = 0
+    exhausted: bool = False
+    generation: int = 0
+    max_targets: Optional[int] = None
+    message: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    device_lanes: list[ContinuousCrawlDeviceLaneOut] = Field(default_factory=list)
+    recent_targets: list[ContinuousCrawlTargetSummaryOut] = Field(default_factory=list)
+
+
 class CampaignEntityOut(BaseModel):
     id: str
     organization_id: str

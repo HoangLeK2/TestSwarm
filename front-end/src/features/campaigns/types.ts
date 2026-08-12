@@ -317,6 +317,7 @@ export type WorkflowProgress = {
 
 export type StepLogEntry = {
   index: number;
+  occurrence_key?: string;
   step_id?: string | null;
   type?: string;
   step_type: string;
@@ -431,6 +432,7 @@ export type ExecutionOut = {
   status: string;
   campaign_id: string | null;
   scenario_id: string | null;
+  account_id?: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

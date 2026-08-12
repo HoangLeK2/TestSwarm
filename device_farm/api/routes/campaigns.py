@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import re as _re
 import time
-from datetime import datetime
-from typing import Union
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime, timezone
+from typing import Any, Union
+from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -20,9 +22,14 @@ from api.org_scope import (
 )
 from db.models import User
 from api.schemas.campaign import (
-    CampaignCreate, CampaignDeviceOut, CampaignOut,
-    ScenarioCreate, ScenarioUpdate, ScenarioOut,
-    ScenarioDeviceVariablesBody, ScenarioDeviceVariablesOut,
+    CampaignCreate,
+    CampaignDeviceOut,
+    CampaignOut,
+    ScenarioCreate,
+    ScenarioUpdate,
+    ScenarioOut,
+    ScenarioDeviceVariablesBody,
+    ScenarioDeviceVariablesOut,
 )
 from api.schemas.campaign_entity import (
     CampaignEntityOut,
@@ -36,6 +43,10 @@ from api.schemas.campaign_entity import (
     CampaignScenarioRefOut,
     CampaignForceTransitionIn,
     CampaignForceTransitionOut,
+    ContinuousCrawlPreflightOut,
+    ContinuousCrawlDeviceTargetsOut,
+    ContinuousCrawlProgressOut,
+    ContinuousCrawlStartOut,
 )
 from api.schemas.scenario_validation import ScenarioValidationOut, ValidationIssueOut
 from api.schemas.execution import CampaignControlOut, ExecutionCancelBody
@@ -80,7 +91,7 @@ class StatusUpdate(BaseModel):
 
 
 class StepActionBody(BaseModel):
-    action: str           # "retry" | "skip"
+    action: str  # "retry" | "skip"
     device_serial: str | None = None  # None = apply to all paused-on-error workflows
 
 
@@ -106,6 +117,7 @@ class ReorderScenariosBody(BaseModel):
 
 # ── Helper ──────────────────────────────────────────────────────────────────
 
+
 async def _lookup_account_group_name(db, group_id: str | None) -> str | None:
     """Resolve a group's display name for ScenarioOut enrichment.
 
@@ -115,6 +127,7 @@ async def _lookup_account_group_name(db, group_id: str | None) -> str | None:
     if not group_id:
         return None
     from db.crud.account_group import get_group as _get_group
+
     grp = await _get_group(db, group_id)
     return grp.name if grp is not None else None
 
@@ -212,17 +225,24 @@ def _to_out(c, scenarios=None) -> CampaignOut:
     if scenarios_list:
         embedded = scenario_row_to_embedded_dict(scenarios_list[0])
     return CampaignOut(
-        id=c.id, name=c.name, description=c.description,
-        status=c.status, scenario=embedded,
+        id=c.id,
+        name=c.name,
+        description=c.description,
+        status=c.status,
+        scenario=embedded,
         variables=c.variables or {},
         scenarios=[_scenario_to_out(s) for s in scenarios_list],
-        user_id=c.user_id, created_at=c.created_at,
+        user_id=c.user_id,
+        created_at=c.created_at,
         target_group_id=getattr(c, "target_group_id", None),
     )
 
 
 def _map_campaign_error(exc: CampaignError) -> HTTPException:
-    from services.campaign.lifecycle import CampaignInvalidTransitionError, CampaignLockedError
+    from services.campaign.lifecycle import (
+        CampaignInvalidTransitionError,
+        CampaignLockedError,
+    )
     from services.campaign.service import (
         CampaignDuplicateNameError,
         CampaignNotFoundError,
@@ -235,12 +255,20 @@ def _map_campaign_error(exc: CampaignError) -> HTTPException:
     if isinstance(exc, CampaignDuplicateNameError):
         return HTTPException(status_code=409, detail={"code": exc.code})
     if isinstance(exc, (CampaignRunningError, CampaignInvalidTransitionError)):
-        return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
+        return HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        )
     if isinstance(exc, CampaignLockedError):
-        return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
+        return HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)}
+        )
     if isinstance(exc, CampaignValidationError):
-        return HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)})
-    return HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)})
+        return HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        )
+    return HTTPException(
+        status_code=400, detail={"code": exc.code, "message": str(exc)}
+    )
 
 
 def _entity_out(view: CampaignView) -> CampaignEntityOut:
@@ -269,8 +297,12 @@ def _entity_out(view: CampaignView) -> CampaignEntityOut:
         created_at=datetime.fromisoformat(view.created_at),
         updated_at=datetime.fromisoformat(view.updated_at),
         started_at=datetime.fromisoformat(view.started_at) if view.started_at else None,
-        completed_at=datetime.fromisoformat(view.completed_at) if view.completed_at else None,
-        cancelled_at=datetime.fromisoformat(view.cancelled_at) if view.cancelled_at else None,
+        completed_at=datetime.fromisoformat(view.completed_at)
+        if view.completed_at
+        else None,
+        cancelled_at=datetime.fromisoformat(view.cancelled_at)
+        if view.cancelled_at
+        else None,
     )
 
 
@@ -429,7 +461,9 @@ def _campaign_recovery_scenario_ids(campaign) -> set[str]:
     )
 
 
-async def _scenario_variable_scope_or_404(db, campaign_id: str, scenario_id: str) -> str:
+async def _scenario_variable_scope_or_404(
+    db, campaign_id: str, scenario_id: str
+) -> str:
     scenario = await repo.get_scenario(db, scenario_id)
     if scenario and scenario.campaign_id == campaign_id:
         return "legacy"
@@ -447,6 +481,7 @@ async def _scenario_variable_scope_or_404(db, campaign_id: str, scenario_id: str
 
 
 # ── Campaign CRUD ────────────────────────────────────────────────────────────
+
 
 @router.get(
     "",
@@ -543,7 +578,9 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
     for device_id in body.device_ids:
         device = await repo.get_device(db, device_id)
         if not device or device.org_id != getattr(user, "org_id", None):
-            raise HTTPException(status_code=404, detail=f"Device not found: {device_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Device not found: {device_id}"
+            )
         valid_device_ids.append(device_id)
 
     campaign = await repo.create_campaign(
@@ -561,7 +598,9 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
     sc = body.scenario or {}
     steps = sc.get("steps") if isinstance(sc, dict) else None
     if isinstance(steps, list) and len(steps) > 0:
-        scenario_template_vars: dict = (sc.get("variables") or {}) if isinstance(sc, dict) else {}
+        scenario_template_vars: dict = (
+            (sc.get("variables") or {}) if isinstance(sc, dict) else {}
+        )
         merged_vars = merge_scenario_variables_for_row(
             {**scenario_template_vars, **(body.variables or {})},
             {},
@@ -579,14 +618,17 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
         await db.flush()
         saved_steps = save_step_images(steps, scenario_row.id)
         from common.graph_compiler import steps_to_graph
+
         nodes, edges = steps_to_graph(saved_steps)
-        await repo.update_scenario(db, scenario_row.id, steps=saved_steps, nodes=nodes, edges=edges)
+        await repo.update_scenario(
+            db, scenario_row.id, steps=saved_steps, nodes=nodes, edges=edges
+        )
     elif isinstance(sc, dict) and (
-        sc.get("instructions")
-        or sc.get("variables")
-        or sc.get("device_context")
+        sc.get("instructions") or sc.get("variables") or sc.get("device_context")
     ):
-        scenario_template_vars = (sc.get("variables") or {}) if isinstance(sc.get("variables"), dict) else {}
+        scenario_template_vars = (
+            (sc.get("variables") or {}) if isinstance(sc.get("variables"), dict) else {}
+        )
         merged_vars = merge_scenario_variables_for_row(
             {**scenario_template_vars, **(body.variables or {})},
             {},
@@ -654,7 +696,9 @@ async def preview_campaign_dispatch_route(
             platform=body.source_pool.platform,
             entity_type=body.source_pool.entity_type,
             search=body.source_pool.search,
-            statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+            statuses=tuple(
+                status.strip().lower() for status in body.source_pool.statuses
+            ),
             output_prefix=body.source_pool.output_prefix,
         )
         if body.source_pool is not None
@@ -743,7 +787,9 @@ async def dispatch_campaign_route(
             platform=body.source_pool.platform,
             entity_type=body.source_pool.entity_type,
             search=body.source_pool.search,
-            statuses=tuple(status.strip().lower() for status in body.source_pool.statuses),
+            statuses=tuple(
+                status.strip().lower() for status in body.source_pool.statuses
+            ),
             output_prefix=body.source_pool.output_prefix,
         )
         if body.source_pool is not None
@@ -987,6 +1033,7 @@ async def delete_campaign(campaign_id: str, db: DB, user: CurrentUser):
     await db.commit()
     return _entity_out(view)
 
+
 # api endpoint for archive campaign
 # used to archive campaign
 # this is used to archive campaign
@@ -1011,6 +1058,7 @@ async def archive_campaign_route(campaign_id: str, db: DB, user: CurrentUser):
         raise _map_campaign_error(exc) from exc
     await db.commit()
     return _entity_out(view)
+
 
 # api endpoint for force transition campaign
 # used to force transition campaign to a specific status
@@ -1063,7 +1111,9 @@ async def force_transition_campaign(
     "/{campaign_id}/status",
     dependencies=[Depends(require_permission("campaigns", "execute"))],
 )
-async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: CurrentUser, request: Request):
+async def update_status(
+    campaign_id: str, body: StatusUpdate, db: DB, user: CurrentUser, request: Request
+):
     await _get_campaign_or_404(campaign_id, user, db)
     valid = {"idle", "running", "stopped", "draft", "paused", "completed"}
     if body.status not in valid:
@@ -1081,7 +1131,11 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
             cancelled_count = queue.cancel_by_name_prefix(prefix)
 
     config = getattr(request.app.state, "config", None)
-    if config is not None and getattr(config, "temporal", None) and config.temporal.enabled:
+    if (
+        config is not None
+        and getattr(config, "temporal", None)
+        and config.temporal.enabled
+    ):
         try:
             from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
             from services.execution_control import _resolve_workflow_ids_for_campaign
@@ -1101,7 +1155,10 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
                 executions = await list_running_executions_for_campaign(db, campaign_id)
                 wf_ids.update(
                     await _resolve_workflow_ids_for_campaign(
-                        db, campaign_id, executions, t_client,
+                        db,
+                        campaign_id,
+                        executions,
+                        t_client,
                     )
                 )
 
@@ -1131,11 +1188,13 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
                             )
                     except Exception as exc:
                         import logging
+
                         logging.getLogger(__name__).warning(
                             "Failed to update workflow %s: %s", wf_id, exc
                         )
         except Exception as exc:
             import logging
+
             logging.getLogger(__name__).warning("Temporal signal failed: %s", exc)
 
     if body.status == "running":
@@ -1151,7 +1210,11 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
 
 async def _campaign_temporal_client(request: Request):
     config = getattr(request.app.state, "config", None)
-    if config is None or not getattr(config, "temporal", None) or not config.temporal.enabled:
+    if (
+        config is None
+        or not getattr(config, "temporal", None)
+        or not config.temporal.enabled
+    ):
         return None
     cached = getattr(request.app.state, "temporal_client", None)
     if cached is not None:
@@ -1163,21 +1226,540 @@ async def _campaign_temporal_client(request: Request):
     return client
 
 
+@dataclass(slots=True)
+class _ContinuousCrawlPreparation:
+    campaign: Any
+    config: Any
+    source_pool: Any
+    source_pool_payload: dict[str, Any]
+    devices: list[Any]
+    available_count: int
+    target_counts: dict[str, int]
+    snapshot_at: datetime
+
+
+def _continuous_crawl_error(
+    code: str, message: str, status_code: int = 422
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code, detail={"code": code, "message": message}
+    )
+
+
+async def _prepare_continuous_crawl(
+    db, campaign, org_id: str
+) -> _ContinuousCrawlPreparation:
+    from services.campaign.account_resolver import (
+        AccountBindingError,
+        assert_dispatch_account_guard,
+    )
+    from services.campaign.continuous_crawl import (
+        ContinuousCrawlConfigError,
+        parse_continuous_crawl_config,
+    )
+    from services.campaign.device_validator import (
+        DispatchValidationError,
+        resolve_dispatch_targets,
+        validate_devices_for_dispatch,
+    )
+    from services.campaign.entity_allocation import count_assigned_targets_by_device
+    from services.campaign.scenario_sources import (
+        build_campaign_scenario_registry,
+        resolve_campaign_scenario_refs,
+    )
+    from services.campaign.source_pool_steps import source_pool_from_scenario_registry
+
+    try:
+        config = parse_continuous_crawl_config(campaign.variables or {})
+    except ContinuousCrawlConfigError as exc:
+        raise _continuous_crawl_error(
+            "INVALID_CONTINUOUS_CRAWL_CONFIG", str(exc)
+        ) from exc
+    if not config.continuous:
+        raise _continuous_crawl_error(
+            "CONTINUOUS_CRAWL_NOT_CONFIGURED",
+            "Campaign _crawl.mode must be continuous_source_pool",
+        )
+
+    refs = await resolve_campaign_scenario_refs(db, campaign)
+    registry = await build_campaign_scenario_registry(
+        db, campaign=campaign, org_id=org_id, scenario_refs=refs
+    )
+    source_pool = source_pool_from_scenario_registry(registry)
+    if source_pool is None:
+        variables = campaign.variables or {}
+        crawl_variables = variables.get("_crawl")
+        raw_pool = (
+            crawl_variables.get("source_pool")
+            if isinstance(crawl_variables, dict)
+            else None
+        ) or variables.get("source_pool")
+        if isinstance(raw_pool, dict):
+            from services.campaign.source_pool_steps import source_pool_from_step
+
+            source_pool = source_pool_from_step({"type": "use_source_pool", **raw_pool})
+    if source_pool is None:
+        raise _continuous_crawl_error(
+            "SOURCE_POOL_REQUIRED", "Campaign scenarios do not configure a source pool"
+        )
+
+    campaign_devices = await repo.list_campaign_devices(db, campaign.id)
+    device_ids = [str(device.id) for device in campaign_devices]
+    group_ids = [str(campaign.target_group_id)] if campaign.target_group_id else []
+    try:
+        entries = await resolve_dispatch_targets(
+            db, org_id=org_id, device_ids=device_ids, device_group_ids=group_ids
+        )
+        validation = await validate_devices_for_dispatch(
+            db, org_id=org_id, entries=entries, require_online=True, allow_partial=False
+        )
+    except DispatchValidationError as exc:
+        raise _continuous_crawl_error(exc.code, str(exc)) from exc
+    if not entries:
+        raise _continuous_crawl_error(
+            "EMPTY_DISPATCH_TARGET", "Campaign has no configured devices"
+        )
+    if validation.not_found_ids or validation.cross_org_ids:
+        raise _continuous_crawl_error(
+            "DEVICE_NOT_FOUND", "One or more campaign devices were not found"
+        )
+    if validation.offline_ids:
+        raise _continuous_crawl_error(
+            "DEVICE_OFFLINE", "One or more campaign devices are offline"
+        )
+    devices = [
+        validation.devices_by_id[entry.device_id] for entry in validation.entries
+    ]
+
+    try:
+        await assert_dispatch_account_guard(db, campaign=campaign, org_id=org_id)
+    except AccountBindingError as exc:
+        raise _continuous_crawl_error(exc.code, str(exc)) from exc
+
+    snapshot_at = datetime.now(timezone.utc)
+    target_counts = await count_assigned_targets_by_device(
+        db,
+        org_id=org_id,
+        spec=source_pool,
+        device_ids=[str(device.id) for device in devices],
+        snapshot_at=snapshot_at,
+    )
+    devices_without_targets = [
+        str(device.serial)
+        for device in devices
+        if target_counts.get(str(device.id), 0) == 0
+    ]
+    if devices_without_targets:
+        raise _continuous_crawl_error(
+            "DEVICE_TARGETS_REQUIRED",
+            "Each campaign device must have at least one assigned target matching "
+            f"the scenario source: {', '.join(devices_without_targets)}",
+        )
+    available_count = sum(target_counts.values())
+    source_pool_payload = {
+        "platform": source_pool.platform,
+        "entity_type": source_pool.entity_type,
+        "search": source_pool.search,
+        "statuses": list(source_pool.statuses),
+        "output_prefix": source_pool.output_prefix,
+    }
+    return _ContinuousCrawlPreparation(
+        campaign,
+        config,
+        source_pool,
+        source_pool_payload,
+        devices,
+        available_count,
+        target_counts,
+        snapshot_at,
+    )
+
+
+async def _require_continuous_temporal(request: Request):
+    client = await _campaign_temporal_client(request)
+    if client is None:
+        raise _continuous_crawl_error(
+            "TEMPORAL_UNAVAILABLE", "Temporal is not enabled or unavailable", 503
+        )
+    return client
+
+
+async def _continuous_workflow_exists(client, workflow_id: str) -> bool:
+    from temporalio.service import RPCError, RPCStatusCode
+
+    try:
+        await client.get_workflow_handle(workflow_id).describe()
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+    return True
+
+
+def _continuous_crawl_metadata(campaign) -> dict[str, Any] | None:
+    value = (campaign.variables or {}).get("_continuous_crawl")
+    return value if isinstance(value, dict) else None
+
+
+def _map_continuous_crawl_progress(
+    campaign_id: str, metadata: dict[str, Any], raw: Any
+) -> ContinuousCrawlProgressOut:
+    if is_dataclass(raw):
+        data = asdict(raw)
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        data = {
+            key: getattr(raw, key)
+            for key in (
+                "status",
+                "loaded",
+                "active",
+                "succeeded",
+                "failed",
+                "consecutive_failures",
+                "exhausted",
+                "generation",
+                "message",
+                "device_lanes",
+                "recent_targets",
+            )
+            if hasattr(raw, key)
+        }
+    failed = int(data.get("failed") or 0)
+    succeeded = int(data.get("succeeded") or 0)
+    consecutive = int(data.get("consecutive_failures") or 0)
+    status_value = str(data.get("status") or metadata.get("status") or "running")
+    completed = failed + succeeded
+    ratio = failed / completed if completed else 0.0
+    max_consecutive = int(metadata.get("max_consecutive_failures") or 10)
+    max_ratio = float(metadata.get("max_failure_ratio") or 0.2)
+    if status_value == "failed" or consecutive >= max_consecutive or ratio > max_ratio:
+        health = "critical"
+    elif failed or status_value in {"cancelling", "paused"}:
+        health = "degraded"
+    else:
+        health = "healthy"
+    return ContinuousCrawlProgressOut(
+        campaign_id=campaign_id,
+        dispatch_id=metadata.get("dispatch_id"),
+        status=status_value,
+        health=health,
+        loaded=int(data.get("loaded") or 0),
+        active=int(data.get("active") or 0),
+        succeeded=succeeded,
+        failed=failed,
+        consecutive_failures=consecutive,
+        exhausted=bool(data.get("exhausted", False)),
+        generation=int(data.get("generation") or 0),
+        max_targets=metadata.get("max_targets"),
+        message=str(data.get("message") or "") or None,
+        updated_at=datetime.now(timezone.utc),
+        device_lanes=list(data.get("device_lanes") or [])[:12],
+        recent_targets=list(data.get("recent_targets") or [])[:8],
+    )
+
+
+async def _active_continuous_crawl(
+    campaign_id: str,
+    db,
+    user,
+    request: Request,
+    *,
+    for_update: bool = False,
+):
+    campaign = await _get_campaign_or_404(campaign_id, user, db)
+    if for_update:
+        campaign = await db.scalar(
+            select(type(campaign))
+            .where(type(campaign).id == campaign_id)
+            .with_for_update()
+        )
+        if campaign is None or campaign.org_id != getattr(user, "org_id", None):
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "CAMPAIGN_NOT_FOUND"},
+            )
+    metadata = _continuous_crawl_metadata(campaign)
+    if (
+        not metadata
+        or not metadata.get("dispatch_id")
+        or not metadata.get("workflow_id")
+    ):
+        raise _continuous_crawl_error(
+            "CONTINUOUS_CRAWL_NOT_ACTIVE", "No active continuous crawl", 409
+        )
+    client = await _require_continuous_temporal(request)
+    return campaign, metadata, client.get_workflow_handle(str(metadata["workflow_id"]))
+
+
+@router.post(
+    "/{campaign_id}/continuous-crawl/preflight",
+    response_model=ContinuousCrawlPreflightOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def continuous_crawl_preflight(
+    campaign_id: str, request: Request, db: DB, user: CurrentUser
+):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+    campaign = await _get_campaign_or_404(campaign_id, user, db)
+    await _require_continuous_temporal(request)
+    prepared = await _prepare_continuous_crawl(db, campaign, org_id)
+    return ContinuousCrawlPreflightOut(
+        ready=True,
+        target_count=prepared.available_count,
+        device_count=len(prepared.devices),
+        max_concurrency=len(prepared.devices),
+        device_targets=[
+            ContinuousCrawlDeviceTargetsOut(
+                device_id=str(device.id),
+                device_serial=str(device.serial),
+                device_name=str(device.name or device.serial),
+                target_count=prepared.target_counts.get(str(device.id), 0),
+            )
+            for device in prepared.devices
+        ],
+    )
+
+
+@router.post(
+    "/{campaign_id}/continuous-crawl/start",
+    response_model=ContinuousCrawlStartOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def start_continuous_crawl(
+    campaign_id: str, request: Request, db: DB, user: CurrentUser
+):
+    from services.campaign.continuous_crawl import crawl_workflow_id, source_filter_hash
+    from temporal.continuous_crawl_workflows import (
+        ContinuousCrawlInput,
+        ContinuousCrawlWorkflow,
+    )
+    from temporal.shared import TASK_QUEUE_NAME
+
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+    campaign = await _get_campaign_or_404(campaign_id, user, db)
+    client = await _require_continuous_temporal(request)
+    campaign = await db.scalar(
+        select(type(campaign)).where(type(campaign).id == campaign_id).with_for_update()
+    )
+    if campaign is None or campaign.org_id != org_id:
+        raise HTTPException(status_code=404, detail={"code": "CAMPAIGN_NOT_FOUND"})
+    active = _continuous_crawl_metadata(campaign)
+    if active and active.get("status") in {
+        "starting",
+        "running",
+        "pausing",
+        "paused",
+        "cancelling",
+    }:
+        workflow_id_value = str(active.get("workflow_id") or "")
+        if workflow_id_value and await _continuous_workflow_exists(
+            client, workflow_id_value
+        ):
+            raise _continuous_crawl_error(
+                "CONTINUOUS_CRAWL_ALREADY_ACTIVE",
+                "A continuous crawl is already active",
+                409,
+            )
+    prepared = await _prepare_continuous_crawl(db, campaign, org_id)
+    dispatch_id = str(uuid4())
+    workflow_id = crawl_workflow_id(campaign_id, dispatch_id)
+    snapshot_at = prepared.snapshot_at
+    prior_variables = dict(campaign.variables or {})
+    prior_status = campaign.status
+    metadata = {
+        "dispatch_id": dispatch_id,
+        "workflow_id": workflow_id,
+        "active": True,
+        "status": "starting",
+        "snapshot_at": snapshot_at.isoformat(),
+        "source_pool": prepared.source_pool_payload,
+        "source_filter_hash": source_filter_hash(prepared.source_pool_payload),
+        "device_ids": [str(device.id) for device in prepared.devices],
+        "device_serials": [str(device.serial) for device in prepared.devices],
+        "device_target_counts": prepared.target_counts,
+        "max_targets": prepared.available_count,
+        "max_failure_ratio": prepared.config.max_failure_ratio,
+        "max_consecutive_failures": prepared.config.max_consecutive_failures,
+    }
+    campaign.variables = {**prior_variables, "_continuous_crawl": metadata}
+    campaign.status = "running"
+    await db.commit()
+    app_config = getattr(request.app.state, "config", None)
+    temporal_config = getattr(app_config, "temporal", None)
+    task_queue = getattr(temporal_config, "task_queue", None) or TASK_QUEUE_NAME
+    inp = ContinuousCrawlInput(
+        campaign_id=campaign_id,
+        dispatch_id=dispatch_id,
+        org_id=org_id,
+        device_serials=metadata["device_serials"],
+        source_pool=prepared.source_pool_payload,
+        snapshot_at=metadata["snapshot_at"],
+        task_queue=task_queue,
+        max_concurrency=len(prepared.devices),
+        source_page_size=prepared.config.source_page_size,
+        max_targets=prepared.available_count,
+        target_timeout_seconds=prepared.config.target_timeout_seconds,
+        maximum_attempts=prepared.config.maximum_attempts,
+        failure_policy=prepared.config.failure_policy,
+        max_failure_ratio=prepared.config.max_failure_ratio,
+        max_consecutive_failures=prepared.config.max_consecutive_failures,
+    )
+    try:
+        await client.start_workflow(
+            ContinuousCrawlWorkflow.run, inp, id=workflow_id, task_queue=task_queue
+        )
+    except Exception as exc:
+        try:
+            workflow_exists = await _continuous_workflow_exists(client, workflow_id)
+        except Exception as describe_exc:
+            raise _continuous_crawl_error(
+                "TEMPORAL_START_UNCONFIRMED",
+                "Temporal did not confirm whether the continuous crawl started; "
+                "retry with the same campaign to reconcile it",
+                503,
+            ) from describe_exc
+        if workflow_exists:
+            metadata["status"] = "running"
+            campaign.variables = {**prior_variables, "_continuous_crawl": metadata}
+            await db.commit()
+            return ContinuousCrawlStartOut(
+                campaign_id=campaign_id,
+                dispatch_id=dispatch_id,
+                workflow_id=workflow_id,
+                status="running",
+            )
+        try:
+            campaign.variables = prior_variables
+            campaign.status = prior_status
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        raise _continuous_crawl_error(
+            "TEMPORAL_START_FAILED", f"Failed to start continuous crawl: {exc}", 503
+        ) from exc
+    metadata["status"] = "running"
+    campaign.variables = {**prior_variables, "_continuous_crawl": metadata}
+    await db.commit()
+    return ContinuousCrawlStartOut(
+        campaign_id=campaign_id,
+        dispatch_id=dispatch_id,
+        workflow_id=workflow_id,
+        status="running",
+    )
+
+
+@router.get(
+    "/{campaign_id}/continuous-crawl/progress",
+    response_model=ContinuousCrawlProgressOut,
+    dependencies=[Depends(require_permission("campaigns", "read"))],
+)
+async def continuous_crawl_progress(
+    campaign_id: str, request: Request, db: DB, user: CurrentUser
+):
+    _campaign, metadata, handle = await _active_continuous_crawl(
+        campaign_id, db, user, request
+    )
+    raw = await handle.query("get_progress")
+    return _map_continuous_crawl_progress(campaign_id, metadata, raw)
+
+
+async def _control_continuous_crawl(
+    action: str, campaign_id: str, request: Request, db, user
+):
+    campaign, metadata, handle = await _active_continuous_crawl(
+        campaign_id,
+        db,
+        user,
+        request,
+        for_update=True,
+    )
+    allowed = {
+        "pause": {"starting", "running"},
+        "resume": {"pausing", "paused"},
+        "cancel": {"starting", "running", "pausing", "paused", "cancelling"},
+    }
+    if metadata.get("status") not in allowed[action]:
+        raise _continuous_crawl_error(
+            "STALE_CONTINUOUS_CRAWL_DISPATCH",
+            "Continuous crawl dispatch is not active for this control",
+            409,
+        )
+    await handle.signal(action)
+    metadata = {
+        **metadata,
+        "status": {"pause": "pausing", "resume": "running", "cancel": "cancelling"}[
+            action
+        ],
+    }
+    campaign.variables = {**(campaign.variables or {}), "_continuous_crawl": metadata}
+    await db.commit()
+    raw = await handle.query("get_progress")
+    return _map_continuous_crawl_progress(campaign_id, metadata, raw)
+
+
+@router.post(
+    "/{campaign_id}/continuous-crawl/pause",
+    response_model=ContinuousCrawlProgressOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def pause_continuous_crawl(
+    campaign_id: str, request: Request, db: DB, user: CurrentUser
+):
+    return await _control_continuous_crawl("pause", campaign_id, request, db, user)
+
+
+@router.post(
+    "/{campaign_id}/continuous-crawl/resume",
+    response_model=ContinuousCrawlProgressOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def resume_continuous_crawl(
+    campaign_id: str, request: Request, db: DB, user: CurrentUser
+):
+    return await _control_continuous_crawl("resume", campaign_id, request, db, user)
+
+
+@router.post(
+    "/{campaign_id}/continuous-crawl/cancel",
+    response_model=ContinuousCrawlProgressOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def cancel_continuous_crawl(
+    campaign_id: str, request: Request, db: DB, user: CurrentUser
+):
+    return await _control_continuous_crawl("cancel", campaign_id, request, db, user)
+
+
 @router.post(
     "/{campaign_id}/pause",
     response_model=CampaignControlOut,
     dependencies=[Depends(require_permission("campaigns", "execute"))],
 )
 async def pause_campaign(
-    campaign_id: str, request: Request, db: DB, user: CurrentUser,
+    campaign_id: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    from services.execution_control import ExecutionControlError, pause_campaign_executions
+    from services.execution_control import (
+        ExecutionControlError,
+        pause_campaign_executions,
+    )
 
     try:
         client = await _campaign_temporal_client(request)
         data = await pause_campaign_executions(
-            db, campaign_id, user_id=user.id, temporal_client=client,
+            db,
+            campaign_id,
+            user_id=user.id,
+            temporal_client=client,
         )
         await db.commit()
         return CampaignControlOut(**data)
@@ -1194,15 +1776,24 @@ async def pause_campaign(
     dependencies=[Depends(require_permission("campaigns", "execute"))],
 )
 async def resume_campaign(
-    campaign_id: str, request: Request, db: DB, user: CurrentUser,
+    campaign_id: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    from services.execution_control import ExecutionControlError, resume_campaign_executions
+    from services.execution_control import (
+        ExecutionControlError,
+        resume_campaign_executions,
+    )
 
     try:
         client = await _campaign_temporal_client(request)
         data = await resume_campaign_executions(
-            db, campaign_id, user_id=user.id, temporal_client=client,
+            db,
+            campaign_id,
+            user_id=user.id,
+            temporal_client=client,
         )
         await db.commit()
         return CampaignControlOut(**data)
@@ -1226,7 +1817,10 @@ async def cancel_campaign(
     body: ExecutionCancelBody | None = None,
 ):
     await _get_campaign_or_404(campaign_id, user, db)
-    from services.execution_control import ExecutionControlError, cancel_campaign_executions
+    from services.execution_control import (
+        ExecutionControlError,
+        cancel_campaign_executions,
+    )
 
     reason = (body.reason if body else "") or None
     session_store = getattr(request.app.state, "session_store", None)
@@ -1253,7 +1847,9 @@ async def cancel_campaign(
     "/{campaign_id}/step-action",
     dependencies=[Depends(require_permission("campaigns", "execute"))],
 )
-async def step_action(campaign_id: str, body: StepActionBody, db: DB, user: CurrentUser, request: Request):
+async def step_action(
+    campaign_id: str, body: StepActionBody, db: DB, user: CurrentUser, request: Request
+):
     """Send retry_step or skip_step signal to workflows paused on error.
 
     When a step fails and its on_error policy is "pause", the workflow blocks
@@ -1271,7 +1867,11 @@ async def step_action(campaign_id: str, body: StepActionBody, db: DB, user: Curr
         raise HTTPException(status_code=400, detail="Invalid device_serial format")
 
     config = getattr(request.app.state, "config", None)
-    if config is None or not getattr(config, "temporal", None) or not config.temporal.enabled:
+    if (
+        config is None
+        or not getattr(config, "temporal", None)
+        or not config.temporal.enabled
+    ):
         raise HTTPException(status_code=400, detail="Temporal is not enabled")
 
     from temporal.worker import get_temporal_client
@@ -1289,6 +1889,7 @@ async def step_action(campaign_id: str, body: StepActionBody, db: DB, user: Curr
         )
 
     import logging
+
     log = logging.getLogger(__name__)
     signalled: list[str] = []
     errors: list[str] = []
@@ -1354,6 +1955,7 @@ async def remove_device(campaign_id: str, device_id: str, db: DB, user: CurrentU
 
 # ── Cumulative run stats for this campaign ───────────────────────────────────
 
+
 @router.get(
     "/{campaign_id}/run-stats",
     dependencies=[Depends(require_permission("campaigns", "read"))],
@@ -1370,6 +1972,7 @@ async def campaign_run_stats_endpoint(campaign_id: str, db: DB, user: CurrentUse
 
 # ── Content stats for this campaign ──────────────────────────────────────────
 
+
 @router.get(
     "/{campaign_id}/content/stats",
     dependencies=[Depends(require_permission("campaigns", "read"))],
@@ -1379,14 +1982,19 @@ async def campaign_content_stats(campaign_id: str, db: DB, user: CurrentUser):
     await _get_campaign_or_404(campaign_id, user, db)
     from sqlalchemy import func, select
     from db.models.content import ContentItem
+
     total = (
         await db.execute(
-            select(func.count(ContentItem.id)).where(ContentItem.campaign_id == campaign_id)
+            select(func.count(ContentItem.id)).where(
+                ContentItem.campaign_id == campaign_id
+            )
         )
     ).scalar_one()
     latest = (
         await db.execute(
-            select(func.max(ContentItem.extracted_at)).where(ContentItem.campaign_id == campaign_id)
+            select(func.max(ContentItem.extracted_at)).where(
+                ContentItem.campaign_id == campaign_id
+            )
         )
     ).scalar_one()
     return {
@@ -1397,6 +2005,7 @@ async def campaign_content_stats(campaign_id: str, db: DB, user: CurrentUser):
 
 
 # ── PATCH full scenario blob → default Scenario row (MCP / legacy clients) ────
+
 
 @router.patch(
     "/{campaign_id}/scenario",
@@ -1410,7 +2019,11 @@ async def update_scenario(
     user: CurrentUser,
     force: bool = Query(False, description="Allow save despite validation errors"),
 ):
-    from common.graph_compiler import compile_graph_to_steps, ensure_step_ids, steps_to_graph
+    from common.graph_compiler import (
+        compile_graph_to_steps,
+        ensure_step_ids,
+        steps_to_graph,
+    )
 
     campaign = await _get_campaign_or_404(campaign_id, user, db)
     patch = body.scenario if isinstance(body.scenario, dict) else {}
@@ -1419,7 +2032,9 @@ async def update_scenario(
     nodes_in = patch.get("nodes")
     edges_in = patch.get("edges")
     steps_in = patch.get("steps")
-    patch_vars = patch.get("variables") if isinstance(patch.get("variables"), dict) else {}
+    patch_vars = (
+        patch.get("variables") if isinstance(patch.get("variables"), dict) else {}
+    )
     device_context = patch.get("device_context")
 
     pending_updates: dict = {"instructions": instructions}
@@ -1427,15 +2042,25 @@ async def update_scenario(
         compiled = compile_graph_to_steps(nodes_in, edges_in or [])
         saved_steps = ensure_step_ids(save_step_images(compiled, s.id))
         n, e = steps_to_graph(saved_steps)
-        vars_merged = merge_scenario_variables_for_row(s.variables, patch_vars, device_context)
-        pending_updates.update(steps=saved_steps, nodes=n, edges=e, variables=vars_merged)
+        vars_merged = merge_scenario_variables_for_row(
+            s.variables, patch_vars, device_context
+        )
+        pending_updates.update(
+            steps=saved_steps, nodes=n, edges=e, variables=vars_merged
+        )
     elif isinstance(steps_in, list):
         saved_steps = ensure_step_ids(save_step_images(steps_in, s.id))
         n, e = steps_to_graph(saved_steps) if saved_steps else ([], [])
-        vars_merged = merge_scenario_variables_for_row(s.variables, patch_vars, device_context)
-        pending_updates.update(steps=saved_steps, nodes=n, edges=e, variables=vars_merged)
+        vars_merged = merge_scenario_variables_for_row(
+            s.variables, patch_vars, device_context
+        )
+        pending_updates.update(
+            steps=saved_steps, nodes=n, edges=e, variables=vars_merged
+        )
     else:
-        vars_merged = merge_scenario_variables_for_row(s.variables, patch_vars, device_context)
+        vars_merged = merge_scenario_variables_for_row(
+            s.variables, patch_vars, device_context
+        )
         pending_updates["variables"] = vars_merged
 
     await _validate_before_save(db, campaign, s, pending_updates, force=force)
@@ -1506,11 +2131,15 @@ async def compile_scenario(
         device_context=device_context,
     )
     from common.scenario_schema import validate_scenario
+
     validation_errors = validate_scenario(scenario)
     if validation_errors:
         raise HTTPException(
             status_code=400,
-            detail={"message": "Scenario validation failed", "errors": validation_errors},
+            detail={
+                "message": "Scenario validation failed",
+                "errors": validation_errors,
+            },
         )
 
     if body.scenario_id:
@@ -1518,15 +2147,19 @@ async def compile_scenario(
         if not s or s.campaign_id != campaign_id:
             raise HTTPException(status_code=404, detail="Scenario not found")
         from common.graph_compiler import steps_to_graph
+
         compiled_steps = scenario.get("steps", [])
         nodes, edges = steps_to_graph(compiled_steps)
         vars_merged = merge_scenario_variables_for_row(
             s.variables,
-            scenario.get("variables") if isinstance(scenario.get("variables"), dict) else {},
+            scenario.get("variables")
+            if isinstance(scenario.get("variables"), dict)
+            else {},
             body.device_context,
         )
         await repo.update_scenario(
-            db, body.scenario_id,
+            db,
+            body.scenario_id,
             steps=compiled_steps,
             instructions=instructions,
             nodes=nodes,
@@ -1535,16 +2168,20 @@ async def compile_scenario(
         )
     else:
         from common.graph_compiler import steps_to_graph
+
         tgt = await ensure_default_scenario(db, campaign.id, name=campaign.name)
         compiled_steps = scenario.get("steps", [])
         nodes, edges = steps_to_graph(compiled_steps)
         vars_merged = merge_scenario_variables_for_row(
             tgt.variables,
-            scenario.get("variables") if isinstance(scenario.get("variables"), dict) else {},
+            scenario.get("variables")
+            if isinstance(scenario.get("variables"), dict)
+            else {},
             body.device_context,
         )
         await repo.update_scenario(
-            db, tgt.id,
+            db,
+            tgt.id,
             steps=compiled_steps,
             instructions=instructions,
             nodes=nodes,
@@ -1559,6 +2196,7 @@ async def compile_scenario(
 
 
 # ── Scenario CRUD ─────────────────────────────────────────────────────────────
+
 
 @router.get(
     "/{campaign_id}/scenarios",
@@ -1589,7 +2227,9 @@ async def list_scenarios(campaign_id: str, db: DB, user: CurrentUser):
     status_code=201,
     dependencies=[Depends(require_permission("campaigns", "create"))],
 )
-async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: CurrentUser):
+async def create_scenario(
+    campaign_id: str, body: ScenarioCreate, db: DB, user: CurrentUser
+):
     await _get_campaign_or_404(campaign_id, user, db)
     # auto-order: append after last
     existing = await repo.list_scenarios(db, campaign_id)
@@ -1597,11 +2237,17 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
     # Validate account_group_id (must belong to the current user).
     if body.account_group_id:
         from db.crud.account_group import get_group as _get_group
-        grp = await _get_group(db, body.account_group_id, user_id=data_owner_user_id(user))
+
+        grp = await _get_group(
+            db, body.account_group_id, user_id=data_owner_user_id(user)
+        )
         if grp is None:
-            raise HTTPException(status_code=400, detail="Account group not found or not owned by user")
+            raise HTTPException(
+                status_code=400, detail="Account group not found or not owned by user"
+            )
     s = await repo.create_scenario(
-        db, campaign_id,
+        db,
+        campaign_id,
         name=body.name,
         instructions=body.instructions,
         steps=[],
@@ -1610,10 +2256,17 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
         account_group_id=body.account_group_id or None,
     )
     await db.flush()
-    from common.graph_compiler import ensure_step_ids, steps_to_graph
-    saved_steps = save_step_images(body.steps or [], s.id)
-    saved_steps = ensure_step_ids(saved_steps)
-    nodes, edges = steps_to_graph(saved_steps)
+    if body.nodes:
+        from common.graph_compiler import compile_graph_to_steps
+
+        nodes = [node.model_dump() for node in body.nodes]
+        edges = [edge.model_dump() for edge in body.edges]
+        saved_steps = save_step_images(compile_graph_to_steps(nodes, edges), s.id)
+    else:
+        from common.graph_compiler import ensure_step_ids, steps_to_graph
+
+        saved_steps = ensure_step_ids(save_step_images(body.steps or [], s.id))
+        nodes, edges = steps_to_graph(saved_steps)
     await repo.update_scenario(db, s.id, steps=saved_steps, nodes=nodes, edges=edges)
     await db.commit()
     s = await repo.get_scenario(db, s.id)
@@ -1847,6 +2500,7 @@ async def update_scenario_route(
             updates["account_group_id"] = None
         else:
             from db.crud.account_group import get_group as _get_group
+
             grp = await _get_group(db, agid, user_id=data_owner_user_id(user))
             if grp is None:
                 raise HTTPException(
@@ -1857,10 +2511,14 @@ async def update_scenario_route(
     # Graph model: compile nodes+edges → steps for executor
     if "nodes" in updates:
         from common.graph_compiler import compile_graph_to_steps
+
         # After model_dump(exclude_unset=True), nodes/edges are already plain dicts
-        updates["steps"] = compile_graph_to_steps(updates["nodes"], updates.get("edges", []))
+        updates["steps"] = compile_graph_to_steps(
+            updates["nodes"], updates.get("edges", [])
+        )
     elif "steps" in updates:
         from common.graph_compiler import ensure_step_ids, steps_to_graph
+
         updates["steps"] = save_step_images(updates["steps"], scenario_id)
         updates["steps"] = ensure_step_ids(updates["steps"])
         updates["nodes"], updates["edges"] = steps_to_graph(updates["steps"])
@@ -1906,7 +2564,9 @@ async def validate_scenario_route(
     await persist_validation_summary(db, scenario_id, result)
     await db.commit()
     s = await repo.get_scenario(db, scenario_id)
-    return _validation_to_out(result, last_validated_at=getattr(s, "last_validated_at", None))
+    return _validation_to_out(
+        result, last_validated_at=getattr(s, "last_validated_at", None)
+    )
 
 
 @router.delete(
@@ -1927,6 +2587,7 @@ async def delete_scenario_route(
 
 
 # ── Compile scenario for a specific scenario row ──────────────────────────────
+
 
 @router.post(
     "/{campaign_id}/scenarios/{scenario_id}/compile",
@@ -1972,15 +2633,20 @@ async def compile_scenario_row(
         instructions, ui_xml=ui_xml, device_context=body.device_context
     )
     from common.scenario_schema import validate_scenario
+
     errs = validate_scenario(scenario)
     if errs:
-        raise HTTPException(status_code=400, detail={"message": "Validation failed", "errors": errs})
+        raise HTTPException(
+            status_code=400, detail={"message": "Validation failed", "errors": errs}
+        )
 
     from common.graph_compiler import steps_to_graph
+
     compiled_steps = scenario.get("steps", [])
     nodes, edges = steps_to_graph(compiled_steps)
     await repo.update_scenario(
-        db, scenario_id,
+        db,
+        scenario_id,
         steps=compiled_steps,
         instructions=instructions,
         nodes=nodes,
@@ -1992,6 +2658,7 @@ async def compile_scenario_row(
 
 
 # ── Campaign Runs (backed by executions table) ───────────────────────────────
+
 
 def _execution_to_run_dict(ex) -> dict:
     meta = ex.meta or {}
@@ -2019,8 +2686,13 @@ async def list_runs(
 ):
     await _get_campaign_or_404(campaign_id, user, db)
     from db.crud.execution import list_executions
+
     runs, total = await list_executions(
-        db, campaign_id=campaign_id, run_type="campaign_run", limit=limit, offset=offset,
+        db,
+        campaign_id=campaign_id,
+        run_type="campaign_run",
+        limit=limit,
+        offset=offset,
     )
     return {"total": total, "items": [_execution_to_run_dict(r) for r in runs]}
 
@@ -2057,4 +2729,5 @@ async def run_content_stats(campaign_id: str, run_id: str, db: DB, user: Current
     if run.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Run not found")
     from db.crud.execution import execution_summary
+
     return await execution_summary(db, run_id)

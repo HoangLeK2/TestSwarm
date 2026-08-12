@@ -838,11 +838,16 @@ class ScenarioStepsWorkflow:
                     "retry_attempts": attempt_records,
                 }
 
+            attempt_step = dict(activity_step)
+            attempt_step["_account_action_outer_retry"] = {
+                "attempt": attempt,
+                "retry": dict(step.get("retry") or {}),
+            }
             sr: StepResult = await workflow.execute_activity(
                 "execute_device_action",
                 DeviceActionInput(
                     device_serial=inp.device_serial,
-                    step=activity_step,
+                    step=attempt_step,
                     step_index=step_index,
                     variables=inp.variables,
                     campaign_vars=inp.campaign_vars,
@@ -994,9 +999,14 @@ class ScenarioStepsWorkflow:
                 failed_message=f"Max nesting depth {MAX_NESTING_DEPTH} exceeded",
             )
 
-        runtime_vars: dict[str, Any] = dict(inp.parent_runtime_vars)
         # Shared execution context: posts, text_nodes, _no_new_streak, vars (legacy ctx)
         runtime_context: dict[str, Any] = dict(inp.context)
+        context_vars = runtime_context.get("vars")
+        runtime_vars: dict[str, Any] = {
+            **(context_vars if isinstance(context_vars, dict) else {}),
+            **inp.variables,
+            **inp.parent_runtime_vars,
+        }
         # Seed from accumulated_results so retry/history-reset continue_as_new calls
         # preserve the results of already-completed steps.
         step_results: list[dict[str, Any]] = list(inp.accumulated_results)
@@ -1120,7 +1130,22 @@ class ScenarioStepsWorkflow:
             _pending_steps.clear()
             _pending_indices.clear()
             if batch_result.context:
+                previous_context_vars = runtime_context.get("vars")
                 runtime_context = {**runtime_context, **batch_result.context}
+                context_vars = batch_result.context.get("vars")
+                if isinstance(context_vars, dict):
+                    previous = (
+                        previous_context_vars
+                        if isinstance(previous_context_vars, dict)
+                        else {}
+                    )
+                    runtime_vars.update(
+                        {
+                            key: value
+                            for key, value in context_vars.items()
+                            if key not in previous or previous[key] != value
+                        }
+                    )
             for r in batch_result.results:
                 _append(r)
                 steps_executed += 1
@@ -1533,6 +1558,11 @@ class ScenarioStepsWorkflow:
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
                         execution_id=inp.execution_id,
+                        account_id=(
+                            runtime_context.get("__ACCOUNT_ID__")
+                            or inp.variables.get("__ACCOUNT_ID__")
+                            or inp.campaign_vars.get("__ACCOUNT_ID__")
+                        ),
                         user_id=inp.campaign_vars.get("__USER_ID__"),
                         campaign_vars=dict(inp.campaign_vars or {}),
                     ),
@@ -1638,9 +1668,12 @@ class ScenarioStepsWorkflow:
         sub_result_state: dict[str, Any] = {}
         actual_iters = 0
         ctx = dict(runtime_context)
+        loop_var = str(step.get("loop_var") or "").strip()
 
         for i in range(iterations):
             runtime_vars["__LOOP_ITER__"] = i
+            if loop_var:
+                runtime_vars[loop_var] = i
             ctx["_loop_iter"] = i
 
             if use_while:
@@ -2202,6 +2235,14 @@ def _resolve_step(
     replay determinism (Python's random module is not seeded by Temporal).
     """
     wf_random = _get_wf_random()
+    step_type = str(raw_step.get("type") or "")
+    nested_keys: set[str] = set()
+    if step_type in {"loop", "repeat", "repeat_until"}:
+        nested_keys.add("steps")
+    elif step_type in {"if", "if_element", "if_variable"}:
+        nested_keys.update({"then", "else"})
+    elif step_type == "random_pick":
+        nested_keys.add("branches")
 
     def _lookup(name: str) -> Any:
         if name in runtime_vars:
@@ -2234,7 +2275,30 @@ def _resolve_step(
             return [_resolve_value(item) for item in val]
         return val
 
-    return _resolve_value(raw_step)
+    if not nested_keys:
+        return _resolve_value(raw_step)
+
+    resolved = _resolve_value(
+        {key: value for key, value in raw_step.items() if key not in nested_keys}
+    )
+    for key in nested_keys:
+        if key not in raw_step:
+            continue
+        if key != "branches":
+            resolved[key] = raw_step[key]
+            continue
+        branches = []
+        for branch in raw_step.get("branches") or []:
+            if not isinstance(branch, dict):
+                branches.append(branch)
+                continue
+            resolved_branch = _resolve_value(
+                {k: v for k, v in branch.items() if k != "steps"}
+            )
+            resolved_branch["steps"] = branch.get("steps") or []
+            branches.append(resolved_branch)
+        resolved[key] = branches
+    return resolved
 
 
 def _handle_set_variable(
@@ -2248,11 +2312,28 @@ def _handle_set_variable(
         return {"index": idx, "type": "set_variable", "ok": False,
                 "message": "set_variable: missing name"}
 
-    if "from_list" in raw_step:
-        vals = raw_step["from_list"]
+    if "from_list" in step:
+        vals = step["from_list"]
         if not isinstance(vals, list) or not vals:
             return {"index": idx, "type": "set_variable", "ok": False,
                     "message": "set_variable: from_list must be non-empty list"}
+        if "from_list_index" in step:
+            try:
+                list_index = int(step["from_list_index"])
+            except (TypeError, ValueError):
+                return {"index": idx, "type": "set_variable", "ok": False,
+                        "message": "set_variable: from_list_index must be an integer"}
+            if list_index < 0 or list_index >= len(vals):
+                return {"index": idx, "type": "set_variable", "ok": False,
+                        "message": (
+                            f"set_variable: from_list_index {list_index} out of range "
+                            f"0..{len(vals) - 1}"
+                        )}
+            chosen = vals[list_index]
+            runtime_vars[name] = chosen
+            return {"index": idx, "type": "set_variable", "ok": True,
+                    "message": f"set_variable: {name} = {chosen!r} (from_list_index={list_index})"}
+
         chosen = _get_wf_random().choice(vals)
         runtime_vars[name] = chosen
         return {"index": idx, "type": "set_variable", "ok": True,

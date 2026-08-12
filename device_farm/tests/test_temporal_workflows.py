@@ -130,7 +130,42 @@ class TestResolveStep:
             "branches": [{"steps": [{"type": "wait", "seconds": "${DELAY}"}]}],
         }
         result = _resolve_step(step, {"DELAY": "2"}, {}, {}, 0)
-        assert result["branches"][0]["steps"][0]["seconds"] == "2"
+        assert result["branches"][0]["steps"][0]["seconds"] == "${DELAY}"
+
+    def test_control_flow_nested_steps_are_not_resolved_before_runtime_vars(self):
+        step = {
+            "type": "if_variable",
+            "name": "FACEBOOK_SESSION_READY",
+            "then": [
+                {
+                    "type": "loop",
+                    "count": "${PAGE_COUNT}",
+                    "loop_var": "PAGE_INDEX",
+                    "steps": [
+                        {
+                            "type": "set_variable",
+                            "name": "PAGE_SEARCH_CURRENT",
+                            "from_list": "${PAGE_TARGETS}",
+                            "from_list_index": "${PAGE_INDEX}",
+                        }
+                    ],
+                }
+            ],
+        }
+        result = _resolve_step(
+            step,
+            {},
+            {
+                "FACEBOOK_SESSION_READY": True,
+                "PAGE_COUNT": 2,
+                "PAGE_TARGETS": ["Go2Joy Vietnam", "Booking.com"],
+            },
+            {},
+            0,
+        )
+        nested_set = result["then"][0]["steps"][0]
+        assert nested_set["from_list"] == "${PAGE_TARGETS}"
+        assert nested_set["from_list_index"] == "${PAGE_INDEX}"
 
     def test_resolve_step_index(self):
         step = {"type": "set_variable", "name": "idx", "value": "${__STEP_INDEX__}"}
@@ -179,6 +214,27 @@ class TestHandleSetVariable:
         )
         assert result["ok"] is True
         assert runtime_vars["COLOR"] in ("red", "blue")
+
+    def test_set_from_list_index(self):
+        runtime_vars: dict = {}
+        result = _handle_set_variable(
+            {
+                "type": "set_variable",
+                "name": "PAGE_SEARCH_CURRENT",
+                "from_list": ["Go2Joy Vietnam", "Booking.com"],
+                "from_list_index": 1,
+            },
+            {
+                "type": "set_variable",
+                "name": "PAGE_SEARCH_CURRENT",
+                "from_list": "${PAGE_TARGETS}",
+                "from_list_index": "${PAGE_INDEX}",
+            },
+            runtime_vars, {}, {}, 0,
+        )
+        assert result["ok"] is True
+        assert runtime_vars["PAGE_SEARCH_CURRENT"] == "Booking.com"
+        assert "from_list_index=1" in result["message"]
 
     def test_set_increment(self):
         runtime_vars: dict = {"COUNTER": 5}

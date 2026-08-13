@@ -25,6 +25,18 @@ SKIPPED_PREFIXES = (
     "/api/ready",
     "/api/health",
 )
+DEVICE_SCREEN_CONTROL_PATH_PARTS = (
+    "/scrcpy",
+    "/control",
+    "/touch",
+    "/tap",
+    "/swipe",
+    "/key",
+    "/text",
+    "/hierarchy",
+    "/screenshot",
+    "/interrupt",
+)
 SENSITIVE_KEY_PARTS = (
     "password",
     "passwd",
@@ -123,7 +135,13 @@ def should_audit_request(method: str, path: str) -> bool:
         return False
     if not path.startswith("/api/"):
         return False
-    return not any(path.startswith(prefix) for prefix in SKIPPED_PREFIXES)
+    if any(path.startswith(prefix) for prefix in SKIPPED_PREFIXES):
+        return False
+    if path.startswith("/api/devices/") and any(
+        part in path for part in DEVICE_SCREEN_CONTROL_PATH_PARTS
+    ):
+        return False
+    return True
 
 
 def _route_segments(route_template: str | None, path: str) -> list[str]:

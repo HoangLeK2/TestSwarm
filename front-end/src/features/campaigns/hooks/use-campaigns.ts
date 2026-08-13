@@ -65,6 +65,7 @@ const MONITOR_SIDEBAR_ACTIVE_POLL_MS = 30_000;
 const MONITOR_SIDEBAR_IDLE_POLL_MS = 60_000;
 const WORKFLOW_PROGRESS_POLL_MS = 8_000;
 const WORKFLOW_STEPS_POLL_MS = 15_000;
+const EXECUTION_TASK_LOG_POLL_MS = 30_000;
 
 const monitorQueryDefaults = {
   refetchOnWindowFocus: false
@@ -547,6 +548,21 @@ export function useCampaignExecutions(campaignId: string, enabled: boolean) {
   });
 }
 
+export function useCampaignMonitor(
+  campaignId: string,
+  enabled: boolean,
+  poll = enabled
+) {
+  return useQuery({
+    queryKey: ['campaign-monitor', campaignId],
+    queryFn: () => campaignsApi.monitor(campaignId, { limit: 200 }),
+    enabled: enabled && !!campaignId,
+    ...monitorQueryDefaults,
+    staleTime: 10_000,
+    refetchInterval: enabled && poll ? MONITOR_EXECUTION_POLL_MS : false
+  });
+}
+
 export function useContinuousCrawlProgress(
   campaignId: string,
   enabled: boolean
@@ -608,6 +624,25 @@ export function useWorkflowSteps(
     ...monitorQueryDefaults,
     staleTime: 5_000,
     refetchInterval: enabled && poll ? WORKFLOW_STEPS_POLL_MS : false
+  });
+}
+
+export function useExecutionTaskLog(
+  executionId: string | undefined,
+  enabled: boolean,
+  poll = enabled
+) {
+  return useQuery({
+    queryKey: ['execution-task-log', executionId],
+    queryFn: () =>
+      executionsApi.taskLog(executionId as string, {
+        eventLimit: 250,
+        stepLimit: 500
+      }),
+    enabled: enabled && !!executionId,
+    ...monitorQueryDefaults,
+    staleTime: 10_000,
+    refetchInterval: enabled && poll ? EXECUTION_TASK_LOG_POLL_MS : false
   });
 }
 

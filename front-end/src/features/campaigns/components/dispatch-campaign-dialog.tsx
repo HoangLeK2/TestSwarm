@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
   CheckSquare,
   Eye,
   Loader2,
+  Play,
   Smartphone,
   Square
 } from 'lucide-react';
@@ -110,6 +114,14 @@ type SourceEntityOption = {
   display_name: string;
 };
 
+type DispatchStep = 'targets' | 'variables' | 'source' | 'review';
+const dispatchSteps: DispatchStep[] = [
+  'targets',
+  'variables',
+  'source',
+  'review'
+];
+
 export type DispatchScenarioItem = {
   id: string;
   name: string;
@@ -176,6 +188,7 @@ export function DispatchCampaignDialog({
   );
   const [backendCampaignLoading, setBackendCampaignLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [step, setStep] = useState<DispatchStep>('targets');
 
   const allDeviceIds = useMemo(() => devices.map((d) => d.id), [devices]);
   const deviceSignature = useMemo(
@@ -314,6 +327,7 @@ export function DispatchCampaignDialog({
     setDrafts({});
     setDeviceVarEnabled({});
     setDirtyKeys({});
+    setStep('targets');
   }, [
     allDeviceIds,
     deviceSignature,
@@ -587,6 +601,7 @@ export function DispatchCampaignDialog({
       });
       const campaign = normalizeCampaignOut(updated);
       if (campaign) {
+        setBackendCampaign(campaign);
         qc.setQueryData(['campaigns', campaignId], campaign);
         qc.setQueryData<CampaignOut[]>(['campaigns'], (old) =>
           old?.map((row) =>
@@ -669,173 +684,387 @@ export function DispatchCampaignDialog({
   };
 
   const showVarsPanel = devices.length > 0;
+  const stepIndex = dispatchSteps.indexOf(step);
+  const selectedDirectCount = selectedIds.size;
+  const selectedGroupCount = groupIds.size;
+  const dispatchTargetCount = selectedDirectCount + selectedGroupCount;
+  const selectedDevices = devices.filter((device) =>
+    selectedIds.has(device.id)
+  );
+  const selectedGroups = deviceGroups.filter((group) => groupIds.has(group.id));
+  const stepLabels: Record<DispatchStep, string> = {
+    targets: t('steps.targets'),
+    variables: t('steps.variables'),
+    source: t('steps.source'),
+    review: t('steps.review')
+  };
+  const sourceStepBlocked =
+    sourcePoolEnabled &&
+    (!sourcePreviewCurrent || !sourcePreview || hasDuplicateSourceAssignment);
+
+  const goBack = () => {
+    if (stepIndex <= 0) {
+      onClose();
+      return;
+    }
+    setStep(dispatchSteps[stepIndex - 1] ?? 'targets');
+  };
+
+  const goNext = async () => {
+    if (step === 'targets') {
+      if (!hasTarget) return;
+      setStep('variables');
+      return;
+    }
+    if (step === 'variables') {
+      if (currentJsonError) {
+        toast.error(currentJsonError);
+        return;
+      }
+      if (!(await saveDirtyDrafts())) return;
+      setStep('source');
+      return;
+    }
+    if (step === 'source') {
+      if (sourceStepBlocked) {
+        toast.error(
+          hasDuplicateSourceAssignment
+            ? t('duplicateSourceAssignment')
+            : t('previewRequired')
+        );
+        return;
+      }
+      setStep('review');
+      return;
+    }
+    await handleSubmit();
+  };
+
+  const nextDisabled =
+    isDispatching ||
+    isSaving ||
+    (step === 'targets' && !hasTarget) ||
+    (step === 'variables' && !!currentJsonError) ||
+    (step === 'source' && sourceStepBlocked) ||
+    (step === 'review' &&
+      (!hasTarget ||
+        !sourcePreviewCurrent ||
+        hasDuplicateSourceAssignment ||
+        !!currentJsonError));
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className='flex max-h-[92vh] min-w-[800px] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:w-full'>
+      <DialogContent className='flex max-h-[92vh] w-[min(calc(100vw-2rem),56rem)] max-w-none flex-col gap-0 overflow-hidden p-0'>
         <DialogHeader className='shrink-0 space-y-0 border-b px-5 py-4 pr-12 text-left'>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription className='mt-1.5 text-xs'>
             {t('description')}
           </DialogDescription>
-          {activeScenario ? (
-            scenarios.length > 1 ? (
-              <div className='mt-3 min-w-0'>
-                <Select
-                  value={activeScenarioId}
-                  onValueChange={setActiveScenarioId}
-                >
-                  <SelectTrigger
-                    size='sm'
-                    className='h-auto min-h-9 w-full min-w-0 whitespace-normal py-2 text-left text-xs leading-snug [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal'
-                    title={activeScenario.name}
-                  >
-                    <SelectValue
-                      placeholder={tList('runDialogScenarioPlaceholder')}
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {scenarios.map((scenario) => (
-                      <SelectItem key={scenario.id} value={scenario.id}>
-                        {scenario.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : (
-              <p
-                className='mt-2 line-clamp-2 text-xs font-medium leading-snug text-foreground'
-                title={activeScenario.name}
-              >
-                {activeScenario.name}
-              </p>
-            )
-          ) : null}
         </DialogHeader>
 
-        <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-5'>
-          <div
-            className={cn(
-              'grid min-h-0 min-w-0 flex-1 pb-2 pt-4',
-              showVarsPanel
-                ? 'grid-cols-1 divide-y divide-border md:grid-cols-[minmax(220px,300px)_minmax(0,1fr)] md:divide-x md:divide-y-0'
-                : 'grid-cols-1'
-            )}
-          >
-            <div className='min-h-0 space-y-4 max-md:max-h-[42vh] max-md:overflow-y-auto md:py-0 md:pr-4'>
-              <div className='space-y-2'>
-                <Label className='text-xs'>{t('devicesLabel')}</Label>
-                {devices.length === 0 ? (
-                  <p className='text-xs text-muted-foreground'>
-                    {t('noDevices')}
-                  </p>
-                ) : (
-                  <>
-                    <button
-                      type='button'
-                      onClick={toggleAllDevices}
-                      className='mb-1 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/60'
-                    >
-                      {allSelected ? (
-                        <CheckSquare size={14} className='text-primary' />
-                      ) : (
-                        <Square size={14} className='text-muted-foreground' />
-                      )}
-                      <span className='font-medium'>
-                        {tList('runDialogSelectAll')}
-                      </span>
-                      <Badge
-                        variant='secondary'
-                        className='ml-auto text-[10px]'
+        <div className='grid grid-cols-4 border-b bg-muted/30 px-3 py-3 sm:px-5'>
+          {dispatchSteps.map((item, index) => (
+            <div key={item} className='flex min-w-0 items-center gap-2'>
+              <span
+                className={cn(
+                  'flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold',
+                  index <= stepIndex
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'text-muted-foreground'
+                )}
+              >
+                {index < stepIndex ? <Check className='size-3.5' /> : index + 1}
+              </span>
+              <span
+                className={cn(
+                  'hidden truncate text-xs sm:block',
+                  index === stepIndex
+                    ? 'font-semibold'
+                    : 'text-muted-foreground'
+                )}
+              >
+                {stepLabels[item]}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className='min-h-0 flex-1 overflow-y-auto px-5 py-5'>
+          {step === 'targets' ? (
+            <div className='mx-auto grid max-w-3xl gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]'>
+              <div className='min-w-0 space-y-4'>
+                {activeScenario ? (
+                  <div className='space-y-2'>
+                    <Label className='text-xs'>{t('scenarioLabel')}</Label>
+                    {scenarios.length > 1 ? (
+                      <Select
+                        value={activeScenarioId}
+                        onValueChange={setActiveScenarioId}
                       >
-                        {devices.length}
-                      </Badge>
-                    </button>
-                    <div className='max-h-40 space-y-1 overflow-y-auto rounded-md border p-2'>
-                      {devices.map((device) => {
-                        const isChecked = selectedIds.has(device.id);
-                        const isActive = activeDevice?.id === device.id;
-                        return (
-                          <div
-                            key={device.id}
-                            className={cn(
-                              'flex items-center gap-1 rounded border border-transparent px-1 py-1',
-                              isActive && 'border-primary/30 bg-primary/[0.06]'
-                            )}
-                          >
-                            <button
-                              type='button'
-                              onClick={() => toggleDevice(device.id)}
-                              className='flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted'
-                              aria-label={
-                                isChecked
-                                  ? tList('runDialogAriaDeselectDevice')
-                                  : tList('runDialogAriaSelectDevice')
-                              }
-                            >
-                              {isChecked ? (
-                                <CheckSquare
-                                  size={13}
-                                  className='text-primary'
-                                />
-                              ) : (
-                                <Square
-                                  size={13}
-                                  className='text-muted-foreground'
-                                />
+                        <SelectTrigger
+                          size='sm'
+                          className='h-auto min-h-9 w-full min-w-0 whitespace-normal py-2 text-left text-xs leading-snug [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal'
+                          title={activeScenario.name}
+                        >
+                          <SelectValue
+                            placeholder={tList('runDialogScenarioPlaceholder')}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {scenarios.map((scenario) => (
+                            <SelectItem key={scenario.id} value={scenario.id}>
+                              {scenario.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p
+                        className='line-clamp-2 rounded-md border px-3 py-2 text-xs font-medium leading-snug'
+                        title={activeScenario.name}
+                      >
+                        {activeScenario.name}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                <div className='space-y-2'>
+                  <Label className='text-xs'>{t('devicesLabel')}</Label>
+                  {devices.length === 0 ? (
+                    <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
+                      {t('noDevices')}
+                    </p>
+                  ) : (
+                    <>
+                      <button
+                        type='button'
+                        onClick={toggleAllDevices}
+                        className='mb-1 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/60'
+                      >
+                        {allSelected ? (
+                          <CheckSquare size={14} className='text-primary' />
+                        ) : (
+                          <Square size={14} className='text-muted-foreground' />
+                        )}
+                        <span className='font-medium'>
+                          {tList('runDialogSelectAll')}
+                        </span>
+                        <Badge
+                          variant='secondary'
+                          className='ml-auto text-[10px]'
+                        >
+                          {devices.length}
+                        </Badge>
+                      </button>
+                      <div className='max-h-56 space-y-1 overflow-y-auto rounded-md border p-2'>
+                        {devices.map((device) => {
+                          const isChecked = selectedIds.has(device.id);
+                          const isActive = activeDevice?.id === device.id;
+                          return (
+                            <div
+                              key={device.id}
+                              className={cn(
+                                'flex items-center gap-1 rounded border border-transparent px-1 py-1',
+                                isActive &&
+                                  'border-primary/30 bg-primary/[0.06]'
                               )}
-                            </button>
-                            <button
-                              type='button'
-                              onClick={() => setActiveDeviceId(device.id)}
-                              className='flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted/60'
                             >
-                              <Smartphone
-                                size={12}
-                                className='shrink-0 text-muted-foreground'
-                              />
-                              <span className='min-w-0 truncate font-mono'>
-                                {device.serial}
-                              </span>
-                              {device.name ? (
-                                <span className='ml-auto truncate text-muted-foreground'>
-                                  {deviceLabel(device)}
+                              <button
+                                type='button'
+                                onClick={() => toggleDevice(device.id)}
+                                className='flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted'
+                                aria-label={
+                                  isChecked
+                                    ? tList('runDialogAriaDeselectDevice')
+                                    : tList('runDialogAriaSelectDevice')
+                                }
+                              >
+                                {isChecked ? (
+                                  <CheckSquare
+                                    size={13}
+                                    className='text-primary'
+                                  />
+                                ) : (
+                                  <Square
+                                    size={13}
+                                    className='text-muted-foreground'
+                                  />
+                                )}
+                              </button>
+                              <button
+                                type='button'
+                                onClick={() => setActiveDeviceId(device.id)}
+                                className='flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted/60'
+                              >
+                                <Smartphone
+                                  size={12}
+                                  className='shrink-0 text-muted-foreground'
+                                />
+                                <span className='min-w-0 truncate font-mono'>
+                                  {device.serial}
                                 </span>
-                              ) : null}
-                            </button>
-                          </div>
-                        );
-                      })}
+                                {device.name ? (
+                                  <span className='ml-auto truncate text-muted-foreground'>
+                                    {deviceLabel(device)}
+                                  </span>
+                                ) : null}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {deviceGroups.length > 0 && (
+                  <div className='space-y-2'>
+                    <Label className='text-xs'>{t('groupsLabel')}</Label>
+                    <div className='max-h-36 space-y-2 overflow-y-auto rounded-md border p-3'>
+                      {deviceGroups.map((group) => (
+                        <label
+                          key={group.id}
+                          className='flex cursor-pointer items-center gap-2 text-sm'
+                        >
+                          <Checkbox
+                            checked={groupIds.has(group.id)}
+                            onCheckedChange={(checked) =>
+                              toggleGroup(group.id, checked === true)
+                            }
+                          />
+                          <span className='min-w-0 truncate'>{group.name}</span>
+                        </label>
+                      ))}
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
 
-              {deviceGroups.length > 0 && (
-                <div className='space-y-2'>
-                  <Label className='text-xs'>{t('groupsLabel')}</Label>
-                  <div className='max-h-28 space-y-2 overflow-y-auto rounded-md border p-3'>
-                    {deviceGroups.map((group) => (
-                      <label
-                        key={group.id}
-                        className='flex cursor-pointer items-center gap-2 text-sm'
-                      >
-                        <Checkbox
-                          checked={groupIds.has(group.id)}
-                          onCheckedChange={(checked) =>
-                            toggleGroup(group.id, checked === true)
-                          }
-                        />
-                        <span className='min-w-0 truncate'>{group.name}</span>
-                      </label>
-                    ))}
-                  </div>
+              <div className='space-y-4'>
+                <div className='space-y-1.5'>
+                  <Label className='text-xs'>{t('strategyLabel')}</Label>
+                  <Select
+                    value={strategy}
+                    onValueChange={(v) =>
+                      setStrategy(
+                        v === 'sequential' ? 'sequential' : 'parallel'
+                      )
+                    }
+                  >
+                    <SelectTrigger className='h-8 text-xs'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='parallel'>
+                        {t('strategyParallel')}
+                      </SelectItem>
+                      <SelectItem value='sequential'>
+                        {t('strategySequential')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
+                <div className='space-y-3 rounded-md border bg-muted/20 p-3'>
+                  <SummaryRow
+                    label={t('selectedDevices')}
+                    value={String(selectedDirectCount)}
+                  />
+                  <SummaryRow
+                    label={t('selectedGroups')}
+                    value={String(selectedGroupCount)}
+                  />
+                  <SummaryRow
+                    label={t('selectedTotal')}
+                    value={String(dispatchTargetCount)}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
 
-              {sourcePoolMenuOptions.length > 0 && (
-                <div className='space-y-2'>
+          {step === 'variables' ? (
+            <div
+              className={cn(
+                'mx-auto grid max-w-4xl gap-5',
+                showVarsPanel
+                  ? 'lg:grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]'
+                  : 'grid-cols-1'
+              )}
+            >
+              <div className='min-w-0 space-y-2'>
+                <Label className='text-xs'>{t('devicesLabel')}</Label>
+                {devices.length === 0 ? (
+                  <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
+                    {t('noDevices')}
+                  </p>
+                ) : (
+                  <div className='max-h-[28rem] space-y-1 overflow-y-auto rounded-md border p-2'>
+                    {devices.map((device) => {
+                      const isActive = activeDevice?.id === device.id;
+                      const hasOverride =
+                        deviceVarEnabled[device.id] === true ||
+                        Object.prototype.hasOwnProperty.call(
+                          effectivePerDeviceOverrides,
+                          device.id
+                        );
+                      return (
+                        <button
+                          key={device.id}
+                          type='button'
+                          onClick={() => setActiveDeviceId(device.id)}
+                          className={cn(
+                            'flex w-full min-w-0 items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
+                            isActive && 'border-primary/30 bg-primary/[0.06]'
+                          )}
+                        >
+                          <Smartphone
+                            size={12}
+                            className='shrink-0 text-muted-foreground'
+                          />
+                          <span className='min-w-0 flex-1 truncate font-mono'>
+                            {device.serial}
+                          </span>
+                          {hasOverride ? (
+                            <Badge
+                              variant='secondary'
+                              className='shrink-0 text-[10px]'
+                            >
+                              {t('overrideBadge')}
+                            </Badge>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {showVarsPanel ? (
+                <div className='flex min-h-[28rem] min-w-0 flex-col overflow-hidden'>
+                  <DeviceVarsJsonPanel
+                    enabled={currentDeviceVarsEnabled}
+                    onEnabledChange={handleDeviceVarsToggle}
+                    draft={currentDraft}
+                    onDraftChange={handleDraftChange}
+                    loading={backendCampaignLoading}
+                    jsonError={currentJsonError}
+                    deviceLabel={activeDevice?.serial}
+                    baseVariables={globalVariablesPreview}
+                    globalVariablesPreview={globalVariablesPreview}
+                    className='flex min-h-0 min-w-0 flex-1 flex-col'
+                    editorClassName='min-h-[220px] flex-1'
+                    emptyClassName='flex min-h-[220px] flex-1 flex-col'
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {step === 'source' ? (
+            <div className='mx-auto max-w-3xl space-y-4'>
+              {sourcePoolMenuOptions.length > 0 ? (
+                <div className='space-y-3'>
                   <label className='flex cursor-pointer items-center gap-2 text-xs font-medium'>
                     <Checkbox
                       checked={sourcePoolEnabled}
@@ -850,44 +1079,53 @@ export function DispatchCampaignDialog({
                     {t('sourcePoolEnabled')}
                   </label>
                   {sourcePoolEnabled ? (
-                    <div className='space-y-2 rounded-md border p-3'>
-                      <Label className='text-[11px]'>
-                        {t('sourcePoolLabel')}
-                      </Label>
-                      <Select
-                        value={sourcePoolKey}
-                        onValueChange={(value) => {
-                          setSourcePoolKey(value);
-                          setSourcePreviewError('');
-                          setSourceAssignmentOverrides({});
-                        }}
-                      >
-                        <SelectTrigger className='h-8 text-xs'>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {sourcePoolMenuOptions.map((option) => (
-                            <SelectItem key={option.key} value={option.key}>
-                              {option.platform} / {option.entityType} (
-                              {option.count})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Input
-                        value={sourceSearch}
-                        onChange={(event) => {
-                          setSourceSearch(event.target.value);
-                          setSourcePreviewError('');
-                          setSourceAssignmentOverrides({});
-                        }}
-                        placeholder={t('sourceSearchPlaceholder')}
-                        className='h-8 text-xs'
-                      />
+                    <div className='space-y-3 rounded-md border p-3'>
+                      <div className='grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'>
+                        <div className='space-y-1.5'>
+                          <Label className='text-[11px]'>
+                            {t('sourcePoolLabel')}
+                          </Label>
+                          <Select
+                            value={sourcePoolKey}
+                            onValueChange={(value) => {
+                              setSourcePoolKey(value);
+                              setSourcePreviewError('');
+                              setSourceAssignmentOverrides({});
+                            }}
+                          >
+                            <SelectTrigger className='h-8 text-xs'>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {sourcePoolMenuOptions.map((option) => (
+                                <SelectItem key={option.key} value={option.key}>
+                                  {option.platform} / {option.entityType} (
+                                  {option.count})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className='space-y-1.5'>
+                          <Label className='text-[11px]'>
+                            {t('sourceSearchLabel')}
+                          </Label>
+                          <Input
+                            value={sourceSearch}
+                            onChange={(event) => {
+                              setSourceSearch(event.target.value);
+                              setSourcePreviewError('');
+                              setSourceAssignmentOverrides({});
+                            }}
+                            placeholder={t('sourceSearchPlaceholder')}
+                            className='h-8 text-xs'
+                          />
+                        </div>
+                      </div>
                       <p className='text-[11px] text-muted-foreground'>
                         {t('sourcePolicyHelp')}
                       </p>
-                      <div className='flex flex-wrap gap-2'>
+                      <div className='flex flex-wrap items-center gap-2'>
                         <Button
                           type='button'
                           size='sm'
@@ -907,6 +1145,13 @@ export function DispatchCampaignDialog({
                           )}
                           {t('previewAllocation')}
                         </Button>
+                        {sourcePoolEnabled &&
+                        !sourcePreviewLoading &&
+                        !sourcePreviewCurrent ? (
+                          <span className='text-[11px] text-muted-foreground'>
+                            {t('previewRequired')}
+                          </span>
+                        ) : null}
                       </div>
                       {sourcePreviewError ? (
                         <p className='text-[11px] text-destructive'>
@@ -914,7 +1159,7 @@ export function DispatchCampaignDialog({
                         </p>
                       ) : null}
                       {sourcePreviewCurrent && sourcePreview ? (
-                        <div className='max-h-56 space-y-2 overflow-y-auto rounded bg-muted/40 p-2'>
+                        <div className='max-h-[22rem] space-y-2 overflow-y-auto rounded-md bg-muted/40 p-2'>
                           <p className='text-[11px] font-medium'>
                             {t('previewSummary', {
                               assigned: effectiveSourceAssignments.length,
@@ -938,7 +1183,7 @@ export function DispatchCampaignDialog({
                             return (
                               <div
                                 key={assignment.device_id}
-                                className='grid gap-1 rounded border bg-background/70 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,1.4fr)] sm:items-center'
+                                className='grid gap-1 rounded-md border bg-background/70 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,1.4fr)] sm:items-center'
                               >
                                 <div className='min-w-0 text-[11px]'>
                                   <p className='truncate font-medium'>
@@ -989,93 +1234,136 @@ export function DispatchCampaignDialog({
                       ) : null}
                     </div>
                   ) : (
-                    <p className='text-[11px] text-muted-foreground'>
+                    <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
                       {t('sourcePoolDisabledHelp')}
                     </p>
                   )}
                 </div>
+              ) : (
+                <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
+                  {t('sourceUnavailable')}
+                </p>
               )}
-
-              <div className='space-y-1.5'>
-                <Label className='text-xs'>{t('strategyLabel')}</Label>
-                <Select
-                  value={strategy}
-                  onValueChange={(v) =>
-                    setStrategy(v === 'sequential' ? 'sequential' : 'parallel')
-                  }
-                >
-                  <SelectTrigger className='h-8 text-xs'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='parallel'>
-                      {t('strategyParallel')}
-                    </SelectItem>
-                    <SelectItem value='sequential'>
-                      {t('strategySequential')}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
+          ) : null}
 
-            {showVarsPanel ? (
-              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-md:pt-4 md:pl-4 md:pt-0'>
-                <DeviceVarsJsonPanel
-                  enabled={currentDeviceVarsEnabled}
-                  onEnabledChange={handleDeviceVarsToggle}
-                  draft={currentDraft}
-                  onDraftChange={handleDraftChange}
-                  loading={backendCampaignLoading}
-                  jsonError={currentJsonError}
-                  deviceLabel={activeDevice?.serial}
-                  baseVariables={globalVariablesPreview}
-                  globalVariablesPreview={globalVariablesPreview}
-                  className='flex min-h-0 min-w-0 flex-1 flex-col'
-                  editorClassName='min-h-[180px] flex-1 md:min-h-[220px]'
-                  emptyClassName='flex min-h-[180px] flex-1 flex-col md:min-h-[220px]'
-                />
+          {step === 'review' ? (
+            <div className='mx-auto max-w-3xl space-y-4'>
+              <div className='grid gap-3 sm:grid-cols-2'>
+                <div className='space-y-3 rounded-md border p-4'>
+                  <p className='text-sm font-semibold'>{t('reviewTargets')}</p>
+                  <SummaryRow
+                    label={t('selectedDevices')}
+                    value={String(selectedDirectCount)}
+                  />
+                  <SummaryRow
+                    label={t('selectedGroups')}
+                    value={String(selectedGroupCount)}
+                  />
+                  <SummaryRow
+                    label={t('reviewStrategy')}
+                    value={
+                      strategy === 'sequential'
+                        ? t('strategySequentialShort')
+                        : t('strategyParallelShort')
+                    }
+                  />
+                </div>
+                <div className='space-y-3 rounded-md border p-4'>
+                  <p className='text-sm font-semibold'>{t('reviewSetup')}</p>
+                  <SummaryRow
+                    label={t('reviewVariables')}
+                    value={t('reviewVariableCount', {
+                      count: Object.keys(effectivePerDeviceOverrides).length
+                    })}
+                  />
+                  <SummaryRow
+                    label={t('reviewSource')}
+                    value={
+                      sourcePoolEnabled && sourcePreview
+                        ? t('reviewSourceCount', {
+                            count: effectiveSourceAssignments.length
+                          })
+                        : t('reviewSourceDisabled')
+                    }
+                  />
+                </div>
               </div>
-            ) : null}
-          </div>
+
+              {selectedDevices.length > 0 ? (
+                <div className='rounded-md border p-4'>
+                  <p className='mb-2 text-sm font-semibold'>
+                    {t('selectedDeviceList')}
+                  </p>
+                  <div className='flex flex-wrap gap-2'>
+                    {selectedDevices.map((device) => (
+                      <Badge key={device.id} variant='secondary'>
+                        {device.serial}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedGroups.length > 0 ? (
+                <div className='rounded-md border p-4'>
+                  <p className='mb-2 text-sm font-semibold'>
+                    {t('selectedGroupList')}
+                  </p>
+                  <div className='flex flex-wrap gap-2'>
+                    {selectedGroups.map((group) => (
+                      <Badge key={group.id} variant='outline'>
+                        {group.name}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
-        <DialogFooter className='shrink-0 gap-2 border-t bg-background px-5 py-4'>
+        <DialogFooter className='flex-row items-center justify-between border-t bg-muted/20 px-5 py-4 sm:justify-between'>
           <Button
-            size='sm'
-            variant='outline'
-            className='h-7 text-xs'
-            onClick={onClose}
+            variant='ghost'
+            onClick={goBack}
+            disabled={isDispatching || isSaving}
           >
-            {t('cancel')}
+            {stepIndex > 0 ? <ArrowLeft className='mr-1.5 size-4' /> : null}
+            {stepIndex === 0 ? t('cancel') : t('back')}
           </Button>
           <Button
-            size='sm'
-            className='h-7 gap-1.5 text-xs'
-            disabled={
-              isDispatching ||
-              isSaving ||
-              !hasTarget ||
-              !sourcePreviewCurrent ||
-              hasDuplicateSourceAssignment ||
-              !!currentJsonError
-            }
-            onClick={() => void handleSubmit()}
+            className='gap-1.5'
+            disabled={nextDisabled}
+            onClick={() => void goNext()}
           >
             {isDispatching || isSaving ? (
-              <Loader2 size={12} className='animate-spin' />
+              <Loader2 className='size-4 animate-spin' />
+            ) : step === 'review' ? (
+              <Play className='size-4' />
             ) : null}
             {isDispatching
               ? t('dispatching')
               : isSaving
                 ? tVars('footerLoading')
-                : t('dispatchCount', {
-                    count:
-                      selectedIds.size + (groupIds.size > 0 ? groupIds.size : 0)
-                  })}
+                : step === 'review'
+                  ? t('dispatchCount', { count: dispatchTargetCount })
+                  : t('next')}
+            {step !== 'review' && !isDispatching && !isSaving ? (
+              <ArrowRight className='size-4' />
+            ) : null}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className='flex items-center justify-between gap-3 text-xs'>
+      <span className='min-w-0 truncate text-muted-foreground'>{label}</span>
+      <span className='shrink-0 text-right font-medium'>{value}</span>
+    </div>
   );
 }

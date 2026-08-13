@@ -1,4 +1,5 @@
 import type { FlowNode, FlowEdge } from './components/scenario-steps/types';
+import type { ExecutionEventOut } from '../device-farm/services/generated/DeviceFarmApi';
 
 /** Epic 04 lifecycle + legacy statuses from backend FSM (DF-T-04-007). */
 export type CampaignStatus =
@@ -356,6 +357,87 @@ export type WorkflowStepLog = {
   steps: StepLogEntry[];
 };
 
+export type ExecutionTraceContext = {
+  org_id?: string | null;
+  campaign_id?: string | null;
+  execution_id: string;
+  workflow_id?: string | null;
+  scenario_id?: string | null;
+  scenario_version_id?: string | null;
+  device_id?: string | null;
+  device_serial?: string | null;
+  device_name?: string | null;
+  account_id?: string | null;
+  account_label?: string | null;
+  account_platform?: string | null;
+};
+
+export type ExecutionTaskLogSummary = {
+  total_steps: number;
+  completed_steps: number;
+  failed_steps: number;
+  running_steps: number;
+  current_step_index?: number | null;
+  counters: Record<string, number>;
+};
+
+export type ExecutionTaskLogStep = {
+  id: string;
+  execution_id: string;
+  device_id?: string | null;
+  step_index: number;
+  step_id?: string | null;
+  step_type?: string | null;
+  status: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  error_json: Record<string, unknown>;
+  effective_config_json: Record<string, unknown>;
+  artifacts_json: unknown[];
+  attempts_json: unknown[];
+  marked_ignored: boolean;
+  message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExecutionTaskLog = {
+  execution_id: string;
+  status: string;
+  context: ExecutionTraceContext;
+  summary: ExecutionTaskLogSummary;
+  steps: ExecutionTaskLogStep[];
+  events: ExecutionEventOut[];
+  has_more_steps: boolean;
+  has_more_events: boolean;
+  last_event_id?: string | null;
+  dlq?: Record<string, unknown> | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
+export type CampaignMonitorExecution = {
+  execution_id: string;
+  status: string;
+  context: ExecutionTraceContext;
+  summary: ExecutionTaskLogSummary;
+  current_step_type?: string | null;
+  message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_event_at?: string | null;
+};
+
+export type CampaignMonitorOut = {
+  campaign_id: string;
+  total: number;
+  limit: number;
+  executions: CampaignMonitorExecution[];
+};
+
 export type CampaignExecutionEngine = 'temporal' | 'task_queue';
 
 export type CampaignRunResponse = {
@@ -440,7 +522,7 @@ export type ExecutionOut = {
   meta?: Record<string, unknown>;
 };
 
-export type { ExecutionEventOut } from '../device-farm/services/generated/DeviceFarmApi';
+export type { ExecutionEventOut };
 
 export type ExecutionArtifact = {
   artifact_type: string;

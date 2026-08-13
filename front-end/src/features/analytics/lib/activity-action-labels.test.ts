@@ -18,6 +18,9 @@ const t = (key: string, values?: Record<string, string | number>) => {
     'statusLabels.cancelled': 'Cancelled',
     'releaseReasonLabels.execution_terminal': 'Run finished',
     contextCampaign: 'Campaign {id}',
+    contextCampaignGeneric: 'Campaign',
+    contextExecutionGeneric: 'Scenario run',
+    contextScenarioGeneric: 'Scenario',
     deviceSerial: 'Device {serial}'
   };
   let out = table[key] ?? key;
@@ -119,7 +122,21 @@ test('resolveDomainActivityDescription includes release context', () => {
     t,
     (serial) => `Device ${serial}`
   );
-  assert.ok(line?.includes('Campaign'));
   assert.ok(line?.includes('Run finished'));
   assert.ok(line?.includes('ABC123'));
+});
+
+test('resolveDomainActivityDescription hides technical campaign id', () => {
+  const line = resolveDomainActivityDescription(
+    item({
+      action: 'campaign.dlq_opened',
+      details: {
+        campaign_id: '0ce1c7e0-d9e9-4a0d-ae6b-331f84836f16'
+      }
+    }),
+    t,
+    (serial) => `Device ${serial}`
+  );
+  assert.ok(line?.includes('Campaign'));
+  assert.ok(!line?.includes('0ce1c7e0'));
 });

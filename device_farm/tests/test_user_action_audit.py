@@ -5,8 +5,13 @@ import asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from api.routes.analytics import _exclude_device_screen_control_logs
 from auth.jwt_service import issue_access_token
+from db.database import Base
+from db.models.activity import ActivityLog
 from services.user_action_audit import (
     AuditWriteDispatcher,
     UserActionAuditMiddleware,
@@ -25,6 +30,27 @@ def test_should_audit_only_mutating_api_requests():
     assert should_audit_request("OPTIONS", "/api/campaigns") is False
     assert should_audit_request("POST", "/api/analytics/activity") is False
     assert should_audit_request("POST", "/health") is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/devices/serial-1/scrcpy/attach",
+        "/api/devices/serial-1/scrcpy/detach",
+        "/api/devices/serial-1/control/tap",
+        "/api/devices/serial-1/control/swipe",
+        "/api/devices/serial-1/touch",
+        "/api/devices/serial-1/tap",
+        "/api/devices/serial-1/swipe",
+        "/api/devices/serial-1/key",
+        "/api/devices/serial-1/text",
+        "/api/devices/serial-1/hierarchy",
+        "/api/devices/serial-1/screenshot",
+        "/api/devices/serial-1/interrupt",
+    ],
+)
+def test_should_not_audit_realtime_device_screen_control(path):
+    assert should_audit_request("POST", path) is False
 
 
 def test_build_user_action_payload_uses_stable_route_template():
@@ -170,3 +196,49 @@ async def test_user_action_middleware_schedules_authenticated_mutation():
     assert payload.org_id == "org-1"
     assert payload.request_id == "req-1"
     assert payload.details["query"]["token"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_activity_history_query_hides_old_realtime_device_control_logs():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+    try:
+        async with session_factory() as db:
+            db.add_all(
+                [
+                    ActivityLog(
+                        id="control-1",
+                        action="user.devices.attach",
+                        entity_type="devices",
+                        entity_id="serial-1",
+                        route_template="/api/devices/{serial}/scrcpy/attach",
+                        path="/api/devices/serial-1/scrcpy/attach",
+                        details={},
+                    ),
+                    ActivityLog(
+                        id="campaign-1",
+                        action="campaign.dispatched",
+                        entity_type="campaign",
+                        entity_id="camp-1",
+                        details={},
+                    ),
+                ]
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            result = await db.execute(
+                _exclude_device_screen_control_logs(select(ActivityLog))
+                .order_by(ActivityLog.id)
+            )
+            rows = list(result.scalars().all())
+    finally:
+        await engine.dispose()
+
+    assert [row.id for row in rows] == ["campaign-1"]

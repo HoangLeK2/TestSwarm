@@ -6,14 +6,18 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   Download,
+  ExternalLink,
   Loader2,
   LogIn,
   MousePointerClick,
   FileText,
+  ListChecks,
+  MessageSquare,
   PlayCircle,
   Shield,
   Smartphone,
@@ -34,6 +38,8 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { useExecutionTaskLog } from '@/features/campaigns/hooks/use-campaigns';
+import type { ExecutionTaskLogStep } from '@/features/campaigns/types';
 import { useActivityLog } from '../hooks/use-activity-log';
 import type { ActivityLogItem } from '../services/api';
 import { activityLogDeepLink } from '../lib/activity-deep-link';
@@ -44,6 +50,8 @@ import {
   resolveDomainActivityDescription
 } from '../lib/activity-action-labels';
 import { triggerBlobDownload } from '@/features/content/lib/download';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 function exportActivitiesCsv(
@@ -158,6 +166,39 @@ function nestedString(value: unknown, key: string) {
   const record = value as Record<string, unknown>;
   const child = record[key];
   return typeof child === 'string' ? child : '';
+}
+
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function executionIdForActivity(item: ActivityLogItem): string | null {
+  if (item.entity_type === 'execution') {
+    return firstText(item.entity_id);
+  }
+  const details = item.details ?? {};
+  return firstText(
+    details.execution_id,
+    details.executionId,
+    nestedString(details.path_params, 'execution_id'),
+    nestedString(details.query_params, 'execution_id')
+  );
+}
+
+function shouldShowTaskLog(item: ActivityLogItem): boolean {
+  if (!executionIdForActivity(item)) return false;
+  return (
+    item.entity_type === 'execution' ||
+    item.action.startsWith('execution.') ||
+    item.action.startsWith('campaign.') ||
+    item.action.startsWith('scenario.') ||
+    item.action.startsWith('task.')
+  );
 }
 
 function getUserOperationLabel(
@@ -294,6 +335,350 @@ function getActivityIcon(action: string) {
   return ACTION_ICON[action as keyof typeof ACTION_ICON] ?? Smartphone;
 }
 
+function taskStepStatusClass(status: string): string {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === 'completed' ||
+    normalized === 'success' ||
+    normalized === 'passed'
+  ) {
+    return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  }
+  if (normalized === 'failed' || normalized === 'error') {
+    return 'border-destructive/20 bg-destructive/10 text-destructive';
+  }
+  if (normalized === 'running' || normalized === 'in_progress') {
+    return 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300';
+  }
+  return 'border-border bg-muted text-muted-foreground';
+}
+
+function taskStepStatusIcon(status: string) {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === 'completed' ||
+    normalized === 'success' ||
+    normalized === 'passed'
+  ) {
+    return <CheckCircle2 className='size-3.5' />;
+  }
+  if (normalized === 'failed' || normalized === 'error') {
+    return <XCircle className='size-3.5' />;
+  }
+  if (normalized === 'running' || normalized === 'in_progress') {
+    return <Clock className='size-3.5' />;
+  }
+  return <Clock className='size-3.5' />;
+}
+
+function taskStepStatusLabel(
+  status: string,
+  t: ReturnType<typeof useTranslations>
+): string {
+  const normalized = status.toLowerCase();
+  if (
+    normalized === 'completed' ||
+    normalized === 'success' ||
+    normalized === 'passed'
+  ) {
+    return t('taskLogStatus.completed');
+  }
+  if (normalized === 'failed' || normalized === 'error') {
+    return t('taskLogStatus.failed');
+  }
+  if (normalized === 'running' || normalized === 'in_progress') {
+    return t('taskLogStatus.running');
+  }
+  return t('taskLogStatus.pending');
+}
+
+function taskStepTypeLabel(
+  stepType: string | null | undefined,
+  t: ReturnType<typeof useTranslations>
+): string {
+  if (stepType === 'run_scenario') return t('taskLogStepRunScenario');
+  if (stepType === 'if_variable') return t('taskLogStepIfVariable');
+  if (stepType === 'facebook_session_gate') {
+    return t('taskLogStepFacebookSessionGate');
+  }
+  if (!stepType) return t('taskLogStepFallback');
+  return stepType.replaceAll('_', ' ');
+}
+
+function friendlyStepCause(
+  cause: string,
+  t: ReturnType<typeof useTranslations>
+): string {
+  const normalized = cause.trim();
+  if (normalized === 'if_variable: then branch failed') {
+    return t('taskLogCauseIfThenFailed');
+  }
+  if (
+    normalized ===
+    'facebook_session_gate failed: Facebook session gate requires an execution account'
+  ) {
+    return t('taskLogCauseMissingExecutionAccount');
+  }
+  return normalized
+    .replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+      ''
+    )
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function taskStepMessage(
+  step: ExecutionTaskLogStep,
+  t: ReturnType<typeof useTranslations>
+): string {
+  const message = step.message?.trim();
+  if (!message) return '';
+
+  const completedMatch = message.match(
+    /^run_scenario:\s*'[^']+'\s*completed\s*\((\d+)\s+steps?\)$/i
+  );
+  if (completedMatch?.[1]) {
+    return t('taskLogMessageScenarioCompleted', {
+      count: Number(completedMatch[1])
+    });
+  }
+
+  const failedSubScenarioMatch = message.match(
+    /^run_scenario:\s*sub-scenario\s*'[^']+'\s*failed\s*—\s*(.+)$/i
+  );
+  if (failedSubScenarioMatch?.[1]) {
+    return t('taskLogMessageSubScenarioFailed', {
+      cause: friendlyStepCause(failedSubScenarioMatch[1], t)
+    });
+  }
+
+  return friendlyStepCause(message, t);
+}
+
+function ActivityTaskStepRow({ step }: { step: ExecutionTaskLogStep }) {
+  const t = useTranslations('analyticsFeature.activity');
+  const stepTitle = taskStepTypeLabel(step.step_type, t);
+  const stepMessage = taskStepMessage(step, t);
+  const statusLabel = taskStepStatusLabel(step.status, t);
+  return (
+    <li className='grid grid-cols-[1.75rem_minmax(0,1fr)_auto] gap-3 px-4 py-3'>
+      <div
+        className={cn(
+          'mt-0.5 flex size-6 items-center justify-center rounded-full border',
+          taskStepStatusClass(step.status)
+        )}
+      >
+        {taskStepStatusIcon(step.status)}
+      </div>
+      <div className='min-w-0 space-y-1'>
+        <div className='flex min-w-0 flex-wrap items-center gap-2'>
+          <p className='truncate text-sm font-medium text-foreground'>
+            {stepTitle}
+          </p>
+          <span className='text-[11px] text-muted-foreground'>
+            {t('taskLogStepNumber', { index: step.step_index + 1 })}
+          </span>
+        </div>
+        {stepMessage ? (
+          <p
+            className='line-clamp-2 text-xs leading-relaxed text-muted-foreground'
+            title={stepMessage}
+          >
+            {stepMessage}
+          </p>
+        ) : null}
+      </div>
+      <Badge
+        variant='outline'
+        className={cn(
+          'h-6 whitespace-nowrap px-2 text-[10px] font-medium',
+          taskStepStatusClass(step.status)
+        )}
+      >
+        {statusLabel}
+      </Badge>
+    </li>
+  );
+}
+
+function ActivityTaskLogPreview({
+  executionId,
+  expanded
+}: {
+  executionId: string;
+  expanded: boolean;
+}) {
+  const tActivity = useTranslations('analyticsFeature.activity');
+  const tCampaign = useTranslations('campaignsFeature.list');
+  const taskLog = useExecutionTaskLog(executionId, expanded, false);
+  const summary = taskLog.data?.summary;
+  const counters = summary?.counters ?? {};
+  const failedStep = taskLog.data?.steps.find((step) =>
+    ['failed', 'error'].includes(step.status.toLowerCase())
+  );
+  const context = taskLog.data?.context;
+  const deviceLabel =
+    context?.device_name?.trim() ||
+    context?.device_serial?.trim() ||
+    tActivity('taskLogUnknown');
+  const accountLabel =
+    context?.account_label?.trim() ||
+    context?.account_platform?.trim() ||
+    tActivity('taskLogNoAccount');
+  const totalSteps = summary?.total_steps ?? taskLog.data?.steps.length ?? 0;
+  const completedSteps = summary?.completed_steps ?? 0;
+  const failedSteps = summary?.failed_steps ?? 0;
+  const runningSteps = summary?.running_steps ?? 0;
+  const visibleCounters = (
+    ['matched', 'liked', 'commented', 'skipped'] as const
+  ).filter((key) => Number(counters[key] ?? 0) > 0);
+
+  if (!expanded) return null;
+
+  return (
+    <div className='mb-4 ml-10 mr-4 overflow-hidden rounded-md border bg-muted/20'>
+      <div className='flex min-w-0 flex-wrap items-start justify-between gap-3 border-b bg-background px-4 py-3'>
+        <div className='flex min-w-0 gap-3'>
+          <div className='flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary'>
+            <ListChecks className='size-4' />
+          </div>
+          <div className='min-w-0'>
+            <p className='truncate text-sm font-semibold'>
+              {tActivity('taskLogTitle')}
+            </p>
+            <p className='mt-0.5 text-xs text-muted-foreground'>
+              {tActivity('taskLogSubtitle', {
+                total: totalSteps,
+                completed: completedSteps,
+                failed: failedSteps
+              })}
+            </p>
+            <div className='mt-2 flex min-w-0 flex-wrap gap-1.5'>
+              <span className='inline-flex min-w-0 items-center gap-1 rounded border bg-muted px-2 py-1 text-[11px] text-muted-foreground'>
+                <Smartphone className='size-3 shrink-0' />
+                <span className='truncate'>
+                  {tCampaign('monitorTaskLogDevice')}: {deviceLabel}
+                </span>
+              </span>
+              <span className='inline-flex min-w-0 items-center gap-1 rounded border bg-muted px-2 py-1 text-[11px] text-muted-foreground'>
+                <Shield className='size-3 shrink-0' />
+                <span className='truncate'>
+                  {tCampaign('monitorTaskLogAccount')}: {accountLabel}
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+        {taskLog.isFetching ? (
+          <Badge variant='secondary' className='h-6 gap-1 text-[10px]'>
+            <Loader2 className='size-3 animate-spin' />
+            {tActivity('taskLogRefreshing')}
+          </Badge>
+        ) : taskLog.data?.status ? (
+          <Badge
+            variant='outline'
+            className={cn(
+              'h-6 px-2 text-[10px]',
+              taskStepStatusClass(taskLog.data.status)
+            )}
+          >
+            {taskStepStatusLabel(taskLog.data.status, tActivity)}
+          </Badge>
+        ) : null}
+      </div>
+
+      {taskLog.isError ? (
+        <p className='px-3 py-4 text-xs text-destructive'>
+          {formatFarmApiError(
+            taskLog.error,
+            tCampaign('monitorTaskLogFailedToLoad')
+          )}
+        </p>
+      ) : taskLog.isLoading ? (
+        <p className='px-3 py-4 text-xs text-muted-foreground'>
+          {tCampaign('monitorTaskLogLoading')}
+        </p>
+      ) : !taskLog.data?.steps.length ? (
+        <p className='px-3 py-4 text-xs text-muted-foreground'>
+          {tCampaign('monitorTaskLogEmpty')}
+        </p>
+      ) : (
+        <>
+          <div className='grid grid-cols-2 gap-2 border-b bg-background px-4 py-3 sm:grid-cols-4'>
+            {(['completed', 'running', 'failed', 'total'] as const).map(
+              (key) => {
+                const value =
+                  key === 'completed'
+                    ? completedSteps
+                    : key === 'running'
+                      ? runningSteps
+                      : key === 'failed'
+                        ? failedSteps
+                        : totalSteps;
+                return (
+                  <div key={key} className='rounded-md border px-3 py-2'>
+                    <p className='text-[11px] text-muted-foreground'>
+                      {tCampaign(`runHistorySummary.${key}`)}
+                    </p>
+                    <p className='mt-0.5 text-base font-semibold text-foreground'>
+                      {(value ?? 0).toLocaleString()}
+                    </p>
+                  </div>
+                );
+              }
+            )}
+          </div>
+
+          {failedStep ? (
+            <div className='flex gap-2 border-b bg-destructive/5 px-4 py-3 text-xs text-destructive'>
+              <AlertTriangle className='mt-0.5 size-4 shrink-0' />
+              <div className='min-w-0'>
+                <p className='font-medium'>{tActivity('taskLogFailure')}</p>
+                <p className='mt-0.5 break-words text-destructive/80'>
+                  {taskStepMessage(failedStep, tActivity) ||
+                    taskStepTypeLabel(failedStep.step_type, tActivity)}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          <div className='flex flex-wrap gap-1.5 border-b bg-background px-4 py-2 text-[11px]'>
+            {(visibleCounters.length
+              ? visibleCounters
+              : (['matched'] as const)
+            ).map((key) => (
+              <span
+                key={key}
+                className='inline-flex items-center gap-1 rounded border bg-muted px-2 py-1 text-muted-foreground'
+              >
+                {key === 'commented' ? (
+                  <MessageSquare className='size-3' />
+                ) : null}
+                {tCampaign(`monitorTaskLogCounter.${key}`)}:{' '}
+                <b className='font-semibold text-foreground'>
+                  {Number(counters[key] ?? 0)}
+                </b>
+              </span>
+            ))}
+            {taskLog.data.has_more_steps ? (
+              <span className='inline-flex items-center rounded border bg-muted px-2 py-1 text-muted-foreground'>
+                {tCampaign('monitorTaskLogBounded')}
+              </span>
+            ) : null}
+          </div>
+
+          <ol className='max-h-[22rem] divide-y overflow-y-auto bg-background'>
+            {taskLog.data.steps.map((step) => (
+              <ActivityTaskStepRow key={step.id} step={step} />
+            ))}
+          </ol>
+        </>
+      )}
+    </div>
+  );
+}
+
 function resolveDeviceDisplay(item: ActivityLogItem): string {
   if (item.device_display?.trim()) return item.device_display.trim();
   const details = item.details ?? {};
@@ -410,11 +795,14 @@ function ActivityRow({
   locale: string;
 }) {
   const t = useTranslations('analyticsFeature.activity');
+  const [expandedTaskLog, setExpandedTaskLog] = useState(false);
   const Icon = getActivityIcon(item.action);
   const title = getActivityTitle(item, t);
   const categoryBadge = getActivityCategoryBadge(item, title, t);
   const description = getActivityDescription(item, t);
   const deepLink = activityLogDeepLink(item);
+  const taskLogExecutionId = executionIdForActivity(item);
+  const hasTaskLog = Boolean(taskLogExecutionId && shouldShowTaskLog(item));
   const rowClass =
     'flex gap-3 border-b px-4 py-3 transition-colors last:border-0 min-h-[3.25rem]';
 
@@ -458,6 +846,47 @@ function ActivityRow({
     </>
   );
 
+  if (hasTaskLog && taskLogExecutionId) {
+    return (
+      <div className='border-b last:border-0'>
+        <div className='flex min-h-[3.25rem] gap-3 px-4 py-3'>{inner}</div>
+        <div className='mb-3 ml-10 mr-4 flex flex-wrap items-center gap-2'>
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-7 px-2 text-xs'
+            aria-expanded={expandedTaskLog}
+            onClick={() => setExpandedTaskLog((value) => !value)}
+          >
+            {expandedTaskLog ? (
+              <ChevronDown className='size-3.5' />
+            ) : (
+              <ChevronRight className='size-3.5' />
+            )}
+            {expandedTaskLog ? t('taskLogHide') : t('taskLogShow')}
+          </Button>
+          {deepLink ? (
+            <Button
+              asChild
+              variant='ghost'
+              size='sm'
+              className='h-7 px-2 text-xs'
+            >
+              <Link href={deepLink}>
+                <ExternalLink className='size-3.5' />
+                {t('taskLogOpenRunHistory')}
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+        <ActivityTaskLogPreview
+          executionId={taskLogExecutionId}
+          expanded={expandedTaskLog}
+        />
+      </div>
+    );
+  }
+
   if (deepLink) {
     return (
       <Link href={deepLink} className={`${rowClass} hover:bg-muted/40`}>
@@ -478,6 +907,11 @@ const ACTION_FILTER_OPTIONS = [
   'device.error',
   'campaign.run',
   'campaign.complete',
+  'campaign.dispatched',
+  'execution.started',
+  'execution.completed',
+  'execution.failed',
+  'execution.cancelled',
   'task.done',
   'task.failed',
   'schedule.triggered'

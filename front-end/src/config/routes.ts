@@ -51,6 +51,15 @@ export const ROUTES = {
     /** Campaign list with row scroll/highlight (monitor opens manually). */
     DETAIL: (id: string) =>
       `/dashboard/campaigns?campaign_id=${encodeURIComponent(id)}`,
+    /** Campaign run history with an optional selected execution log. */
+    RUN_LOG: (id: string, executionId?: string | null) => {
+      const params = new URLSearchParams({
+        campaign_id: id,
+        panel: 'run-log'
+      });
+      if (executionId?.trim()) params.set('execution_id', executionId.trim());
+      return `/dashboard/campaigns?${params.toString()}`;
+    },
     MONITOR: (id: string) =>
       `/dashboard/campaigns/${encodeURIComponent(id)}/monitor`
   },

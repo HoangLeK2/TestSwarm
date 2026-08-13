@@ -331,8 +331,10 @@ export function resolveDomainActivityDescription(
   const parts: string[] = [];
 
   const campaignId = detailString(details, 'campaign_id');
+  const campaignName = detailString(details, 'campaign_name', 'campaignName');
   const executionId = detailString(details, 'execution_id');
   const scenarioId = detailString(details, 'scenario_id');
+  const scenarioName = detailString(details, 'scenario_name', 'scenarioName');
   const reason = detailString(details, 'reason');
   const releaseReason = detailString(details, 'release_reason');
 
@@ -351,21 +353,29 @@ export function resolveDomainActivityDescription(
   }
 
   if (item.action.startsWith('campaign.') && campaignId) {
-    parts.push(t('contextCampaign', { id: shortId(campaignId) }));
+    parts.push(
+      campaignName
+        ? t('contextCampaignName', { name: campaignName })
+        : t('contextCampaignGeneric')
+    );
   }
   if (item.action.startsWith('execution.') && executionId) {
-    parts.push(t('contextExecution', { id: shortId(executionId) }));
+    parts.push(t('contextExecutionGeneric'));
   } else if (item.action.startsWith('execution.') && item.entity_id) {
-    parts.push(t('contextExecution', { id: shortId(item.entity_id) }));
+    parts.push(t('contextExecutionGeneric'));
   }
   if (item.action.startsWith('scenario.') && scenarioId) {
-    parts.push(t('contextScenario', { id: shortId(scenarioId) }));
+    parts.push(
+      scenarioName
+        ? t('contextScenarioName', { name: scenarioName })
+        : t('contextScenarioGeneric')
+    );
   } else if (
     item.entity_type === 'org_scenario' &&
     item.entity_id &&
     item.action.startsWith('scenario.')
   ) {
-    parts.push(t('contextScenario', { id: shortId(item.entity_id) }));
+    parts.push(t('contextScenarioGeneric'));
   }
 
   const formattedReason = formatActivityReleaseReason(reason, t);

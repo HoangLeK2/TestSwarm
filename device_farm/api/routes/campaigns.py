@@ -49,7 +49,7 @@ from api.schemas.campaign_entity import (
     ContinuousCrawlStartOut,
 )
 from api.schemas.scenario_validation import ScenarioValidationOut, ValidationIssueOut
-from api.schemas.execution import CampaignControlOut, ExecutionCancelBody
+from api.schemas.execution import CampaignControlOut, CampaignMonitorOut, ExecutionCancelBody
 from db import crud as repo
 from db.crud.default_scenario import (
     ensure_default_scenario,
@@ -646,6 +646,25 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
     await db.commit()
     scenarios = await repo.list_scenarios(db, campaign.id)
     return _to_out(campaign, scenarios)
+
+
+@router.get(
+    "/{campaign_id}/monitor",
+    response_model=CampaignMonitorOut,
+    dependencies=[Depends(require_permission("campaigns", "read"))],
+)
+async def get_campaign_monitor(
+    campaign_id: str,
+    db: DB,
+    user: CurrentUser,
+    limit: int = Query(200, ge=1, le=500),
+):
+    """Unified campaign monitoring snapshot with phone/account/step context."""
+    await _get_campaign_or_404(campaign_id, user, db)
+    from services.execution_trace import build_campaign_monitor
+
+    snapshot = await build_campaign_monitor(db, campaign_id, limit=limit)
+    return CampaignMonitorOut.model_validate(snapshot)
 
 
 @router.get(

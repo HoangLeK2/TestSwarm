@@ -151,13 +151,13 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
     () => new Map(executions.map((execution) => [execution.id, execution])),
     [executions]
   );
+  const workflows = useMemo(() => data?.workflows ?? [], [data?.workflows]);
   const filteredWorkflows = useMemo(
-    () => filterWorkflows(data?.workflows ?? [], statusFilter, deviceFilter),
-    [data?.workflows, statusFilter, deviceFilter]
+    () => filterWorkflows(workflows, statusFilter, deviceFilter),
+    [workflows, statusFilter, deviceFilter]
   );
-  const workflows = data?.workflows ?? [];
 
-  if (isCampaignLoading || (!continuous && isLoading)) {
+  if (isCampaignLoading || (!continuous && isRunning && isLoading)) {
     return (
       <div className='flex items-center justify-center py-12 text-sm text-muted-foreground'>
         {t('loading')}
@@ -187,17 +187,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
     );
   }
 
-  if (!isRunning) {
-    return (
-      <div>
-        {crawlDashboard}
-        {filterBar}
-        <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />
-      </div>
-    );
-  }
-
-  if (!data?.temporal_available) {
+  if (isRunning && data && !data.temporal_available && workflows.length === 0) {
     return (
       <div>
         {crawlDashboard}
@@ -233,18 +223,20 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
             {t('monitorFilterEmpty')}
           </p>
         ) : (
-          filteredWorkflows.map((wf) => (
-            <WorkflowProgressCard
-              key={wf.workflow_id}
-              wf={wf}
-              campaignId={campaignId}
-              execution={executionsById.get(
-                wf.execution_id ||
-                  resolveExecutionIdForWorkflow(wf.workflow_id, executions) ||
-                  ''
-              )}
-            />
-          ))
+          filteredWorkflows.map((wf) => {
+            const executionId =
+              wf.execution_id ||
+              resolveExecutionIdForWorkflow(wf.workflow_id, executions) ||
+              '';
+            return (
+              <WorkflowProgressCard
+                key={wf.workflow_id}
+                wf={wf}
+                campaignId={campaignId}
+                execution={executionsById.get(executionId)}
+              />
+            );
+          })
         )}
       </div>
       <MonitorSidePanels campaignId={campaignId} pollAggressive={isRunning} />

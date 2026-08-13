@@ -149,7 +149,7 @@ export function DeviceVarsFacebookTargetForm({
   }
 
   return (
-    <div className='flex min-h-0 flex-1 flex-col gap-3'>
+    <div className='flex min-h-0 min-w-0 max-w-full flex-col gap-3 overflow-hidden'>
       <Tabs
         value={targetType}
         onValueChange={(value) => {
@@ -157,18 +157,18 @@ export function DeviceVarsFacebookTargetForm({
           setSearch('');
         }}
       >
-        <TabsList className='grid h-8 w-full grid-cols-3'>
-          <TabsTrigger value='group' className='gap-1 text-xs'>
+        <TabsList className='grid h-8 w-full min-w-0 grid-cols-3'>
+          <TabsTrigger value='group' className='min-w-0 gap-1 text-xs'>
             <Users className='size-3.5' />
-            {t('types.group')}
+            <span className='truncate'>{t('types.group')}</span>
           </TabsTrigger>
-          <TabsTrigger value='page' className='gap-1 text-xs'>
+          <TabsTrigger value='page' className='min-w-0 gap-1 text-xs'>
             <Flag className='size-3.5' />
-            {t('types.page')}
+            <span className='truncate'>{t('types.page')}</span>
           </TabsTrigger>
-          <TabsTrigger value='profile' className='gap-1 text-xs'>
+          <TabsTrigger value='profile' className='min-w-0 gap-1 text-xs'>
             <UserRound className='size-3.5' />
-            {t('types.profile')}
+            <span className='truncate'>{t('types.profile')}</span>
           </TabsTrigger>
         </TabsList>
       </Tabs>
@@ -185,27 +185,33 @@ export function DeviceVarsFacebookTargetForm({
         />
       </div>
 
-      <div className='flex flex-wrap items-center gap-1.5'>
-        <Badge variant='secondary' className='rounded'>
+      <div className='flex min-w-0 flex-wrap items-center gap-1.5 overflow-hidden'>
+        <Badge variant='secondary' className='max-w-full rounded'>
           {t('selectedTotal', { count: allSelectedCount })}
         </Badge>
         {TARGET_TYPES.map((type) => (
-          <Badge key={type} variant='outline' className='rounded font-normal'>
-            {t(`types.${type}`)} {formState.selected[type].length}
+          <Badge
+            key={type}
+            variant='outline'
+            className='min-w-0 rounded font-normal'
+          >
+            <span className='truncate'>
+              {t(`types.${type}`)} {formState.selected[type].length}
+            </span>
           </Badge>
         ))}
       </div>
 
-      <ScrollArea className='min-h-[220px] flex-1 rounded-md border bg-background'>
-        <div aria-busy={catalogQuery.isLoading}>
+      <ScrollArea className='h-48 min-w-0 max-w-full overflow-hidden rounded-md border bg-background md:h-56'>
+        <div className='min-w-0 max-w-full' aria-busy={catalogQuery.isLoading}>
           {catalogQuery.isLoading ? (
             Array.from({ length: 5 }).map((_, index) => (
               <div
                 key={index}
-                className='flex h-14 items-center gap-3 border-b px-3'
+                className='flex h-14 min-w-0 items-center gap-3 border-b px-3'
               >
                 <Skeleton className='size-4 rounded' />
-                <div className='flex-1 space-y-2'>
+                <div className='min-w-0 flex-1 space-y-2'>
                   <Skeleton className='h-3 w-2/3' />
                   <Skeleton className='h-2.5 w-1/3' />
                 </div>
@@ -216,7 +222,7 @@ export function DeviceVarsFacebookTargetForm({
               {t('loadError')}
             </div>
           ) : rows.length === 0 ? (
-            <div className='grid min-h-[220px] place-items-center px-4 text-center'>
+            <div className='grid h-48 place-items-center px-4 text-center md:h-56'>
               <div>
                 <Inbox className='mx-auto mb-2 size-7 text-muted-foreground' />
                 <p className='text-sm font-medium'>{t('emptyTitle')}</p>
@@ -232,7 +238,7 @@ export function DeviceVarsFacebookTargetForm({
                 <label
                   key={`${target.entity_type}:${target.id}`}
                   className={cn(
-                    'flex min-h-14 cursor-pointer items-center gap-3 border-b px-3 py-2.5 last:border-b-0 hover:bg-muted/50',
+                    'flex min-h-14 min-w-0 cursor-pointer items-center gap-3 border-b px-3 py-2.5 last:border-b-0 hover:bg-muted/50',
                     selected && 'bg-primary/[0.04]',
                     disabled && 'cursor-not-allowed opacity-70'
                   )}
@@ -247,7 +253,7 @@ export function DeviceVarsFacebookTargetForm({
                       name: target.display_name
                     })}
                   />
-                  <span className='min-w-0 flex-1'>
+                  <span className='min-w-0 flex-1 overflow-hidden'>
                     <span
                       className='block truncate text-sm font-medium'
                       title={target.display_name}

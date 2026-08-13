@@ -16,6 +16,8 @@ type Props = {
   hideStepMonitor?: boolean;
   /** Render as monitor-only preview: no controls, no interactions. */
   readOnlyPreview?: boolean;
+  /** User explicitly opened this mirror; keep the stream mounted immediately. */
+  forceStream?: boolean;
   onTap?: (serial: string, rx: number, ry: number) => void;
   onSwipe?: (
     serial: string,
@@ -49,6 +51,7 @@ export function DeviceControlEmbed({
   compact = true,
   hideStepMonitor = false,
   readOnlyPreview = false,
+  forceStream = false,
   onTap,
   onSwipe,
   onDragGesture
@@ -64,7 +67,7 @@ export function DeviceControlEmbed({
   });
 
   useLayoutEffect(() => {
-    if (!readOnlyPreview) {
+    if (!readOnlyPreview || forceStream) {
       setNearViewport(true);
       return;
     }
@@ -104,16 +107,16 @@ export function DeviceControlEmbed({
       window.removeEventListener('pageshow', sync);
       document.removeEventListener('visibilitychange', sync);
     };
-  }, [readOnlyPreview]);
+  }, [forceStream, readOnlyPreview]);
 
   useEffect(() => {
-    if (!readOnlyPreview || nearViewport) {
+    if (!readOnlyPreview || forceStream || nearViewport) {
       setPreviewStreamEnabled(true);
       return;
     }
     const timer = window.setTimeout(() => setPreviewStreamEnabled(false), 700);
     return () => window.clearTimeout(timer);
-  }, [nearViewport, readOnlyPreview]);
+  }, [forceStream, nearViewport, readOnlyPreview]);
 
   const {
     devices,
@@ -218,7 +221,7 @@ export function DeviceControlEmbed({
         }
         streamEnabled={shouldRunEmbedStream({
           readOnlyPreview,
-          nearViewport: previewStreamEnabled
+          nearViewport: forceStream || previewStreamEnabled
         })}
       />
     </div>

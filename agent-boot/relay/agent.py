@@ -11,7 +11,6 @@ Protocol:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import random
@@ -45,6 +44,7 @@ from relay.recovery_coordinator import RecoveryCoordinator
 from relay.session_manager import ScrcpySessionManager
 from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
+from relay import runtime as json
 from relay.runtime         import (
     SEND_CONTROL_MAX,
     SEND_PER_DEVICE_MAX,
@@ -63,6 +63,7 @@ from relay.runtime         import (
     init_semaphores,
     register_stats_source,
     shutdown_executors,
+    loads,
     u2_batch_sem,
     u2_executor_pool,
     u2_flow_sem,
@@ -982,7 +983,7 @@ class RelayAgent:
                         await self._handle_binary(raw_msg, send_queue)
                     else:
                         try:
-                            msg = json.loads(raw_msg)
+                            msg = loads(raw_msg)
                         except Exception:
                             continue
                         await self._handle_server_msg(msg, send_queue, loop)
@@ -1071,7 +1072,7 @@ class RelayAgent:
                         return
                     if ctrl_msg.is_json:
                         try:
-                            msg = json.loads(ctrl_msg.data.decode("utf-8", errors="replace"))
+                            msg = loads(ctrl_msg.data)
                             await self._handle_server_msg(msg, send_queue, loop)
                         except Exception as exc:
                             logger.debug("gRPC JSON msg error: %s", exc)
@@ -2947,7 +2948,7 @@ class RelayAgent:
             serial,
             "POST",
             "/jsonrpc/0",
-            json.dumps(payload),
+            dumps(payload),
             "application/json",
             timeout,
         )
@@ -3054,7 +3055,7 @@ class RelayAgent:
                         serial,
                         "POST",
                         "/jsonrpc/0",
-                        json.dumps(payload),
+                        dumps(payload),
                         "application/json",
                         timeout,
                     )
@@ -3127,7 +3128,7 @@ class RelayAgent:
         if not raw.strip():
             return False, "JSON-RPC empty response", None
         try:
-            data = json.loads(raw)
+            data = loads(raw)
         except Exception:
             return False, f"JSON-RPC invalid response: {raw[:120]!r}", None
         if "error" in data:
@@ -3445,7 +3446,7 @@ class RelayAgent:
             )
             if cmd_type == CMD_ADB_CONNECT:
                 try:
-                    parsed = json.loads(result)
+                    parsed = loads(result)
                 except Exception:
                     parsed = {}
                 if parsed.get("ok"):

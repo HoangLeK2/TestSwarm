@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
@@ -9,18 +8,19 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.fast_codec import dumps_bytes, loads
 from db.models.account_event import AccountEvent
 from db.models.utils import _uuid
 
 
 def encode_event_cursor(created_at: datetime, event_id: str) -> str:
     payload = {"t": created_at.isoformat(), "id": event_id}
-    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    return base64.urlsafe_b64encode(dumps_bytes(payload)).decode()
 
 
 def decode_event_cursor(cursor: str) -> Tuple[datetime, str]:
     raw = base64.urlsafe_b64decode(cursor.encode())
-    payload = json.loads(raw.decode())
+    payload = loads(raw)
     return datetime.fromisoformat(payload["t"]), payload["id"]
 
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json as _json
 import logging
 import os as _os
 import re
@@ -30,6 +29,7 @@ from typing import Optional
 
 from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
 from relay.device_state import DeviceRegistry
+from relay import runtime as _json
 
 logger = logging.getLogger("relay.adb")
 
@@ -1648,8 +1648,6 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
     Returns a compact JSON summary on success, error string + -1 on failure.
     Designed to be idempotent — safe to call multiple times.
     """
-    import json as _json
-
     logger.info("[%s] Bootstrap starting", serial)
     summary: dict[str, object] = {
         "stf_installed": False,

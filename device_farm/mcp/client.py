@@ -8,12 +8,13 @@ This is structured version of the previous `mcp_mobile.py`:
 - `MobileActions` is a thin helper for calling mobile-mcp style tools.
 """
 
-import json
 import queue
 import subprocess
 import threading
 import uuid
 from typing import Any, Dict, List, Optional
+
+from common.fast_codec import dumps, loads
 
 
 class StdIoMcpClient:
@@ -46,7 +47,7 @@ class StdIoMcpClient:
             if not line:
                 continue
             try:
-                msg = json.loads(line)
+                msg = loads(line)
             except Exception:
                 continue
             msg_id = str(msg.get("id") or "")
@@ -62,7 +63,7 @@ class StdIoMcpClient:
         with self._lock:
             self._pending[msg_id] = q
             assert self._proc.stdin is not None
-            self._proc.stdin.write(json.dumps(payload) + "\n")
+            self._proc.stdin.write(dumps(payload) + "\n")
             self._proc.stdin.flush()
         resp: Dict[str, Any] = q.get(timeout=30)
         with self._lock:
@@ -189,7 +190,7 @@ class MobileActions:
         if marker in txt:
             payload = txt.split(marker, 1)[1]
         try:
-            return json.loads(payload)
+            return loads(payload)
         except Exception:
             return []
 
@@ -206,4 +207,3 @@ class MobileActions:
         if img.get("type") != "image":
             return None
         return img.get("data")
-

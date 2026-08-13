@@ -26,8 +26,8 @@ from services.facebook_candidates import (
     CandidateLeaseAttempt,
     get_candidate_settings,
     normalize_vietnamese_text,
+    _apply_candidate_scores_batch,
     _apply_keyword_auto_ready,
-    _apply_candidate_score,
     _sync_keyword_rows,
 )
 
@@ -342,13 +342,14 @@ class FacebookContentAuthorDiscoveryProvider:
         for keyword_row in keyword_rows:
             keywords_by_candidate[keyword_row.candidate_id].append(keyword_row)
 
+        score_results = _apply_candidate_scores_batch(
+            candidates=candidates,
+            evidence_by_candidate=evidence_by_candidate,
+            settings=settings,
+        )
         ready_count = 0
         for candidate in candidates:
-            positive, negative = _apply_candidate_score(
-                candidate=candidate,
-                evidence=evidence_by_candidate[candidate.id],
-                settings=settings,
-            )
+            positive, negative = score_results[candidate.id]
             await _sync_keyword_rows(
                 db,
                 candidate=candidate,

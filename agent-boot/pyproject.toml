@@ -28,6 +28,7 @@ dependencies = [
     # ~5–10x faster than stdlib json. Used everywhere we serialize device
     # results so cpu_executor can run dumps in real parallel.
     "orjson>=3.10",
+    "msgspec>=0.19.0",
     # perf: uvloop is a libuv-backed asyncio loop, ~2x faster than the default
     # selector loop on Linux/macOS for I/O-heavy workloads (sockets, ADB,
     # WebSocket). Installed in main.py before asyncio.run().

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.execution.effective_config import build_effective_config_snapshot
 from services.execution.event_publisher import enqueue_execution_event
+from services.execution.trace_context import build_step_trace_context
 from services.execution.event_types import (
     STEP_COMPLETED,
     STEP_FAILED,
@@ -28,8 +29,15 @@ async def emit_step_started(
     step: dict[str, Any],
     step_index: int,
     depth: int = 0,
+    trace_context: dict[str, Any] | None = None,
 ) -> None:
     step_id = _step_id(step, step_index)
+    trace = build_step_trace_context(
+        step=step,
+        step_index=step_index,
+        depth=depth,
+        base_context=trace_context,
+    )
     await enqueue_execution_event(
         db,
         event_type=STEP_STARTED,
@@ -42,6 +50,7 @@ async def emit_step_started(
             "step_id": step_id,
             "step_type": step.get("type"),
             "depth": depth,
+            "trace": trace,
         },
     )
 
@@ -56,6 +65,7 @@ async def emit_step_finished(
     step_index: int,
     step_result: dict[str, Any],
     depth: int = 0,
+    trace_context: dict[str, Any] | None = None,
 ) -> None:
     step_id = _step_id(step, step_index)
     retry_attempts = step_result.get("retry_attempts") or []
@@ -89,6 +99,15 @@ async def emit_step_finished(
         "message": step_result.get("message"),
         "reason_code": step_result.get("reason_code"),
     }
+    trace = build_step_trace_context(
+        step=step,
+        step_index=step_index,
+        depth=depth,
+        base_context=trace_context,
+        step_result=step_result,
+    )
+    if trace:
+        payload["trace"] = trace
     for key in ("failure_class", "retry_hint", "operator_summary"):
         if step_result.get(key) is not None:
             payload[key] = step_result.get(key)
@@ -166,6 +185,7 @@ async def emit_step_finished(
                 "step_id": step_id,
                 "step_type": step.get("type"),
                 "depth": depth,
+                "trace": trace,
                 **incident_payload,
             },
         )

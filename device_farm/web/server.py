@@ -1686,7 +1686,6 @@ def create_app(
             session_id = ctx.session_id
             effective_org_id = ctx.org_id
             try:
-                from services.security_audit import emit_security_event
                 from db.database import AsyncSessionLocal
                 from api.deps import resolve_effective_org_id_for_user_id
 
@@ -1696,16 +1695,6 @@ def create_app(
                     )
                     if header_org:
                         effective_org_id = header_org
-                    await emit_security_event(
-                        db,
-                        action="ws.connected",
-                        user_id=user_id,
-                        entity_type="session",
-                        entity_id=session_id,
-                        ip_address=ws.client.host if ws.client else None,
-                        user_agent=ws.headers.get("user-agent"),
-                    )
-                    await db.commit()
             except Exception:
                 pass
         else:

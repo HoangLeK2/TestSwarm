@@ -200,7 +200,11 @@ test('foldEventsToStepLog preserves every repeated step occurrence and action pr
         step_index: 4,
         step_id: 'batch-like',
         step_type: 'content_interaction',
-        depth: 2
+        depth: 2,
+        trace: {
+          scenario_name: 'Scenario A',
+          account_id: 'account-1'
+        }
       }
     },
     {
@@ -216,7 +220,14 @@ test('foldEventsToStepLog preserves every repeated step occurrence and action pr
         display_name: `Post ${iteration}`,
         outcome: 'applied',
         action_performed: true,
-        account_action_id: `action-${iteration}`
+        account_action_id: `action-${iteration}`,
+        trace: {
+          scenario_name: 'Scenario A',
+          account_id: 'account-1',
+          action: {
+            account_action_id: `action-${iteration}`
+          }
+        }
       }
     }
   ]);
@@ -232,5 +243,13 @@ test('foldEventsToStepLog preserves every repeated step occurrence and action pr
   assert.deepEqual(
     rows.map((row) => row.details?.account_action_id),
     ['action-1', 'action-2']
+  );
+  assert.deepEqual(
+    rows.map((row) => row.trace?.scenario_name),
+    ['Scenario A', 'Scenario A']
+  );
+  assert.deepEqual(
+    rows.map((row) => row.trace?.account_id),
+    ['account-1', 'account-1']
   );
 });

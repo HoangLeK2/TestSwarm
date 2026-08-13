@@ -7,6 +7,7 @@ import { useOrganization } from '@/features/organization/hooks/use-organization'
 export type ActivityLogQuery = {
   action?: string;
   device_serial?: string;
+  account_id?: string;
   offset?: number;
   limit?: number;
 };
@@ -28,6 +29,7 @@ export function useActivityLog(query: ActivityLogQuery = {}) {
       analyticsApi.activity({
         action: query.action,
         device_serial: query.device_serial,
+        account_id: query.account_id,
         offset,
         limit
       }),

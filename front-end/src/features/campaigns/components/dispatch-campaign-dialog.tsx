@@ -1,12 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   Check,
   CheckSquare,
-  Eye,
   Loader2,
   Play,
   Smartphone,
@@ -19,7 +18,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -49,78 +47,17 @@ import {
   campaignPerDeviceOverrides as readCampaignPerDeviceOverrides,
   campaignVariables as readCampaignVariables,
   campaignsApi,
-  externalEntitiesApi,
   normalizeCampaignOut
 } from '../services/api';
-import type {
-  CampaignDispatchIn,
-  CampaignDispatchPreviewOut,
-  ExternalEntityCatalogItem
-} from '../services/api';
+import type { CampaignDispatchIn } from '../services/api';
 import type { CampaignDeviceOut, CampaignOut } from '../types';
-import {
-  buildSourcePoolInput,
-  isAllocatableSourceStatus,
-  listSourcePoolOptions
-} from './dispatch-source-pool';
 
 function deviceLabel(d: CampaignDeviceOut) {
   return d.name?.trim() || d.serial || '—';
 }
 
-function findSourcePoolStep(steps: unknown): FlowSourcePoolStep | null {
-  if (!Array.isArray(steps)) return null;
-  for (const step of steps) {
-    if (!step || typeof step !== 'object') continue;
-    const row = step as Record<string, unknown>;
-    if (row.type === 'use_source_pool') {
-      return {
-        platform: String(row.platform || 'facebook'),
-        entityType: String(row.entity_type || 'group'),
-        search: typeof row.search === 'string' ? row.search : '',
-        outputPrefix:
-          typeof row.output_prefix === 'string' ? row.output_prefix : 'GROUP'
-      };
-    }
-    for (const key of ['steps', 'then', 'else']) {
-      const nested = findSourcePoolStep(row[key]);
-      if (nested) return nested;
-    }
-    if (Array.isArray(row.branches)) {
-      for (const branch of row.branches) {
-        const nested = findSourcePoolStep(
-          branch && typeof branch === 'object'
-            ? (branch as Record<string, unknown>).steps
-            : null
-        );
-        if (nested) return nested;
-      }
-    }
-  }
-  return null;
-}
-
-type FlowSourcePoolStep = {
-  platform: string;
-  entityType: string;
-  search: string;
-  outputPrefix: string;
-};
-
-type SourceEntityOption = {
-  id: string;
-  platform: string;
-  entity_type: string;
-  display_name: string;
-};
-
-type DispatchStep = 'targets' | 'variables' | 'source' | 'review';
-const dispatchSteps: DispatchStep[] = [
-  'targets',
-  'variables',
-  'source',
-  'review'
-];
+type DispatchStep = 'targets' | 'variables' | 'review';
+const dispatchSteps: DispatchStep[] = ['targets', 'variables', 'review'];
 
 export type DispatchScenarioItem = {
   id: string;
@@ -158,21 +95,6 @@ export function DispatchCampaignDialog({
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [groupIds, setGroupIds] = useState<Set<string>>(new Set());
-  const [externalEntities, setExternalEntities] = useState<
-    ExternalEntityCatalogItem[]
-  >([]);
-  const [sourcePoolEnabled, setSourcePoolEnabled] = useState(false);
-  const [sourcePoolKey, setSourcePoolKey] = useState('');
-  const [sourceSearch, setSourceSearch] = useState('');
-  const [sourceOutputPrefix, setSourceOutputPrefix] = useState('');
-  const [sourcePreview, setSourcePreview] =
-    useState<CampaignDispatchPreviewOut | null>(null);
-  const [sourcePreviewKey, setSourcePreviewKey] = useState('');
-  const [sourcePreviewError, setSourcePreviewError] = useState('');
-  const [sourcePreviewLoading, setSourcePreviewLoading] = useState(false);
-  const [sourceAssignmentOverrides, setSourceAssignmentOverrides] = useState<
-    Record<string, string>
-  >({});
   const [strategy, setStrategy] = useState<'parallel' | 'sequential'>(
     'parallel'
   );
@@ -201,16 +123,6 @@ export function DispatchCampaignDialog({
   );
   const firstDeviceId = devices[0]?.id ?? '';
   const firstScenarioId = scenarios[0]?.id ?? '';
-  const sourcePoolFromScenario = useMemo(() => {
-    for (const scenario of scenarios) {
-      const sourcePool = findSourcePoolStep(scenario.steps);
-      if (sourcePool) return sourcePool;
-    }
-    return null;
-  }, [scenarios]);
-  const sourcePoolFromScenarioKey = sourcePoolFromScenario
-    ? `${sourcePoolFromScenario.platform.trim().toLowerCase()}::${sourcePoolFromScenario.entityType.trim().toLowerCase()}`
-    : '';
   const activeDevice = useMemo(
     () => devices.find((d) => d.id === activeDeviceId) ?? devices[0],
     [activeDeviceId, devices]
@@ -238,28 +150,6 @@ export function DispatchCampaignDialog({
           : perDeviceOverrides,
     [backendCampaign, open, perDeviceOverrides]
   );
-
-  const applyExternalEntityList = useCallback(
-    (items: ExternalEntityCatalogItem[]) => {
-      const available = items.filter((item) =>
-        isAllocatableSourceStatus(item.status)
-      );
-      setExternalEntities(available);
-      const options = listSourcePoolOptions(available);
-      setSourcePoolKey((current) => {
-        if (sourcePoolFromScenarioKey) return sourcePoolFromScenarioKey;
-        return options.some((option) => option.key === current)
-          ? current
-          : options[0]?.key || '';
-      });
-    },
-    [sourcePoolFromScenarioKey]
-  );
-
-  const loadExternalEntities = useCallback(async () => {
-    const result = await externalEntitiesApi.list({ limit: 500 });
-    return result.items;
-  }, []);
 
   useEffect(() => {
     if (!open || !campaignId) {
@@ -295,32 +185,8 @@ export function DispatchCampaignDialog({
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
-    loadExternalEntities()
-      .then((items) => {
-        if (!cancelled) applyExternalEntityList(items);
-      })
-      .catch(() => {
-        if (!cancelled) setExternalEntities([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [applyExternalEntityList, loadExternalEntities, open]);
-
-  useEffect(() => {
-    if (!open) return;
     setSelectedIds(new Set(allDeviceIds));
     setGroupIds(new Set());
-    setSourcePoolEnabled(Boolean(sourcePoolFromScenario));
-    setSourcePoolKey(sourcePoolFromScenarioKey);
-    setSourceSearch(sourcePoolFromScenario?.search ?? '');
-    setSourceOutputPrefix(sourcePoolFromScenario?.outputPrefix ?? '');
-    setSourcePreview(null);
-    setSourcePreviewKey('');
-    setSourcePreviewError('');
-    setSourcePreviewLoading(false);
-    setSourceAssignmentOverrides({});
     setStrategy('parallel');
     setActiveDeviceId(firstDeviceId);
     setActiveScenarioId(firstScenarioId);
@@ -335,9 +201,7 @@ export function DispatchCampaignDialog({
     firstScenarioId,
     open,
     campaignId,
-    scenarioSignature,
-    sourcePoolFromScenario,
-    sourcePoolFromScenarioKey
+    scenarioSignature
   ]);
 
   useEffect(() => {
@@ -375,121 +239,6 @@ export function DispatchCampaignDialog({
     allDeviceIds.length > 0 && allDeviceIds.every((id) => selectedIds.has(id));
   const someSelected = allDeviceIds.some((id) => selectedIds.has(id));
   const hasTarget = someSelected || groupIds.size > 0;
-  const sourcePoolOptions = useMemo(
-    () => listSourcePoolOptions(externalEntities),
-    [externalEntities]
-  );
-  const sourcePoolMenuOptions = useMemo(() => {
-    if (!sourcePoolFromScenario || !sourcePoolFromScenarioKey) {
-      return sourcePoolOptions;
-    }
-    if (
-      sourcePoolOptions.some(
-        (option) => option.key === sourcePoolFromScenarioKey
-      )
-    ) {
-      return sourcePoolOptions;
-    }
-    return [
-      {
-        key: sourcePoolFromScenarioKey,
-        platform: sourcePoolFromScenario.platform.trim().toLowerCase(),
-        entityType: sourcePoolFromScenario.entityType.trim().toLowerCase(),
-        count: 0
-      },
-      ...sourcePoolOptions
-    ];
-  }, [sourcePoolFromScenario, sourcePoolFromScenarioKey, sourcePoolOptions]);
-  const selectedSourcePool = useMemo(
-    () =>
-      sourcePoolKey
-        ? buildSourcePoolInput(sourcePoolKey, sourceSearch, sourceOutputPrefix)
-        : null,
-    [sourceOutputPrefix, sourcePoolKey, sourceSearch]
-  );
-  const currentSourcePreviewKey = useMemo(
-    () =>
-      JSON.stringify({
-        device_ids: allDeviceIds.filter((id) => selectedIds.has(id)),
-        device_group_ids: Array.from(groupIds).sort(),
-        source_pool: selectedSourcePool
-      }),
-    [allDeviceIds, groupIds, selectedIds, selectedSourcePool]
-  );
-  const sourcePreviewCurrent =
-    !sourcePoolEnabled ||
-    (sourcePreview != null && sourcePreviewKey === currentSourcePreviewKey);
-  const sourceEntityOptions = useMemo(() => {
-    if (!selectedSourcePool) return [];
-    const search = (selectedSourcePool.search ?? '').trim().toLowerCase();
-    const options: SourceEntityOption[] = externalEntities
-      .filter((entity) => {
-        if (
-          entity.platform.trim().toLowerCase() !==
-            selectedSourcePool.platform.trim().toLowerCase() ||
-          entity.entity_type.trim().toLowerCase() !==
-            selectedSourcePool.entity_type.trim().toLowerCase()
-        ) {
-          return false;
-        }
-        if (!search) return true;
-        return entity.display_name.trim().toLowerCase().includes(search);
-      })
-      .map((entity) => ({
-        id: entity.id,
-        platform: entity.platform,
-        entity_type: entity.entity_type,
-        display_name: entity.display_name
-      }));
-    const byId = new Map(options.map((entity) => [entity.id, entity]));
-    for (const assignment of sourcePreview?.assignments ?? []) {
-      if (byId.has(assignment.external_entity_id)) continue;
-      byId.set(assignment.external_entity_id, {
-        id: assignment.external_entity_id,
-        platform: assignment.platform,
-        entity_type: assignment.entity_type,
-        display_name: assignment.display_name
-      });
-    }
-    return Array.from(byId.values()).sort((left, right) =>
-      left.display_name.localeCompare(right.display_name)
-    );
-  }, [externalEntities, selectedSourcePool, sourcePreview?.assignments]);
-  const sourceEntityById = useMemo(
-    () => new Map(sourceEntityOptions.map((entity) => [entity.id, entity])),
-    [sourceEntityOptions]
-  );
-  const effectiveSourceAssignments = useMemo(() => {
-    return (sourcePreview?.assignments ?? []).map((assignment) => {
-      const externalEntityId =
-        sourceAssignmentOverrides[assignment.device_id] ||
-        assignment.external_entity_id;
-      const entity = sourceEntityById.get(externalEntityId);
-      return {
-        ...assignment,
-        external_entity_id: externalEntityId,
-        display_name: entity?.display_name ?? assignment.display_name,
-        platform: entity?.platform ?? assignment.platform,
-        entity_type: entity?.entity_type ?? assignment.entity_type
-      };
-    });
-  }, [sourceAssignmentOverrides, sourceEntityById, sourcePreview?.assignments]);
-  const duplicateSourceEntityIds = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const assignment of effectiveSourceAssignments) {
-      counts.set(
-        assignment.external_entity_id,
-        (counts.get(assignment.external_entity_id) ?? 0) + 1
-      );
-    }
-    return new Set(
-      Array.from(counts.entries())
-        .filter(([, count]) => count > 1)
-        .map(([entityId]) => entityId)
-    );
-  }, [effectiveSourceAssignments]);
-  const hasDuplicateSourceAssignment = duplicateSourceEntityIds.size > 0;
-
   const parseMsgs = useMemo(
     () => ({
       invalidJson: tVars('parseInvalidJson'),
@@ -621,9 +370,7 @@ export function DispatchCampaignDialog({
     }
   };
 
-  const buildDispatchBody = (
-    includeAllocationSnapshot = true
-  ): CampaignDispatchIn => {
+  const buildDispatchBody = (): CampaignDispatchIn => {
     const device_ids = allDeviceIds.filter((id) => selectedIds.has(id));
     const device_group_ids = Array.from(groupIds);
     return {
@@ -631,55 +378,14 @@ export function DispatchCampaignDialog({
         ...(device_ids.length ? { device_ids } : {}),
         ...(device_group_ids.length ? { device_group_ids } : {})
       },
-      ...(sourcePoolEnabled && selectedSourcePool
-        ? {
-            source_pool: selectedSourcePool,
-            ...(includeAllocationSnapshot &&
-            sourcePreviewCurrent &&
-            sourcePreview
-              ? {
-                  allocation_snapshot: effectiveSourceAssignments.map(
-                    (assignment) => ({
-                      device_id: assignment.device_id,
-                      external_entity_id: assignment.external_entity_id
-                    })
-                  )
-                }
-              : {}),
-            allocation_policy: 'one_per_device' as const
-          }
-        : {}),
       dispatch_strategy: strategy,
       require_online: true,
       allow_partial: false
     };
   };
 
-  const handleSourcePreview = async () => {
-    if (!sourcePoolEnabled || !selectedSourcePool || !hasTarget) return;
-    setSourcePreviewLoading(true);
-    setSourcePreviewError('');
-    try {
-      const preview = await campaignsApi.previewDispatch(
-        campaignId,
-        buildDispatchBody(false)
-      );
-      setSourcePreview(preview);
-      setSourcePreviewKey(currentSourcePreviewKey);
-      setSourceAssignmentOverrides({});
-    } catch (err) {
-      setSourcePreview(null);
-      setSourcePreviewKey('');
-      setSourcePreviewError(formatFarmApiError(err, t('previewFailed')));
-    } finally {
-      setSourcePreviewLoading(false);
-    }
-  };
-
   const handleSubmit = async () => {
     if (!(await saveDirtyDrafts())) return;
-    if (!sourcePreviewCurrent) return;
-    if (hasDuplicateSourceAssignment) return;
     onConfirm(buildDispatchBody());
   };
 
@@ -695,12 +401,8 @@ export function DispatchCampaignDialog({
   const stepLabels: Record<DispatchStep, string> = {
     targets: t('steps.targets'),
     variables: t('steps.variables'),
-    source: t('steps.source'),
     review: t('steps.review')
   };
-  const sourceStepBlocked =
-    sourcePoolEnabled &&
-    (!sourcePreviewCurrent || !sourcePreview || hasDuplicateSourceAssignment);
 
   const goBack = () => {
     if (stepIndex <= 0) {
@@ -722,18 +424,6 @@ export function DispatchCampaignDialog({
         return;
       }
       if (!(await saveDirtyDrafts())) return;
-      setStep('source');
-      return;
-    }
-    if (step === 'source') {
-      if (sourceStepBlocked) {
-        toast.error(
-          hasDuplicateSourceAssignment
-            ? t('duplicateSourceAssignment')
-            : t('previewRequired')
-        );
-        return;
-      }
       setStep('review');
       return;
     }
@@ -745,39 +435,34 @@ export function DispatchCampaignDialog({
     isSaving ||
     (step === 'targets' && !hasTarget) ||
     (step === 'variables' && !!currentJsonError) ||
-    (step === 'source' && sourceStepBlocked) ||
-    (step === 'review' &&
-      (!hasTarget ||
-        !sourcePreviewCurrent ||
-        hasDuplicateSourceAssignment ||
-        !!currentJsonError));
+    (step === 'review' && (!hasTarget || !!currentJsonError));
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className='flex max-h-[92vh] w-[min(calc(100vw-2rem),56rem)] max-w-none flex-col gap-0 overflow-hidden p-0'>
-        <DialogHeader className='shrink-0 space-y-0 border-b px-5 py-4 pr-12 text-left'>
-          <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription className='mt-1.5 text-xs'>
+      <DialogContent className='flex h-[min(92vh,52rem)] w-[min(calc(100vw-3rem),80rem)] max-w-[calc(100vw-3rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[80rem]'>
+        <DialogHeader className='shrink-0 space-y-0 border-b px-8 py-5 pr-14 text-left'>
+          <DialogTitle className='text-2xl'>{t('title')}</DialogTitle>
+          <DialogDescription className='mt-2 text-sm'>
             {t('description')}
           </DialogDescription>
         </DialogHeader>
 
-        <div className='grid grid-cols-4 border-b bg-muted/30 px-3 py-3 sm:px-5'>
+        <div className='grid grid-cols-4 border-b bg-muted/30 px-8 py-4'>
           {dispatchSteps.map((item, index) => (
-            <div key={item} className='flex min-w-0 items-center gap-2'>
+            <div key={item} className='flex min-w-0 items-center gap-3'>
               <span
                 className={cn(
-                  'flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold',
+                  'flex size-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold',
                   index <= stepIndex
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'text-muted-foreground'
                 )}
               >
-                {index < stepIndex ? <Check className='size-3.5' /> : index + 1}
+                {index < stepIndex ? <Check className='size-4' /> : index + 1}
               </span>
               <span
                 className={cn(
-                  'hidden truncate text-xs sm:block',
+                  'hidden truncate text-sm sm:block',
                   index === stepIndex
                     ? 'font-semibold'
                     : 'text-muted-foreground'
@@ -789,13 +474,13 @@ export function DispatchCampaignDialog({
           ))}
         </div>
 
-        <div className='min-h-0 flex-1 overflow-y-auto px-5 py-5'>
+        <div className='min-h-0 flex-1 overflow-y-auto px-8 py-6'>
           {step === 'targets' ? (
-            <div className='mx-auto grid max-w-3xl gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]'>
+            <div className='grid gap-8 lg:grid-cols-[minmax(0,1fr)_24rem]'>
               <div className='min-w-0 space-y-4'>
                 {activeScenario ? (
                   <div className='space-y-2'>
-                    <Label className='text-xs'>{t('scenarioLabel')}</Label>
+                    <Label className='text-sm'>{t('scenarioLabel')}</Label>
                     {scenarios.length > 1 ? (
                       <Select
                         value={activeScenarioId}
@@ -803,7 +488,7 @@ export function DispatchCampaignDialog({
                       >
                         <SelectTrigger
                           size='sm'
-                          className='h-auto min-h-9 w-full min-w-0 whitespace-normal py-2 text-left text-xs leading-snug [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal'
+                          className='h-auto min-h-11 w-full min-w-0 whitespace-normal py-2.5 text-left text-sm leading-snug [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal'
                           title={activeScenario.name}
                         >
                           <SelectValue
@@ -820,7 +505,7 @@ export function DispatchCampaignDialog({
                       </Select>
                     ) : (
                       <p
-                        className='line-clamp-2 rounded-md border px-3 py-2 text-xs font-medium leading-snug'
+                        className='line-clamp-2 rounded-md border px-4 py-3 text-sm font-medium leading-snug'
                         title={activeScenario.name}
                       >
                         {activeScenario.name}
@@ -830,9 +515,9 @@ export function DispatchCampaignDialog({
                 ) : null}
 
                 <div className='space-y-2'>
-                  <Label className='text-xs'>{t('devicesLabel')}</Label>
+                  <Label className='text-sm'>{t('devicesLabel')}</Label>
                   {devices.length === 0 ? (
-                    <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
+                    <p className='rounded-md border border-dashed px-4 py-5 text-sm text-muted-foreground'>
                       {t('noDevices')}
                     </p>
                   ) : (
@@ -840,24 +525,21 @@ export function DispatchCampaignDialog({
                       <button
                         type='button'
                         onClick={toggleAllDevices}
-                        className='mb-1 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/60'
+                        className='mb-2 flex w-full items-center gap-3 rounded px-3 py-2 text-sm hover:bg-muted/60'
                       >
                         {allSelected ? (
-                          <CheckSquare size={14} className='text-primary' />
+                          <CheckSquare size={16} className='text-primary' />
                         ) : (
-                          <Square size={14} className='text-muted-foreground' />
+                          <Square size={16} className='text-muted-foreground' />
                         )}
                         <span className='font-medium'>
                           {tList('runDialogSelectAll')}
                         </span>
-                        <Badge
-                          variant='secondary'
-                          className='ml-auto text-[10px]'
-                        >
+                        <Badge variant='secondary' className='ml-auto text-xs'>
                           {devices.length}
                         </Badge>
                       </button>
-                      <div className='max-h-56 space-y-1 overflow-y-auto rounded-md border p-2'>
+                      <div className='max-h-80 space-y-1.5 overflow-y-auto rounded-md border p-3'>
                         {devices.map((device) => {
                           const isChecked = selectedIds.has(device.id);
                           const isActive = activeDevice?.id === device.id;
@@ -865,7 +547,7 @@ export function DispatchCampaignDialog({
                             <div
                               key={device.id}
                               className={cn(
-                                'flex items-center gap-1 rounded border border-transparent px-1 py-1',
+                                'flex items-center gap-2 rounded border border-transparent px-2 py-2',
                                 isActive &&
                                   'border-primary/30 bg-primary/[0.06]'
                               )}
@@ -873,7 +555,7 @@ export function DispatchCampaignDialog({
                               <button
                                 type='button'
                                 onClick={() => toggleDevice(device.id)}
-                                className='flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted'
+                                className='flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted'
                                 aria-label={
                                   isChecked
                                     ? tList('runDialogAriaDeselectDevice')
@@ -882,12 +564,12 @@ export function DispatchCampaignDialog({
                               >
                                 {isChecked ? (
                                   <CheckSquare
-                                    size={13}
+                                    size={16}
                                     className='text-primary'
                                   />
                                 ) : (
                                   <Square
-                                    size={13}
+                                    size={16}
                                     className='text-muted-foreground'
                                   />
                                 )}
@@ -895,10 +577,10 @@ export function DispatchCampaignDialog({
                               <button
                                 type='button'
                                 onClick={() => setActiveDeviceId(device.id)}
-                                className='flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted/60'
+                                className='flex min-w-0 flex-1 items-center gap-3 rounded px-2 py-1.5 text-left text-sm hover:bg-muted/60'
                               >
                                 <Smartphone
-                                  size={12}
+                                  size={16}
                                   className='shrink-0 text-muted-foreground'
                                 />
                                 <span className='min-w-0 truncate font-mono'>
@@ -920,12 +602,12 @@ export function DispatchCampaignDialog({
 
                 {deviceGroups.length > 0 && (
                   <div className='space-y-2'>
-                    <Label className='text-xs'>{t('groupsLabel')}</Label>
-                    <div className='max-h-36 space-y-2 overflow-y-auto rounded-md border p-3'>
+                    <Label className='text-sm'>{t('groupsLabel')}</Label>
+                    <div className='max-h-52 space-y-2 overflow-y-auto rounded-md border p-4'>
                       {deviceGroups.map((group) => (
                         <label
                           key={group.id}
-                          className='flex cursor-pointer items-center gap-2 text-sm'
+                          className='flex cursor-pointer items-center gap-3 text-base'
                         >
                           <Checkbox
                             checked={groupIds.has(group.id)}
@@ -943,7 +625,7 @@ export function DispatchCampaignDialog({
 
               <div className='space-y-4'>
                 <div className='space-y-1.5'>
-                  <Label className='text-xs'>{t('strategyLabel')}</Label>
+                  <Label className='text-sm'>{t('strategyLabel')}</Label>
                   <Select
                     value={strategy}
                     onValueChange={(v) =>
@@ -952,7 +634,7 @@ export function DispatchCampaignDialog({
                       )
                     }
                   >
-                    <SelectTrigger className='h-8 text-xs'>
+                    <SelectTrigger className='h-11 text-sm'>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -965,7 +647,7 @@ export function DispatchCampaignDialog({
                     </SelectContent>
                   </Select>
                 </div>
-                <div className='space-y-3 rounded-md border bg-muted/20 p-3'>
+                <div className='space-y-4 rounded-md border bg-muted/20 p-5'>
                   <SummaryRow
                     label={t('selectedDevices')}
                     value={String(selectedDirectCount)}
@@ -986,20 +668,20 @@ export function DispatchCampaignDialog({
           {step === 'variables' ? (
             <div
               className={cn(
-                'mx-auto grid max-w-4xl gap-5',
+                'grid gap-8',
                 showVarsPanel
-                  ? 'lg:grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]'
+                  ? 'lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]'
                   : 'grid-cols-1'
               )}
             >
               <div className='min-w-0 space-y-2'>
-                <Label className='text-xs'>{t('devicesLabel')}</Label>
+                <Label className='text-sm'>{t('devicesLabel')}</Label>
                 {devices.length === 0 ? (
-                  <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
+                  <p className='rounded-md border border-dashed px-4 py-5 text-sm text-muted-foreground'>
                     {t('noDevices')}
                   </p>
                 ) : (
-                  <div className='max-h-[28rem] space-y-1 overflow-y-auto rounded-md border p-2'>
+                  <div className='max-h-[38rem] space-y-1.5 overflow-y-auto rounded-md border p-3'>
                     {devices.map((device) => {
                       const isActive = activeDevice?.id === device.id;
                       const hasOverride =
@@ -1014,12 +696,12 @@ export function DispatchCampaignDialog({
                           type='button'
                           onClick={() => setActiveDeviceId(device.id)}
                           className={cn(
-                            'flex w-full min-w-0 items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
+                            'flex w-full min-w-0 items-center gap-3 rounded border border-transparent px-3 py-2.5 text-left text-sm hover:bg-muted/60',
                             isActive && 'border-primary/30 bg-primary/[0.06]'
                           )}
                         >
                           <Smartphone
-                            size={12}
+                            size={16}
                             className='shrink-0 text-muted-foreground'
                           />
                           <span className='min-w-0 flex-1 truncate font-mono'>
@@ -1028,7 +710,7 @@ export function DispatchCampaignDialog({
                           {hasOverride ? (
                             <Badge
                               variant='secondary'
-                              className='shrink-0 text-[10px]'
+                              className='shrink-0 text-xs'
                             >
                               {t('overrideBadge')}
                             </Badge>
@@ -1041,7 +723,7 @@ export function DispatchCampaignDialog({
               </div>
 
               {showVarsPanel ? (
-                <div className='flex min-h-[28rem] min-w-0 flex-col overflow-hidden'>
+                <div className='flex min-h-[38rem] min-w-0 flex-col overflow-hidden'>
                   <DeviceVarsJsonPanel
                     enabled={currentDeviceVarsEnabled}
                     onEnabledChange={handleDeviceVarsToggle}
@@ -1053,205 +735,21 @@ export function DispatchCampaignDialog({
                     baseVariables={globalVariablesPreview}
                     globalVariablesPreview={globalVariablesPreview}
                     className='flex min-h-0 min-w-0 flex-1 flex-col'
-                    editorClassName='min-h-[220px] flex-1'
-                    emptyClassName='flex min-h-[220px] flex-1 flex-col'
+                    editorClassName='min-h-[420px] flex-1'
+                    emptyClassName='flex min-h-[420px] flex-1 flex-col'
                   />
                 </div>
               ) : null}
             </div>
           ) : null}
 
-          {step === 'source' ? (
-            <div className='mx-auto max-w-3xl space-y-4'>
-              {sourcePoolMenuOptions.length > 0 ? (
-                <div className='space-y-3'>
-                  <label className='flex cursor-pointer items-center gap-2 text-xs font-medium'>
-                    <Checkbox
-                      checked={sourcePoolEnabled}
-                      onCheckedChange={(checked) => {
-                        setSourcePoolEnabled(checked === true);
-                        setSourcePreview(null);
-                        setSourcePreviewKey('');
-                        setSourcePreviewError('');
-                        setSourceAssignmentOverrides({});
-                      }}
-                    />
-                    {t('sourcePoolEnabled')}
-                  </label>
-                  {sourcePoolEnabled ? (
-                    <div className='space-y-3 rounded-md border p-3'>
-                      <div className='grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'>
-                        <div className='space-y-1.5'>
-                          <Label className='text-[11px]'>
-                            {t('sourcePoolLabel')}
-                          </Label>
-                          <Select
-                            value={sourcePoolKey}
-                            onValueChange={(value) => {
-                              setSourcePoolKey(value);
-                              setSourcePreviewError('');
-                              setSourceAssignmentOverrides({});
-                            }}
-                          >
-                            <SelectTrigger className='h-8 text-xs'>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {sourcePoolMenuOptions.map((option) => (
-                                <SelectItem key={option.key} value={option.key}>
-                                  {option.platform} / {option.entityType} (
-                                  {option.count})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className='space-y-1.5'>
-                          <Label className='text-[11px]'>
-                            {t('sourceSearchLabel')}
-                          </Label>
-                          <Input
-                            value={sourceSearch}
-                            onChange={(event) => {
-                              setSourceSearch(event.target.value);
-                              setSourcePreviewError('');
-                              setSourceAssignmentOverrides({});
-                            }}
-                            placeholder={t('sourceSearchPlaceholder')}
-                            className='h-8 text-xs'
-                          />
-                        </div>
-                      </div>
-                      <p className='text-[11px] text-muted-foreground'>
-                        {t('sourcePolicyHelp')}
-                      </p>
-                      <div className='flex flex-wrap items-center gap-2'>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant='outline'
-                          className='h-7 gap-1.5 text-xs'
-                          disabled={
-                            sourcePreviewLoading ||
-                            !hasTarget ||
-                            !selectedSourcePool
-                          }
-                          onClick={() => void handleSourcePreview()}
-                        >
-                          {sourcePreviewLoading ? (
-                            <Loader2 size={12} className='animate-spin' />
-                          ) : (
-                            <Eye size={12} />
-                          )}
-                          {t('previewAllocation')}
-                        </Button>
-                        {sourcePoolEnabled &&
-                        !sourcePreviewLoading &&
-                        !sourcePreviewCurrent ? (
-                          <span className='text-[11px] text-muted-foreground'>
-                            {t('previewRequired')}
-                          </span>
-                        ) : null}
-                      </div>
-                      {sourcePreviewError ? (
-                        <p className='text-[11px] text-destructive'>
-                          {sourcePreviewError}
-                        </p>
-                      ) : null}
-                      {sourcePreviewCurrent && sourcePreview ? (
-                        <div className='max-h-[22rem] space-y-2 overflow-y-auto rounded-md bg-muted/40 p-2'>
-                          <p className='text-[11px] font-medium'>
-                            {t('previewSummary', {
-                              assigned: effectiveSourceAssignments.length,
-                              available: sourcePreview.available_source_count
-                            })}
-                          </p>
-                          {hasDuplicateSourceAssignment ? (
-                            <p className='text-[11px] text-destructive'>
-                              {t('duplicateSourceAssignment')}
-                            </p>
-                          ) : null}
-                          {effectiveSourceAssignments.map((assignment) => {
-                            const selectedByOtherDevice = new Set(
-                              effectiveSourceAssignments
-                                .filter(
-                                  (row) =>
-                                    row.device_id !== assignment.device_id
-                                )
-                                .map((row) => row.external_entity_id)
-                            );
-                            return (
-                              <div
-                                key={assignment.device_id}
-                                className='grid gap-1 rounded-md border bg-background/70 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,1.4fr)] sm:items-center'
-                              >
-                                <div className='min-w-0 text-[11px]'>
-                                  <p className='truncate font-medium'>
-                                    {assignment.device_serial ??
-                                      assignment.device_id}
-                                  </p>
-                                  {assignment.device_name ? (
-                                    <p className='truncate text-muted-foreground'>
-                                      {assignment.device_name}
-                                    </p>
-                                  ) : null}
-                                </div>
-                                <Select
-                                  value={assignment.external_entity_id}
-                                  onValueChange={(value) => {
-                                    setSourceAssignmentOverrides((prev) => ({
-                                      ...prev,
-                                      [assignment.device_id]: value
-                                    }));
-                                    setSourcePreviewError('');
-                                  }}
-                                >
-                                  <SelectTrigger className='h-8 min-w-0 text-xs'>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {sourceEntityOptions.map((entity) => (
-                                      <SelectItem
-                                        key={entity.id}
-                                        value={entity.id}
-                                        disabled={selectedByOtherDevice.has(
-                                          entity.id
-                                        )}
-                                      >
-                                        {entity.display_name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : sourcePreview && !sourcePreviewCurrent ? (
-                        <p className='text-[11px] text-amber-600'>
-                          {t('previewStale')}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
-                      {t('sourcePoolDisabledHelp')}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className='rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground'>
-                  {t('sourceUnavailable')}
-                </p>
-              )}
-            </div>
-          ) : null}
-
           {step === 'review' ? (
-            <div className='mx-auto max-w-3xl space-y-4'>
+            <div className='space-y-4'>
               <div className='grid gap-3 sm:grid-cols-2'>
-                <div className='space-y-3 rounded-md border p-4'>
-                  <p className='text-sm font-semibold'>{t('reviewTargets')}</p>
+                <div className='space-y-4 rounded-md border p-5'>
+                  <p className='text-base font-semibold'>
+                    {t('reviewTargets')}
+                  </p>
                   <SummaryRow
                     label={t('selectedDevices')}
                     value={String(selectedDirectCount)}
@@ -1269,30 +767,20 @@ export function DispatchCampaignDialog({
                     }
                   />
                 </div>
-                <div className='space-y-3 rounded-md border p-4'>
-                  <p className='text-sm font-semibold'>{t('reviewSetup')}</p>
+                <div className='space-y-4 rounded-md border p-5'>
+                  <p className='text-base font-semibold'>{t('reviewSetup')}</p>
                   <SummaryRow
                     label={t('reviewVariables')}
                     value={t('reviewVariableCount', {
                       count: Object.keys(effectivePerDeviceOverrides).length
                     })}
                   />
-                  <SummaryRow
-                    label={t('reviewSource')}
-                    value={
-                      sourcePoolEnabled && sourcePreview
-                        ? t('reviewSourceCount', {
-                            count: effectiveSourceAssignments.length
-                          })
-                        : t('reviewSourceDisabled')
-                    }
-                  />
                 </div>
               </div>
 
               {selectedDevices.length > 0 ? (
-                <div className='rounded-md border p-4'>
-                  <p className='mb-2 text-sm font-semibold'>
+                <div className='rounded-md border p-5'>
+                  <p className='mb-3 text-base font-semibold'>
                     {t('selectedDeviceList')}
                   </p>
                   <div className='flex flex-wrap gap-2'>
@@ -1306,8 +794,8 @@ export function DispatchCampaignDialog({
               ) : null}
 
               {selectedGroups.length > 0 ? (
-                <div className='rounded-md border p-4'>
-                  <p className='mb-2 text-sm font-semibold'>
+                <div className='rounded-md border p-5'>
+                  <p className='mb-3 text-base font-semibold'>
                     {t('selectedGroupList')}
                   </p>
                   <div className='flex flex-wrap gap-2'>
@@ -1323,9 +811,10 @@ export function DispatchCampaignDialog({
           ) : null}
         </div>
 
-        <DialogFooter className='flex-row items-center justify-between border-t bg-muted/20 px-5 py-4 sm:justify-between'>
+        <DialogFooter className='flex-row items-center justify-between border-t bg-muted/20 px-8 py-5 sm:justify-between'>
           <Button
             variant='ghost'
+            className='h-11 px-5 text-base'
             onClick={goBack}
             disabled={isDispatching || isSaving}
           >
@@ -1333,7 +822,7 @@ export function DispatchCampaignDialog({
             {stepIndex === 0 ? t('cancel') : t('back')}
           </Button>
           <Button
-            className='gap-1.5'
+            className='h-11 gap-2 px-6 text-base'
             disabled={nextDisabled}
             onClick={() => void goNext()}
           >
@@ -1361,9 +850,11 @@ export function DispatchCampaignDialog({
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className='flex items-center justify-between gap-3 text-xs'>
+    <div className='flex items-center justify-between gap-4 text-sm'>
       <span className='min-w-0 truncate text-muted-foreground'>{label}</span>
-      <span className='shrink-0 text-right font-medium'>{value}</span>
+      <span className='shrink-0 text-right text-base font-semibold'>
+        {value}
+      </span>
     </div>
   );
 }

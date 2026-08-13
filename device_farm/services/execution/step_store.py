@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
 from services.execution.effective_config import build_effective_config_snapshot
+from services.execution.trace_context import build_step_trace_context, trace_from_runtime_context
 
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
@@ -93,6 +94,13 @@ def _step_status(step_result: dict[str, Any]) -> str:
     return "passed" if step_result.get("ok", True) else "failed"
 
 
+def _int_or_default(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_execution_step_payload(
     execution_id: str,
     step: dict[str, Any],
@@ -101,6 +109,7 @@ def build_execution_step_payload(
     started_at: datetime | None = None,
     ended_at: datetime | None = None,
     duration_ms: float | None = None,
+    runtime_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     flat = normalize_workflow_step_result(step_result)
     idx = int(flat.get("index", step_result.get("index", 0)))
@@ -116,6 +125,24 @@ def build_execution_step_payload(
     merged_step = {**step, **{k: v for k, v in flat.items() if k in ("type", "id", "_id")}}
     artifacts = extract_artifacts_json(step_result)
 
+    trace_base = flat.get("trace") if isinstance(flat.get("trace"), dict) else None
+    trace = build_step_trace_context(
+        step=merged_step,
+        step_index=idx,
+        depth=_int_or_default(
+            flat.get(
+                "depth",
+                trace_from_runtime_context(runtime_context).get("depth", 0),
+            )
+        ),
+        runtime_context=runtime_context,
+        base_context=trace_base,
+        step_result=flat,
+    )
+    effective_config = build_effective_config_snapshot(merged_step, step_index=idx)
+    if trace:
+        effective_config["trace"] = trace
+
     payload: dict[str, Any] = {
         "execution_id": execution_id,
         "step_index": idx,
@@ -126,7 +153,7 @@ def build_execution_step_payload(
         "ended_at": ended_at,
         "duration_ms": duration_ms,
         "error_json": error_json,
-        "effective_config_json": build_effective_config_snapshot(merged_step, step_index=idx),
+        "effective_config_json": effective_config,
         "attempts_json": list(flat.get("retry_attempts") or []),
         "marked_ignored": bool(flat.get("marked_ignored")),
         "message": flat.get("message"),
@@ -174,6 +201,7 @@ def schedule_persist_step(
         started_at=started_at,
         ended_at=ended_at,
         duration_ms=duration_ms,
+        runtime_context=sc.ctx,
     )
 
     async def _do() -> None:

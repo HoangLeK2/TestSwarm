@@ -7,11 +7,12 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import false, func, literal, or_, select, union_all
 
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import activity_log_scope, data_owner_user_id
 from api.schemas.analytics import (
+    ActivityLogOut,
     ActivityLogListOut,
     AnalyticsAdhocOut,
     AnalyticsSummaryOut,
@@ -19,9 +20,16 @@ from api.schemas.analytics import (
 )
 from db.models.analytics import MetricRollupDaily, MetricRollupWeekly
 from db.models.activity import ActivityLog
+from db.models.account import Account
+from db.models.account_action import AccountAction
+from db.models.account_event import AccountEvent
 from services.analytics_query import AnalyticsQueryError, analytics_query_from_payload
 from services.activity_presenter import present_activity_logs
-from services.user_action_audit import DEVICE_SCREEN_CONTROL_PATH_PARTS
+from services.user_action_audit import (
+    DEVICE_SCREEN_CONTROL_PATH_PARTS,
+    MEDIA_PREVIEW_PATH_PREFIXES,
+)
+from tenancy.context import tenant_context
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -55,7 +63,7 @@ def _redact(value: Any) -> Any:
 
 
 def _exclude_device_screen_control_logs(stmt):
-    route_or_path_matches = or_(
+    device_route_or_path_matches = or_(
         *[
             or_(
                 ActivityLog.route_template.contains(part),
@@ -64,13 +72,322 @@ def _exclude_device_screen_control_logs(stmt):
             for part in DEVICE_SCREEN_CONTROL_PATH_PARTS
         ]
     )
+    media_route_or_path_matches = or_(
+        *[
+            or_(
+                ActivityLog.route_template.startswith(prefix),
+                ActivityLog.path.startswith(prefix),
+            )
+            for prefix in MEDIA_PREVIEW_PATH_PREFIXES
+        ]
+    )
     return stmt.where(
         ~(
-            (ActivityLog.entity_type == "devices")
-            & ActivityLog.action.startswith("user.devices.")
-            & route_or_path_matches
+            (
+                (ActivityLog.entity_type == "devices")
+                & ActivityLog.action.startswith("user.devices.")
+                & device_route_or_path_matches
+            )
+            | (
+                (ActivityLog.entity_type == "media")
+                & ActivityLog.action.startswith("user.media.")
+                & media_route_or_path_matches
+            )
+            | ActivityLog.action.startswith("ws.")
         )
     )
+
+
+def _account_visibility_filter(user: CurrentUser):
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        return Account.org_id == org_id
+    return Account.user_id == data_owner_user_id(user)
+
+
+def _account_event_base(user: CurrentUser):
+    return (
+        select(AccountEvent)
+        .join(Account, Account.id == AccountEvent.account_id)
+        .where(_account_visibility_filter(user))
+    )
+
+
+def _account_action_base(user: CurrentUser):
+    return (
+        select(AccountAction)
+        .join(Account, Account.id == AccountAction.account_id)
+        .where(_account_visibility_filter(user))
+    )
+
+
+def _apply_account_filters(
+    stmt,
+    *,
+    account_id: str | None,
+    device_serial: str | None,
+):
+    if account_id:
+        stmt = stmt.where(Account.id == account_id)
+    if device_serial:
+        stmt = stmt.where(AccountEvent.device_serial == device_serial)
+    return stmt
+
+
+def _apply_account_action_filters(
+    stmt,
+    *,
+    account_id: str | None,
+    action: str | None,
+    device_serial: str | None,
+):
+    if account_id:
+        stmt = stmt.where(Account.id == account_id)
+    if device_serial:
+        return stmt.where(false())
+    if not action:
+        return stmt
+    if action == "account.action":
+        return stmt
+    prefix = "account.action."
+    if action.startswith(prefix):
+        return stmt.where(AccountAction.action_type == action[len(prefix) :])
+    return stmt.where(false())
+
+
+def _apply_account_event_filters(
+    stmt,
+    *,
+    account_id: str | None,
+    action: str | None,
+    device_serial: str | None,
+):
+    stmt = _apply_account_filters(
+        stmt,
+        account_id=account_id,
+        device_serial=device_serial,
+    )
+    if action:
+        stmt = stmt.where(AccountEvent.event_type == action)
+    return stmt
+
+
+def _account_label(account: Account) -> str:
+    display = (account.display_name or "").strip()
+    username = (account.username or "").strip()
+    if display and username and display != username:
+        return f"{display} ({username})"
+    return display or username or account.id
+
+
+def _account_event_out(row: AccountEvent, account: Account) -> ActivityLogOut:
+    details = dict(row.details) if isinstance(row.details, dict) else {}
+    details.update(
+        {
+            "source": "account_event",
+            "account_id": row.account_id,
+            "account_label": _account_label(account),
+            "account_username": account.username,
+            "account_platform": account.platform,
+            "event_type": row.event_type,
+        }
+    )
+    return ActivityLogOut(
+        id=f"account_event:{row.id}",
+        action=row.event_type,
+        entity_type="account",
+        entity_id=row.account_id,
+        device_serial=row.device_serial,
+        device_display=None,
+        org_id=account.org_id,
+        user_id=row.user_id or account.user_id,
+        user_name=None,
+        method=None,
+        path=None,
+        route_template=None,
+        status_code=None,
+        request_id=None,
+        ip_address=None,
+        user_agent=None,
+        outcome=None,
+        duration_ms=None,
+        details=_redact(details),
+        created_at=row.created_at,
+    )
+
+
+def _account_action_out(row: AccountAction, account: Account) -> ActivityLogOut:
+    target = row.target if isinstance(row.target, dict) else {}
+    result = row.result if isinstance(row.result, dict) else {}
+    target_label = target.get("label") or target.get("name")
+    failed = row.status in {"failed", "stale", "cancelled"}
+    error_message = (
+        result.get("error_message")
+        or result.get("error")
+        or (result.get("reason") if failed else None)
+    )
+    details = {
+        "source": "account_action",
+        "account_id": row.account_id,
+        "account_label": _account_label(account),
+        "account_username": account.username,
+        "account_platform": account.platform,
+        "action_type": row.action_type,
+        "status": row.status,
+        "target_type": target.get("target_type") or target.get("type"),
+        "target_id": target.get("target_id") or target.get("id"),
+        "target_label": (
+            str(target_label)[:512] if target_label is not None else None
+        ),
+        "error_code": result.get("error_code")
+        or (result.get("reason") if failed else None),
+        "error_message": str(error_message)[:2048] if error_message is not None else None,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "execution_id": row.execution_id,
+        "step_id": row.step_id,
+    }
+    return ActivityLogOut(
+        id=f"account_action:{row.id}",
+        action=f"account.action.{row.action_type}",
+        entity_type="account",
+        entity_id=row.account_id,
+        device_serial=None,
+        device_display=None,
+        org_id=account.org_id,
+        user_id=account.user_id,
+        user_name=None,
+        method=None,
+        path=None,
+        route_template=None,
+        status_code=None,
+        request_id=None,
+        ip_address=None,
+        user_agent=None,
+        outcome=(
+            "error"
+            if failed
+            else "success"
+            if row.status == "succeeded"
+            else None
+        ),
+        duration_ms=None,
+        details=_redact(details),
+        created_at=row.updated_at or row.created_at,
+    )
+
+
+async def _load_account_feed_page(
+    db: DB,
+    user: CurrentUser,
+    *,
+    action: str | None,
+    device_serial: str | None,
+    account_id: str | None,
+    offset: int,
+    limit: int,
+    activity_stmt,
+) -> tuple[int, list[ActivityLogOut]]:
+    org_id = getattr(user, "org_id", None)
+    with tenant_context(org_id):
+        activity_keys = activity_stmt.with_only_columns(
+            literal("activity").label("source"),
+            ActivityLog.id.label("row_id"),
+            ActivityLog.created_at.label("created_at"),
+        )
+        account_event_stmt = _apply_account_event_filters(
+            _account_event_base(user),
+            account_id=account_id,
+            action=action,
+            device_serial=device_serial,
+        )
+        account_action_stmt = _apply_account_action_filters(
+            _account_action_base(user),
+            account_id=account_id,
+            action=action,
+            device_serial=device_serial,
+        )
+        account_event_keys = account_event_stmt.with_only_columns(
+            literal("account_event").label("source"),
+            AccountEvent.id.label("row_id"),
+            AccountEvent.created_at.label("created_at"),
+        )
+        account_action_keys = account_action_stmt.with_only_columns(
+            literal("account_action").label("source"),
+            AccountAction.id.label("row_id"),
+            AccountAction.updated_at.label("created_at"),
+        )
+
+        feed = union_all(
+            activity_keys,
+            account_event_keys,
+            account_action_keys,
+        ).subquery()
+        total = (
+            await db.execute(select(func.count()).select_from(feed))
+        ).scalar() or 0
+        page_rows = (
+            await db.execute(
+                select(feed.c.source, feed.c.row_id)
+                .order_by(feed.c.created_at.desc(), feed.c.row_id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+
+        ids_by_source: dict[str, list[str]] = {
+            "activity": [],
+            "account_event": [],
+            "account_action": [],
+        }
+        for source, row_id in page_rows:
+            ids_by_source[str(source)].append(str(row_id))
+
+        hydrated: dict[tuple[str, str], ActivityLogOut] = {}
+        if ids_by_source["activity"]:
+            rows = (
+                await db.execute(
+                    select(ActivityLog).where(
+                        ActivityLog.id.in_(ids_by_source["activity"])
+                    )
+                )
+            ).scalars().all()
+            for item in await present_activity_logs(db, list(rows)):
+                hydrated[("activity", item.id)] = item
+
+        if ids_by_source["account_event"]:
+            rows = (
+                await db.execute(
+                    select(AccountEvent, Account)
+                    .join(Account, Account.id == AccountEvent.account_id)
+                    .where(AccountEvent.id.in_(ids_by_source["account_event"]))
+                )
+            ).all()
+            for event, account in rows:
+                hydrated[("account_event", event.id)] = _account_event_out(
+                    event,
+                    account,
+                )
+
+        if ids_by_source["account_action"]:
+            rows = (
+                await db.execute(
+                    select(AccountAction, Account)
+                    .join(Account, Account.id == AccountAction.account_id)
+                    .where(AccountAction.id.in_(ids_by_source["account_action"]))
+                )
+            ).all()
+            for action_row, account in rows:
+                hydrated[("account_action", action_row.id)] = _account_action_out(
+                    action_row,
+                    account,
+                )
+
+        return total, [
+            hydrated[(str(source), str(row_id))]
+            for source, row_id in page_rows
+            if (str(source), str(row_id)) in hydrated
+        ]
 
 
 @router.get(
@@ -83,37 +400,39 @@ async def list_activity(
     user: CurrentUser,
     action: str | None = None,
     device_serial: str | None = None,
+    account_id: str | None = None,
     offset: int = 0,
     limit: int = 50,
 ):
     safe_limit = min(max(limit, 1), 100)
+    safe_offset = max(offset, 0)
     scope = await activity_log_scope(db, user)
     q = select(ActivityLog).where(scope)
-    count_q = select(func.count(ActivityLog.id)).where(scope)
     q = _exclude_device_screen_control_logs(q)
-    count_q = _exclude_device_screen_control_logs(count_q)
 
     if action:
         q = q.where(ActivityLog.action == action)
-        count_q = count_q.where(ActivityLog.action == action)
     if device_serial:
         q = q.where(ActivityLog.device_serial == device_serial)
-        count_q = count_q.where(ActivityLog.device_serial == device_serial)
+    if account_id:
+        q = q.where(false())
 
-    total = (await db.execute(count_q)).scalar() or 0
-    rows = (
-        await db.execute(
-            q.order_by(ActivityLog.created_at.desc())
-            .offset(max(offset, 0))
-            .limit(safe_limit)
-        )
-    ).scalars().all()
+    total, activities = await _load_account_feed_page(
+        db,
+        user,
+        action=action,
+        device_serial=device_serial,
+        account_id=account_id.strip() if account_id else None,
+        offset=safe_offset,
+        limit=safe_limit,
+        activity_stmt=q,
+    )
 
     return ActivityLogListOut(
         total=total,
-        offset=max(offset, 0),
+        offset=safe_offset,
         limit=safe_limit,
-        activities=await present_activity_logs(db, list(rows)),
+        activities=activities,
     )
 
 

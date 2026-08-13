@@ -35,6 +35,7 @@ from services.extraction_usecase import (
     update_parent_stats_if_available,
 )
 from services.execution.dsl_runtime import materialize_legacy_step
+from services.execution.trace_context import build_step_trace_context
 from services.scenario_step_contract import (
     extract_data_var_for_strategy,
     normalize_extract_step,
@@ -273,6 +274,88 @@ _STEP_EVENT_CONTEXT_MISSING = object()
 _U2_BATCH_ACTION_ERROR_RE = re.compile(r"action\[(\d+)\]")
 
 
+def _first_trace_value(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _build_activity_trace_context(
+    inp: Any,
+    *,
+    org_id: str | None = None,
+    campaign_id: str | None = None,
+    execution: Any | None = None,
+) -> dict[str, Any]:
+    campaign_vars = getattr(inp, "campaign_vars", None) or {}
+    variables = getattr(inp, "variables", None) or {}
+    meta = getattr(execution, "meta", None) or {}
+    device_config = getattr(execution, "device_config", None) or {}
+    return {
+        "org_id": org_id,
+        "dispatch_id": _first_trace_value(
+            meta.get("dispatch_id"),
+            meta.get("campaign_dispatch_id"),
+            meta.get("dispatch_run_id"),
+        ),
+        "campaign_id": _first_trace_value(
+            campaign_id,
+            getattr(inp, "campaign_id", None),
+            getattr(execution, "campaign_id", None),
+        ),
+        "execution_id": _first_trace_value(
+            getattr(inp, "execution_id", None),
+            getattr(inp, "run_id", None),
+            getattr(execution, "id", None),
+        ),
+        "workflow_id": meta.get("workflow_id"),
+        "device_id": _first_trace_value(
+            device_config.get("device_id"),
+            device_config.get("claimed_device_id"),
+        ),
+        "device_serial": _first_trace_value(
+            getattr(inp, "device_serial", None),
+            device_config.get("device_serial"),
+            device_config.get("serial"),
+            meta.get("device_serial"),
+        ),
+        "device_name": _first_trace_value(
+            device_config.get("device_name"),
+            device_config.get("name"),
+        ),
+        "account_id": _first_trace_value(
+            getattr(execution, "account_id", None),
+            campaign_vars.get("__ACCOUNT_ID__"),
+            variables.get("__ACCOUNT_ID__"),
+        ),
+    }
+
+
+def _attach_activity_step_trace(
+    inp: Any,
+    *,
+    step: dict[str, Any],
+    step_index: int,
+    step_result: dict[str, Any],
+    trace_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    trace = build_step_trace_context(
+        step=step,
+        step_index=step_index,
+        depth=getattr(inp, "depth", 0),
+        runtime_context=getattr(inp, "context", None),
+        base_context=trace_context or _build_activity_trace_context(
+            inp,
+            campaign_id=getattr(inp, "campaign_id", None),
+        ),
+        step_result=step_result,
+    )
+    if trace:
+        step_result["trace"] = trace
+    return step_result
+
+
 class _ExecutionFlagProbe:
     """Throttle Redis pause/cancel probes while still honoring local flags immediately."""
 
@@ -325,7 +408,7 @@ class _ExecutionFlagProbe:
 
 async def _resolve_step_event_context(
     inp: DeviceActionInput | DeviceActionBatchInput,
-) -> tuple[Any, Any] | None:
+) -> tuple[Any, Any, Any] | None:
     execution_id = getattr(inp, "execution_id", None)
     if not execution_id:
         return None
@@ -333,16 +416,16 @@ async def _resolve_step_event_context(
     from services.execution.event_publisher import resolve_execution_event_context
 
     async with activity_session() as db:
-        _, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
+        execution, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
     if not org_id:
         return None
-    return org_id, (getattr(inp, "campaign_id", None) or camp_id)
+    return execution, org_id, (getattr(inp, "campaign_id", None) or camp_id)
 
 
 async def _cached_step_event_context(
     inp: DeviceActionInput | DeviceActionBatchInput,
     cache: dict[str, Any],
-) -> tuple[Any, Any] | None:
+) -> tuple[Any, Any, Any] | None:
     if "value" not in cache:
         cache["value"] = await _resolve_step_event_context(inp)
     return cache["value"]
@@ -788,7 +871,7 @@ async def _emit_step_events_for_activity(
     step_index: int,
     step_result: dict[str, Any] | None = None,
     phase: str,
-    event_context: tuple[Any, Any] | None | object = _STEP_EVENT_CONTEXT_MISSING,
+    event_context: tuple[Any, Any, Any] | None | object = _STEP_EVENT_CONTEXT_MISSING,
     event_context_cache: dict[str, Any] | None = None,
 ) -> None:
     execution_id = getattr(inp, "execution_id", None)
@@ -806,13 +889,20 @@ async def _emit_step_events_for_activity(
         return
 
     async with activity_session() as db:
+        execution = None
         if event_context is _STEP_EVENT_CONTEXT_MISSING:
-            _, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
+            execution, org_id, camp_id = await resolve_execution_event_context(db, execution_id)
             if not org_id:
                 return
             campaign_id = getattr(inp, "campaign_id", None) or camp_id
         else:
-            org_id, campaign_id = event_context
+            execution, org_id, campaign_id = event_context
+        trace_context = _build_activity_trace_context(
+            inp,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            execution=execution,
+        )
         with tenant_context(org_id):
             if phase == "started":
                 await emit_step_started(
@@ -823,6 +913,7 @@ async def _emit_step_events_for_activity(
                     step=step,
                     step_index=step_index,
                     depth=getattr(inp, "depth", 0),
+                    trace_context=trace_context,
                 )
             elif phase == "finished" and step_result is not None:
                 await emit_step_finished(
@@ -834,6 +925,7 @@ async def _emit_step_events_for_activity(
                     step_index=step_index,
                     step_result=step_result,
                     depth=getattr(inp, "depth", 0),
+                    trace_context=trace_context,
                 )
             await db.commit()
 
@@ -1065,6 +1157,12 @@ class DeviceActivities:
                 sr = dict(step_results[0])
                 sr.setdefault("duration_ms", activity_step_duration_ms)
                 sr.setdefault("activity_duration_ms", activity_step_duration_ms)
+                _attach_activity_step_trace(
+                    inp,
+                    step=step,
+                    step_index=idx,
+                    step_result=sr,
+                )
 
                 await _emit_step_events_for_activity(
                     inp, step=step, step_index=idx, step_result=sr, phase="finished",
@@ -1094,6 +1192,19 @@ class DeviceActivities:
                 "ok": result.get("success", False),
                 "message": result.get("failed_message") or "",
             }
+            _attach_activity_step_trace(
+                inp,
+                step=step,
+                step_index=idx,
+                step_result=fallback_sr,
+            )
+            await _emit_step_events_for_activity(
+                inp,
+                step=step,
+                step_index=idx,
+                step_result=fallback_sr,
+                phase="finished",
+            )
             await _advance_execution_checkpoint(inp.execution_id, [fallback_sr])
             return StepResult(
                 index=idx,
@@ -1103,6 +1214,7 @@ class DeviceActivities:
                 details={
                     "duration_ms": activity_step_duration_ms,
                     "activity_duration_ms": activity_step_duration_ms,
+                    "trace": fallback_sr.get("trace"),
                 },
             )
 
@@ -1115,9 +1227,29 @@ class DeviceActivities:
                 "[%s] activity error step#%d (%s): %s",
                 inp.device_serial, idx, step_type, exc,
             )
+            error_sr = _attach_activity_step_trace(
+                inp,
+                step=step,
+                step_index=idx,
+                step_result={
+                    "index": idx,
+                    "type": step_type,
+                    "ok": False,
+                    "message": f"Activity error: {exc}",
+                },
+            )
+            with contextlib.suppress(Exception):
+                await _emit_step_events_for_activity(
+                    inp,
+                    step=step,
+                    step_index=idx,
+                    step_result=error_sr,
+                    phase="finished",
+                )
             return StepResult(
                 index=idx, step_type=step_type, ok=False,
                 message=f"Activity error: {exc}",
+                details={"trace": error_sr.get("trace")},
             )
 
     @activity.defn
@@ -1260,6 +1392,12 @@ class DeviceActivities:
                             "u2_batch_duration_ms": u2_batch_duration_ms,
                             "u2_batch_action_duration_ms": u2_batch_action_duration_ms,
                         }
+                        _attach_activity_step_trace(
+                            inp,
+                            step=touch_step,
+                            step_index=touch_idx,
+                            step_result=sr,
+                        )
                         entry = {
                             "index": touch_idx,
                             "type": touch_step.get("type", ""),
@@ -1269,6 +1407,7 @@ class DeviceActivities:
                                 "duration_ms": u2_batch_action_duration_ms,
                                 "u2_batch_duration_ms": u2_batch_duration_ms,
                                 "u2_batch_action_duration_ms": u2_batch_action_duration_ms,
+                                "trace": sr.get("trace"),
                             },
                         }
                         _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
@@ -1339,12 +1478,18 @@ class DeviceActivities:
                                 "ok": True,
                                 "message": "",
                             }
+                            _attach_activity_step_trace(
+                                inp,
+                                step=touch_step,
+                                step_index=touch_idx,
+                                step_result=sr,
+                            )
                             entry = {
                                 "index": touch_idx,
                                 "type": touch_step.get("type", ""),
                                 "ok": True,
                                 "message": "",
-                                "details": {},
+                                "details": {"trace": sr.get("trace")},
                             }
                             _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
                             await _emit_step_events_for_activity(
@@ -1436,12 +1581,18 @@ class DeviceActivities:
                             "ok": ok,
                             "message": message,
                         }
+                        _attach_activity_step_trace(
+                            inp,
+                            step=touch_step,
+                            step_index=touch_idx,
+                            step_result=sr,
+                        )
                         entry = {
                             "index": touch_idx,
                             "type": touch_step.get("type", ""),
                             "ok": ok,
                             "message": message,
-                            "details": {},
+                            "details": {"trace": sr.get("trace")},
                         }
                         _safe_activity_heartbeat(f"batch:{batch_pos + rel}:emit_started")
                         await _emit_step_events_for_activity(
@@ -1518,6 +1669,12 @@ class DeviceActivities:
                     sr.setdefault("ok", False)
                     sr.setdefault("duration_ms", activity_step_duration_ms)
                     sr.setdefault("activity_duration_ms", activity_step_duration_ms)
+                    _attach_activity_step_trace(
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=sr,
+                    )
                     entry = {
                         "index": step_idx,
                         "type": step_type,
@@ -1549,6 +1706,12 @@ class DeviceActivities:
                     sr = dict(step_results[0])
                     sr.setdefault("duration_ms", activity_step_duration_ms)
                     sr.setdefault("activity_duration_ms", activity_step_duration_ms)
+                    _attach_activity_step_trace(
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=sr,
+                    )
                     entry = {
                         "index": step_idx, "type": step_type,
                         "ok": sr.get("ok", False),
@@ -1575,6 +1738,22 @@ class DeviceActivities:
                             "activity_duration_ms": activity_step_duration_ms,
                         },
                     }
+                    _attach_activity_step_trace(
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=entry,
+                    )
+                    entry["details"]["trace"] = entry.get("trace")
+                    _safe_activity_heartbeat(f"batch:{batch_pos}:emit_finished")
+                    await _emit_step_events_for_activity(
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=entry,
+                        phase="finished",
+                        event_context_cache=event_context_cache,
+                    )
             except BaseException as exc:
                 if _is_cancellation_exc(exc):
                     log.info(
@@ -1590,6 +1769,22 @@ class DeviceActivities:
                     raise
                 log.error("[%s] batch step#%d (%s): %s", inp.device_serial, step_idx, step_type, exc)
                 entry = {"index": step_idx, "type": step_type, "ok": False, "message": str(exc)}
+                _attach_activity_step_trace(
+                    inp,
+                    step=step,
+                    step_index=step_idx,
+                    step_result=entry,
+                )
+                entry["details"] = {"trace": entry.get("trace")}
+                with contextlib.suppress(Exception):
+                    await _emit_step_events_for_activity(
+                        inp,
+                        step=step,
+                        step_index=step_idx,
+                        step_result=entry,
+                        phase="finished",
+                        event_context_cache=event_context_cache,
+                    )
 
             results.append(entry)
             if not entry["ok"] and not step.get("ignore_error"):

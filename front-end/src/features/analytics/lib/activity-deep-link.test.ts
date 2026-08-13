@@ -89,3 +89,10 @@ test('activityLogDeepLink returns content detail for content entity', () => {
   );
   assert.equal(link, '/dashboard/content/content-9');
 });
+
+test('activityLogDeepLink returns account detail for account entity', () => {
+  const link = activityLogDeepLink(
+    item({ entity_type: 'account', entity_id: 'account-9' })
+  );
+  assert.equal(link, '/dashboard/accounts?account_id=account-9');
+});

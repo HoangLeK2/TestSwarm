@@ -1,12 +1,12 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -38,6 +38,21 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle
+} from '@/components/ui/sheet';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from '@/components/ui/table';
 import { useExecutionTaskLog } from '@/features/campaigns/hooks/use-campaigns';
 import type { ExecutionTaskLogStep } from '@/features/campaigns/types';
 import { useActivityLog } from '../hooks/use-activity-log';
@@ -45,6 +60,7 @@ import type { ActivityLogItem } from '../services/api';
 import { activityLogDeepLink } from '../lib/activity-deep-link';
 import {
   DEDICATED_ACTIVITY_TITLE_ACTIONS,
+  formatActivityStatus,
   resolveActivityActionLabel,
   resolveDedicatedActivityTitle,
   resolveDomainActivityDescription
@@ -99,12 +115,27 @@ const USER_OPERATION_LABEL_KEY: Record<string, string> = {
   '/api/campaigns/{campaign_id}/pause': 'campaign_pause',
   '/api/campaigns/{campaign_id}/resume': 'campaign_resume',
   '/api/campaigns/{campaign_id}/cancel': 'campaign_cancel',
+  '/api/campaigns/{campaign_id}/dispatch': 'campaign_dispatch',
+  '/api/campaigns/{campaign_id}/execute': 'campaign_execute',
+  '/campaigns/{campaign_id}/dispatch': 'campaign_dispatch',
+  '/campaigns/{campaign_id}/execute': 'campaign_execute',
+  '/auth/login': 'auth_login',
+  '/auth/logout': 'auth_logout',
   '/api/schedules/{schedule_id}/run-now': 'schedule_run_now',
   '/api/schedules/{schedule_id}/toggle': 'schedule_toggle'
 };
 
+type ActivityTone = 'success' | 'error' | 'warning' | 'info' | 'neutral';
+
+type ActivityContextChip = {
+  key: string;
+  label: string;
+  tone?: ActivityTone;
+};
+
 function actionTone(action: string) {
   if (action.startsWith('user.')) return 'text-sky-500';
+  if (action.startsWith('account.action.')) return 'text-emerald-600';
   if (
     action.endsWith('.failed') ||
     action.includes('cancelled') ||
@@ -177,6 +208,28 @@ function firstText(...values: unknown[]): string | null {
   return null;
 }
 
+function shortVisibleId(id: string): string {
+  const trimmed = id.trim();
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 8)}…`;
+}
+
+function chipClassName(tone: ActivityTone = 'neutral') {
+  if (tone === 'success') {
+    return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  }
+  if (tone === 'error') {
+    return 'border-destructive/20 bg-destructive/10 text-destructive';
+  }
+  if (tone === 'warning') {
+    return 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  }
+  if (tone === 'info') {
+    return 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300';
+  }
+  return 'border-border bg-muted/60 text-muted-foreground';
+}
+
 function executionIdForActivity(item: ActivityLogItem): string | null {
   if (item.entity_type === 'execution') {
     return firstText(item.entity_id);
@@ -225,6 +278,80 @@ function getOutcomeLabel(
   return '';
 }
 
+function getActivityTone(item: ActivityLogItem): ActivityTone {
+  if (
+    item.outcome === 'error' ||
+    item.action.endsWith('.failed') ||
+    item.action.includes('dlq.opened') ||
+    item.action.includes('rejected') ||
+    item.action.includes('denied') ||
+    item.action === 'device.error' ||
+    item.action === 'device.disconnect'
+  ) {
+    return 'error';
+  }
+  if (
+    item.outcome === 'rejected' ||
+    item.action.includes('cancelled') ||
+    item.action.includes('paused')
+  ) {
+    return 'warning';
+  }
+  if (
+    item.outcome === 'success' ||
+    item.action.endsWith('.completed') ||
+    item.action.endsWith('.complete') ||
+    item.action.endsWith('.success') ||
+    item.action === 'device.connect' ||
+    item.action === 'task.done'
+  ) {
+    return 'success';
+  }
+  if (
+    item.action.endsWith('.started') ||
+    item.action === 'campaign.run' ||
+    item.action === 'campaign.dispatched' ||
+    item.action === 'session.claimed'
+  ) {
+    return 'info';
+  }
+  return 'neutral';
+}
+
+function getActivityStatusLabel(
+  item: ActivityLogItem,
+  t: ReturnType<typeof useTranslations>
+) {
+  const details = item.details ?? {};
+  const status = firstText(details.status, details.run_status);
+  if (status) return formatActivityStatus(status, t);
+
+  const outcome = getOutcomeLabel(item.outcome, t);
+  if (outcome) return outcome;
+
+  if (
+    item.action.endsWith('.failed') ||
+    item.action.includes('dlq.opened') ||
+    item.action.includes('rejected') ||
+    item.action.includes('denied')
+  ) {
+    return t('stateBadge.error');
+  }
+  if (item.action.includes('cancelled')) return t('stateBadge.cancelled');
+  if (item.action.includes('paused')) return t('stateBadge.paused');
+  if (item.action.endsWith('.completed') || item.action.endsWith('.complete')) {
+    return t('stateBadge.completed');
+  }
+  if (
+    item.action.endsWith('.started') ||
+    item.action === 'campaign.run' ||
+    item.action === 'campaign.dispatched'
+  ) {
+    return t('stateBadge.running');
+  }
+  return '';
+}
+
 function formatDurationMs(ms: number, t: ReturnType<typeof useTranslations>) {
   if (ms >= 1000) {
     return t('duration', { seconds: Math.round(ms / 1000) });
@@ -252,6 +379,22 @@ function getActivityTitle(
   const taskName = String(details.name ?? t('task'));
   if (item.action.startsWith('user.')) {
     return getUserOperationLabel(item, t);
+  }
+  if (item.entity_type === 'account' || item.action.startsWith('account.')) {
+    const accountLabel =
+      firstText(details.account_label, details.account_username) ??
+      item.entity_id ??
+      t('unknownAccount');
+    const actionLabel = getActionLabel(item.action, t);
+    return item.action.startsWith('account.action.')
+      ? t('titles.accountAction', {
+          account: accountLabel,
+          action: actionLabel
+        })
+      : t('titles.accountEvent', {
+          account: accountLabel,
+          event: actionLabel
+        });
   }
 
   switch (item.action) {
@@ -318,6 +461,7 @@ function getActivityCategoryBadge(
 
 function getActivityIcon(action: string) {
   if (action.startsWith('user.')) return MousePointerClick;
+  if (action.startsWith('account.action.')) return ListChecks;
   if (action.startsWith('auth.') || action.startsWith('account.')) {
     return action.includes('success') || action.includes('refresh')
       ? LogIn
@@ -537,7 +681,7 @@ function ActivityTaskLogPreview({
   if (!expanded) return null;
 
   return (
-    <div className='mb-4 ml-10 mr-4 overflow-hidden rounded-md border bg-muted/20'>
+    <div className='overflow-hidden rounded-md border bg-muted/20'>
       <div className='flex min-w-0 flex-wrap items-start justify-between gap-3 border-b bg-background px-4 py-3'>
         <div className='flex min-w-0 gap-3'>
           <div className='flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary'>
@@ -684,6 +828,8 @@ function resolveDeviceDisplay(item: ActivityLogItem): string {
   const details = item.details ?? {};
   const stored = details.device_label;
   if (typeof stored === 'string' && stored.trim()) return stored.trim();
+  const detailSerial = firstText(details.device_serial, details.serial);
+  if (detailSerial) return detailSerial;
   if (item.device_serial?.trim()) return item.device_serial.trim();
   const pathParams = details.path_params;
   const serial = nestedString(pathParams, 'serial');
@@ -707,11 +853,34 @@ function securityContextLine(
   return parts.join(' · ');
 }
 
+function accountContextLine(
+  item: ActivityLogItem,
+  details: Record<string, unknown>,
+  t: ReturnType<typeof useTranslations>
+) {
+  const parts: string[] = [];
+  const platform = firstText(details.account_platform);
+  const target = firstText(details.target_label, details.target_id);
+  const status = firstText(details.status);
+  const device = item.device_serial?.trim();
+  const error = firstText(details.error_message, details.error_code);
+
+  if (platform) parts.push(t('accountPlatformLine', { platform }));
+  if (device) parts.push(t('deviceSerial', { serial: device }));
+  if (target) parts.push(t('accountTargetLine', { target }));
+  if (status) parts.push(formatActivityStatus(status, t));
+  if (error) parts.push(error);
+  return parts.join(' · ');
+}
+
 function getActivityDescription(
   item: ActivityLogItem,
   t: ReturnType<typeof useTranslations>
 ) {
   const details = item.details ?? {};
+  if (item.entity_type === 'account' || item.action.startsWith('account.')) {
+    return accountContextLine(item, details, t);
+  }
   if (
     item.action.startsWith('auth.') ||
     item.action.startsWith('ws.') ||
@@ -787,115 +956,484 @@ function getActivityDescription(
     : '';
 }
 
-function ActivityRow({
+function addContextChip(
+  chips: ActivityContextChip[],
+  key: string,
+  label: string | null | undefined,
+  tone?: ActivityTone
+) {
+  const trimmed = label?.trim();
+  if (!trimmed || chips.some((chip) => chip.label === trimmed)) return;
+  chips.push({ key, label: trimmed, tone });
+}
+
+function getActivityContextChips(
+  item: ActivityLogItem,
+  t: ReturnType<typeof useTranslations>
+): ActivityContextChip[] {
+  const details = item.details ?? {};
+  const chips: ActivityContextChip[] = [];
+  const campaignName = firstText(
+    details.campaign_name,
+    details.campaignName,
+    details.campaign_title,
+    item.entity_type === 'campaign' ? details.name : ''
+  );
+  const campaignId = firstText(
+    details.campaign_id,
+    details.owner_type === 'campaign' ? details.owner_id : '',
+    nestedString(details.path_params, 'campaign_id'),
+    nestedString(details.query_params, 'campaign_id'),
+    item.entity_type === 'campaign' ? item.entity_id : ''
+  );
+  const scenarioName = firstText(
+    details.scenario_name,
+    details.scenarioName,
+    details.org_scenario_name,
+    item.entity_type === 'org_scenario' ? details.name : ''
+  );
+  const scenarioId = firstText(
+    details.scenario_id,
+    details.org_scenario_id,
+    nestedString(details.path_params, 'scenario_id'),
+    nestedString(details.query_params, 'scenario_id'),
+    item.entity_type === 'org_scenario' ? item.entity_id : ''
+  );
+  const executionId = executionIdForActivity(item);
+  const scheduleId = firstText(
+    details.schedule_id,
+    nestedString(details.path_params, 'schedule_id')
+  );
+  const accountLabel = firstText(
+    details.account_label,
+    details.account_username,
+    details.account_email,
+    item.entity_type === 'account' ? item.entity_id : ''
+  );
+  const targetLabel = firstText(details.target_label, details.target_name);
+  const deviceLabel = resolveDeviceDisplay(item);
+
+  if (
+    campaignName ||
+    campaignId ||
+    item.action.startsWith('campaign.') ||
+    item.action.startsWith('execution.')
+  ) {
+    addContextChip(
+      chips,
+      'campaign',
+      campaignName
+        ? t('contextChipCampaign', { value: campaignName })
+        : campaignId
+          ? t('contextChipCampaign', { value: shortVisibleId(campaignId) })
+          : t('contextChipCampaignGeneric'),
+      'info'
+    );
+  }
+  if (
+    scenarioName ||
+    scenarioId ||
+    item.action.startsWith('scenario.') ||
+    item.action.startsWith('execution.')
+  ) {
+    addContextChip(
+      chips,
+      'scenario',
+      scenarioName
+        ? t('contextChipScenario', { value: scenarioName })
+        : scenarioId
+          ? t('contextChipScenario', { value: shortVisibleId(scenarioId) })
+          : t('contextChipScenarioGeneric'),
+      'neutral'
+    );
+  }
+  if (executionId) {
+    addContextChip(
+      chips,
+      'execution',
+      t('contextChipExecution', { value: shortVisibleId(executionId) }),
+      getActivityTone(item)
+    );
+  }
+  if (scheduleId) {
+    addContextChip(
+      chips,
+      'schedule',
+      t('contextChipSchedule', { value: shortVisibleId(scheduleId) })
+    );
+  }
+  if (deviceLabel) {
+    addContextChip(
+      chips,
+      'device',
+      t('contextChipDevice', { value: deviceLabel })
+    );
+  }
+  if (accountLabel) {
+    addContextChip(
+      chips,
+      'account',
+      t('contextChipAccount', { value: accountLabel }),
+      'success'
+    );
+  }
+  if (targetLabel) {
+    addContextChip(
+      chips,
+      'target',
+      t('contextChipTarget', { value: targetLabel })
+    );
+  }
+  if (item.user_name?.trim()) {
+    addContextChip(
+      chips,
+      'actor',
+      t('contextChipActor', { value: item.user_name.trim() })
+    );
+  }
+  return chips.slice(0, 6);
+}
+
+function getActivitySummary(
+  item: ActivityLogItem,
+  fallback: string,
+  t: ReturnType<typeof useTranslations>
+) {
+  if (item.action.startsWith('user.')) {
+    const operation = getUserOperationLabel(item, t);
+    const generic = t('operationLabels.generic');
+    return operation === generic
+      ? t('summary.userAction')
+      : t('summary.userOperation', { operation });
+  }
+  if (item.action.startsWith('account.action.')) {
+    return t('summary.accountAction');
+  }
+  if (item.action.startsWith('account.')) {
+    return t('summary.accountEvent');
+  }
+  if (item.action === 'campaign.dispatched') {
+    return t('summary.campaignDispatched');
+  }
+  if (item.action.startsWith('campaign.')) {
+    return t('summary.campaignChanged');
+  }
+  if (item.action.startsWith('execution.dlq.')) {
+    return t('summary.executionDlq');
+  }
+  if (item.action.startsWith('execution.')) {
+    return t('summary.executionChanged');
+  }
+  if (item.action.startsWith('scenario.')) {
+    return t('summary.scenarioChanged');
+  }
+  if (item.action.startsWith('session.')) {
+    return t('summary.sessionChanged');
+  }
+  if (item.action.startsWith('schedule.')) {
+    return t('summary.scheduleChanged');
+  }
+  if (item.action.startsWith('device.')) {
+    return t('summary.deviceChanged');
+  }
+  if (item.action.startsWith('auth.')) {
+    return t('summary.authEvent');
+  }
+  return fallback;
+}
+
+function ActivityTableRow({
   item,
-  locale
+  locale,
+  selected,
+  onSelect
 }: {
   item: ActivityLogItem;
   locale: string;
+  selected: boolean;
+  onSelect: () => void;
 }) {
   const t = useTranslations('analyticsFeature.activity');
-  const [expandedTaskLog, setExpandedTaskLog] = useState(false);
   const Icon = getActivityIcon(item.action);
   const title = getActivityTitle(item, t);
   const categoryBadge = getActivityCategoryBadge(item, title, t);
   const description = getActivityDescription(item, t);
-  const deepLink = activityLogDeepLink(item);
+  const summary = getActivitySummary(item, description, t);
+  const contextChips = getActivityContextChips(item, t);
+  const statusLabel = getActivityStatusLabel(item, t);
+  const statusTone = getActivityTone(item);
   const taskLogExecutionId = executionIdForActivity(item);
   const hasTaskLog = Boolean(taskLogExecutionId && shouldShowTaskLog(item));
-  const rowClass =
-    'flex gap-3 border-b px-4 py-3 transition-colors last:border-0 min-h-[3.25rem]';
 
-  const inner = (
-    <>
-      <div className='flex size-7 shrink-0 items-center justify-center rounded-md bg-muted'>
-        <Icon size={15} className={actionTone(item.action)} />
-      </div>
-      <div className='min-w-0 flex-1'>
-        <div className='flex items-start justify-between gap-3'>
-          <div className='min-w-0 flex-1 space-y-0.5'>
-            <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
-              <p className='break-words text-sm font-medium leading-snug'>
+  return (
+    <TableRow
+      role='button'
+      tabIndex={0}
+      data-state={selected ? 'selected' : undefined}
+      className='cursor-pointer align-top'
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <TableCell className='w-[44%] min-w-[320px] whitespace-normal px-4 py-3 align-top'>
+        <div className='flex min-w-0 gap-3'>
+          <div className='mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted'>
+            <Icon size={15} className={actionTone(item.action)} />
+          </div>
+          <div className='min-w-0'>
+            <div className='flex min-w-0 flex-wrap items-center gap-2'>
+              <p className='min-w-0 break-words text-sm font-medium leading-snug'>
                 {title}
               </p>
               {categoryBadge ? (
-                <Badge variant='secondary' className='shrink-0 text-[10px]'>
+                <Badge variant='secondary' className='text-[10px]'>
                   {categoryBadge}
                 </Badge>
               ) : null}
             </div>
-            <p
-              className={
-                description
-                  ? 'break-words text-[11px] leading-relaxed text-muted-foreground'
-                  : 'select-none text-[11px] leading-relaxed text-transparent'
-              }
-              aria-hidden={!description}
-            >
-              {description || '\u00a0'}
-            </p>
+            {summary ? (
+              <p className='mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground'>
+                {summary}
+              </p>
+            ) : null}
           </div>
-          <time
-            dateTime={item.created_at}
-            className='shrink-0 whitespace-nowrap pt-0.5 text-xs tabular-nums text-muted-foreground'
-          >
-            {formatDate(item.created_at, locale)}
-          </time>
         </div>
-      </div>
-    </>
+      </TableCell>
+      <TableCell className='min-w-[260px] whitespace-normal px-4 py-3 align-top'>
+        {contextChips.length ? (
+          <div className='flex min-w-0 flex-wrap gap-1.5'>
+            {contextChips.slice(0, 4).map((chip) => (
+              <span
+                key={chip.key}
+                className={cn(
+                  'inline-flex max-w-full items-center rounded border px-2 py-0.5 text-[11px] leading-5',
+                  chipClassName(chip.tone)
+                )}
+                title={chip.label}
+              >
+                <span className='truncate'>{chip.label}</span>
+              </span>
+            ))}
+            {contextChips.length > 4 ? (
+              <span className='inline-flex items-center rounded border bg-muted/60 px-2 py-0.5 text-[11px] leading-5 text-muted-foreground'>
+                {t('contextMore', { count: contextChips.length - 4 })}
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <span className='text-xs text-muted-foreground'>
+            {t('contextEmpty')}
+          </span>
+        )}
+      </TableCell>
+      <TableCell className='w-[140px] px-4 py-3 align-top'>
+        {statusLabel ? (
+          <Badge
+            variant='outline'
+            className={cn(
+              'h-6 whitespace-nowrap px-2 text-[10px] font-medium',
+              chipClassName(statusTone)
+            )}
+          >
+            {statusLabel}
+          </Badge>
+        ) : (
+          <span className='text-xs text-muted-foreground'>-</span>
+        )}
+        {hasTaskLog ? (
+          <p className='mt-2 text-[11px] text-muted-foreground'>
+            {t('tableHasSteps')}
+          </p>
+        ) : null}
+      </TableCell>
+      <TableCell className='w-[130px] whitespace-nowrap px-4 py-3 text-right align-top'>
+        <time
+          dateTime={item.created_at}
+          className='text-xs tabular-nums text-muted-foreground'
+        >
+          {formatDate(item.created_at, locale)}
+        </time>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function ActivityDetailSheet({
+  item,
+  locale,
+  open,
+  onOpenChange
+}: {
+  item: ActivityLogItem | null;
+  locale: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const t = useTranslations('analyticsFeature.activity');
+  const title = item ? getActivityTitle(item, t) : '';
+  const description = item ? getActivityDescription(item, t) : '';
+  const summary = item ? getActivitySummary(item, description, t) : '';
+  const contextChips = item ? getActivityContextChips(item, t) : [];
+  const statusLabel = item ? getActivityStatusLabel(item, t) : '';
+  const statusTone = item ? getActivityTone(item) : 'neutral';
+  const deepLink = item ? activityLogDeepLink(item) : null;
+  const taskLogExecutionId = item ? executionIdForActivity(item) : null;
+  const hasTaskLog = Boolean(
+    item && taskLogExecutionId && shouldShowTaskLog(item)
   );
 
-  if (hasTaskLog && taskLogExecutionId) {
-    return (
-      <div className='border-b last:border-0'>
-        <div className='flex min-h-[3.25rem] gap-3 px-4 py-3'>{inner}</div>
-        <div className='mb-3 ml-10 mr-4 flex flex-wrap items-center gap-2'>
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 px-2 text-xs'
-            aria-expanded={expandedTaskLog}
-            onClick={() => setExpandedTaskLog((value) => !value)}
-          >
-            {expandedTaskLog ? (
-              <ChevronDown className='size-3.5' />
-            ) : (
-              <ChevronRight className='size-3.5' />
-            )}
-            {expandedTaskLog ? t('taskLogHide') : t('taskLogShow')}
-          </Button>
-          {deepLink ? (
-            <Button
-              asChild
-              variant='ghost'
-              size='sm'
-              className='h-7 px-2 text-xs'
-            >
-              <Link href={deepLink}>
-                <ExternalLink className='size-3.5' />
-                {t('taskLogOpenRunHistory')}
-              </Link>
-            </Button>
-          ) : null}
-        </div>
-        <ActivityTaskLogPreview
-          executionId={taskLogExecutionId}
-          expanded={expandedTaskLog}
-        />
-      </div>
-    );
-  }
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className='w-full gap-0 p-0 sm:max-w-xl'>
+        {item ? (
+          <>
+            <SheetHeader className='border-b px-5 py-4 pr-12'>
+              <div className='flex items-start justify-between gap-3'>
+                <div className='min-w-0'>
+                  <SheetTitle className='break-words text-base'>
+                    {title}
+                  </SheetTitle>
+                  <SheetDescription className='mt-1 break-words text-sm'>
+                    {summary || t('detailNoSummary')}
+                  </SheetDescription>
+                </div>
+                {statusLabel ? (
+                  <Badge
+                    variant='outline'
+                    className={cn(
+                      'mt-0.5 h-6 shrink-0 whitespace-nowrap px-2 text-[10px] font-medium',
+                      chipClassName(statusTone)
+                    )}
+                  >
+                    {statusLabel}
+                  </Badge>
+                ) : null}
+              </div>
+            </SheetHeader>
 
-  if (deepLink) {
-    return (
-      <Link href={deepLink} className={`${rowClass} hover:bg-muted/40`}>
-        {inner}
-      </Link>
-    );
-  }
+            <ScrollArea className='h-[calc(100dvh-5rem)]'>
+              <div className='space-y-5 p-5'>
+                <section className='space-y-3'>
+                  <div className='flex items-center justify-between gap-3'>
+                    <h3 className='text-sm font-medium'>
+                      {t('detailContext')}
+                    </h3>
+                    <time
+                      dateTime={item.created_at}
+                      className='text-xs tabular-nums text-muted-foreground'
+                    >
+                      {formatDate(item.created_at, locale)}
+                    </time>
+                  </div>
+                  {contextChips.length ? (
+                    <div className='flex flex-wrap gap-1.5'>
+                      {contextChips.map((chip) => (
+                        <span
+                          key={chip.key}
+                          className={cn(
+                            'inline-flex max-w-full items-center rounded border px-2 py-1 text-xs',
+                            chipClassName(chip.tone)
+                          )}
+                          title={chip.label}
+                        >
+                          <span className='truncate'>{chip.label}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className='text-sm text-muted-foreground'>
+                      {t('contextEmpty')}
+                    </p>
+                  )}
+                </section>
 
-  return <div className={rowClass}>{inner}</div>;
+                <section className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
+                  <div className='rounded-md border p-3'>
+                    <p className='text-[11px] text-muted-foreground'>
+                      {t('detailAction')}
+                    </p>
+                    <p className='mt-1 break-words text-sm font-medium'>
+                      {getActionLabel(item.action, t)}
+                    </p>
+                  </div>
+                  <div className='rounded-md border p-3'>
+                    <p className='text-[11px] text-muted-foreground'>
+                      {t('detailSource')}
+                    </p>
+                    <p className='mt-1 break-words text-sm font-medium'>
+                      {item.route_template ||
+                        item.entity_type ||
+                        t('detailUnknown')}
+                    </p>
+                  </div>
+                </section>
+
+                {hasTaskLog && taskLogExecutionId ? (
+                  <section className='space-y-3'>
+                    <div className='flex items-center justify-between gap-2'>
+                      <h3 className='text-sm font-medium'>
+                        {t('taskLogTitle')}
+                      </h3>
+                      {deepLink ? (
+                        <Button
+                          asChild
+                          variant='outline'
+                          size='sm'
+                          className='h-8'
+                        >
+                          <Link href={deepLink}>
+                            <ExternalLink className='size-3.5' />
+                            {t('taskLogOpenRunHistory')}
+                          </Link>
+                        </Button>
+                      ) : null}
+                    </div>
+                    <ActivityTaskLogPreview
+                      executionId={taskLogExecutionId}
+                      expanded
+                    />
+                  </section>
+                ) : deepLink ? (
+                  <Button asChild variant='outline' size='sm'>
+                    <Link href={deepLink}>
+                      <ExternalLink className='size-3.5' />
+                      {t('detailOpenRelated')}
+                    </Link>
+                  </Button>
+                ) : null}
+
+                <section className='space-y-2'>
+                  <h3 className='text-sm font-medium'>
+                    {t('detailTechnical')}
+                  </h3>
+                  <div className='rounded-md border bg-muted/30 p-3 text-xs'>
+                    <dl className='grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-2'>
+                      <dt className='text-muted-foreground'>
+                        {t('detailEvent')}
+                      </dt>
+                      <dd className='break-all font-mono'>{item.action}</dd>
+                      <dt className='text-muted-foreground'>
+                        {t('detailEntity')}
+                      </dt>
+                      <dd className='break-all font-mono'>
+                        {[item.entity_type, item.entity_id]
+                          .filter(Boolean)
+                          .join(' · ') || '-'}
+                      </dd>
+                    </dl>
+                  </div>
+                </section>
+              </div>
+            </ScrollArea>
+          </>
+        ) : null}
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 const PAGE_SIZE = 50;
@@ -914,35 +1452,91 @@ const ACTION_FILTER_OPTIONS = [
   'execution.cancelled',
   'task.done',
   'task.failed',
-  'schedule.triggered'
+  'schedule.triggered',
+  'account.created',
+  'account.updated',
+  'account.state_changed',
+  'account.device_assigned',
+  'account.device_unassigned',
+  'account.usage_started',
+  'account.usage_ended',
+  'account.session.login_required',
+  'account.session.confirmed',
+  'account.session.invalidated',
+  'account.action'
 ] as const;
 
 export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
   const tPage = useTranslations('analyticsFeature.dashboard');
   const tActivity = useTranslations('analyticsFeature.activity');
   const locale = useLocale();
+  const searchParams = useSearchParams();
+  const accountIdFromUrl = searchParams.get('account_id')?.trim() ?? '';
   const [actionFilter, setActionFilter] = useState<string>('all');
   const [deviceSerial, setDeviceSerial] = useState('');
+  const [accountId, setAccountId] = useState(accountIdFromUrl);
   const [page, setPage] = useState(0);
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(
+    null
+  );
+
+  useEffect(() => {
+    setAccountId(accountIdFromUrl);
+    setPage(0);
+  }, [accountIdFromUrl]);
 
   const query = useMemo(
     () => ({
       action: actionFilter === 'all' ? undefined : actionFilter,
       device_serial: deviceSerial.trim() || undefined,
+      account_id: accountId.trim() || undefined,
       offset: page * PAGE_SIZE,
       limit: PAGE_SIZE
     }),
-    [actionFilter, deviceSerial, page]
+    [accountId, actionFilter, deviceSerial, page]
   );
 
   const { data, isLoading, error, refetch, isFetching } = useActivityLog(query);
-  const activities = data?.activities ?? [];
+  const activities = useMemo(() => data?.activities ?? [], [data?.activities]);
   const total = data?.total ?? activities.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const selectedActivity =
+    activities.find((activity) => activity.id === selectedActivityId) ?? null;
+  const stats = useMemo(() => {
+    let running = 0;
+    let attention = 0;
+    let completed = 0;
+    let accountEvents = 0;
+
+    for (const item of activities) {
+      const tone = getActivityTone(item);
+      if (tone === 'error' || tone === 'warning') attention += 1;
+      if (tone === 'success') completed += 1;
+      if (tone === 'info') running += 1;
+      if (
+        item.entity_type === 'account' ||
+        item.action.startsWith('account.')
+      ) {
+        accountEvents += 1;
+      }
+    }
+
+    return { running, attention, completed, accountEvents };
+  }, [activities]);
+
+  useEffect(() => {
+    if (
+      selectedActivityId &&
+      !activities.some((activity) => activity.id === selectedActivityId)
+    ) {
+      setSelectedActivityId(null);
+    }
+  }, [activities, selectedActivityId]);
 
   const resetFilters = useCallback(() => {
     setActionFilter('all');
     setDeviceSerial('');
+    setAccountId('');
     setPage(0);
   }, []);
 
@@ -984,71 +1578,128 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
         </div>
       </div>
 
-      <div className='flex flex-wrap items-end gap-2'>
-        <div className='space-y-1'>
-          <label className='text-[11px] text-muted-foreground'>
-            {tActivity('filterAction')}
-          </label>
-          <Select
-            value={actionFilter}
-            onValueChange={(v) => {
-              setActionFilter(v);
-              setPage(0);
-            }}
-          >
-            <SelectTrigger className='h-8 w-[200px]'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ACTION_FILTER_OPTIONS.map((key) => (
-                <SelectItem key={key} value={key}>
-                  {key === 'all'
-                    ? tActivity('filterAll')
-                    : getActionLabel(key, tActivity)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      {!embedded ? (
+        <div className='grid grid-cols-2 gap-2 lg:grid-cols-4'>
+          {(
+            [
+              ['running', stats.running],
+              ['attention', stats.attention],
+              ['completed', stats.completed],
+              ['accountEvents', stats.accountEvents]
+            ] as const
+          ).map(([key, value]) => (
+            <Card key={key} className='gap-0 py-0 shadow-sm'>
+              <CardContent className='px-4 py-3'>
+                <p className='text-[11px] text-muted-foreground'>
+                  {tActivity(`statLabels.${key}`)}
+                </p>
+                <p className='mt-1 text-lg font-semibold tabular-nums'>
+                  {value.toLocaleString()}
+                </p>
+              </CardContent>
+            </Card>
+          ))}
         </div>
-        <div className='space-y-1'>
-          <label className='text-[11px] text-muted-foreground'>
-            {tActivity('filterDevice')}
-          </label>
-          <Input
-            className='h-8 w-[180px]'
-            placeholder={tActivity('filterDevicePlaceholder')}
-            value={deviceSerial}
-            onChange={(e) => {
-              setDeviceSerial(e.target.value);
-              setPage(0);
-            }}
-          />
-        </div>
-        {(actionFilter !== 'all' || deviceSerial.trim()) && (
-          <Button
-            variant='ghost'
-            size='sm'
-            className='h-8'
-            onClick={resetFilters}
-          >
-            {tActivity('filterReset')}
-          </Button>
-        )}
-      </div>
+      ) : null}
 
-      <Card className='gap-0 py-0'>
+      <Card className='gap-0 py-0 shadow-sm'>
+        <CardContent className='flex flex-wrap items-end gap-2 px-4 py-3'>
+          <div className='space-y-1'>
+            <label className='text-[11px] text-muted-foreground'>
+              {tActivity('filterAction')}
+            </label>
+            <Select
+              value={actionFilter}
+              onValueChange={(v) => {
+                setActionFilter(v);
+                setPage(0);
+              }}
+            >
+              <SelectTrigger className='h-8 w-[200px]'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className='max-h-[min(22rem,var(--radix-select-content-available-height))]'>
+                {ACTION_FILTER_OPTIONS.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {key === 'all'
+                      ? tActivity('filterAll')
+                      : getActionLabel(key, tActivity)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className='space-y-1'>
+            <label className='text-[11px] text-muted-foreground'>
+              {tActivity('filterDevice')}
+            </label>
+            <Input
+              className='h-8 w-[180px]'
+              placeholder={tActivity('filterDevicePlaceholder')}
+              value={deviceSerial}
+              onChange={(e) => {
+                setDeviceSerial(e.target.value);
+                setPage(0);
+              }}
+            />
+          </div>
+          <div className='space-y-1'>
+            <label className='text-[11px] text-muted-foreground'>
+              {tActivity('filterAccount')}
+            </label>
+            <Input
+              className='h-8 w-[220px]'
+              placeholder={tActivity('filterAccountPlaceholder')}
+              value={accountId}
+              onChange={(e) => {
+                setAccountId(e.target.value);
+                setPage(0);
+              }}
+            />
+          </div>
+          {(actionFilter !== 'all' ||
+            deviceSerial.trim() ||
+            accountId.trim()) && (
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-8'
+              onClick={resetFilters}
+            >
+              {tActivity('filterReset')}
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className='gap-0 overflow-hidden py-0 shadow-sm'>
         <CardContent className='p-0'>
           <ScrollArea
             className={
               embedded
                 ? 'h-[min(520px,calc(100dvh-280px))] min-h-[360px]'
-                : 'h-[calc(100dvh-320px)] min-h-[420px]'
+                : 'h-[calc(100dvh-390px)] min-h-[420px]'
             }
           >
             {isLoading ? (
-              <div className='flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground'>
-                <Loader2 size={16} className='animate-spin' />
-                {tActivity('loading')}
+              <div className='space-y-0 divide-y'>
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className='grid grid-cols-[minmax(320px,1.7fr)_minmax(240px,1fr)_140px_120px] gap-4 px-4 py-4'
+                  >
+                    <div className='space-y-2'>
+                      <div className='h-4 w-2/3 animate-pulse rounded bg-muted' />
+                      <div className='h-3 w-full animate-pulse rounded bg-muted' />
+                    </div>
+                    <div className='flex gap-2'>
+                      <div className='h-6 w-24 animate-pulse rounded bg-muted' />
+                      <div className='h-6 w-28 animate-pulse rounded bg-muted' />
+                    </div>
+                    <div className='h-6 w-20 animate-pulse rounded bg-muted' />
+                    <div className='h-4 w-16 animate-pulse rounded bg-muted' />
+                  </div>
+                ))}
               </div>
             ) : error ? (
               <div className='py-16 text-center text-sm text-destructive'>
@@ -1056,18 +1707,55 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
               </div>
             ) : activities.length === 0 ? (
               <div className='py-16 text-center text-sm text-muted-foreground'>
-                {actionFilter !== 'all' || deviceSerial.trim()
+                {actionFilter !== 'all' ||
+                deviceSerial.trim() ||
+                accountId.trim()
                   ? tActivity('emptyFiltered')
                   : tActivity('empty')}
               </div>
             ) : (
-              activities.map((item: ActivityLogItem) => (
-                <ActivityRow key={item.id} item={item} locale={locale} />
-              ))
+              <Table>
+                <TableHeader className='sticky top-0 z-10 bg-background'>
+                  <TableRow className='hover:bg-transparent'>
+                    <TableHead className='min-w-[320px] px-4'>
+                      {tActivity('tableActivity')}
+                    </TableHead>
+                    <TableHead className='min-w-[260px] px-4'>
+                      {tActivity('tableContext')}
+                    </TableHead>
+                    <TableHead className='w-[140px] px-4'>
+                      {tActivity('tableStatus')}
+                    </TableHead>
+                    <TableHead className='w-[130px] px-4 text-right'>
+                      {tActivity('tableTime')}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {activities.map((item: ActivityLogItem) => (
+                    <ActivityTableRow
+                      key={item.id}
+                      item={item}
+                      locale={locale}
+                      selected={item.id === selectedActivityId}
+                      onSelect={() => setSelectedActivityId(item.id)}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </ScrollArea>
         </CardContent>
       </Card>
+
+      <ActivityDetailSheet
+        item={selectedActivity}
+        locale={locale}
+        open={Boolean(selectedActivity)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedActivityId(null);
+        }}
+      />
 
       {total > PAGE_SIZE ? (
         <div className='flex items-center justify-between gap-2 text-xs text-muted-foreground'>

@@ -254,9 +254,20 @@ export function normalizeTemporalStepLogEntry(
   raw: Record<string, unknown>
 ): StepLogEntry {
   const type = String(raw.step_type ?? raw.type ?? '');
-  const ok = raw.ok !== false;
+  const status = typeof raw.status === 'string' ? raw.status.toLowerCase() : '';
+  const ok =
+    raw.ok !== false &&
+    !['failed', 'error', 'cancelled', 'canceled'].includes(status);
+  const trace =
+    raw.trace && typeof raw.trace === 'object'
+      ? (raw.trace as Record<string, unknown>)
+      : undefined;
+  const details =
+    raw.details && typeof raw.details === 'object'
+      ? (raw.details as Record<string, unknown>)
+      : undefined;
   return {
-    index: Number(raw.index ?? 0),
+    index: Number(raw.index ?? raw.step_index ?? 0),
     occurrence_key:
       typeof raw.occurrence_key === 'string' ? raw.occurrence_key : undefined,
     step_id: typeof raw.step_id === 'string' ? raw.step_id : null,
@@ -265,15 +276,18 @@ export function normalizeTemporalStepLogEntry(
     ok,
     message: typeof raw.message === 'string' ? raw.message : null,
     depth: Number(raw.depth ?? 0),
-    status: ok ? 'completed' : 'failed',
+    status:
+      status === 'running' || status === 'in_progress'
+        ? 'running'
+        : ok
+          ? 'completed'
+          : 'failed',
     output: typeof raw.output === 'string' ? raw.output : null,
     exit_code: typeof raw.exit_code === 'number' ? raw.exit_code : null,
     save_as: typeof raw.save_as === 'string' ? raw.save_as : null,
     output_truncated: Boolean(raw.output_truncated),
-    details:
-      raw.details && typeof raw.details === 'object'
-        ? (raw.details as Record<string, unknown>)
-        : undefined
+    details: trace ? { ...(details ?? {}), trace } : details,
+    trace
   };
 }
 

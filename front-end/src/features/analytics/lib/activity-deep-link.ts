@@ -79,6 +79,9 @@ export function activityLogDeepLink(item: ActivityLogItem): string | null {
   if (entityType === 'content' && entityId) {
     return ROUTES.CONTENT.DETAIL(entityId);
   }
+  if (entityType === 'account' && entityId) {
+    return `${ROUTES.ACCOUNTS.ROOT}?account_id=${encodeURIComponent(entityId)}`;
+  }
   if (item.device_serial?.trim()) {
     return ROUTES.DEVICES.DETAIL(item.device_serial.trim());
   }

@@ -5,6 +5,7 @@ import {
   deriveWorkflowCursor,
   flattenWorkflowSteps,
   mergeStepLogEntries,
+  normalizeTemporalStepLogEntry,
   resolveCurrentRootIndex
 } from './workflow-step-list-model.ts';
 import type { FlowStep } from '../components/scenario-steps/types.ts';
@@ -330,4 +331,19 @@ test('flattenWorkflowSteps labels run_scenario children as scenario steps', () =
   assert.equal(flat[0].branchLabel, undefined);
   assert.equal(flat[1].branchLabel, 'monitorStepBranchScenario');
   assert.equal(flat[1].depth, 1);
+});
+
+test('normalizeTemporalStepLogEntry maps persisted failed status to failed row', () => {
+  const row = normalizeTemporalStepLogEntry({
+    step_index: 7,
+    step_type: 'social_like',
+    status: 'failed',
+    message: 'selector timeout',
+    trace: { account_id: 'acc-1' }
+  });
+
+  assert.equal(row.index, 7);
+  assert.equal(row.ok, false);
+  assert.equal(row.status, 'failed');
+  assert.equal(row.trace?.account_id, 'acc-1');
 });

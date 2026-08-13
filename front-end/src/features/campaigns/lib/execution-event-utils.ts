@@ -80,6 +80,10 @@ export function foldEventsToStepLog(
     const p = (ev.payload ?? {}) as Record<string, unknown>;
     const idx = Number(p.step_index ?? 0);
     const depth = typeof p.depth === 'number' ? p.depth : 0;
+    const trace =
+      p.trace && typeof p.trace === 'object'
+        ? (p.trace as Record<string, unknown>)
+        : undefined;
     const baseKey = `${depth}:${idx}:${String(p.step_id ?? ev.step_id ?? p.step_type ?? '')}`;
 
     if (ev.event_type === 'step.started') {
@@ -102,6 +106,7 @@ export function foldEventsToStepLog(
         message: String(p.message ?? '') || null,
         depth,
         status: 'running',
+        trace: trace ?? existing?.trace,
         incidents: existing?.incidents
       });
     }
@@ -137,6 +142,7 @@ export function foldEventsToStepLog(
           ...p,
           ...(mergeAppAutomationDetails(undefined, p) ?? {})
         },
+        trace: trace ?? existing?.trace,
         incidents: existing?.incidents
       });
       activeByBase.delete(baseKey);
@@ -189,6 +195,7 @@ export function foldEventsToStepLog(
         save_as: existing?.save_as,
         output_truncated: existing?.output_truncated,
         details: existing?.details,
+        trace: trace ?? existing?.trace,
         incidents: [...(existing?.incidents ?? []), incident]
       });
     }

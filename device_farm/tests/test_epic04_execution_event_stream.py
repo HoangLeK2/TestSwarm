@@ -394,6 +394,14 @@ async def test_catch_up_since_event_id(session_factory):
 @pytest.mark.asyncio
 async def test_step_retried_events(session_factory):
     exec_id = await _seed_campaign_execution(session_factory)
+    trace_context = {
+        "execution_id": exec_id,
+        "campaign_id": "camp-1",
+        "device_serial": "phone-001",
+        "account_id": "acc-1",
+        "scenario_name": "Trace Scenario",
+        "password": "must-not-leak",
+    }
     async with session_factory() as db:
         with tenant_context("org-1"):
             await emit_step_started(
@@ -404,6 +412,7 @@ async def test_step_retried_events(session_factory):
                 step={"type": "tap", "id": "s1"},
                 step_index=0,
                 depth=2,
+                trace_context=trace_context,
             )
             await emit_step_finished(
                 db,
@@ -425,11 +434,15 @@ async def test_step_retried_events(session_factory):
                     "extra_data_steps": 1,
                     "scroll_to_flow_ms": 321.0,
                     "scroll_to_swipes": 4,
+                    "account_action_id": "action-1",
+                    "outcome": "applied",
+                    "action_performed": True,
                     "retry_attempts": [
                         {"attempt": 1, "error_reason": "stale_frame", "wait_ms_before_next": 100},
                         {"attempt": 2, "error_reason": None, "wait_ms_before_next": None},
                     ],
                 },
+                trace_context=trace_context,
             )
         await db.commit()
 
@@ -442,7 +455,13 @@ async def test_step_retried_events(session_factory):
     assert rows[0].step_id == "s1"
     assert rows[0].payload["step_id"] == "s1"
     assert rows[0].payload["depth"] == 2
+    assert rows[0].payload["trace"]["device_serial"] == "phone-001"
+    assert rows[0].payload["trace"]["account_id"] == "acc-1"
+    assert rows[0].payload["trace"]["scenario_name"] == "Trace Scenario"
+    assert "password" not in rows[0].payload["trace"]
     assert rows[2].payload["depth"] == 2
+    assert rows[2].payload["trace"]["action"]["account_action_id"] == "action-1"
+    assert rows[2].payload["trace"]["action"]["outcome"] == "applied"
     assert rows[2].payload["duration_ms"] == 123.4
     assert rows[2].payload["extra_data_total_ms"] == 55.0
     assert rows[2].payload["extra_data_dump_ms"] == 40.0

@@ -66,6 +66,18 @@ export const ACTIVITY_ACTION_LABEL_KEYS: Record<string, string> = {
   'account.admin_unlocked': 'account_admin_unlocked',
   'account.rotated': 'account_rotated',
   'account.lock_skipped_last_admin': 'account_lock_skipped_last_admin',
+  'account.created': 'account_created',
+  'account.updated': 'account_updated',
+  'account.state_changed': 'account_state_changed',
+  'account.status_changed': 'account_state_changed',
+  'account.device_assigned': 'account_device_assigned',
+  'account.device_unassigned': 'account_device_unassigned',
+  'account.usage_started': 'account_usage_started',
+  'account.usage_ended': 'account_usage_ended',
+  'account.session.login_required': 'account_session_login_required',
+  'account.session.confirmed': 'account_session_confirmed',
+  'account.session.invalidated': 'account_session_invalidated',
+  'account.action': 'account_action',
   'member.invited': 'member_invited',
   'member.role_changed': 'member_role_changed',
   'password.changed': 'password_changed',
@@ -181,6 +193,17 @@ export function resolveActivityActionLabel(
   action: string,
   t: ActivityTranslate
 ): string {
+  if (action.startsWith('account.action.')) {
+    const actionType = action.slice('account.action.'.length);
+    const labelKey = `actionLabels.account_action_${actionType.replaceAll('.', '_')}`;
+    try {
+      const translated = t(labelKey);
+      if (translated !== labelKey) return translated;
+    } catch {
+      // missing key — fall through
+    }
+    return t('actionLabels.account_action');
+  }
   const labelKey = ACTIVITY_ACTION_LABEL_KEYS[action];
   if (labelKey) {
     return t(`actionLabels.${labelKey}`);
@@ -189,7 +212,7 @@ export function resolveActivityActionLabel(
     return t('actionLabels.user_action');
   }
   if (action.startsWith('auth.') || action.startsWith('account.')) {
-    return t('categoryLabels.security');
+    return t('categoryLabels.account');
   }
   if (action.startsWith('ws.')) {
     return t('categoryLabels.connection');

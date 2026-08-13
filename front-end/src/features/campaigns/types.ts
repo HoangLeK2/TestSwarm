@@ -331,6 +331,7 @@ export type StepLogEntry = {
   save_as?: string | null;
   output_truncated?: boolean;
   details?: Record<string, unknown>;
+  trace?: Record<string, unknown>;
   incidents?: IncidentEvent[];
 };
 
@@ -359,11 +360,13 @@ export type WorkflowStepLog = {
 
 export type ExecutionTraceContext = {
   org_id?: string | null;
+  dispatch_id?: string | null;
   campaign_id?: string | null;
   execution_id: string;
   workflow_id?: string | null;
   scenario_id?: string | null;
   scenario_version_id?: string | null;
+  scenario_plan?: unknown[];
   device_id?: string | null;
   device_serial?: string | null;
   device_name?: string | null;
@@ -394,6 +397,8 @@ export type ExecutionTaskLogStep = {
   duration_ms?: number | null;
   error_json: Record<string, unknown>;
   effective_config_json: Record<string, unknown>;
+  trace?: Record<string, unknown>;
+  account_actions?: Record<string, unknown>[];
   artifacts_json: unknown[];
   attempts_json: unknown[];
   marked_ignored: boolean;
@@ -408,6 +413,7 @@ export type ExecutionTaskLog = {
   context: ExecutionTraceContext;
   summary: ExecutionTaskLogSummary;
   steps: ExecutionTaskLogStep[];
+  account_actions?: Record<string, unknown>[];
   events: ExecutionEventOut[];
   has_more_steps: boolean;
   has_more_events: boolean;

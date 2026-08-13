@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud.execution import get_execution, list_executions
 from db.models.account import Account
+from db.models.account_action import AccountAction
 from db.models.device import Device
 from db.models.execution import Execution, ExecutionDevice
 from db.models.execution_dlq import ExecutionDLQ
@@ -26,6 +27,12 @@ TERMINAL_STEP_STATUSES = {"completed", "passed", "skipped"}
 FAILED_STEP_STATUSES = {"failed", "error"}
 RUNNING_STEP_STATUSES = {"running", "in_progress"}
 ACTION_COUNTER_KEYS = ("matched", "liked", "commented", "skipped")
+
+
+AccountActionIndex = tuple[
+    dict[str, list[AccountAction]],
+    dict[str, AccountAction],
+]
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -112,13 +119,20 @@ def _build_context(
     devices = devices_by_execution.get(execution.id, [])
     device = devices[0] if devices else None
     account = accounts_by_id.get(execution.account_id or "")
+    meta = _safe_dict(execution.meta)
     return {
         "org_id": execution.org_id,
+        "dispatch_id": _first_text(
+            meta.get("dispatch_id"),
+            meta.get("campaign_dispatch_id"),
+            meta.get("dispatch_run_id"),
+        ),
         "campaign_id": execution.campaign_id,
         "execution_id": execution.id,
         "workflow_id": _workflow_id(execution),
         "scenario_id": execution.scenario_id,
         "scenario_version_id": execution.scenario_version_id,
+        "scenario_plan": _safe_list(meta.get("scenario_plan")),
         "device_id": device.id if device else None,
         "device_serial": _device_serial_from_execution(execution, devices),
         "device_name": device.name if device else None,
@@ -128,7 +142,105 @@ def _build_context(
     }
 
 
-def _normalize_step(row: ExecutionStep) -> dict[str, Any]:
+def _normalize_account_action(row: AccountAction) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "account_id": row.account_id,
+        "execution_id": row.execution_id,
+        "step_id": row.step_id,
+        "action_type": row.action_type,
+        "platform": row.platform,
+        "status": row.status,
+        "target": _safe_dict(row.target),
+        "result": _safe_dict(row.result),
+        "artifact_refs": _safe_list(row.artifact_refs),
+        "started_at": row.started_at,
+        "completed_at": row.completed_at,
+        "last_transition_at": row.last_transition_at,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+async def _load_account_actions_by_execution(
+    db: AsyncSession,
+    execution_ids: list[str],
+    *,
+    org_id: str | None = None,
+) -> dict[str, list[AccountAction]]:
+    ids = [execution_id for execution_id in dict.fromkeys(execution_ids) if execution_id]
+    if not ids:
+        return {}
+    stmt = select(AccountAction).where(AccountAction.execution_id.in_(ids))
+    if org_id:
+        stmt = stmt.where(AccountAction.org_id == org_id)
+    result = await db.execute(
+        stmt
+        .order_by(
+            AccountAction.execution_id,
+            AccountAction.created_at,
+            AccountAction.id,
+        )
+    )
+    out: dict[str, list[AccountAction]] = defaultdict(list)
+    for row in result.scalars().all():
+        if row.execution_id:
+            out[row.execution_id].append(row)
+    return dict(out)
+
+
+def _trace_account_action_ids(trace: dict[str, Any]) -> set[str]:
+    action = _safe_dict(trace.get("action"))
+    ids: set[str] = set()
+    single = action.get("account_action_id")
+    if single:
+        ids.add(str(single))
+    for value in _safe_list(action.get("account_action_ids")):
+        if value:
+            ids.add(str(value))
+    return ids
+
+
+def _actions_for_step(
+    row: ExecutionStep,
+    action_index: AccountActionIndex,
+    trace: dict[str, Any],
+) -> list[dict[str, Any]]:
+    actions_by_step, actions_by_id = action_index
+    trace_ids = _trace_account_action_ids(trace)
+    out = list(actions_by_step.get(row.step_id or "", []))
+    for action_id in trace_ids:
+        action = actions_by_id.get(action_id)
+        if action is not None:
+            out.append(action)
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for action in out:
+        if action.id in seen:
+            continue
+        seen.add(action.id)
+        normalized.append(_normalize_account_action(action))
+    return normalized
+
+
+def _build_account_action_index(actions: list[AccountAction]) -> AccountActionIndex:
+    by_step: dict[str, list[AccountAction]] = defaultdict(list)
+    by_id: dict[str, AccountAction] = {}
+    for action in actions:
+        by_id[action.id] = action
+        if action.step_id:
+            by_step[action.step_id].append(action)
+    return dict(by_step), by_id
+
+
+def _normalize_step(
+    row: ExecutionStep,
+    *,
+    account_action_index: AccountActionIndex | None = None,
+) -> dict[str, Any]:
+    effective_config = _safe_dict(row.effective_config_json)
+    trace = _safe_dict(effective_config.get("trace"))
+    action_index = account_action_index or ({}, {})
     return {
         "id": row.id,
         "execution_id": row.execution_id,
@@ -141,7 +253,9 @@ def _normalize_step(row: ExecutionStep) -> dict[str, Any]:
         "ended_at": row.ended_at,
         "duration_ms": row.duration_ms,
         "error_json": _safe_dict(row.error_json),
-        "effective_config_json": _safe_dict(row.effective_config_json),
+        "effective_config_json": effective_config,
+        "trace": trace,
+        "account_actions": _actions_for_step(row, action_index, trace),
         "artifacts_json": _safe_list(row.artifacts_json),
         "attempts_json": _safe_list(row.attempts_json),
         "marked_ignored": row.marked_ignored,
@@ -341,7 +455,14 @@ async def build_execution_task_log(
     with use_tenant_scope(execution.org_id):
         devices_by_execution = await _load_devices_by_execution(db, [execution.id])
         accounts_by_id = await _load_accounts_by_id(db, [execution.account_id])
+        account_actions_by_execution = await _load_account_actions_by_execution(
+            db,
+            [execution.id],
+            org_id=execution.org_id,
+        )
     context = _build_context(execution, devices_by_execution, accounts_by_id)
+    account_actions = account_actions_by_execution.get(execution.id, [])
+    account_action_index = _build_account_action_index(account_actions)
     bounded_step_limit = max(1, min(int(step_limit or 500), 2000))
     steps, has_more_steps = await _list_execution_step_page(
         db,
@@ -366,7 +487,14 @@ async def build_execution_task_log(
         "status": execution.status,
         "context": context,
         "summary": summary,
-        "steps": [_normalize_step(step) for step in steps],
+        "steps": [
+            _normalize_step(step, account_action_index=account_action_index)
+            for step in steps
+        ],
+        "account_actions": [
+            _normalize_account_action(action)
+            for action in account_actions
+        ],
         "events": [_normalize_event(event, context) for event in bounded_events],
         "has_more_steps": has_more_steps,
         "has_more_events": has_more,

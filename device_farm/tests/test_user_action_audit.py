@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -8,10 +10,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from api.routes.analytics import _exclude_device_screen_control_logs
+from api.routes.analytics import _exclude_device_screen_control_logs, _load_account_feed_page
 from auth.jwt_service import issue_access_token
 from db.database import Base
 from db.models.activity import ActivityLog
+from db.models.account import Account
+from db.models.account_action import AccountAction
+from db.models.account_event import AccountEvent
 from services.user_action_audit import (
     AuditWriteDispatcher,
     UserActionAuditMiddleware,
@@ -29,6 +34,14 @@ def test_should_audit_only_mutating_api_requests():
     assert should_audit_request("GET", "/api/campaigns") is False
     assert should_audit_request("OPTIONS", "/api/campaigns") is False
     assert should_audit_request("POST", "/api/analytics/activity") is False
+    assert should_audit_request("POST", "/api/media/webrtc/sessions") is False
+    assert (
+        should_audit_request(
+            "POST",
+            "/api/media/webrtc/sessions/session-1/answer",
+        )
+        is False
+    )
     assert should_audit_request("POST", "/health") is False
 
 
@@ -228,6 +241,22 @@ async def test_activity_history_query_hides_old_realtime_device_control_logs():
                         entity_id="camp-1",
                         details={},
                     ),
+                    ActivityLog(
+                        id="media-1",
+                        action="user.media.answer",
+                        entity_type="media",
+                        entity_id="session-1",
+                        route_template="/api/media/webrtc/sessions/{session_id}/answer",
+                        path="/api/media/webrtc/sessions/session-1/answer",
+                        details={},
+                    ),
+                    ActivityLog(
+                        id="ws-1",
+                        action="ws.connected",
+                        entity_type="session",
+                        entity_id="session-1",
+                        details={},
+                    ),
                 ]
             )
             await db.commit()
@@ -242,3 +271,93 @@ async def test_activity_history_query_hides_old_realtime_device_control_logs():
         await engine.dispose()
 
     assert [row.id for row in rows] == ["campaign-1"]
+
+
+@pytest.mark.asyncio
+async def test_activity_history_unifies_account_events_and_actions():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    try:
+        async with session_factory() as db:
+            db.add(
+                Account(
+                    id="account-1",
+                    org_id="org-1",
+                    user_id="user-1",
+                    platform="facebook",
+                    username="fb-user",
+                    display_name="FB User",
+                )
+            )
+            db.add_all(
+                [
+                    ActivityLog(
+                        id="activity-1",
+                        org_id="org-1",
+                        user_id="user-1",
+                        action="campaign.dispatched",
+                        entity_type="campaign",
+                        entity_id="campaign-1",
+                        details={"campaign_name": "Campaign"},
+                        created_at=now - timedelta(minutes=3),
+                    ),
+                    AccountEvent(
+                        id="event-1",
+                        account_id="account-1",
+                        user_id="user-1",
+                        event_type="account.usage_started",
+                        device_serial="serial-1",
+                        platform="facebook",
+                        details={"token": "secret"},
+                        created_at=now - timedelta(minutes=2),
+                    ),
+                    AccountAction(
+                        id="action-1",
+                        org_id="org-1",
+                        account_id="account-1",
+                        action_key="key-1",
+                        action_type="connection_request",
+                        platform="facebook",
+                        status="succeeded",
+                        status_rank=40,
+                        target={"type": "profile", "label": "Lead A"},
+                        result={"ok": True},
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            total, rows = await _load_account_feed_page(
+                db,
+                SimpleNamespace(id="user-1", org_id="org-1"),
+                action=None,
+                device_serial=None,
+                account_id=None,
+                offset=0,
+                limit=50,
+                activity_stmt=select(ActivityLog).where(ActivityLog.org_id == "org-1"),
+            )
+
+        assert total == 3
+        assert [row.id for row in rows] == [
+            "account_action:action-1",
+            "account_event:event-1",
+            "activity-1",
+        ]
+        assert rows[0].action == "account.action.connection_request"
+        assert rows[0].entity_type == "account"
+        assert rows[0].details["account_label"] == "FB User (fb-user)"
+        assert rows[0].details["target_label"] == "Lead A"
+        assert rows[1].details["token"] == "[REDACTED]"
+    finally:
+        await engine.dispose()

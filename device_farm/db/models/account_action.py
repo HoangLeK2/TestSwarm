@@ -16,6 +16,7 @@ class AccountAction(TenantScopedModel, Base):
     __table_args__ = (
         UniqueConstraint("org_id", "action_key", name="uq_account_actions_org_key"),
         Index("idx_account_actions_account_time", "org_id", "account_id", "created_at", "id"),
+        Index("idx_account_actions_execution_time", "org_id", "execution_id", "created_at", "id"),
         Index("idx_account_actions_active", "status", "last_transition_at", "id"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

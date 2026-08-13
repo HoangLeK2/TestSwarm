@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re as _re
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Union
@@ -13,7 +15,7 @@ from sqlalchemy import select
 
 _SERIAL_RE = _re.compile(r"^[\w.:_\-]{1,128}$")
 
-from api.deps import CurrentUser, DB, require_permission
+from api.deps import CurrentUser, DB, _get_db, require_permission
 from api.org_scope import (
     campaign_visible_to_user,
     data_owner_user_id,
@@ -84,6 +86,7 @@ from services.campaign.service import (
 )
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+log = logging.getLogger(__name__)
 
 
 class StatusUpdate(BaseModel):
@@ -774,6 +777,99 @@ async def preview_campaign_dispatch_route(
     )
 
 
+def _campaign_runtime_db_context(app):
+    override = getattr(app, "dependency_overrides", {}).get(_get_db)
+    if override is not None:
+        return asynccontextmanager(override)()
+
+    from db.database import AsyncSessionLocal
+
+    return AsyncSessionLocal()
+
+
+async def _start_campaign_runtime_background(
+    app,
+    *,
+    fan_out,
+    campaign_id: str,
+    org_id: str,
+    actor_user_id: str,
+) -> None:
+    from db.crud import campaign_entity as campaign_entity_repo
+    from services.campaign.execution_runtime import start_execution_runtime
+
+    async with _campaign_runtime_db_context(app) as db:
+        campaign = await campaign_entity_repo.get_campaign_entity(
+            db, campaign_id, org_id=org_id
+        )
+        if campaign is None:
+            log.warning(
+                "campaign runtime background skipped: campaign not found campaign_id=%s",
+                campaign_id,
+            )
+            return
+
+        config = getattr(app.state, "config", None)
+        temporal_client = None
+        temporal_config = getattr(config, "temporal", None) if config else None
+        if temporal_config is not None and getattr(temporal_config, "enabled", False):
+            temporal_client = getattr(app.state, "temporal_client", None)
+            if temporal_client is None:
+                from temporal.worker import get_temporal_client
+
+                temporal_client = await get_temporal_client(temporal_config)
+                app.state.temporal_client = temporal_client
+
+        await start_execution_runtime(
+            db,
+            fan_out=fan_out,
+            campaign=campaign,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            temporal_client=temporal_client,
+            temporal_config=temporal_config,
+            manager=getattr(app.state, "manager", None),
+            commit_before_start=True,
+        )
+
+
+def _schedule_campaign_runtime_start(
+    app,
+    *,
+    fan_out,
+    campaign_id: str,
+    org_id: str,
+    actor_user_id: str,
+) -> None:
+    task = asyncio.create_task(
+        _start_campaign_runtime_background(
+            app,
+            fan_out=fan_out,
+            campaign_id=campaign_id,
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+        )
+    )
+
+    def _log_runtime_failure(done: asyncio.Task) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            log.warning(
+                "campaign runtime background cancelled campaign_id=%s dispatch_id=%s",
+                campaign_id,
+                getattr(fan_out, "dispatch_id", None),
+            )
+        except Exception:
+            log.exception(
+                "campaign runtime background failed campaign_id=%s dispatch_id=%s",
+                campaign_id,
+                getattr(fan_out, "dispatch_id", None),
+            )
+
+    task.add_done_callback(_log_runtime_failure)
+
+
 @router.post(
     "/{campaign_id}/dispatch",
     response_model=CampaignDispatchOut,
@@ -850,44 +946,65 @@ async def dispatch_campaign_route(
     )
     phase_started = time.perf_counter()
 
-    from db.crud import campaign_entity as campaign_entity_repo
-    from services.campaign.execution_runtime import start_execution_runtime
-
-    campaign = await campaign_entity_repo.get_campaign_entity(
-        db, campaign_id, org_id=org_id
+    inline_default = bool(
+        getattr(request.app, "dependency_overrides", {}).get(_get_db)
     )
-    if campaign is None:
-        raise HTTPException(status_code=404, detail={"code": "CAMPAIGN_NOT_FOUND"})
-    config = getattr(request.app.state, "config", None)
-    temporal_client = await _campaign_temporal_client(request)
-    temporal_config = getattr(config, "temporal", None) if config else None
-    manager = getattr(request.app.state, "manager", None)
-    _runtime_stats = await start_execution_runtime(
-        db,
-        fan_out=result,
-        campaign=campaign,
-        org_id=org_id,
-        actor_user_id=user.id,
-        temporal_client=temporal_client,
-        temporal_config=temporal_config,
-        manager=manager,
-        commit_before_start=True,
+    runtime_start_inline = bool(
+        getattr(
+            request.app.state,
+            "campaign_runtime_start_inline",
+            inline_default,
+        )
     )
+    if runtime_start_inline:
+        from db.crud import campaign_entity as campaign_entity_repo
+        from services.campaign.execution_runtime import start_execution_runtime
 
-    await db.commit()
+        campaign = await campaign_entity_repo.get_campaign_entity(
+            db, campaign_id, org_id=org_id
+        )
+        if campaign is None:
+            raise HTTPException(status_code=404, detail={"code": "CAMPAIGN_NOT_FOUND"})
+        config = getattr(request.app.state, "config", None)
+        temporal_client = await _campaign_temporal_client(request)
+        temporal_config = getattr(config, "temporal", None) if config else None
+        manager = getattr(request.app.state, "manager", None)
+        _runtime_stats = await start_execution_runtime(
+            db,
+            fan_out=result,
+            campaign=campaign,
+            org_id=org_id,
+            actor_user_id=user.id,
+            temporal_client=temporal_client,
+            temporal_config=temporal_config,
+            manager=manager,
+            commit_before_start=True,
+        )
+        await db.commit()
+    else:
+        await db.commit()
+        _schedule_campaign_runtime_start(
+            request.app,
+            fan_out=result,
+            campaign_id=campaign_id,
+            org_id=org_id,
+            actor_user_id=user.id,
+        )
 
     campaign_dispatch_phase_duration_seconds.labels(phase="runtime_start").observe(
         time.perf_counter() - phase_started
     )
     phase_started = time.perf_counter()
 
-    from db.crud.execution import get_executions_by_ids
-
     payload = result.to_dict(include_vars=include_vars)
-    executions_by_id = await get_executions_by_ids(
-        db,
-        [item["execution_id"] for item in payload["executions"]],
-    )
+    executions_by_id = {}
+    if runtime_start_inline:
+        from db.crud.execution import get_executions_by_ids
+
+        executions_by_id = await get_executions_by_ids(
+            db,
+            [item["execution_id"] for item in payload["executions"]],
+        )
     execution_rows: list[CampaignDispatchExecutionOut] = []
     for item in payload["executions"]:
         ex = executions_by_id.get(item["execution_id"])

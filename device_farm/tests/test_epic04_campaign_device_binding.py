@@ -1,6 +1,7 @@
 """Epic 04 DF-T-04-008: campaign device binding & fan-out."""
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -1077,6 +1078,7 @@ async def test_dispatch_response_bulk_loads_execution_metadata(session_factory, 
         for idx in range(12)
     ]
     app = _build_app(session_factory)
+    app.state.campaign_runtime_start_inline = True
     capture_response_queries = False
     individual_execution_reads = 0
 
@@ -1131,6 +1133,69 @@ async def test_dispatch_response_bulk_loads_execution_metadata(session_factory, 
         for row in payload["executions"]
     } == {("temporal", "workflow-bulk")}
     assert individual_execution_reads == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_response_does_not_wait_for_runtime_start(session_factory):
+    await _seed_orgs(session_factory)
+    device_id = await _online_device(session_factory, serial="ASYNC-RUNTIME-01")
+    app = _build_app(session_factory)
+    app.state.campaign_runtime_start_inline = False
+    runtime_started = asyncio.Event()
+    runtime_can_finish = asyncio.Event()
+
+    async def _runtime_stub(db, *, fan_out, **_kwargs):
+        runtime_started.set()
+        await runtime_can_finish.wait()
+        execution_ids = [view.execution_id for view in fan_out.executions]
+        await db.execute(
+            update(Execution)
+            .where(Execution.id.in_(execution_ids))
+            .values(
+                meta={
+                    "dispatch_source": "temporal",
+                    "workflow_id": "workflow-async",
+                }
+            )
+        )
+        return {"temporal": 1, "fallback": 0, "failed": 0, "skipped": 0}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        campaign_id = await _create_campaign(client, name="AsyncRuntimeDispatch")
+        with patch(
+            "services.campaign.execution_runtime.start_execution_runtime",
+            AsyncMock(side_effect=_runtime_stub),
+        ) as runtime_start:
+            response = await asyncio.wait_for(
+                client.post(
+                    f"/api/campaigns/{campaign_id}/dispatch",
+                    json={"target": {"device_ids": [device_id]}},
+                ),
+                timeout=1.0,
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["target_count"] == 1
+            assert payload["executions"][0]["workflow_id"] is None
+
+            await asyncio.wait_for(runtime_started.wait(), timeout=1.0)
+            runtime_start.assert_awaited_once()
+            runtime_can_finish.set()
+
+            execution_id = payload["executions"][0]["execution_id"]
+            for _ in range(20):
+                async with session_factory() as db:
+                    meta = await db.scalar(
+                        select(Execution.meta).where(Execution.id == execution_id)
+                    )
+                if (meta or {}).get("workflow_id") == "workflow-async":
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("background runtime did not persist workflow metadata")
 
 
 @pytest.mark.asyncio

@@ -815,6 +815,7 @@ class ScenarioStepsWorkflow:
         inp: StepsInput,
         step: dict[str, Any],
         step_index: int,
+        runtime_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run one leaf step with DF-T-04-011 retry at workflow level (durable backoff)."""
         policy = parse_step_retry_policy(step)
@@ -856,6 +857,7 @@ class ScenarioStepsWorkflow:
                     execution_id=inp.execution_id or inp.run_id,
                     campaign_id=inp.campaign_id,
                     depth=inp.depth,
+                    context=dict(runtime_context or {}),
                 ),
                 result_type=StepResult,
                 start_to_close_timeout=_LONG_TIMEOUT,
@@ -1601,7 +1603,12 @@ class ScenarioStepsWorkflow:
                 if early is not None:
                     return early
 
-                entry = await self._execute_leaf_with_durable_retry(inp, step, idx)
+                entry = await self._execute_leaf_with_durable_retry(
+                    inp,
+                    step,
+                    idx,
+                    runtime_context=runtime_context,
+                )
                 _append(entry)
                 steps_executed += 1
                 if not entry.get("ok", True):
@@ -2096,10 +2103,32 @@ class ScenarioStepsWorkflow:
         merged_vars = {**(sub_def.get("variables") or {}), **override_vars}
         child_vars = {**inp.variables, **merged_vars}
         sub_steps = sub_def.get("steps") or []
+        parent_trace = runtime_context.get("__scenario_trace__")
+        trace = dict(parent_trace) if isinstance(parent_trace, dict) else {}
+        trace.update(
+            {
+                "scenario_id": scenario_id or sub_def.get("id"),
+                "scenario_name": (
+                    scenario_name
+                    or str(sub_def.get("name") or "").strip()
+                    or scenario_ref
+                ),
+                "scenario_ref_index": step.get("scenario_ref_index"),
+                "scenario_sequence_index": step.get("scenario_sequence_index"),
+                "repeat_index": step.get("repeat_index"),
+                "repeat_count": step.get("repeat_count"),
+            }
+        )
+        trace = {
+            key: value
+            for key, value in trace.items()
+            if value not in (None, "", [], {})
+        }
 
         child_context = {
             **runtime_context,
             "__scenario_call_stack__": [*stack, scenario_ref],
+            "__scenario_trace__": trace,
         }
         child_result = await self._execute_child_steps(
             inp,

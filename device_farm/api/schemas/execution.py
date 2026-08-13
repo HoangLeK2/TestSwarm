@@ -181,11 +181,13 @@ class ExecutionStepOut(BaseModel):
 
 class ExecutionTraceContextOut(BaseModel):
     org_id: Optional[str] = None
+    dispatch_id: Optional[str] = None
     campaign_id: Optional[str] = None
     execution_id: str
     workflow_id: Optional[str] = None
     scenario_id: Optional[str] = None
     scenario_version_id: Optional[str] = None
+    scenario_plan: list[Any] = Field(default_factory=list)
     device_id: Optional[str] = None
     device_serial: Optional[str] = None
     device_name: Optional[str] = None
@@ -216,6 +218,8 @@ class ExecutionTaskLogStepOut(BaseModel):
     duration_ms: Optional[float] = None
     error_json: dict[str, Any] = Field(default_factory=dict)
     effective_config_json: dict[str, Any] = Field(default_factory=dict)
+    trace: dict[str, Any] = Field(default_factory=dict)
+    account_actions: list[dict[str, Any]] = Field(default_factory=list)
     artifacts_json: list[Any] = Field(default_factory=list)
     attempts_json: list[Any] = Field(default_factory=list)
     marked_ignored: bool = False
@@ -242,6 +246,7 @@ class ExecutionTaskLogOut(BaseModel):
     context: ExecutionTraceContextOut
     summary: ExecutionTaskLogSummaryOut
     steps: list[ExecutionTaskLogStepOut] = Field(default_factory=list)
+    account_actions: list[dict[str, Any]] = Field(default_factory=list)
     events: list[dict[str, Any]] = Field(default_factory=list)
     has_more_steps: bool = False
     has_more_events: bool = False

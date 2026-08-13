@@ -37,6 +37,9 @@ DEVICE_SCREEN_CONTROL_PATH_PARTS = (
     "/screenshot",
     "/interrupt",
 )
+MEDIA_PREVIEW_PATH_PREFIXES = (
+    "/api/media/webrtc",
+)
 SENSITIVE_KEY_PARTS = (
     "password",
     "passwd",
@@ -136,6 +139,8 @@ def should_audit_request(method: str, path: str) -> bool:
     if not path.startswith("/api/"):
         return False
     if any(path.startswith(prefix) for prefix in SKIPPED_PREFIXES):
+        return False
+    if any(path.startswith(prefix) for prefix in MEDIA_PREVIEW_PATH_PREFIXES):
         return False
     if path.startswith("/api/devices/") and any(
         part in path for part in DEVICE_SCREEN_CONTROL_PATH_PARTS

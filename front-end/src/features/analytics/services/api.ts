@@ -59,9 +59,17 @@ export const analyticsApi = {
   activity: async (query?: {
     action?: string;
     device_serial?: string;
+    account_id?: string;
     offset?: number;
     limit?: number;
-  }) => (await df().listActivityApiAnalyticsActivityGet(query)).data,
+  }) =>
+    (
+      await df().listActivityApiAnalyticsActivityGet(
+        query as Parameters<
+          ReturnType<typeof df>['listActivityApiAnalyticsActivityGet']
+        >[0]
+      )
+    ).data,
 
   summary: async (windowDays = 7) =>
     (await df().summaryApiAnalyticsSummaryGet({ window_days: windowDays }))

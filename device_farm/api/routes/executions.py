@@ -45,6 +45,7 @@ from api.schemas.execution import (
     ExecutionPatch,
     ExecutionResultOut,
     ExecutionStepOut,
+    ExecutionTaskLogOut,
     FinishBody,
     SummaryOut,
     UpsertResultBody,
@@ -662,6 +663,60 @@ async def dismiss_dlq(dlq_id: str, db: DB, user: CurrentUser):
 
 
 # ── Execution CRUD ────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/{execution_id}/task-log",
+    response_model=ExecutionTaskLogOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
+async def get_execution_task_log(
+    execution_id: str,
+    db: DB,
+    user: CurrentUser,
+    since: _Optional[str] = None,
+    event_limit: int = 200,
+    step_limit: int = 500,
+):
+    """Unified trace for one execution: phone, account, steps, events, DLQ."""
+    await _get_or_404(db, execution_id, user)
+    from services.execution_trace import build_execution_task_log
+
+    norm_since = since.strip() if since else None
+    if norm_since == "":
+        norm_since = None
+    trace = await build_execution_task_log(
+        db,
+        execution_id,
+        since_event_id=norm_since,
+        event_limit=event_limit,
+        step_limit=step_limit,
+    )
+    return ExecutionTaskLogOut.model_validate(trace)
+
+
+@router.get(
+    "/{execution_id}/run-trace",
+    response_model=ExecutionTaskLogOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
+async def get_execution_run_trace(
+    execution_id: str,
+    db: DB,
+    user: CurrentUser,
+    since: _Optional[str] = None,
+    event_limit: int = 200,
+    step_limit: int = 500,
+):
+    """Alias for task-log while the frontend migrates naming."""
+    return await get_execution_task_log(
+        execution_id,
+        db,
+        user,
+        since=since,
+        event_limit=event_limit,
+        step_limit=step_limit,
+    )
 
 
 @router.get(

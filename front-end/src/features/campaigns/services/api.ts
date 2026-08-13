@@ -18,6 +18,7 @@ import type {
   CampaignScenarioRefOut,
   CampaignRunResponse,
   CampaignStatus,
+  CampaignMonitorOut,
   CampaignWorkflowsResponse,
   ScenarioCreate,
   ScenarioOut,
@@ -29,7 +30,8 @@ import type {
   DlqSummary,
   ExecutionOut,
   ExecutionArtifact,
-  ExecutionEventOut
+  ExecutionEventOut,
+  ExecutionTaskLog
 } from '../types';
 import type {
   ContinuousCrawlControl,
@@ -51,6 +53,7 @@ export type {
   CampaignOut,
   CampaignRunResponse,
   CampaignStatus,
+  CampaignMonitorOut,
   CampaignWorkflowsResponse,
   ScenarioCreate,
   ScenarioOut,
@@ -61,7 +64,8 @@ export type {
   DlqBulkRetryResult,
   DlqSummary,
   ExecutionOut,
-  ExecutionArtifact
+  ExecutionArtifact,
+  ExecutionTaskLog
 } from '../types';
 
 export type { CampaignDispatchOut, CampaignEntityOut, CampaignAccountBindIn };
@@ -283,6 +287,14 @@ export const campaignsApi = {
         }
         return row;
       }),
+  monitor: (id: string, params?: { limit?: number }) =>
+    farmApi
+      .get<CampaignMonitorOut>(`/campaigns/${encodeURIComponent(id)}/monitor`, {
+        params: {
+          ...(params?.limit != null ? { limit: params.limit } : {})
+        }
+      })
+      .then((r) => r.data),
   runStats: (id: string) =>
     farmApi
       .get<{
@@ -708,6 +720,26 @@ export const executionsApi = {
           params: {
             ...(params?.since ? { since: params.since } : {}),
             ...(params?.limit != null ? { limit: params.limit } : {})
+          }
+        }
+      )
+      .then((r) => r.data),
+  taskLog: (
+    executionId: string,
+    params?: { since?: string | null; eventLimit?: number; stepLimit?: number }
+  ) =>
+    farmApi
+      .get<ExecutionTaskLog>(
+        `/executions/${encodeURIComponent(executionId)}/task-log`,
+        {
+          params: {
+            ...(params?.since ? { since: params.since } : {}),
+            ...(params?.eventLimit != null
+              ? { event_limit: params.eventLimit }
+              : {}),
+            ...(params?.stepLimit != null
+              ? { step_limit: params.stepLimit }
+              : {})
           }
         }
       )

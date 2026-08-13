@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import activity_log_scope, data_owner_user_id
@@ -21,6 +21,7 @@ from db.models.analytics import MetricRollupDaily, MetricRollupWeekly
 from db.models.activity import ActivityLog
 from services.analytics_query import AnalyticsQueryError, analytics_query_from_payload
 from services.activity_presenter import present_activity_logs
+from services.user_action_audit import DEVICE_SCREEN_CONTROL_PATH_PARTS
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -53,6 +54,25 @@ def _redact(value: Any) -> Any:
     return value
 
 
+def _exclude_device_screen_control_logs(stmt):
+    route_or_path_matches = or_(
+        *[
+            or_(
+                ActivityLog.route_template.contains(part),
+                ActivityLog.path.contains(part),
+            )
+            for part in DEVICE_SCREEN_CONTROL_PATH_PARTS
+        ]
+    )
+    return stmt.where(
+        ~(
+            (ActivityLog.entity_type == "devices")
+            & ActivityLog.action.startswith("user.devices.")
+            & route_or_path_matches
+        )
+    )
+
+
 @router.get(
     "/activity",
     response_model=ActivityLogListOut,
@@ -70,6 +90,8 @@ async def list_activity(
     scope = await activity_log_scope(db, user)
     q = select(ActivityLog).where(scope)
     count_q = select(func.count(ActivityLog.id)).where(scope)
+    q = _exclude_device_screen_control_logs(q)
+    count_q = _exclude_device_screen_control_logs(count_q)
 
     if action:
         q = q.where(ActivityLog.action == action)

@@ -16,7 +16,7 @@ function item(partial: Partial<ActivityLogItem>): ActivityLogItem {
   } as ActivityLogItem;
 }
 
-test('activityLogDeepLink returns campaign list deep link for campaign entity', () => {
+test('activityLogDeepLink returns campaign run log for runtime campaign activity', () => {
   const link = activityLogDeepLink(
     item({
       entity_type: 'campaign',
@@ -24,7 +24,33 @@ test('activityLogDeepLink returns campaign list deep link for campaign entity', 
       action: 'campaign.complete'
     })
   );
+  assert.equal(link, '/dashboard/campaigns?campaign_id=camp-42&panel=run-log');
+});
+
+test('activityLogDeepLink returns campaign detail for non-runtime campaign entity', () => {
+  const link = activityLogDeepLink(
+    item({
+      entity_type: 'campaign',
+      entity_id: 'camp-42',
+      action: 'campaign.updated'
+    })
+  );
   assert.equal(link, '/dashboard/campaigns?campaign_id=camp-42');
+});
+
+test('activityLogDeepLink returns campaign run log for execution activity', () => {
+  const link = activityLogDeepLink(
+    item({
+      entity_type: 'execution',
+      entity_id: 'exec-1',
+      action: 'execution.failed',
+      details: { campaign_id: 'camp-42' }
+    })
+  );
+  assert.equal(
+    link,
+    '/dashboard/campaigns?campaign_id=camp-42&panel=run-log&execution_id=exec-1'
+  );
 });
 
 test('activityLogDeepLink returns device detail for device serial', () => {

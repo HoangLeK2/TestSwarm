@@ -35,9 +35,17 @@ function screenHeightForDevicePx(
   deviceWidth?: number,
   deviceHeight?: number
 ): number {
-  const safeDeviceWidth = Math.max(1, Number(deviceWidth) || 0);
-  const safeDeviceHeight = Math.max(1, Number(deviceHeight) || 0);
-  return Math.round((screenWidth * safeDeviceHeight) / safeDeviceWidth);
+  const safeDeviceWidth = Number(deviceWidth);
+  const safeDeviceHeight = Number(deviceHeight);
+  if (
+    Number.isFinite(safeDeviceWidth) &&
+    Number.isFinite(safeDeviceHeight) &&
+    safeDeviceWidth > 0 &&
+    safeDeviceHeight > 0
+  ) {
+    return Math.round((screenWidth * safeDeviceHeight) / safeDeviceWidth);
+  }
+  return mockupPortraitScreenHeightPx(screenWidth);
 }
 
 export function mockupFrameWidthPx(screenWidth: number): number {

@@ -177,3 +177,96 @@ class ExecutionStepOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ExecutionTraceContextOut(BaseModel):
+    org_id: Optional[str] = None
+    campaign_id: Optional[str] = None
+    execution_id: str
+    workflow_id: Optional[str] = None
+    scenario_id: Optional[str] = None
+    scenario_version_id: Optional[str] = None
+    device_id: Optional[str] = None
+    device_serial: Optional[str] = None
+    device_name: Optional[str] = None
+    account_id: Optional[str] = None
+    account_label: Optional[str] = None
+    account_platform: Optional[str] = None
+
+
+class ExecutionTaskLogSummaryOut(BaseModel):
+    total_steps: int = 0
+    completed_steps: int = 0
+    failed_steps: int = 0
+    running_steps: int = 0
+    current_step_index: Optional[int] = None
+    counters: dict[str, int] = Field(default_factory=dict)
+
+
+class ExecutionTaskLogStepOut(BaseModel):
+    id: str
+    execution_id: str
+    device_id: Optional[str] = None
+    step_index: int
+    step_id: Optional[str] = None
+    step_type: Optional[str] = None
+    status: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration_ms: Optional[float] = None
+    error_json: dict[str, Any] = Field(default_factory=dict)
+    effective_config_json: dict[str, Any] = Field(default_factory=dict)
+    artifacts_json: list[Any] = Field(default_factory=list)
+    attempts_json: list[Any] = Field(default_factory=list)
+    marked_ignored: bool = False
+    message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExecutionTaskLogDlqOut(BaseModel):
+    id: str
+    status: str
+    device_serial: str
+    error: Optional[str] = None
+    failed_step_id: Optional[str] = None
+    failure_reason: Optional[str] = None
+    failed_at: Optional[datetime] = None
+    artifact_refs: dict[str, Any] = Field(default_factory=dict)
+    retry_count: int = 0
+
+
+class ExecutionTaskLogOut(BaseModel):
+    execution_id: str
+    status: str
+    context: ExecutionTraceContextOut
+    summary: ExecutionTaskLogSummaryOut
+    steps: list[ExecutionTaskLogStepOut] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    has_more_steps: bool = False
+    has_more_events: bool = False
+    last_event_id: Optional[str] = None
+    dlq: Optional[ExecutionTaskLogDlqOut] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+
+class CampaignMonitorExecutionOut(BaseModel):
+    execution_id: str
+    status: str
+    context: ExecutionTraceContextOut
+    summary: ExecutionTaskLogSummaryOut
+    current_step_type: Optional[str] = None
+    message: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    last_event_at: Optional[datetime] = None
+
+
+class CampaignMonitorOut(BaseModel):
+    campaign_id: str
+    total: int
+    limit: int
+    executions: list[CampaignMonitorExecutionOut] = Field(default_factory=list)

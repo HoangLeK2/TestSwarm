@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Play,
   Pause,
@@ -9,6 +9,7 @@ import {
   Trash2,
   MoreHorizontal,
   BarChart3,
+  History,
   MonitorPlay,
   Pencil
 } from 'lucide-react';
@@ -35,6 +36,7 @@ import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { ScenarioListDialog } from '../scenario-list-dialog';
 import { EditCampaignEntityDialog } from '../edit-campaign-entity-dialog';
 import { CampaignMonitorDialog } from '../campaign-monitor';
+import { CampaignRunHistoryDialog } from '../campaign-run-history-dialog';
 import { ROUTES } from '@/config/routes';
 import { cn } from '@/lib/utils';
 import {
@@ -88,14 +90,27 @@ export function CampaignRowActions({
   const confirm = useConfirm();
   const perms = useResourcePermissions('campaigns');
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const linkedRunHistory =
+    searchParams.get('campaign_id') === campaign.id &&
+    searchParams.get('panel') === 'run-log';
+  const linkedExecutionId = linkedRunHistory
+    ? searchParams.get('execution_id')
+    : null;
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [dispatchDialogOpen, setDispatchDialogOpen] = useState(false);
   const [automationDialogOpen, setAutomationDialogOpen] = useState(false);
+  const [runHistoryOpen, setRunHistoryOpen] = useState(linkedRunHistory);
   const [resumeAutomationReview, setResumeAutomationReview] = useState(false);
   const [addDevicesOpen, setAddDevicesOpen] = useState(false);
   const [scenarioOpen, setScenarioOpen] = useState(false);
   const [entityEditOpen, setEntityEditOpen] = useState(false);
+
+  useEffect(() => {
+    if (linkedRunHistory) setRunHistoryOpen(true);
+  }, [linkedRunHistory]);
+
   const detailNeeded =
     runDialogOpen ||
     dispatchDialogOpen ||
@@ -635,6 +650,13 @@ export function CampaignRowActions({
                   {t('titleContent')}
                 </Link>
               </DropdownMenuItem>
+              <DropdownMenuItem
+                className='gap-2'
+                onClick={() => setRunHistoryOpen(true)}
+              >
+                <History size={14} />
+                {t('titleRunHistory')}
+              </DropdownMenuItem>
 
               {perms.canUpdate && isEntityCampaign ? (
                 <DropdownMenuItem
@@ -705,6 +727,12 @@ export function CampaignRowActions({
             setAutomationDialogOpen(true);
           }
         }}
+      />
+      <CampaignRunHistoryDialog
+        campaign={campaign}
+        open={runHistoryOpen}
+        onOpenChange={setRunHistoryOpen}
+        initialExecutionId={linkedExecutionId}
       />
     </div>
   );

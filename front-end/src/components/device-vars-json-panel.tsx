@@ -471,90 +471,94 @@ export function DeviceVarsJsonPanel({
                 {t('formJsonInvalid')}
               </div>
             ) : (
-              <div className='flex min-h-0 flex-1 flex-col gap-4'>
-                <section className='min-h-0 space-y-2'>
-                  <div className='flex flex-wrap items-center justify-between gap-2'>
-                    <p className='text-xs font-medium'>
-                      {t('otherVariablesTitle')}
-                    </p>
-                    {missingTemplateKeys.length > 0 ? (
+              <ScrollArea className='min-h-0 min-w-0 flex-1 overflow-hidden pr-3'>
+                <div className='min-w-0 max-w-full space-y-4 overflow-hidden pb-1'>
+                  <section className='min-w-0 space-y-2 overflow-hidden'>
+                    <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                      <p className='text-xs font-medium'>
+                        {t('otherVariablesTitle')}
+                      </p>
+                      {missingTemplateKeys.length > 0 ? (
+                        <Select
+                          value=''
+                          disabled={loading || parsedDraft === null}
+                          onValueChange={addTemplateKey}
+                        >
+                          <SelectTrigger className='h-8 w-full text-xs sm:w-48'>
+                            <SelectValue
+                              placeholder={t('addGlobalKeySelect')}
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {missingTemplateKeys.map((key) => (
+                              <SelectItem key={key} value={key}>
+                                {key}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : null}
+                    </div>
+                    {formVariableEntries.length > 0 ? (
+                      <VariablesFieldGrid
+                        entries={formVariableEntries}
+                        readOnly={false}
+                        disabled={loading}
+                        onApply={handleFormVariableChange}
+                        globalBaseline={globalPreview}
+                        globalHint={(value) => t('globalValueHint', { value })}
+                      />
+                    ) : (
+                      <p className='rounded-md border border-dashed bg-muted/10 px-3 py-4 text-center text-xs text-muted-foreground'>
+                        {t('otherVariablesEmpty')}
+                      </p>
+                    )}
+                  </section>
+
+                  <section className='min-w-0 space-y-3 overflow-hidden rounded-md border bg-muted/10 p-3'>
+                    <div className='grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,12rem)] sm:items-end'>
+                      <div className='min-w-0'>
+                        <p className='text-xs font-medium'>
+                          {t('targetFormTitle')}
+                        </p>
+                        <p className='mt-0.5 text-[11px] text-muted-foreground'>
+                          {specialForm === 'facebookTargets'
+                            ? t('specialFormFacebookHint')
+                            : t('specialFormNoneHint')}
+                        </p>
+                      </div>
                       <Select
-                        value=''
-                        disabled={loading || parsedDraft === null}
-                        onValueChange={addTemplateKey}
+                        value={specialForm}
+                        disabled={loading}
+                        onValueChange={(value) =>
+                          handleSpecialFormChange(
+                            value as 'none' | 'facebookTargets'
+                          )
+                        }
                       >
-                        <SelectTrigger className='h-8 w-full text-xs sm:w-48'>
-                          <SelectValue placeholder={t('addGlobalKeySelect')} />
+                        <SelectTrigger className='h-8 w-full min-w-0 text-xs [&_[data-slot=select-value]]:truncate'>
+                          <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {missingTemplateKeys.map((key) => (
-                            <SelectItem key={key} value={key}>
-                              {key}
-                            </SelectItem>
-                          ))}
+                          <SelectItem value='none'>
+                            {t('specialFormNone')}
+                          </SelectItem>
+                          <SelectItem value='facebookTargets'>
+                            {t('specialFormFacebook')}
+                          </SelectItem>
                         </SelectContent>
                       </Select>
-                    ) : null}
-                  </div>
-                  {formVariableEntries.length > 0 ? (
-                    <VariablesFieldGrid
-                      entries={formVariableEntries}
-                      readOnly={false}
-                      disabled={loading}
-                      onApply={handleFormVariableChange}
-                      globalBaseline={globalPreview}
-                      globalHint={(value) => t('globalValueHint', { value })}
-                    />
-                  ) : (
-                    <p className='rounded-md border border-dashed bg-muted/10 px-3 py-4 text-center text-xs text-muted-foreground'>
-                      {t('otherVariablesEmpty')}
-                    </p>
-                  )}
-                </section>
-
-                <section className='min-h-0 space-y-2 rounded-md border bg-muted/10 p-3'>
-                  <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-end'>
-                    <div className='min-w-0'>
-                      <p className='text-xs font-medium'>
-                        {t('targetFormTitle')}
-                      </p>
-                      <p className='mt-0.5 text-[11px] text-muted-foreground'>
-                        {specialForm === 'facebookTargets'
-                          ? t('specialFormFacebookHint')
-                          : t('specialFormNoneHint')}
-                      </p>
                     </div>
-                    <Select
-                      value={specialForm}
-                      disabled={loading}
-                      onValueChange={(value) =>
-                        handleSpecialFormChange(
-                          value as 'none' | 'facebookTargets'
-                        )
-                      }
-                    >
-                      <SelectTrigger className='h-8'>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='none'>
-                          {t('specialFormNone')}
-                        </SelectItem>
-                        <SelectItem value='facebookTargets'>
-                          {t('specialFormFacebook')}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {specialForm === 'facebookTargets' ? (
-                    <DeviceVarsFacebookTargetForm
-                      vars={parsedDraft}
-                      disabled={loading}
-                      onChange={handleTargetFormChange}
-                    />
-                  ) : null}
-                </section>
-              </div>
+                    {specialForm === 'facebookTargets' ? (
+                      <DeviceVarsFacebookTargetForm
+                        vars={parsedDraft}
+                        disabled={loading}
+                        onChange={handleTargetFormChange}
+                      />
+                    ) : null}
+                  </section>
+                </div>
+              </ScrollArea>
             )
           ) : (
             <>

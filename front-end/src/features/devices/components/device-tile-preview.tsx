@@ -151,6 +151,66 @@ function HealthIndicator({
 
 type PreviewWarmupState = 'idle' | 'queued' | 'attaching' | 'live' | 'error';
 
+function PreviewLoadingSurface({
+  label,
+  showSpinner = true,
+  failed = false,
+  onRetry,
+  retryLabel
+}: {
+  label: string;
+  showSpinner?: boolean;
+  failed?: boolean;
+  onRetry?: () => void;
+  retryLabel?: string;
+}) {
+  return (
+    <div className='absolute inset-0 z-10 overflow-hidden bg-zinc-950'>
+      <div className='absolute inset-x-0 top-0 h-10 bg-zinc-900/80' />
+      <div className='absolute left-3 right-3 top-14 space-y-3 opacity-70'>
+        <div className='h-3 w-1/2 rounded-full bg-zinc-700/80' />
+        <div className='h-24 rounded-md bg-zinc-800/80' />
+        <div className='grid grid-cols-3 gap-2'>
+          <div className='h-7 rounded bg-zinc-800/70' />
+          <div className='h-7 rounded bg-zinc-800/70' />
+          <div className='h-7 rounded bg-zinc-800/70' />
+        </div>
+        <div className='h-20 rounded-md bg-zinc-900/90' />
+      </div>
+      <div className='absolute inset-x-0 bottom-0 h-9 bg-zinc-900/85' />
+      <div className='absolute inset-0 flex items-center justify-center px-3 text-center'>
+        <div
+          className={cn(
+            'flex max-w-[82%] items-center gap-2 rounded-full border px-3 py-2 text-[10px] shadow-sm backdrop-blur',
+            failed
+              ? 'border-amber-400/25 bg-amber-950/45 text-amber-100'
+              : 'border-white/10 bg-black/35 text-zinc-200'
+          )}
+        >
+          {showSpinner ? (
+            <span
+              className='size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent opacity-80'
+              aria-hidden
+            />
+          ) : null}
+          <span className='min-w-0 truncate'>{label}</span>
+        </div>
+      </div>
+      {onRetry ? (
+        <Button
+          type='button'
+          variant='secondary'
+          size='sm'
+          className='absolute bottom-12 left-1/2 h-7 -translate-x-1/2 text-xs'
+          onClick={onRetry}
+        >
+          {retryLabel}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function DashboardWebRtcPreview({
   device,
   active
@@ -223,34 +283,22 @@ function DashboardWebRtcPreview({
       />
       <div
         className={cn(
-          'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-300',
+          'absolute inset-0 z-10 transition-opacity duration-300',
           hasFrame ? 'pointer-events-none opacity-0' : 'opacity-100'
         )}
         aria-live='polite'
         aria-hidden={hasFrame}
       >
         {!webrtc.failed || webrtc.connecting ? (
-          <>
-            <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
-            <p className='mt-2 text-[10px] text-muted-foreground'>
-              {t('streamWaitingFirstFrame')}
-            </p>
-          </>
+          <PreviewLoadingSurface label={t('streamWaitingFirstFrame')} />
         ) : (
-          <>
-            <p className='px-2 text-center text-[10px] text-amber-200/90'>
-              {t('streamUnresponsive')}
-            </p>
-            <Button
-              type='button'
-              variant='secondary'
-              size='sm'
-              className='mt-2 h-7 text-xs'
-              onClick={retryNow}
-            >
-              {t('retry')}
-            </Button>
-          </>
+          <PreviewLoadingSurface
+            label={t('streamUnresponsive')}
+            showSpinner={false}
+            failed
+            onRetry={retryNow}
+            retryLabel={t('retry')}
+          />
         )}
       </div>
     </>
@@ -615,16 +663,6 @@ function DeviceTilePreviewInner({
                 {t('controlDevice')}
               </Button>
             )}
-            <Button
-              asChild
-              size='sm'
-              variant='outline'
-              className='h-8 min-w-0 flex-1 px-3 text-xs font-semibold'
-            >
-              <Link href={`${ROUTES.DEVICES.DETAIL(device.serial)}#accounts`}>
-                {t('deviceAccounts')}
-              </Link>
-            </Button>
           </div>
           <div className='mt-2 grid grid-cols-3 gap-1'>
             <HealthIndicator
@@ -722,36 +760,31 @@ function DeviceTilePreviewInner({
                     {t('deviceInactive')}
                   </div>
                 ) : !loadStream ? (
-                  <div className='absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-zinc-800 to-zinc-950 px-2 text-center'>
-                    {previewEnabled ? (
-                      <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400/70 border-t-transparent' />
-                    ) : null}
-                    <p className='text-[10px] text-muted-foreground'>
-                      {previewEnabled
+                  <PreviewLoadingSurface
+                    label={
+                      previewEnabled
                         ? t('previewScrollToLoad')
-                        : t('previewDeferred')}
-                    </p>
-                  </div>
+                        : t('previewDeferred')
+                    }
+                    showSpinner={previewEnabled}
+                  />
                 ) : shouldUseWebRtcPreview ? null : (
                   <div
                     className={cn(
-                      'absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-b from-zinc-800 to-zinc-950 transition-opacity duration-500',
+                      'absolute inset-0 z-10 transition-opacity duration-500',
                       hasFrame ? 'pointer-events-none opacity-0' : 'opacity-100'
                     )}
                     aria-live='polite'
                     aria-hidden={hasFrame}
                   >
                     {!isUnresponsive ? (
-                      <>
-                        <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
-                        <p className='mt-2 text-[10px] text-muted-foreground'>
-                          {t('streamWaitingFirstFrame')}
-                        </p>
-                      </>
+                      <PreviewLoadingSurface label={t('streamWaitingFirstFrame')} />
                     ) : (
-                      <p className='px-2 text-center text-[10px] text-amber-200/90'>
-                        {t('streamUnresponsive')}
-                      </p>
+                      <PreviewLoadingSurface
+                        label={t('streamUnresponsive')}
+                        showSpinner={false}
+                        failed
+                      />
                     )}
                   </div>
                 )}

@@ -379,6 +379,127 @@ def _fb_post_like_and_comment_steps(
     ]
 
 
+def _fb_publish_post_steps() -> List[Dict[str, Any]]:
+    """Create a Facebook post from the current logged-in home surface."""
+    return [
+        {
+            "id": "publish_post_open_composer_primary",
+            "type": "if_element",
+            "by": "text",
+            "value": "${POST_COMPOSER_LABEL}",
+            "timeout": 5,
+            "then": [
+                {
+                    "type": "tap_selector",
+                    "by": "text",
+                    "value": "${POST_COMPOSER_LABEL}",
+                    "timeout": 3,
+                }
+            ],
+            "else": [
+                {
+                    "type": "if_element",
+                    "by": "descriptionContains",
+                    "value": "${POST_COMPOSER_LABEL_FALLBACK}",
+                    "timeout": 2,
+                    "then": [
+                        {
+                            "type": "tap_selector",
+                            "by": "descriptionContains",
+                            "value": "${POST_COMPOSER_LABEL_FALLBACK}",
+                            "timeout": 3,
+                        }
+                    ],
+                    "else": [
+                        {
+                            "type": "tap_ratio",
+                            "x": 0.5,
+                            "y": 0.225,
+                        }
+                    ],
+                }
+            ],
+        },
+        {
+            "id": "publish_post_composer_ready",
+            "type": "wait_stable",
+            "timeout": 5,
+            "stable_duration": 0.45,
+        },
+        {
+            "id": "publish_post_focus_textarea",
+            "type": "tap_ratio",
+            "x": 0.45,
+            "y": 0.34,
+        },
+        {
+            "id": "publish_post_input_text",
+            "type": "input_text",
+            "via": "u2",
+            "text": "${POST_TEXT}",
+            "clear_first": False,
+        },
+        {"id": "publish_post_text_settle", "type": "wait", "seconds": 0.5},
+        {
+            "id": "publish_post_next",
+            "type": "if_element",
+            "by": "text",
+            "value": "${POST_NEXT_LABEL}",
+            "timeout": 4,
+            "then": [
+                {
+                    "type": "tap_selector",
+                    "by": "text",
+                    "value": "${POST_NEXT_LABEL}",
+                    "timeout": 4,
+                }
+            ],
+            "else": [
+                {
+                    "type": "tap_ratio",
+                    "x": 0.85,
+                    "y": 0.955,
+                }
+            ],
+        },
+        {
+            "id": "publish_post_preview_ready",
+            "type": "wait_stable",
+            "timeout": 6,
+            "stable_duration": 0.5,
+        },
+        {
+            "id": "publish_post_submit",
+            "type": "if_element",
+            "by": "text",
+            "value": "${POST_SUBMIT_LABEL}",
+            "timeout": 4,
+            "then": [
+                {
+                    "type": "tap_selector",
+                    "by": "text",
+                    "value": "${POST_SUBMIT_LABEL}",
+                    "timeout": 4,
+                }
+            ],
+            "else": [
+                {
+                    "type": "tap_ratio",
+                    "x": 0.5,
+                    "y": 0.955,
+                }
+            ],
+        },
+        {
+            "id": "publish_post_wait_uploaded",
+            "type": "wait_stable",
+            "timeout": 12,
+            "stable_duration": 0.8,
+        },
+        {"id": "publish_post_dismiss_after_post", "type": "dismiss_popup", "retries": 2},
+    ]
+
+
 def _fb_set_page_context_steps() -> List[Dict[str, Any]]:
     return [
         {
@@ -856,6 +977,62 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "variables": {},
         "steps": [
             *_fb_session_guard_steps("facebook"),
+        ],
+    },
+
+    {
+        "name": "Đăng bài Facebook rồi like/comment",
+        "display_name": "Đăng bài Facebook rồi like/comment",
+        "category": "facebook",
+        "description": (
+            "Mở Facebook bằng account đã gắn với thiết bị, tạo bài viết từ POST_TEXT, "
+            "tìm lại bài vừa đăng theo chính nội dung đó rồi chạy like và comment bằng "
+            "social-action node có sẵn. POST_TEXT để trống mặc định để tránh lỡ publish."
+        ),
+        "tags": "facebook,post,publish,like,comment,app-automation",
+        "variables": {
+            "POST_TEXT": "",
+            "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
+            "POST_COMPOSER_LABEL": "Bạn đang nghĩ gì",
+            "POST_COMPOSER_LABEL_FALLBACK": "What's on your mind",
+            "POST_NEXT_LABEL": "Tiếp",
+            "POST_SUBMIT_LABEL": "Đăng",
+            "COMMENT_INPUT_LABEL": "Viết bình luận",
+            "COMMENT_SUBMIT_LABEL": "Đăng",
+        },
+        "steps": [
+            *_fb_session_guard_steps("publish_post"),
+            {
+                "id": "publish_post_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "then": [
+                    *_fb_publish_post_steps(),
+                    *_fb_open_search_tab_steps(
+                        search_var="POST_TEXT",
+                        tab_vi="Bài viết",
+                        tab_en="Posts",
+                        tab_description_contains="tab Bài viết",
+                    ),
+                    {
+                        "id": "publish_post_select_created_post",
+                        "type": "fb_select_post_target",
+                        "search": "${POST_TEXT}",
+                        "display_text": "${POST_TEXT}",
+                        "required_keywords": ["${POST_TEXT}"],
+                        "min_score": 80,
+                        "require_unique": False,
+                        "timeout": 12,
+                        "save_as": "_published_post_target",
+                    },
+                    *_fb_post_like_and_comment_steps(
+                        require_verified_target="_published_post_target",
+                        save_prefix="_published_post",
+                    ),
+                    {"id": "publish_post_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
         ],
     },
 

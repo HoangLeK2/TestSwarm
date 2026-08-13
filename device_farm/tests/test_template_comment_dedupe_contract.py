@@ -623,6 +623,95 @@ def test_login_template_uses_facebook_credentials_only() -> None:
     assert fields["password"]["value_from"] == "account.password"
 
 
+def test_publish_post_template_posts_then_likes_and_comments_verified_post() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME["Đăng bài Facebook rồi like/comment"]
+    flat_steps = _walk_steps(template["steps"])
+
+    assert template["variables"]["POST_TEXT"] == ""
+    assert template["variables"]["COMMENT_TEXT"]
+    assert [step["phase"] for step in flat_steps if step.get("type") == "facebook_session_gate"] == [
+        "preflight",
+        "confirm",
+    ]
+    assert any(step.get("type") == "login_if_needed" for step in flat_steps)
+    assert any(
+        step.get("type") == "if_element"
+        and step.get("by") == "text"
+        and step.get("value") == "${POST_COMPOSER_LABEL}"
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "tap_ratio"
+        and step.get("x") == 0.5
+        and step.get("y") == 0.225
+        for step in flat_steps
+    )
+    assert any(
+        step.get("id") == "publish_post_focus_textarea"
+        and step.get("type") == "tap_ratio"
+        and step.get("x") == 0.45
+        and step.get("y") == 0.34
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "tap_ratio"
+        and step.get("x") == 0.85
+        and step.get("y") == 0.955
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "tap_ratio"
+        and step.get("x") == 0.5
+        and step.get("y") == 0.955
+        for step in flat_steps
+    )
+    assert any(
+        step.get("type") == "input_text"
+        and step.get("text") == "${POST_TEXT}"
+        for step in flat_steps
+    )
+
+    target = next(
+        step for step in flat_steps if step.get("id") == "publish_post_select_created_post"
+    )
+    assert target["type"] == "fb_select_post_target"
+    assert target["search"] == "${POST_TEXT}"
+    assert target["required_keywords"] == ["${POST_TEXT}"]
+    assert target["save_as"] == "_published_post_target"
+
+    next_index = next(
+        index
+        for index, step in enumerate(flat_steps)
+        if step.get("id") == "publish_post_next"
+    )
+    publish_index = next(
+        index
+        for index, step in enumerate(flat_steps)
+        if step.get("id") == "publish_post_submit"
+    )
+    assert next_index < publish_index
+    target_index = flat_steps.index(target)
+    like_index = next(
+        index
+        for index, step in enumerate(flat_steps)
+        if step.get("type") == "content_interaction"
+        and step.get("action") == "like"
+        and step.get("require_verified_target") == "_published_post_target"
+    )
+    comment_index = next(
+        index
+        for index, step in enumerate(flat_steps)
+        if step.get("type") == "content_interaction"
+        and step.get("action") == "comment"
+        and step.get("require_verified_target") == "_published_post_target"
+    )
+    comment_step = flat_steps[comment_index]
+
+    assert publish_index < target_index < like_index < comment_index
+    assert comment_step["require_completion"] is True
+    assert comment_step["completion_steps"][0]["text"] == "${COMMENT_TEXT}"
+
+
 def test_login_template_opens_credential_form_from_saved_profile_chooser() -> None:
     template = BUILTIN_TEMPLATE_BY_NAME["Đăng nhập Facebook"]
     login_branch = template["steps"][4]["else"]

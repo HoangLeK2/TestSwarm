@@ -198,12 +198,12 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
     if (!wf.workflow_id.startsWith('exec_')) return fromWorkflow;
     const cfg = (execution?.device_config ?? {}) as Record<string, unknown>;
     return String(cfg.device_serial ?? fromWorkflow);
-  }, [wf.device_serial, wf.workflow_id, execution, executionId]);
+  }, [wf.device_serial, wf.workflow_id, execution]);
   const verification = (execution?.meta?.account_verification ?? {}) as Record<
     string,
     unknown
   >;
-  const accountLabel = execution?.account_id
+  const fallbackAccountLabel = execution?.account_id
     ? `Account #${execution.account_id.slice(0, 8)}`
     : '';
   const verificationStatus = String(verification.status ?? '');
@@ -243,6 +243,9 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
     workflowId: wf.workflow_id,
     deviceSerial: serial
   });
+  const unifiedStepLog = eventStream.stepLog;
+  const displaySerial = serial;
+  const accountLabel = fallbackAccountLabel;
   const { data: orgScenarios } = useOrgScenarios();
   const scenarioNamesById = useMemo(() => {
     const map = new Map<string, string>();
@@ -347,9 +350,9 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
           <Smartphone size={11} className='shrink-0 text-muted-foreground' />
           <span
             className='flex-1 truncate font-mono text-[11px] font-semibold'
-            title={serial}
+            title={displaySerial}
           >
-            {serial}
+            {displaySerial}
           </span>
           <WorkflowScenarioModeBadge
             mode={isRecoveryMode ? 'recovery' : 'main'}
@@ -621,6 +624,7 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
                     compact
                     hideStepMonitor
                     readOnlyPreview
+                    forceStream
                   />
                 </div>
               ) : (
@@ -651,7 +655,7 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
               <WorkflowStepList
                 wf={wf}
                 maxHeight='min(560px, calc(90dvh - 320px))'
-                sseStepLog={eventStream.stepLog}
+                sseStepLog={unifiedStepLog}
                 sseConnected={eventStream.connected}
                 liveProgress={{
                   current_step: current,

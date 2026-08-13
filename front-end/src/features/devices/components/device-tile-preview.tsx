@@ -663,16 +663,6 @@ function DeviceTilePreviewInner({
                 {t('controlDevice')}
               </Button>
             )}
-            <Button
-              asChild
-              size='sm'
-              variant='outline'
-              className='h-8 min-w-0 flex-1 px-3 text-xs font-semibold'
-            >
-              <Link href={`${ROUTES.DEVICES.DETAIL(device.serial)}#accounts`}>
-                {t('deviceAccounts')}
-              </Link>
-            </Button>
           </div>
           <div className='mt-2 grid grid-cols-3 gap-1'>
             <HealthIndicator

@@ -30,6 +30,7 @@ from services.account_candidate_discovery import (
     register_discovery_provider,
 )
 from services.facebook_candidates import (
+    CandidateSettings,
     CandidateLeaseAttempt,
     assert_candidate_action_allowed,
     complete_candidate_lease,
@@ -37,6 +38,8 @@ from services.facebook_candidates import (
     normalize_vietnamese_text,
     release_candidate_leases_for_execution,
     update_candidate_settings,
+    _apply_candidate_score,
+    _apply_candidate_scores_batch,
     _ready_candidate_lease_query,
 )
 from tenancy.context import set_current_org_id
@@ -595,6 +598,74 @@ async def test_negative_keyword_blocks_candidate(session_factory):
             "code": "negative_keyword_block",
             "matches": ["lừa đảo"],
         }
+
+
+def test_polars_batch_candidate_scoring_matches_python_scoring() -> None:
+    settings = CandidateSettings(
+        org_id=ORG_A,
+        relationship_weight=0.2,
+        keyword_weight=0.8,
+        semantic_weight=0,
+        review_threshold=0.55,
+        positive_keywords=("công nghệ", "việc làm"),
+        negative_keywords=("lừa đảo",),
+    )
+
+    def candidate(candidate_id: str):
+        return SimpleNamespace(
+            id=candidate_id,
+            relationship_score=0.5,
+            keyword_score=0,
+            semantic_score=0,
+            final_score=0,
+            matched_keywords=[],
+            negative_keywords=[],
+            evidence_count=0,
+            reasons=[],
+            status="discovered",
+            updated_at=None,
+        )
+
+    def evidence(*texts: str):
+        return [
+            SimpleNamespace(normalized_text=normalize_vietnamese_text(text))
+            for text in texts
+        ]
+
+    candidate_ids = [f"candidate-{index}" for index in range(8)]
+    batch_candidates = [candidate(candidate_id) for candidate_id in candidate_ids]
+    python_candidates = [candidate(candidate_id) for candidate_id in candidate_ids]
+    evidence_by_candidate = {
+        candidate_id: evidence(
+            "Tôi làm công nghệ và tuyển việc làm",
+            "Hồ sơ có dấu hiệu lừa đảo" if index % 4 == 0 else "Cùng chủ đề công nghệ",
+        )
+        for index, candidate_id in enumerate(candidate_ids)
+    }
+
+    batch_results = _apply_candidate_scores_batch(
+        candidates=batch_candidates,
+        evidence_by_candidate=evidence_by_candidate,
+        settings=settings,
+    )
+    python_results = {
+        candidate.id: _apply_candidate_score(
+            candidate=candidate,
+            evidence=evidence_by_candidate[candidate.id],
+            settings=settings,
+        )
+        for candidate in python_candidates
+    }
+
+    assert batch_results == python_results
+    assert [
+        (candidate.status, candidate.final_score, candidate.matched_keywords)
+        for candidate in batch_candidates
+    ] == [
+        (candidate.status, candidate.final_score, candidate.matched_keywords)
+        for candidate in python_candidates
+    ]
+    assert sum(1 for candidate in batch_candidates if candidate.status == "blocked") == 2
 
 
 @pytest.mark.asyncio

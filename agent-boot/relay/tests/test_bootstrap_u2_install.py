@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 
 import bootstrap
@@ -115,9 +116,10 @@ def test_relay_bootstrap_skips_atx_u2_restart_when_healthy(monkeypatch) -> None:
     output, rc = relay_adb._bootstrap_device("serial-1", timeout=60)
 
     assert rc == 0
-    assert '"u2_ready": true' in output
-    assert '"atx_ready": true' in output
-    assert '"u2_ime_ready": true' in output
+    result = json.loads(output)
+    assert result["u2_ready"] is True
+    assert result["atx_ready"] is True
+    assert result["u2_ime_ready"] is True
 
 
 def test_u2_atx_health_rejects_wedged_http_even_when_ports_listen(monkeypatch) -> None:

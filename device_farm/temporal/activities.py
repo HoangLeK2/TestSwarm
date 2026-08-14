@@ -2453,6 +2453,7 @@ class DeviceActivities:
                                     org_id=org_id_epic,
                                     user_id=execution_user_id,
                                 )
+                                execution_already_finished = True
                             elif ex_row and getattr(ex_row, "status", None) not in ("cancelled", "paused"):
                                 ex_row.status = terminal
                                 ex_row.finished_at = finished_at
@@ -2472,7 +2473,16 @@ class DeviceActivities:
                                     payload={"device_serial": device_serial},
                                     execution=ex_row,
                                 )
-                            if ex_row and (getattr(ex_row, "meta", {}) or {}).get("dispatch_source"):
+                            execution_device_config = (
+                                getattr(ex_row, "device_config", {}) or {}
+                            )
+                            has_campaign_claim = bool(
+                                execution_device_config.get("claim_session_id")
+                            )
+                            if ex_row and (
+                                (getattr(ex_row, "meta", {}) or {}).get("dispatch_source")
+                                or has_campaign_claim
+                            ):
                                 from services.campaign.dispatcher import finish_fan_out_execution
                                 from services.campaign.execution_runtime import (
                                     maybe_promote_sequential_execution,
@@ -2613,7 +2623,12 @@ class DeviceActivities:
 
                 async with activity_session() as db:
                     ex_row = await get_execution(db, execution_id)
-                    if ex_row and (getattr(ex_row, "meta", {}) or {}).get("dispatch_source"):
+                    if ex_row and (
+                        (getattr(ex_row, "meta", {}) or {}).get("dispatch_source")
+                        or (getattr(ex_row, "device_config", {}) or {}).get(
+                            "claim_session_id"
+                        )
+                    ):
                         return
             except Exception:
                 pass

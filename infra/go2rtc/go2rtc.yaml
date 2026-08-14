@@ -18,6 +18,3 @@ webrtc:
     - stun:8555
   ice_servers:
     - urls: [stun:stun.l.google.com:19302]
-streams:
-  device-10AE7S00HD002JK:
-    - rtsp://host.docker.internal:8556/device-10AE7S00HD002JK

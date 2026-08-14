@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.crud.account import get_accounts_by_ids
-from db.crud.account_group import get_group, pick_next_batch
-from db.models.account import Account
+from db.crud.account import get_accounts_by_ids, get_primary_accounts_for_devices
+from db.crud.account_group import get_group
+from db.models.account import Account, DeviceAccount
 from db.models.campaign import Campaign
 from db.models.enums import AccountState
 from services.org_scenario_validation.step_index import OrgStepIndex
@@ -163,18 +164,8 @@ async def assert_dispatch_account_guard(
     campaign: Campaign,
     org_id: str,
 ) -> None:
-    """Fail before fan-out when scenarios need account but campaign has no binding."""
-    if campaign_has_account_binding(campaign):
-        return
-    steps = await load_pinned_scenario_steps(db, campaign, org_id)
-    if not scenario_requires_account(steps):
-        return
-    raise AccountBindingError(
-        "Scenario requires account but campaign has no account binding; "
-        "set account_group_id or scenario_account_id",
-        code="ACCOUNT_NOT_BOUND",
-        details={"hint": "khai báo account_group hoặc scenario_account_id"},
-    )
+    """Account availability is resolved per device during fan-out."""
+    return None
 
 
 async def validate_account_in_org(
@@ -274,66 +265,54 @@ async def resolve_accounts_for_devices(
     org_id: str,
     device_ids: list[str],
 ) -> dict[str, ResolvedDeviceAccount]:
-    """Resolve effective account per device using bind precedence.
-
-    DB round-trips: at most 1 batch account SELECT + 1 pick_next_batch (group).
-    """
+    """Resolve each device's active primary Facebook account."""
     if not device_ids:
         return {}
 
-    per_device_map = dict(getattr(campaign, "per_device_accounts", None) or {})
-    group_id = getattr(campaign, "account_group_id", None)
-    shared_id = getattr(campaign, "scenario_account_id", None)
     now = datetime.now(timezone.utc)
-
-    devices_for_group: list[str] = []
-    if group_id:
-        devices_for_group = [d for d in device_ids if d not in per_device_map]
-
-    ids_to_load: set[str] = set()
-    for device_id in device_ids:
-        override_id = per_device_map.get(device_id)
-        if override_id:
-            ids_to_load.add(str(override_id))
-    if shared_id and not group_id:
-        ids_to_load.add(str(shared_id))
-
-    account_rows = await get_accounts_by_ids(db, list(ids_to_load), org_id=org_id)
-
-    group_accounts: list[Account] = []
-    if group_id and devices_for_group:
-        group_accounts = await pick_next_batch(db, group_id, len(devices_for_group))
-    group_iter = iter(group_accounts)
+    requires_account = scenario_requires_account(
+        await load_pinned_scenario_steps(db, campaign, org_id)
+    )
+    primary_accounts = await get_primary_accounts_for_devices(
+        db,
+        device_ids,
+        "facebook",
+    )
+    missing_primary_ids = [
+        device_id for device_id in device_ids if device_id not in primary_accounts
+    ]
+    if missing_primary_ids:
+        rows = (
+            await db.execute(
+                select(DeviceAccount.device_id, Account)
+                .join(Account, Account.id == DeviceAccount.account_id)
+                .where(
+                    DeviceAccount.device_id.in_(missing_primary_ids),
+                    Account.org_id == org_id,
+                    Account.platform == "facebook",
+                    Account.state == AccountState.ACTIVE.value,
+                )
+                .order_by(DeviceAccount.assigned_at)
+            )
+        ).all()
+        accounts_by_device: dict[str, list[Account]] = {}
+        for device_id, account in rows:
+            accounts_by_device.setdefault(str(device_id), []).append(account)
+        for device_id, linked_accounts in accounts_by_device.items():
+            if len(linked_accounts) == 1:
+                primary_accounts[device_id] = linked_accounts[0]
 
     out: dict[str, ResolvedDeviceAccount] = {}
     for device_id in device_ids:
-        override_id = per_device_map.get(device_id)
-        account: Account | None = None
-
-        if override_id:
-            account = account_rows.get(str(override_id))
-            out[device_id] = _resolve_account_row(account, org_id=org_id, now=now)
+        account = primary_accounts.get(device_id)
+        if account is None and not requires_account:
+            out[device_id] = ResolvedDeviceAccount(account_id=None, account_vars={})
             continue
-
-        if group_id and device_id in devices_for_group:
-            account = next(group_iter, None)
-            if account is None:
-                out[device_id] = ResolvedDeviceAccount(
-                    account_id=None,
-                    account_vars={},
-                    unavailable=True,
-                    failure_reason="account_unavailable",
-                )
-            else:
-                out[device_id] = _resolve_account_row(account, org_id=org_id, now=now)
-            continue
-
-        if shared_id:
-            account = account_rows.get(str(shared_id))
-            out[device_id] = _resolve_account_row(account, org_id=org_id, now=now)
-            continue
-
-        out[device_id] = ResolvedDeviceAccount(account_id=None, account_vars={})
+        out[device_id] = _resolve_account_row(
+            account,
+            org_id=org_id,
+            now=now,
+        )
 
     return out
 

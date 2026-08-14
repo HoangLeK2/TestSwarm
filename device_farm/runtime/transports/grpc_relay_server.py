@@ -19,13 +19,14 @@ Auth: gRPC metadata  x-relay-api-key  (same key as WebSocket relay).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from typing import Any, Optional
 
 import grpc
 from grpc import aio
+
+from common.fast_codec import dumps, loads
 
 from .grpc_gen import relay_pb2, relay_pb2_grpc
 
@@ -94,7 +95,7 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
                     elif payload == "meta":
                         # JSON control message from agent (register / heartbeat / result)
                         try:
-                            data = json.loads(msg.meta.decode("utf-8", errors="replace"))
+                            data = loads(msg.meta)
                         except Exception:
                             continue
                         relay_id, conn = await self._handle_json(
@@ -154,7 +155,7 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
             conn.serials = serials
             await self._rm.register(conn)
             # Send ack back
-            ack_json = json.dumps({
+            ack_json = dumps({
                 "type": "ack",
                 "message": f"registered {len(serials)} serials",
             }).encode()

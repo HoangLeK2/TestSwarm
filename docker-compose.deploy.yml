@@ -8,6 +8,7 @@
 #   farm       — Backend API + Temporal worker + gRPC relay (8081, 50051 → host)
 #   frontend   — Next.js dashboard (port 3000)
 #   temporal   — Temporal Server (port 7233, UI: 8233) — uses external Postgres
+#   go2rtc     — WebRTC/RTSP media gateway (1984 local API, 8554 RTSP, 8555 ICE/WebRTC)
 #   postgres   — Disabled by default. Bring your own Postgres (set DB_HOST in .env).
 #                Uncomment block below to run a local Postgres.
 #
@@ -80,6 +81,25 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
+  go2rtc:
+    image: ${GO2RTC_IMAGE:-ghcr.io/alexxit/go2rtc:1.9.14}
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+      nproc: 65535
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    ports:
+      # Keep go2rtc API local to the host. Browser signaling goes through farm.
+      - "127.0.0.1:${GO2RTC_API_PORT:-1984}:1984/tcp"
+      - "${GO2RTC_RTSP_PORT:-8554}:8554/tcp"
+      - "${GO2RTC_WEBRTC_PORT:-8555}:8555/tcp"
+      - "${GO2RTC_WEBRTC_PORT:-8555}:8555/udp"
+    volumes:
+      - ./infra/go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+
   farm:
     build:
       context: ./device_farm
@@ -95,6 +115,8 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
+      go2rtc:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Bridge network (default): works on Docker Desktop Mac/Windows. Agent-boot on the
@@ -137,6 +159,10 @@ services:
       RELAY_PORT: ${RELAY_PORT:-50051}
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
+      DEVICE_FARM_WEBRTC_ENABLED: ${DEVICE_FARM_WEBRTC_ENABLED:-1}
+      MEDIA_ADAPTER_CONTROL_PLANE: ${MEDIA_ADAPTER_CONTROL_PLANE:-grpc}
+      DEVICE_FARM_GO2RTC_URL: ${DEVICE_FARM_GO2RTC_URL:-http://go2rtc:1984}
+      MEDIA_WEBRTC_SIGNALING_PLANE: ${MEDIA_WEBRTC_SIGNALING_PLANE:-backend}
       ACCOUNT_VERIFICATION_MODE: ${ACCOUNT_VERIFICATION_MODE:-shadow}
       ACCOUNT_VERIFICATION_CONCURRENCY: ${ACCOUNT_VERIFICATION_CONCURRENCY:-8}
       ACCOUNT_VERIFICATION_TIMEOUT_SECONDS: ${ACCOUNT_VERIFICATION_TIMEOUT_SECONDS:-6}

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
@@ -17,6 +16,7 @@ from db.models.device_group import DeviceGroupMember
 from db.models.device_reserve_session import DeviceReserveSession
 from db.models.enums import DeviceFsmState, SessionOwnerType
 from db.models.relay_agent import RelayAgent
+from common.fast_codec import dumps_bytes, loads
 from services.fleet_stats import derive_session_owner_type
 
 
@@ -103,14 +103,14 @@ def _encode_cursor(org_id: str, sort: str, row: FleetDeviceRow) -> str:
         "name": row.name,
         "state": row.state,
     }
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    raw = dumps_bytes(payload)
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
 def _decode_cursor(cursor: str, *, org_id: str, sort: str) -> dict[str, Any]:
     try:
         raw = base64.urlsafe_b64decode(cursor.encode("ascii"))
-        payload = json.loads(raw.decode("utf-8"))
+        payload = loads(raw)
     except Exception as exc:
         raise FleetQueryValidationError("malformed cursor", code="INVALID_CURSOR") from exc
     if payload.get("org_id") != org_id:

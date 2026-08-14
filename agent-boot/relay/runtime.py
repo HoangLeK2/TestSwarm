@@ -12,46 +12,80 @@ from typing import Any, Optional
 
 logger = logging.getLogger("relay.runtime")
 
-# ── JSON backend: orjson if available, stdlib fallback ───────────────────────
+# ── JSON backend: msgspec → orjson → stdlib fallback ─────────────────────────
 #
-# orjson is a C extension that releases the GIL on dump and is 5–10x faster
-# than the stdlib. We swap it in transparently so the rest of the code can
-# stay on plain `dumps(...)`/`loads(...)` calls without caring which backend
-# is in use.
+# msgspec is fastest for JSON-compatible internal control payloads and also
+# supports typed Struct validation at call-site boundaries. orjson remains the
+# fallback for values msgspec cannot encode, preserving the existing transport
+# contract while accelerating the common relay/status/command path.
 #
 # Callers may import `dumps` / `loads` from this module instead of `json` to
 # get the speedup; the stdlib `json` module still works for legacy call sites.
 try:
+    import msgspec as _msgspec  # type: ignore[import-not-found]
+    _MSG_JSON_ENCODER = _msgspec.json.Encoder()
+    _MSG_JSON_DECODER = _msgspec.json.Decoder()
+    _HAS_MSGSPEC = True
+except Exception:  # pragma: no cover - msgspec is in pyproject deps
+    _msgspec = None  # type: ignore[assignment]
+    _MSG_JSON_ENCODER = None
+    _MSG_JSON_DECODER = None
+    _HAS_MSGSPEC = False
+
+try:
     import orjson as _orjson  # type: ignore[import-not-found]
     _HAS_ORJSON = True
-
-    def dumps(obj: Any) -> str:
-        """orjson-backed json.dumps replacement. Returns str for transport compat."""
-        # orjson always returns bytes; decode once to str so consumers (gRPC
-        # AgentMsg.meta, WebSocket text frames) can take it as-is.
-        return _orjson.dumps(obj).decode("utf-8")
-
-    def dumps_bytes(obj: Any) -> bytes:
-        """orjson dumps without the decode round-trip (for byte transports)."""
-        return _orjson.dumps(obj)
-
-    def loads(data: Any) -> Any:
-        return _orjson.loads(data)
-
-except ImportError:  # pragma: no cover — orjson is in pyproject deps
-    import json as _stdlib_json
+except ImportError:  # pragma: no cover - orjson is in pyproject deps
+    _orjson = None  # type: ignore[assignment]
     _HAS_ORJSON = False
 
-    def dumps(obj: Any) -> str:
-        return _stdlib_json.dumps(obj)
+import json as _stdlib_json
 
-    def dumps_bytes(obj: Any) -> bytes:
-        return _stdlib_json.dumps(obj).encode("utf-8")
 
-    def loads(data: Any) -> Any:
-        if isinstance(data, (bytes, bytearray)):
-            data = data.decode("utf-8")
-        return _stdlib_json.loads(data)
+def _json_backend_name() -> str:
+    if _HAS_MSGSPEC:
+        return "msgspec"
+    if _HAS_ORJSON:
+        return "orjson"
+    return "stdlib"
+
+
+def dumps_bytes(obj: Any) -> bytes:
+    """Fast JSON encoder. Falls back if a payload uses unsupported objects."""
+    if _MSG_JSON_ENCODER is not None:
+        try:
+            return _MSG_JSON_ENCODER.encode(obj)
+        except (TypeError, ValueError):
+            pass
+    if _orjson is not None:
+        try:
+            return _orjson.dumps(obj)
+        except (TypeError, ValueError):
+            pass
+    return _stdlib_json.dumps(obj, default=str).encode("utf-8")
+
+
+def dumps(obj: Any) -> str:
+    """json.dumps replacement. Returns str for WebSocket/gRPC text metadata."""
+    return dumps_bytes(obj).decode("utf-8")
+
+
+def loads(data: Any) -> Any:
+    if isinstance(data, memoryview):
+        data = data.tobytes()
+    if _MSG_JSON_DECODER is not None:
+        try:
+            return _MSG_JSON_DECODER.decode(data)
+        except Exception:
+            pass
+    if _orjson is not None:
+        try:
+            return _orjson.loads(data)
+        except Exception:
+            pass
+    if isinstance(data, (bytes, bytearray)):
+        data = data.decode("utf-8")
+    return _stdlib_json.loads(data)
 
 
 def _env_int(name: str, default: int, *, lo: int = 1, hi: int = 1024) -> int:
@@ -154,7 +188,7 @@ def init_executors() -> None:
     logger.info(
         "runtime: executors ready adb=%d u2=%d scrcpy=%d generic=%d cpu=%d json=%s",
         ADB_POOL_SIZE, U2_POOL_SIZE, SCRCPY_POOL_SIZE, GENERIC_POOL_SIZE, CPU_POOL_SIZE,
-        "orjson" if _HAS_ORJSON else "stdlib",
+        _json_backend_name(),
     )
 
 

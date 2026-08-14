@@ -27,6 +27,8 @@ try:
 except ImportError:
     _HTTPX_AVAILABLE = False
 
+from common.fast_codec import dumps as fast_dumps, loads as fast_loads
+
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
@@ -2224,7 +2226,7 @@ def run_stdio_server() -> None:
         if not line:
             continue
         try:
-            msg = json.loads(line)
+            msg = fast_loads(line)
         except Exception:
             continue
 
@@ -2243,7 +2245,7 @@ def run_stdio_server() -> None:
             }
         else:
             out = handler(ctx, msg)
-        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+        sys.stdout.write(fast_dumps(out) + "\n")
         sys.stdout.flush()
 
 

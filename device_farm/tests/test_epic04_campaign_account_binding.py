@@ -228,7 +228,7 @@ async def test_ac2_per_device_override(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_ac3_account_not_bound_no_fallback(session_factory):
+async def test_ac3_account_not_bound_uses_primary_device_account(session_factory):
     await _seed_orgs(session_factory)
     d1 = await _online_device(session_factory, serial="NF-D1")
     primary = await _account(session_factory, "primary-on-device")
@@ -259,19 +259,17 @@ async def test_ac3_account_not_bound_no_fallback(session_factory):
             json={"target": {"device_ids": [d1]}},
         )
 
-    assert resp.status_code == 400
-    detail = resp.json()["detail"]
-    assert detail["code"] == "ACCOUNT_NOT_BOUND"
-    assert "hint" in detail
+    assert resp.status_code == 200
+    execution = resp.json()["executions"][0]
+    assert execution["account_id"] == primary.id
 
     async with session_factory() as db:
         count = (await db.execute(select(func.count()).select_from(Execution))).scalar_one()
-        assert count == 0
+        assert count == 1
 
 
 @pytest.mark.asyncio
-async def test_fr04_20_guard_unit_no_primary_fallback(session_factory):
-    """Second FR-04-20 guard: social step + primary on device must not dispatch."""
+async def test_fr04_20_social_step_uses_primary_device_account(session_factory):
     await _seed_orgs(session_factory)
     d1 = await _online_device(session_factory, serial="GUARD-D1")
     primary = await _account(session_factory, "guard-primary")
@@ -301,8 +299,42 @@ async def test_fr04_20_guard_unit_no_primary_fallback(session_factory):
             json={"target": {"device_ids": [d1]}},
         )
 
-    assert resp.status_code == 400
-    assert resp.json()["detail"]["code"] == "ACCOUNT_NOT_BOUND"
+    assert resp.status_code == 200
+    assert resp.json()["executions"][0]["account_id"] == primary.id
+
+
+@pytest.mark.asyncio
+async def test_account_required_device_without_primary_account_fails_without_claim(
+    session_factory,
+):
+    await _seed_orgs(session_factory)
+    device_id = await _online_device(session_factory, serial="NO-ACCOUNT-D1")
+
+    app = _build_app(session_factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        scenario_id = await _create_org_scenario(
+            client,
+            name="NoDeviceAccount",
+            steps=[_sequence_step("login", "platform_specific.fb_login")],
+        )
+        campaign = await client.post(
+            "/api/campaigns",
+            json={"name": "NoDeviceAccount", "scenario_refs": [{"scenario_id": scenario_id}]},
+        )
+        response = await client.post(
+            f"/api/campaigns/{campaign.json()['id']}/dispatch",
+            json={"target": {"device_ids": [device_id]}},
+        )
+
+    assert response.status_code == 200
+    execution = response.json()["executions"][0]
+    assert execution["status"] == "failed"
+    assert execution["failure_reason"] == "account_unavailable"
+    async with session_factory() as db:
+        assert await get_active_session(db, device_id) is None
 
 
 @pytest.mark.asyncio

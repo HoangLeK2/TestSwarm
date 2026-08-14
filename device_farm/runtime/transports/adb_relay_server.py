@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import struct
@@ -28,6 +27,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, Optional, Set
 
+from common.fast_codec import dumps, loads
 from runtime.stream_telemetry import stream_telemetry
 
 logger = logging.getLogger(__name__)
@@ -128,7 +128,7 @@ class RelayConnection:
         future: asyncio.Future = loop.create_future()
         self._pending[msg_id] = future
 
-        msg = json.dumps({
+        msg = dumps({
             "type":     "command",
             "msg_id":   msg_id,
             "serial":   serial,
@@ -169,7 +169,7 @@ class RelayConnection:
         future: asyncio.Future = loop.create_future()
         self._pending[msg_id] = future
 
-        msg = json.dumps({
+        msg = dumps({
             "type":         "u2_request",
             "msg_id":       msg_id,
             "serial":       serial,
@@ -207,7 +207,7 @@ class RelayConnection:
         future: asyncio.Future = loop.create_future()
         self._pending[reply_id] = future
 
-        await self._write_queue.put(json.dumps(msg))
+        await self._write_queue.put(dumps(msg))
 
         try:
             return await asyncio.wait_for(
@@ -222,7 +222,7 @@ class RelayConnection:
 
     async def send_json_message(self, msg: dict) -> None:
         """Fire-and-forget JSON message (no correlated reply)."""
-        await self._write_queue.put(json.dumps(msg))
+        await self._write_queue.put(dumps(msg))
 
     def resolve(self, msg_id: str, result: dict) -> None:
         future = self._pending.pop(msg_id, None)
@@ -537,7 +537,7 @@ class AdbRelayManager:
         try:
             r = redis_store.client()
             pipe = r.pipeline()
-            pipe.hset(redis_store.key("relay:agents"), conn.relay_id, json.dumps({
+            pipe.hset(redis_store.key("relay:agents"), conn.relay_id, dumps({
                 "relay_id": conn.relay_id,
                 "serials": sorted(conn.serials),
             }))
@@ -789,7 +789,7 @@ class AdbRelayManager:
         if conn is None:
             logger.warning("start_scrcpy: no relay for serial=%s", serial)
             return False
-        msg = json.dumps({
+        msg = dumps({
             "type":        "scrcpy_start",
             "serial":      serial,
             "max_fps":     max_fps or SCRCPY_DEFAULT_MAX_FPS,
@@ -812,7 +812,7 @@ class AdbRelayManager:
         self._scrcpy_running.discard(serial)
         conn = self.relay_for_serial(serial)
         if conn is not None:
-            msg = json.dumps({"type": "scrcpy_stop", "serial": serial, "reason": reason})
+            msg = dumps({"type": "scrcpy_stop", "serial": serial, "reason": reason})
             await conn._write_queue.put(msg)
             logger.info("scrcpy_stop → relay=%s serial=%s reason=%s", conn.relay_id, serial, reason)
         self.unregister_scrcpy_receiver(serial)
@@ -1013,7 +1013,6 @@ class AdbRelayManager:
 
     async def probe_caps(self, serial: str, timeout: float = 30.0) -> dict:
         """Ask agent-boot to probe device capabilities → dict with android_version, abi, etc."""
-        import json
         conn = self.relay_for_serial(serial)
         if conn is None:
             return {}
@@ -1022,7 +1021,7 @@ class AdbRelayManager:
         if not result.get("ok"):
             return {}
         try:
-            return json.loads(result.get("output", "{}"))
+            return loads(result.get("output", "{}"))
         except Exception:
             return {}
 
@@ -1197,7 +1196,7 @@ class AdbRelayManager:
                     serial,
                     "POST",
                     "/jsonrpc/0",
-                    json.dumps(payload),
+                    dumps(payload),
                     "application/json",
                     timeout,
                 )
@@ -1238,7 +1237,7 @@ class AdbRelayManager:
         if not raw.strip():
             return False, "JSON-RPC empty response"
         try:
-            data = json.loads(raw)
+            data = loads(raw)
         except Exception:
             return False, f"JSON-RPC invalid response: {raw[:120]!r}"
         if "error" in data:
@@ -1567,7 +1566,7 @@ class WsRelayAgentSession:
                 if not text:
                     continue
                 try:
-                    msg = json.loads(text)
+                    msg = loads(text)
                 except Exception:
                     continue
 
@@ -1579,7 +1578,7 @@ class WsRelayAgentSession:
                     conn = RelayConnection(relay_id, write_queue)
                     conn.serials = serials
                     await self._manager.register(conn)
-                    ack = json.dumps({
+                    ack = dumps({
                         "type":    "ack",
                         "message": f"registered {len(serials)} serials",
                     })

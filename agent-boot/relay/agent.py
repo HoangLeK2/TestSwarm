@@ -11,7 +11,6 @@ Protocol:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import random
@@ -45,6 +44,17 @@ from relay.recovery_coordinator import RecoveryCoordinator
 from relay.session_manager import ScrcpySessionManager
 from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
+from relay.payloads import (
+    CommandMessage,
+    CommandQueueFullResult,
+    ServerMessage,
+    U2RequestMessage,
+    decode_server_message,
+    message_get,
+    message_to_dict,
+    message_type,
+)
+from relay import runtime as json
 from relay.runtime         import (
     SEND_CONTROL_MAX,
     SEND_PER_DEVICE_MAX,
@@ -63,6 +73,7 @@ from relay.runtime         import (
     init_semaphores,
     register_stats_source,
     shutdown_executors,
+    loads,
     u2_batch_sem,
     u2_executor_pool,
     u2_flow_sem,
@@ -982,7 +993,7 @@ class RelayAgent:
                         await self._handle_binary(raw_msg, send_queue)
                     else:
                         try:
-                            msg = json.loads(raw_msg)
+                            msg = decode_server_message(raw_msg)
                         except Exception:
                             continue
                         await self._handle_server_msg(msg, send_queue, loop)
@@ -1071,7 +1082,7 @@ class RelayAgent:
                         return
                     if ctrl_msg.is_json:
                         try:
-                            msg = json.loads(ctrl_msg.data.decode("utf-8", errors="replace"))
+                            msg = decode_server_message(ctrl_msg.data)
                             await self._handle_server_msg(msg, send_queue, loop)
                         except Exception as exc:
                             logger.debug("gRPC JSON msg error: %s", exc)
@@ -1796,18 +1807,25 @@ class RelayAgent:
     # ── Server message handling ───────────────────────────────────────────────
 
     async def _handle_server_msg(
-        self, msg: dict, send_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop
+        self,
+        msg: ServerMessage | dict[str, Any],
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
-        mtype = msg.get("type", "")
+        mtype = message_type(msg)
+        schema_error = message_get(msg, "_schema_error", "")
+        if schema_error:
+            logger.debug("control message schema fallback type=%s error=%s", mtype, schema_error)
 
         if mtype == "ack":
-            logger.info("registered: %s", msg.get("message"))
+            logger.info("registered: %s", message_get(msg, "message", ""))
 
         elif mtype == "command":
             await self._enqueue_command(msg, send_queue, loop)
 
         elif mtype == "scrcpy_start":
-            req = str(msg.get("serial", "") or "")
+            msg_dict = message_to_dict(msg)
+            req = str(msg_dict.get("serial", "") or "")
             adb_s = self._adb_serial_prefer_usb_over_tcp(req)
             if adb_s != req:
                 self._scrcpy_logical_to_adb[req] = adb_s
@@ -1816,7 +1834,7 @@ class RelayAgent:
             restart_task = state.get("restart_task")
             if restart_task and not restart_task.done():
                 restart_task.cancel()
-            cfg = self._scrcpy_cfg_from_start_msg(msg, adb_serial=adb_s)
+            cfg = self._scrcpy_cfg_from_start_msg(msg_dict, adb_serial=adb_s)
             state.update({
                 "desired": True,
                 "manual_stop": False,
@@ -1832,8 +1850,8 @@ class RelayAgent:
             await self._start_desired_scrcpy(req, send_queue, loop)
 
         elif mtype == "scrcpy_stop":
-            req = str(msg.get("serial", "") or "")
-            reason = str(msg.get("reason") or "manual_stop")
+            req = str(message_get(msg, "serial", "") or "")
+            reason = str(message_get(msg, "reason", "manual_stop") or "manual_stop")
             adb_s = self._scrcpy_logical_to_adb.pop(req, req)
             state = self._scrcpy_desired.get(req) or {}
             restart_task = state.get("restart_task")
@@ -1857,16 +1875,16 @@ class RelayAgent:
             )
 
         elif mtype == "u2_batch":
-            req_id = str(msg.get("id", "") or "")
+            msg_dict = message_to_dict(msg)
+            req_id = str(msg_dict.get("id", "") or "")
             if req_id:
-                msg = dict(msg)
                 cancel_event = asyncio.Event()
-                msg["_cancel_event"] = cancel_event
+                msg_dict["_cancel_event"] = cancel_event
                 self._u2_batch_cancel_events[req_id] = cancel_event
             task = self._stream_tasks.add(
                 self._guarded(
                     u2_batch_sem(),
-                    self._handle_u2_batch(msg, send_queue),
+                    self._handle_u2_batch(msg_dict, send_queue),
                     label="u2_batch",
                 ),
                 name="u2-batch",
@@ -1881,32 +1899,32 @@ class RelayAgent:
                 )
 
         elif mtype == "u2_batch_cancel":
-            self._cancel_u2_batch(str(msg.get("id", "") or ""))
+            self._cancel_u2_batch(str(message_get(msg, "id", "") or ""))
 
         elif mtype == "u2_flow":
             self._stream_tasks.add(
                 self._guarded(
                     u2_flow_sem(),
-                    self._handle_u2_flow(msg, send_queue),
+                    self._handle_u2_flow(message_to_dict(msg), send_queue),
                     label="u2_flow",
                 ),
                 name="u2-flow",
             )
 
         elif mtype == "extra_data":
-            req_id = str(msg.get("id", "") or "")
+            msg_dict = message_to_dict(msg)
+            req_id = str(msg_dict.get("id", "") or "")
             if req_id:
-                context = msg.get("context") if isinstance(msg.get("context"), dict) else {}
+                context = msg_dict.get("context") if isinstance(msg_dict.get("context"), dict) else {}
                 context = dict(context)
                 cancel_event = asyncio.Event()
                 context["_cancel_event"] = cancel_event
-                msg = dict(msg)
-                msg["context"] = context
+                msg_dict["context"] = context
                 self._extra_data_cancel_events[req_id] = cancel_event
             task = self._stream_tasks.add(
                 self._guarded(
                     extra_data_sem(),
-                    self._handle_extra_data(msg, send_queue),
+                    self._handle_extra_data(msg_dict, send_queue),
                     label="extra_data",
                 ),
                 name="extra-data",
@@ -1921,10 +1939,10 @@ class RelayAgent:
                 )
 
         elif mtype == "extra_data_cancel":
-            self._cancel_extra_data_task(str(msg.get("id", "") or ""))
+            self._cancel_extra_data_task(str(message_get(msg, "id", "") or ""))
 
         elif mtype == "a11y_action":
-            await self._handle_a11y_action(msg, send_queue, loop)
+            await self._handle_a11y_action(message_to_dict(msg), send_queue, loop)
 
         elif mtype == "ping":
             pass  # WebSocket ping/pong handles keepalive at transport layer
@@ -2300,19 +2318,21 @@ class RelayAgent:
             "attempts": attempts,
         }
 
-    async def _handle_u2_request(self, msg: dict, send_queue: asyncio.Queue) -> None:
+    async def _handle_u2_request(
+        self, msg: U2RequestMessage | dict[str, Any], send_queue: asyncio.Queue
+    ) -> None:
         """Proxy an HTTP request to atx-agent (port 7912) on behalf of device_farm."""
-        msg_id       = msg.get("msg_id", "")
-        serial       = msg.get("serial", "")
-        method       = msg.get("method", "GET").upper()
-        path         = msg.get("path", "/")
-        body         = msg.get("body", "")
-        content_type = msg.get("content_type", "")
-        timeout      = max(1.0, float(msg.get("timeout", 30)))
-        priority     = msg.get("priority") or (
-            "visible" if msg.get("visible") or msg.get("focused") else None
+        msg_id       = message_get(msg, "msg_id", "")
+        serial       = message_get(msg, "serial", "")
+        method       = str(message_get(msg, "method", "GET") or "GET").upper()
+        path         = message_get(msg, "path", "/")
+        body         = message_get(msg, "body", "")
+        content_type = message_get(msg, "content_type", "")
+        timeout      = max(1.0, float(message_get(msg, "timeout", 30)))
+        priority     = message_get(msg, "priority") or (
+            "visible" if message_get(msg, "visible") or message_get(msg, "focused") else None
         )
-        deadline_ms  = msg.get("deadline_ms") or msg.get("timeout_ms")
+        deadline_ms  = message_get(msg, "deadline_ms") or message_get(msg, "timeout_ms")
 
         ui_executor = self._u2_executor
         can_admit = ui_executor is not None and ui_executor.__class__.__name__ == "U2Executor"
@@ -2947,7 +2967,7 @@ class RelayAgent:
             serial,
             "POST",
             "/jsonrpc/0",
-            json.dumps(payload),
+            dumps(payload),
             "application/json",
             timeout,
         )
@@ -3054,7 +3074,7 @@ class RelayAgent:
                         serial,
                         "POST",
                         "/jsonrpc/0",
-                        json.dumps(payload),
+                        dumps(payload),
                         "application/json",
                         timeout,
                     )
@@ -3127,7 +3147,7 @@ class RelayAgent:
         if not raw.strip():
             return False, "JSON-RPC empty response", None
         try:
-            data = json.loads(raw)
+            data = loads(raw)
         except Exception:
             return False, f"JSON-RPC invalid response: {raw[:120]!r}", None
         if "error" in data:
@@ -3367,9 +3387,12 @@ class RelayAgent:
         return True
 
     async def _enqueue_command(
-        self, msg: dict, send_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop
+        self,
+        msg: CommandMessage | dict[str, Any],
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
-        cmd_serial = str(msg.get("serial", "") or "")
+        cmd_serial = str(message_get(msg, "serial", "") or "")
         serial_key = cmd_serial or "-"
         state = self._command_state.get(serial_key)
         if state is None:
@@ -3387,14 +3410,10 @@ class RelayAgent:
         try:
             state["q"].put_nowait(msg)
         except asyncio.QueueFull:
-            result = dumps({
-                "type": "result",
-                "msg_id": str(msg.get("msg_id", "") or ""),
-                "ok": False,
-                "exit_code": -1,
-                "output": "",
-                "error": f"command queue full: serial={serial_key}",
-            })
+            result = dumps(CommandQueueFullResult(
+                msg_id=str(message_get(msg, "msg_id", "") or ""),
+                error=f"command queue full: serial={serial_key}",
+            ))
             await bounded_put(
                 send_queue,
                 result,
@@ -3412,29 +3431,29 @@ class RelayAgent:
             msg = await q.get()
             if msg is None:
                 return
-            cmd_serial = str(msg.get("serial", "") or "")
-            cmd_type = int(msg.get("cmd_type", CMD_SHELL))
+            cmd_serial = str(message_get(msg, "serial", "") or "")
+            cmd_type = int(message_get(msg, "cmd_type", CMD_SHELL))
             if cmd_type == CMD_BOOTSTRAP:
                 result = await self._execute_bootstrap_command(
-                    msg.get("msg_id", ""),
+                    message_get(msg, "msg_id", ""),
                     cmd_serial,
-                    int(msg.get("timeout", 30)),
+                    int(message_get(msg, "timeout", 30)),
                 )
             elif cmd_type in {CMD_RESTART_U2, CMD_RESTART_ATX}:
                 result = await self._execute_recovery_command(
-                    msg.get("msg_id", ""),
+                    message_get(msg, "msg_id", ""),
                     cmd_serial,
-                    int(msg.get("timeout", 30)),
+                    int(message_get(msg, "timeout", 30)),
                     cmd_type,
                 )
             else:
                 result = await loop.run_in_executor(
                     adb_executor(),
                     self._execute_command,
-                    msg.get("msg_id", ""),
+                    message_get(msg, "msg_id", ""),
                     cmd_serial,
-                    msg.get("cmd", ""),
-                    int(msg.get("timeout", 30)),
+                    message_get(msg, "cmd", ""),
+                    int(message_get(msg, "timeout", 30)),
                     cmd_type,
                 )
             await bounded_put(
@@ -3445,7 +3464,7 @@ class RelayAgent:
             )
             if cmd_type == CMD_ADB_CONNECT:
                 try:
-                    parsed = json.loads(result)
+                    parsed = loads(result)
                 except Exception:
                     parsed = {}
                 if parsed.get("ok"):

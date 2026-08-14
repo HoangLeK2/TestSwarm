@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Any
 from uuid import uuid4
 
@@ -38,6 +40,10 @@ DEFAULT_AUTO_READY_THRESHOLD = 0.75
 DEFAULT_AUTO_READY_MIN_EVIDENCE = 2
 DEFAULT_EMBEDDING_MODEL = "multilingual-e5-small"
 DEFAULT_EMBEDDING_DIMENSIONS = 384
+POLARS_BATCH_MIN_CANDIDATES = 8
+POLARS_MAX_KEYWORDS = 256
+KeywordCounts = dict[str, tuple[str, int]]
+CandidateScoreResults = dict[str, tuple[KeywordCounts, KeywordCounts]]
 
 REVIEW_TARGET_STATUSES = frozenset(
     {"approved", "ready_to_connect", "rejected", "deferred"}
@@ -145,14 +151,87 @@ def _normalized_keywords(values: Iterable[str]) -> list[tuple[str, str]]:
 
 def _keyword_counts(
     normalized_texts: Sequence[str], keywords: Iterable[str]
-) -> dict[str, tuple[str, int]]:
-    matches: dict[str, tuple[str, int]] = {}
+) -> KeywordCounts:
+    matches: KeywordCounts = {}
     for normalized, original in _normalized_keywords(keywords):
         needle = f" {normalized} "
         count = sum(f" {text} ".count(needle) for text in normalized_texts)
         if count:
             matches[normalized] = (original, count)
     return matches
+
+
+@lru_cache(maxsize=1)
+def _optional_polars():
+    try:
+        return importlib.import_module("polars")
+    except Exception:
+        return None
+
+
+def _apply_candidate_score_values(
+    *,
+    candidate: FacebookCandidate,
+    settings: CandidateSettings,
+    positive: KeywordCounts,
+    negative: KeywordCounts,
+    evidence_count: int,
+    configured_positive_count: int,
+) -> None:
+    keyword_score = (
+        min(1.0, len(positive) / configured_positive_count)
+        if configured_positive_count
+        else 0.0
+    )
+    weighted_signals = [
+        (candidate.relationship_score, settings.relationship_weight),
+    ]
+    if configured_positive_count:
+        weighted_signals.append((keyword_score, settings.keyword_weight))
+    if candidate.semantic_score > 0:
+        weighted_signals.append((candidate.semantic_score, settings.semantic_weight))
+    weights_total = sum(weight for _, weight in weighted_signals)
+    final_score = round(
+        sum(score * weight for score, weight in weighted_signals) / weights_total,
+        6,
+    ) if weights_total else 0.0
+    matched_keywords = sorted(original for original, _ in positive.values())
+    negative_keywords = sorted(original for original, _ in negative.values())
+    candidate.keyword_score = round(keyword_score, 6)
+    candidate.final_score = final_score
+    candidate.matched_keywords = matched_keywords
+    candidate.negative_keywords = negative_keywords
+    candidate.evidence_count = evidence_count
+    candidate.reasons = [
+        {
+            "code": "relationship_score",
+            "score": round(candidate.relationship_score, 6),
+            "weight": settings.relationship_weight,
+        },
+        {
+            "code": "keyword_score",
+            "score": candidate.keyword_score,
+            "weight": settings.keyword_weight,
+            "matches": matched_keywords,
+        },
+        {
+            "code": "semantic_score",
+            "score": round(candidate.semantic_score, 6),
+            "weight": settings.semantic_weight,
+        },
+    ]
+    if negative_keywords:
+        candidate.reasons.append(
+            {"code": "negative_keyword_block", "matches": negative_keywords}
+        )
+        candidate.status = "blocked"
+    elif candidate.status in {"discovered", "review_required", "blocked"}:
+        candidate.status = (
+            "review_required"
+            if final_score >= settings.review_threshold
+            else "discovered"
+        )
+    candidate.updated_at = datetime.now(UTC)
 
 
 def _settings_from_row(
@@ -570,66 +649,132 @@ def _apply_candidate_score(
     candidate: FacebookCandidate,
     evidence: Sequence[FacebookCandidateEvidence],
     settings: CandidateSettings,
-) -> tuple[dict[str, tuple[str, int]], dict[str, tuple[str, int]]]:
+) -> tuple[KeywordCounts, KeywordCounts]:
     normalized_texts = [row.normalized_text for row in evidence if row.normalized_text]
     positive = _keyword_counts(normalized_texts, settings.positive_keywords)
     negative = _keyword_counts(normalized_texts, settings.negative_keywords)
     configured_positive_count = len(_normalized_keywords(settings.positive_keywords))
-    keyword_score = (
-        min(1.0, len(positive) / configured_positive_count)
-        if configured_positive_count
-        else 0.0
+    _apply_candidate_score_values(
+        candidate=candidate,
+        settings=settings,
+        positive=positive,
+        negative=negative,
+        evidence_count=len(evidence),
+        configured_positive_count=configured_positive_count,
     )
-    weighted_signals = [
-        (candidate.relationship_score, settings.relationship_weight),
-    ]
-    if configured_positive_count:
-        weighted_signals.append((keyword_score, settings.keyword_weight))
-    if candidate.semantic_score > 0:
-        weighted_signals.append((candidate.semantic_score, settings.semantic_weight))
-    weights_total = sum(weight for _, weight in weighted_signals)
-    final_score = round(
-        sum(score * weight for score, weight in weighted_signals) / weights_total,
-        6,
-    ) if weights_total else 0.0
-    matched_keywords = sorted(original for original, _ in positive.values())
-    negative_keywords = sorted(original for original, _ in negative.values())
-    candidate.keyword_score = round(keyword_score, 6)
-    candidate.final_score = final_score
-    candidate.matched_keywords = matched_keywords
-    candidate.negative_keywords = negative_keywords
-    candidate.evidence_count = len(evidence)
-    candidate.reasons = [
-        {
-            "code": "relationship_score",
-            "score": round(candidate.relationship_score, 6),
-            "weight": settings.relationship_weight,
-        },
-        {
-            "code": "keyword_score",
-            "score": candidate.keyword_score,
-            "weight": settings.keyword_weight,
-            "matches": matched_keywords,
-        },
-        {
-            "code": "semantic_score",
-            "score": round(candidate.semantic_score, 6),
-            "weight": settings.semantic_weight,
-        },
-    ]
-    if negative_keywords:
-        candidate.reasons.append(
-            {"code": "negative_keyword_block", "matches": negative_keywords}
-        )
-        candidate.status = "blocked"
-    elif candidate.status in {"discovered", "review_required", "blocked"}:
-        candidate.status = (
-            "review_required"
-            if final_score >= settings.review_threshold
-            else "discovered"
-        )
-    candidate.updated_at = datetime.now(UTC)
     return positive, negative
+
+
+def _apply_candidate_scores_batch(
+    *,
+    candidates: Sequence[FacebookCandidate],
+    evidence_by_candidate: dict[str, list[FacebookCandidateEvidence]],
+    settings: CandidateSettings,
+) -> CandidateScoreResults:
+    polars_results = _apply_candidate_scores_batch_polars(
+        candidates=candidates,
+        evidence_by_candidate=evidence_by_candidate,
+        settings=settings,
+    )
+    if polars_results is not None:
+        return polars_results
+
+    results: CandidateScoreResults = {}
+    for candidate in candidates:
+        results[candidate.id] = _apply_candidate_score(
+            candidate=candidate,
+            evidence=evidence_by_candidate.get(candidate.id, []),
+            settings=settings,
+        )
+    return results
+
+
+def _apply_candidate_scores_batch_polars(
+    *,
+    candidates: Sequence[FacebookCandidate],
+    evidence_by_candidate: dict[str, list[FacebookCandidateEvidence]],
+    settings: CandidateSettings,
+) -> CandidateScoreResults | None:
+    keyword_specs = [
+        ("positive", normalized, original)
+        for normalized, original in _normalized_keywords(settings.positive_keywords)
+    ] + [
+        ("negative", normalized, original)
+        for normalized, original in _normalized_keywords(settings.negative_keywords)
+    ]
+    if (
+        len(candidates) < POLARS_BATCH_MIN_CANDIDATES
+        or not keyword_specs
+        or len(keyword_specs) > POLARS_MAX_KEYWORDS
+    ):
+        return None
+    pl = _optional_polars()
+    if pl is None:
+        return None
+
+    rows = []
+    evidence_counts: dict[str, int] = {}
+    for candidate in candidates:
+        evidence_rows = evidence_by_candidate.get(candidate.id, [])
+        evidence_counts[candidate.id] = len(evidence_rows)
+        normalized_text = "  ".join(
+            row.normalized_text for row in evidence_rows if row.normalized_text
+        )
+        rows.append(
+            {
+                "candidate_id": candidate.id,
+                "padded_text": f" {normalized_text} " if normalized_text else "",
+            }
+        )
+    if not rows:
+        return None
+
+    expressions = [
+        pl.col("padded_text")
+        .str.count_matches(f" {normalized} ", literal=True)
+        .alias(f"kw_{index}")
+        for index, (_, normalized, _) in enumerate(keyword_specs)
+    ]
+    score_rows = (
+        pl.DataFrame(rows)
+        .lazy()
+        .select("candidate_id", *expressions)
+        .collect()
+        .iter_rows(named=True)
+    )
+    counts_by_candidate: dict[str, dict[str, int]] = {
+        str(row["candidate_id"]): {
+            key: int(value or 0)
+            for key, value in row.items()
+            if key.startswith("kw_")
+        }
+        for row in score_rows
+    }
+
+    configured_positive_count = len(
+        _normalized_keywords(settings.positive_keywords)
+    )
+    results: CandidateScoreResults = {}
+    for candidate in candidates:
+        counts = counts_by_candidate.get(candidate.id, {})
+        positive: KeywordCounts = {}
+        negative: KeywordCounts = {}
+        for index, (keyword_type, normalized, original) in enumerate(keyword_specs):
+            count = counts.get(f"kw_{index}", 0)
+            if count <= 0:
+                continue
+            target = positive if keyword_type == "positive" else negative
+            target[normalized] = (original, count)
+        _apply_candidate_score_values(
+            candidate=candidate,
+            settings=settings,
+            positive=positive,
+            negative=negative,
+            evidence_count=evidence_counts.get(candidate.id, 0),
+            configured_positive_count=configured_positive_count,
+        )
+        results[candidate.id] = (positive, negative)
+    return results
 
 
 def _candidate_meets_keyword_auto_ready(
@@ -1003,12 +1148,13 @@ async def recompute_candidates(
     for row in keyword_rows:
         keywords_by_candidate[row.candidate_id].append(row)
 
+    score_results = _apply_candidate_scores_batch(
+        candidates=candidates,
+        evidence_by_candidate=evidence_by_candidate,
+        settings=settings,
+    )
     for candidate in candidates:
-        positive, negative = _apply_candidate_score(
-            candidate=candidate,
-            evidence=evidence_by_candidate[candidate.id],
-            settings=settings,
-        )
+        positive, negative = score_results[candidate.id]
         await _sync_keyword_rows(
             db,
             candidate=candidate,

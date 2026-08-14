@@ -32,7 +32,10 @@ import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
 import { InsertGap } from './insert-button';
-import { StepDetailPanel } from './step-detail-panel';
+import {
+  StepDetailPanel,
+  type SessionGateRuntimeContext
+} from './step-detail-panel';
 import { StepEditOverlay } from './step-edit-overlay';
 import {
   Dialog,
@@ -117,6 +120,7 @@ interface BracketBlockProps {
    */
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
   campaignScenarios?: RunScenarioCampaignOption[];
+  sessionGateRuntimeContext?: SessionGateRuntimeContext;
   enableDragDrop?: boolean;
 }
 
@@ -532,10 +536,11 @@ export function BracketBlock({
   rootStepIndex,
   pathFromRoot,
   campaignScenarios = [],
+  sessionGateRuntimeContext,
   enableDragDrop = true
 }: BracketBlockProps) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
-  const { getStepTypeName } = useCampaignFlowI18n();
+  const { getStepTypeName, getVariableDisplayName } = useCampaignFlowI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [editingChildPath, setEditingChildPath] = useState<{
     listKey: string;
@@ -615,8 +620,14 @@ export function BracketBlock({
     if (step.type === 'random_pick') {
       return tFlow('branchSummary', { count: step.branches?.length ?? 0 });
     }
+    if (step.type === 'if_variable' && step.name) {
+      return getStepSummary({
+        ...step,
+        name: getVariableDisplayName(step.name)
+      });
+    }
     return getStepSummary(step);
-  }, [step, tFlow]);
+  }, [step, tFlow, getVariableDisplayName]);
 
   const ifElementCondition = useMemo(() => {
     if (step.type !== 'if_element') return null;
@@ -695,6 +706,7 @@ export function BracketBlock({
               onChange={handleEditingChildChange}
               onClose={closeEditingChild}
               campaignScenarios={campaignScenarios}
+              runtimeContext={sessionGateRuntimeContext}
               onRequestPickSelector={
                 onTogglePickSelector
                   ? () => {
@@ -778,6 +790,7 @@ export function BracketBlock({
                 onChange={handleEditingChildChange}
                 onClose={closeEditingChild}
                 campaignScenarios={campaignScenarios}
+                runtimeContext={sessionGateRuntimeContext}
                 onRequestPickSelector={
                   onTogglePickSelector
                     ? () => {

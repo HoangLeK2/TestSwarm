@@ -17,6 +17,11 @@ import {
   useUpdateScenario,
   useCompileScenario
 } from '../hooks/use-campaigns';
+import {
+  useAccount,
+  useDeviceAccounts,
+  useFacebookPlatformSession
+} from '@/features/accounts/hooks/use-accounts';
 import type { CampaignOut, ScenarioOut } from '../types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1759,6 +1764,20 @@ export function ScenarioDialog({
 
   /** Luôn có thiết bị xem trước khi campaign có device — tránh cột phải trống khi chọn "Không gửi XML". */
   const embedSerial = xmlSerial || devices[0]?.serial || '';
+  const runtimeDevice = devices.find((device) => device.serial === embedSerial);
+  const { data: deviceAccountLinks = [], isLoading: accountsLoading } =
+    useDeviceAccounts(runtimeDevice?.id ?? '');
+  const primaryLink = deviceAccountLinks.find((link) => link.is_primary);
+  const { data: primaryAccount, isLoading: primaryAccountLoading } = useAccount(
+    primaryLink?.account_id ?? ''
+  );
+  const {
+    data: platformSession,
+    isLoading: sessionLoading,
+    isError: sessionError
+  } = useFacebookPlatformSession(
+    primaryAccount?.platform === 'facebook' ? (runtimeDevice?.id ?? '') : ''
+  );
 
   return (
     <Dialog open={open} onOpenChange={setOpen} modal={!childStepEditorOpen}>
@@ -2310,6 +2329,25 @@ export function ScenarioDialog({
                     onRunStep={handleInlineRunStep}
                     stepRunStates={stepRunStates}
                     onStopInlineRun={hardStopPreview}
+                    sessionGateRuntimeContext={{
+                      deviceLabel: runtimeDevice
+                        ? `${runtimeDevice.name || runtimeDevice.serial} · ${runtimeDevice.serial}`
+                        : '',
+                      platform: primaryAccount?.platform ?? null,
+                      accountLabel: primaryAccount
+                        ? primaryAccount.display_name || primaryAccount.username
+                        : null,
+                      sessionState:
+                        primaryAccount?.platform === 'facebook'
+                          ? (platformSession?.state ?? null)
+                          : null,
+                      loading:
+                        accountsLoading ||
+                        primaryAccountLoading ||
+                        (primaryAccount?.platform === 'facebook' &&
+                          sessionLoading),
+                      error: sessionError
+                    }}
                   />
                 </div>
               )}

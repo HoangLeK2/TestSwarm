@@ -639,6 +639,9 @@
       "colTags": "Nhãn",
       "colTime": "Tạo lúc",
       "setStatus": "Đặt {status}",
+      "history": "Lịch sử hoạt động",
+      "edit": "Cập nhật tài khoản",
+      "transition": "Đổi trạng thái",
       "delete": "Xóa",
       "badgeTest": "Test",
       "badgeDev": "Dev",
@@ -709,11 +712,36 @@
       "updateFailed": "Cập nhật tài khoản thất bại"
     },
     "devicesDialog": {
-      "title": "Liên kết thiết bị",
+      "title": "Điện thoại và phiên đăng nhập",
+      "trigger": "Gắn vào điện thoại",
       "linkedDevices": "{count} thiết bị đã liên kết",
       "availableDevices": "Thiết bị khả dụng",
       "loading": "Đang tải...",
       "noAvailable": "Tất cả thiết bị đã được gán",
+      "primary": "Tài khoản chính",
+      "makePrimary": "Đặt làm tài khoản chính của điện thoại",
+      "replacePrimaryWarning": "Điện thoại này đã có tài khoản chính. Nếu tiếp tục, tài khoản đang chọn sẽ thay thế tài khoản chính hiện tại.",
+      "assignAction": "Gắn {account} vào {device}",
+      "assignSuccess": "Đã gắn {account} vào {device}",
+      "sessionSection": "Phiên đăng nhập nền tảng",
+      "sessionState": "Trạng thái hiện tại: {state}",
+      "sessionMissing": "Chưa có phiên đăng nhập được lưu cho tài khoản này.",
+      "sessionStates": {
+        "unknown": "Chưa xác định",
+        "active": "Đang hoạt động",
+        "login_required": "Cần đăng nhập",
+        "logged_out": "Đã đăng xuất",
+        "checkpoint": "Cần xác minh",
+        "failed": "Kiểm tra thất bại"
+      },
+      "invalidateAction": "Xóa phiên đăng nhập",
+      "invalidateTitle": "Xóa phiên nền tảng?",
+      "invalidateDescription": "Thao tác này xóa trạng thái phiên đã lưu trong hệ thống. Tài khoản vẫn gắn với điện thoại và ứng dụng trên điện thoại không tự đăng xuất.",
+      "invalidateConfirm": "Xóa phiên",
+      "invalidateSuccess": "Đã xóa phiên nền tảng",
+      "invalidateError": "Không thể xóa phiên nền tảng",
+      "removeLink": "Gỡ tài khoản khỏi điện thoại",
+      "cancel": "Hủy",
       "assignError": "Gán thiết bị thất bại",
       "removeSuccess": "Đã gỡ liên kết thiết bị",
       "removeError": "Gỡ liên kết thiết bị thất bại"
@@ -2092,6 +2120,25 @@
         "appOptions": "Tùy chọn mở",
         "timing": "Thời gian & chờ"
       },
+      "sessionGate": {
+        "contextTitle": "Thông tin phiên khi chạy",
+        "platform": "Nền tảng",
+        "account": "Tài khoản",
+        "session": "Phiên đăng nhập",
+        "phone": "Phone kiểm tra",
+        "loading": "Đang tải…",
+        "notAvailable": "Chưa xác định",
+        "noPrimaryAccount": "Phone chưa có tài khoản chính",
+        "noSession": "Chưa có dữ liệu phiên",
+        "loadFailed": "Không tải được trạng thái phiên",
+        "selectPhone": "Chọn phone để xem dữ liệu thực tế",
+        "output": "Kết quả",
+        "outputDescription": "Biến “Phiên nền tảng sẵn sàng” nhận true hoặc false để các node điều kiện dùng tiếp.",
+        "phase": "Thời điểm kiểm tra",
+        "preflight": "Trước khi đăng nhập",
+        "confirm": "Sau khi đăng nhập",
+        "timeout": "Chờ tối đa (giây)"
+      },
       "errorPolicy": {
         "title": "Khi bước lỗi",
         "optionalBadge": "Tuỳ chọn",
@@ -2812,6 +2859,7 @@
         "assert_element": "KIỂM TRA",
         "dismiss_popup": "ĐÓNG POPUP",
         "login_if_needed": "ĐĂNG NHẬP",
+        "facebook_session_gate": "KIỂM TRA PHIÊN NỀN TẢNG",
         "fill_form": "NHẬP BIỂU MẪU",
         "assert_app_state": "KIỂM TRA ỨNG DỤNG",
         "double_tap": "CHẠM ĐÚP",
@@ -2849,6 +2897,8 @@
         "extract_screen_data": "EXTRACT SCREEN DATA"
       },
       "display": {
+        "platformSessionPreflight": "Kiểm tra trước khi tiếp tục",
+        "platformSessionConfirm": "Xác nhận sau đăng nhập",
         "waitSeconds": "{seconds} giây",
         "waitAppTimeout": "{package} ({timeout}s)",
         "verifySsim": "SSIM ≥ {threshold}",
@@ -2867,6 +2917,9 @@
         "commentFilterAllComments": "Tất cả bình luận",
         "commentFilterNone": "Không đổi",
         "fbCommentElse": " / Không thấy {elseCount}"
+      },
+      "systemVariable": {
+        "platformSessionReady": "Phiên nền tảng sẵn sàng"
       }
     },
     "scenarioValidation": {

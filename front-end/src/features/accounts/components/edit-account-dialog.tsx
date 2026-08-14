@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -28,7 +28,13 @@ type FormData = {
   notes?: string;
 };
 
-export function EditAccountDialog({ account }: { account: AccountOut }) {
+export function EditAccountDialog({
+  account,
+  trigger
+}: {
+  account: AccountOut;
+  trigger?: ReactNode;
+}) {
   const t = useTranslations('accountsFeature.editDialog');
   const schema = z.object({
     password: z.string().optional(),
@@ -79,9 +85,11 @@ export function EditAccountDialog({ account }: { account: AccountOut }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size='icon' variant='ghost' className='size-8'>
-          <Pencil size={14} />
-        </Button>
+        {trigger ?? (
+          <Button size='icon' variant='ghost' className='size-8'>
+            <Pencil size={14} />
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className='z-[1000] max-w-md'>
         <DialogHeader>

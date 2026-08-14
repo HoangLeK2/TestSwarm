@@ -5,6 +5,7 @@ import {
   getInsertMenuForUi,
   getStepDisplay,
   getStepTypeName,
+  getVariableDisplayName,
   type FlowStepTranslator
 } from './constants';
 
@@ -27,6 +28,8 @@ export function useCampaignFlowI18n() {
     tValidation,
     getInsertMenu: () => getInsertMenuForUi(tInsert),
     getStepTypeName: (type: string) => getStepTypeName(type, stepT),
+    getVariableDisplayName: (name: string) =>
+      getVariableDisplayName(name, stepT),
     getStepDisplay: (step: Parameters<typeof getStepDisplay>[0]) =>
       getStepDisplay(step, stepT)
   };

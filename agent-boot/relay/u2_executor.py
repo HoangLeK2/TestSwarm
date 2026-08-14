@@ -25,6 +25,9 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 from lxml import etree as LET
 
 from relay.adb import _adb_shell, lock_portrait_rotation, lock_rotation_after_shell_enabled
+from relay.extra_data.parsers.facebook.comment_pipeline import (
+    parse_fb_comments_from_xml_with_diagnostic,
+)
 from relay.u2_session_pool import U2SessionPool
 from relay.u2_xpath_util import normalize_u2_xpath
 
@@ -2351,6 +2354,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     submit_wait_s = max(0.0, min(float(p.get("submit_wait_s", 0.6) or 0.6), 5.0))
     scroll_wait_s = max(0.0, min(float(p.get("scroll_wait_s", 0.7) or 0.7), 5.0))
     require_comment = _fb_bool_param(p.get("require_comment"), bool(comment_text))
+    like_post = _fb_bool_param(p.get("like_post"), True)
     seen_fingerprints: set[str] = set()
     seen_expand_keys: set[str] = set()
     actions: list[dict[str, Any]] = []
@@ -2404,7 +2408,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
         for candidate in qualified:
             seen_fingerprints.add(str(candidate["fingerprint"]))
             liked = bool(candidate.get("already_liked"))
-            if not liked:
+            if like_post and not liked:
                 left, top, right, bottom = candidate["like_bounds"]
                 dev.click((left + right) // 2, (top + bottom) // 2)
                 time.sleep(submit_wait_s)
@@ -3005,6 +3009,247 @@ def _flow_social_open_author_from_post_match(dev: Any, p: dict) -> dict:
         "verified": False,
         "reason": "unsupported_platform",
         "message": f"author-from-post resolver is not implemented for {platform!r}",
+        "platform": platform,
+    }
+
+
+def _fb_commenter_author_nodes(
+    root: Any,
+    comments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    authors = [
+        _fb_author_label_from_node(str(item.get("author") or ""))
+        for item in comments
+        if str(item.get("author") or "").strip()
+    ]
+    folded_authors = [(_fb_fold(author), author) for author in authors]
+    restrict_to_parsed_authors = bool(folded_authors)
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for node in root.iter("node"):
+        label = _fb_author_label_from_node(_fb_node_label(node))
+        folded = _fb_fold(label)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not folded or not bounds or folded in seen:
+            continue
+        if restrict_to_parsed_authors:
+            matched_author = next(
+                (
+                    author
+                    for folded_author, author in folded_authors
+                    if folded_author and folded == folded_author
+                ),
+                None,
+            )
+            if matched_author is None:
+                continue
+        else:
+            matched_author = label
+            if any(
+                token in folded
+                for token in (
+                    "phu hop nhat",
+                    "most relevant",
+                    "tat ca binh luan",
+                    "all comments",
+                    "viet binh luan",
+                    "write a comment",
+                    "tra loi",
+                    "reply",
+                    "thich",
+                    "like",
+                )
+            ):
+                continue
+        if not _fb_author_label_allowed(matched_author):
+            continue
+        if bounds[1] < 260:
+            continue
+        class_name = str(node.attrib.get("class", "") or "")
+        clickable = _fb_is_clickable(node)
+        if not clickable and "TextView" not in class_name and "Button" not in class_name:
+            continue
+        tap_x = min(bounds[2] - 1, bounds[0] + max(24, min(80, (bounds[2] - bounds[0]) // 3)))
+        tap_y = (bounds[1] + bounds[3]) // 2
+        seen.add(folded)
+        comment = next(
+            (item for item in comments if _fb_fold(item.get("author")) == folded),
+            {},
+        )
+        candidates.append(
+            {
+                "author_label": matched_author,
+                "comment_text": str(comment.get("text") or "")[:512],
+                "comment_key": comment.get("comment_key"),
+                "bounds": list(bounds),
+                "tap": [tap_x, tap_y],
+            }
+        )
+    candidates.sort(key=lambda item: (int(item["bounds"][1]), int(item["bounds"][0])))
+    return candidates
+
+
+def _flow_fb_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
+    """Open and verify a commenter profile from a matched feed post action."""
+    action = p.get("action") if isinstance(p.get("action"), dict) else {}
+    comment_bounds = action.get("comment_bounds") if action else None
+    if (
+        not action
+        or not isinstance(comment_bounds, list)
+        or len(comment_bounds) != 4
+    ):
+        return {
+            "verified": False,
+            "reason": "comment_binding_missing",
+            "message": "matched post action does not expose comment bounds",
+            "source_action": {"target_id": action.get("target_id") if action else None},
+        }
+
+    min_score = max(0, int(p.get("min_score", 80) or 80))
+    required = _fb_keyword_list(p.get("required_keywords"))
+    optional = _fb_keyword_list(p.get("optional_keywords"))
+    forbidden = _fb_keyword_list(p.get("forbidden_keywords"))
+    wait_s = max(0.0, min(float(p.get("comment_wait_s", 1.0) or 1.0), 10.0))
+    profile_wait_s = max(0.0, min(float(p.get("profile_wait_s", 1.0) or 1.0), 10.0))
+    max_commenters = max(1, int(p.get("max_commenters", 5) or 5))
+
+    left, top, right, bottom = [int(v) for v in comment_bounds]
+    dev.click((left + right) // 2, (top + bottom) // 2)
+    time.sleep(wait_s)
+
+    comments_xml = dev.dump_hierarchy(compressed=False)
+    comments, diagnostic = parse_fb_comments_from_xml_with_diagnostic(
+        comments_xml,
+        parent_post_id=str(action.get("target_id") or ""),
+        max_items=max_commenters,
+    )
+    comments_root = _xml_parse_root(comments_xml)
+    if _fb_close_comment_filter_sheet_if_needed(dev, comments_root):
+        time.sleep(min(max(wait_s, 0.2), 0.8))
+        comments_xml = dev.dump_hierarchy(compressed=False)
+        comments, diagnostic = parse_fb_comments_from_xml_with_diagnostic(
+            comments_xml,
+            parent_post_id=str(action.get("target_id") or ""),
+            max_items=max_commenters,
+        )
+        comments_root = _xml_parse_root(comments_xml)
+    candidates = _fb_commenter_author_nodes(comments_root, comments)[:max_commenters]
+    if not candidates:
+        return {
+            "verified": False,
+            "reason": "no_commenter_candidate",
+            "message": "comment sheet did not expose a tappable commenter candidate",
+            "profile_opened": False,
+            "comment_sheet_opened": True,
+            "comment_count": len(comments),
+            "diagnostic": diagnostic,
+            "source_post_target_id": action.get("target_id"),
+            "comments_xml_chars": len(comments_xml or ""),
+        }
+
+    tried: list[dict[str, Any]] = []
+    press = getattr(dev, "press", None)
+    for candidate in candidates:
+        author_label = str(candidate.get("author_label") or "")
+        profile_required = required
+        if author_label and author_label not in profile_required:
+            profile_required = [author_label, *profile_required]
+        tap_x, tap_y = int(candidate["tap"][0]), int(candidate["tap"][1])
+        dev.click(tap_x, tap_y)
+        time.sleep(profile_wait_s)
+
+        profile_xml = dev.dump_hierarchy(compressed=False)
+        profile_root = _xml_parse_root(profile_xml)
+        profile_text = " ".join(_fb_all_labels(profile_root))
+        profile_score, matched, missing, forbidden_hit = _fb_score_text(
+            profile_text,
+            display_name=author_label,
+            search=str(p.get("search") or author_label),
+            required=profile_required,
+            optional=optional,
+            forbidden=forbidden,
+        )
+        action_buttons: list[dict[str, Any]] = []
+        for node in profile_root.iter("node"):
+            label = _fb_node_label(node)
+            bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+            if not bounds or not _fb_is_clickable(node):
+                continue
+            if _fb_is_add_friend_label(label) or _fb_is_connection_action_label(label):
+                action_buttons.append({"label": label, "bounds": list(bounds)})
+
+        if (
+            not forbidden_hit
+            and not missing
+            and profile_score >= min_score
+            and len(action_buttons) == 1
+        ):
+            target_id_source = (
+                f"{action.get('target_id') or ''}|{candidate.get('comment_key') or ''}|"
+                f"{_fb_fold(author_label)}"
+            )
+            return {
+                "verified": True,
+                "target_type": "person",
+                "source": "matched_feed_post_commenter",
+                "confidence": profile_score,
+                "target_id": "ui_commenter:" + hashlib.sha256(
+                    target_id_source.encode("utf-8")
+                ).hexdigest(),
+                "name": author_label,
+                "display_name": author_label,
+                "matched_keywords": matched,
+                "selected_bounds": candidate["bounds"],
+                "selected_tap": [tap_x, tap_y],
+                "action_bounds": action_buttons[0]["bounds"],
+                "profile_opened": True,
+                "comment_sheet_opened": True,
+                "source_post_target_id": action.get("target_id"),
+                "source_comment_key": candidate.get("comment_key"),
+                "source_comment_text": candidate.get("comment_text"),
+                "comments_xml_chars": len(comments_xml or ""),
+                "profile_xml_chars": len(profile_xml or ""),
+            }
+
+        tried.append(
+            {
+                "author_label": author_label,
+                "reason": (
+                    "profile_not_verified"
+                    if forbidden_hit or missing or profile_score < min_score
+                    else "ambiguous_profile_action"
+                ),
+                "missing_keywords": missing,
+                "matched_keywords": matched,
+                "confidence": profile_score,
+                "action_count": len(action_buttons),
+            }
+        )
+        if callable(press):
+            press("back")
+            time.sleep(min(max(wait_s, 0.2), 0.8))
+
+    return {
+        "verified": False,
+        "reason": "no_verified_commenter_profile",
+        "message": "no commenter profile satisfied profile keywords",
+        "profile_opened": False,
+        "comment_sheet_opened": True,
+        "candidate_count": len(candidates),
+        "tried": tried,
+        "source_post_target_id": action.get("target_id"),
+        "comments_xml_chars": len(comments_xml or ""),
+    }
+
+
+def _flow_social_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
+    platform = str(p.get("platform") or "facebook").strip().casefold()
+    if platform == "facebook":
+        return _flow_fb_open_commenter_from_post_match(dev, p)
+    return {
+        "verified": False,
+        "reason": "unsupported_platform",
+        "message": f"commenter-from-post resolver is not implemented for {platform!r}",
         "platform": platform,
     }
 
@@ -3671,6 +3916,8 @@ _FLOW_TABLE: dict[str, Any] = {
     "fb_scan_posts_interact": _flow_fb_scan_posts_interact,
     "social_open_author_from_post_match": _flow_social_open_author_from_post_match,
     "fb_open_author_from_post_match": _flow_fb_open_author_from_post_match,
+    "social_open_commenter_from_post_match": _flow_social_open_commenter_from_post_match,
+    "fb_open_commenter_from_post_match": _flow_fb_open_commenter_from_post_match,
 }
 
 

@@ -744,9 +744,9 @@ def test_post_template_runs_real_like_and_comment() -> None:
     assert scan["target_count"] == "${POST_TARGET_COUNT}"
 
 
-def test_home_post_author_connect_template_uses_generic_author_step() -> None:
+def test_home_post_commenter_connect_template_opens_comments_without_commenting() -> None:
     template = BUILTIN_TEMPLATE_BY_NAME[
-        "Nuôi Facebook - Kết bạn từ bài post Home đúng keyword"
+        "Nuôi Facebook - Kết bạn từ người bình luận post Home đúng keyword"
     ]
     assert ScenarioModel.validate_dict(
         {"steps": template["steps"], "variables": template["variables"]}
@@ -755,10 +755,10 @@ def test_home_post_author_connect_template_uses_generic_author_step() -> None:
     scan = next(
         step for step in flat_steps if step.get("type") == "fb_scan_posts_interact"
     )
-    author_steps = [
+    commenter_steps = [
         step
         for step in flat_steps
-        if step.get("type") == "social_open_author_from_post_match"
+        if step.get("type") == "social_open_commenter_from_post_match"
     ]
     connection_steps = [
         step for step in flat_steps if step.get("type") == "connection_request"
@@ -767,16 +767,19 @@ def test_home_post_author_connect_template_uses_generic_author_step() -> None:
 
     assert scan["target_count"] == "${POSTS_PER_BATCH}"
     assert scan["max_scrolls"] == 0
-    assert [step["action_index"] for step in author_steps] == [0, 1]
-    assert all(step["platform"] == "facebook" for step in author_steps)
-    assert all(step["source_var"] == "_post_scan" for step in author_steps)
+    assert scan["comment_text"] == ""
+    assert scan["require_comment"] is False
+    assert scan["like_post"] is False
+    assert [step["action_index"] for step in commenter_steps] == [0, 1]
+    assert all(step["platform"] == "facebook" for step in commenter_steps)
+    assert all(step["source_var"] == "_post_scan" for step in commenter_steps)
     assert all(
         step["required_keywords"] == "${PROFILE_REQUIRED_KEYWORDS}"
-        for step in author_steps
+        for step in commenter_steps
     )
     assert len(connection_steps) == 2
     assert all(step["require_verified_target"] == "_people_target" for step in connection_steps)
-    assert len(back_steps) == 2
+    assert len(back_steps) == 4
 
 
 def _post_comment_sibling_flows(

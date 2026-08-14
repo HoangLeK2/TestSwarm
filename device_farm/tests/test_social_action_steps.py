@@ -733,6 +733,7 @@ def test_fb_scan_posts_interact_delegates_to_agent_boot() -> None:
     assert device.flows[0][1]["comment_text"] == "Bài viết hữu ích"
     assert device.flows[0][1]["target_count"] == 2
     assert device.flows[0][1]["max_scrolls"] == 4
+    assert device.flows[0][1]["like_post"] is True
     assert sc.ctx["vars"]["_post_scan"]["interacted_count"] == 2
 
 
@@ -879,6 +880,65 @@ def test_social_open_author_from_post_match_delegates_and_saves_target() -> None
     assert sc.ctx["vars"]["_people_target"]["verified"] is True
     assert sc.ctx["vars"]["PEOPLE_PROFILE_SELECTED"] is True
     assert sc.ctx["vars"]["AUTHOR_PROFILE_OPENED"] is True
+
+
+def test_social_open_commenter_from_post_match_delegates_and_saves_target() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    device.flow_result = {
+        "verified": True,
+        "target_type": "person",
+        "source": "matched_feed_post_commenter",
+        "confidence": 92,
+        "target_id": "ui_commenter:abc",
+        "display_name": "Tran Van B",
+        "matched_keywords": ["AI"],
+        "selected_bounds": [180, 740, 420, 790],
+        "action_bounds": [600, 720, 980, 810],
+        "profile_opened": True,
+        "comment_sheet_opened": True,
+        "source_post_target_id": "ui_post:abc",
+    }
+    sc = _context(device)
+    sc.var_ctx.set(
+        "_post_scan",
+        {
+            "actions": [
+                {
+                    "verified": True,
+                    "target_id": "ui_post:abc",
+                    "comment_bounds": [227, 1505, 457, 1659],
+                    "matched_keywords": ["AI"],
+                }
+            ]
+        },
+    )
+
+    result = dispatch_step(
+        sc,
+        {
+            "type": "social_open_commenter_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 0,
+            "required_keywords": ["AI"],
+            "max_commenters": 5,
+            "save_as": "_people_target",
+            "save_success_as": "PEOPLE_PROFILE_SELECTED",
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "target_verified"
+    assert device.flows[0][0] == "social_open_commenter_from_post_match"
+    assert device.flows[0][1]["action"]["target_id"] == "ui_post:abc"
+    assert device.flows[0][1]["max_commenters"] == 5
+    assert sc.ctx["vars"]["_people_target"]["verified"] is True
+    assert sc.ctx["vars"]["PEOPLE_PROFILE_SELECTED"] is True
+    assert sc.ctx["vars"]["COMMENTER_PROFILE_OPENED"] is True
+    assert sc.ctx["vars"]["COMMENT_SHEET_OPENED"] is True
 
 
 def test_social_open_author_from_post_match_skips_missing_action_index() -> None:

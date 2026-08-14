@@ -89,6 +89,7 @@ test('exposes all actions in the Facebook insert group', () => {
   assert.equal(types.has('fb_select_post_target'), true);
   assert.equal(types.has('fb_scan_posts_interact'), true);
   assert.equal(types.has('social_open_author_from_post_match'), true);
+  assert.equal(types.has('social_open_commenter_from_post_match'), true);
 });
 
 test('creates a default Facebook people profile resolver', () => {
@@ -135,6 +136,7 @@ test('creates a default Facebook post feed scanner', () => {
   assert.equal(step.target_count, 1);
   assert.equal(step.max_scrolls, 6);
   assert.equal(step.require_comment, true);
+  assert.equal(step.like_post, true);
   assert.deepEqual(step.keywords, []);
 });
 
@@ -148,6 +150,21 @@ test('creates a default social author-from-post resolver', () => {
   assert.equal(step.save_as, '_people_target');
   assert.equal(step.save_success_as, 'PEOPLE_PROFILE_SELECTED');
   assert.equal(step.save_opened_as, 'AUTHOR_PROFILE_OPENED');
+  assert.deepEqual(step.required_keywords, []);
+});
+
+test('creates a default social commenter-from-post resolver', () => {
+  const step = createDefaultStep('social_open_commenter_from_post_match');
+
+  assert.equal(step.type, 'social_open_commenter_from_post_match');
+  assert.equal(step.platform, 'facebook');
+  assert.equal(step.source_var, '_post_scan');
+  assert.equal(step.action_index, 0);
+  assert.equal(step.save_as, '_people_target');
+  assert.equal(step.save_success_as, 'PEOPLE_PROFILE_SELECTED');
+  assert.equal(step.save_opened_as, 'COMMENTER_PROFILE_OPENED');
+  assert.equal(step.save_sheet_opened_as, 'COMMENT_SHEET_OPENED');
+  assert.equal(step.max_commenters, 5);
   assert.deepEqual(step.required_keywords, []);
 });
 

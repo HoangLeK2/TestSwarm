@@ -801,6 +801,7 @@ class FbScanPostsInteractStep(StepBase):
     comment_wait_s: Union[float, str] = 0.8
     submit_wait_s: Union[float, str] = 0.6
     require_comment: Union[bool, str] = True
+    like_post: Union[bool, str] = True
     save_as: Optional[str] = Field(None, min_length=1, max_length=128)
 
 
@@ -820,6 +821,27 @@ class SocialOpenAuthorFromPostMatchStep(StepBase):
     save_as: str = Field("_people_target", min_length=1, max_length=128)
     save_success_as: str = Field("PEOPLE_PROFILE_SELECTED", min_length=1, max_length=128)
     save_opened_as: str = Field("AUTHOR_PROFILE_OPENED", min_length=1, max_length=128)
+
+
+class SocialOpenCommenterFromPostMatchStep(StepBase):
+    type: Literal["social_open_commenter_from_post_match"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    source_var: str = Field("_post_scan", min_length=1, max_length=128)
+    action_index: Union[int, str] = 0
+    search: Optional[str] = Field(None, max_length=512)
+    display_name: Optional[str] = Field(None, max_length=256)
+    required_keywords: Optional[Union[List[str], str]] = None
+    optional_keywords: Optional[Union[List[str], str]] = None
+    forbidden_keywords: Optional[Union[List[str], str]] = None
+    min_score: Union[int, str] = 80
+    timeout: Union[float, str] = 12.0
+    comment_wait_s: Union[float, str] = 1.0
+    profile_wait_s: Union[float, str] = 1.0
+    max_commenters: Union[int, str] = 5
+    save_as: str = Field("_people_target", min_length=1, max_length=128)
+    save_success_as: str = Field("PEOPLE_PROFILE_SELECTED", min_length=1, max_length=128)
+    save_opened_as: str = Field("COMMENTER_PROFILE_OPENED", min_length=1, max_length=128)
+    save_sheet_opened_as: str = Field("COMMENT_SHEET_OPENED", min_length=1, max_length=128)
 
 
 class ContentInteractionStep(SocialActionStepBase):
@@ -946,6 +968,10 @@ StepModel = Annotated[
         Annotated[
             SocialOpenAuthorFromPostMatchStep,
             Tag("social_open_author_from_post_match"),
+        ],
+        Annotated[
+            SocialOpenCommenterFromPostMatchStep,
+            Tag("social_open_commenter_from_post_match"),
         ],
         Annotated[ContentInteractionStep, Tag("content_interaction")],
         Annotated[ConnectionRequestStep, Tag("connection_request")],

@@ -1579,6 +1579,14 @@ export function StepDetailPanel({
                   <label className='flex items-center gap-2 text-xs text-muted-foreground'>
                     <input
                       type='checkbox'
+                      checked={step.like_post ?? true}
+                      onChange={(e) => update({ like_post: e.target.checked })}
+                    />
+                    Like post khi match
+                  </label>
+                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                    <input
+                      type='checkbox'
                       checked={step.require_comment ?? true}
                       onChange={(e) =>
                         update({ require_comment: e.target.checked })
@@ -1589,12 +1597,13 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'social_open_author_from_post_match' && (
+              {(step.type === 'social_open_author_from_post_match' ||
+                step.type === 'social_open_commenter_from_post_match') && (
                 <>
                   <StepPanelHint>
-                    Chạy platform adapter: lấy post action đã match từ biến
-                    scan, mở author profile, verify profile rồi lưu target proof
-                    cho bước gửi kết bạn.
+                    {step.type === 'social_open_commenter_from_post_match'
+                      ? 'Chạy platform adapter: lấy post action đã match, mở comment sheet, chọn commenter, verify profile rồi lưu target proof cho bước gửi kết bạn.'
+                      : 'Chạy platform adapter: lấy post action đã match từ biến scan, mở author profile, verify profile rồi lưu target proof cho bước gửi kết bạn.'}
                   </StepPanelHint>
                   <div className='grid grid-cols-3 gap-2'>
                     <F label='Platform'>
@@ -1840,6 +1849,59 @@ export function StepDetailPanel({
                     Tìm nút Bình luận đúng bài viết và cache target trong
                     runtime. Step này không bấm.
                   </div>
+                  {step.type === 'social_open_commenter_from_post_match' && (
+                    <div className='grid grid-cols-3 gap-2'>
+                      <F label='Chờ comment sheet'>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={10}
+                          step={0.1}
+                          className='h-8 text-xs'
+                          value={step.comment_wait_s ?? 1}
+                          onChange={(e) =>
+                            update({
+                              comment_wait_s: Math.max(
+                                0,
+                                Math.min(10, Number(e.target.value) || 1)
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                      <F label='Max commenter'>
+                        <Input
+                          type='number'
+                          min={1}
+                          max={20}
+                          className='h-8 text-xs'
+                          value={step.max_commenters ?? 5}
+                          onChange={(e) =>
+                            update({
+                              max_commenters: Math.max(
+                                1,
+                                Math.min(20, Number(e.target.value) || 5)
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                      <F label='Biến comment sheet'>
+                        <Input
+                          className='h-8 font-mono text-xs'
+                          value={
+                            step.save_sheet_opened_as ?? 'COMMENT_SHEET_OPENED'
+                          }
+                          onChange={(e) =>
+                            update({
+                              save_sheet_opened_as:
+                                e.target.value || 'COMMENT_SHEET_OPENED'
+                            })
+                          }
+                        />
+                      </F>
+                    </div>
+                  )}
                   <div className='grid grid-cols-2 gap-2'>
                     <F label='Chờ nút tối đa (giây)'>
                       <Input

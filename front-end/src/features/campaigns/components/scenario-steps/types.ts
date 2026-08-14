@@ -113,6 +113,7 @@ export type ActionType =
   | 'fb_select_post_target'
   | 'fb_scan_posts_interact'
   | 'social_open_author_from_post_match'
+  | 'social_open_commenter_from_post_match'
   | 'content_interaction'
   | 'connection_request'
   | 'community_membership'
@@ -209,6 +210,7 @@ export function getStepIcon(type: string): LucideIcon {
     case 'fb_select_post_target':
       return ShieldCheck;
     case 'social_open_author_from_post_match':
+    case 'social_open_commenter_from_post_match':
       return UserPlus;
     case 'fb_tap_comment_button':
     case 'tap_fb_comment_button':
@@ -379,6 +381,8 @@ export function getStepLabel(step: FlowStep): string {
       return `Scan post · ${step.target_count ?? 1} bài · ${step.keywords || 'mọi keyword'}`;
     case 'social_open_author_from_post_match':
       return `${step.platform ?? 'facebook'} · mở author từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
+    case 'social_open_commenter_from_post_match':
+      return `${step.platform ?? 'facebook'} · mở commenter từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
     case 'content_interaction':
       return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
     case 'connection_request':
@@ -464,6 +468,11 @@ export const ALL_STEP_TYPES: {
   {
     value: 'social_open_author_from_post_match',
     label: 'Mở author từ post match',
+    group: 'action'
+  },
+  {
+    value: 'social_open_commenter_from_post_match',
+    label: 'Mở commenter từ post match',
     group: 'action'
   },
   {
@@ -771,6 +780,7 @@ export function createDefaultStep(
         max_scrolls: 6,
         timeout: 45,
         scroll_x_ratio: 0.5,
+        like_post: true,
         require_comment: true,
         save_as: '_post_scan'
       };
@@ -799,6 +809,35 @@ export function createDefaultStep(
         save_as: '_people_target',
         save_success_as: 'PEOPLE_PROFILE_SELECTED',
         save_opened_as: 'AUTHOR_PROFILE_OPENED'
+      };
+    case 'social_open_commenter_from_post_match':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        source_var: '_post_scan',
+        action_index: 0,
+        required_keywords: [],
+        optional_keywords: [],
+        forbidden_keywords: [
+          'trang',
+          'page',
+          'nhóm',
+          'group',
+          'ẩn danh',
+          'anonymous',
+          'sponsored',
+          'được tài trợ'
+        ],
+        min_score: 80,
+        timeout: 12,
+        comment_wait_s: 1,
+        profile_wait_s: 1,
+        max_commenters: 5,
+        save_as: '_people_target',
+        save_success_as: 'PEOPLE_PROFILE_SELECTED',
+        save_opened_as: 'COMMENTER_PROFILE_OPENED',
+        save_sheet_opened_as: 'COMMENT_SHEET_OPENED'
       };
     case 'content_interaction':
       return {

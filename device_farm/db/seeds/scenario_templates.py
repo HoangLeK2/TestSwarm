@@ -1731,24 +1731,23 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 
     {
-        "name": "Nuôi Facebook - Kết bạn từ bài post Home đúng keyword",
-        "display_name": "Nuôi Facebook - Kết bạn từ bài post Home đúng keyword",
+        "name": "Nuôi Facebook - Kết bạn từ người bình luận post Home đúng keyword",
+        "display_name": "Nuôi Facebook - Kết bạn từ người bình luận post Home đúng keyword",
         "category": "facebook",
         "description": (
-            "Treo Home feed theo cycle: scan vùng đang thấy, chỉ comment bài post "
-            "khớp keyword, mở profile author của chính post đã match, verify profile "
-            "phù hợp rồi mới gửi lời mời kết bạn. Back về feed sau mỗi profile rồi "
-            "mới cuộn tiếp."
+            "Treo Home feed theo cycle: scan vùng đang thấy, tìm bài post khớp "
+            "keyword, bấm Bình luận để mở comment sheet, mở profile commenter phù "
+            "hợp rồi mới gửi lời mời kết bạn. Back về feed rồi mới cuộn tiếp."
         ),
-        "tags": "facebook,nurture,home-feed,post,profile,connection,keyword",
+        "tags": "facebook,nurture,home-feed,post,commenter,profile,connection,keyword",
         "variables": {
             "POST_RUN_SECONDS": 28800,
             "FEED_ITERATIONS": 9999,
             "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
-            "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
             "POSTS_PER_BATCH": 2,
             "POST_MATCH_MODE": "any",
             "POST_SCAN_TIMEOUT_SECONDS": 60,
+            "COMMENTER_SCAN_LIMIT": 5,
             "PROFILE_REQUIRED_KEYWORDS": ["AI", "công nghệ"],
             "PROFILE_OPTIONAL_KEYWORDS": ["tuyển dụng", "startup", "automation"],
             "PROFILE_FORBIDDEN_KEYWORDS": [
@@ -1786,16 +1785,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "keywords": "${POST_KEYWORDS}",
                                 "keywords_var": "POST_KEYWORDS",
                                 "match_mode": "${POST_MATCH_MODE}",
-                                "comment_text": "${COMMENT_TEXT}",
+                                "comment_text": "",
                                 "target_count": "${POSTS_PER_BATCH}",
                                 "max_scrolls": 0,
                                 "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
-                                "require_comment": True,
+                                "require_comment": False,
+                                "like_post": False,
                                 "save_as": "_post_scan",
                             },
                             {
                                 "id": "home_post_author_open_0",
-                                "type": "social_open_author_from_post_match",
+                                "type": "social_open_commenter_from_post_match",
                                 "platform": "facebook",
                                 "source_var": "_post_scan",
                                 "action_index": 0,
@@ -1803,9 +1803,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
                                 "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
                                 "min_score": "${PROFILE_MIN_SCORE}",
+                                "max_commenters": "${COMMENTER_SCAN_LIMIT}",
                                 "save_as": "_people_target",
                                 "save_success_as": "PEOPLE_PROFILE_SELECTED",
-                                "save_opened_as": "AUTHOR_PROFILE_OPENED",
+                                "save_opened_as": "COMMENTER_PROFILE_OPENED",
+                                "save_sheet_opened_as": "COMMENT_SHEET_OPENED",
                             },
                             {
                                 "id": "home_post_author_connect_0",
@@ -1838,7 +1840,18 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             {
                                 "id": "home_post_author_back_0",
                                 "type": "if_variable",
-                                "name": "AUTHOR_PROFILE_OPENED",
+                                "name": "COMMENTER_PROFILE_OPENED",
+                                "equals": True,
+                                "then": [
+                                    {"type": "key", "key": "back"},
+                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "id": "home_post_author_close_comments_0",
+                                "type": "if_variable",
+                                "name": "COMMENT_SHEET_OPENED",
                                 "equals": True,
                                 "then": [
                                     {"type": "key", "key": "back"},
@@ -1848,7 +1861,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             },
                             {
                                 "id": "home_post_author_open_1",
-                                "type": "social_open_author_from_post_match",
+                                "type": "social_open_commenter_from_post_match",
                                 "platform": "facebook",
                                 "source_var": "_post_scan",
                                 "action_index": 1,
@@ -1856,9 +1869,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
                                 "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
                                 "min_score": "${PROFILE_MIN_SCORE}",
+                                "max_commenters": "${COMMENTER_SCAN_LIMIT}",
                                 "save_as": "_people_target",
                                 "save_success_as": "PEOPLE_PROFILE_SELECTED",
-                                "save_opened_as": "AUTHOR_PROFILE_OPENED",
+                                "save_opened_as": "COMMENTER_PROFILE_OPENED",
+                                "save_sheet_opened_as": "COMMENT_SHEET_OPENED",
                             },
                             {
                                 "id": "home_post_author_connect_1",
@@ -1891,7 +1906,18 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             {
                                 "id": "home_post_author_back_1",
                                 "type": "if_variable",
-                                "name": "AUTHOR_PROFILE_OPENED",
+                                "name": "COMMENTER_PROFILE_OPENED",
+                                "equals": True,
+                                "then": [
+                                    {"type": "key", "key": "back"},
+                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "id": "home_post_author_close_comments_1",
+                                "type": "if_variable",
+                                "name": "COMMENT_SHEET_OPENED",
                                 "equals": True,
                                 "then": [
                                     {"type": "key", "key": "back"},

@@ -50,6 +50,7 @@ SCENARIO_STEP_TYPES = [
     "fb_select_post_target",
     "fb_scan_posts_interact",
     "social_open_author_from_post_match",
+    "social_open_commenter_from_post_match",
     "content_interaction",
     "connection_request",
     "lease_connection_candidate",
@@ -239,11 +240,11 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "batch_size", "max_scrolls", "timeout", "scroll_x_ratio",
             "scroll_y1_ratio", "scroll_y2_ratio", "scroll_duration_s",
             "scroll_wait_s", "comment_wait_s", "submit_wait_s",
-            "require_comment", "save_as",
+            "require_comment", "like_post", "save_as",
         ],
         "description": (
             "Agent-boot flow: scan visible Facebook feed/group posts, match configured "
-            "keywords, then perform real like and comment on matched posts."
+            "keywords, then optionally like and comment on matched posts."
         ),
     },
     "social_open_author_from_post_match": {
@@ -257,6 +258,20 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "description": (
             "Platform adapter flow: open the author profile from a previously matched "
             "post action, verify profile suitability, and save target proof."
+        ),
+    },
+    "social_open_commenter_from_post_match": {
+        "required": [],
+        "optional": [
+            "platform", "source_var", "action_index", "search", "display_name",
+            "required_keywords", "optional_keywords", "forbidden_keywords",
+            "min_score", "timeout", "comment_wait_s", "profile_wait_s",
+            "max_commenters", "save_as", "save_success_as", "save_opened_as",
+            "save_sheet_opened_as",
+        ],
+        "description": (
+            "Platform adapter flow: open comments for a previously matched feed post, "
+            "open a commenter profile, verify suitability, and save target proof."
         ),
     },
     "community_membership": {

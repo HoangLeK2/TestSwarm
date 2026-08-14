@@ -1219,6 +1219,7 @@ def _handle_social_scan_posts_interact(
                 "comment_wait_s": step.get("comment_wait_s", 0.8),
                 "submit_wait_s": step.get("submit_wait_s", 0.6),
                 "require_comment": _bool_value(step.get("require_comment"), True),
+                "like_post": _bool_value(step.get("like_post"), True),
                 **selector_config,
             },
             timeout=timeout,
@@ -1318,30 +1319,50 @@ def handle_fb_scan_posts_interact(
     )
 
 
-@register_step("social_open_author_from_post_match", "fb_open_author_from_post_match")
+@register_step(
+    "social_open_author_from_post_match",
+    "fb_open_author_from_post_match",
+    "social_open_commenter_from_post_match",
+    "fb_open_commenter_from_post_match",
+)
 def handle_social_open_author_from_post_match(
     sc: ScenarioContext,
     step: dict[str, Any],
     idx: int,
     result: dict[str, Any],
 ) -> None:
-    """Open and verify the author profile from a previously matched post action."""
+    """Open and verify a profile from a previously matched post action."""
 
+    is_commenter = str(step.get("type") or "").startswith(
+        ("social_open_commenter", "fb_open_commenter")
+    )
+    step_name = (
+        "social_open_commenter_from_post_match"
+        if is_commenter
+        else "social_open_author_from_post_match"
+    )
+    flow_name = step_name
     source_var = str(step.get("source_var") or "_post_scan").strip()
     save_as = str(step.get("save_as") or _DEFAULT_PEOPLE_TARGET_VAR).strip()
     success_var = str(
         step.get("save_success_as") or _DEFAULT_PEOPLE_SELECTED_VAR
     ).strip()
-    opened_var = str(step.get("save_opened_as") or "AUTHOR_PROFILE_OPENED").strip()
+    opened_var = str(
+        step.get("save_opened_as")
+        or ("COMMENTER_PROFILE_OPENED" if is_commenter else "AUTHOR_PROFILE_OPENED")
+    ).strip()
+    sheet_opened_var = str(step.get("save_sheet_opened_as") or "COMMENT_SHEET_OPENED").strip()
     platform = str(step.get("platform") or "facebook").strip().casefold()
     _set_runtime_variable(sc, success_var, False)
     _set_runtime_variable(sc, opened_var, False)
+    if is_commenter:
+        _set_runtime_variable(sc, sheet_opened_var, False)
     _save_unverified_target(
         sc,
         save_as=save_as,
         target_type="person",
         outcome="target_not_checked",
-        message="social_open_author_from_post_match: target has not been verified",
+        message=f"{step_name}: target has not been verified",
     )
 
     source = _lookup_runtime_dict(sc, source_var)
@@ -1352,8 +1373,7 @@ def handle_social_open_author_from_post_match(
                 "ok": True,
                 "outcome": "source_actions_missing",
                 "message": (
-                    "social_open_author_from_post_match: source scan has no "
-                    "actions to inspect"
+                    f"{step_name}: source scan has no actions to inspect"
                 ),
                 "action_performed": False,
                 "source_var": source_var,
@@ -1373,8 +1393,7 @@ def handle_social_open_author_from_post_match(
                 "ok": True,
                 "outcome": "source_action_index_missing",
                 "message": (
-                    "social_open_author_from_post_match: requested post action "
-                    "index is not available"
+                    f"{step_name}: requested post action index is not available"
                 ),
                 "action_performed": False,
                 "source_var": source_var,
@@ -1391,8 +1410,7 @@ def handle_social_open_author_from_post_match(
                 "ok": True,
                 "outcome": "source_action_not_verified",
                 "message": (
-                    "social_open_author_from_post_match: selected post action "
-                    "was not verified"
+                    f"{step_name}: selected post action was not verified"
                 ),
                 "action_performed": False,
                 "source_var": source_var,
@@ -1426,7 +1444,7 @@ def handle_social_open_author_from_post_match(
     timeout = max(1.0, float(step.get("timeout", 12.0) or 12.0))
     try:
         flow_result = sc.device.u2_flow(
-            "social_open_author_from_post_match",
+            flow_name,
             {
                 "platform": platform,
                 "action": action,
@@ -1437,6 +1455,8 @@ def handle_social_open_author_from_post_match(
                 "forbidden_keywords": forbidden_keywords or [],
                 "min_score": step.get("min_score", 80),
                 "profile_wait_s": step.get("profile_wait_s", 1.0),
+                "comment_wait_s": step.get("comment_wait_s", 1.0),
+                "max_commenters": step.get("max_commenters", 5),
             },
             timeout=timeout,
             priority="visible",
@@ -1447,8 +1467,7 @@ def handle_social_open_author_from_post_match(
                 "ok": False,
                 "outcome": "target_resolver_unavailable",
                 "message": (
-                    "social_open_author_from_post_match: agent-boot flow "
-                    f"failed: {exc}"
+                    f"{step_name}: agent-boot flow failed: {exc}"
                 ),
                 "action_performed": False,
             }
@@ -1466,8 +1485,7 @@ def handle_social_open_author_from_post_match(
                 "ok": False,
                 "outcome": "target_resolver_failed",
                 "message": (
-                    "social_open_author_from_post_match: agent-boot returned "
-                    "an invalid payload"
+                    f"{step_name}: agent-boot returned an invalid payload"
                 ),
                 "action_performed": False,
             }
@@ -1480,16 +1498,20 @@ def handle_social_open_author_from_post_match(
         {
             "ok": target.get("verified") is True,
             "outcome": (
-                "target_verified"
-                if target.get("verified") is True
-                else str(target.get("reason") or "target_not_verified")
+                    "target_verified"
+                    if target.get("verified") is True
+                    else str(target.get("reason") or "target_not_verified")
             ),
             "message": str(
                 target.get("message")
                 or (
                     "social_open_author_from_post_match: verified author profile is open"
-                    if target.get("verified") is True
-                    else "social_open_author_from_post_match: author profile not verified"
+                    if target.get("verified") is True and not is_commenter
+                    else (
+                        "social_open_commenter_from_post_match: verified commenter profile is open"
+                        if target.get("verified") is True
+                        else f"{step_name}: profile not verified"
+                    )
                 )
             ),
             "action_performed": target.get("verified") is True,
@@ -1503,6 +1525,8 @@ def handle_social_open_author_from_post_match(
         }
     )
     _set_runtime_variable(sc, opened_var, target.get("profile_opened") is True)
+    if is_commenter:
+        _set_runtime_variable(sc, sheet_opened_var, target.get("comment_sheet_opened") is True)
     if target.get("verified") is True:
         target["verified"] = True
         _save_verified_target(sc, save_as=save_as, target=target)

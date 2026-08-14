@@ -32,6 +32,7 @@ _GENERIC_SOCIAL_TYPES = frozenset(
         "fb_select_post_target",
         "fb_scan_posts_interact",
         "social_open_author_from_post_match",
+        "social_open_commenter_from_post_match",
     }
 )
 

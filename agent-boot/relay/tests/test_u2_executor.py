@@ -505,6 +505,71 @@ def test_flow_social_scan_posts_interact_forwards_author_binding(monkeypatch):
     assert result["actions"][0]["author_tap"] == [393, 485]
 
 
+def test_flow_social_scan_posts_interact_can_skip_like_and_comment(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    dev = _FlowDevice(feed)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["AI"],
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": False,
+            "require_comment": False,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["liked_count"] == 0
+    assert result["commented_count"] == 0
+    assert result["actions"][0]["liked"] is False
+    assert dev.clicks == []
+
+
+def test_flow_social_open_commenter_from_post_match_verifies_profile(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    comments = _fb_xml(
+        _fb_node("Phù hợp nhất", bounds="[40,450][400,500]"),
+        _fb_node("Tran Van B", bounds="[180,740][420,790]", clickable=True),
+        _fb_node("Mình đang làm AI automation", bounds="[180,800][1000,860]"),
+        _fb_node("Viết bình luận…", bounds="[40,2280][1040,2340]"),
+    )
+    profile = _fb_xml(
+        _fb_node("Tran Van B", bounds="[80,320][620,390]"),
+        _fb_node("AI automation consultant", bounds="[80,430][820,490]"),
+        _fb_node("Thêm bạn bè", bounds="[600,720][980,810]", clickable=True),
+    )
+    dev = _FlowDevice(comments, profile)
+
+    result = u2_exec_mod._flow_social_open_commenter_from_post_match(
+        dev,
+        {
+            "platform": "facebook",
+            "action": {
+                "verified": True,
+                "target_id": "ui_post:abc",
+                "comment_bounds": [227, 1505, 457, 1659],
+            },
+            "required_keywords": ["AI"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["source"] == "matched_feed_post_commenter"
+    assert result["name"] == "Tran Van B"
+    assert result["comment_sheet_opened"] is True
+    assert result["action_bounds"] == [600, 720, 980, 810]
+    assert dev.clicks == [(342, 1582), (260, 765)]
+
+
 def test_flow_social_open_author_from_post_match_skips_unsupported_platform():
     result = u2_exec_mod._flow_social_open_author_from_post_match(
         _FlowDevice(_fb_xml()),

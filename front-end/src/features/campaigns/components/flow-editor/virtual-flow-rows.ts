@@ -132,7 +132,10 @@ function projectList(
     }
 
     if (step.type === 'random_pick') {
-      (step.branches ?? []).forEach((branch, branchIndex) => {
+      const branches = (
+        step as FlowStep & { branches?: Array<{ steps?: FlowStep[] }> }
+      ).branches;
+      (branches ?? []).forEach((branch, branchIndex) => {
         const branchSteps = branch.steps ?? [];
         const branchKey = `branches.${branchIndex}`;
         rows.push({

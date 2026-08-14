@@ -34,7 +34,8 @@ import {
   AppWindow,
   Upload,
   Download,
-  PackagePlus
+  PackagePlus,
+  UserPlus
 } from 'lucide-react';
 
 /** Generate a unique step ID. */
@@ -111,6 +112,7 @@ export type ActionType =
   | 'fb_connect_visible_people'
   | 'fb_select_post_target'
   | 'fb_scan_posts_interact'
+  | 'social_open_author_from_post_match'
   | 'content_interaction'
   | 'connection_request'
   | 'community_membership'
@@ -206,6 +208,8 @@ export function getStepIcon(type: string): LucideIcon {
     case 'fb_connect_visible_people':
     case 'fb_select_post_target':
       return ShieldCheck;
+    case 'social_open_author_from_post_match':
+      return UserPlus;
     case 'fb_tap_comment_button':
     case 'tap_fb_comment_button':
       return GitBranch;
@@ -373,6 +377,8 @@ export function getStepLabel(step: FlowStep): string {
       return `Xác minh post · ${step.display_text || step.search || step.save_as || '_post_target'}`;
     case 'fb_scan_posts_interact':
       return `Scan post · ${step.target_count ?? 1} bài · ${step.keywords || 'mọi keyword'}`;
+    case 'social_open_author_from_post_match':
+      return `${step.platform ?? 'facebook'} · mở author từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
     case 'content_interaction':
       return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
     case 'connection_request':
@@ -453,6 +459,11 @@ export const ALL_STEP_TYPES: {
   {
     value: 'fb_scan_posts_interact',
     label: 'Scan và tương tác post (FB)',
+    group: 'action'
+  },
+  {
+    value: 'social_open_author_from_post_match',
+    label: 'Mở author từ post match',
     group: 'action'
   },
   {
@@ -762,6 +773,32 @@ export function createDefaultStep(
         scroll_x_ratio: 0.5,
         require_comment: true,
         save_as: '_post_scan'
+      };
+    case 'social_open_author_from_post_match':
+      return {
+        ...base,
+        type,
+        platform: 'facebook',
+        source_var: '_post_scan',
+        action_index: 0,
+        required_keywords: [],
+        optional_keywords: [],
+        forbidden_keywords: [
+          'trang',
+          'page',
+          'nhóm',
+          'group',
+          'ẩn danh',
+          'anonymous',
+          'sponsored',
+          'được tài trợ'
+        ],
+        min_score: 80,
+        timeout: 12,
+        profile_wait_s: 1,
+        save_as: '_people_target',
+        save_success_as: 'PEOPLE_PROFILE_SELECTED',
+        save_opened_as: 'AUTHOR_PROFILE_OPENED'
       };
     case 'content_interaction':
       return {

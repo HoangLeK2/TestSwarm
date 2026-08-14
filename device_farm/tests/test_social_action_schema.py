@@ -74,6 +74,18 @@ from api.schemas.scenario import ScenarioModel
             "required_keywords": ["launch text"],
             "save_as": "_post_target",
         },
+        {
+            "type": "social_open_author_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 0,
+            "required_keywords": ["AI"],
+            "optional_keywords": ["automation"],
+            "forbidden_keywords": ["page", "group"],
+            "save_as": "_people_target",
+            "save_success_as": "PEOPLE_PROFILE_SELECTED",
+            "save_opened_as": "AUTHOR_PROFILE_OPENED",
+        },
     ],
 )
 def test_generic_social_action_steps_are_valid_scenario_steps(step: dict) -> None:
@@ -127,6 +139,7 @@ def test_social_action_step_limits_completion_steps() -> None:
         "fb_select_people_profile",
         "fb_connect_visible_people",
         "fb_select_post_target",
+        "social_open_author_from_post_match",
     ],
 )
 def test_generic_social_steps_keep_account_binding_warning(step_type: str) -> None:

@@ -98,6 +98,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   fb_tap_comment_target: MousePointerClick,
   fb_apply_comment_filter: CheckCircle,
   fb_scan_posts_interact: MessageCircle,
+  social_open_author_from_post_match: UserPlus,
   extract_fb_comments: Search,
   extract_fb_posts: Search
 };
@@ -162,6 +163,7 @@ const COLOR_MAP: Record<string, string> = {
   fb_tap_comment_target: 'text-blue-600',
   fb_apply_comment_filter: 'text-emerald-600',
   fb_scan_posts_interact: 'text-blue-600',
+  social_open_author_from_post_match: 'text-emerald-700',
   extract_fb_comments: 'text-fuchsia-500',
   extract_fb_posts: 'text-fuchsia-500'
 };

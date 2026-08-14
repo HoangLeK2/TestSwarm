@@ -353,6 +353,178 @@ def test_flow_fb_connect_visible_people_closes_detail_before_opening_surface(
     assert dev.clicks[:3] == [(98, 210), (90, 208), (285, 1220)]
 
 
+def test_flow_social_open_author_from_post_match_verifies_profile(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node(
+            "Ảnh đại diện của Nguyen Van A",
+            bounds="[42,451][182,591]",
+            clickable=True,
+        ),
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node(
+            "Nút Thích",
+            bounds="[0,1505][223,1659]",
+            clickable=True,
+        ),
+        _fb_node(
+            "Bình luận",
+            bounds="[227,1505][457,1659]",
+            clickable=True,
+        ),
+    )
+    profile = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[80,320][620,390]"),
+        _fb_node("AI automation builder", bounds="[80,430][820,490]"),
+        _fb_node("Thêm bạn bè", bounds="[600,720][980,810]", clickable=True),
+    )
+    dev = _FlowDevice(feed, profile)
+
+    result = u2_exec_mod._flow_social_open_author_from_post_match(
+        dev,
+        {
+            "platform": "facebook",
+            "action": {
+                "verified": True,
+                "target_id": "ui_post:abc",
+                "author_label": "Nguyen Van A",
+                "author_tap": [393, 485],
+                "like_bounds": [0, 1505, 223, 1659],
+                "comment_bounds": [227, 1505, 457, 1659],
+                "matched_keywords": ["AI"],
+            },
+            "required_keywords": ["AI"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["source"] == "matched_feed_post_author"
+    assert result["name"] == "Nguyen Van A"
+    assert result["source_post_target_id"] == "ui_post:abc"
+    assert result["action_bounds"] == [600, 720, 980, 810]
+    assert dev.clicks == [(393, 485)]
+
+
+def test_flow_social_open_author_closes_comment_overlay_before_author_tap(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    overlay = _fb_xml(
+        _fb_node("Viết bình luận", bounds="[80,2080][920,2180]"),
+        _fb_node("Đóng", bounds="[980,120][1060,200]", clickable=True),
+    )
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    profile = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[80,320][620,390]"),
+        _fb_node("AI automation builder", bounds="[80,430][820,490]"),
+        _fb_node("Thêm bạn bè", bounds="[600,720][980,810]", clickable=True),
+    )
+    dev = _FlowDevice(overlay, feed, profile)
+
+    result = u2_exec_mod._flow_social_open_author_from_post_match(
+        dev,
+        {
+            "platform": "facebook",
+            "action": {
+                "verified": True,
+                "target_id": "ui_post:abc",
+                "author_label": "Nguyen Van A",
+                "author_tap": [393, 485],
+                "like_bounds": [0, 1505, 223, 1659],
+                "comment_bounds": [227, 1505, 457, 1659],
+                "matched_keywords": ["AI"],
+            },
+            "required_keywords": ["AI"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["verified"] is True
+    assert dev.clicks == [(1020, 160), (393, 485)]
+
+
+def test_fb_visible_post_candidates_include_author_binding():
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node(
+            "Nút Thích",
+            bounds="[0,1505][223,1659]",
+            clickable=True,
+        ),
+        _fb_node(
+            "Bình luận",
+            bounds="[227,1505][457,1659]",
+            clickable=True,
+        ),
+    )
+
+    _candidates, qualified, _expand = u2_exec_mod._fb_visible_post_candidates(
+        feed,
+        keywords=u2_exec_mod._fb_scan_keyword_terms(["AI"]),
+        match_mode="any",
+        seen_fingerprints=set(),
+        seen_expand_keys=set(),
+        like_terms=["nut thich", "thich", "like"],
+        liked_terms=["da thich", "liked"],
+        comment_terms=["binh luan", "comment"],
+        forbidden_context_terms=[],
+    )
+
+    assert len(qualified) == 1
+    assert qualified[0]["author_label"] == "Nguyen Van A"
+    assert qualified[0]["author_tap"] == [393, 485]
+
+
+def test_flow_social_scan_posts_interact_forwards_author_binding(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    dev = _FlowDevice(feed)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["AI"],
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["actions"][0]["author_label"] == "Nguyen Van A"
+    assert result["actions"][0]["author_tap"] == [393, 485]
+
+
+def test_flow_social_open_author_from_post_match_skips_unsupported_platform():
+    result = u2_exec_mod._flow_social_open_author_from_post_match(
+        _FlowDevice(_fb_xml()),
+        {"platform": "instagram", "action": {}},
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "unsupported_platform"
+
+
+def test_flow_fb_open_author_from_post_match_fails_closed_without_binding():
+    result = u2_exec_mod._flow_fb_open_author_from_post_match(
+        _FlowDevice(_fb_xml()),
+        {"action": {"verified": True, "target_id": "ui_post:abc"}},
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "author_binding_missing"
+
+
 # ── Batch tests ───────────────────────────────────────────────────────────────
 
 

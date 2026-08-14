@@ -50,6 +50,7 @@ export const STEP_COLORS: Record<string, string> = {
   fb_connect_visible_people: 'border-l-emerald-600',
   fb_select_post_target: 'border-l-emerald-700',
   fb_scan_posts_interact: 'border-l-blue-600',
+  social_open_author_from_post_match: 'border-l-emerald-700',
   content_interaction: 'border-l-blue-500',
   connection_request: 'border-l-sky-500',
   community_membership: 'border-l-emerald-500',
@@ -351,6 +352,7 @@ export const INSERT_MENU_DEF = [
       'fb_connect_visible_people',
       'fb_select_post_target',
       'fb_scan_posts_interact',
+      'social_open_author_from_post_match',
       'fb_find_comment_button',
       'fb_tap_comment_target',
       'fb_apply_comment_filter',
@@ -580,6 +582,8 @@ export function getStepSummary(step: FlowStep): string {
       return `Xác minh post · ${step.display_text || step.search || step.save_as || '_post_target'}`;
     case 'fb_scan_posts_interact':
       return `Scan post · ${step.target_count ?? 1} bài · ${step.max_scrolls ?? 0} scroll`;
+    case 'social_open_author_from_post_match':
+      return `Mở author · ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}] · ${step.platform ?? 'facebook'}`;
     case 'content_interaction':
       return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
     case 'connection_request':
@@ -865,6 +869,10 @@ export function getStepDisplay(
     case 'fb_scan_posts_interact':
       return {
         target: `${step.keywords || 'mọi keyword'} · ${step.target_count ?? 1} bài`
+      };
+    case 'social_open_author_from_post_match':
+      return {
+        target: `${step.platform ?? 'facebook'} · ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`
       };
     case 'content_interaction':
       return {

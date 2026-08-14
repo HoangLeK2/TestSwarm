@@ -1159,6 +1159,18 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
+                  <F label='Biến profile đã mở'>
+                    <Input
+                      className='h-8 font-mono text-xs'
+                      value={step.save_opened_as ?? 'AUTHOR_PROFILE_OPENED'}
+                      onChange={(e) =>
+                        update({
+                          save_opened_as:
+                            e.target.value || 'AUTHOR_PROFILE_OPENED'
+                        })
+                      }
+                    />
+                  </F>
                 </>
               )}
 
@@ -1574,6 +1586,142 @@ export function StepDetailPanel({
                     />
                     Chỉ tính thành công khi comment đã được submit
                   </label>
+                </>
+              )}
+
+              {step.type === 'social_open_author_from_post_match' && (
+                <>
+                  <StepPanelHint>
+                    Chạy platform adapter: lấy post action đã match từ biến
+                    scan, mở author profile, verify profile rồi lưu target proof
+                    cho bước gửi kết bạn.
+                  </StepPanelHint>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Platform'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={step.platform ?? 'facebook'}
+                        onChange={(e) =>
+                          update({ platform: e.target.value || 'facebook' })
+                        }
+                      />
+                    </F>
+                    <F label='Biến scan'>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.source_var ?? '_post_scan'}
+                        onChange={(e) =>
+                          update({ source_var: e.target.value || '_post_scan' })
+                        }
+                      />
+                    </F>
+                    <F label='Action index'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={20}
+                        className='h-8 text-xs'
+                        value={step.action_index ?? 0}
+                        onChange={(e) =>
+                          update({
+                            action_index: Math.max(
+                              0,
+                              Math.min(20, Number(e.target.value) || 0)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <F label='Keyword bắt buộc trên profile'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={keywordInputValue(step.required_keywords)}
+                      placeholder='AI, tuyển dụng, founder'
+                      onChange={(e) =>
+                        update({
+                          required_keywords: keywordListFromInput(
+                            e.target.value
+                          )
+                        })
+                      }
+                    />
+                  </F>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label='Keyword cộng điểm'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.optional_keywords)}
+                        placeholder='công nghệ, startup'
+                        onChange={(e) =>
+                          update({
+                            optional_keywords: keywordListFromInput(
+                              e.target.value
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Keyword cấm'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.forbidden_keywords)}
+                        placeholder='page, group, anonymous'
+                        onChange={(e) =>
+                          update({
+                            forbidden_keywords: keywordListFromInput(
+                              e.target.value
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Điểm tối thiểu'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={200}
+                        className='h-8 text-xs'
+                        value={step.min_score ?? 80}
+                        onChange={(e) =>
+                          update({
+                            min_score: Math.max(
+                              0,
+                              Math.min(200, Number(e.target.value) || 80)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Timeout'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={60}
+                        step={0.5}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 12}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(1, Number(e.target.value) || 12)
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Lưu target'>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.save_as ?? '_people_target'}
+                        onChange={(e) =>
+                          update({
+                            save_as: e.target.value || '_people_target'
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
                 </>
               )}
 

@@ -266,6 +266,21 @@ def _lookup_verified_target(sc: ScenarioContext, name: str) -> dict[str, Any] | 
     return value if isinstance(value, dict) else None
 
 
+def _lookup_runtime_dict(sc: ScenarioContext, name: str) -> dict[str, Any] | None:
+    clean = str(name or "").strip()
+    if clean.startswith("${") and clean.endswith("}"):
+        clean = clean[2:-1].strip()
+    value = sc.ctx.get("vars", {}).get(clean)
+    if isinstance(value, dict):
+        return value
+    lookup_raw = getattr(sc.var_ctx, "lookup_raw", None)
+    if callable(lookup_raw):
+        raw_value = lookup_raw(clean)
+        if isinstance(raw_value, dict):
+            return raw_value
+    return None
+
+
 def _verified_target_summary(name: str, target: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "name": name,
@@ -1301,6 +1316,210 @@ def handle_fb_scan_posts_interact(
         flow_name="fb_scan_posts_interact",
         step_name="fb_scan_posts_interact",
     )
+
+
+@register_step("social_open_author_from_post_match", "fb_open_author_from_post_match")
+def handle_social_open_author_from_post_match(
+    sc: ScenarioContext,
+    step: dict[str, Any],
+    idx: int,
+    result: dict[str, Any],
+) -> None:
+    """Open and verify the author profile from a previously matched post action."""
+
+    source_var = str(step.get("source_var") or "_post_scan").strip()
+    save_as = str(step.get("save_as") or _DEFAULT_PEOPLE_TARGET_VAR).strip()
+    success_var = str(
+        step.get("save_success_as") or _DEFAULT_PEOPLE_SELECTED_VAR
+    ).strip()
+    opened_var = str(step.get("save_opened_as") or "AUTHOR_PROFILE_OPENED").strip()
+    platform = str(step.get("platform") or "facebook").strip().casefold()
+    _set_runtime_variable(sc, success_var, False)
+    _set_runtime_variable(sc, opened_var, False)
+    _save_unverified_target(
+        sc,
+        save_as=save_as,
+        target_type="person",
+        outcome="target_not_checked",
+        message="social_open_author_from_post_match: target has not been verified",
+    )
+
+    source = _lookup_runtime_dict(sc, source_var)
+    actions = source.get("actions") if isinstance(source, dict) else None
+    if not isinstance(actions, list):
+        result.update(
+            {
+                "ok": True,
+                "outcome": "source_actions_missing",
+                "message": (
+                    "social_open_author_from_post_match: source scan has no "
+                    "actions to inspect"
+                ),
+                "action_performed": False,
+                "source_var": source_var,
+            }
+        )
+        return
+
+    try:
+        action_index = int(
+            sc.var_ctx.resolve(step.get("action_index", 0), step_index=idx) or 0
+        )
+    except (TypeError, ValueError):
+        action_index = 0
+    if action_index < 0 or action_index >= len(actions):
+        result.update(
+            {
+                "ok": True,
+                "outcome": "source_action_index_missing",
+                "message": (
+                    "social_open_author_from_post_match: requested post action "
+                    "index is not available"
+                ),
+                "action_performed": False,
+                "source_var": source_var,
+                "source_action_index": action_index,
+                "source_action_count": len(actions),
+            }
+        )
+        return
+
+    action = actions[action_index]
+    if not isinstance(action, dict) or action.get("verified") is not True:
+        result.update(
+            {
+                "ok": True,
+                "outcome": "source_action_not_verified",
+                "message": (
+                    "social_open_author_from_post_match: selected post action "
+                    "was not verified"
+                ),
+                "action_performed": False,
+                "source_var": source_var,
+                "source_action_index": action_index,
+            }
+        )
+        return
+
+    required_keywords = _resolve_keyword_list(
+        sc,
+        {"var": step.get("required_keywords_var")}
+        if step.get("required_keywords_var")
+        else step.get("required_keywords"),
+        step_index=idx,
+    )
+    optional_keywords = _resolve_keyword_list(
+        sc,
+        {"var": step.get("optional_keywords_var")}
+        if step.get("optional_keywords_var")
+        else step.get("optional_keywords"),
+        step_index=idx,
+    )
+    forbidden_keywords = _resolve_keyword_list(
+        sc,
+        {"var": step.get("forbidden_keywords_var")}
+        if step.get("forbidden_keywords_var")
+        else step.get("forbidden_keywords"),
+        step_index=idx,
+    )
+
+    timeout = max(1.0, float(step.get("timeout", 12.0) or 12.0))
+    try:
+        flow_result = sc.device.u2_flow(
+            "social_open_author_from_post_match",
+            {
+                "platform": platform,
+                "action": action,
+                "search": step.get("search") or action.get("author_label"),
+                "display_name": step.get("display_name") or action.get("author_label"),
+                "required_keywords": required_keywords or [],
+                "optional_keywords": optional_keywords or [],
+                "forbidden_keywords": forbidden_keywords or [],
+                "min_score": step.get("min_score", 80),
+                "profile_wait_s": step.get("profile_wait_s", 1.0),
+            },
+            timeout=timeout,
+            priority="visible",
+        )
+    except Exception as exc:
+        result.update(
+            {
+                "ok": False,
+                "outcome": "target_resolver_unavailable",
+                "message": (
+                    "social_open_author_from_post_match: agent-boot flow "
+                    f"failed: {exc}"
+                ),
+                "action_performed": False,
+            }
+        )
+        return
+
+    target = (
+        flow_result.get("value")
+        if isinstance(flow_result.get("value"), dict)
+        else flow_result
+    )
+    if not isinstance(target, dict):
+        result.update(
+            {
+                "ok": False,
+                "outcome": "target_resolver_failed",
+                "message": (
+                    "social_open_author_from_post_match: agent-boot returned "
+                    "an invalid payload"
+                ),
+                "action_performed": False,
+            }
+        )
+        return
+
+    target.setdefault("target_type", "person")
+    target.setdefault("source", "matched_feed_post_author")
+    result.update(
+        {
+            "ok": target.get("verified") is True,
+            "outcome": (
+                "target_verified"
+                if target.get("verified") is True
+                else str(target.get("reason") or "target_not_verified")
+            ),
+            "message": str(
+                target.get("message")
+                or (
+                    "social_open_author_from_post_match: verified author profile is open"
+                    if target.get("verified") is True
+                    else "social_open_author_from_post_match: author profile not verified"
+                )
+            ),
+            "action_performed": target.get("verified") is True,
+            "target_type": "person",
+            "platform": platform,
+            "source_var": source_var,
+            "source_action_index": action_index,
+            "source_post_target_id": action.get("target_id"),
+            "profile_opened": target.get("profile_opened") is True,
+            "resolver": target,
+        }
+    )
+    _set_runtime_variable(sc, opened_var, target.get("profile_opened") is True)
+    if target.get("verified") is True:
+        target["verified"] = True
+        _save_verified_target(sc, save_as=save_as, target=target)
+        _set_runtime_variable(sc, success_var, True)
+        result["verified_target"] = _verified_target_summary(save_as, target)
+        result["action_bounds"] = target.get("action_bounds")
+        result["_bounds"] = target.get("action_bounds")
+    else:
+        result["ok"] = True
+        _set_runtime_variable(sc, success_var, False)
+        _save_unverified_target(
+            sc,
+            save_as=save_as,
+            target_type="person",
+            outcome=str(result.get("outcome") or "target_not_verified"),
+            message=str(result.get("message") or "author profile not verified"),
+        )
 
 
 @register_step(

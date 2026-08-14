@@ -821,6 +821,92 @@ def test_fb_scan_posts_interact_no_match_is_non_terminal() -> None:
     assert result["screens_scanned"] == 3
 
 
+def test_social_open_author_from_post_match_delegates_and_saves_target() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    device.flow_result = {
+        "verified": True,
+        "target_type": "person",
+        "source": "matched_feed_post_author",
+        "confidence": 95,
+        "target_id": "ui_author:abc",
+        "display_name": "Nguyen Van A",
+        "matched_keywords": ["AI"],
+        "selected_bounds": [210, 452, 576, 518],
+        "action_bounds": [600, 720, 980, 810],
+        "profile_opened": True,
+        "source_post_target_id": "ui_post:abc",
+    }
+    sc = _context(device)
+    sc.var_ctx.set(
+        "_post_scan",
+        {
+            "actions": [
+                {
+                    "verified": True,
+                    "target_id": "ui_post:abc",
+                    "author_label": "Nguyen Van A",
+                    "author_tap": [393, 485],
+                    "like_bounds": [0, 1505, 223, 1659],
+                    "comment_bounds": [227, 1505, 457, 1659],
+                    "matched_keywords": ["AI"],
+                }
+            ]
+        },
+    )
+
+    result = dispatch_step(
+        sc,
+        {
+            "type": "social_open_author_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 0,
+            "required_keywords": ["AI"],
+            "save_as": "_people_target",
+            "save_success_as": "PEOPLE_PROFILE_SELECTED",
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "target_verified"
+    assert device.flows[0][0] == "social_open_author_from_post_match"
+    assert device.flows[0][1]["platform"] == "facebook"
+    assert device.flows[0][1]["action"]["target_id"] == "ui_post:abc"
+    assert device.flows[0][1]["required_keywords"] == ["AI"]
+    assert sc.ctx["vars"]["_people_target"]["verified"] is True
+    assert sc.ctx["vars"]["PEOPLE_PROFILE_SELECTED"] is True
+    assert sc.ctx["vars"]["AUTHOR_PROFILE_OPENED"] is True
+
+
+def test_social_open_author_from_post_match_skips_missing_action_index() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    sc = _context(device)
+    sc.var_ctx.set("_post_scan", {"actions": []})
+
+    result = dispatch_step(
+        sc,
+        {
+            "type": "social_open_author_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 1,
+            "save_as": "_people_target",
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "source_action_index_missing"
+    assert result["action_performed"] is False
+    assert device.flows == []
+    assert sc.ctx["vars"]["_people_target"]["verified"] is False
+
+
 def test_social_action_requires_verified_target_before_tapping() -> None:
     from tasks.scenario.steps import dispatch_step
 

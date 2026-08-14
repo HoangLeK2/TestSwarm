@@ -1731,6 +1731,193 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 
     {
+        "name": "Nuôi Facebook - Kết bạn từ bài post Home đúng keyword",
+        "display_name": "Nuôi Facebook - Kết bạn từ bài post Home đúng keyword",
+        "category": "facebook",
+        "description": (
+            "Treo Home feed theo cycle: scan vùng đang thấy, chỉ comment bài post "
+            "khớp keyword, mở profile author của chính post đã match, verify profile "
+            "phù hợp rồi mới gửi lời mời kết bạn. Back về feed sau mỗi profile rồi "
+            "mới cuộn tiếp."
+        ),
+        "tags": "facebook,nurture,home-feed,post,profile,connection,keyword",
+        "variables": {
+            "POST_RUN_SECONDS": 28800,
+            "FEED_ITERATIONS": 9999,
+            "POST_KEYWORDS": ["AI", "tuyển dụng", "công nghệ"],
+            "COMMENT_TEXT": "Bài viết rất hữu ích, cảm ơn bạn đã chia sẻ.",
+            "POSTS_PER_BATCH": 2,
+            "POST_MATCH_MODE": "any",
+            "POST_SCAN_TIMEOUT_SECONDS": 60,
+            "PROFILE_REQUIRED_KEYWORDS": ["AI", "công nghệ"],
+            "PROFILE_OPTIONAL_KEYWORDS": ["tuyển dụng", "startup", "automation"],
+            "PROFILE_FORBIDDEN_KEYWORDS": [
+                "trang",
+                "page",
+                "nhóm",
+                "group",
+                "ẩn danh",
+                "anonymous",
+                "sponsored",
+                "được tài trợ",
+            ],
+            "PROFILE_MIN_SCORE": 80,
+            "ENABLE_CONNECTION_REQUEST": True,
+        },
+        "steps": [
+            *_fb_session_guard_steps("home_post_author_connect", allow_login_recovery=False),
+            {
+                "id": "home_post_author_requires_ready_session",
+                "type": "if_variable",
+                "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
+                "then": [
+                    {
+                        "id": "home_post_author_cycle",
+                        "type": "loop",
+                        "count": "${FEED_ITERATIONS}",
+                        "duration_seconds": "${POST_RUN_SECONDS}",
+                        "loop_var": "FEED_CYCLE",
+                        "steps": [
+                            {
+                                "id": "home_post_author_scan",
+                                "type": "fb_scan_posts_interact",
+                                "platform": "facebook",
+                                "keywords": "${POST_KEYWORDS}",
+                                "keywords_var": "POST_KEYWORDS",
+                                "match_mode": "${POST_MATCH_MODE}",
+                                "comment_text": "${COMMENT_TEXT}",
+                                "target_count": "${POSTS_PER_BATCH}",
+                                "max_scrolls": 0,
+                                "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                                "require_comment": True,
+                                "save_as": "_post_scan",
+                            },
+                            {
+                                "id": "home_post_author_open_0",
+                                "type": "social_open_author_from_post_match",
+                                "platform": "facebook",
+                                "source_var": "_post_scan",
+                                "action_index": 0,
+                                "required_keywords": "${PROFILE_REQUIRED_KEYWORDS}",
+                                "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
+                                "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
+                                "min_score": "${PROFILE_MIN_SCORE}",
+                                "save_as": "_people_target",
+                                "save_success_as": "PEOPLE_PROFILE_SELECTED",
+                                "save_opened_as": "AUTHOR_PROFILE_OPENED",
+                            },
+                            {
+                                "id": "home_post_author_connect_0",
+                                "type": "if_variable",
+                                "name": "PEOPLE_PROFILE_SELECTED",
+                                "equals": True,
+                                "then": [
+                                    {
+                                        "type": "if_variable",
+                                        "name": "ENABLE_CONNECTION_REQUEST",
+                                        "equals": True,
+                                        "then": [
+                                            {
+                                                "type": "connection_request",
+                                                "platform": "facebook",
+                                                "action": "request",
+                                                "timeout": 5,
+                                                "verify_timeout": 5,
+                                                "settle_seconds": 0.4,
+                                                "require_verified_target": "_people_target",
+                                                "save_as": "_people_connection_action",
+                                                "ignore_error": True,
+                                            }
+                                        ],
+                                        "else": [],
+                                    }
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "id": "home_post_author_back_0",
+                                "type": "if_variable",
+                                "name": "AUTHOR_PROFILE_OPENED",
+                                "equals": True,
+                                "then": [
+                                    {"type": "key", "key": "back"},
+                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "id": "home_post_author_open_1",
+                                "type": "social_open_author_from_post_match",
+                                "platform": "facebook",
+                                "source_var": "_post_scan",
+                                "action_index": 1,
+                                "required_keywords": "${PROFILE_REQUIRED_KEYWORDS}",
+                                "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
+                                "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
+                                "min_score": "${PROFILE_MIN_SCORE}",
+                                "save_as": "_people_target",
+                                "save_success_as": "PEOPLE_PROFILE_SELECTED",
+                                "save_opened_as": "AUTHOR_PROFILE_OPENED",
+                            },
+                            {
+                                "id": "home_post_author_connect_1",
+                                "type": "if_variable",
+                                "name": "PEOPLE_PROFILE_SELECTED",
+                                "equals": True,
+                                "then": [
+                                    {
+                                        "type": "if_variable",
+                                        "name": "ENABLE_CONNECTION_REQUEST",
+                                        "equals": True,
+                                        "then": [
+                                            {
+                                                "type": "connection_request",
+                                                "platform": "facebook",
+                                                "action": "request",
+                                                "timeout": 5,
+                                                "verify_timeout": 5,
+                                                "settle_seconds": 0.4,
+                                                "require_verified_target": "_people_target",
+                                                "save_as": "_people_connection_action",
+                                                "ignore_error": True,
+                                            }
+                                        ],
+                                        "else": [],
+                                    }
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "id": "home_post_author_back_1",
+                                "type": "if_variable",
+                                "name": "AUTHOR_PROFILE_OPENED",
+                                "equals": True,
+                                "then": [
+                                    {"type": "key", "key": "back"},
+                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "id": "home_post_author_scroll_next",
+                                "type": "scroll_down",
+                                "repeats": 1,
+                                "start_y_ratio": 0.72,
+                                "end_y_ratio": 0.34,
+                                "duration_ms": 520,
+                                "pause_seconds": 0.7,
+                            },
+                        ],
+                    },
+                    {"id": "home_post_author_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
+        ],
+    },
+
+    {
         "name": "Nuôi Facebook - Tương tác bài viết trong Group",
         "display_name": "Nuôi Facebook - Tương tác bài viết trong Group",
         "category": "facebook",

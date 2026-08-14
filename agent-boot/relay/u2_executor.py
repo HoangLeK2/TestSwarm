@@ -2112,6 +2112,112 @@ def _fb_screen_right(root: Any) -> int:
     return right or 1260
 
 
+_FB_AUTHOR_NOISE_TOKENS = (
+    "anh dai dien",
+    "profile picture",
+    "lua chon khac",
+    "more options",
+    "theo doi",
+    "follow",
+    "gio",
+    "phut",
+    "ngay",
+    "chia se voi",
+    "shared with",
+    "cong khai",
+    "public",
+    "nhom cong khai",
+    "sponsored",
+    "duoc tai tro",
+    "xem them",
+    "see more",
+)
+
+
+def _fb_author_label_from_node(label: str) -> str:
+    raw = str(label or "").strip()
+    folded = _fb_fold(raw)
+    for prefix in (
+        "anh dai dien cua ",
+        "profile picture of ",
+        "profile photo of ",
+    ):
+        if folded.startswith(prefix):
+            return raw[len(prefix) :].strip(" ,.")
+    for sep in ("•", "·"):
+        if sep in raw:
+            raw = raw.split(sep, 1)[0]
+    return raw.strip(" ,.")
+
+
+def _fb_author_label_allowed(label: str) -> bool:
+    clean = _fb_author_label_from_node(label)
+    folded = _fb_fold(clean)
+    if not folded or len(clean) > 96:
+        return False
+    if any(token in folded for token in _FB_AUTHOR_NOISE_TOKENS):
+        return False
+    if _fb_is_connection_action_label(clean):
+        return False
+    if _fb_is_comment_action_label(clean) or _fb_is_add_friend_label(clean):
+        return False
+    compact = folded.replace(" ", "")
+    if compact in {"go", "gogo", "banbe", "friends"}:
+        return False
+    return True
+
+
+def _fb_author_candidate_near_post(
+    root: Any,
+    *,
+    like_bounds: tuple[int, int, int, int],
+    comment_bounds: tuple[int, int, int, int],
+) -> dict[str, Any] | None:
+    action_top = min(like_bounds[1], comment_bounds[1])
+    search_top = max(0, action_top - 1300)
+    search_bottom = max(0, action_top - 80)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for node in root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not label or not bounds or not _fb_is_clickable(node):
+            continue
+        left, top, right, bottom = bounds
+        if bottom < search_top or top > search_bottom:
+            continue
+        if right < 40 or left > 1080:
+            continue
+        clean = _fb_author_label_from_node(label)
+        if not _fb_author_label_allowed(clean):
+            continue
+        score = 0
+        klass = str(node.attrib.get("class", "") or "")
+        if "Button" in klass:
+            score += 45
+        if "ImageView" in klass and "anh dai dien" in _fb_fold(label):
+            score += 25
+        if 120 <= left <= 760:
+            score += 25
+        if len(clean) <= 42:
+            score += 10
+        score += max(0, 20 - abs((bottom + top) // 2 - (action_top - 1050)) // 80)
+        candidates.append(
+            (
+                -score,
+                {
+                    "label": clean,
+                    "bounds": list(bounds),
+                    "tap": [(left + right) // 2, (top + bottom) // 2],
+                    "score": score,
+                },
+            )
+        )
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]["bounds"][1], item[1]["bounds"][0]))
+    return candidates[0][1]
+
+
 def _fb_visible_post_candidates(
     hierarchy_xml: str,
     *,
@@ -2188,6 +2294,11 @@ def _fb_visible_post_candidates(
         folded_context = _fb_fold(context_text)
         if any(token in folded_context for token in forbidden_context_terms):
             continue
+        author = _fb_author_candidate_near_post(
+            root,
+            like_bounds=like_bounds,
+            comment_bounds=comment_bounds,
+        )
         matched, matched_terms = _fb_scan_post_keyword_match(
             context_text,
             terms=keywords,
@@ -2207,6 +2318,9 @@ def _fb_visible_post_candidates(
                 "matched_keywords": matched_terms,
                 "like_bounds": list(like_bounds),
                 "comment_bounds": list(comment_bounds),
+                "author_label": author.get("label") if author else None,
+                "author_bounds": author.get("bounds") if author else None,
+                "author_tap": author.get("tap") if author else None,
                 "like_label": like_label,
                 "comment_label": comment_label,
                 "already_liked": already_liked,
@@ -2389,6 +2503,9 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
                         "row_text": candidate["row_text"],
                         "like_bounds": candidate["like_bounds"],
                         "comment_bounds": candidate["comment_bounds"],
+                        "author_label": candidate.get("author_label"),
+                        "author_bounds": candidate.get("author_bounds"),
+                        "author_tap": candidate.get("author_tap"),
                         "liked": liked,
                         "commented": False,
                         "error": comment_error or "comment not submitted",
@@ -2406,6 +2523,9 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
                     "row_text": candidate["row_text"],
                     "like_bounds": candidate["like_bounds"],
                     "comment_bounds": candidate["comment_bounds"],
+                    "author_label": candidate.get("author_label"),
+                    "author_bounds": candidate.get("author_bounds"),
+                    "author_tap": candidate.get("author_tap"),
                     "liked": liked,
                     "commented": commented,
                 }
@@ -2730,6 +2850,162 @@ def _flow_fb_select_people_profile(dev: Any, p: dict) -> dict:
         "search_xml_chars": len(search_xml or ""),
         "confirmation_xml_chars": len(confirmation_xml or ""),
         "profile_xml_chars": len(profile_xml or ""),
+    }
+
+
+def _flow_fb_open_author_from_post_match(dev: Any, p: dict) -> dict:
+    """Open and verify the author profile for one matched feed post action."""
+    action = p.get("action") if isinstance(p.get("action"), dict) else {}
+    if not action:
+        return {
+            "verified": False,
+            "reason": "source_action_missing",
+            "message": "matched post action payload is missing",
+        }
+
+    author_label = _fb_author_label_from_node(
+        str(p.get("display_name") or action.get("author_label") or "")
+    )
+    author_tap = action.get("author_tap")
+    like_bounds = action.get("like_bounds")
+    comment_bounds = action.get("comment_bounds")
+    if (
+        not author_label
+        or not _fb_author_label_allowed(author_label)
+        or not isinstance(author_tap, list)
+        or len(author_tap) != 2
+        or not isinstance(like_bounds, list)
+        or len(like_bounds) != 4
+        or not isinstance(comment_bounds, list)
+        or len(comment_bounds) != 4
+    ):
+        return {
+            "verified": False,
+            "reason": "author_binding_missing",
+            "message": "matched post action does not expose a safe author binding",
+            "source_action": {
+                "target_id": action.get("target_id"),
+                "author_label": action.get("author_label"),
+            },
+        }
+
+    min_score = max(0, int(p.get("min_score", 80) or 80))
+    required = _fb_keyword_list(p.get("required_keywords"))
+    optional = _fb_keyword_list(p.get("optional_keywords"))
+    forbidden = _fb_keyword_list(p.get("forbidden_keywords"))
+    if author_label and author_label not in required:
+        required = [author_label, *required]
+
+    before_xml = dev.dump_hierarchy(compressed=False)
+    terms = _social_post_terms(p)
+    input_classes = _social_input_classes(p)
+    if _fb_close_comment_overlay_if_needed(
+        dev,
+        before_xml,
+        input_terms=terms["comment_input_terms"],
+        input_classes=input_classes,
+        close_terms=terms["overlay_close_terms"],
+    ):
+        time.sleep(max(0.1, min(float(p.get("overlay_close_wait_s", 0.3) or 0.3), 2.0)))
+        before_xml = dev.dump_hierarchy(compressed=False)
+    before_root = _xml_parse_root(before_xml)
+    current_author = _fb_author_candidate_near_post(
+        before_root,
+        like_bounds=tuple(int(v) for v in like_bounds),
+        comment_bounds=tuple(int(v) for v in comment_bounds),
+    )
+    if not current_author or _fb_fold(current_author.get("label")) != _fb_fold(author_label):
+        return {
+            "verified": False,
+            "reason": "author_target_changed",
+            "message": "matched post author is no longer visible at the expected row",
+            "expected_author": author_label,
+            "current_author": current_author,
+            "before_xml_chars": len(before_xml or ""),
+        }
+
+    tap_x, tap_y = int(current_author["tap"][0]), int(current_author["tap"][1])
+    dev.click(tap_x, tap_y)
+    time.sleep(max(0.0, min(float(p.get("profile_wait_s", 1.0) or 1.0), 10.0)))
+
+    profile_xml = dev.dump_hierarchy(compressed=False)
+    profile_root = _xml_parse_root(profile_xml)
+    profile_text = " ".join(_fb_all_labels(profile_root))
+    profile_score, matched, missing, forbidden_hit = _fb_score_text(
+        profile_text,
+        display_name=author_label,
+        search=str(p.get("search") or author_label),
+        required=required,
+        optional=optional,
+        forbidden=forbidden,
+    )
+    action_buttons: list[dict[str, Any]] = []
+    for node in profile_root.iter("node"):
+        label = _fb_node_label(node)
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds or not _fb_is_clickable(node):
+            continue
+        if _fb_is_add_friend_label(label) or _fb_is_connection_action_label(label):
+            action_buttons.append({"label": label, "bounds": list(bounds)})
+
+    if forbidden_hit or missing or profile_score < min_score:
+        return {
+            "verified": False,
+            "reason": "profile_not_verified",
+            "message": "opened author profile did not satisfy profile keywords",
+            "expected_author": author_label,
+            "missing_keywords": missing,
+            "matched_keywords": matched,
+            "confidence": profile_score,
+            "profile_opened": True,
+            "source_post_target_id": action.get("target_id"),
+            "profile_xml_chars": len(profile_xml or ""),
+        }
+    if len(action_buttons) != 1:
+        return {
+            "verified": False,
+            "reason": "ambiguous_profile_action",
+            "message": "author profile does not expose exactly one connection action",
+            "expected_author": author_label,
+            "action_count": len(action_buttons),
+            "action_buttons": action_buttons[:3],
+            "profile_opened": True,
+            "source_post_target_id": action.get("target_id"),
+            "profile_xml_chars": len(profile_xml or ""),
+        }
+
+    target_id_source = f"{action.get('target_id') or ''}|{_fb_fold(author_label)}"
+    return {
+        "verified": True,
+        "target_type": "person",
+        "source": "matched_feed_post_author",
+        "confidence": profile_score,
+        "target_id": "ui_author:" + hashlib.sha256(
+            target_id_source.encode("utf-8")
+        ).hexdigest(),
+        "name": author_label,
+        "display_name": author_label,
+        "matched_keywords": matched,
+        "selected_bounds": current_author["bounds"],
+        "selected_tap": [tap_x, tap_y],
+        "action_bounds": action_buttons[0]["bounds"],
+        "profile_opened": True,
+        "source_post_target_id": action.get("target_id"),
+        "source_post_keywords": action.get("matched_keywords") or [],
+        "before_xml_chars": len(before_xml or ""),
+        "profile_xml_chars": len(profile_xml or ""),
+    }
+
+
+def _flow_social_open_author_from_post_match(dev: Any, p: dict) -> dict:
+    platform = str(p.get("platform") or "facebook").strip().casefold()
+    if platform == "facebook":
+        return _flow_fb_open_author_from_post_match(dev, p)
+    return {
+        "verified": False,
+        "reason": "unsupported_platform",
+        "message": f"author-from-post resolver is not implemented for {platform!r}",
+        "platform": platform,
     }
 
 
@@ -3393,6 +3669,8 @@ _FLOW_TABLE: dict[str, Any] = {
     "fb_select_post_target": _flow_fb_select_post_target,
     "social_scan_posts_interact": _flow_social_scan_posts_interact,
     "fb_scan_posts_interact": _flow_fb_scan_posts_interact,
+    "social_open_author_from_post_match": _flow_social_open_author_from_post_match,
+    "fb_open_author_from_post_match": _flow_fb_open_author_from_post_match,
 }
 
 

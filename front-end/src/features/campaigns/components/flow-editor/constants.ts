@@ -255,6 +255,20 @@ export type FlowStepTranslator = (
   values?: Record<string, string | number>
 ) => string;
 
+const SYSTEM_VARIABLE_LABEL_KEYS: Record<string, string> = {
+  FACEBOOK_SESSION_READY: 'systemVariable.platformSessionReady'
+};
+
+export function getVariableDisplayName(
+  name: string,
+  t?: FlowStepTranslator
+): string {
+  const key = SYSTEM_VARIABLE_LABEL_KEYS[name];
+  if (!key || !t) return name;
+  const label = t(key as 'systemVariable.platformSessionReady');
+  return isIntlMissingMessage(key, label) ? name : label;
+}
+
 /** Insert menu structure (labels resolved via i18n). */
 export const INSERT_MENU_DEF = [
   {
@@ -701,7 +715,13 @@ export function getStepDisplay(
     case 'facebook_session_gate':
       return {
         target:
-          step.phase === 'confirm' ? 'Xác nhận sau đăng nhập' : 'Kiểm tra trước'
+          step.phase === 'confirm'
+            ? t
+              ? td('platformSessionConfirm')
+              : 'Confirm after login'
+            : t
+              ? td('platformSessionPreflight')
+              : 'Check before continuing'
       };
     case 'fill_form':
       return { target: step.recipe ?? '' };

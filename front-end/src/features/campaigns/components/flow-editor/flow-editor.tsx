@@ -31,7 +31,10 @@ import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
 import { InsertStepPicker } from './insert-step-picker';
-import { StepDetailPanel } from './step-detail-panel';
+import {
+  StepDetailPanel,
+  type SessionGateRuntimeContext
+} from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
 import {
   selectorPickTargetEquals,
@@ -87,6 +90,7 @@ interface Props {
   enableDragDrop?: boolean;
   /** Show lightweight reorder controls in the virtualized editor. */
   virtualReorderMode?: boolean;
+  sessionGateRuntimeContext?: SessionGateRuntimeContext;
 }
 
 const ROOT_SORTABLE_ID = encodeFlowListRef({ kind: 'root' });
@@ -106,6 +110,7 @@ export function FlowEditor({
   nestedInDialog = false,
   onChildStepEditorOpenChange,
   campaignScenarios = [],
+  sessionGateRuntimeContext,
   enableDragDrop = true,
   virtualReorderMode = false
 }: Props) {
@@ -407,6 +412,7 @@ export function FlowEditor({
               }}
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
+              runtimeContext={sessionGateRuntimeContext}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -476,6 +482,7 @@ export function FlowEditor({
                     {(dragHandle, isDragging) => (
                       <FlowEditorRow
                         campaignScenarios={campaignScenarios}
+                        sessionGateRuntimeContext={sessionGateRuntimeContext}
                         compact={compact}
                         coordinatePickTarget={coordinatePickTarget}
                         dragHandle={dragHandle}
@@ -1196,6 +1203,7 @@ function VirtualScopeMarker({
 
 function FlowEditorRow({
   campaignScenarios,
+  sessionGateRuntimeContext,
   compact,
   coordinatePickTarget,
   dragHandle,
@@ -1222,6 +1230,7 @@ function FlowEditorRow({
   updateAt
 }: {
   campaignScenarios: RunScenarioCampaignOption[];
+  sessionGateRuntimeContext?: SessionGateRuntimeContext;
   compact: boolean;
   coordinatePickTarget: CoordinatePickTarget | null;
   dragHandle: ReactNode;
@@ -1293,6 +1302,7 @@ function FlowEditorRow({
             }
             onRunChild={onRunStep ? (s, k) => onRunStep(s, k) : undefined}
             campaignScenarios={campaignScenarios}
+            sessionGateRuntimeContext={sessionGateRuntimeContext}
             enableDragDrop={enableDragDrop}
           />
         ) : (

@@ -51,7 +51,17 @@ interface Props {
   onRequestPickSwipeCoords?: () => void;
   /** Other scenarios in the campaign — for run_scenario picker (templates always loaded inside RunScenarioFields). */
   campaignScenarios?: RunScenarioCampaignOption[];
+  runtimeContext?: SessionGateRuntimeContext;
 }
+
+export type SessionGateRuntimeContext = {
+  deviceLabel: string;
+  platform: string | null;
+  accountLabel: string | null;
+  sessionState: string | null;
+  loading?: boolean;
+  error?: boolean;
+};
 
 /** Value field + variable insert: stacks on narrow widths so the select never squeezes the input. */
 function valueInsertRowClassName() {
@@ -208,7 +218,8 @@ export function StepDetailPanel({
   onRequestPickSelector,
   onRequestPickTapCoords,
   onRequestPickSwipeCoords,
-  campaignScenarios = []
+  campaignScenarios = [],
+  runtimeContext
 }: Props) {
   const t = useTranslations('campaignsFeature.stepEditor');
   const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
@@ -785,38 +796,103 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'facebook_session_gate' && (
-                <div className='grid grid-cols-2 gap-3'>
-                  <F label='Giai đoạn'>
-                    <select
-                      className='h-8 w-full rounded border bg-background px-2 text-xs'
-                      value={step.phase ?? 'preflight'}
-                      onChange={(e) => {
-                        const phase = e.target.value;
-                        update({
-                          phase,
-                          timeout: phase === 'confirm' ? 20 : 0
-                        });
-                      }}
-                    >
-                      <option value='preflight'>Kiểm tra trước</option>
-                      <option value='confirm'>Xác nhận sau đăng nhập</option>
-                    </select>
-                  </F>
-                  <F label='Thời gian chờ (giây)'>
-                    <Input
-                      type='number'
-                      min={0}
-                      max={30}
-                      step={1}
-                      className='h-8 text-xs'
-                      value={
-                        step.timeout ?? (step.phase === 'confirm' ? 20 : 0)
-                      }
-                      onChange={(e) =>
-                        update({ timeout: Number(e.target.value) || 0 })
-                      }
-                    />
-                  </F>
+                <div className='space-y-3'>
+                  <div className='space-y-2 rounded-md border bg-muted/30 p-3 text-xs'>
+                    <p className='font-medium'>
+                      {t('sessionGate.contextTitle')}
+                    </p>
+                    <dl className='grid gap-3 sm:grid-cols-2'>
+                      <div>
+                        <dt className='font-medium'>
+                          {t('sessionGate.platform')}
+                        </dt>
+                        <dd className='text-muted-foreground'>
+                          {runtimeContext?.loading
+                            ? t('sessionGate.loading')
+                            : runtimeContext?.platform ||
+                              t('sessionGate.notAvailable')}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className='font-medium'>
+                          {t('sessionGate.account')}
+                        </dt>
+                        <dd className='text-muted-foreground'>
+                          {runtimeContext?.loading
+                            ? t('sessionGate.loading')
+                            : runtimeContext?.accountLabel ||
+                              t('sessionGate.noPrimaryAccount')}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className='font-medium'>
+                          {t('sessionGate.session')}
+                        </dt>
+                        <dd className='text-muted-foreground'>
+                          {runtimeContext?.loading
+                            ? t('sessionGate.loading')
+                            : runtimeContext?.error
+                              ? t('sessionGate.loadFailed')
+                              : runtimeContext?.sessionState ||
+                                t('sessionGate.noSession')}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className='font-medium'>
+                          {t('sessionGate.phone')}
+                        </dt>
+                        <dd className='text-muted-foreground'>
+                          {runtimeContext?.deviceLabel ||
+                            t('sessionGate.selectPhone')}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className='font-medium'>
+                          {t('sessionGate.output')}
+                        </dt>
+                        <dd className='text-muted-foreground'>
+                          {t('sessionGate.outputDescription')}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <F label={t('sessionGate.phase')}>
+                      <select
+                        className='h-8 w-full rounded border bg-background px-2 text-xs'
+                        value={step.phase ?? 'preflight'}
+                        onChange={(e) => {
+                          const phase = e.target.value;
+                          update({
+                            phase,
+                            timeout: phase === 'confirm' ? 20 : 0
+                          });
+                        }}
+                      >
+                        <option value='preflight'>
+                          {t('sessionGate.preflight')}
+                        </option>
+                        <option value='confirm'>
+                          {t('sessionGate.confirm')}
+                        </option>
+                      </select>
+                    </F>
+                    <F label={t('sessionGate.timeout')}>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={30}
+                        step={1}
+                        className='h-8 text-xs'
+                        value={
+                          step.timeout ?? (step.phase === 'confirm' ? 20 : 0)
+                        }
+                        onChange={(e) =>
+                          update({ timeout: Number(e.target.value) || 0 })
+                        }
+                      />
+                    </F>
+                  </div>
                 </div>
               )}
 

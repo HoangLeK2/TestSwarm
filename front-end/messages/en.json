@@ -2090,6 +2090,25 @@
         "appOptions": "Launch options",
         "timing": "Timing & wait"
       },
+      "sessionGate": {
+        "contextTitle": "Runtime session information",
+        "platform": "Platform",
+        "account": "Account",
+        "session": "Signed-in session",
+        "phone": "Phone being checked",
+        "loading": "Loading…",
+        "notAvailable": "Not available",
+        "noPrimaryAccount": "The phone has no primary account",
+        "noSession": "No session data",
+        "loadFailed": "Could not load session state",
+        "selectPhone": "Select a phone to view live data",
+        "output": "Result",
+        "outputDescription": "The “Platform session is ready” variable receives true or false for subsequent condition nodes.",
+        "phase": "Check timing",
+        "preflight": "Before login",
+        "confirm": "After login",
+        "timeout": "Maximum wait (seconds)"
+      },
       "errorPolicy": {
         "title": "On step failure",
         "optionalBadge": "Optional",
@@ -2810,6 +2829,7 @@
         "assert_element": "ASSERT",
         "dismiss_popup": "DISMISS",
         "login_if_needed": "LOGIN",
+        "facebook_session_gate": "PLATFORM SESSION CHECK",
         "fill_form": "FILL FORM",
         "assert_app_state": "APP ASSERT",
         "double_tap": "DOUBLE TAP",
@@ -2847,6 +2867,8 @@
         "extract_screen_data": "SCREEN DATA"
       },
       "display": {
+        "platformSessionPreflight": "Check before continuing",
+        "platformSessionConfirm": "Confirm after login",
         "waitSeconds": "{seconds} s",
         "waitAppTimeout": "{package} ({timeout}s)",
         "verifySsim": "SSIM ≥ {threshold}",
@@ -2865,6 +2887,9 @@
         "commentFilterAllComments": "All comments",
         "commentFilterNone": "No change",
         "fbCommentElse": " / not found {elseCount}"
+      },
+      "systemVariable": {
+        "platformSessionReady": "Platform session is ready"
       }
     },
     "scenarioValidation": {

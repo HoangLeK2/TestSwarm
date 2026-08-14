@@ -2092,6 +2092,25 @@
         "appOptions": "Tùy chọn mở",
         "timing": "Thời gian & chờ"
       },
+      "sessionGate": {
+        "contextTitle": "Thông tin phiên khi chạy",
+        "platform": "Nền tảng",
+        "account": "Tài khoản",
+        "session": "Phiên đăng nhập",
+        "phone": "Phone kiểm tra",
+        "loading": "Đang tải…",
+        "notAvailable": "Chưa xác định",
+        "noPrimaryAccount": "Phone chưa có tài khoản chính",
+        "noSession": "Chưa có dữ liệu phiên",
+        "loadFailed": "Không tải được trạng thái phiên",
+        "selectPhone": "Chọn phone để xem dữ liệu thực tế",
+        "output": "Kết quả",
+        "outputDescription": "Biến “Phiên nền tảng sẵn sàng” nhận true hoặc false để các node điều kiện dùng tiếp.",
+        "phase": "Thời điểm kiểm tra",
+        "preflight": "Trước khi đăng nhập",
+        "confirm": "Sau khi đăng nhập",
+        "timeout": "Chờ tối đa (giây)"
+      },
       "errorPolicy": {
         "title": "Khi bước lỗi",
         "optionalBadge": "Tuỳ chọn",
@@ -2812,6 +2831,7 @@
         "assert_element": "KIỂM TRA",
         "dismiss_popup": "ĐÓNG POPUP",
         "login_if_needed": "ĐĂNG NHẬP",
+        "facebook_session_gate": "KIỂM TRA PHIÊN NỀN TẢNG",
         "fill_form": "NHẬP BIỂU MẪU",
         "assert_app_state": "KIỂM TRA ỨNG DỤNG",
         "double_tap": "CHẠM ĐÚP",
@@ -2849,6 +2869,8 @@
         "extract_screen_data": "EXTRACT SCREEN DATA"
       },
       "display": {
+        "platformSessionPreflight": "Kiểm tra trước khi tiếp tục",
+        "platformSessionConfirm": "Xác nhận sau đăng nhập",
         "waitSeconds": "{seconds} giây",
         "waitAppTimeout": "{package} ({timeout}s)",
         "verifySsim": "SSIM ≥ {threshold}",
@@ -2867,6 +2889,9 @@
         "commentFilterAllComments": "Tất cả bình luận",
         "commentFilterNone": "Không đổi",
         "fbCommentElse": " / Không thấy {elseCount}"
+      },
+      "systemVariable": {
+        "platformSessionReady": "Phiên nền tảng sẵn sàng"
       }
     },
     "scenarioValidation": {

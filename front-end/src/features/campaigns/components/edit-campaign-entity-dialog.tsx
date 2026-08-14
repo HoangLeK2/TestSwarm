@@ -20,10 +20,8 @@ import { CampaignOrgScenarioPicker } from './campaign-org-scenario-picker';
 import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import {
   useCampaign,
-  useBindCampaignAccounts,
   useCampaignDevices,
-  usePatchCampaignEntity,
-  useUnbindCampaignAccounts
+  usePatchCampaignEntity
 } from '../hooks/use-campaigns';
 import type {
   CampaignOut,
@@ -36,12 +34,6 @@ import {
   scenarioRefRunCount
 } from '../types';
 import { isCampaignEntityOut } from '../services/api';
-import {
-  CampaignAccountBindingFields,
-  campaignBindingFromEntity,
-  campaignBindingToPayload,
-  type CampaignAccountBindingValue
-} from './campaign-account-binding-fields';
 import { ContinuousCrawlSettings } from './continuous-crawl-settings';
 import {
   campaignVariablesForEditor,
@@ -67,10 +59,6 @@ export function EditCampaignEntityDialog({
     error,
     reset
   } = usePatchCampaignEntity();
-  const { mutateAsync: bindAccounts, isPending: isBinding } =
-    useBindCampaignAccounts();
-  const { mutateAsync: unbindAccounts, isPending: isUnbinding } =
-    useUnbindCampaignAccounts();
 
   const entity = detail && isCampaignEntityOut(detail) ? detail : null;
   const bodyLocked = !isCampaignBodyEditable(entity?.status ?? campaign.status);
@@ -81,13 +69,6 @@ export function EditCampaignEntityDialog({
   const [variables, setVariables] = useState<Record<string, unknown>>({});
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const [selectedRefs, setSelectedRefs] = useState<CampaignScenarioRefIn[]>([]);
-  const [accountBinding, setAccountBinding] =
-    useState<CampaignAccountBindingValue>({
-      mode: 'none',
-      accountGroupId: '',
-      scenarioAccountId: '',
-      perDeviceAccounts: {}
-    });
 
   useEffect(() => {
     if (!entity) return;
@@ -97,25 +78,9 @@ export function EditCampaignEntityDialog({
     setVariables(entity.vars ?? entity.variables ?? {});
     setRecoveryPolicy((entity.recovery_policy ?? {}) as RecoveryPolicy);
     setSelectedRefs(normalizeCampaignScenarioRefs(entity.scenario_refs ?? []));
-    setAccountBinding(campaignBindingFromEntity(entity));
   }, [entity]);
 
-  useEffect(() => {
-    if (!entity || !campaignDevices.length) return;
-    const currentDeviceIds = new Set(
-      campaignDevices.map((device) => device.id)
-    );
-    setAccountBinding((current) => ({
-      ...current,
-      perDeviceAccounts: Object.fromEntries(
-        Object.entries(current.perDeviceAccounts).filter(([deviceId]) =>
-          currentDeviceIds.has(deviceId)
-        )
-      )
-    }));
-  }, [campaignDevices, entity]);
-
-  const isSaving = isPatching || isBinding || isUnbinding;
+  const isSaving = isPatching;
 
   const onSubmit = () => {
     patchEntity(
@@ -143,28 +108,10 @@ export function EditCampaignEntityDialog({
             }
       },
       {
-        onSuccess: async () => {
-          try {
-            if (!bodyLocked) {
-              const payload = campaignBindingToPayload(accountBinding);
-              if (
-                accountBinding.mode === 'none' &&
-                Object.keys(accountBinding.perDeviceAccounts).length === 0
-              ) {
-                await unbindAccounts(campaign.id);
-              } else {
-                await bindAccounts({
-                  id: campaign.id,
-                  data: payload
-                });
-              }
-            }
-            toast.success(t('saveSuccess'));
-            reset();
-            onOpenChange(false);
-          } catch (bindErr) {
-            toast.error(formatFarmApiError(bindErr, t('bindFailed')));
-          }
+        onSuccess: () => {
+          toast.success(t('saveSuccess'));
+          reset();
+          onOpenChange(false);
         },
         onError: (patchErr) => {
           toast.error(formatFarmApiError(patchErr, t('saveFailed')));
@@ -278,22 +225,29 @@ export function EditCampaignEntityDialog({
               }
             />
           </div>
-          <div
-            className={cn(
-              'space-y-2 rounded-md border p-3',
-              bodyLocked && 'pointer-events-none opacity-60'
-            )}
-          >
+          <div className='space-y-2 rounded-md border bg-muted/30 p-3'>
             <Label>{t('accountBindingLabel')}</Label>
-            <p className='text-[11px] text-muted-foreground'>
+            <p className='text-xs text-muted-foreground'>
               {t('accountBindingHint')}
             </p>
-            <CampaignAccountBindingFields
-              value={accountBinding}
-              onChange={setAccountBinding}
-              devices={campaignDevices}
-              showPerDevice
-            />
+            <div className='space-y-1.5'>
+              {campaignDevices.map((device) => (
+                <div
+                  key={device.id}
+                  className='flex items-center justify-between rounded-md border bg-background px-3 py-2 text-xs'
+                >
+                  <span className='font-medium'>
+                    {device.name || device.serial}
+                  </span>
+                  <span className='text-muted-foreground'>{device.serial}</span>
+                </div>
+              ))}
+              {!campaignDevices.length && (
+                <p className='text-xs text-amber-600'>
+                  {t('accountNoDevices')}
+                </p>
+              )}
+            </div>
           </div>
           <RecoveryPolicyEditor
             value={recoveryPolicy}

@@ -584,6 +584,87 @@ class TestFinalizeCampaignExecutionResult:
         assert finish_fan_out.await_args.kwargs["device_id"] == device.id
 
     @pytest.mark.asyncio
+    async def test_fan_out_failure_releases_claim_after_opening_dlq(self):
+        acts = self._make_activities()
+        db_mock = _make_db_mock()
+        execution = SimpleNamespace(
+            id="exec-failed-finalize",
+            status="running",
+            meta={},
+            org_id="org-test",
+            campaign_id="camp-1",
+            user_id="user-1",
+            device_config={"claim_session_id": "claim-1"},
+        )
+        device = SimpleNamespace(id="device-1")
+        open_dlq = AsyncMock()
+        finish_fan_out = AsyncMock()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("temporal.activities.activity"))
+            stack.enter_context(
+                patch("db.database.activity_session", return_value=db_mock)
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.execution.get_execution",
+                    AsyncMock(return_value=execution),
+                )
+            )
+            stack.enter_context(
+                patch("db.crud.execution.upsert_execution_result", AsyncMock())
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.device.get_device_by_serial",
+                    AsyncMock(return_value=device),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.execution.step_store.persist_execution_steps_from_results",
+                    AsyncMock(),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.campaign.dlq_service.open_dlq_for_failed_execution",
+                    open_dlq,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "services.campaign.dispatcher.finish_fan_out_execution",
+                    finish_fan_out,
+                )
+            )
+            stack.enter_context(patch("temporal.activities._temporal_config", None))
+
+            await acts.finalize_campaign(
+                {
+                    "campaign_id": "camp-1",
+                    "execution_id": execution.id,
+                    "device_serial": "SN-FAILED",
+                    "org_id": "org-test",
+                    "success": False,
+                    "step_results": [
+                        {
+                            "index": 0,
+                            "type": "facebook_session_gate",
+                            "ok": False,
+                            "message": "execution account required",
+                        }
+                    ],
+                }
+            )
+
+        open_dlq.assert_awaited_once()
+        finish_fan_out.assert_awaited_once()
+        assert finish_fan_out.await_args.kwargs["status"] == "dlq_open"
+        assert finish_fan_out.await_args.kwargs["execution_already_finished"] is True
+        assert finish_fan_out.await_args.kwargs["device_id"] == device.id
+
+    @pytest.mark.asyncio
     async def test_upsert_execution_result_called_on_success(self):
         acts = self._make_activities()
         db_mock = _make_db_mock()

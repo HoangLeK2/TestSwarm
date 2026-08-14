@@ -46,11 +46,6 @@ import { useTranslations } from 'next-intl';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 import { CampaignOrgScenarioPicker } from './campaign-org-scenario-picker';
-import {
-  CampaignAccountBindingFields,
-  campaignBindingToPayload,
-  type CampaignAccountBindingValue
-} from './campaign-account-binding-fields';
 import { RecoveryPolicyEditor } from './recovery-policy-editor';
 import type { CampaignScenarioRefIn, RecoveryPolicy } from '../types';
 import { normalizeCampaignScenarioRefs, scenarioRefRunCount } from '../types';
@@ -242,13 +237,6 @@ export function CreateCampaignDialog({
     replaceVariables
   ]);
 
-  const [accountBinding, setAccountBinding] =
-    useState<CampaignAccountBindingValue>({
-      mode: 'none',
-      accountGroupId: '',
-      scenarioAccountId: '',
-      perDeviceAccounts: {}
-    });
   const { mutate, isPending, error } = useCreateCampaign();
   const {
     register,
@@ -275,12 +263,6 @@ export function CreateCampaignDialog({
       setTags('');
       setRecoveryPolicy({});
       setCurrentStep('basics');
-      setAccountBinding({
-        mode: 'none',
-        accountGroupId: '',
-        scenarioAccountId: '',
-        perDeviceAccounts: {}
-      });
       lastMergedSelectionRef.current = '';
     }
   };
@@ -375,8 +357,7 @@ export function CreateCampaignDialog({
           .map((tag) => tag.trim())
           .filter(Boolean),
         scenario_refs: effectiveScenarioRefs,
-        recovery_policy: recoveryPolicy,
-        ...campaignBindingToPayload(accountBinding)
+        recovery_policy: recoveryPolicy
       },
       {
         onSuccess: (created) => {
@@ -391,12 +372,6 @@ export function CreateCampaignDialog({
             )
           );
           setCurrentStep('basics');
-          setAccountBinding({
-            mode: 'none',
-            accountGroupId: '',
-            scenarioAccountId: '',
-            perDeviceAccounts: {}
-          });
           setOpen(false);
           toast.success(t('createSuccess'));
           if (created?.id) {
@@ -588,10 +563,6 @@ export function CreateCampaignDialog({
                       <p className='mb-2 text-[11px] text-muted-foreground'>
                         {t('libraryAccountHint')}
                       </p>
-                      <CampaignAccountBindingFields
-                        value={accountBinding}
-                        onChange={setAccountBinding}
-                      />
                     </Section>
                   </div>
                 </TabsContent>

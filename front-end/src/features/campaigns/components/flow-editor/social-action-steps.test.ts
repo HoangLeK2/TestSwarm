@@ -52,7 +52,9 @@ for (const [locale, messages] of [
   ['vi', viMessages]
 ] as const) {
   test(`renders the full insert menu with ${locale} flowInsert messages`, () => {
-    assert.doesNotThrow(() => getInsertMenuForUi(flowInsertTranslator(messages)));
+    assert.doesNotThrow(() =>
+      getInsertMenuForUi(flowInsertTranslator(messages))
+    );
   });
 }
 

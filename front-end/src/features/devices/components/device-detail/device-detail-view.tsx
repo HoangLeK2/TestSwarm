@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
@@ -99,6 +99,12 @@ export function DeviceDetailView({
     !['DISCONNECTED', 'DEAD'].includes(streamDevice.state.toUpperCase());
 
   const [liveViewOpen, setLiveViewOpen] = useState(false);
+  useEffect(() => {
+    if (!isActive) return;
+    ensureWatchSerial(serial);
+    setLiveViewOpen(true);
+  }, [isActive, serial]);
+
   const { blockedByOtherTab } = useLiveViewTabLock(
     serial,
     liveViewOpen && Boolean(isActive)

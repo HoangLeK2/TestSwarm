@@ -2651,6 +2651,17 @@
         "itemLevelPost": "0 - Bài viết",
         "itemLevelComment": "1 - Bình luận",
         "itemLevelReply": "2 - Trả lời bình luận"
+      },
+      "ifVariable": {
+        "nameLabel": "Tên biến",
+        "operatorLabel": "Điều kiện",
+        "valueLabel": "Giá trị",
+        "equals": "Bằng (==)",
+        "notEquals": "Khác (!=)",
+        "contains": "Chứa",
+        "greaterThan": "Lớn hơn (>)",
+        "true": "Đúng",
+        "false": "Sai"
       }
     },
     "flowInsert": {

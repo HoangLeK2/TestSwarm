@@ -21,6 +21,10 @@ import { AppAutomationStepFields } from './app-automation-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
 import {
+  normalizeSystemVariableCondition,
+  PLATFORM_SESSION_READY_VARIABLE
+} from './system-variable-condition';
+import {
   AppLifecycleStepFields,
   F,
   StepErrorPolicySection,
@@ -225,7 +229,10 @@ export function StepDetailPanel({
   const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
-  const [step, setStep] = useState(stepProp);
+  const tIfVar = useTranslations('campaignsFeature.stepEditor.ifVariable');
+  const [step, setStep] = useState(() =>
+    normalizeSystemVariableCondition(stepProp)
+  );
   const stepRef = useRef(step);
   stepRef.current = step;
   const pendingCommitRef = useRef<FlowStep | null>(null);
@@ -242,7 +249,9 @@ export function StepDetailPanel({
   useEffect(() => {
     if (stepIdentityRef.current === stepIdentity) return;
     stepIdentityRef.current = stepIdentity;
-    setStep(stepProp);
+    const normalized = normalizeSystemVariableCondition(stepProp);
+    setStep(normalized);
+    if (normalized !== stepProp) onChangeRef.current(normalized);
   }, [stepProp, stepIdentity]);
 
   useEffect(() => {
@@ -1982,24 +1991,39 @@ export function StepDetailPanel({
 
               {step.type === 'if_variable' && (
                 <>
-                  <F label='Tên biến'>
+                  <F label={tIfVar('nameLabel')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.name ?? ''}
-                      onChange={(e) => update({ name: e.target.value })}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        if (name === PLATFORM_SESSION_READY_VARIABLE) {
+                          commitStep(
+                            normalizeSystemVariableCondition({
+                              ...stepRef.current,
+                              name
+                            })
+                          );
+                          return;
+                        }
+                        update({ name });
+                      }}
                     />
                   </F>
-                  <F label='Điều kiện'>
+                  <F label={tIfVar('operatorLabel')}>
                     <select
                       className='w-full rounded border bg-background px-2 py-1.5 text-xs'
+                      disabled={step.name === PLATFORM_SESSION_READY_VARIABLE}
                       value={
-                        step.equals != null
+                        step.name === PLATFORM_SESSION_READY_VARIABLE
                           ? 'equals'
-                          : step.not_equals != null
-                            ? 'not_equals'
-                            : step.contains != null
-                              ? 'contains'
-                              : 'greater_than'
+                          : step.equals != null
+                            ? 'equals'
+                            : step.not_equals != null
+                              ? 'not_equals'
+                              : step.contains != null
+                                ? 'contains'
+                                : 'greater_than'
                       }
                       onChange={(e) => {
                         const val =
@@ -2016,59 +2040,74 @@ export function StepDetailPanel({
                         onChange({ ...c, [e.target.value]: val });
                       }}
                     >
-                      <option value='equals'>Bằng (==)</option>
-                      <option value='not_equals'>Khác (!=)</option>
-                      <option value='contains'>Chứa</option>
-                      <option value='greater_than'>Lớn hơn (&gt;)</option>
+                      <option value='equals'>{tIfVar('equals')}</option>
+                      <option value='not_equals'>{tIfVar('notEquals')}</option>
+                      <option value='contains'>{tIfVar('contains')}</option>
+                      <option value='greater_than'>
+                        {tIfVar('greaterThan')}
+                      </option>
                     </select>
                   </F>
-                  <F label='Giá trị'>
-                    <div className={valueInsertRowClassName()}>
-                      <Input
-                        className='h-9 min-w-0 flex-1 text-xs'
-                        value={
-                          step.equals ??
-                          step.not_equals ??
-                          step.contains ??
-                          step.greater_than ??
-                          ''
+                  <F label={tIfVar('valueLabel')}>
+                    {step.name === PLATFORM_SESSION_READY_VARIABLE ? (
+                      <select
+                        className='w-full rounded border bg-background px-2 py-1.5 text-xs'
+                        value={String(step.equals ?? true)}
+                        onChange={(e) =>
+                          update({ equals: e.target.value === 'true' })
                         }
-                        onChange={(e) => {
-                          const op =
-                            step.equals != null
-                              ? 'equals'
-                              : step.not_equals != null
-                                ? 'not_equals'
-                                : step.contains != null
-                                  ? 'contains'
-                                  : 'greater_than';
-                          update({ [op]: e.target.value });
-                        }}
-                      />
-                      <VariableInsertSelect
-                        availableVariables={availableVariables}
-                        t={t}
-                        onInsert={(token) => {
-                          const op =
-                            step.equals != null
-                              ? 'equals'
-                              : step.not_equals != null
-                                ? 'not_equals'
-                                : step.contains != null
-                                  ? 'contains'
-                                  : 'greater_than';
-                          const current =
+                      >
+                        <option value='true'>{tIfVar('true')}</option>
+                        <option value='false'>{tIfVar('false')}</option>
+                      </select>
+                    ) : (
+                      <div className={valueInsertRowClassName()}>
+                        <Input
+                          className='h-9 min-w-0 flex-1 text-xs'
+                          value={
                             step.equals ??
                             step.not_equals ??
                             step.contains ??
                             step.greater_than ??
-                            '';
-                          update({
-                            [op]: insertToken(String(current), token)
-                          } as Partial<FlowStep>);
-                        }}
-                      />
-                    </div>
+                            ''
+                          }
+                          onChange={(e) => {
+                            const op =
+                              step.equals != null
+                                ? 'equals'
+                                : step.not_equals != null
+                                  ? 'not_equals'
+                                  : step.contains != null
+                                    ? 'contains'
+                                    : 'greater_than';
+                            update({ [op]: e.target.value });
+                          }}
+                        />
+                        <VariableInsertSelect
+                          availableVariables={availableVariables}
+                          t={t}
+                          onInsert={(token) => {
+                            const op =
+                              step.equals != null
+                                ? 'equals'
+                                : step.not_equals != null
+                                  ? 'not_equals'
+                                  : step.contains != null
+                                    ? 'contains'
+                                    : 'greater_than';
+                            const current =
+                              step.equals ??
+                              step.not_equals ??
+                              step.contains ??
+                              step.greater_than ??
+                              '';
+                            update({
+                              [op]: insertToken(String(current), token)
+                            } as Partial<FlowStep>);
+                          }}
+                        />
+                      </div>
+                    )}
                   </F>
                 </>
               )}
@@ -2107,14 +2146,16 @@ export function StepDetailPanel({
                   <F label={t('setVariable.randomListLabel')}>
                     <Input
                       className='h-9 text-sm'
-                      value={(step.from_list ?? []).join(', ')}
+                      value={keywordInputValue(step.from_list)}
                       placeholder={t('setVariable.randomListPlaceholder')}
                       onChange={(e) =>
                         update({
-                          from_list: e.target.value
-                            .split(',')
-                            .map((s: string) => s.trim())
-                            .filter(Boolean)
+                          from_list: isVarRef(e.target.value.trim())
+                            ? e.target.value.trim()
+                            : e.target.value
+                                .split(',')
+                                .map((s: string) => s.trim())
+                                .filter(Boolean)
                         })
                       }
                     />

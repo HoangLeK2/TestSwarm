@@ -66,7 +66,8 @@ export function DeviceFarm() {
     staleTime: 60_000
   });
   const gridStreamTransport = useMemo<DeviceScreenTransport>(
-    () => (GRID_WEBRTC_PREVIEW && appConfig?.webrtc_enabled ? 'webrtc' : 'auto'),
+    () =>
+      GRID_WEBRTC_PREVIEW && appConfig?.webrtc_enabled ? 'webrtc' : 'auto',
     [appConfig?.webrtc_enabled]
   );
 

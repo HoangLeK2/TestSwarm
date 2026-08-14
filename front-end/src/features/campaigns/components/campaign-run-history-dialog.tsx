@@ -26,6 +26,7 @@ import {
   useExecutionTaskLog
 } from '../hooks/use-campaigns';
 import type { CampaignOut, ExecutionOut, ExecutionTaskLogStep } from '../types';
+import { executionStepDetail } from '../lib/execution-step-detail';
 import { useTranslations } from 'next-intl';
 
 type Props = {
@@ -100,23 +101,59 @@ function StepRow({
   step: ExecutionTaskLogStep;
   fallbackLabel: string;
 }) {
-  const stepType = step.step_type || fallbackLabel;
+  const detail = executionStepDetail(step);
+  const stepType = detail.label || fallbackLabel;
   return (
-    <div className='grid grid-cols-[3.25rem_minmax(0,1fr)_auto] gap-2 border-b px-3 py-2 last:border-b-0'>
+    <div className='grid grid-cols-[3.25rem_minmax(0,1fr)_auto] gap-2 border-b px-3 py-3 last:border-b-0'>
       <span className='font-mono text-[11px] text-muted-foreground'>
         #{step.step_index}
       </span>
       <div className='min-w-0'>
-        <p className='truncate text-xs font-medium text-foreground'>
-          {stepType}
-        </p>
+        <div className='flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+          <p className='text-xs font-medium text-foreground'>{stepType}</p>
+          {detail.reference ? (
+            <span className='font-mono text-[10px] text-muted-foreground'>
+              {detail.reference}
+            </span>
+          ) : null}
+        </div>
         {step.message ? (
-          <p
-            className='mt-0.5 line-clamp-2 text-[11px] text-muted-foreground'
-            title={step.message}
-          >
+          <p className='mt-1 whitespace-pre-wrap break-words text-[11px] text-muted-foreground'>
             {step.message}
           </p>
+        ) : null}
+        <div className='mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground/80'>
+          {step.duration_ms != null ? <span>{step.duration_ms} ms</span> : null}
+          {step.step_id ? <span>ID: {step.step_id}</span> : null}
+        </div>
+        {detail.nested.length ? (
+          <div className='mt-2 space-y-1 border-l-2 border-muted pl-3'>
+            {detail.nested.map((nested, index) => (
+              <div
+                key={`${nested.label}-${index}`}
+                className='flex items-start justify-between gap-3 rounded bg-muted/35 px-2 py-1.5'
+              >
+                <div className='min-w-0'>
+                  <p className='text-[11px] font-medium text-foreground'>
+                    {index + 1}. {nested.label}
+                  </p>
+                  {nested.message ? (
+                    <p className='break-words text-[10px] text-muted-foreground'>
+                      {nested.message}
+                    </p>
+                  ) : null}
+                </div>
+                <span
+                  className={cn(
+                    'shrink-0 rounded px-1.5 py-0.5 text-[9px]',
+                    stepStatusClass(nested.status)
+                  )}
+                >
+                  {nested.status}
+                </span>
+              </div>
+            ))}
+          </div>
         ) : null}
       </div>
       <span
@@ -175,7 +212,7 @@ export function CampaignRunHistoryDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {children ? <DialogTrigger asChild>{children}</DialogTrigger> : null}
-      <DialogContent className='flex max-h-[92vh] max-w-6xl flex-col gap-0 overflow-hidden p-0'>
+      <DialogContent className='flex h-[min(88vh,900px)] w-[min(94vw,1200px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none'>
         <DialogHeader className='border-b px-5 py-3'>
           <div className='flex min-w-0 items-center gap-2'>
             <History className='size-4 text-primary' />
@@ -188,7 +225,7 @@ export function CampaignRunHistoryDialog({
           </p>
         </DialogHeader>
 
-        <div className='grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[20rem_minmax(0,1fr)]'>
+        <div className='grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[22rem_minmax(0,1fr)]'>
           <div className='min-h-0 border-b md:border-b-0 md:border-r'>
             <div className='flex items-center justify-between border-b px-3 py-2'>
               <p className='text-[11px] font-semibold uppercase tracking-wide text-muted-foreground'>
@@ -198,7 +235,7 @@ export function CampaignRunHistoryDialog({
                 <Loader2 className='size-3 animate-spin text-muted-foreground' />
               ) : null}
             </div>
-            <ScrollArea className='h-[15rem] md:h-[calc(92vh-7rem)]'>
+            <ScrollArea className='h-[15rem] md:h-full'>
               {history.isError ? (
                 <p className='px-3 py-4 text-xs text-destructive'>
                   {formatFarmApiError(history.error, t('runHistoryLoadFailed'))}

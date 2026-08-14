@@ -2649,6 +2649,17 @@
         "itemLevelPost": "0 - Post",
         "itemLevelComment": "1 - Comment",
         "itemLevelReply": "2 - Reply"
+      },
+      "ifVariable": {
+        "nameLabel": "Variable name",
+        "operatorLabel": "Condition",
+        "valueLabel": "Value",
+        "equals": "Equals (==)",
+        "notEquals": "Does not equal (!=)",
+        "contains": "Contains",
+        "greaterThan": "Greater than (>)",
+        "true": "True",
+        "false": "False"
       }
     },
     "flowInsert": {

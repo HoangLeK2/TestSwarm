@@ -58,9 +58,26 @@ export function CampaignAccountBindingFields({
   );
 
   const pickedGroup = groups.find((g) => g.id === value.accountGroupId);
+  const pickedAccount = accounts.find(
+    (account) => account.id === value.scenarioAccountId
+  );
+  const bindingSummary =
+    value.mode === 'group' && pickedGroup
+      ? t('summaryGroup', { name: pickedGroup.name })
+      : value.mode === 'single' && pickedAccount
+        ? t('summarySingle', {
+            name: pickedAccount.display_name || pickedAccount.username
+          })
+        : t('summaryNone');
 
   return (
     <div className='space-y-3'>
+      <div className='rounded-md border bg-muted/30 px-3 py-2'>
+        <p className='text-xs font-medium'>{bindingSummary}</p>
+        <p className='mt-0.5 text-[11px] text-muted-foreground'>
+          {value.mode === 'none' ? t('summaryNoneHint') : t('summaryReadyHint')}
+        </p>
+      </div>
       <div className='space-y-1.5'>
         <Label className='text-xs'>{t('modeLabel')}</Label>
         <Select
@@ -204,7 +221,15 @@ export function CampaignAccountBindingFields({
                     </SelectTrigger>
                     <SelectContent className='z-[10001]'>
                       <SelectItem value='_fallback'>
-                        {t('useFallback')}
+                        {value.mode === 'group' && pickedGroup
+                          ? t('useGroup', { name: pickedGroup.name })
+                          : value.mode === 'single' && pickedAccount
+                            ? t('useSingle', {
+                                name:
+                                  pickedAccount.display_name ||
+                                  pickedAccount.username
+                              })
+                            : t('chooseAccount')}
                       </SelectItem>
                       {accounts.map((account) => (
                         <SelectItem key={account.id} value={account.id}>

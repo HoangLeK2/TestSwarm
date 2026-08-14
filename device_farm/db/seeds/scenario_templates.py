@@ -982,6 +982,7 @@ def _fb_session_guard_steps(
             "id": f"{prefix}_login_when_needed",
             "type": "if_variable",
             "name": "FACEBOOK_SESSION_READY",
+            "equals": True,
             "then": [{"type": "wait", "seconds": 0.1}],
             "else": [
                 {
@@ -1063,6 +1064,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "publish_post_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     *_fb_publish_post_steps(),
                     *_fb_open_search_tab_steps(
@@ -1221,6 +1223,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "page_discovery_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     {
                         "type": "loop",
@@ -1423,6 +1426,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "fanpage_crawl_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     *_fb_set_page_context_steps(),
                     *_fb_open_page_target_steps(
@@ -1469,6 +1473,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "fanpage_nurture_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     {
                         "type": "loop",
@@ -1692,6 +1697,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "feed_post_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     {
                         "id": "feed_post_scan_8h_loop",
@@ -1759,6 +1765,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "group_post_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     {
                         "id": "group_post_multi_group_loop",
@@ -1848,6 +1855,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "id": "candidate_profile_requires_ready_session",
                 "type": "if_variable",
                 "name": "FACEBOOK_SESSION_READY",
+                "equals": True,
                 "then": [
                     {
                         "id": "candidate_profile_connect_visible_common_batch",

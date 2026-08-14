@@ -723,7 +723,12 @@ export function createDefaultStep(
         min_score: 40,
         require_common: true,
         common_keywords: ['bạn chung', 'mutual friends', 'cùng nhóm'],
-        forbidden_keywords: ['trang', 'page', 'người tham gia ẩn danh', 'anonymous'],
+        forbidden_keywords: [
+          'trang',
+          'page',
+          'người tham gia ẩn danh',
+          'anonymous'
+        ],
         timeout: 8,
         verify_wait_s: 0.8,
         save_as: '_visible_connection_action'

@@ -205,14 +205,20 @@ function syncDerivedEntryValues(entries: VarEntry[]): VarEntry[] {
     (entry) => entry.key.trim() === 'PAGE_KEYWORDS' && entry.type === 'list'
   );
   if (!keywordEntry) return entries;
-  const count = keywordEntry.listVal.map((item) => item.trim()).filter(Boolean)
-    .length;
+  const count = keywordEntry.listVal
+    .map((item) => item.trim())
+    .filter(Boolean).length;
   let changed = false;
   const next = entries.map((entry) => {
     if (entry.key.trim() !== 'PAGE_KEYWORD_COUNT') return entry;
     if (entry.type === 'number' && entry.strVal === String(count)) return entry;
     changed = true;
-    return { ...entry, type: 'number' as const, strVal: String(count), listVal: [] };
+    return {
+      ...entry,
+      type: 'number' as const,
+      strVal: String(count),
+      listVal: []
+    };
   });
   return changed ? next : entries;
 }

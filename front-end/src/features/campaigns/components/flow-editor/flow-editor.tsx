@@ -374,6 +374,7 @@ export function FlowEditor({
           stepRunStates={stepRunStates}
           onStopInlineRun={onStopInlineRun}
           campaignScenarios={campaignScenarios}
+          sessionGateRuntimeContext={sessionGateRuntimeContext}
           availableVariables={availableVariables}
           reorderMode={virtualReorderMode}
         />
@@ -693,6 +694,7 @@ function VirtualizedFlowEditor({
   stepRunStates,
   onStopInlineRun,
   campaignScenarios,
+  sessionGateRuntimeContext,
   availableVariables,
   reorderMode
 }: {
@@ -708,6 +710,7 @@ function VirtualizedFlowEditor({
   stepRunStates: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
   onStopInlineRun?: () => void;
   campaignScenarios: RunScenarioCampaignOption[];
+  sessionGateRuntimeContext?: SessionGateRuntimeContext;
   availableVariables: string[];
   reorderMode: boolean;
 }) {
@@ -803,6 +806,7 @@ function VirtualizedFlowEditor({
               onClose={closeDetail}
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
+              runtimeContext={sessionGateRuntimeContext}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {

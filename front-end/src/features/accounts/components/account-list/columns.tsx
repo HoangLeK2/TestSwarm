@@ -10,7 +10,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Trash2 } from 'lucide-react';
+import {
+  History,
+  MoreHorizontal,
+  Pencil,
+  RefreshCw,
+  Trash2
+} from 'lucide-react';
 import {
   Tooltip,
   TooltipContent,
@@ -24,9 +30,10 @@ import {
 import type { ColumnDef } from '@tanstack/react-table';
 import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
-import { AccountHistoryDialog } from '../account-history-dialog';
 import { AccountStateTransitionDialog } from '../account-state-transition-dialog';
 import { AccountDevicesDialog } from '../account-devices-dialog';
+import Link from 'next/link';
+import { ROUTES } from '@/config/routes';
 import type { ResourcePermissionFlags } from '@/features/auth/types/resource-permissions';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
@@ -193,16 +200,11 @@ export function getAccountColumns(
         const targets = allowedTransitionTargets(current);
         return (
           <div className='flex items-center gap-1'>
-            <AccountHistoryDialog account={account} />
             <AccountDevicesDialog
               account={account}
               canUpdate={perms.canUpdate}
             />
-            {perms.canUpdate ? <EditAccountDialog account={account} /> : null}
-            {perms.canUpdate && targets.length > 0 ? (
-              <AccountStateTransitionDialog account={account} />
-            ) : null}
-            {perms.canUpdate || perms.canDelete ? (
+            {perms.canUpdate || perms.canDelete || perms.canRead ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button size='icon' variant='ghost' className='size-8'>
@@ -210,22 +212,40 @@ export function getAccountColumns(
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align='end'>
-                  {perms.canUpdate
-                    ? targets.map((target) => (
-                        <AccountStateTransitionDialog
-                          key={target}
-                          account={account}
-                          defaultTo={target}
-                          trigger={
-                            <DropdownMenuItem
-                              onSelect={(e) => e.preventDefault()}
-                            >
-                              {t('setStatus', { status: statusLabel[target] })}
-                            </DropdownMenuItem>
-                          }
-                        />
-                      ))
-                    : null}
+                  <DropdownMenuItem asChild>
+                    <Link
+                      href={`${ROUTES.DASHBOARD.ACTIVITY_HISTORY.ROOT}?account_id=${encodeURIComponent(account.id)}`}
+                    >
+                      <History className='mr-2 size-4' />
+                      {t('history')}
+                    </Link>
+                  </DropdownMenuItem>
+                  {perms.canUpdate ? (
+                    <EditAccountDialog
+                      account={account}
+                      trigger={
+                        <DropdownMenuItem
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          <Pencil className='mr-2 size-4' />
+                          {t('edit')}
+                        </DropdownMenuItem>
+                      }
+                    />
+                  ) : null}
+                  {perms.canUpdate && targets.length > 0 ? (
+                    <AccountStateTransitionDialog
+                      account={account}
+                      trigger={
+                        <DropdownMenuItem
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          <RefreshCw className='mr-2 size-4' />
+                          {t('transition')}
+                        </DropdownMenuItem>
+                      }
+                    />
+                  ) : null}
                   {perms.canDelete ? (
                     <DropdownMenuItem
                       className='text-destructive'

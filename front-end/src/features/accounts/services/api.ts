@@ -238,6 +238,20 @@ export const accountsApi = {
         `/devices/${deviceId}/platform-sessions/facebook`
       )
       .then((r) => r.data),
+  invalidateFacebookPlatformSession: (
+    deviceId: string,
+    body: {
+      reason: string;
+      expected_version?: number;
+      evidence?: Record<string, unknown>;
+    }
+  ) =>
+    farmApi
+      .post<DevicePlatformSessionOut>(
+        `/devices/${deviceId}/platform-sessions/facebook/invalidate`,
+        body
+      )
+      .then((r) => r.data),
   listFacebookLoginAttempts: (deviceId: string, query?: { limit?: number }) =>
     farmApi
       .get<

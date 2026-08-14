@@ -3,6 +3,11 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useAccount,
+  useDeviceAccounts,
+  useFacebookPlatformSession
+} from '@/features/accounts/hooks/use-accounts';
 import { ScenarioPlayer } from './control-record/scenario-player';
 import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
 import { ControlRecordTopBar } from './control-record/control-record-top-bar';
@@ -1019,6 +1024,39 @@ export function ControlRecordView({
     selectedDeviceId,
     tDvDlg
   ]);
+  const { data: selectedAccountLinks = [], isLoading: accountLinksLoading } =
+    useDeviceAccounts(selectedDeviceId ?? '');
+  const selectedPrimaryLink = selectedAccountLinks.find(
+    (link) => link.is_primary
+  );
+  const { data: selectedPrimaryAccount, isLoading: primaryAccountLoading } =
+    useAccount(selectedPrimaryLink?.account_id ?? '');
+  const {
+    data: selectedPlatformSession,
+    isLoading: platformSessionLoading,
+    isError: platformSessionError
+  } = useFacebookPlatformSession(
+    selectedPrimaryAccount?.platform === 'facebook'
+      ? (selectedDeviceId ?? '')
+      : ''
+  );
+  const sessionGateRuntimeContext = {
+    deviceLabel: selectedDeviceLabel || selectedDeviceForControl?.serial || '',
+    platform: selectedPrimaryAccount?.platform ?? null,
+    accountLabel: selectedPrimaryAccount
+      ? selectedPrimaryAccount.display_name || selectedPrimaryAccount.username
+      : null,
+    sessionState:
+      selectedPrimaryAccount?.platform === 'facebook'
+        ? (selectedPlatformSession?.state ?? null)
+        : null,
+    loading:
+      accountLinksLoading ||
+      primaryAccountLoading ||
+      (selectedPrimaryAccount?.platform === 'facebook' &&
+        platformSessionLoading),
+    error: platformSessionError
+  };
   const currentDeviceVarJsonDraft = selectedScenarioDeviceId
     ? (deviceVarJsonDrafts[selectedScenarioDeviceId] ??
       formatDeviceVarsJson({}))
@@ -3154,6 +3192,9 @@ export function ControlRecordView({
                                       : undefined
                                   }
                                   stepRunStates={stepRunStates}
+                                  sessionGateRuntimeContext={
+                                    sessionGateRuntimeContext
+                                  }
                                   onChildStepEditorOpenChange={
                                     setChildStepEditorOpen
                                   }

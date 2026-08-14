@@ -344,6 +344,26 @@ export function useFacebookPlatformSession(deviceId: string) {
   });
 }
 
+export function useInvalidateFacebookPlatformSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      deviceId,
+      expectedVersion
+    }: {
+      deviceId: string;
+      expectedVersion?: number;
+    }) =>
+      accountsApi.invalidateFacebookPlatformSession(deviceId, {
+        reason: 'operator_deleted_session',
+        expected_version: expectedVersion,
+        evidence: { source: 'account_devices_dialog' }
+      }),
+    onSuccess: (_, { deviceId }) =>
+      qc.invalidateQueries({ queryKey: KEYS.facebookSession(deviceId) })
+  });
+}
+
 export function useFacebookLoginAttempts(
   deviceId: string,
   opts?: { limit?: number }

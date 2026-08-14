@@ -1,6 +1,7 @@
 """Step handlers for app automation profile flows."""
 from __future__ import annotations
 
+import time
 from typing import Any, Dict
 
 from common.totp import generate_totp
@@ -12,6 +13,7 @@ from services.app_automation_locator import (
 from services.app_automation_profile import (
     AppAutomationProfile,
     FormRecipe,
+    LoginPostSubmitAction,
     LoginSubmit,
     validate_app_automation_profile,
 )
@@ -315,6 +317,90 @@ def _click_submit(
     raise RuntimeError("login submit failed: " + "; ".join(errors))
 
 
+def _cancelled(sc: ScenarioContext) -> bool:
+    return sc.cancel_event is not None and sc.cancel_event.is_set()
+
+
+def _wait_or_cancel(sc: ScenarioContext, seconds: float) -> bool:
+    if seconds <= 0:
+        return _cancelled(sc)
+    if sc.cancel_event is not None:
+        return bool(sc.cancel_event.wait(seconds))
+    time.sleep(seconds)
+    return False
+
+
+def _wait_for_post_submit_action(
+    sc: ScenarioContext,
+    action: LoginPostSubmitAction,
+) -> tuple[str, Any] | None:
+    deadline = time.monotonic() + float(action.timeout_s)
+    while True:
+        xml, snapshot = _current_snapshot(sc)
+        if not action.when_text_any or _snapshot_has_any_text(snapshot, action.when_text_any):
+            return xml, snapshot
+        if _cancelled(sc) or time.monotonic() >= deadline:
+            return None
+        _wait_or_cancel(sc, min(float(action.poll_s), max(0.0, deadline - time.monotonic())))
+
+
+def _execute_post_submit_actions(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    profile: AppAutomationProfile,
+    actions: list[LoginPostSubmitAction],
+) -> list[Dict[str, Any]]:
+    traces: list[Dict[str, Any]] = []
+    for index, action in enumerate(actions):
+        trace: Dict[str, Any] = {
+            "index": index,
+            "when_text_any": action.when_text_any,
+            "matched": False,
+            "executed": False,
+        }
+        found = _wait_for_post_submit_action(sc, action)
+        if found is None:
+            trace["reason"] = "condition_not_visible"
+            traces.append(trace)
+            continue
+        xml, snapshot = found
+        trace["matched"] = True
+        submit = LoginSubmit(
+            tap_text=action.tap_text,
+            tap_text_any=action.tap_text_any,
+            locator=action.locator,
+        )
+        trace["action_trace"] = _click_submit(sc, step, profile, submit, xml, snapshot)
+        trace["executed"] = True
+        if _wait_or_cancel(sc, float(action.wait_after_s)):
+            trace["cancelled"] = True
+            traces.append(trace)
+            break
+        traces.append(trace)
+    return traces
+
+
+def _input_post_submit_fields(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    profile: AppAutomationProfile,
+    post_submit_fields: Dict[str, Any],
+) -> tuple[Dict[str, Any], bool, str, Any]:
+    xml, snapshot = _current_snapshot(sc)
+    traces: Dict[str, Any] = {}
+    entered_post_submit = False
+    for field_name, field in post_submit_fields.items():
+        entered, trace = _input_login_field_if_present(
+            sc, step, idx, profile, field_name, field, xml, snapshot
+        )
+        traces[field_name] = trace
+        if entered:
+            entered_post_submit = True
+            xml, snapshot = _current_snapshot(sc)
+    return traces, entered_post_submit, xml, snapshot
+
+
 def _detect_logged_in(profile: AppAutomationProfile, snapshot: Any) -> bool:
     recipe = profile.login_recipe
     if recipe is None:
@@ -345,20 +431,25 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             )
             xml, snapshot = _current_snapshot(sc)
         submit_trace = _click_submit(sc, step, profile, recipe.submit, xml, snapshot)
+        post_submit_action_trace: list[Dict[str, Any]] = []
         post_submit_traces: Dict[str, Any] = {}
         post_submit_trace = None
         post_submit_fields = getattr(recipe, "post_submit_fields", {}) or {}
+        entered_post_submit = False
         if post_submit_fields:
-            xml, snapshot = _current_snapshot(sc)
-            entered_post_submit = False
-            for field_name, field in post_submit_fields.items():
-                entered, trace = _input_login_field_if_present(
-                    sc, step, idx, profile, field_name, field, xml, snapshot
+            post_submit_traces, entered_post_submit, xml, snapshot = _input_post_submit_fields(
+                sc, step, idx, profile, post_submit_fields
+            )
+        post_submit_actions = getattr(recipe, "post_submit_actions", []) or []
+        if post_submit_actions and not entered_post_submit:
+            post_submit_action_trace = _execute_post_submit_actions(
+                sc, step, profile, list(post_submit_actions)
+            )
+            if post_submit_fields:
+                post_submit_traces, entered_post_submit, xml, snapshot = _input_post_submit_fields(
+                    sc, step, idx, profile, post_submit_fields
                 )
-                post_submit_traces[field_name] = trace
-                if entered:
-                    entered_post_submit = True
-                    xml, snapshot = _current_snapshot(sc)
+        if post_submit_fields:
             post_submit = getattr(recipe, "post_submit", None) or recipe.submit
             if entered_post_submit and post_submit is not None:
                 post_submit_trace = _click_submit(sc, step, profile, post_submit, xml, snapshot)
@@ -367,6 +458,7 @@ def handle_login_if_needed(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
             "login_state": "submitted",
             "locator_trace": traces,
             "submit_trace": submit_trace,
+            "post_submit_action_trace": post_submit_action_trace,
             "post_submit_locator_trace": post_submit_traces,
             "post_submit_trace": post_submit_trace,
         })

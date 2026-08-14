@@ -187,10 +187,18 @@ class LoginSubmit(StrictProfileModel):
         return self
 
 
+class LoginPostSubmitAction(LoginSubmit):
+    when_text_any: list[str] = Field(default_factory=list)
+    timeout_s: float = Field(default=0.0, ge=0.0, le=30.0)
+    poll_s: float = Field(default=0.5, gt=0, le=5.0)
+    wait_after_s: float = Field(default=0.5, ge=0.0, le=10.0)
+
+
 class LoginRecipe(StrictProfileModel):
     detect_logged_in: dict[str, Any]
     fields: dict[str, LoginField] = Field(min_length=1)
     submit: LoginSubmit
+    post_submit_actions: list[LoginPostSubmitAction] = Field(default_factory=list)
     post_submit_fields: dict[str, LoginField] = Field(default_factory=dict)
     post_submit: LoginSubmit | None = None
     blocked_text_any: list[str] = Field(default_factory=lambda: ["captcha", "2fa", "verification"])
@@ -245,6 +253,11 @@ class AppAutomationProfile(StrictProfileModel):
                     raise ValueError(f"login field {field_name!r} references unknown locator {field.locator!r}")
             if self.login_recipe.submit.locator and self.login_recipe.submit.locator not in locator_names:
                 raise ValueError(f"login submit references unknown locator {self.login_recipe.submit.locator!r}")
+            for action_index, action in enumerate(self.login_recipe.post_submit_actions):
+                if action.locator and action.locator not in locator_names:
+                    raise ValueError(
+                        f"login post-submit action {action_index} references unknown locator {action.locator!r}"
+                    )
             for field_name, field in self.login_recipe.post_submit_fields.items():
                 if field.locator not in locator_names:
                     raise ValueError(

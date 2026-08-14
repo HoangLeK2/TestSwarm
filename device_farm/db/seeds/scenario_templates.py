@@ -875,6 +875,17 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
                 {"description_contains": "Đăng nhập", "class_name": "android.widget.Button"},
             ]
         },
+        "auth_code_field": {
+            "candidates": [
+                {"by": "description", "value": "Mã,"},
+                {"by": "description", "value": "Code,"},
+                {
+                    "text_near": ["Mã", "Authentication code", "Code"],
+                    "target_class": "android.widget.EditText",
+                    "allow_coordinate_fallback": True,
+                },
+            ]
+        },
     },
     "login_recipe": {
         "detect_logged_in": _FB_DETECT_LOGGED_IN,
@@ -883,6 +894,52 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
             "password": {"locator": "password_field", "value_from": "account.password"},
         },
         "submit": {"locator": "login_button"},
+        "post_submit_actions": [
+            {
+                "when_text_any": [
+                    "Kiểm tra thông báo trên thiết bị khác",
+                    "Đang chờ phê duyệt",
+                    "Check notifications on another device",
+                    "Waiting for approval",
+                ],
+                "tap_text_any": ["Thử cách khác", "Try another way"],
+                "timeout_s": 8,
+                "poll_s": 0.5,
+                "wait_after_s": 1,
+            },
+            {
+                "when_text_any": [
+                    "Chọn một cách để xác nhận đó là bạn",
+                    "Choose a way to confirm",
+                    "Ứng dụng xác thực",
+                    "Authentication app",
+                ],
+                "tap_text_any": ["Ứng dụng xác thực", "Authentication app"],
+                "timeout_s": 6,
+                "poll_s": 0.5,
+                "wait_after_s": 0.5,
+            },
+            {
+                "when_text_any": [
+                    "Chọn một cách để xác nhận đó là bạn",
+                    "Choose a way to confirm",
+                    "Ứng dụng xác thực",
+                    "Authentication app",
+                ],
+                "tap_text_any": ["Tiếp tục", "Continue", "Next"],
+                "timeout_s": 4,
+                "poll_s": 0.5,
+                "wait_after_s": 2,
+            },
+        ],
+        "post_submit_fields": {
+            "auth_code": {
+                "locator": "auth_code_field",
+                "value_from": "account.totp_code",
+                "required": False,
+            },
+        },
+        "post_submit": {"tap_text_any": ["Tiếp tục", "Continue", "Next"]},
     },
 }
 

@@ -307,7 +307,9 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": ["profile", "clear_first", "implicit_wait"],
         "description": (
             "Profile-driven login. Detects logged-in state first, fills login_recipe fields from "
-            "account/scenario/variables/secret references, then submits."
+            "account/scenario/variables/secret references, then submits. Optional "
+            "login_recipe.post_submit_actions can navigate intermediate 2FA screens before "
+            "post_submit_fields such as account.totp_code are entered."
         ),
     },
     "facebook_session_gate": {

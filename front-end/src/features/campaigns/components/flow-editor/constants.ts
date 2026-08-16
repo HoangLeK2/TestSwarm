@@ -29,7 +29,7 @@ export const STEP_COLORS: Record<string, string> = {
   assert_element: 'border-l-green-500',
   dismiss_popup: 'border-l-green-500',
   login_if_needed: 'border-l-emerald-500',
-  facebook_session_gate: 'border-l-emerald-600',
+  platform_session_gate: 'border-l-emerald-600',
   fill_form: 'border-l-cyan-600',
   assert_app_state: 'border-l-green-600',
   double_tap: 'border-l-blue-400',
@@ -43,13 +43,12 @@ export const STEP_COLORS: Record<string, string> = {
   use_source_pool: 'border-l-teal-600',
   extract: 'border-l-fuchsia-500',
   save_extraction: 'border-l-fuchsia-600',
-  fb_find_comment_button: 'border-l-sky-500',
-  fb_tap_comment_target: 'border-l-blue-500',
-  fb_apply_comment_filter: 'border-l-emerald-500',
-  fb_select_people_profile: 'border-l-emerald-600',
-  fb_connect_visible_people: 'border-l-emerald-600',
-  fb_select_post_target: 'border-l-emerald-700',
-  fb_scan_posts_interact: 'border-l-blue-600',
+  social_find_comment_button: 'border-l-sky-500',
+  social_tap_comment_target: 'border-l-blue-500',
+  social_apply_comment_filter: 'border-l-emerald-500',
+  social_select_target: 'border-l-emerald-600',
+  social_connect_visible_people: 'border-l-emerald-600',
+  social_scan_posts_interact: 'border-l-blue-600',
   social_open_author_from_post_match: 'border-l-emerald-700',
   social_open_commenter_from_post_match: 'border-l-emerald-700',
   content_interaction: 'border-l-blue-500',
@@ -113,12 +112,7 @@ export const BRACKET_COLORS: Record<
     bg: 'bg-amber-50/50 dark:bg-amber-950/20',
     label: 'text-amber-600 dark:text-amber-400'
   },
-  fb_tap_comment_button: {
-    border: 'border-blue-400/60',
-    bg: 'bg-blue-50/50 dark:bg-blue-950/20',
-    label: 'text-blue-600 dark:text-blue-400'
-  },
-  tap_fb_comment_button: {
+  social_open_comments: {
     border: 'border-blue-400/60',
     bg: 'bg-blue-50/50 dark:bg-blue-950/20',
     label: 'text-blue-600 dark:text-blue-400'
@@ -130,16 +124,20 @@ export const BRACKET_COLORS: Record<
   }
 };
 
-function localizeExtractStrategy(strategy?: string): string {
-  switch (strategy) {
-    case 'fb_posts':
-      return 'Bài viết Facebook';
-    case 'fb_comments':
-      return 'Bình luận Facebook';
+function localizeExtractEntity(entity?: string): string {
+  switch (entity) {
+    case 'posts':
+      return 'Bài viết';
+    case 'comments':
+      return 'Bình luận';
+    case 'groups':
+      return 'Nhóm';
+    case 'pages':
+      return 'Trang';
     case 'text_nodes':
       return 'Văn bản hiển thị';
     default:
-      return strategy ?? 'fb_posts';
+      return entity ?? 'Bài viết';
   }
 }
 
@@ -213,7 +211,7 @@ function hasFbCommentExtract(steps: unknown): boolean {
   return steps.some((raw) => {
     if (!raw || typeof raw !== 'object') return false;
     const step = raw as FlowStep;
-    if (step.type === 'extract' && step.strategy === 'fb_comments') {
+    if (step.type === 'extract' && step.entity === 'comments') {
       return true;
     }
     return (
@@ -258,7 +256,7 @@ export type FlowStepTranslator = (
 ) => string;
 
 const SYSTEM_VARIABLE_LABEL_KEYS: Record<string, string> = {
-  FACEBOOK_SESSION_READY: 'systemVariable.platformSessionReady'
+  PLATFORM_SESSION_READY: 'systemVariable.platformSessionReady'
 };
 
 export function getVariableDisplayName(
@@ -311,7 +309,7 @@ export const INSERT_MENU_DEF = [
       'assert_element',
       'dismiss_popup',
       'login_if_needed',
-      'facebook_session_gate',
+      'platform_session_gate',
       'fill_form',
       'assert_app_state',
       'double_tap',
@@ -342,24 +340,23 @@ export const INSERT_MENU_DEF = [
     ]
   },
   {
-    groupKey: 'facebook' as const,
+    groupKey: 'social' as const,
     items: [
       'content_interaction',
       'connection_request',
       'lease_source_target',
       'lease_connection_candidate',
       'community_membership',
-      'fb_select_people_profile',
-      'fb_connect_visible_people',
-      'fb_select_post_target',
-      'fb_scan_posts_interact',
+      'social_select_target',
+      'social_connect_visible_people',
+      'social_scan_posts_interact',
       'social_open_author_from_post_match',
       'social_open_commenter_from_post_match',
-      'fb_find_comment_button',
-      'fb_tap_comment_target',
-      'fb_apply_comment_filter',
-      'extract_fb_comments',
-      'extract_fb_posts'
+      'social_find_comment_button',
+      'social_tap_comment_target',
+      'social_apply_comment_filter',
+      'extract_comments',
+      'extract_posts'
     ]
   }
 ] as const;
@@ -461,7 +458,7 @@ export function getStepSummary(step: FlowStep): string {
     }
     case 'login_if_needed':
       return step.profile?.package || '';
-    case 'facebook_session_gate':
+    case 'platform_session_gate':
       return step.phase === 'confirm'
         ? 'Xác nhận sau đăng nhập'
         : 'Kiểm tra trước';
@@ -558,8 +555,8 @@ export function getStepSummary(step: FlowStep): string {
       return step.scenario_name || step.scenario_id || '';
     case 'loop':
       return `×${step.count ?? '?'}`;
-    case 'fb_tap_comment_button':
-    case 'tap_fb_comment_button': {
+    case 'social_open_comments':
+    case 'social_open_comments': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
       const commentPart = hasFbCommentExtract(step.then)
@@ -570,19 +567,19 @@ export function getStepSummary(step: FlowStep): string {
         : '';
       return `OK: ${thenN} bước${commentPart}${requirePostPart}${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
     }
-    case 'fb_find_comment_button':
+    case 'social_find_comment_button':
       return `target nút Bình luận · chờ ${step.timeout ?? 6}s`;
-    case 'fb_tap_comment_target':
+    case 'social_tap_comment_target':
       return `tap target đã tìm · chờ ${step.post_tap_wait_s ?? 0.35}s`;
-    case 'fb_apply_comment_filter':
+    case 'social_apply_comment_filter':
       return `Lọc bình luận → ${localizeCommentFilterVi(step.comment_filter)}`;
-    case 'fb_select_people_profile':
-      return `Xác minh profile · ${step.display_name || step.search || step.save_as || '_people_target'}`;
-    case 'fb_connect_visible_people':
+    case 'social_select_target':
+      return step.target_type === 'post'
+        ? `Xác minh bài viết · ${step.display_text || step.search || step.save_as || '_post_target'}`
+        : `Xác minh trang cá nhân · ${step.display_name || step.search || step.save_as || '_people_target'}`;
+    case 'social_connect_visible_people':
       return `Kết bạn người có điểm chung · điểm >= ${step.min_score ?? 40}`;
-    case 'fb_select_post_target':
-      return `Xác minh post · ${step.display_text || step.search || step.save_as || '_post_target'}`;
-    case 'fb_scan_posts_interact':
+    case 'social_scan_posts_interact':
       return `Scan post · ${step.target_count ?? 1} bài · ${step.max_scrolls ?? 0} scroll`;
     case 'social_open_author_from_post_match':
       return `Mở author · ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}] · ${step.platform ?? 'facebook'}`;
@@ -595,7 +592,7 @@ export function getStepSummary(step: FlowStep): string {
     case 'community_membership':
       return `${step.platform ?? 'facebook'} · tham gia nhóm`;
     case 'extract': {
-      const base = localizeExtractStrategy(step.strategy);
+      const base = localizeExtractEntity(step.entity);
       return step.collection
         ? `${base} → ${localizeCollection(step.collection)}`
         : base;
@@ -720,7 +717,7 @@ export function getStepDisplay(
       return { target: step.retries != null ? `×${step.retries}` : '' };
     case 'login_if_needed':
       return { target: step.profile?.package ?? '' };
-    case 'facebook_session_gate':
+    case 'platform_session_gate':
       return {
         target:
           step.phase === 'confirm'
@@ -812,8 +809,8 @@ export function getStepDisplay(
       };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
-    case 'fb_tap_comment_button':
-    case 'tap_fb_comment_button': {
+    case 'social_open_comments':
+    case 'social_open_comments': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
       const commentPart = hasFbCommentExtract(step.then)
@@ -834,13 +831,13 @@ export function getStepDisplay(
         target: `Comment · OK ${thenN}${commentPart}${requirePostPart}${elseN ? ` / miss ${elseN}` : ''}`
       };
     }
-    case 'fb_find_comment_button':
+    case 'social_find_comment_button':
       return {
         target: t
           ? td('fbFindCommentButton', { timeout: step.timeout ?? 6 })
           : `Find comment button · ${step.timeout ?? 6}s`
       };
-    case 'fb_tap_comment_target':
+    case 'social_tap_comment_target':
       return {
         target: t
           ? td('fbTapCommentTarget', {
@@ -848,7 +845,7 @@ export function getStepDisplay(
             })
           : `Tap cached target · ${step.post_tap_wait_s ?? 0.35}s`
       };
-    case 'fb_apply_comment_filter': {
+    case 'social_apply_comment_filter': {
       const filterLabel = localizeCommentFilter(step.comment_filter, t);
       return {
         target: t
@@ -856,21 +853,21 @@ export function getStepDisplay(
           : `Filter · ${filterLabel}`
       };
     }
-    case 'fb_select_people_profile':
+    case 'social_select_target':
       return {
         target:
-          step.display_name || step.search || step.save_as || '_people_target'
+          step.target_type === 'post'
+            ? step.display_text || step.search || step.save_as || '_post_target'
+            : step.display_name ||
+              step.search ||
+              step.save_as ||
+              '_people_target'
       };
-    case 'fb_connect_visible_people':
+    case 'social_connect_visible_people':
       return {
-        target: `common-context · score >= ${step.min_score ?? 40}`
+        target: `điểm chung · điểm >= ${step.min_score ?? 40}`
       };
-    case 'fb_select_post_target':
-      return {
-        target:
-          step.display_text || step.search || step.save_as || '_post_target'
-      };
-    case 'fb_scan_posts_interact':
+    case 'social_scan_posts_interact':
       return {
         target: `${step.keywords || 'mọi keyword'} · ${step.target_count ?? 1} bài`
       };
@@ -894,7 +891,7 @@ export function getStepDisplay(
     case 'community_membership':
       return { target: `${step.platform ?? 'facebook'} · join` };
     case 'extract': {
-      const base = localizeExtractStrategy(step.strategy);
+      const base = localizeExtractEntity(step.entity);
       return {
         target: step.collection
           ? `${base} → ${localizeCollection(step.collection)}`

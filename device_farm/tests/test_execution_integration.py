@@ -650,7 +650,7 @@ class TestFinalizeCampaignExecutionResult:
                     "step_results": [
                         {
                             "index": 0,
-                            "type": "facebook_session_gate",
+                            "type": "platform_session_gate",
                             "ok": False,
                             "message": "execution account required",
                         }

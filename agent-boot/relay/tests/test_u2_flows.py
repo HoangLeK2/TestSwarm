@@ -607,7 +607,8 @@ async def test_fb_select_people_profile_verifies_target_before_friend_request(ex
     """
     dev.dump_hierarchy.side_effect = [search_xml, search_xml, profile_xml]
 
-    result = await exc.execute_flow("serial", "fb_select_people_profile", {
+    result = await exc.execute_flow("serial", "social_select_target", {
+        "target_type": "person",
         "display_name": "Hoang Le",
         "required_keywords": ["Hoang Le"],
         "min_score": 80,
@@ -655,8 +656,9 @@ async def test_fb_select_people_profile_rechecks_bounds_before_click(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_select_people_profile",
+        "social_select_target",
         {
+            "target_type": "person",
             "display_name": "Hoang Le",
             "required_keywords": ["Hoang Le"],
             "min_score": 80,
@@ -694,8 +696,9 @@ async def test_fb_select_people_profile_accepts_base_name_on_opened_profile(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_select_people_profile",
+        "social_select_target",
         {
+            "target_type": "person",
             "display_name": "Tuan Vu (Tuấn Tattoo Piercing)",
             "required_keywords": ["Tuan Vu (Tuấn Tattoo Piercing)"],
             "min_score": 80,
@@ -732,8 +735,9 @@ async def test_fb_select_people_profile_verifies_already_pending_target(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_select_people_profile",
+        "social_select_target",
         {
+            "target_type": "person",
             "display_name": "Nguyễn Tuấn Anh Osana",
             "required_keywords": ["Nguyễn Tuấn Anh Osana"],
             "min_score": 80,
@@ -761,7 +765,8 @@ async def test_fb_select_people_profile_rejects_ambiguous_people_rows(executor_w
     """
     dev.dump_hierarchy.return_value = search_xml
 
-    result = await exc.execute_flow("serial", "fb_select_people_profile", {
+    result = await exc.execute_flow("serial", "social_select_target", {
+        "target_type": "person",
         "display_name": "Hoang Le",
         "required_keywords": ["Hoang Le"],
         "min_score": 80,
@@ -795,7 +800,8 @@ async def test_fb_select_post_target_uses_dump_xml_fixture(executor_with_device)
     """
     dev.dump_hierarchy.side_effect = [search_xml, detail_xml]
 
-    result = await exc.execute_flow("serial", "fb_select_post_target", {
+    result = await exc.execute_flow("serial", "social_select_target", {
+        "target_type": "post",
         "display_text": "Các bác cho hỏi claude",
         "required_keywords": ["Các bác cho hỏi claude"],
         "min_score": 80,
@@ -841,8 +847,9 @@ async def test_fb_select_post_target_matches_split_vietnamese_result_without_pos
 
     result = await exc.execute_flow(
         "serial",
-        "fb_select_post_target",
+        "social_select_target",
         {
+            "target_type": "post",
             "display_text": "Chào mọi người, mình là thành viên mới",
             "required_keywords": ["Chào mọi người, mình là thành viên mới"],
             "min_score": 80,
@@ -894,8 +901,9 @@ async def test_fb_select_post_target_submits_focused_search_suggestion(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_select_post_target",
+        "social_select_target",
         {
+            "target_type": "post",
             "display_text": "Anh chị em dùng AI cho những công",
             "required_keywords": ["Anh chị em dùng AI cho những công"],
             "min_score": 80,
@@ -925,7 +933,8 @@ async def test_fb_select_post_target_accepts_current_post_detail(executor_with_d
     """
     dev.dump_hierarchy.return_value = detail_xml
 
-    result = await exc.execute_flow("serial", "fb_select_post_target", {
+    result = await exc.execute_flow("serial", "social_select_target", {
+        "target_type": "post",
         "display_text": "Introducing a new way to edit videos with Meta AI",
         "required_keywords": ["Introducing a new way to edit videos with Meta AI"],
         "min_score": 80,
@@ -958,7 +967,8 @@ async def test_fb_select_post_target_clicks_current_post_see_more_bounds(executo
     """
     dev.dump_hierarchy.side_effect = [search_xml, search_xml]
 
-    result = await exc.execute_flow("serial", "fb_select_post_target", {
+    result = await exc.execute_flow("serial", "social_select_target", {
+        "target_type": "post",
         "display_text": "Chắc sẽ có anh em cần cái này",
         "required_keywords": ["Chắc sẽ có anh em cần cái này"],
         "min_score": 80,
@@ -985,7 +995,8 @@ async def test_fb_select_post_target_rejects_ambiguous_post_rows(executor_with_d
     """
     dev.dump_hierarchy.return_value = search_xml
 
-    result = await exc.execute_flow("serial", "fb_select_post_target", {
+    result = await exc.execute_flow("serial", "social_select_target", {
+        "target_type": "post",
         "display_text": "same launch text",
         "required_keywords": ["same launch text"],
         "min_score": 80,
@@ -1031,7 +1042,7 @@ async def test_fb_scan_posts_interact_likes_and_comments_keyword_post(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["tuyển dụng", "AI"],
             "comment_text": "Quan điểm rất hữu ích",
@@ -1102,7 +1113,7 @@ async def test_fb_scan_posts_interact_closes_comment_overlay_before_scan(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["AI"],
             "comment_text": "Quan điểm rất hữu ích",
@@ -1179,7 +1190,7 @@ async def test_fb_scan_posts_interact_closes_comment_filter_sheet_before_input(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
@@ -1250,7 +1261,7 @@ async def test_fb_scan_posts_interact_closes_existing_comment_filter_sheet_befor
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
@@ -1301,7 +1312,7 @@ async def test_fb_scan_posts_interact_ignores_subscribe_text_when_submitting_com
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
@@ -1365,7 +1376,7 @@ async def test_fb_scan_posts_interact_scrolls_comment_sheet_to_input_node(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
@@ -1495,7 +1506,7 @@ async def test_fb_scan_posts_interact_expands_see_more_before_keyword_match(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["tuyển dụng AI"],
             "comment_text": "Quan điểm rất hữu ích",
@@ -1567,7 +1578,7 @@ async def test_fb_scan_posts_interact_expands_parent_see_more_label(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["tuyển dụng AI"],
             "comment_text": "Quan điểm rất hữu ích",
@@ -1603,7 +1614,7 @@ async def test_fb_scan_posts_interact_rejects_profile_surface(
 
     result = await exc.execute_flow(
         "serial",
-        "fb_scan_posts_interact",
+        "social_scan_posts_interact",
         {
             "keywords": ["Chip AI"],
             "comment_text": "Quan điểm rất hữu ích",

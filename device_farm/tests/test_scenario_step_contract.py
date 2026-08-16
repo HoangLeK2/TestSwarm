@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from api.schemas.scenario import ScenarioModel
 from services.scenario_step_contract import (
-    extract_data_var_for_strategy,
+    extract_data_var_for_entity,
     normalize_extract_step,
-    normalize_fb_tap_comment_step,
+    normalize_social_comment_step,
     normalize_save_extraction_step,
 )
 
 
-def test_normalize_fb_tap_comment_step_applies_crawl_defaults() -> None:
-    step = normalize_fb_tap_comment_step(
+def test_normalize_social_comment_step_applies_crawl_defaults() -> None:
+    step = normalize_social_comment_step(
         {
-            "type": "fb_tap_comment_button",
+            "type": "social_open_comments",
             "pre_scroll": True,
-            "then": [{"type": "extract", "strategy": "fb_comments"}],
+            "then": [{"type": "extract", "entity": "comments", "platform": "facebook"}],
         }
     )
     assert step["comment_filter"] == "all_comments"
@@ -27,12 +27,12 @@ def test_normalize_extract_step_applies_profile_defaults_and_version() -> None:
     step = normalize_extract_step(
         {
             "type": "extract",
-            "strategy": "fb_comments",
+            "entity": "comments", "platform": "facebook",
             "extract_profile": "balanced",
         }
     )
     assert step["extract_profile"] == "balanced"
-    assert step["strategy_version"] == "fb_comments:v1"
+    assert step["entity_version"] == "comments:v1"
     assert step["max_items"] <= 220
     assert step["comment_scroll_passes"] == 16
     assert step["comment_swipes_per_dump"] == 6
@@ -49,7 +49,7 @@ def test_normalize_extract_step_keeps_explicit_values() -> None:
     step = normalize_extract_step(
         {
             "type": "extract",
-            "strategy": "fb_comments",
+            "entity": "comments", "platform": "facebook",
             "extract_profile": "safe",
             "max_items": 123,
         }
@@ -59,7 +59,7 @@ def test_normalize_extract_step_keeps_explicit_values() -> None:
 
 
 def test_normalize_extract_step_without_profile_applies_fb_comments_edge_defaults() -> None:
-    step = normalize_extract_step({"type": "extract", "strategy": "fb_comments"})
+    step = normalize_extract_step({"type": "extract", "entity": "comments", "platform": "facebook"})
     assert "extract_profile" not in step
     assert step["comment_scroll_passes"] >= 1
     assert step["max_items"] >= 50
@@ -68,7 +68,7 @@ def test_normalize_extract_step_without_profile_applies_fb_comments_edge_default
 
 def test_normalize_extract_step_applies_fb_posts_open_post_default() -> None:
     step = normalize_extract_step(
-        {"type": "extract", "strategy": "fb_posts", "extract_profile": "balanced"}
+        {"type": "extract", "entity": "posts", "platform": "facebook", "extract_profile": "balanced"}
     )
     assert step.get("open_post_before_extract") is True
     assert step.get("open_post_press_back_after_extract") is False
@@ -80,7 +80,7 @@ def test_normalize_alias_for_parent_id_var() -> None:
     step = normalize_extract_step(
         {
             "type": "extract",
-            "strategy": "fb_comments",
+            "entity": "comments", "platform": "facebook",
             "save_parent_id_var": "_active_comment_parent_hash",
         }
     )
@@ -100,10 +100,10 @@ def test_normalize_save_extraction_alias() -> None:
     assert step.get("dedup_action") == "skip"
 
 
-def test_extract_data_var_for_strategy() -> None:
-    assert extract_data_var_for_strategy({"strategy": "fb_posts"}) == "posts"
-    assert extract_data_var_for_strategy({"strategy": "fb_comments"}) == "comments"
-    assert extract_data_var_for_strategy({"strategy": "text_nodes"}) == "text_nodes"
+def test_extract_data_var_for_entity() -> None:
+    assert extract_data_var_for_entity({"entity": "posts", "platform": "facebook"}) == "posts"
+    assert extract_data_var_for_entity({"entity": "comments", "platform": "facebook"}) == "comments"
+    assert extract_data_var_for_entity({"entity": "text_nodes", "platform": "ui"}) == "text_nodes"
 
 
 def test_scenario_model_accepts_extract_profile_variable() -> None:
@@ -115,15 +115,15 @@ def test_scenario_model_accepts_extract_profile_variable() -> None:
                 "steps": [
                     {
                         "type": "extract",
-                        "strategy": "fb_posts",
+                        "entity": "posts", "platform": "facebook",
                         "extract_profile": "${EXTRACT_PROFILE}",
                     },
                     {
-                        "type": "tap_fb_comment_button",
+                        "type": "social_open_comments",
                         "then": [
                             {
                                 "type": "extract",
-                                "strategy": "fb_comments",
+                                "entity": "comments", "platform": "facebook",
                                 "extract_profile": "${EXTRACT_PROFILE}",
                             }
                         ],
@@ -143,13 +143,13 @@ def test_scenario_model_accepts_split_fb_comment_steps() -> None:
                 "type": "loop",
                 "count": 1,
                 "steps": [
-                    {"type": "fb_find_comment_button", "timeout": 6},
-                    {"type": "fb_tap_comment_target", "post_tap_wait_s": 0.35},
+                    {"type": "social_find_comment_button", "timeout": 6},
+                    {"type": "social_tap_comment_target", "post_tap_wait_s": 0.35},
                     {
-                        "type": "fb_apply_comment_filter",
+                        "type": "social_apply_comment_filter",
                         "comment_filter": "all_comments",
                     },
-                    {"type": "extract", "strategy": "fb_comments"},
+                    {"type": "extract", "entity": "comments", "platform": "facebook"},
                 ],
             }
         ],
@@ -169,7 +169,7 @@ def test_scenario_model_accepts_use_source_pool_step() -> None:
                 "output_prefix": "GROUP",
                 "statuses": ["candidate", "active"],
             },
-            {"type": "extract", "strategy": "fb_posts"},
+            {"type": "extract", "entity": "posts", "platform": "facebook"},
         ],
     }
 
@@ -182,7 +182,7 @@ def test_scenario_model_rejects_invalid_extract_profile() -> None:
             "steps": [
                 {
                     "type": "extract",
-                    "strategy": "fb_posts",
+                    "entity": "posts", "platform": "facebook",
                     "extract_profile": "turbo",
                 }
             ]

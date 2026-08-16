@@ -1,76 +1,26 @@
+"""Facebook implementation of platform readiness detection.
+
+Only the marker tables and the Facebook package check live here; the status enum,
+result payload and hierarchy helpers are shared and come from
+``services/platform_readiness.py``.
+"""
+
 from __future__ import annotations
 
-import hashlib
 import re
-import unicodedata
 import xml.etree.ElementTree as ET
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from enum import StrEnum
-from typing import Any
 
+from services.platform_readiness import (
+    PlatformReadinessResult,
+    PlatformReadinessStatus,
+    attrs_blob,
+    hierarchy_digest,
+    match_any,
+    register_readiness_resolver,
+    utcnow,
+)
 
-class FacebookReadinessStatus(StrEnum):
-    READY = "ready"
-    LOGGED_OUT = "logged_out"
-    CHECKPOINT = "checkpoint"
-    UNRESPONSIVE = "unresponsive"
-    UNSUPPORTED_BUILD = "unsupported_build"
-    INCONCLUSIVE = "inconclusive"
-
-
-@dataclass(frozen=True, slots=True)
-class FacebookReadinessResult:
-    status: FacebookReadinessStatus
-    reason: str
-    attempted_at: datetime
-    hierarchy_sha256: str | None = None
-    app_package: str | None = None
-    app_version: str | None = None
-    matched_markers: tuple[str, ...] = ()
-
-    @property
-    def is_ready(self) -> bool:
-        return self.status == FacebookReadinessStatus.READY
-
-    def evidence(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["status"] = self.status.value
-        data["attempted_at"] = self.attempted_at.isoformat()
-        data["matched_markers"] = list(self.matched_markers)
-        return {
-            key: value for key, value in data.items() if value not in (None, [], ())
-        }
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _normalized(value: str | None) -> str:
-    raw = unicodedata.normalize("NFKC", value or "")
-    raw = raw.casefold()
-    raw = re.sub(r"\s+", " ", raw)
-    return raw.strip()
-
-
-def _attrs_blob(root: ET.Element) -> str:
-    parts: list[str] = []
-    for node in root.iter():
-        for key in ("resource-id", "text", "content-desc", "class", "package"):
-            value = node.attrib.get(key)
-            if value:
-                parts.append(value)
-    return _normalized(" ".join(parts))
-
-
-def _match_any(blob: str, patterns: tuple[tuple[str, str], ...]) -> tuple[str, ...]:
-    matches: list[str] = []
-    for name, pattern in patterns:
-        if re.search(pattern, blob):
-            matches.append(name)
-    return tuple(matches)
-
+FACEBOOK_PACKAGE = "com.facebook.katana"
 
 _CHECKPOINT_MARKERS = (
     (
@@ -137,19 +87,19 @@ _UNRESPONSIVE_MARKERS = (
 def resolve_facebook_readiness(
     hierarchy_xml: str | None,
     *,
-    package: str = "com.facebook.katana",
+    package: str = FACEBOOK_PACKAGE,
     app_version: str | None = None,
-) -> FacebookReadinessResult:
-    attempted_at = _now()
+) -> PlatformReadinessResult:
+    attempted_at = utcnow()
     raw = hierarchy_xml or ""
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest() if raw else None
+    digest = hierarchy_digest(raw)
 
     def result(
-        status: FacebookReadinessStatus,
+        status: PlatformReadinessStatus,
         reason: str,
         markers: tuple[str, ...] = (),
-    ) -> FacebookReadinessResult:
-        return FacebookReadinessResult(
+    ) -> PlatformReadinessResult:
+        return PlatformReadinessResult(
             status=status,
             reason=reason,
             attempted_at=attempted_at,
@@ -157,41 +107,45 @@ def resolve_facebook_readiness(
             app_package=package,
             app_version=app_version,
             matched_markers=markers,
+            platform="facebook",
         )
 
     if not raw.strip():
-        return result(FacebookReadinessStatus.INCONCLUSIVE, "hierarchy_unavailable")
+        return result(PlatformReadinessStatus.INCONCLUSIVE, "hierarchy_unavailable")
     try:
         root = ET.fromstring(raw)
     except ET.ParseError:
-        return result(FacebookReadinessStatus.INCONCLUSIVE, "invalid_hierarchy")
+        return result(PlatformReadinessStatus.INCONCLUSIVE, "invalid_hierarchy")
 
-    blob = _attrs_blob(root)
+    blob = attrs_blob(root)
     if package and package not in blob and "facebook" not in blob:
         return result(
-            FacebookReadinessStatus.UNSUPPORTED_BUILD, "facebook_package_not_visible"
+            PlatformReadinessStatus.UNSUPPORTED_BUILD, "facebook_package_not_visible"
         )
 
-    markers = _match_any(blob, _UNRESPONSIVE_MARKERS)
+    markers = match_any(blob, _UNRESPONSIVE_MARKERS)
     if markers:
-        return result(FacebookReadinessStatus.UNRESPONSIVE, "app_unresponsive", markers)
-    markers = _match_any(blob, _CHECKPOINT_MARKERS)
+        return result(PlatformReadinessStatus.UNRESPONSIVE, "app_unresponsive", markers)
+    markers = match_any(blob, _CHECKPOINT_MARKERS)
     if markers:
-        return result(FacebookReadinessStatus.CHECKPOINT, "checkpoint_visible", markers)
-    markers = _match_any(blob, _LOGGED_OUT_MARKERS)
+        return result(PlatformReadinessStatus.CHECKPOINT, "checkpoint_visible", markers)
+    markers = match_any(blob, _LOGGED_OUT_MARKERS)
     if markers:
         return result(
-            FacebookReadinessStatus.LOGGED_OUT, "login_surface_visible", markers
+            PlatformReadinessStatus.LOGGED_OUT, "login_surface_visible", markers
         )
     if re.search(r"\bsearch\b|tìm kiếm", blob) and re.search(
         r"\bback\b|quay lại", blob
     ):
         return result(
-            FacebookReadinessStatus.READY,
+            PlatformReadinessStatus.READY,
             "ready_surface_visible",
             ("search_surface",),
         )
-    markers = _match_any(blob, _READY_MARKERS)
+    markers = match_any(blob, _READY_MARKERS)
     if markers:
-        return result(FacebookReadinessStatus.READY, "ready_surface_visible", markers)
-    return result(FacebookReadinessStatus.INCONCLUSIVE, "readiness_markers_not_found")
+        return result(PlatformReadinessStatus.READY, "ready_surface_visible", markers)
+    return result(PlatformReadinessStatus.INCONCLUSIVE, "readiness_markers_not_found")
+
+
+register_readiness_resolver("facebook", resolve_facebook_readiness)

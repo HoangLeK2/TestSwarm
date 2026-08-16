@@ -1,6 +1,6 @@
 import type { FlowStep } from '../scenario-steps/types';
 
-export const PLATFORM_SESSION_READY_VARIABLE = 'FACEBOOK_SESSION_READY';
+export const PLATFORM_SESSION_READY_VARIABLE = 'PLATFORM_SESSION_READY';
 
 export function normalizeSystemVariableCondition(step: FlowStep): FlowStep {
   if (

@@ -20,6 +20,8 @@ import { ExtractStepFields } from './extract-fields';
 import { AppAutomationStepFields } from './app-automation-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
+import { PlatformSelect } from './platform-select';
+import { PLATFORM_AWARE_STEP_TYPES } from './platform-aware-steps';
 import {
   normalizeSystemVariableCondition,
   PLATFORM_SESSION_READY_VARIABLE
@@ -230,6 +232,8 @@ export function StepDetailPanel({
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
   const tIfVar = useTranslations('campaignsFeature.stepEditor.ifVariable');
+  const tTarget = useTranslations('campaignsFeature.stepEditor.selectTarget');
+  const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
   const [step, setStep] = useState(() =>
     normalizeSystemVariableCondition(stepProp)
   );
@@ -804,7 +808,15 @@ export function StepDetailPanel({
                 />
               )}
 
-              {step.type === 'facebook_session_gate' && (
+              {PLATFORM_AWARE_STEP_TYPES.has(step.type) && (
+                <PlatformSelect
+                  value={step.platform}
+                  onChange={(platform) => update({ platform })}
+                  stepType={step.type}
+                />
+              )}
+
+              {step.type === 'platform_session_gate' && (
                 <div className='space-y-3'>
                   <div className='space-y-2 rounded-md border bg-muted/30 p-3 text-xs'>
                     <p className='font-medium'>
@@ -1189,25 +1201,39 @@ export function StepDetailPanel({
                 </F>
               )}
 
-              {['fb_select_people_profile', 'fb_select_post_target'].includes(
-                step.type
-              ) && (
+              {step.type === 'social_select_target' && (
                 <>
                   <StepPanelHint>
-                    Chạy resolver trên agent-boot: dump XML, score keyword, mở
-                    đúng{' '}
-                    {step.type === 'fb_select_post_target'
-                      ? 'bài viết'
-                      : 'profile'}{' '}
-                    và lưu target proof. Step này không thực hiện
-                    like/share/comment hay gửi lời mời kết bạn.
+                    {tTarget('hint', {
+                      kind:
+                        step.target_type === 'post'
+                          ? tTarget('kindPost')
+                          : tTarget('kindPerson')
+                    })}
                   </StepPanelHint>
+                  <F label={tTarget('targetTypeLabel')}>
+                    <select
+                      className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                      value={step.target_type ?? 'person'}
+                      onChange={(e) =>
+                        update({
+                          target_type: e.target.value,
+                          ...(e.target.value === 'post'
+                            ? { display_name: undefined }
+                            : { display_text: undefined })
+                        })
+                      }
+                    >
+                      <option value='person'>{tTarget('optionPerson')}</option>
+                      <option value='post'>{tTarget('optionPost')}</option>
+                    </select>
+                  </F>
                   <F label='Từ khoá search'>
                     <Input
                       className='h-8 text-xs'
                       value={step.search ?? ''}
                       placeholder={
-                        step.type === 'fb_select_post_target'
+                        step.target_type === 'post'
                           ? '${POST_SEARCH}'
                           : '${PEOPLE_SEARCH}'
                       }
@@ -1218,7 +1244,7 @@ export function StepDetailPanel({
                   </F>
                   <F
                     label={
-                      step.type === 'fb_select_post_target'
+                      step.target_type === 'post'
                         ? 'Text bài viết cần match'
                         : 'Tên hiển thị cần match'
                     }
@@ -1226,18 +1252,18 @@ export function StepDetailPanel({
                     <Input
                       className='h-8 text-xs'
                       value={
-                        step.type === 'fb_select_post_target'
+                        step.target_type === 'post'
                           ? (step.display_text ?? '')
                           : (step.display_name ?? '')
                       }
                       placeholder={
-                        step.type === 'fb_select_post_target'
+                        step.target_type === 'post'
                           ? '${POST_ROW_TEXT}'
                           : '${PEOPLE_ROW_TEXT}'
                       }
                       onChange={(e) =>
                         update(
-                          step.type === 'fb_select_post_target'
+                          step.target_type === 'post'
                             ? { display_text: e.target.value || undefined }
                             : { display_name: e.target.value || undefined }
                         )
@@ -1326,7 +1352,7 @@ export function StepDetailPanel({
                         className='h-8 font-mono text-xs'
                         value={
                           step.save_as ??
-                          (step.type === 'fb_select_post_target'
+                          (step.target_type === 'post'
                             ? '_post_target'
                             : '_people_target')
                         }
@@ -1334,7 +1360,7 @@ export function StepDetailPanel({
                           update({
                             save_as:
                               e.target.value ||
-                              (step.type === 'fb_select_post_target'
+                              (step.target_type === 'post'
                                 ? '_post_target'
                                 : '_people_target')
                           })
@@ -1355,7 +1381,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_connect_visible_people' && (
+              {step.type === 'social_connect_visible_people' && (
                 <>
                   <StepPanelHint>
                     Scan các row/card đang hiện có nút Thêm bạn bè, chỉ gửi lời
@@ -1467,13 +1493,9 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_scan_posts_interact' && (
+              {step.type === 'social_scan_posts_interact' && (
                 <>
-                  <StepPanelHint>
-                    Agent-boot scan XML trên màn hình Facebook hiện tại, chỉ
-                    like/comment bài post có keyword khớp. Step này không search
-                    từng bài và không nhận profile/page/group làm post.
-                  </StepPanelHint>
+                  <StepPanelHint>{t('scanPostsHint')}</StepPanelHint>
                   <F label='Keyword bài viết'>
                     <Input
                       className='h-8 text-xs'
@@ -1606,15 +1628,6 @@ export function StepDetailPanel({
                       : 'Chạy platform adapter: lấy post action đã match từ biến scan, mở author profile, verify profile rồi lưu target proof cho bước gửi kết bạn.'}
                   </StepPanelHint>
                   <div className='grid grid-cols-3 gap-2'>
-                    <F label='Platform'>
-                      <Input
-                        className='h-8 text-xs'
-                        value={step.platform ?? 'facebook'}
-                        onChange={(e) =>
-                          update({ platform: e.target.value || 'facebook' })
-                        }
-                      />
-                    </F>
                     <F label='Biến scan'>
                       <Input
                         className='h-8 font-mono text-xs'
@@ -1746,15 +1759,6 @@ export function StepDetailPanel({
                     đúng một target; màn hình search có nhiều nút sẽ bị chặn.
                     Kết quả được xác minh trước khi bước hoàn tất.
                   </StepPanelHint>
-                  <F label='Nền tảng'>
-                    <select
-                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
-                      value={step.platform ?? 'facebook'}
-                      onChange={(e) => update({ platform: e.target.value })}
-                    >
-                      <option value='facebook'>Facebook</option>
-                    </select>
-                  </F>
                   <F label='Hành động'>
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
@@ -1843,65 +1847,12 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_find_comment_button' && (
+              {step.type === 'social_find_comment_button' && (
                 <>
                   <div className='rounded-md border border-sky-400/40 bg-sky-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-sky-950 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-100'>
                     Tìm nút Bình luận đúng bài viết và cache target trong
                     runtime. Step này không bấm.
                   </div>
-                  {step.type === 'social_open_commenter_from_post_match' && (
-                    <div className='grid grid-cols-3 gap-2'>
-                      <F label='Chờ comment sheet'>
-                        <Input
-                          type='number'
-                          min={0}
-                          max={10}
-                          step={0.1}
-                          className='h-8 text-xs'
-                          value={step.comment_wait_s ?? 1}
-                          onChange={(e) =>
-                            update({
-                              comment_wait_s: Math.max(
-                                0,
-                                Math.min(10, Number(e.target.value) || 1)
-                              )
-                            })
-                          }
-                        />
-                      </F>
-                      <F label='Max commenter'>
-                        <Input
-                          type='number'
-                          min={1}
-                          max={20}
-                          className='h-8 text-xs'
-                          value={step.max_commenters ?? 5}
-                          onChange={(e) =>
-                            update({
-                              max_commenters: Math.max(
-                                1,
-                                Math.min(20, Number(e.target.value) || 5)
-                              )
-                            })
-                          }
-                        />
-                      </F>
-                      <F label='Biến comment sheet'>
-                        <Input
-                          className='h-8 font-mono text-xs'
-                          value={
-                            step.save_sheet_opened_as ?? 'COMMENT_SHEET_OPENED'
-                          }
-                          onChange={(e) =>
-                            update({
-                              save_sheet_opened_as:
-                                e.target.value || 'COMMENT_SHEET_OPENED'
-                            })
-                          }
-                        />
-                      </F>
-                    </div>
-                  )}
                   <div className='grid grid-cols-2 gap-2'>
                     <F label='Chờ nút tối đa (giây)'>
                       <Input
@@ -1943,7 +1894,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_tap_comment_target' && (
+              {step.type === 'social_tap_comment_target' && (
                 <>
                   <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
                     Bấm target đã được cache bởi bước Tìm nút Bình luận, rồi xác
@@ -1977,7 +1928,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_apply_comment_filter' && (
+              {step.type === 'social_apply_comment_filter' && (
                 <>
                   <div className='rounded-md border border-emerald-400/40 bg-emerald-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-emerald-950 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-100'>
                     Đổi bộ lọc trong sheet bình luận đang mở. Đặt step này sau
@@ -2035,8 +1986,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {(step.type === 'fb_tap_comment_button' ||
-                step.type === 'tap_fb_comment_button') && (
+              {step.type === 'social_open_comments' && (
                 <>
                   <div className='rounded-md border border-amber-400/50 bg-amber-50/70 px-3 py-2.5 text-[11px] leading-relaxed text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100'>
                     <div className='mb-1 font-semibold'>
@@ -2894,63 +2844,52 @@ export function StepDetailPanel({
 
               {step.type === 'extract_text_ocr' && (
                 <>
-                  <F label='save_as'>
+                  <StepPanelHint>{tOcr('hint')}</StepPanelHint>
+                  <F label={tOcr('saveAs')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.save_as ?? 'ocr_text'}
+                      placeholder='ocr_text'
                       onChange={(e) =>
                         update({ save_as: e.target.value || undefined })
                       }
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='language'>
+                    <F label={tOcr('language')}>
                       <Input
                         className='h-8 font-mono text-xs'
-                        value={step.language ?? 'eng'}
+                        value={step.language ?? 'vie+eng'}
+                        placeholder='vie+eng'
                         onChange={(e) =>
-                          update({ language: e.target.value || 'eng' })
+                          update({ language: e.target.value || 'vie+eng' })
                         }
                       />
                     </F>
-                    <F label='psm'>
+                    <F label={tOcr('confidence')}>
                       <Input
                         type='number'
-                        min={1}
+                        min={0}
+                        max={1}
+                        step={0.05}
                         className='h-8 text-xs'
-                        value={step.psm ?? 11}
-                        onChange={(e) =>
-                          update({ psm: Number(e.target.value) || 11 })
-                        }
-                      />
-                    </F>
-                    <F label='scale_factor'>
-                      <Input
-                        type='number'
-                        min={0.1}
-                        step={0.1}
-                        className='h-8 text-xs'
-                        value={step.scale_factor ?? 2.0}
+                        value={step.confidence_threshold ?? 0.5}
                         onChange={(e) =>
                           update({
-                            scale_factor: Number(e.target.value) || 2.0
+                            confidence_threshold: Math.min(
+                              1,
+                              Math.max(0, Number(e.target.value) || 0.5)
+                            )
                           })
                         }
                       />
                     </F>
                   </div>
                   <JsonTextarea
-                    label='region (JSON)'
+                    label={tOcr('region')}
                     value={step.region}
                     onCommit={(next) => update({ region: next })}
-                    placeholder='{"x":0,"y":0,"w":100,"h":100}'
-                  />
-                  <StepPanelToggle
-                    label='preprocess'
-                    checked={step.preprocess ?? true}
-                    onCheckedChange={(checked) =>
-                      update({ preprocess: checked })
-                    }
+                    placeholder='{"x1":0,"y1":0.3,"x2":1,"y2":0.7}'
                   />
                 </>
               )}
@@ -3349,15 +3288,6 @@ export function StepDetailPanel({
                   <StepPanelHint>
                     {t('leaseTarget.connectionHint')}
                   </StepPanelHint>
-                  <F label={t('leaseTarget.platform')}>
-                    <Input
-                      className='h-8 text-xs'
-                      value={step.platform ?? 'facebook'}
-                      onChange={(event) =>
-                        update({ platform: event.target.value || 'facebook' })
-                      }
-                    />
-                  </F>
                   <div className='rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-5 text-muted-foreground'>
                     CANDIDATE_AVAILABLE · CANDIDATE_NAME · CANDIDATE_LEASE_TOKEN
                     · TARGET_ENTITY_ID

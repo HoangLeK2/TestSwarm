@@ -37,9 +37,9 @@ from services.extraction_usecase import (
 from services.execution.dsl_runtime import materialize_legacy_step
 from services.execution.trace_context import build_step_trace_context
 from services.scenario_step_contract import (
-    extract_data_var_for_strategy,
+    extract_data_var_for_entity,
     normalize_extract_step,
-    normalize_fb_tap_comment_step,
+    normalize_social_comment_step,
     normalize_save_extraction_step,
 )
 
@@ -209,8 +209,8 @@ def _prepare_activity_step(step: dict[str, Any]) -> dict[str, Any]:
     prepared = materialize_legacy_step(dict(step))
     if prepared.get("type") == "extract":
         prepared = normalize_extract_step(prepared)
-    elif prepared.get("type") in {"fb_tap_comment_button", "tap_fb_comment_button"}:
-        prepared = normalize_fb_tap_comment_step(prepared)
+    elif prepared.get("type") in {"social_open_comments", "social_open_comments"}:
+        prepared = normalize_social_comment_step(prepared)
     elif prepared.get("type") == "save_extraction":
         prepared = normalize_save_extraction_step(prepared)
     # Workflow-level durable retry (DF-T-04-011) owns the attempt loop in Temporal.
@@ -1948,7 +1948,7 @@ class DeviceActivities:
     @activity.defn
     async def execute_extract(self, inp: ExtractInput) -> ExtractResult:
         """
-        Execute an 'extract' step (fb_posts / text_nodes / fb_comments strategies).
+        Execute an 'extract' step (posts / comments / text_nodes entities).
 
         Returns updated context (posts, text_nodes, comments, _no_new_streak) and
         break_requested flag when stop_if_no_new triggers.
@@ -1963,7 +1963,7 @@ class DeviceActivities:
         device = _get_device(inp.device_serial)
         step = _prepare_activity_step(dict(inp.step))
         idx = inp.step_index
-        activity.heartbeat(f"extract:{idx}:{step.get('strategy', 'fb_posts')}")
+        activity.heartbeat(f"extract:{idx}:{step.get('entity', 'posts')}")
 
         # Work on a deep-enough copy so we never mutate the input.
         # Lists (posts, text_nodes) are copied explicitly to prevent shared-reference mutation.
@@ -1973,10 +1973,14 @@ class DeviceActivities:
         ctx.setdefault("posts", [])
         ctx.setdefault("comments", [])
 
-        strategy = str(step.get("strategy", "fb_posts"))
-        from tasks.scenario.steps.extraction import EDGE_CONTENT_STRATEGIES
+        from tasks.scenario.steps.extraction import (
+            EDGE_CONTENT_ENTITIES,
+            resolve_extract_target,
+        )
 
-        if strategy in EDGE_CONTENT_STRATEGIES:
+        entity, platform = resolve_extract_target(step)
+
+        if entity in EDGE_CONTENT_ENTITIES:
             from db.database import activity_session
             from services.content.campaign_ref import resolve_persist_campaign_id
 
@@ -2058,7 +2062,8 @@ class DeviceActivities:
                         ctx=ctx,
                         scenario=scenario_meta,
                         step=step,
-                        strategy=strategy,
+                        entity=entity,
+                        platform=platform,
                         result=edge_result,
                         cancel_event=cancel_event,
                         cooperative_cancel_event=cancel_event,
@@ -2085,7 +2090,7 @@ class DeviceActivities:
             return ExtractResult(
                 ok=False,
                 message=(
-                    f"extract {strategy}: device_farm content XML parser was removed; "
+                    f"extract {entity}: device_farm content XML parser was removed; "
                     "enable edge_extra_data so phone/APK sends XML to agent-boot"
                 ),
                 context=ctx,
@@ -2093,7 +2098,7 @@ class DeviceActivities:
 
         return ExtractResult(
             ok=False,
-            message=f"extract: unknown strategy {strategy!r}",
+            message=f"extract: unknown entity {entity!r}",
             context=ctx,
         )
 

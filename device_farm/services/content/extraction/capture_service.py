@@ -37,6 +37,11 @@ def _sha256(data: bytes) -> str:
 
 
 def _png_bytes(raw: bytes) -> bytes:
+    """Re-encode a device frame to PNG.
+
+    ``optimize=True`` is deliberately not used: on a 1260x2800 device frame it
+    costs ~260ms versus ~57ms, and saves ~1% of the output size.
+    """
     if raw[:8] == b"\x89PNG\r\n\x1a\n":
         return raw
     try:
@@ -44,7 +49,7 @@ def _png_bytes(raw: bytes) -> bytes:
         if img.mode == "RGBA":
             img = img.convert("RGB")
         out = io.BytesIO()
-        img.save(out, format="PNG", optimize=True)
+        img.save(out, format="PNG")
         return out.getvalue()
     except Exception as exc:
         raise CaptureError(
@@ -89,7 +94,6 @@ class ExtractionCaptureService:
         self,
         device: Any,
         *,
-        region: dict[str, float] | None = None,
         persist: bool = True,
         execution_ctx: ExecutionCaptureContext | None = None,
         db=None,
@@ -114,43 +118,25 @@ class ExtractionCaptureService:
         if not raw:
             raise CaptureError("device screenshot unavailable", code="DEVICE_OFFLINE")
 
-        png = _png_bytes(raw)
-        if region:
-            png = self._crop_png(png, region)
+        # Always PNG: callers write these bytes out as .png with an image/png
+        # content type regardless of `persist` (see epic06_capture_adapter), so
+        # handing back a raw JPEG here would mislabel the stored file.
+        image = _png_bytes(raw)
 
-        digest = _sha256(png)
+        digest = _sha256(image)
         captured_at = datetime.now(timezone.utc)
         object_key: str | None = None
         artifact_id: str | None = None
 
         if persist and execution_ctx is not None:
-            object_key = _object_key(execution_ctx, "png")
-            if self._upload(object_key, png, "image/png"):
-                artifact_id = _try_persist_artifact(
-                    execution_ctx,
-                    db=db,
-                    object_key=object_key,
-                    mime="image/png",
-                    size=len(png),
-                    sha256=digest,
-                    captured_at=captured_at,
-                )
-            else:
-                from services import minio_store
-
-                if minio_store.local_image_fallback_enabled():
-                    object_key = None
-                else:
-                    raise CaptureError(
-                        "object storage upload failed",
-                        code="OBJECT_STORAGE_UNAVAILABLE",
-                        details={"kind": execution_ctx.kind},
-                    )
+            object_key, artifact_id = self._store_image(
+                image, execution_ctx, db=db, digest=digest, captured_at=captured_at
+            )
 
         handle = CaptureHandle(
-            image_bytes=png,
+            image_bytes=image,
             object_key=object_key,
-            size_bytes=len(png),
+            size_bytes=len(image),
             sha256=digest,
             captured_at=captured_at,
             artifact_id=artifact_id,
@@ -158,6 +144,58 @@ class ExtractionCaptureService:
         _cache_put(_screenshot_cache, cache_key, handle)
         self._observe_capture("screenshot", persist, started)
         return handle
+
+    def _store_image(
+        self,
+        image: bytes,
+        execution_ctx: ExecutionCaptureContext,
+        *,
+        db=None,
+        digest: str | None = None,
+        captured_at: datetime | None = None,
+    ) -> tuple[str | None, str | None]:
+        """Upload one screenshot and record it as an execution artifact."""
+        digest = digest or _sha256(image)
+        captured_at = captured_at or datetime.now(timezone.utc)
+        object_key = _object_key(execution_ctx, "png")
+        if not self._upload(object_key, image, "image/png"):
+            from services import minio_store
+
+            if minio_store.local_image_fallback_enabled():
+                return None, None
+            raise CaptureError(
+                "object storage upload failed",
+                code="OBJECT_STORAGE_UNAVAILABLE",
+                details={"kind": execution_ctx.kind},
+            )
+        artifact_id = _try_persist_artifact(
+            execution_ctx,
+            db=db,
+            object_key=object_key,
+            mime="image/png",
+            size=len(image),
+            sha256=digest,
+            captured_at=captured_at,
+        )
+        return object_key, artifact_id
+
+    def persist_image(
+        self,
+        image: bytes,
+        *,
+        execution_ctx: ExecutionCaptureContext,
+        db=None,
+    ) -> str | None:
+        """Store a screenshot the caller already has; returns the artifact id.
+
+        Used for frames that were captured on agent-boot rather than here — the
+        OCR path only ships one back when a read comes up empty.
+        """
+        if not image:
+            return None
+        png = _png_bytes(image)
+        _, artifact_id = self._store_image(png, execution_ctx, db=db)
+        return artifact_id
 
     def capture_hierarchy(
         self,
@@ -228,28 +266,6 @@ class ExtractionCaptureService:
         _cache_put(_hierarchy_cache, cache_key, handle)
         self._observe_capture("hierarchy", persist, started)
         return handle
-
-    @staticmethod
-    def _crop_png(png: bytes, region: dict[str, float]) -> bytes:
-        img = Image.open(io.BytesIO(png))
-        w, h = img.size
-        if {"x1", "y1", "x2", "y2"}.issubset(region):
-            box = (
-                int(float(region["x1"]) * w),
-                int(float(region["y1"]) * h),
-                int(float(region["x2"]) * w),
-                int(float(region["y2"]) * h),
-            )
-        else:
-            x = float(region.get("x", 0))
-            y = float(region.get("y", 0))
-            rw = float(region.get("w", 1.0))
-            rh = float(region.get("h", 1.0))
-            box = (int(x * w), int(y * h), int((x + rw) * w), int((y + rh) * h))
-        cropped = img.crop(box)
-        out = io.BytesIO()
-        cropped.save(out, format="PNG")
-        return out.getvalue()
 
     @staticmethod
     def _upload(object_key: str, data: bytes, mime: str) -> bool:

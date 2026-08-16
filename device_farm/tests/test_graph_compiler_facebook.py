@@ -7,7 +7,7 @@ from db.seeds.scenario_templates import BUILTIN_TEMPLATE_BY_NAME
 def _count_fb_comment_extracts(steps: list[dict]) -> int:
     total = 0
     for step in steps:
-        if step.get("type") == "extract" and step.get("strategy") == "fb_comments":
+        if step.get("type") == "extract" and step.get("entity") == "comments":
             total += 1
         for key in ("steps", "then", "else"):
             children = step.get(key)
@@ -24,11 +24,11 @@ def _count_fb_comment_extracts(steps: list[dict]) -> int:
 def test_facebook_comment_button_graph_round_trip_keeps_then_branch() -> None:
     steps = [
         {
-            "type": "fb_tap_comment_button",
+            "type": "social_open_comments",
             "then": [
                 {
                     "type": "extract",
-                    "strategy": "fb_comments",
+                    "entity": "comments", "platform": "facebook",
                     "edge_extra_data": True,
                 }
             ],
@@ -39,7 +39,7 @@ def test_facebook_comment_button_graph_round_trip_keeps_then_branch() -> None:
     nodes, edges = steps_to_graph(steps)
     assert any(
         node.get("type") == "extract"
-        and node.get("config", {}).get("strategy") == "fb_comments"
+        and node.get("config", {}).get("entity") == "comments"
         and node.get("scope", {}).get("branch") == "then"
         for node in nodes
     )
@@ -62,11 +62,11 @@ def test_facebook_group_template_keeps_extra_data_tuning_in_steps_not_variables(
     }
 
     assert variables.isdisjoint(extra_data_keys)
-    assert not _contains_step_type(spec["steps"], "tap_fb_comment_button")
-    assert not _contains_step_type(spec["steps"], "fb_tap_comment_button")
-    assert _contains_step_type(spec["steps"], "fb_find_comment_button")
-    assert _contains_step_type(spec["steps"], "fb_tap_comment_target")
-    assert _contains_step_type(spec["steps"], "fb_apply_comment_filter")
+    assert not _contains_step_type(spec["steps"], "social_open_comments")
+    assert not _contains_step_type(spec["steps"], "social_open_comments")
+    assert _contains_step_type(spec["steps"], "social_find_comment_button")
+    assert _contains_step_type(spec["steps"], "social_tap_comment_target")
+    assert _contains_step_type(spec["steps"], "social_apply_comment_filter")
 
     nodes, edges = steps_to_graph(spec["steps"])
     round_tripped = compile_graph_to_steps(nodes, edges)
@@ -168,9 +168,9 @@ def _contains_step_type(steps: list[dict], step_type: str) -> bool:
 def _post_comment_sibling_flows(steps: list[dict]) -> list[tuple[list[dict], int, int, int, int, int]]:
     flows: list[tuple[list[dict], int, int, int, int, int]] = []
     post_index = _first_step_index(steps, _is_fb_post_extract)
-    find_index = _first_step_index(steps, lambda step: step.get("type") == "fb_find_comment_button")
-    tap_index = _first_step_index(steps, lambda step: step.get("type") == "fb_tap_comment_target")
-    filter_index = _first_step_index(steps, lambda step: step.get("type") == "fb_apply_comment_filter")
+    find_index = _first_step_index(steps, lambda step: step.get("type") == "social_find_comment_button")
+    tap_index = _first_step_index(steps, lambda step: step.get("type") == "social_tap_comment_target")
+    filter_index = _first_step_index(steps, lambda step: step.get("type") == "social_apply_comment_filter")
     comment_index = _first_step_index(steps, _is_fb_comment_extract)
     if (
         post_index is not None
@@ -202,11 +202,11 @@ def _first_step_index(steps: list[dict], predicate) -> int | None:
 
 
 def _is_fb_post_extract(step: dict) -> bool:
-    return step.get("type") == "extract" and step.get("strategy") == "fb_posts"
+    return step.get("type") == "extract" and step.get("entity") == "posts"
 
 
 def _is_fb_comment_extract(step: dict) -> bool:
-    return step.get("type") == "extract" and step.get("strategy") == "fb_comments"
+    return step.get("type") == "extract" and step.get("entity") == "comments"
 
 
 def _is_back_step(step: dict) -> bool:

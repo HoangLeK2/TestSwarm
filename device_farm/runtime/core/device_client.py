@@ -2488,14 +2488,22 @@ class DeviceClient:
         self,
         *,
         endpoint: str = "",
-        strategy: str,
+        strategy: str = "",
+        entity: str = "",
+        platform: str = "",
         context: Dict[str, Any],
         token: str = "",
         timeout: float = 45.0,
         cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
-        """PA B relay-only: dump + parse on agent-boot via relay.extra_data."""
+        """PA B relay-only: dump + parse on agent-boot via relay.extra_data.
+
+        Content extraction passes ``entity``/``platform`` (platform-neutral);
+        agent-boot's internal probes still pass a bare ``strategy`` name.
+        """
         del endpoint, token  # relay path does not use HTTP ingest or APK WS
+        if entity:
+            context = {**context, "entity": entity, "platform": platform or "auto"}
         if not _env_bool("EDGE_EXTRA_RELAY_ENABLED", True):
             return {"ok": False, "error": "edge_extra_relay_disabled"}
         if self._loop is None:
@@ -2539,6 +2547,103 @@ class DeviceClient:
         except Exception as exc:
             self._log(f"edge_extra relay failed: {exc}", level=logging.WARNING)
             return {"ok": False, "error": str(exc)}
+
+    def ocr_supported(self) -> bool:
+        """Whether the agent hosting this device ships an OCR engine.
+
+        Reported per device in the relay heartbeat capabilities, but it is really
+        a property of the agent host's image.
+        """
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return False
+            caps = relay.get_capabilities(self._resolve_relay_serial())
+            return bool(caps and caps.get("has_ocr"))
+        except Exception:
+            return False
+
+    def request_ocr(
+        self,
+        *,
+        languages: Optional[List[str]] = None,
+        region: Optional[Dict[str, float]] = None,
+        min_confidence: float = 0.5,
+        want_image_on_empty: bool = False,
+        timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Screenshot + OCR on agent-boot; returns text boxes, not an image.
+
+        ``take_screenshot()`` is deliberately not used here: it only reads the
+        scrcpy JPEG cache, and since media moved to go2rtc nothing fills that
+        cache any more.
+        """
+        if self._loop is None:
+            return {"ok": False, "error": "no_event_loop"}
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._ocr_via_relay_async(
+                    languages=languages,
+                    region=region,
+                    min_confidence=min_confidence,
+                    want_image_on_empty=want_image_on_empty,
+                    timeout=timeout,
+                    cancel_event=cancel_event,
+                ),
+                self._loop,
+            )
+            deadline = time.monotonic() + timeout + 15.0
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    try:
+                        return fut.result(timeout=0.75)
+                    except concurrent.futures.TimeoutError:
+                        fut.cancel()
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    fut.cancel()
+                    return {"ok": False, "error": f"relay timeout ({timeout}s)"}
+                try:
+                    return fut.result(timeout=min(0.25, remaining))
+                except concurrent.futures.TimeoutError:
+                    continue
+        except Exception as exc:
+            self._log(f"ocr relay failed: {exc}", level=logging.WARNING)
+            return {"ok": False, "error": str(exc)}
+
+    async def _ocr_via_relay_async(
+        self,
+        *,
+        languages: Optional[List[str]],
+        region: Optional[Dict[str, float]],
+        min_confidence: float,
+        want_image_on_empty: bool,
+        timeout: float,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is None:
+            return {"ok": False, "error": "no_relay_manager"}
+        serial = self._resolve_relay_serial()
+        if not relay.relay_for_serial(serial):
+            return {"ok": False, "error": "no_relay"}
+        return await relay.ocr(
+            serial,
+            languages=languages,
+            region=region,
+            min_confidence=min_confidence,
+            want_image_on_empty=want_image_on_empty,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
 
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
         """Request hierarchy dump via gRPC a11y query, fallback to WS direct."""

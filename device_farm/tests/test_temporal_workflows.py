@@ -135,7 +135,7 @@ class TestResolveStep:
     def test_control_flow_nested_steps_are_not_resolved_before_runtime_vars(self):
         step = {
             "type": "if_variable",
-            "name": "FACEBOOK_SESSION_READY",
+            "name": "PLATFORM_SESSION_READY",
             "then": [
                 {
                     "type": "loop",
@@ -156,7 +156,7 @@ class TestResolveStep:
             step,
             {},
             {
-                "FACEBOOK_SESSION_READY": True,
+                "PLATFORM_SESSION_READY": True,
                 "PAGE_COUNT": 2,
                 "PAGE_TARGETS": ["Go2Joy Vietnam", "Booking.com"],
             },

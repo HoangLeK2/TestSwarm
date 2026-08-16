@@ -467,7 +467,7 @@ async def test_fb_extract_without_bind_dispatches(session_factory):
     d1 = await _online_device(session_factory, serial="EXT-D1")
     steps = [
         _sequence_step("x1", "extract", strategy="fb_posts"),
-        _sequence_step("x2", "tap_fb_comment_button"),
+        _sequence_step("x2", "social_open_comments"),
     ]
     assert not scenario_requires_account(steps)
 

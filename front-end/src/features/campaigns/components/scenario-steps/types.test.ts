@@ -13,15 +13,15 @@ test('step dropdown hides legacy compound fb comment node', () => {
     ALL_STEP_TYPES.map((stepType) => stepType.value)
   );
 
-  assert.equal(exposedTypes.has('fb_find_comment_button'), true);
-  assert.equal(exposedTypes.has('fb_tap_comment_target'), true);
-  assert.equal(exposedTypes.has('fb_apply_comment_filter'), true);
-  assert.equal(exposedTypes.has('fb_tap_comment_button'), false);
-  assert.equal(exposedTypes.has('tap_fb_comment_button'), false);
+  assert.equal(exposedTypes.has('social_find_comment_button'), true);
+  assert.equal(exposedTypes.has('social_tap_comment_target'), true);
+  assert.equal(exposedTypes.has('social_apply_comment_filter'), true);
+  assert.equal(exposedTypes.has('social_open_comments'), false);
+  assert.equal(exposedTypes.has('social_open_comments'), false);
 });
 
 test('default fb comment extract uses balanced fast crawl budget', () => {
-  const step = createDefaultStep('extract_fb_comments');
+  const step = createDefaultStep('extract_comments');
 
   assert.equal(step.max_items, 220);
   assert.equal(step.comment_scroll_passes, 16);
@@ -37,7 +37,7 @@ test('default fb comment extract uses balanced fast crawl budget', () => {
 test('default fb comment sequence keeps back inside extract step', () => {
   const steps = createDefaultFbCommentThenSteps();
   const extract = steps.find(
-    (step) => step.type === 'extract' && step.strategy === 'fb_comments'
+    (step) => step.type === 'extract' && step.entity === 'comments'
   );
 
   assert.ok(extract);
@@ -50,7 +50,7 @@ test('default fb comment sequence keeps back inside extract step', () => {
 
 test('custom fb comment crawl budget survives frontend JSON payload', () => {
   const step = {
-    ...createDefaultStep('extract_fb_comments'),
+    ...createDefaultStep('extract_comments'),
     max_items: 333,
     comment_scroll_passes: 27,
     comment_swipes_per_dump: 5,
@@ -75,14 +75,14 @@ test('custom fb comment crawl budget survives frontend JSON payload', () => {
 
 test('app automation default steps include editable profile shells', () => {
   const login = createDefaultStep('login_if_needed');
-  const sessionGate = createDefaultStep('facebook_session_gate');
+  const sessionGate = createDefaultStep('platform_session_gate');
   const form = createDefaultStep('fill_form');
   const assertState = createDefaultStep('assert_app_state');
 
   assert.equal(login.type, 'login_if_needed');
   assert.equal(login.profile.package, '');
   assert.deepEqual(login.profile.login_recipe.detect_logged_in.any_text, []);
-  assert.equal(sessionGate.type, 'facebook_session_gate');
+  assert.equal(sessionGate.type, 'platform_session_gate');
   assert.equal(sessionGate.phase, 'preflight');
   assert.equal(sessionGate.timeout, 0);
 

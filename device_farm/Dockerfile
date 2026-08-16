@@ -54,6 +54,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     adb \
     curl \
     ca-certificates \
+    # OCR backend. Without these, OCREngine.available is False and every
+    # extract_text_ocr step fails with ENGINE_UNAVAILABLE. `vie` is not
+    # optional: OCRService defaults to lang ["vi", "en"].
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-vie \
     && rm -rf /var/lib/apt/lists/* && \
     mkdir -p /usr/share/scrcpy && \
     curl -fL "https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_SERVER_VERSION}/scrcpy-server-v${SCRCPY_SERVER_VERSION}" \

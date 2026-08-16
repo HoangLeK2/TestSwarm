@@ -19,7 +19,7 @@ from services.device_platform_session import (
     mark_login_required,
     mark_readiness_observed,
 )
-from services.facebook_readiness import FacebookReadinessResult, FacebookReadinessStatus
+from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 from tenancy.context import tenant_context
 
 _LOGIN_RECOVERABLE_GUARD_REASONS = frozenset(
@@ -39,7 +39,7 @@ def guard_reason_allows_login_recovery(reason: str | None) -> bool:
     return str(reason or "") in _LOGIN_RECOVERABLE_GUARD_REASONS
 
 
-def scenario_registry_has_facebook_login_gate(
+def scenario_registry_has_platform_login_gate(
     registry: dict[str, Any],
     scenario_refs: list[dict[str, Any]],
 ) -> bool:
@@ -60,7 +60,7 @@ def scenario_registry_has_facebook_login_gate(
             if not isinstance(step, dict):
                 continue
             if (
-                step.get("type") == "facebook_session_gate"
+                step.get("type") == "platform_session_gate"
                 and step.get("phase", "preflight") == "preflight"
             ):
                 return True, nested_refs
@@ -113,7 +113,7 @@ def _session_cache_is_fresh(last_ready_at: datetime | None) -> bool:
     try:
         ttl = max(
             0,
-            min(3600, int(os.environ.get("FACEBOOK_SESSION_READY_TTL_SECONDS", "300"))),
+            min(3600, int(os.environ.get("PLATFORM_SESSION_READY_TTL_SECONDS", "300"))),
         )
     except ValueError:
         ttl = 300
@@ -194,21 +194,21 @@ def _decision(
     }
 
 
-async def apply_facebook_session_gate(
+async def apply_platform_session_gate(
     db: AsyncSession,
     *,
     org_id: str,
     device_id: str,
     account_id: str,
     phase: str,
-    readiness: FacebookReadinessResult,
+    readiness: PlatformReadinessResult,
     login_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     session = await get_platform_session(db, org_id=org_id, device_id=device_id)
     evidence = {"source": "scenario_session_gate", "readiness": readiness.evidence()}
 
     if phase == "preflight":
-        if readiness.status == FacebookReadinessStatus.READY:
+        if readiness.status == PlatformReadinessStatus.READY:
             if (
                 session is not None
                 and session.state == DevicePlatformSessionState.ACTIVE.value
@@ -257,7 +257,7 @@ async def apply_facebook_session_gate(
                 state=session.state,
             )
 
-        if readiness.status == FacebookReadinessStatus.LOGGED_OUT:
+        if readiness.status == PlatformReadinessStatus.LOGGED_OUT:
             session = await mark_login_required(
                 db,
                 org_id=org_id,
@@ -277,7 +277,7 @@ async def apply_facebook_session_gate(
             )
 
         if (
-            readiness.status == FacebookReadinessStatus.INCONCLUSIVE
+            readiness.status == PlatformReadinessStatus.INCONCLUSIVE
             and session is not None
             and session.state == DevicePlatformSessionState.ACTIVE.value
             and session.account_id == account_id
@@ -293,7 +293,7 @@ async def apply_facebook_session_gate(
                 state=session.state,
             )
         if (
-            readiness.status == FacebookReadinessStatus.INCONCLUSIVE
+            readiness.status == PlatformReadinessStatus.INCONCLUSIVE
             and session is not None
             and session.state
             in {
@@ -320,7 +320,7 @@ async def apply_facebook_session_gate(
     )
     if (
         phase == "confirm"
-        and readiness.status == FacebookReadinessStatus.READY
+        and readiness.status == PlatformReadinessStatus.READY
         and provenance_matches
     ):
         session = await mark_active(
@@ -343,10 +343,10 @@ async def apply_facebook_session_gate(
         )
 
     state_by_status = {
-        FacebookReadinessStatus.CHECKPOINT: DevicePlatformSessionState.CHECKPOINT,
-        FacebookReadinessStatus.LOGGED_OUT: DevicePlatformSessionState.LOGGED_OUT,
-        FacebookReadinessStatus.UNRESPONSIVE: DevicePlatformSessionState.FAILED,
-        FacebookReadinessStatus.UNSUPPORTED_BUILD: DevicePlatformSessionState.FAILED,
+        PlatformReadinessStatus.CHECKPOINT: DevicePlatformSessionState.CHECKPOINT,
+        PlatformReadinessStatus.LOGGED_OUT: DevicePlatformSessionState.LOGGED_OUT,
+        PlatformReadinessStatus.UNRESPONSIVE: DevicePlatformSessionState.FAILED,
+        PlatformReadinessStatus.UNSUPPORTED_BUILD: DevicePlatformSessionState.FAILED,
     }
     next_state = state_by_status.get(readiness.status)
     if next_state is not None:
@@ -363,7 +363,7 @@ async def apply_facebook_session_gate(
         )
     reason = (
         "facebook_login_provenance_missing"
-        if phase == "confirm" and readiness.status == FacebookReadinessStatus.READY
+        if phase == "confirm" and readiness.status == PlatformReadinessStatus.READY
         else readiness.reason
     )
     return _decision(
@@ -377,12 +377,12 @@ async def apply_facebook_session_gate(
     )
 
 
-def run_facebook_session_gate(
+def run_platform_session_gate(
     *,
     identity: dict[str, str | None],
     device_serial: str,
     phase: str,
-    readiness: FacebookReadinessResult,
+    readiness: PlatformReadinessResult,
     login_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from db.database import activity_session, run_activity_coro_blocking
@@ -395,7 +395,7 @@ def run_facebook_session_gate(
                 device_serial=device_serial,
             )
             with tenant_context(org_id):
-                return await apply_facebook_session_gate(
+                return await apply_platform_session_gate(
                     db,
                     org_id=org_id,
                     device_id=device_id,

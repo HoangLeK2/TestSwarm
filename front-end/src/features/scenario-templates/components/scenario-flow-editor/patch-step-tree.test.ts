@@ -13,12 +13,13 @@ const fbGroupLoop: FlowStep = {
   count: 10,
   steps: [
     {
-      type: 'fb_tap_comment_button',
+      type: 'social_open_comments',
       _fgId: 'tap-node',
       then: [
         {
           type: 'extract',
-          strategy: 'fb_comments',
+          entity: 'comments',
+          platform: 'facebook',
           _fgId: 'extract-node',
           max_items: 500
         }
@@ -28,10 +29,11 @@ const fbGroupLoop: FlowStep = {
   ]
 } as FlowStep;
 
-test('patchStepByFlowgramId updates extract inside fb_tap_comment_button then branch', () => {
+test('patchStepByFlowgramId updates extract inside social_open_comments then branch', () => {
   const next = patchStepByFlowgramId([fbGroupLoop], 'extract-node', {
     type: 'extract',
-    strategy: 'fb_comments',
+    entity: 'comments',
+    platform: 'facebook',
     max_items: 120,
     comment_scroll_passes: 12
   } as FlowStep);
@@ -45,11 +47,11 @@ test('patchStepByFlowgramId updates extract inside fb_tap_comment_button then br
   assert.equal((extract as Record<string, unknown>)._fgId, 'extract-node');
 });
 
-test('findStepByFlowgramId locates nested extract under fb_tap_comment_button', () => {
+test('findStepByFlowgramId locates nested extract under social_open_comments', () => {
   const found = findStepByFlowgramId([fbGroupLoop], 'extract-node');
   assert.ok(found);
   assert.equal(found.type, 'extract');
-  assert.equal((found as { strategy?: string }).strategy, 'fb_comments');
+  assert.equal((found as { entity?: string }).entity, 'comments');
 });
 
 test('findStepByFlowgramId locates children under generic if step', () => {

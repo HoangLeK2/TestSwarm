@@ -10,7 +10,7 @@ from unittest.mock import patch
 from relay.extra_data.collector import (
     build_ingest_payload,
     collect_fb_comment_filter_apply,
-    collect_fb_comment_target_with_tap,
+    collect_comment_target_with_tap,
     collect_xml_snapshots,
     expand_see_more_via_u2,
     release_collect_lock,
@@ -1926,7 +1926,7 @@ async def test_collect_fb_posts_probe_then_final_dump() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collect_fb_comment_target_prefers_click_spec() -> None:
+async def test_collect_comment_target_prefers_click_spec() -> None:
     exec_ = _SessionFakeExecutor()
     diagnostic = {
         "reason_code": "ok",
@@ -1944,7 +1944,7 @@ async def test_collect_fb_comment_target_prefers_click_spec() -> None:
         "relay.extra_data.ingest._parse_items",
         return_value=([], diagnostic),
     ):
-        _snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
+        _snapshots, err, tapped, diag = await collect_comment_target_with_tap(
             exec_,
             "dev1",
             {
@@ -2045,7 +2045,7 @@ async def test_post_open_u2_click_is_explicit_fallback_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collect_fb_comment_target_tap_disabled_by_default() -> None:
+async def test_collect_comment_target_tap_disabled_by_default() -> None:
     exec_ = _SessionFakeExecutor()
     diagnostic = {
         "reason_code": "ok",
@@ -2056,7 +2056,7 @@ async def test_collect_fb_comment_target_tap_disabled_by_default() -> None:
         "relay.extra_data.ingest._parse_items",
         return_value=([], diagnostic),
     ):
-        snapshots, err, tapped, diagnostic = await collect_fb_comment_target_with_tap(
+        snapshots, err, tapped, diagnostic = await collect_comment_target_with_tap(
             exec_,
             "dev1",
             {"post_tap_wait_s": 0.0},
@@ -2073,7 +2073,7 @@ async def test_collect_fb_comment_target_tap_disabled_by_default() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collect_fb_comment_target_with_tap_same_session() -> None:
+async def test_collect_comment_target_with_tap_same_session() -> None:
     exec_ = _SessionFakeExecutor()
     diagnostic = {
         "reason_code": "ok",
@@ -2087,7 +2087,7 @@ async def test_collect_fb_comment_target_with_tap_same_session() -> None:
         "relay.extra_data.collector._wait_comment_sheet_opened",
         return_value=(True, "wait_exists"),
     ):
-        snapshots, err, tapped, diagnostic = await collect_fb_comment_target_with_tap(
+        snapshots, err, tapped, diagnostic = await collect_comment_target_with_tap(
             exec_,
             "dev1",
             {"post_tap_wait_s": 0.0, "comment_target_tap_enabled": True},
@@ -2104,7 +2104,7 @@ async def test_collect_fb_comment_target_with_tap_same_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collect_fb_comment_target_retries_when_sheet_did_not_open() -> None:
+async def test_collect_comment_target_retries_when_sheet_did_not_open() -> None:
     exec_ = _SessionFakeExecutor()
     diagnostic = {
         "reason_code": "ok",
@@ -2130,7 +2130,7 @@ async def test_collect_fb_comment_target_retries_when_sheet_did_not_open() -> No
         "relay.extra_data.parsers.facebook.comment_pipeline.should_press_back_after_failed_tap",
         return_value=True,
     ):
-        snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
+        snapshots, err, tapped, diag = await collect_comment_target_with_tap(
             exec_,
             "dev1",
             {
@@ -2155,7 +2155,7 @@ async def test_collect_fb_comment_target_retries_when_sheet_did_not_open() -> No
 
 
 @pytest.mark.asyncio
-async def test_collect_fb_comment_target_skips_back_on_group_feed() -> None:
+async def test_collect_comment_target_skips_back_on_group_feed() -> None:
     exec_ = _SessionFakeExecutor()
     feed_xml = """<?xml version="1.0"?>
 <hierarchy bounds="[0,0][1080,2400]">
@@ -2178,7 +2178,7 @@ async def test_collect_fb_comment_target_skips_back_on_group_feed() -> None:
         "relay.extra_data.collector._diag_sheet_opened",
         side_effect=[False, True],
     ):
-        _snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
+        _snapshots, err, tapped, diag = await collect_comment_target_with_tap(
             exec_,
             "dev1",
             {
@@ -2197,7 +2197,7 @@ async def test_collect_fb_comment_target_skips_back_on_group_feed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collect_fb_comment_target_skips_verify_when_disabled() -> None:
+async def test_collect_comment_target_skips_verify_when_disabled() -> None:
     exec_ = _SessionFakeExecutor()
     diagnostic = {
         "reason_code": "ok",
@@ -2210,7 +2210,7 @@ async def test_collect_fb_comment_target_skips_verify_when_disabled() -> None:
     ), patch(
         "relay.extra_data.collector._diag_sheet_opened",
     ) as mock_verify:
-        snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
+        snapshots, err, tapped, diag = await collect_comment_target_with_tap(
             exec_,
             "dev1",
             {

@@ -154,14 +154,14 @@ def test_if_variable_preserves_loop_branch_variables_until_runtime():
         device,
         {
             "variables": {
-                "FACEBOOK_SESSION_READY": True,
+                "PLATFORM_SESSION_READY": True,
                 "PAGE_COUNT": 2,
                 "PAGE_TARGETS": ["Go2Joy Vietnam", "Booking.com"],
             },
             "steps": [
                 {
                     "type": "if_variable",
-                    "name": "FACEBOOK_SESSION_READY",
+                    "name": "PLATFORM_SESSION_READY",
                     "then": [
                         {
                             "type": "loop",

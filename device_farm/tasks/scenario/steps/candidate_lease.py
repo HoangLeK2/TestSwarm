@@ -4,32 +4,38 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from services.platform_readiness import DEFAULT_PLATFORM
+from services.social_ext import supports_step
 from tasks.scenario.steps import register_step
 
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
 
+_STEP_TYPE = "lease_connection_candidate"
 
-@register_step("lease_connection_candidate")
+
+@register_step(_STEP_TYPE)
 def handle_lease_connection_candidate(
     sc: "ScenarioContext",
     step: dict[str, Any],
     idx: int,
     result: dict[str, Any],
 ) -> None:
-    platform = str(step.get("platform") or "facebook").strip().casefold()
-    if platform != "facebook":
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    if not supports_step(platform, _STEP_TYPE):
         result.update(
             {
                 "ok": False,
                 "outcome": "unsupported_platform",
-                "message": f"lease_connection_candidate: unsupported {platform!r}",
+                "message": (
+                    f"{_STEP_TYPE}: platform {platform!r} does not implement this step"
+                ),
             }
         )
         return
 
     from services.account_actions import resolve_action_identity
-    from services.facebook_candidate_runtime import lease_connection_candidate
+    from services.candidate_runtime import lease_connection_candidate
 
     try:
         identity = resolve_action_identity(

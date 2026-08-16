@@ -12,7 +12,11 @@ PaddleOCR notes:
   - Confidence threshold via `min_confidence` param (default 0.7)
 
 Tesseract notes (legacy path, kept for backwards compat):
-  - Tesseract works best at 300+ DPI; mobile screenshots are ~72-96 DPI → upscale 2-3x
+  - Do NOT upscale modern Android screenshots. They are already dense (1260x2800
+    for a 6" screen), so the classic "72-96 DPI → upscale 2-3x" advice hurts here.
+    Measured over 6 real Facebook screenshots: scale 1.0 gave 285 words @ 90.2 conf
+    in 234ms/image, scale 2.0 gave *fewer* words (268 @ 89.5) in 525ms. Hence
+    `scale_factor` defaults to 1.0 — raise it only for genuinely low-res sources.
   - Preprocessing order matters: scale → grayscale → sharpen → binarize
   - PSM 11 (sparse) for full screenshots, PSM 7 (single line) for elements
   - Each tesseract call spawns a subprocess (~50ms + ~50MB RAM)
@@ -136,7 +140,7 @@ class OCREngine:
         region: dict[str, float] | None = None,
         psm: int = PSM_SPARSE,
         preprocess: bool = True,
-        scale_factor: float = 2.0,
+        scale_factor: float = 1.0,
         whitelist: str | None = None,
         min_confidence: float = 0.7,
     ) -> str:
@@ -162,7 +166,7 @@ class OCREngine:
         region: dict[str, float] | None = None,
         psm: int = PSM_SPARSE,
         preprocess: bool = True,
-        scale_factor: float = 2.0,
+        scale_factor: float = 1.0,
         min_confidence: float = 0.7,
     ) -> list[dict[str, Any]]:
         backend = self._resolve_backend()
@@ -259,7 +263,7 @@ class OCREngine:
 
     # ─── Tesseract helpers (legacy fallback) ─────────────────────────────
     @staticmethod
-    def _preprocess(img: Image.Image, scale_factor: float = 2.0) -> Image.Image:
+    def _preprocess(img: Image.Image, scale_factor: float = 1.0) -> Image.Image:
         if scale_factor > 1.0:
             new_size = (int(img.width * scale_factor), int(img.height * scale_factor))
             img = img.resize(new_size, Image.LANCZOS)
@@ -310,10 +314,14 @@ class OCREngine:
             img.save(tmp.name, format="PNG")
             result = subprocess.run(
                 [self._cmd, tmp.name, "stdout", "-l", lang,
-                 f"--psm {psm}", "--oem 3", "tsv"],
+                 "--psm", str(psm), "--oem", "3", "tsv"],
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:
+                log.warning(
+                    "Tesseract tsv failed rc=%s: %s",
+                    result.returncode, result.stderr.strip()[:200],
+                )
                 return []
 
             lines = result.stdout.strip().split("\n")

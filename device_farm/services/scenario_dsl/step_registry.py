@@ -14,7 +14,7 @@ from services.scenario_dsl.step_handler import StepHandler
 _LEGACY_RUNTIME_STEP_TYPES: frozenset[str] = frozenset(
     {
         *SCENARIO_STEP_TYPES,
-        "fb_tap_comment_button",
+        "social_open_comments",
         "install_apk",
     }
 )

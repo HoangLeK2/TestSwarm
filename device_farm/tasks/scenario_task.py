@@ -63,7 +63,7 @@ from services.extraction_usecase import (
     resolve_comment_parent_hash,
 )
 from services.scenario_step_contract import (
-    extract_data_var_for_strategy,
+    extract_data_var_for_entity,
     normalize_extract_step,
     normalize_save_extraction_step,
 )
@@ -2108,10 +2108,14 @@ def _run_scenario_task_legacy(
         elif t == "extract":
             """Extract UI data (posts, text nodes) from current screen into context."""
             step = normalize_extract_step(step)
-            strategy = str(step.get("strategy", "fb_posts"))
-            from tasks.scenario.steps.extraction import EDGE_CONTENT_STRATEGIES
+            from tasks.scenario.steps.extraction import (
+                EDGE_CONTENT_ENTITIES,
+                resolve_extract_target,
+            )
 
-            if strategy in EDGE_CONTENT_STRATEGIES:
+            entity, platform = resolve_extract_target(step)
+
+            if entity in EDGE_CONTENT_ENTITIES:
                 from tasks.scenario.steps.extraction import request_edge_extra_data
 
                 if request_edge_extra_data(
@@ -2120,7 +2124,8 @@ def _run_scenario_task_legacy(
                     ctx=ctx,
                     scenario=scenario,
                     step=step,
-                    strategy=strategy,
+                    entity=entity,
+                    platform=platform,
                     result=step_result,
                     cancel_event=cancel_event,
                 ):
@@ -2128,14 +2133,14 @@ def _run_scenario_task_legacy(
                     continue
                 step_result["ok"] = False
                 step_result["message"] = (
-                    f"extract {strategy}: device_farm content XML parser was removed; "
+                    f"extract {entity}: device_farm content XML parser was removed; "
                     "enable edge_extra_data so phone/APK sends XML to agent-boot"
                 )
                 results.append(step_result)
                 continue
 
             step_result["ok"] = False
-            step_result["message"] = f"extract: unknown strategy {strategy!r}"
+            step_result["message"] = f"extract: unknown entity {entity!r}"
 
         # ── DF-009: OCR & Screen Text Extraction ──────────────────────────
         elif t == "extract_text_hierarchy":

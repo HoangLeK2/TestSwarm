@@ -16,11 +16,12 @@ import {
   StepPanelToggle
 } from './step-panel-primitives';
 import { parentPostIdVarForMode } from './extract-parent-mode';
+import { PlatformSelect } from './platform-select';
 
 type ExtractStep = FlowStep & {
-  strategy?: string;
+  entity?: string;
   edge_extra_data?: boolean;
-  strategy_version?: string;
+  entity_version?: string;
   extract_profile?: string;
   open_post_before_extract?: boolean;
   open_post_press_back_after_extract?: boolean;
@@ -64,17 +65,17 @@ const EXTRACT_PROFILES = ['balanced', 'aggressive', 'safe'] as const;
 
 const STRATEGIES = [
   {
-    value: 'fb_posts',
+    value: 'posts',
     titleKey: 'strategyPostsTitle',
     descKey: 'strategyPostsDesc'
   },
   {
-    value: 'fb_comments',
+    value: 'comments',
     titleKey: 'strategyCommentsTitle',
     descKey: 'strategyCommentsDesc'
   },
   {
-    value: 'fb_groups',
+    value: 'groups',
     titleKey: 'strategyGroupsTitle',
     descKey: 'strategyGroupsDesc'
   },
@@ -195,43 +196,43 @@ function CompactField({
 
 const ACTIVE_SAVE_PARENT_VAR = '_active_comment_parent_hash';
 
-function saveDefaultsForStrategy(strategy: string): {
+function saveDefaultsForEntity(entity: string): {
   content_type: string;
   dedupe_field: string;
 } {
-  if (strategy === 'fb_comments') {
+  if (entity === 'comments') {
     return { content_type: 'fb_comment', dedupe_field: 'comment_key' };
   }
-  if (strategy === 'fb_posts') {
+  if (entity === 'posts') {
     return { content_type: 'fb_post', dedupe_field: 'post_key' };
   }
   return { content_type: 'text', dedupe_field: 'text' };
 }
 
 /** Switch extract strategy and drop fields that do not apply (update() cannot delete keys). */
-function applyExtractStrategySwitch(
+function applyExtractEntitySwitch(
   step: ExtractStep,
-  strategy: string,
+  entity: string,
   saveEnabled: boolean
 ): ExtractStep {
-  const next: ExtractStep = { ...step, strategy };
+  const next: ExtractStep = { ...step, entity };
 
-  if (strategy === 'fb_posts') {
+  if (entity === 'posts') {
     next.edge_extra_data = step.edge_extra_data ?? true;
-    next.strategy_version = 'fb_posts:v1';
+    next.entity_version = 'posts:v1';
     next.open_post_before_extract = true;
     next.open_post_press_back_after_extract = false;
     next.extract_profile = step.extract_profile ?? 'balanced';
-  } else if (strategy === 'fb_comments') {
+  } else if (entity === 'comments') {
     next.edge_extra_data = step.edge_extra_data ?? true;
-    next.strategy_version = 'fb_comments:v1';
+    next.entity_version = 'comments:v1';
     next.extract_profile = step.extract_profile ?? 'balanced';
     next.open_post_press_back_after_extract =
       step.open_post_press_back_after_extract ?? true;
     delete next.open_post_before_extract;
-  } else if (strategy === 'text_nodes') {
+  } else if (entity === 'text_nodes') {
     next.edge_extra_data = step.edge_extra_data ?? true;
-    next.strategy_version = 'text_nodes:v1';
+    next.entity_version = 'text_nodes:v1';
     delete next.open_post_before_extract;
     delete next.open_post_press_back_after_extract;
     delete next.extract_profile;
@@ -249,11 +250,11 @@ function applyExtractStrategySwitch(
   }
 
   if (saveEnabled) {
-    Object.assign(next, saveDefaultsForStrategy(strategy));
-    if (strategy !== 'fb_comments') {
+    Object.assign(next, saveDefaultsForEntity(entity));
+    if (entity !== 'comments') {
       delete next.save_parent_id_var;
     }
-    next.platform = strategy === 'text_nodes' ? 'ui' : 'facebook';
+    next.platform = entity === 'text_nodes' ? 'ui' : 'facebook';
   }
 
   return next;
@@ -266,10 +267,10 @@ function labelPlatform(platform: string | undefined, t: (k: string) => string) {
 
 function labelContentType(
   contentType: string | undefined,
-  strategy: string,
+  entity: string,
   t: (k: string) => string
 ) {
-  const ct = contentType ?? saveDefaultsForStrategy(strategy).content_type;
+  const ct = contentType ?? saveDefaultsForEntity(entity).content_type;
   if (ct === 'fb_comment') return t('saveContentTypeComment');
   if (ct === 'fb_post') return t('saveContentTypeGroupPost');
   if (ct === 'text') return t('saveContentTypeText');
@@ -290,10 +291,10 @@ function labelCollection(
 
 function labelDedupe(
   field: string | undefined,
-  strategy: string,
+  entity: string,
   t: (k: string) => string
 ) {
-  const d = field ?? saveDefaultsForStrategy(strategy).dedupe_field;
+  const d = field ?? saveDefaultsForEntity(entity).dedupe_field;
   if (d === 'comment_key') return t('saveDedupeCommentKey');
   if (d === 'post_key') return t('saveDedupePostKey');
   if (d === 'text') return t('saveDedupeText');
@@ -379,10 +380,13 @@ export function ExtractStepFields({
   view?: 'all' | 'screen' | 'data-save';
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.extract');
-  const strategy = step.strategy ?? 'fb_posts';
+  const tPlatform = useTranslations(
+    'campaignsFeature.stepEditor.platformSelect'
+  );
+  const entity = step.entity ?? 'posts';
   const expand = step.expand_see_more ?? true;
   const openPost =
-    step.open_post_before_extract ?? (strategy === 'fb_posts' ? true : false);
+    step.open_post_before_extract ?? (entity === 'posts' ? true : false);
   const autoBackAfterOpenPost =
     step.open_post_press_back_after_extract ?? false;
   const extractParentMode = step.parent_post_id_var ? 'custom' : 'auto';
@@ -407,7 +411,7 @@ export function ExtractStepFields({
     },
     {
       label: t('saveSummaryContentType'),
-      value: labelContentType(step.content_type, strategy, t)
+      value: labelContentType(step.content_type, entity, t)
     },
     {
       label: t('saveSummaryStorage'),
@@ -415,14 +419,14 @@ export function ExtractStepFields({
     },
     {
       label: t('saveSummaryDedupe'),
-      value: labelDedupe(step.dedupe_field, strategy, t)
+      value: labelDedupe(step.dedupe_field, entity, t)
     }
   ];
 
   const dedupeOptions =
-    strategy === 'fb_comments'
+    entity === 'comments'
       ? (['comment_key', 'text'] as const)
-      : strategy === 'fb_posts'
+      : entity === 'posts'
         ? (['post_key', 'text'] as const)
         : (['text'] as const);
   const showScreen = view === 'all' || view === 'screen';
@@ -441,21 +445,29 @@ export function ExtractStepFields({
                   key={s.value}
                   title={t(s.titleKey)}
                   description={t(s.descKey)}
-                  selected={strategy === s.value}
+                  selected={entity === s.value}
                   selectedLabel={t('strategySelected')}
                   onSelect={() =>
                     onChange(
-                      applyExtractStrategySwitch(step, s.value, saveEnabled)
+                      applyExtractEntitySwitch(step, s.value, saveEnabled)
                     )
                   }
                 />
               ))}
             </div>
             <FlowStrip labels={flowLabels} />
+            <PlatformSelect
+              value={step.platform}
+              onChange={(platform) => onChange({ ...step, platform })}
+              entity={entity}
+            />
+            <p className='text-[11px] leading-relaxed text-muted-foreground'>
+              {tPlatform('autoHint')}
+            </p>
           </StepPanelSection>
 
           <StepPanelSection title={t('behaviorSectionTitle')}>
-            {strategy === 'fb_posts' || strategy === 'fb_comments' ? (
+            {entity === 'posts' || entity === 'comments' ? (
               <StepPanelField label={t('extractProfileLabel')}>
                 <select
                   className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
@@ -473,7 +485,7 @@ export function ExtractStepFields({
                 </p>
               </StepPanelField>
             ) : null}
-            {strategy === 'fb_posts' ? (
+            {entity === 'posts' ? (
               <>
                 <StepPanelToggle
                   label={t('openPostBeforeExtractLabel')}
@@ -507,7 +519,7 @@ export function ExtractStepFields({
                 ) : null}
               </>
             ) : null}
-            {strategy === 'fb_comments' ? (
+            {entity === 'comments' ? (
               <StepPanelToggle
                 label={t('openPostPressBackLabel')}
                 description={t('openPostPressBackDescription')}
@@ -525,7 +537,7 @@ export function ExtractStepFields({
                 update({ expand_see_more: checked })
               }
             />
-            {strategy !== 'fb_comments' ? (
+            {entity !== 'comments' ? (
               <StepPanelToggle
                 label={t('stopIfNoNewLabel')}
                 description={t('stopIfNoNewDescription')}
@@ -537,9 +549,9 @@ export function ExtractStepFields({
             ) : null}
           </StepPanelSection>
 
-          {strategy === 'fb_posts' ||
-          strategy === 'fb_comments' ||
-          strategy === 'text_nodes' ? (
+          {entity === 'posts' ||
+          entity === 'comments' ||
+          entity === 'text_nodes' ? (
             <StepPanelSection
               title={t('facebookExtraTitle')}
               badge={
@@ -564,17 +576,17 @@ export function ExtractStepFields({
                   className='h-8 font-mono text-xs'
                   disabled
                   value={
-                    step.strategy_version ??
-                    (strategy === 'fb_comments'
-                      ? 'fb_comments:v1'
-                      : strategy === 'text_nodes'
+                    step.entity_version ??
+                    (entity === 'comments'
+                      ? 'comments:v1'
+                      : entity === 'text_nodes'
                         ? 'text_nodes:v1'
-                        : 'fb_posts:v1')
+                        : 'posts:v1')
                   }
                 />
               </CompactField>
 
-              {strategy === 'fb_comments' ? (
+              {entity === 'comments' ? (
                 <div className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3'>
                   <div className='grid grid-cols-2 gap-3'>
                     <CompactField
@@ -615,7 +627,7 @@ export function ExtractStepFields({
                       {extractParentMode === 'custom' ? (
                         <Input
                           className='mt-1.5 h-8 font-mono text-xs'
-                          placeholder='_fb_comment_parent_pid'
+                          placeholder='_comment_parent_pid'
                           value={step.parent_post_id_var ?? ''}
                           onChange={(e) =>
                             update({
@@ -984,8 +996,8 @@ export function ExtractStepFields({
                 if (checked) {
                   update({
                     collection: '${SAVE_COLLECTION}',
-                    platform: strategy === 'text_nodes' ? 'ui' : 'facebook',
-                    ...saveDefaultsForStrategy(strategy)
+                    platform: entity === 'text_nodes' ? 'ui' : 'facebook',
+                    ...saveDefaultsForEntity(entity)
                   });
                 } else {
                   const {
@@ -1031,13 +1043,13 @@ export function ExtractStepFields({
                     className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
                     value={
                       step.dedupe_field ??
-                      saveDefaultsForStrategy(strategy).dedupe_field
+                      saveDefaultsForEntity(entity).dedupe_field
                     }
                     onChange={(e) => update({ dedupe_field: e.target.value })}
                   >
                     {dedupeOptions.map((opt) => (
                       <option key={opt} value={opt}>
-                        {labelDedupe(opt, strategy, t)}
+                        {labelDedupe(opt, entity, t)}
                       </option>
                     ))}
                   </select>
@@ -1071,7 +1083,7 @@ export function ExtractStepFields({
                         className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
                         value={
                           step.content_type ??
-                          saveDefaultsForStrategy(strategy).content_type
+                          saveDefaultsForEntity(entity).content_type
                         }
                         onChange={(e) =>
                           update({ content_type: e.target.value || undefined })
@@ -1102,7 +1114,7 @@ export function ExtractStepFields({
                       })}
                     </p>
                   </F>
-                  {strategy === 'fb_comments' ? (
+                  {entity === 'comments' ? (
                     <F label={t('saveParentLinkLabel')}>
                       <select
                         className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'

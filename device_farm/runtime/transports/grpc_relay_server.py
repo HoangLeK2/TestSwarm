@@ -28,6 +28,7 @@ from grpc import aio
 
 from common.fast_codec import dumps, loads
 
+from .adb_relay_server import _REQUEST_REPLY_TYPES
 from .grpc_gen import relay_pb2, relay_pb2_grpc
 
 log = logging.getLogger("grpc_relay")
@@ -195,7 +196,7 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
                 },
             )
 
-        elif mtype in ("u2_batch_result", "u2_flow_result", "extra_data_result") and conn is not None:
+        elif mtype in _REQUEST_REPLY_TYPES and conn is not None:
             conn.resolve(msg.get("id", ""), msg)
 
         elif mtype in ("a11y_ack", "a11y_result") and conn is not None:

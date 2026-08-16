@@ -2589,11 +2589,6 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     }
 
 
-def _flow_fb_scan_posts_interact(dev: Any, p: dict) -> dict:
-    """Backward-compatible Facebook preset for visible post interaction."""
-    return _flow_social_scan_posts_interact(dev, p)
-
-
 def _fb_see_more_bounds_near(
     root: Any,
     bounds: tuple[int, int, int, int],
@@ -3902,6 +3897,53 @@ def _flow_fb_select_post_target(dev: Any, p: dict) -> dict:
     }
 
 
+# (platform, target_type) → resolver. Adding a platform means adding rows here
+# plus its `_flow_<platform>_*` implementations; device_farm is untouched.
+_SELECT_TARGET_RESOLVERS: dict[tuple[str, str], Any] = {
+    ("facebook", "person"): _flow_fb_select_people_profile,
+    ("facebook", "post"): _flow_fb_select_post_target,
+}
+
+
+def _flow_social_select_target(dev: Any, p: dict) -> dict:
+    """Resolve and open a verified person/post target for the requested platform."""
+    platform = str(p.get("platform") or "facebook").strip().casefold()
+    target_type = str(p.get("target_type") or "person").strip().casefold()
+    resolver = _SELECT_TARGET_RESOLVERS.get((platform, target_type))
+    if resolver is None:
+        return {
+            "verified": False,
+            "reason": "unsupported_platform",
+            "message": (
+                f"select-target resolver is not implemented for {platform!r}/"
+                f"{target_type!r}"
+            ),
+            "platform": platform,
+            "target_type": target_type,
+        }
+    return resolver(dev, p)
+
+
+_CONNECT_VISIBLE_PEOPLE_FLOWS: dict[str, Any] = {
+    "facebook": _flow_fb_connect_visible_people,
+}
+
+
+def _flow_social_connect_visible_people(dev: Any, p: dict) -> dict:
+    platform = str(p.get("platform") or "facebook").strip().casefold()
+    flow = _CONNECT_VISIBLE_PEOPLE_FLOWS.get(platform)
+    if flow is None:
+        return {
+            "verified": False,
+            "reason": "unsupported_platform",
+            "message": f"connect-visible-people is not implemented for {platform!r}",
+            "platform": platform,
+        }
+    return flow(dev, p)
+
+
+# Flow names are the platform-neutral contract with device_farm. Per-platform
+# implementations stay named `_flow_<platform>_*` and are reached by dispatch.
 _FLOW_TABLE: dict[str, Any] = {
     "find_click_wait":   _flow_find_click_wait,
     "wait_and_click":    _flow_wait_and_click,
@@ -3909,15 +3951,11 @@ _FLOW_TABLE: dict[str, Any] = {
     "find_get_text":     _flow_find_get_text,
     "swipe_until_found": _flow_swipe_until_found,
     "input_and_confirm": _flow_input_and_confirm,
-    "fb_select_people_profile": _flow_fb_select_people_profile,
-    "fb_connect_visible_people": _flow_fb_connect_visible_people,
-    "fb_select_post_target": _flow_fb_select_post_target,
+    "social_select_target": _flow_social_select_target,
+    "social_connect_visible_people": _flow_social_connect_visible_people,
     "social_scan_posts_interact": _flow_social_scan_posts_interact,
-    "fb_scan_posts_interact": _flow_fb_scan_posts_interact,
     "social_open_author_from_post_match": _flow_social_open_author_from_post_match,
-    "fb_open_author_from_post_match": _flow_fb_open_author_from_post_match,
     "social_open_commenter_from_post_match": _flow_social_open_commenter_from_post_match,
-    "fb_open_commenter_from_post_match": _flow_fb_open_commenter_from_post_match,
 }
 
 

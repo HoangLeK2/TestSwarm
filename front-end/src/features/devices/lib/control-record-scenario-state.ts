@@ -19,8 +19,8 @@ const CONDITION_TYPES = new Set([
   'if',
   'if_element',
   'if_variable',
-  'fb_tap_comment_button',
-  'tap_fb_comment_button'
+  'social_open_comments',
+  'social_open_comments'
 ]);
 const LOOP_TYPES = new Set(['loop', 'repeat', 'repeat_until']);
 

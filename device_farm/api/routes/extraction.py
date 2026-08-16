@@ -27,8 +27,6 @@ class HierarchyExtractBody(BaseModel):
 class OCRExtractBody(BaseModel):
     languages: list[str] = Field(default_factory=lambda: ["vi", "en"])
     region: dict[str, float] | None = None
-    psm: int = 11
-    scale_factor: float = 2.0
     confidence_threshold: float = 0.5
 
 
@@ -108,14 +106,11 @@ def build_extraction_router(manager: DeviceManager) -> APIRouter:
         if not device:
             return JSONResponse({"error": "Device not found"}, status_code=404)
 
-        loop = asyncio.get_running_loop()
         try:
-            handle = await loop.run_in_executor(
-                None,
-                lambda: capture.capture_screenshot(device, region=body.region, persist=False),
-            )
-            result = await ocr.extract(
-                handle.image_bytes,
+            # OCR happens on agent-boot: since media moved to go2rtc the farm has
+            # no frame of its own, and this keeps the screenshot off the wire.
+            result, _image = await ocr.extract_on_device(
+                device,
                 lang=body.languages,
                 region=body.region,
                 confidence_threshold=body.confidence_threshold,

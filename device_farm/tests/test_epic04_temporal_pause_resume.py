@@ -87,8 +87,8 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
         raw_context = inp.get("context", {}) if isinstance(inp, dict) else inp.context
         executed_types.extend(str(step.get("type") or "") for step in steps)
         context = dict(raw_context)
-        if steps[0].get("type") == "facebook_session_gate":
-            context["vars"] = {"FACEBOOK_SESSION_READY": True}
+        if steps[0].get("type") == "platform_session_gate":
+            context["vars"] = {"PLATFORM_SESSION_READY": True}
         return DeviceActionBatchResult(
             results=[
                 {
@@ -105,10 +105,10 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
     steps_inp = StepsInput(
         device_serial="V2352A",
         steps=[
-            {"type": "facebook_session_gate", "phase": "preflight"},
+            {"type": "platform_session_gate", "phase": "preflight"},
             {
                 "type": "if_variable",
-                "name": "FACEBOOK_SESSION_READY",
+                "name": "PLATFORM_SESSION_READY",
                 "then": [{"type": "wait", "seconds": 0}],
                 "else": [{"type": "key", "key": "back"}],
             },
@@ -131,7 +131,7 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
             )
 
     assert result.success is True
-    assert executed_types == ["facebook_session_gate", "wait"]
+    assert executed_types == ["platform_session_gate", "wait"]
 
 
 @pytest.mark.asyncio
@@ -239,12 +239,12 @@ async def test_preexisting_context_vars_drive_nested_if_variable():
         steps=[
             {
                 "type": "if_variable",
-                "name": "FACEBOOK_SESSION_READY",
+                "name": "PLATFORM_SESSION_READY",
                 "then": [{"type": "wait", "seconds": 0}],
                 "else": [{"type": "key", "key": "back"}],
             }
         ],
-        context={"vars": {"FACEBOOK_SESSION_READY": True}},
+        context={"vars": {"PLATFORM_SESSION_READY": True}},
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:

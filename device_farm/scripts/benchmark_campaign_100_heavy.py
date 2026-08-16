@@ -80,7 +80,7 @@ def _apply_comment_fast_scroll_profile(
     for step in _iter_steps(steps):
         if step.get("type") != "extract":
             continue
-        if step.get("strategy") != "fb_comments":
+        if step.get("entity") != "comments":
             continue
         step["comment_large_target_fast_scroll"] = True
         step["comment_large_target_swipes_per_dump"] = swipes_per_dump
@@ -141,7 +141,7 @@ def _fallback_heavy_scenario() -> list[dict[str, Any]]:
                 {
                     "id": "posts",
                     "type": "extract",
-                    "strategy": "fb_posts",
+                    "entity": "posts", "platform": "facebook",
                     "max_items": 50,
                     "open_post_before_extract": True,
                     "require_open_post_detail": True,
@@ -163,15 +163,15 @@ def _fallback_heavy_scenario() -> list[dict[str, Any]]:
                 },
                 {
                     "id": "comment-target",
-                    "type": "fb_tap_comment_target",
+                    "type": "social_tap_comment_target",
                     "comment_target_verify": True,
                     "require_post_before_comment": True,
                 },
-                {"id": "filter", "type": "fb_apply_comment_filter", "comment_filter": "newest"},
+                {"id": "filter", "type": "social_apply_comment_filter", "comment_filter": "newest"},
                 {
                     "id": "comments",
                     "type": "extract",
-                    "strategy": "fb_comments",
+                    "entity": "comments", "platform": "facebook",
                     "max_items": 500,
                     "comment_max_snapshots": 12,
                     "comment_scroll_passes": 16,
@@ -262,7 +262,7 @@ def _phase_for_step(resource: str, step_type: str) -> str:
         return "crawl_posts"
     if resource == "extract":
         return "crawl_other"
-    if step_type in {"scroll_to", "scroll_down", "fb_tap_comment_target", "fb_apply_comment_filter"}:
+    if step_type in {"scroll_to", "scroll_down", "social_tap_comment_target", "social_apply_comment_filter"}:
         return "u2_navigation"
     if step_type in {"tap_selector", "tap_ratio", "input_text", "key"}:
         return "u2_interaction"
@@ -354,7 +354,7 @@ class _CampaignSimulator:
         return ok
 
     def _extract_virtual_ms(self, step: dict[str, Any]) -> tuple[str, float]:
-        strategy = str(step.get("strategy") or "fb_posts")
+        strategy = str(step.get("entity") or "posts")
         if strategy == "fb_comments":
             snapshots = int(step.get("comment_max_snapshots") or 8)
             swipe_budget = int(step.get("comment_scroll_passes") or 8)
@@ -432,14 +432,14 @@ class _CampaignSimulator:
             if step_type in {"launch_app", "stop_app"}:
                 self._run_resource(stats, "u2", step_type, 450.0 if step_type == "launch_app" else 160.0)
                 continue
-            if step_type in {"input_text", "key", "tap_ratio", "scroll_down", "fb_tap_comment_target", "fb_apply_comment_filter"}:
+            if step_type in {"input_text", "key", "tap_ratio", "scroll_down", "social_tap_comment_target", "social_apply_comment_filter"}:
                 default = {
                     "input_text": 120.0,
                     "key": 80.0,
                     "tap_ratio": 60.0,
                     "scroll_down": 180.0 * int(step.get("repeats") or 1),
-                    "fb_tap_comment_target": 180.0,
-                    "fb_apply_comment_filter": 220.0,
+                    "social_tap_comment_target": 180.0,
+                    "social_apply_comment_filter": 220.0,
                 }[step_type]
                 self._run_resource(stats, "u2", step_type, default)
                 continue

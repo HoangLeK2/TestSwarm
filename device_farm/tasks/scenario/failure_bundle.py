@@ -61,7 +61,7 @@ def _safe_step_ctx_snapshot(ctx: Dict[str, Any]) -> Dict[str, Any]:
         "comments_count": len(ctx.get("comments") or []),
         "loop_iter": ctx.get("_loop_iter"),
         "no_new_streak": ctx.get("_no_new_posts_streak") or ctx.get("_no_new_streak"),
-        "active_comment_parent_pid": ctx.get("_fb_comment_parent_pid"),
+        "active_comment_parent_pid": ctx.get("_comment_parent_pid"),
         "first_new_post_hash": ctx.get("_first_new_post_hash"),
         "break_flag": bool(ctx.get("_break")),
     }

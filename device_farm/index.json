@@ -8,68 +8,177 @@
     "SAVE_COLLECTION": "fb_group_posts"
   },
   "steps": [
-    { "type": "tap_selector", "by": "text", "value": "Facebook" },
-    { "type": "wait_stable", "timeout": 8, "stable_duration": 0.5 },
-    { "type": "dismiss_popup", "retries": 3 },
-    { "type": "wait_stable", "timeout": 5, "stable_duration": 0.5 },
-
-    { "_comment": "Mở thanh tìm kiếm" },
     {
-      "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
-      "then": [{ "type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4 }],
-      "else": [{ "type": "tap_ratio", "x": 0.87, "y": 0.035 }]
+      "type": "tap_selector",
+      "by": "text",
+      "value": "Facebook"
     },
-    { "type": "wait_stable", "timeout": 4, "stable_duration": 0.4 },
-    { "type": "input_text", "text": "${GROUP_NAME}", "via": "u2" },
-    { "type": "wait", "seconds": 2 },
-    { "type": "key", "key": "enter" },
-    { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
-
-    { "_comment": "Tab Nhóm trong kết quả tìm kiếm (descriptionContains chuẩn nhất)" },
     {
-      "type": "if_element", "by": "descriptionContains", "value": "tab Nhóm", "timeout": 5,
-      "then": [{ "type": "tap_selector", "by": "descriptionContains", "value": "tab Nhóm", "timeout": 4 }],
+      "type": "wait_stable",
+      "timeout": 8,
+      "stable_duration": 0.5
+    },
+    {
+      "type": "dismiss_popup",
+      "retries": 3
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 5,
+      "stable_duration": 0.5
+    },
+    {
+      "_comment": "Mở thanh tìm kiếm"
+    },
+    {
+      "type": "if_element",
+      "by": "content-desc",
+      "value": "Tìm kiếm",
+      "timeout": 5,
+      "then": [
+        {
+          "type": "tap_selector",
+          "by": "content-desc",
+          "value": "Tìm kiếm",
+          "timeout": 4
+        }
+      ],
       "else": [
         {
-          "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 3,
-          "then": [{ "type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3 }],
+          "type": "tap_ratio",
+          "x": 0.87,
+          "y": 0.035
+        }
+      ]
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 4,
+      "stable_duration": 0.4
+    },
+    {
+      "type": "input_text",
+      "text": "${GROUP_NAME}",
+      "via": "u2"
+    },
+    {
+      "type": "wait",
+      "seconds": 2
+    },
+    {
+      "type": "key",
+      "key": "enter"
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 6,
+      "stable_duration": 0.5
+    },
+    {
+      "_comment": "Tab Nhóm trong kết quả tìm kiếm (descriptionContains chuẩn nhất)"
+    },
+    {
+      "type": "if_element",
+      "by": "descriptionContains",
+      "value": "tab Nhóm",
+      "timeout": 5,
+      "then": [
+        {
+          "type": "tap_selector",
+          "by": "descriptionContains",
+          "value": "tab Nhóm",
+          "timeout": 4
+        }
+      ],
+      "else": [
+        {
+          "type": "if_element",
+          "by": "text",
+          "value": "Nhóm",
+          "timeout": 3,
+          "then": [
+            {
+              "type": "tap_selector",
+              "by": "text",
+              "value": "Nhóm",
+              "timeout": 3
+            }
+          ],
           "else": [
             {
-              "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
-              "then": [{ "type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3 }],
+              "type": "if_element",
+              "by": "text",
+              "value": "Groups",
+              "timeout": 3,
+              "then": [
+                {
+                  "type": "tap_selector",
+                  "by": "text",
+                  "value": "Groups",
+                  "timeout": 3
+                }
+              ],
               "else": []
             }
           ]
         }
       ]
     },
-    { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
-
-    { "_comment": "Tap vào nhóm cụ thể theo xpath (đổi GROUP_XPATH theo nhóm thực tế)" },
-    { "type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 6 },
-    { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
-
-    { "_comment": "Cuộn qua header nhóm vào feed bài viết (neo trái — tránh mở ảnh full-width)" },
-    { "type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}" },
-    { "type": "wait", "seconds": 3 },
-    { "type": "wait_stable", "timeout": 4, "stable_duration": 0.5 },
-
+    {
+      "type": "wait_stable",
+      "timeout": 6,
+      "stable_duration": 0.5
+    },
+    {
+      "_comment": "Tap vào nhóm cụ thể theo xpath (đổi GROUP_XPATH theo nhóm thực tế)"
+    },
+    {
+      "type": "tap_selector",
+      "by": "xpath",
+      "value": "${GROUP_XPATH}",
+      "timeout": 6
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 6,
+      "stable_duration": 0.5
+    },
+    {
+      "_comment": "Cuộn qua header nhóm vào feed bài viết (neo trái — tránh mở ảnh full-width)"
+    },
+    {
+      "type": "scroll_down",
+      "repeats": 2,
+      "start_x_ratio": "${SCROLL_X_RATIO}"
+    },
+    {
+      "type": "wait",
+      "seconds": 3
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 4,
+      "stable_duration": 0.5
+    },
     {
       "_comment": "Loop crawl: mở detail → extract bài viết → filter/cào comment đúng bài → quay feed → scroll. Không dừng sớm.",
       "type": "loop",
       "count": "${MAX_SCROLLS}",
       "steps": [
-
-        { "_comment": "Chờ nội dung load xong (đặc biệt quan trọng cho bài viết dài)" },
-        { "type": "wait", "seconds": 1 },
-
-        { "_comment": "Mở detail, expand 'Xem thêm' rồi extract bài viết + lưu collection (inline save)" },
+        {
+          "_comment": "Chờ nội dung load xong (đặc biệt quan trọng cho bài viết dài)"
+        },
+        {
+          "type": "wait",
+          "seconds": 1
+        },
+        {
+          "_comment": "Mở detail, expand 'Xem thêm' rồi extract bài viết + lưu collection (inline save)"
+        },
         {
           "type": "extract",
-          "strategy": "fb_posts",
           "edge_extra_data": true,
           "extract_profile": "balanced",
-          "strategy_version": "fb_posts:v1",
           "open_post_before_extract": true,
           "require_open_post_detail": true,
           "open_post_press_back_after_extract": false,
@@ -83,10 +192,13 @@
           "platform": "facebook",
           "content_type": "fb_post",
           "dedupe_field": "post_key",
-          "tags": "group,crawl,${GROUP_NAME}"
+          "tags": "group,crawl,${GROUP_NAME}",
+          "entity": "posts",
+          "entity_version": "posts:v1"
         },
-
-        { "_comment": "Mở comments bằng node tuần tự để preview/runtime highlight từng hành động." },
+        {
+          "_comment": "Mở comments bằng node tuần tự để preview/runtime highlight từng hành động."
+        },
         {
           "type": "scroll_down",
           "repeats": 1,
@@ -96,36 +208,41 @@
           "ignore_error": true
         },
         {
-          "type": "fb_find_comment_button",
+          "type": "social_find_comment_button",
           "timeout": 5,
           "require_post_before_comment": true,
           "comment_filter": "all_comments",
           "switch_to_all_comments": true,
-          "ignore_error": true
+          "ignore_error": true,
+          "platform": "facebook"
         },
         {
-          "type": "fb_tap_comment_target",
+          "type": "social_tap_comment_target",
           "post_tap_wait_s": 0.35,
-          "ignore_error": true
+          "ignore_error": true,
+          "platform": "facebook"
         },
         {
-          "type": "fb_apply_comment_filter",
+          "type": "social_apply_comment_filter",
           "comment_filter": "all_comments",
           "switch_to_all_comments": true,
           "comment_filter_settle_s": 0.45,
           "comment_filter_step_pause_s": 0.35,
-          "comment_filter_post_select_s": 0.85
+          "comment_filter_post_select_s": 0.85,
+          "platform": "facebook"
         },
-        { "type": "wait", "seconds": 0.3 },
-
-        { "_comment": "Extract comment + lưu parent từ detail post đang active" },
+        {
+          "type": "wait",
+          "seconds": 0.3
+        },
+        {
+          "_comment": "Extract comment + lưu parent từ detail post đang active"
+        },
         {
           "type": "extract",
-          "strategy": "fb_comments",
           "edge_extra_data": true,
           "extract_profile": "balanced",
-          "strategy_version": "fb_comments:v1",
-          "parent_post_id_var": "_fb_comment_parent_pid",
+          "parent_post_id_var": "_comment_parent_pid",
           "require_verified_parent": true,
           "collection": "${SAVE_COLLECTION}",
           "platform": "facebook",
@@ -133,31 +250,60 @@
           "dedupe_field": "comment_key",
           "tags": "group,comment,${GROUP_NAME}",
           "save_parent_id_var": "_active_comment_parent_hash",
-          "item_level": 1
+          "item_level": 1,
+          "entity": "comments",
+          "entity_version": "comments:v1"
         },
-
-        { "type": "key", "key": "back" },
-        { "type": "wait", "seconds": 0.5 },
+        {
+          "type": "key",
+          "key": "back"
+        },
+        {
+          "type": "wait",
+          "seconds": 0.5
+        },
         {
           "type": "if_element",
           "by": "text",
           "value": "Bài viết",
           "timeout": 1,
           "then": [
-            { "type": "key", "key": "back" },
-            { "type": "wait", "seconds": 1 }
+            {
+              "type": "key",
+              "key": "back"
+            },
+            {
+              "type": "wait",
+              "seconds": 1
+            }
           ],
           "else": []
         },
-        { "type": "dismiss_popup", "retries": 1 },
-
-        { "_comment": "Scroll feed (neo trái)" },
-        { "type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}" },
-        { "type": "wait", "seconds": 1 },
-        { "type": "dismiss_popup", "retries": 2 }
+        {
+          "type": "dismiss_popup",
+          "retries": 1
+        },
+        {
+          "_comment": "Scroll feed (neo trái)"
+        },
+        {
+          "type": "scroll_down",
+          "repeats": 1,
+          "start_x_ratio": "${SCROLL_X_RATIO}"
+        },
+        {
+          "type": "wait",
+          "seconds": 1
+        },
+        {
+          "type": "dismiss_popup",
+          "retries": 2
+        }
       ]
     },
-
-    { "type": "key", "key": "home" }
+    {
+      "type": "key",
+      "key": "home"
+    }
   ]
 }

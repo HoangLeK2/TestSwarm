@@ -18,7 +18,7 @@ import pytest
 
 from relay.extra_data.collector import (
     collect_fb_comment_filter_apply,
-    collect_fb_comment_target_with_tap,
+    collect_comment_target_with_tap,
     collect_xml_snapshots,
 )
 from relay.extra_data.ingest import _parse_items
@@ -437,7 +437,7 @@ async def _simulate_crawl_iteration(
     }
 
     t0 = time.perf_counter()
-    _tap_snaps, tap_err, tapped, tap_diag = await collect_fb_comment_target_with_tap(
+    _tap_snaps, tap_err, tapped, tap_diag = await collect_comment_target_with_tap(
         exec_session,
         "bench-dev",
         dict(CRAWL_TAP_CONTEXT),

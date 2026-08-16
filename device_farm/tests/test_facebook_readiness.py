@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from services.facebook_readiness import (
-    FacebookReadinessStatus,
-    resolve_facebook_readiness,
-)
+from services.facebook_readiness import resolve_facebook_readiness
+from services.platform_readiness import PlatformReadinessStatus
 
 
 def _hierarchy(*nodes: str) -> str:
@@ -20,7 +18,7 @@ def test_readiness_detects_ready_home_surface_without_identity_inference():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.READY
+    assert result.status == PlatformReadinessStatus.READY
     assert result.reason == "ready_surface_visible"
     assert result.hierarchy_sha256
     assert "Jane Example" not in str(result.evidence())
@@ -35,7 +33,7 @@ def test_readiness_detects_logged_out_surface():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.LOGGED_OUT
+    assert result.status == PlatformReadinessStatus.LOGGED_OUT
     assert result.reason == "login_surface_visible"
 
 
@@ -47,7 +45,7 @@ def test_readiness_checkpoint_wins_over_login_markers():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.CHECKPOINT
+    assert result.status == PlatformReadinessStatus.CHECKPOINT
     assert result.reason == "checkpoint_visible"
 
 
@@ -56,11 +54,11 @@ def test_readiness_rejects_non_facebook_hierarchy():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.UNSUPPORTED_BUILD
+    assert result.status == PlatformReadinessStatus.UNSUPPORTED_BUILD
 
 
 def test_readiness_handles_invalid_or_empty_hierarchy():
-    assert resolve_facebook_readiness("").status == FacebookReadinessStatus.INCONCLUSIVE
+    assert resolve_facebook_readiness("").status == PlatformReadinessStatus.INCONCLUSIVE
     assert resolve_facebook_readiness("<hierarchy>").reason == "invalid_hierarchy"
 
 
@@ -73,7 +71,7 @@ def test_readiness_detects_vietnamese_login_surface():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.LOGGED_OUT
+    assert result.status == PlatformReadinessStatus.LOGGED_OUT
     assert "credential_field" in result.matched_markers
 
 
@@ -85,7 +83,7 @@ def test_readiness_detects_vietnamese_home_surface():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.READY
+    assert result.status == PlatformReadinessStatus.READY
     assert "home_tab" in result.matched_markers
 
 
@@ -98,7 +96,7 @@ def test_readiness_detects_authenticated_search_results_surface():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.READY
+    assert result.status == PlatformReadinessStatus.READY
     assert "search_results" in result.matched_markers
 
 
@@ -111,5 +109,5 @@ def test_readiness_detects_authenticated_search_input_surface():
 
     result = resolve_facebook_readiness(xml)
 
-    assert result.status == FacebookReadinessStatus.READY
+    assert result.status == PlatformReadinessStatus.READY
     assert result.matched_markers == ("search_surface",)

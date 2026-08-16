@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator
 
+from services.social_ext.contract import SOCIAL_ENTITIES, SOCIAL_STEP_TYPES
+
 StepEntry = tuple[dict, str, str | None]
 
 
@@ -78,22 +80,12 @@ _INTERACTION_PREFIXES = (
     "clear_app",
     "stop_app",
 )
-_SOCIAL_MARKERS = ("tap_fb", "fb_", "ig_", "tiktok_", "linkedin_")
-_GENERIC_SOCIAL_TYPES = frozenset(
-    {
-        "content_interaction",
-        "connection_request",
-        "lease_connection_candidate",
-        "lease_source_target",
-        "community_membership",
-        "fb_select_people_profile",
-        "fb_connect_visible_people",
-        "fb_select_post_target",
-        "fb_scan_posts_interact",
-        "social_open_author_from_post_match",
-        "social_open_commenter_from_post_match",
-    }
-)
+# Steps that act on a social platform. Sourced from the platform-neutral
+# vocabulary so adding a platform never requires touching this list.
+_GENERIC_SOCIAL_TYPES = SOCIAL_STEP_TYPES | {"lease_source_target"}
+
+# Entities that represent social content rather than a raw UI scrape.
+_SOCIAL_ENTITIES = SOCIAL_ENTITIES - {"text_nodes"}
 
 
 def _is_interaction_type(step_type: str) -> bool:
@@ -104,10 +96,9 @@ def _is_social_step(step: dict) -> bool:
     t = str(step.get("type") or "")
     if t in _GENERIC_SOCIAL_TYPES:
         return True
-    if any(marker in t for marker in _SOCIAL_MARKERS):
-        return True
-    strategy = str(step.get("strategy") or "")
-    return any(marker in strategy for marker in ("fb_", "ig_", "tiktok_", "linkedin_"))
+    if t != "extract":
+        return False
+    return str(step.get("entity") or "").strip().casefold() in _SOCIAL_ENTITIES
 
 
 def _walk_steps(

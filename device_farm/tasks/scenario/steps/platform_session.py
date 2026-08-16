@@ -1,24 +1,28 @@
-"""Scenario step for account-scoped Facebook session establishment."""
+"""Scenario step for account-scoped platform session establishment."""
 
 from __future__ import annotations
 
 import time
 from typing import Any
 
-from services.facebook_readiness import (
-    FacebookReadinessResult,
-    FacebookReadinessStatus,
-    resolve_facebook_readiness,
+from services.platform_readiness import (
+    DEFAULT_PLATFORM,
+    PlatformReadinessResult,
+    PlatformReadinessStatus,
+    resolve_platform_readiness,
 )
+from services.social_ext import supports_step
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.steps import register_step
 
+_STEP_TYPE = "platform_session_gate"
+
 _CONFIRM_TERMINAL_STATUSES = frozenset(
     {
-        FacebookReadinessStatus.READY,
-        FacebookReadinessStatus.CHECKPOINT,
-        FacebookReadinessStatus.UNRESPONSIVE,
-        FacebookReadinessStatus.UNSUPPORTED_BUILD,
+        PlatformReadinessStatus.READY,
+        PlatformReadinessStatus.CHECKPOINT,
+        PlatformReadinessStatus.UNRESPONSIVE,
+        PlatformReadinessStatus.UNSUPPORTED_BUILD,
     }
 )
 
@@ -26,12 +30,20 @@ _CONFIRM_TERMINAL_STATUSES = frozenset(
 def _observe_readiness(
     sc: ScenarioContext,
     *,
+    platform: str,
     phase: str,
     timeout: float,
     poll_interval: float,
-) -> FacebookReadinessResult:
+) -> PlatformReadinessResult:
     deadline = time.monotonic() + timeout
-    last = resolve_facebook_readiness(sc.device.hierarchy_xml(force_refresh=True) or "")
+
+    def observe() -> PlatformReadinessResult:
+        return resolve_platform_readiness(
+            sc.device.hierarchy_xml(force_refresh=True) or "",
+            platform=platform,
+        )
+
+    last = observe()
     while phase == "confirm" and last.status not in _CONFIRM_TERMINAL_STATUSES:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -41,20 +53,27 @@ def _observe_readiness(
             break
         if sc.cancel_event is None:
             time.sleep(delay)
-        last = resolve_facebook_readiness(
-            sc.device.hierarchy_xml(force_refresh=True) or ""
-        )
+        last = observe()
     return last
 
 
-@register_step("facebook_session_gate")
-def handle_facebook_session_gate(
+@register_step(_STEP_TYPE)
+def handle_platform_session_gate(
     sc: ScenarioContext,
     step: dict[str, Any],
     idx: int,
     result: dict[str, Any],
 ) -> None:
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
     try:
+        if not supports_step(platform, _STEP_TYPE):
+            result["ok"] = False
+            result["outcome"] = "unsupported_platform"
+            result["message"] = (
+                f"{_STEP_TYPE}: platform {platform!r} does not implement this step"
+            )
+            return
+
         phase = str(step.get("phase") or "preflight").strip().lower()
         if phase not in {"preflight", "confirm"}:
             raise ValueError("phase must be preflight or confirm")
@@ -64,7 +83,7 @@ def handle_facebook_session_gate(
         poll_interval = max(0.1, min(2.0, float(step.get("poll_interval", 0.5))))
 
         from services.account_actions import resolve_action_identity
-        from services.facebook_session_runtime import run_facebook_session_gate
+        from services.platform_session_runtime import run_platform_session_gate
 
         variables = dict(sc.ctx.get("vars", {}))
         account_var = "__ACCOUNT_ID__"
@@ -82,12 +101,13 @@ def handle_facebook_session_gate(
         )
         readiness = _observe_readiness(
             sc,
+            platform=platform,
             phase=phase,
             timeout=timeout,
             poll_interval=poll_interval,
         )
-        provenance = sc.ctx.get("_facebook_login_gate") if phase == "confirm" else None
-        decision = run_facebook_session_gate(
+        provenance = sc.ctx.get("_platform_login_gate") if phase == "confirm" else None
+        decision = run_platform_session_gate(
             identity=identity,
             device_serial=sc.serial,
             phase=phase,
@@ -96,6 +116,7 @@ def handle_facebook_session_gate(
         )
         result.update(
             {
+                "platform": platform,
                 "phase": phase,
                 "readiness_status": readiness.status.value,
                 "readiness_reason": readiness.reason,
@@ -105,26 +126,27 @@ def handle_facebook_session_gate(
         if not decision.get("allowed"):
             result["ok"] = False
             result["message"] = (
-                f"facebook_session_gate {phase} blocked: {decision.get('reason')}"
+                f"{_STEP_TYPE} {phase} blocked: {decision.get('reason')}"
             )
             return
 
         ready = bool(decision.get("ready"))
-        sc.var_ctx.set("FACEBOOK_SESSION_READY", ready)
-        sc.ctx.setdefault("vars", {})["FACEBOOK_SESSION_READY"] = ready
+        sc.var_ctx.set("PLATFORM_SESSION_READY", ready)
+        sc.ctx.setdefault("vars", {})["PLATFORM_SESSION_READY"] = ready
         if phase == "preflight" and not ready:
-            sc.ctx["_facebook_login_gate"] = {
+            sc.ctx["_platform_login_gate"] = {
+                "platform": platform,
                 "org_id": decision.get("org_id"),
                 "device_id": decision.get("device_id"),
                 "account_id": decision.get("account_id"),
                 "login_required": True,
             }
         elif phase == "confirm" and ready:
-            sc.ctx.pop("_facebook_login_gate", None)
+            sc.ctx.pop("_platform_login_gate", None)
         result["message"] = (
-            f"facebook_session_gate {phase}: "
+            f"{_STEP_TYPE} {phase}: "
             f"{'ready' if ready else 'login required'} ({decision.get('reason')})"
         )
     except Exception as exc:
         result["ok"] = False
-        result["message"] = f"facebook_session_gate failed: {exc}"
+        result["message"] = f"{_STEP_TYPE} failed: {exc}"

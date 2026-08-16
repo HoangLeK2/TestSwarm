@@ -50,9 +50,9 @@ const CRAWL_GROUP_STEPS = loadJsonSteps('agent-boot/dist/Crawl group 3.json');
 const REQUIRED_CRAWL_TYPES = [
   'loop',
   'extract',
-  'fb_find_comment_button',
-  'fb_tap_comment_target',
-  'fb_apply_comment_filter',
+  'social_find_comment_button',
+  'social_tap_comment_target',
+  'social_apply_comment_filter',
   'if_element',
   'scroll_down',
   'key',
@@ -69,26 +69,26 @@ test('crawl fixtures contain comment crawl node chain', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const types = countStepTypes(steps);
     assert.ok(
-      types.get('fb_find_comment_button')! >= 1,
-      'missing fb_find_comment_button'
+      types.get('social_find_comment_button')! >= 1,
+      'missing social_find_comment_button'
     );
     assert.ok(
-      types.get('fb_tap_comment_target')! >= 1,
-      'missing fb_tap_comment_target'
+      types.get('social_tap_comment_target')! >= 1,
+      'missing social_tap_comment_target'
     );
     assert.ok(
-      types.get('fb_apply_comment_filter')! >= 1,
-      'missing fb_apply_comment_filter'
+      types.get('social_apply_comment_filter')! >= 1,
+      'missing social_apply_comment_filter'
     );
     assert.equal(
-      types.get('fb_tap_comment_button') ?? 0,
+      types.get('social_open_comments') ?? 0,
       0,
       'template should not use legacy comment node'
     );
     const commentExtracts = walkFlowStepsWithPaths(steps).filter(
-      (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+      (v) => v.step.type === 'extract' && v.step.entity === 'comments'
     );
-    assert.ok(commentExtracts.length >= 1, 'missing extract fb_comments');
+    assert.ok(commentExtracts.length >= 1, 'missing extract entity=comments');
     assert.ok(types.get('extract')! >= 2, 'expected post + comment extract');
     for (const req of REQUIRED_CRAWL_TYPES) {
       assert.ok(types.get(req)! >= 1, `missing step type ${req}`);
@@ -109,10 +109,10 @@ test('every nested step is reachable via resolveStepAtPath', () => {
   }
 });
 
-test('fb_comments extract fields round-trip through updateStepAtPath', () => {
+test('comments extract fields round-trip through updateStepAtPath', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const extracts = walkFlowStepsWithPaths(steps).filter(
-      (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+      (v) => v.step.type === 'extract' && v.step.entity === 'comments'
     );
     assert.ok(extracts.length >= 1);
     for (const { step, path } of extracts) {
@@ -130,12 +130,12 @@ test('fb_comments extract fields round-trip through updateStepAtPath', () => {
   }
 });
 
-test('split comment sequence keeps editable fb_comments extract as a normal step', () => {
+test('split comment sequence keeps editable comments extract as a normal step', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const commentExtract = walkFlowStepsWithPaths(steps).find(
-      (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+      (v) => v.step.type === 'extract' && v.step.entity === 'comments'
     );
-    assert.ok(commentExtract, 'missing fb_comments extract');
+    assert.ok(commentExtract, 'missing entity=comments extract');
     const edited = {
       ...commentExtract.step,
       max_items: 66
@@ -152,7 +152,7 @@ test('patchStepByFlowgramId updates nested extract when _fgId is present', () =>
   assert.ok(loop);
   const body = (loop as FlowStep & { steps?: FlowStep[] }).steps ?? [];
   const extractIdx = body.findIndex(
-    (s) => s.type === 'extract' && s.strategy === 'fb_comments'
+    (s) => s.type === 'extract' && s.entity === 'comments'
   );
   assert.ok(extractIdx >= 0);
   const extract = body[extractIdx]!;
@@ -181,7 +181,7 @@ test('patchStepByFlowgramId updates nested extract when _fgId is present', () =>
 test('comment extract contract: dedupe_field and require_verified_parent', () => {
   for (const steps of [FB_GROUP_STEPS, CRAWL_GROUP_STEPS]) {
     const extracts = walkFlowStepsWithPaths(steps).filter(
-      (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+      (v) => v.step.type === 'extract' && v.step.entity === 'comments'
     );
     for (const { step } of extracts) {
       assert.equal(step.dedupe_field, 'comment_key');
@@ -200,15 +200,19 @@ test('post extract stays before split comment sequence inside loop (no back befo
     assert.ok(loop?.steps?.length);
     const body = loop.steps!;
     const postIdx = body.findIndex(
-      (s) => s.type === 'extract' && s.strategy === 'fb_posts'
+      (s) => s.type === 'extract' && s.entity === 'posts'
     );
-    const findIdx = body.findIndex((s) => s.type === 'fb_find_comment_button');
-    const tapIdx = body.findIndex((s) => s.type === 'fb_tap_comment_target');
+    const findIdx = body.findIndex(
+      (s) => s.type === 'social_find_comment_button'
+    );
+    const tapIdx = body.findIndex(
+      (s) => s.type === 'social_tap_comment_target'
+    );
     const filterIdx = body.findIndex(
-      (s) => s.type === 'fb_apply_comment_filter'
+      (s) => s.type === 'social_apply_comment_filter'
     );
     const commentIdx = body.findIndex(
-      (s) => s.type === 'extract' && s.strategy === 'fb_comments'
+      (s) => s.type === 'extract' && s.entity === 'comments'
     );
     assert.ok(
       postIdx >= 0 &&

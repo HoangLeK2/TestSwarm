@@ -55,7 +55,7 @@ def resolve_fb_comment_parent_id(
     posts = context.get("posts")
     if isinstance(posts, list) and posts:
         dedupe_field = str(
-            context.get("_fb_posts_dedupe_field")
+            context.get("_posts_dedupe_field")
             or context.get("posts_dedupe_field")
             or "text"
         )
@@ -67,7 +67,7 @@ def resolve_fb_comment_parent_id(
     anchor = context.get("_active_comment_parent_anchor") or {}
     if isinstance(anchor, dict) and isinstance(posts, list) and posts:
         dedupe_field = str(
-            context.get("_fb_posts_dedupe_field")
+            context.get("_posts_dedupe_field")
             or context.get("posts_dedupe_field")
             or "text"
         )

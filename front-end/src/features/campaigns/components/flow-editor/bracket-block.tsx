@@ -605,8 +605,8 @@ export function BracketBlock({
         return tFlow('blockTitle.if_variable');
       case 'if':
         return tFlow('blockTitle.if');
-      case 'fb_tap_comment_button':
-      case 'tap_fb_comment_button':
+      case 'social_open_comments':
+      case 'social_open_comments':
         return getStepTypeName(step.type);
       case 'random_pick':
         return tFlow('blockTitle.random_pick');
@@ -863,8 +863,8 @@ export function BracketBlock({
           step.type === 'if_element' ||
             step.type === 'if_variable' ||
             step.type === 'if' ||
-            step.type === 'fb_tap_comment_button' ||
-            step.type === 'tap_fb_comment_button'
+            step.type === 'social_open_comments' ||
+            step.type === 'social_open_comments'
             ? 'border-l-[3px] border-l-amber-500'
             : step.type === 'repeat' || step.type === 'repeat_until'
               ? 'border-l-[3px] border-l-orange-500'
@@ -884,8 +884,8 @@ export function BracketBlock({
             (step.type === 'if_element' ||
               step.type === 'if_variable' ||
               step.type === 'if' ||
-              step.type === 'fb_tap_comment_button' ||
-              step.type === 'tap_fb_comment_button') &&
+              step.type === 'social_open_comments' ||
+              step.type === 'social_open_comments') &&
               'bg-amber-500/[0.06] dark:bg-amber-950/15'
           )}
           onClick={onSelectSelf}
@@ -1082,14 +1082,12 @@ export function BracketBlock({
             {(step.type === 'if_element' ||
               step.type === 'if_variable' ||
               step.type === 'if' ||
-              step.type === 'fb_tap_comment_button' ||
-              step.type === 'tap_fb_comment_button') &&
+              step.type === 'social_open_comments' ||
+              step.type === 'social_open_comments') &&
               (() => {
                 const thenSteps = step.then ?? [];
                 const elseSteps = step.else ?? [];
-                const isFbTap =
-                  step.type === 'fb_tap_comment_button' ||
-                  step.type === 'tap_fb_comment_button';
+                const isFbTap = step.type === 'social_open_comments';
                 const thenLabel = isFbTap
                   ? tFlow('fbTapBranchOnSuccess')
                   : tFlow('branchThen');

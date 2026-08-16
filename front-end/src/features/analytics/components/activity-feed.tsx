@@ -542,7 +542,7 @@ function taskStepTypeLabel(
 ): string {
   if (stepType === 'run_scenario') return t('taskLogStepRunScenario');
   if (stepType === 'if_variable') return t('taskLogStepIfVariable');
-  if (stepType === 'facebook_session_gate') {
+  if (stepType === 'platform_session_gate') {
     return t('taskLogStepFacebookSessionGate');
   }
   if (!stepType) return t('taskLogStepFallback');
@@ -559,7 +559,7 @@ function friendlyStepCause(
   }
   if (
     normalized ===
-    'facebook_session_gate failed: Facebook session gate requires an execution account'
+    'platform_session_gate failed: Facebook session gate requires an execution account'
   ) {
     return t('taskLogCauseMissingExecutionAccount');
   }

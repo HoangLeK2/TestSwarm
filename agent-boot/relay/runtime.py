@@ -119,6 +119,12 @@ GENERIC_POOL_SIZE   = _env_int("RELAY_GENERIC_POOL_SIZE", 8)
 # of large XML payloads, lxml parsing). Dedicated so a CPU spike does not
 # starve adb/u2 throughput. Few threads — GIL means more is wasteful.
 CPU_POOL_SIZE       = _env_int("RELAY_CPU_POOL_SIZE", 4)
+# OCR pool: each job spawns a `tesseract` subprocess (~230 ms of CPU on a full
+# screen). Kept small and separate from `u2` on purpose — OCR sharing the u2
+# pool would let a burst of extraction steps queue ahead of clicks and swipes,
+# trading a backend problem for a much worse one: sluggish device control.
+# Lower RELAY_OCR_POOL_SIZE to shed load fast if agent hosts run hot.
+OCR_POOL_SIZE       = _env_int("RELAY_OCR_POOL_SIZE", 2, lo=1, hi=16)
 # Payload size threshold: smaller dumps run on the loop (cheap), larger ones
 # get offloaded to the CPU pool. Because we now serialise with orjson, which
 # releases the GIL, offloading actually parallelises across threads — so the
@@ -133,6 +139,10 @@ JSON_OFFLOAD_BYTES  = _env_int("RELAY_JSON_OFFLOAD_BYTES", 8 * 1024, hi=16 * 102
 EXTRA_DATA_CONCURRENCY = _env_int("RELAY_EXTRA_DATA_CONCURRENCY", 64, lo=1, hi=128)
 U2_BATCH_CONCURRENCY   = _env_int("RELAY_U2_BATCH_CONCURRENCY", 64, lo=1, hi=128)
 U2_FLOW_CONCURRENCY    = _env_int("RELAY_U2_FLOW_CONCURRENCY", 64, lo=1, hi=128)
+# OCR admission. Deliberately far below the others: unlike a dump or a tap,
+# every OCR call burns real CPU on the agent host, which is also running scrcpy
+# encode, adb and u2 for every phone on the box.
+OCR_CONCURRENCY        = _env_int("RELAY_OCR_CONCURRENCY", 4, lo=1, hi=64)
 
 # FairSendQueue lane sizes. `per_device` is intentionally small — backpressure
 # kicks in per phone so one chatty device cannot drown the others. `control`
@@ -158,6 +168,7 @@ class _Pools:
     scrcpy:  Optional[ThreadPoolExecutor] = None
     generic: Optional[ThreadPoolExecutor] = None
     cpu:     Optional[ThreadPoolExecutor] = None
+    ocr:     Optional[ThreadPoolExecutor] = None
 
 
 _POOLS = _Pools()
@@ -185,16 +196,20 @@ def init_executors() -> None:
         _POOLS.cpu = ThreadPoolExecutor(
             max_workers=CPU_POOL_SIZE, thread_name_prefix="relay-cpu"
         )
+    if _POOLS.ocr is None:
+        _POOLS.ocr = ThreadPoolExecutor(
+            max_workers=OCR_POOL_SIZE, thread_name_prefix="relay-ocr"
+        )
     logger.info(
-        "runtime: executors ready adb=%d u2=%d scrcpy=%d generic=%d cpu=%d json=%s",
+        "runtime: executors ready adb=%d u2=%d scrcpy=%d generic=%d cpu=%d ocr=%d json=%s",
         ADB_POOL_SIZE, U2_POOL_SIZE, SCRCPY_POOL_SIZE, GENERIC_POOL_SIZE, CPU_POOL_SIZE,
-        _json_backend_name(),
+        OCR_POOL_SIZE, _json_backend_name(),
     )
 
 
 def shutdown_executors(wait: bool = False) -> None:
     """Shutdown all pools. `wait=False` returns immediately; threads finish in background."""
-    for name in ("adb", "u2", "scrcpy", "generic", "cpu"):
+    for name in ("adb", "u2", "scrcpy", "generic", "cpu", "ocr"):
         ex = getattr(_POOLS, name)
         if ex is not None:
             try:
@@ -237,6 +252,13 @@ def cpu_executor() -> ThreadPoolExecutor:
         init_executors()
     assert _POOLS.cpu is not None
     return _POOLS.cpu
+
+
+def ocr_executor() -> ThreadPoolExecutor:
+    if _POOLS.ocr is None:
+        init_executors()
+    assert _POOLS.ocr is not None
+    return _POOLS.ocr
 
 
 # ── JSON serialisation helpers ────────────────────────────────────────────────
@@ -292,6 +314,7 @@ class _Semaphores:
     extra_data: Optional[asyncio.Semaphore] = None
     u2_batch:   Optional[asyncio.Semaphore] = None
     u2_flow:    Optional[asyncio.Semaphore] = None
+    ocr:        Optional[asyncio.Semaphore] = None
 
 
 _SEMS = _Semaphores()
@@ -304,9 +327,11 @@ def init_semaphores() -> None:
         _SEMS.u2_batch = asyncio.Semaphore(U2_BATCH_CONCURRENCY)
     if _SEMS.u2_flow is None:
         _SEMS.u2_flow = asyncio.Semaphore(U2_FLOW_CONCURRENCY)
+    if _SEMS.ocr is None:
+        _SEMS.ocr = asyncio.Semaphore(OCR_CONCURRENCY)
     logger.info(
-        "runtime: semaphores ready extra_data=%d u2_batch=%d u2_flow=%d",
-        EXTRA_DATA_CONCURRENCY, U2_BATCH_CONCURRENCY, U2_FLOW_CONCURRENCY,
+        "runtime: semaphores ready extra_data=%d u2_batch=%d u2_flow=%d ocr=%d",
+        EXTRA_DATA_CONCURRENCY, U2_BATCH_CONCURRENCY, U2_FLOW_CONCURRENCY, OCR_CONCURRENCY,
     )
 
 
@@ -329,6 +354,13 @@ def u2_flow_sem() -> asyncio.Semaphore:
         init_semaphores()
     assert _SEMS.u2_flow is not None
     return _SEMS.u2_flow
+
+
+def ocr_sem() -> asyncio.Semaphore:
+    if _SEMS.ocr is None:
+        init_semaphores()
+    assert _SEMS.ocr is not None
+    return _SEMS.ocr
 
 
 # ── Bounded send_queue helpers ───────────────────────────────────────────────

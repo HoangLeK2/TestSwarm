@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.crud.account import get_accounts_by_ids, get_primary_accounts_for_devices
 from db.crud.account_group import get_group
 from db.models.account import Account, DeviceAccount
+from services.social_ext.contract import SOCIAL_ACCOUNT_BOUND_STEP_TYPES
 from db.models.campaign import Campaign
 from db.models.enums import AccountState
 from services.org_scenario_validation.step_index import OrgStepIndex
@@ -24,7 +25,7 @@ _ACCOUNT_VAR_KEYS = frozenset(
 )
 
 # Social steps that mutate state or need credentials (FR-04-20). Read-only crawl/UI
-# (extract, tap_fb_comment_button, generic tap/wait) is intentionally excluded.
+# (extract, social_open_comments, generic tap/wait) is intentionally excluded.
 _ACCOUNT_BINDING_TYPE_HINTS = (
     "login",
     ".auth",
@@ -33,20 +34,9 @@ _ACCOUNT_BINDING_TYPE_HINTS = (
     ".send",
     ".share",
 )
+# Sourced from the neutral vocabulary so a new platform inherits this for free.
 _ACCOUNT_BINDING_EXACT_TYPES = frozenset(
-    {
-        "content_interaction",
-        "connection_request",
-        "lease_connection_candidate",
-        "lease_source_target",
-        "community_membership",
-        "fb_select_people_profile",
-        "fb_connect_visible_people",
-        "fb_select_post_target",
-        "fb_scan_posts_interact",
-        "social_open_author_from_post_match",
-        "social_open_commenter_from_post_match",
-    }
+    SOCIAL_ACCOUNT_BOUND_STEP_TYPES | {"lease_source_target"}
 )
 
 

@@ -32,55 +32,51 @@ class MetadataOnlyHandler:
         }
 
 
+# Platform-neutral step types Facebook implements. Names never carry a platform;
+# the Facebook-specific behaviour lives in agent-boot's ``_flow_fb_*`` handlers.
 FACEBOOK_STEP_TYPES = [
+    "platform_session_gate",
+    "lease_connection_candidate",
     "content_interaction",
     "connection_request",
     "community_membership",
-    "fb_like_post",
-    "fb_comment_post",
-    "fb_share_post",
-    "fb_follow_user",
-    "fb_tap_comment_button",
-    "fb_find_comment_button",
-    "fb_tap_comment_target",
-    "fb_apply_comment_filter",
-    "fb_select_people_profile",
-    "fb_connect_visible_people",
-    "fb_select_post_target",
-    "fb_scan_posts_interact",
+    "social_select_target",
+    "social_connect_visible_people",
+    "social_open_comments",
+    "social_find_comment_button",
+    "social_tap_comment_target",
+    "social_apply_comment_filter",
+    "social_scan_posts_interact",
     "social_open_author_from_post_match",
     "social_open_commenter_from_post_match",
 ]
 
-FACEBOOK_ALIASES = {
-    "tap_fb_comment_button": "fb_tap_comment_button",
-}
+FACEBOOK_ENTITIES = ["posts", "comments", "groups", "pages"]
 
 
 def build_facebook_extension() -> PlatformExtension:
     strategies = {
-        "fb_posts": ExtractionStrategySchema(
-            name="fb_posts",
+        "posts": ExtractionStrategySchema(
+            entity="posts",
             content_type="fb_post",
             status="Active",
         ),
-        "fb_comments": ExtractionStrategySchema(
-            name="fb_comments",
+        "comments": ExtractionStrategySchema(
+            entity="comments",
             content_type="fb_comment",
             status="Active",
         ),
     }
     return PlatformExtension(
         name="facebook",
-        version="1.0.0",
+        version="2.0.0",
         coverage="L2 Active",
         parser=AgentBootDelegatedParser(),
         handlers={step: MetadataOnlyHandler(step) for step in FACEBOOK_STEP_TYPES},
-        aliases=FACEBOOK_ALIASES,
         enabled_by_default=True,
         scenario_lib=PlatformScenarioLib(
             step_types=FACEBOOK_STEP_TYPES,
-            extraction_strategies=list(strategies),
+            entities=FACEBOOK_ENTITIES,
             strategies=strategies,
         ),
         content_schema=PlatformContentTypeSchema(

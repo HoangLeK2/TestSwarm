@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from services.social_ext.contract import (
+    SOCIAL_ENTITIES,
+    SOCIAL_STEP_TYPES,
     ExtractionStrategySchema,
     PlatformContentType,
     PlatformContentTypeSchema,
@@ -23,16 +25,16 @@ def _now_iso() -> str:
 def _draft_extension(
     platform: str,
     *,
-    strategies: dict[str, str],
+    entities: dict[str, str],
     version: str = "0.1.0",
 ) -> PlatformExtension:
     strategy_schemas = {
-        name: ExtractionStrategySchema(
-            name=name,
+        entity: ExtractionStrategySchema(
+            entity=entity,
             content_type=content_type,
             status="Draft",
         )
-        for name, content_type in strategies.items()
+        for entity, content_type in entities.items()
     }
     return PlatformExtension(
         name=platform,
@@ -42,7 +44,7 @@ def _draft_extension(
         handlers={},
         scenario_lib=PlatformScenarioLib(
             step_types=[],
-            extraction_strategies=list(strategy_schemas),
+            entities=list(strategy_schemas),
             strategies=strategy_schemas,
         ),
         content_schema=PlatformContentTypeSchema(
@@ -54,7 +56,7 @@ def _draft_extension(
                     object_type=content_type.rsplit("_", 1)[-1],
                     description=f"{platform} {content_type.rsplit('_', 1)[-1]} draft payload owned by agent-boot",
                 )
-                for content_type in sorted(set(strategies.values()))
+                for content_type in sorted(set(entities.values()))
             ],
         ),
     )
@@ -76,21 +78,21 @@ class SocialPlatformRegistry:
         self.register(
             _draft_extension(
                 "tiktok",
-                strategies={"tiktok_posts": "tiktok_video", "tiktok_comments": "tiktok_comment"},
+                entities={"posts": "tiktok_video", "comments": "tiktok_comment"},
             ),
             actor="system",
         )
         self.register(
             _draft_extension(
                 "threads",
-                strategies={"threads_posts": "threads_post", "threads_comments": "threads_comment"},
+                entities={"posts": "threads_post", "comments": "threads_comment"},
             ),
             actor="system",
         )
         self.register(
             _draft_extension(
                 "instagram",
-                strategies={"ig_posts": "ig_post", "ig_comments": "ig_comment"},
+                entities={"posts": "ig_post", "comments": "ig_comment"},
             ),
             actor="system",
         )
@@ -99,10 +101,14 @@ class SocialPlatformRegistry:
         name = self._clean_platform(extension.name)
         if extension.parser is not None and not extension.handlers:
             raise ValueError(f"PLUGIN_HANDLER_REQUIRED: {name}")
-        step_types = set(extension.scenario_lib.step_types)
-        for alias, canonical in extension.aliases.items():
-            if canonical not in step_types:
-                raise ValueError(f"PLUGIN_ALIAS_TARGET_UNKNOWN: {alias}->{canonical}")
+        # Step types and entities are platform-neutral vocabulary; a platform may
+        # only declare which of them it implements, never invent its own name.
+        unknown_steps = sorted(set(extension.scenario_lib.step_types) - SOCIAL_STEP_TYPES)
+        if unknown_steps:
+            raise ValueError(f"PLUGIN_STEP_TYPE_NOT_NEUTRAL: {name}: {unknown_steps}")
+        unknown_entities = sorted(set(extension.scenario_lib.entities) - SOCIAL_ENTITIES)
+        if unknown_entities:
+            raise ValueError(f"PLUGIN_ENTITY_UNKNOWN: {name}: {unknown_entities}")
         with self._lock:
             updated = dict(self._extensions)
             updated[name] = extension
@@ -206,10 +212,10 @@ class SocialPlatformRegistry:
             "version": ext.version,
             "coverage": ext.coverage,
             "step_types": list(ext.scenario_lib.step_types),
-            "legacy_aliases": dict(ext.aliases),
+            "entities": list(ext.scenario_lib.entities),
             "extraction_strategies": {
-                name: asdict(schema)
-                for name, schema in ext.scenario_lib.strategies.items()
+                entity: asdict(schema)
+                for entity, schema in ext.scenario_lib.strategies.items()
             },
             "content_types": [asdict(content_type) for content_type in ext.content_schema.content_types],
         }
@@ -309,21 +315,45 @@ class SocialPlatformRegistry:
             return _draft_extension(
                 "tiktok",
                 version=version or "0.1.0",
-                strategies={"tiktok_posts": "tiktok_video", "tiktok_comments": "tiktok_comment"},
+                entities={"posts": "tiktok_video", "comments": "tiktok_comment"},
             )
         if platform == "threads":
             return _draft_extension(
                 "threads",
                 version=version or "0.1.0",
-                strategies={"threads_posts": "threads_post", "threads_comments": "threads_comment"},
+                entities={"posts": "threads_post", "comments": "threads_comment"},
             )
         if platform == "instagram":
             return _draft_extension(
                 "instagram",
                 version=version or "0.1.0",
-                strategies={"ig_posts": "ig_post", "ig_comments": "ig_comment"},
+                entities={"posts": "ig_post", "comments": "ig_comment"},
             )
         raise KeyError(platform)
+
+    def supports_step(self, platform: str, step_type: str) -> bool:
+        """Whether ``platform`` implements ``step_type``.
+
+        Replaces the hardcoded ``if platform != "facebook"`` guards that used to
+        live in each step handler.
+        """
+        try:
+            ext = self.get_platform(self._clean_platform(platform))
+        except ValueError:
+            return False
+        if ext is None:
+            return False
+        return step_type in set(ext.scenario_lib.step_types)
+
+    def supports_entity(self, platform: str, entity: str) -> bool:
+        """Whether ``platform`` can extract ``entity`` (posts / comments / …)."""
+        try:
+            ext = self.get_platform(self._clean_platform(platform))
+        except ValueError:
+            return False
+        if ext is None:
+            return False
+        return entity in set(ext.scenario_lib.entities)
 
 
 _REGISTRY = SocialPlatformRegistry(load_defaults=True)
@@ -331,3 +361,11 @@ _REGISTRY = SocialPlatformRegistry(load_defaults=True)
 
 def get_social_platform_registry() -> SocialPlatformRegistry:
     return _REGISTRY
+
+
+def supports_step(platform: str, step_type: str) -> bool:
+    return _REGISTRY.supports_step(platform, step_type)
+
+
+def supports_entity(platform: str, entity: str) -> bool:
+    return _REGISTRY.supports_entity(platform, entity)

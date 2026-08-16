@@ -110,7 +110,7 @@ def test_scroll_to_caps_facebook_comment_target_fast_path(monkeypatch):
     assert result["scroll_to_swipes"] == 8
     assert result["scroll_to_max_swipes_requested"] == 50
     assert result["scroll_to_max_swipes_effective"] == 8
-    assert sc.ctx["_fb_comment_target_missing"]["max_swipes_effective"] == 8
+    assert sc.ctx["_pending_scroll_target"]["max_swipes_effective"] == 8
 
 
 def test_scroll_to_skips_facebook_comment_target_while_post_extract_is_pending():
@@ -121,7 +121,7 @@ def test_scroll_to_skips_facebook_comment_target_while_post_extract_is_pending()
         "reason_code": "post_extract_pending",
         "source_index": 2,
     }
-    sc.ctx["_fb_comment_target_missing"] = marker
+    sc.ctx["_pending_scroll_target"] = marker
     step = {
         "type": "scroll_to",
         "by": "description",
@@ -136,7 +136,7 @@ def test_scroll_to_skips_facebook_comment_target_while_post_extract_is_pending()
     assert result["comment_target_missing"] is True
     assert result["comment_target_missing_detail"] == marker
     assert result["message"] == "scroll_to: skipped — current post extract not ready"
-    assert sc.ctx["_fb_comment_target_missing"] == marker
+    assert sc.ctx["_pending_scroll_target"] == marker
     sc.device.u2_flow.assert_not_called()
     assert sc.device.swipe.call_count == 0
 

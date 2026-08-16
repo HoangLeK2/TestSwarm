@@ -101,6 +101,37 @@ def qualify_content_type(
     return normalized
 
 
+def default_content_type_for_entity(
+    entity: str,
+    platform: str,
+    step: dict[str, Any] | None = None,
+) -> str:
+    """Content type for an ``(entity, platform)`` pair, honouring an explicit override.
+
+    ``platform="auto"`` means the parser is picked from the app on screen, so the
+    concrete type is only known at ingest time — the generic entity name is
+    returned and agent-boot qualifies it.
+    """
+    step = step or {}
+    plat = (platform or "").strip().lower()
+    explicit = step.get("content_type")
+    if explicit:
+        qualified = qualify_content_type(str(explicit), platform=plat or None)
+        return qualified or str(explicit)
+
+    if entity == "text_nodes":
+        return "text"
+    if not plat or plat == "auto":
+        return entity.rstrip("s") if entity.endswith("s") else entity
+
+    generic = _PLATFORM_GENERIC_MAP.get(plat, {})
+    singular = entity[:-1] if entity.endswith("s") else entity
+    mapped = generic.get(singular)
+    if mapped:
+        return mapped
+    return f"{plat}_{singular}"
+
+
 def default_content_type_for_strategy(strategy: str, step: dict[str, Any] | None = None) -> str:
     """Infer platform-qualified default when a step omits content_type."""
     step = step or {}

@@ -74,7 +74,7 @@ def resolve_comment_parent_hash(
     if parent_post_id and parent_post_id in pid_map:
         ctx["_comment_parent_resolve_source"] = "pid_map"
         return pid_map[parent_post_id]
-    # Legacy key — only trust when it was written by ``tap_fb_comment_button``
+    # Legacy key — only trust when it was written by ``social_open_comments``
     # (guaranteed to match the tapped post). Other writers set this to the
     # top-of-batch hash which may diverge from the tapped post, so when there's
     # any ambiguity we return None.
@@ -82,12 +82,12 @@ def resolve_comment_parent_hash(
     if explicit:
         ctx["_comment_parent_resolve_source"] = "active_hash"
         return explicit
-    # Fingerprint fallback from tap_fb_comment_button: robust against pid drift
-    # when UI transitions lag and _fb_comment_parent_pid is missing.
+    # Fingerprint fallback from social_open_comments: robust against pid drift
+    # when UI transitions lag and _comment_parent_pid is missing.
     anchor = ctx.get("_active_comment_parent_anchor") or {}
     posts = ctx.get("posts") or []
     if isinstance(anchor, dict) and isinstance(posts, list) and posts:
-        dedupe_field = str(ctx.get("_fb_posts_dedupe_field") or "post_key")
+        dedupe_field = str(ctx.get("_posts_dedupe_field") or "post_key")
 
         def _pick_exact(field: str) -> str | None:
             v = str(anchor.get(field) or "").strip()

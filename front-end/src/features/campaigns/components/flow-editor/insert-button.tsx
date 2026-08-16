@@ -43,9 +43,41 @@ export function InsertButton({ onInsert }: Props) {
 export function InsertGap({
   onInsert,
   alignWithDragHandle = true,
-  label
-}: Props & { alignWithDragHandle?: boolean }) {
+  label,
+  persistent = false
+}: Props & { alignWithDragHandle?: boolean; persistent?: boolean }) {
   const { tInsert } = useCampaignFlowI18n();
+
+  // The trailing gap is the one place a reader's eye lands after the last step,
+  // so it stays visible instead of hiding behind hover. A hover-only affordance
+  // here left the panel looking like it had no way to add anything at all.
+  if (persistent) {
+    return (
+      <div className='px-0.5 pb-1 pt-1.5'>
+        <InsertStepPicker
+          onInsert={onInsert}
+          contentSide='bottom'
+          contentAlign='center'
+          sideOffset={6}
+          trigger={
+            <Button
+              type='button'
+              variant='outline'
+              className={cn(
+                'h-8 w-full justify-center gap-1.5 rounded-md border-dashed',
+                'border-muted-foreground/35 text-xs font-medium text-muted-foreground',
+                'hover:border-primary/60 hover:bg-primary/5 hover:text-primary'
+              )}
+            >
+              <Plus className='size-3.5' strokeWidth={2} />
+              {label ?? tInsert('addStepAria')}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   const track = (
     <div
       className={cn(
@@ -55,7 +87,7 @@ export function InsertGap({
       <div
         className={cn(
           'h-px min-w-0 flex-1 bg-border transition-opacity duration-150',
-          'opacity-0 group-hover/ig:opacity-100 max-md:opacity-35'
+          'opacity-0 group-hover/flowlist:opacity-30 group-hover/ig:opacity-100 max-md:opacity-35'
         )}
         aria-hidden
       />
@@ -76,7 +108,7 @@ export function InsertGap({
                 'transition-[opacity,transform,background-color,color,box-shadow] duration-150',
                 'hover:bg-muted hover:text-foreground hover:ring-border',
                 'max-md:opacity-80',
-                'md:opacity-0 md:group-hover/ig:opacity-100',
+                'md:opacity-0 md:group-hover/flowlist:opacity-45 md:group-hover/ig:opacity-100',
                 'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
                 'motion-safe:md:group-hover/ig:scale-[1.03]'
               )}
@@ -95,7 +127,7 @@ export function InsertGap({
       <div
         className={cn(
           'h-px min-w-0 flex-1 bg-border transition-opacity duration-150',
-          'opacity-0 group-hover/ig:opacity-100 max-md:opacity-35'
+          'opacity-0 group-hover/flowlist:opacity-30 group-hover/ig:opacity-100 max-md:opacity-35'
         )}
         aria-hidden
       />

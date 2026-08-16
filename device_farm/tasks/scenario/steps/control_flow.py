@@ -430,6 +430,21 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         result["message"] = f"if_element(element_found={element_found}): no steps for {branch_name}, skip"
 
 
+def _mark_post_commented(sc: ScenarioContext) -> None:
+    """Record the post whose comment button was just opened.
+
+    Without this, a feed loop re-resolves "the comment button nearest mid-screen"
+    every iteration and taps the same card again. The anchor list is per-run and
+    bounded, and is the same one the post-open resolver already honours.
+    """
+    from tasks.scenario.steps.extraction import _remember_consumed_comment_parent
+
+    try:
+        _remember_consumed_comment_parent(sc.ctx)
+    except Exception as exc:  # never fail a tap because bookkeeping broke
+        log.warning("[%s] could not record commented post: %s", sc.serial, exc)
+
+
 def _remember_comment_target(
     sc: ScenarioContext,
     target: Dict[str, Any],
@@ -454,6 +469,7 @@ def _remember_comment_target(
         }
         sc.ctx["_active_comment_anchor_verified"] = True
         sc.ctx.pop("_pending_scroll_target", None)
+        _mark_post_commented(sc)
         result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
         result["_pid"] = sc.ctx.get("_comment_parent_pid") or target.get("pid")
         result["tapped_target_pid"] = target.get("pid")
@@ -481,6 +497,7 @@ def _remember_comment_target(
     }
     sc.ctx["_active_comment_anchor_verified"] = True
     sc.ctx.pop("_pending_scroll_target", None)
+    _mark_post_commented(sc)
     result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
     result["_pid"] = target.get("pid")
     result["parent_context_preserved"] = keep_post_detail_parent

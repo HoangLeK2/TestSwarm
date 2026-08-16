@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 import unicodedata
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .constants import (
     _MAX_TS_ANCHOR_NODE_LEN,
@@ -1395,6 +1395,7 @@ def resolve_comment_targets_from_xml(
     band_low: float = 0.12,
     band_high: float = 0.97,
     locked_anchor: Dict[str, Any] | None = None,
+    exclude_post_anchors: Iterable[Dict[str, Any]] | None = None,
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """Rank visible FB Comment buttons per the post-comment linking spec.
 
@@ -1417,7 +1418,10 @@ def resolve_comment_targets_from_xml(
     """
     from .feed_pipeline import _is_ad_container
     from .parser import _infer_screen_size, _parse_xml, _pick_feed_container
-    from .post_open_pipeline import hierarchy_is_fb_post_detail_from_xml
+    from .post_open_pipeline import (
+        ExcludedAnchorIndex,
+        hierarchy_is_fb_post_detail_from_xml,
+    )
 
     root = _parse_xml(xml)
     if root is None:
@@ -1512,6 +1516,12 @@ def resolve_comment_targets_from_xml(
             cand["_center_y_ratio"] = center_y_ratio
             _apply_locked_anchor_scoring(cand, locked_anchor)
             scored.append(cand)
+
+    # Posts this run already commented on must never win again, otherwise a
+    # feed loop keeps tapping the same card every iteration.
+    excluded_index = ExcludedAnchorIndex(exclude_post_anchors)
+    if scored and not excluded_index.empty:
+        scored = [c for c in scored if not excluded_index.matches(c.get("post") or {})]
 
     if locked_anchor and scored:
         matched = [c for c in scored if (c.get("breakdown") or {}).get("anchor_match")]

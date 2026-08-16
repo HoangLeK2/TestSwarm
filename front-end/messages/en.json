@@ -205,7 +205,7 @@
       "builtinsReferenceTitle": "Quick reference",
       "sourcePoolVariablesTitle": "Campaign target variables",
       "sourcePoolVariablesSubtitle": "Assigned target",
-      "sourcePoolVariablesHint": "Set when the campaign has an assigned-target node.",
+      "sourcePoolVariablesHint": "Set when the campaign has a step that uses an assigned target.",
       "pageDiscoveryVariablesTitle": "Page keyword crawl",
       "pageDiscoveryVariablesHint": "PAGE_KEYWORDS is the keyword list; PAGE_KEYWORD_COUNT is synced automatically from the list length.",
       "builtinGroups": {
@@ -222,7 +222,7 @@
         "randomInt": "Random number 1-100",
         "randomUuid": "UUID v4",
         "stepIndex": "Current step index",
-        "groupName": "Assigned group name from the crawled-group node",
+        "groupName": "Assigned group name from the crawled-group step",
         "groupUrl": "Assigned group URL",
         "groupSearchQuery": "Search/open query for the assigned group",
         "groupSelectorBy": "Primary selector type for the assigned group",
@@ -1418,7 +1418,7 @@
     },
     "recoveryPolicy": {
       "title": "Recovery scenario",
-      "hint": "When any node in the campaign fails or gets stuck, the runtime calls the shared recovery scenario and then returns to the main scenario by rule.",
+      "hint": "When any step in the campaign fails or gets stuck, the runtime calls the shared recovery scenario and then returns to the main scenario by rule.",
       "incidentLabel": "Incident",
       "scenarioLabel": "Shared recovery scenario",
       "scenarioHint": "This recovery scenario is shared across the campaign and should be recorded on the Device control & recording screen.",
@@ -1427,7 +1427,7 @@
       "attemptsLabel": "Tries per incident",
       "maxTotalAttemptsLabel": "Total recovery cap",
       "maxStepAttemptsLabel": "Cap for the same incident",
-      "budgetHint": "If the same node fails again in a later loop iteration, the runtime treats it as a new incident and can recover again. The total cap is the safety limit for the whole run.",
+      "budgetHint": "If the same step fails again in a later loop iteration, the runtime treats it as a new incident and can recover again. The total cap is the safety limit for the whole run.",
       "editScenario": "Record/edit on device",
       "createScenario": "Create and record on device",
       "addRule": "Add recovery scenario",
@@ -1456,8 +1456,8 @@
         "unknown": "Unknown"
       },
       "outcome": {
-        "retry_step": "Return and retry failed node",
-        "continue": "Skip failed node and continue",
+        "retry_step": "Return and retry failed step",
+        "continue": "Skip failed step and continue",
         "fail": "Stop and fail"
       }
     },
@@ -2227,7 +2227,7 @@
           "intro": "If the app is already signed in, this step is skipped. Otherwise, it uses the account assigned to the phone.",
           "statusReady": "Ready",
           "statusMissing": "{count} setup items missing",
-          "readyDescription": "This node has enough information to check and perform sign-in.",
+          "readyDescription": "This step has enough information to check and perform sign-in.",
           "missing": {
             "package": "No application selected",
             "loggedInSignal": "No signed-in signal",
@@ -2240,7 +2240,7 @@
           "applicationPlaceholder": "Select an application",
           "customApplication": "Another application",
           "loggedInTitle": "1. Detect an existing sign-in",
-          "loggedInDescription": "When any signal below is visible, this node skips the sign-in flow.",
+          "loggedInDescription": "When any signal below is visible, this step skips the sign-in flow.",
           "loggedInLabel": "Signals visible on screen",
           "loggedInPlaceholder": "e.g. Home, Menu, Feed",
           "credentialsTitle": "2. Information to enter",
@@ -2282,7 +2282,7 @@
           "authCodeSubmitPlaceholder": "Continue, Next",
           "optionalField": "Optional",
           "clearFirstDescription": "Prevents new data from being appended to existing field content.",
-          "summaryTitle": "What this node will do",
+          "summaryTitle": "What this step will do",
           "summary": "If “{loggedIn}” is not visible → fill the username and password → tap “{submit}”.",
           "summaryLoggedInFallback": "a signed-in signal",
           "summarySubmitFallback": "the sign-in button",
@@ -2412,7 +2412,7 @@
         "valueLabel": "Value to match",
         "valuePlaceholder": "e.g. Sign in, com.app:id/btn_login or {varToken}",
         "clickableLabel": "Only tappable elements (buttons / links)",
-        "clickableDescription": "Android clickable=true — enable when you need a real button/link, not static label text. Auto-set when picking a tappable node from the screen.",
+        "clickableDescription": "Android clickable=true — enable when you need a real button/link, not static label text. Auto-set when picking a tappable element from the screen.",
         "advancedTitle": "Fine-tuning (optional)",
         "advancedHasValues": "{count} rules",
         "advancedIntro": "Most steps only need “Match by” and “Value” above. Open this when the tap misses, several similar elements exist, or you want to review auto-filled filters from screen pick.",
@@ -2713,7 +2713,7 @@
         "extract_text_ai": "Extract text with an AI model",
         "extract_screen_data": "Auto-parse on-screen content",
         "tap_selector": "Tap by selector — recommended",
-        "tap_xml_match": "Fallback tap: re-read the screen XML, find the first node whose attribute matches, then tap its centre. Use when the normal selector is unreliable.",
+        "tap_xml_match": "Fallback tap: re-read the screen XML, find the first element whose attribute matches, then tap its centre. Use when the normal selector is unreliable.",
         "tap_ratio": "Tap by screen ratio (rx, ry)",
         "tap_position": "Tap a named preset position",
         "long_tap_selector": "Long-press an element by selector",
@@ -2773,7 +2773,7 @@
         "social_find_comment_button": "Find and cache the Comment button target without tapping",
         "social_tap_comment_target": "Tap the cached Comment target and verify the sheet opened",
         "social_apply_comment_filter": "Switch the comment filter in the open sheet",
-        "social_open_comments": "Open the comment sheet for the current post in one node",
+        "social_open_comments": "Open the comment sheet for the current post in one step",
         "extract_comments": "Preset: extract comments",
         "extract_posts": "Preset: extract group posts"
       },
@@ -3205,10 +3205,10 @@
         "stepCount": "{count} steps · auto-arranged",
         "arranging": "Arranging",
         "building": "Building flow…",
-        "dragHint": "Drag a node to a new position or branch to change execution order",
+        "dragHint": "Drag a step to a new position or branch to change execution order",
         "fitView": "Fit view",
         "addToEnd": "Add to flow end",
-        "invalidDrop": "This node cannot be dropped there. The flow was not changed."
+        "invalidDrop": "This step cannot be dropped there. The flow was not changed."
       },
       "multiControl": {
         "banner": "Multi · {count} devices",
@@ -3251,7 +3251,7 @@
       "pickSelectorNoElement": "No selector at this position — try elsewhere or refresh hierarchy.",
       "pickTargetActive": "Assigning…",
       "tooltipStepSelectorPick": "Click to select the step and enable selector pick. Then tap the mirror or pick a row in the UI tree — [by] and value fill in. Click the step again or Esc to cancel.",
-      "tooltipStepSelectorPicking": "Tap the mirror or pick a node in the UI tree above to set the selector. Esc or click this step again to exit.",
+      "tooltipStepSelectorPicking": "Tap the mirror or pick an element in the UI tree above to set the selector. Esc or click this step again to exit.",
       "tooltipStepDefault": "Click to select the step and edit details in the right panel (when available).",
       "tooltipPickBannerMore": "In this mode, taps on the mirror do not add recorded steps — they only update the selector for the highlighted step.",
       "tooltipDeleteStep": "Remove step",
@@ -3259,7 +3259,7 @@
       "tooltipSelectorBar": "Selector for manual Tap and when picking from the UI tree. It syncs while assigning a selector to a step.",
       "tooltipHierarchyPanel": "Widget tree from the current UI dump. Click a row to highlight on the mirror and fill the selector; use search to filter.",
       "emptyNodePicker": {
-        "title": "Choose a node to start",
+        "title": "Choose a step to start",
         "subtitle": "Add steps manually or pick a template — press Start recording to capture actions from the mirror automatically.",
         "tabSteps": "Add steps",
         "tabTemplates": "Templates",

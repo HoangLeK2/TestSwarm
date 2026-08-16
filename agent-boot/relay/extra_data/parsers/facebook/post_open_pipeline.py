@@ -1688,32 +1688,62 @@ def _anchor_ids(anchor: Dict[str, Any]) -> set[str]:
     return ids
 
 
+class ExcludedAnchorIndex:
+    """Normalised view of the excluded anchors, built once per resolve call.
+
+    Matching used to re-normalise every anchor for every candidate, which is
+    O(candidates x anchors) string work on a hot path. Anchors are normalised
+    once here so a candidate check is a set lookup plus, at most, a couple of
+    prefix compares inside one (author, timestamp) bucket.
+    """
+
+    __slots__ = ("ids", "by_author_ts", "empty")
+
+    def __init__(self, anchors: Iterable[Dict[str, Any]] | None) -> None:
+        self.ids: set[str] = set()
+        self.by_author_ts: Dict[Tuple[str, str], List[str]] = {}
+        for anchor in anchors or ():
+            if not isinstance(anchor, dict):
+                continue
+            self.ids |= _anchor_ids(anchor)
+            author = _norm_anchor_text(anchor.get("author"))
+            timestamp = _norm_anchor_text(anchor.get("timestamp"))
+            text = _norm_anchor_text(anchor.get("text_prefix") or anchor.get("text"))
+            if author and timestamp and text:
+                self.by_author_ts.setdefault((author, timestamp), []).append(text)
+        self.empty = not self.ids and not self.by_author_ts
+
+    def matches(self, post: Dict[str, Any]) -> bool:
+        if self.empty:
+            return False
+        if self.ids:
+            post_ids = _anchor_ids(post)
+            if post_ids and not post_ids.isdisjoint(self.ids):
+                return True
+        if not self.by_author_ts:
+            return False
+        post_author = _norm_anchor_text(post.get("author"))
+        post_timestamp = _norm_anchor_text(post.get("timestamp"))
+        if not (post_author and post_timestamp):
+            return False
+        bucket = self.by_author_ts.get((post_author, post_timestamp))
+        if not bucket:
+            return False
+        post_text = _norm_anchor_text(post.get("text") or post.get("text_prefix"))
+        if not post_text:
+            return False
+        return any(
+            post_text.startswith(text) or text.startswith(post_text)
+            for text in bucket
+        )
+
+
 def _candidate_matches_excluded_anchor(
     post: Dict[str, Any],
     excluded_anchors: Iterable[Dict[str, Any]],
 ) -> bool:
-    post_ids = _anchor_ids(post)
-    post_author = _norm_anchor_text(post.get("author"))
-    post_timestamp = _norm_anchor_text(post.get("timestamp"))
-    post_text = _norm_anchor_text(post.get("text") or post.get("text_prefix"))
-    for anchor in excluded_anchors:
-        if not isinstance(anchor, dict):
-            continue
-        anchor_ids = _anchor_ids(anchor)
-        if post_ids and anchor_ids and post_ids.intersection(anchor_ids):
-            return True
-        anchor_author = _norm_anchor_text(anchor.get("author"))
-        anchor_timestamp = _norm_anchor_text(anchor.get("timestamp"))
-        anchor_text = _norm_anchor_text(anchor.get("text_prefix") or anchor.get("text"))
-        if not (post_author and post_timestamp and post_text):
-            continue
-        if not (anchor_author and anchor_timestamp and anchor_text):
-            continue
-        if post_author != anchor_author or post_timestamp != anchor_timestamp:
-            continue
-        if post_text.startswith(anchor_text) or anchor_text.startswith(post_text):
-            return True
-    return False
+    """Single-shot check. In a loop, build an ExcludedAnchorIndex once instead."""
+    return ExcludedAnchorIndex(excluded_anchors).matches(post)
 
 
 def _first_author_text(nodes: List[Dict[str, Any]]) -> str:
@@ -2085,6 +2115,7 @@ def resolve_post_open_targets_from_xml(
     excluded_anchors = [
         anchor for anchor in (exclude_post_anchors or []) if isinstance(anchor, dict)
     ]
+    excluded_index = ExcludedAnchorIndex(excluded_anchors)
     scan_limit = 0
     if not locked_post_key and max_scan_elements is not None:
         scan_limit = max(0, int(max_scan_elements))
@@ -2102,9 +2133,8 @@ def resolve_post_open_targets_from_xml(
             )
             if cand is None:
                 continue
-            if excluded_anchors and _candidate_matches_excluded_anchor(
-                cand.get("post") or {},
-                excluded_anchors,
+            if not excluded_index.empty and excluded_index.matches(
+                cand.get("post") or {}
             ):
                 continue
             if not _post_open_candidate_passes_filter(cand, screen_h=screen_h, band_low=band_low, band_high=band_high):

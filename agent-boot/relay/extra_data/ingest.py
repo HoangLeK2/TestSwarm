@@ -126,9 +126,9 @@ def _multi_platform_items(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from lxml import etree
 
-    from relay.extra_data.parsers.platform_detector import detect_from_hierarchy, detect_parser
-
     from relay.extra_data.parsers.platform_detector import (
+        detect_from_hierarchy,
+        detect_parser,
         detect_platform,
         detect_platform_from_hierarchy,
     )
@@ -218,9 +218,15 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         locked_anchor = context.get("_active_comment_parent_anchor")
         if not isinstance(locked_anchor, dict) or not locked_anchor:
             locked_anchor = None
+        # Posts already commented on in this run, so a feed loop cannot tap the
+        # same card again once it scrolls back past it.
+        exclude_anchors = context.get("comment_exclude_anchors")
+        if not isinstance(exclude_anchors, list):
+            exclude_anchors = []
         top, ranked = resolve_comment_targets_from_xml(
             xml,
             locked_anchor=locked_anchor,
+            exclude_post_anchors=exclude_anchors,
         )
         if not top:
             diag = diagnose_comment_target_resolution(xml)

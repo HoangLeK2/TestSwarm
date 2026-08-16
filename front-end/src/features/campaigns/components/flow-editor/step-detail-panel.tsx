@@ -2015,7 +2015,7 @@ export function StepDetailPanel({
                   </div>
                   <StepPanelToggle
                     label='Bỏ qua khi không thấy nút'
-                    description='Compatibility setting cho scenario cũ. Flow mới nên cấu hình lỗi trên node Tìm/Bấm riêng.'
+                    description='Tuỳ chọn tương thích cho kịch bản cũ. Luồng mới nên cấu hình lỗi trên từng bước Tìm/Bấm riêng.'
                     checked={step.ignore_error !== false}
                     onCheckedChange={(checked) =>
                       update({ ignore_error: checked })

@@ -106,6 +106,30 @@ _POST_OPEN_CONTEXT_ALIASES = {
 }
 
 
+# The resolver only matches on identifiers plus author/timestamp/text-prefix, and
+# it compares text by prefix. Sending the full stored anchor (a 100-post list can
+# reach ~70 KB) wastes relay bandwidth on every comment resolve, so project each
+# anchor down to what the matcher reads and clip the text.
+_EXCLUDE_ANCHOR_ID_KEYS = ("pid", "post_key", "stable_post_id", "fb_post_id")
+_EXCLUDE_ANCHOR_TEXT_CHARS = 120
+
+
+def _compact_exclude_anchor(anchor: Dict[str, Any]) -> Dict[str, Any]:
+    compact: Dict[str, Any] = {}
+    for key in _EXCLUDE_ANCHOR_ID_KEYS:
+        value = str(anchor.get(key) or "").strip()
+        if value:
+            compact[key] = value
+    author = str(anchor.get("author") or "").strip()
+    timestamp = str(anchor.get("timestamp") or "").strip()
+    text = str(anchor.get("text_prefix") or anchor.get("text") or "").strip()
+    if author and timestamp and text:
+        compact["author"] = author
+        compact["timestamp"] = timestamp
+        compact["text_prefix"] = text[:_EXCLUDE_ANCHOR_TEXT_CHARS]
+    return compact
+
+
 def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
     anchor: Dict[str, Any] = {}
     for key in _COMMENT_PARENT_ANCHOR_KEYS:
@@ -1373,6 +1397,17 @@ def request_edge_comment_target(
     ):
         if ctx_key in step:
             context[ctx_key] = step[ctx_key]
+    # Posts already commented on in this run — the resolver must skip them so a
+    # feed loop cannot tap the same card again after scrolling back past it.
+    consumed = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
+    if isinstance(consumed, list) and consumed:
+        compact = [
+            compacted
+            for anchor in consumed
+            if isinstance(anchor, dict) and (compacted := _compact_exclude_anchor(anchor))
+        ]
+        if compact:
+            context["comment_exclude_anchors"] = compact
     anchor = ctx.get("_active_comment_parent_anchor")
     if isinstance(anchor, dict) and anchor:
         context["_active_comment_parent_anchor"] = anchor

@@ -2852,7 +2852,7 @@ export function ControlRecordView({
                           <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
                           <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
                             {flowCoordPick.kind === 'tap'
-                              ? 'FLOW — chạm mirror để gán tọa độ cho node đang chọn. Esc để hủy.'
+                              ? 'FLOW — chạm mirror để gán toạ độ cho bước đang chọn. Esc để huỷ.'
                               : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
                           </p>
                           <button
@@ -3047,7 +3047,7 @@ export function ControlRecordView({
                                 {!flowDetailStep ? (
                                   <div className='pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md border border-border/70 bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur'>
                                     <MousePointerClick className='size-3.5 shrink-0' />
-                                    <span>Chọn node để cấu hình bước</span>
+                                    <span>Chọn một bước để cấu hình</span>
                                   </div>
                                 ) : null}
                               </div>
@@ -3091,7 +3091,7 @@ export function ControlRecordView({
                                             setCoordinatePickTarget(null);
                                             setFlowSelectorPickFgId(null);
                                             toast.info(
-                                              'Chạm mirror để gán tọa độ cho node này'
+                                              'Chạm mirror để gán toạ độ cho bước này'
                                             );
                                           }
                                         : undefined

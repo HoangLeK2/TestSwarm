@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import threading
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
@@ -1891,16 +1892,33 @@ async def test_dump_hierarchy_breaker_drops_background_visible_bypasses(event_lo
 
 
 @pytest.mark.asyncio
-async def test_screenshot_returns_base64(executor):
+async def test_screenshot_returns_base64_png(executor):
+    """u2 only returns Pillow/opencv now, so the op encodes the PNG itself."""
+    from PIL import Image
+
     exc, dev, pool = executor
-    dev.screenshot.return_value = b"\x89PNG\r\n"
+    dev.screenshot.return_value = Image.new("RGB", (4, 3), (1, 2, 3))
 
     result = await exc.run_batch("serial", [
         {"op": "screenshot"},
     ])
     assert result["ok"] is True
-    b64_val = result["results"][0]["value"]
-    assert base64.b64decode(b64_val) == b"\x89PNG\r\n"
+    dev.screenshot.assert_called_with(format="pillow")
+
+    decoded = Image.open(io.BytesIO(base64.b64decode(result["results"][0]["value"])))
+    assert decoded.format == "PNG"
+    assert decoded.size == (4, 3)
+
+
+@pytest.mark.asyncio
+async def test_screenshot_fails_loudly_when_device_returns_nothing(executor):
+    exc, dev, pool = executor
+    dev.screenshot.return_value = None
+
+    result = await exc.run_batch("serial", [
+        {"op": "screenshot"},
+    ])
+    assert result["ok"] is False
 
 
 @pytest.mark.asyncio

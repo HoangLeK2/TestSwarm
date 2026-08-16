@@ -1684,6 +1684,39 @@ def handle_extract(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: 
     )
 
 
+_RESULT_PREVIEW_CHARS = 400
+
+
+def _attach_produced_value(
+    result: Dict[str, Any],
+    *,
+    save_as: str,
+    value: Any,
+    box_count: int | None = None,
+) -> None:
+    """Expose what a step wrote so the editor can show it after a test run.
+
+    The step result dict is spread straight into the preview SSE event, so a
+    field added here reaches the UI with no transport change. Only a bounded
+    preview travels — the full value stays in the runtime variable.
+    """
+    if isinstance(value, str):
+        text = value
+    elif value is None:
+        text = ""
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(value)
+    result["saved_as"] = save_as
+    result["text_length"] = len(text)
+    result["text_preview"] = text[:_RESULT_PREVIEW_CHARS]
+    result["text_truncated"] = len(text) > _RESULT_PREVIEW_CHARS
+    if box_count is not None:
+        result["box_count"] = box_count
+
+
 @register_step("extract_text_hierarchy")
 def handle_extract_text_hierarchy(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     save_as = step.get("save_as", "")
@@ -1720,14 +1753,21 @@ def handle_extract_text_hierarchy(sc: ScenarioContext, step: Dict[str, Any], idx
         hr = run_extraction_async(_run())
         items = hr.data if isinstance(hr.data, list) else [hr.data]
         fmt = step.get("format", "text")
-        if fmt == "json":
-            sc.var_ctx.set(save_as, items)
-        else:
-            sc.var_ctx.set(
-                save_as,
-                "\n".join(i["text"] for i in items if isinstance(i, dict) and i.get("text")),
+        saved_value: Any = (
+            items
+            if fmt == "json"
+            else "\n".join(
+                i["text"] for i in items if isinstance(i, dict) and i.get("text")
             )
-        result["message"] = f"Extracted {len(items)} text elements"
+        )
+        sc.var_ctx.set(save_as, saved_value)
+        _attach_produced_value(
+            result,
+            save_as=save_as,
+            value=saved_value,
+            box_count=len(items),
+        )
+        result["message"] = f"Đọc được {len(items)} phần tử văn bản vào ${{{save_as}}}"
         if hr.raw_data.get("artifact_id"):
             result["artifact_id"] = hr.raw_data["artifact_id"]
     except (CaptureError, StrategyMismatchError) as exc:
@@ -1788,7 +1828,17 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
         ocr_result, artifact_id = run_extraction_async(_run())
         text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
         sc.var_ctx.set(save_as, text)
-        result["message"] = f"OCR extracted {len(text)} chars"
+        _attach_produced_value(
+            result,
+            save_as=save_as,
+            value=text,
+            box_count=len(ocr_result.results),
+        )
+        result["message"] = (
+            f"OCR đọc được {len(text)} ký tự vào ${{{save_as}}}"
+            if text
+            else f"OCR không đọc được chữ nào (biến ${{{save_as}}} rỗng)"
+        )
         if artifact_id:
             result["artifact_id"] = artifact_id
     except (CaptureError, OCRError) as exc:
@@ -1819,7 +1869,8 @@ def handle_extract_text_ai(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
                                output_format=step.get("format", "json"), model=step.get("model"),
                                region=step.get("region"))
         sc.var_ctx.set(save_as, ai_result)
-        result["message"] = f"AI extracted {type(ai_result).__name__}"
+        _attach_produced_value(result, save_as=save_as, value=ai_result)
+        result["message"] = f"AI trích xuất xong vào ${{{save_as}}}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"extract_text_ai failed: {exc}"

@@ -240,7 +240,6 @@ export const DEVICE_RAIL_STEP_TYPES = new Set<string>([
 const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
   'pull_file',
   'extract_text_hierarchy',
-  'extract_text_ocr',
   'extract_text_ai',
   'extract_screen_data'
 ]);

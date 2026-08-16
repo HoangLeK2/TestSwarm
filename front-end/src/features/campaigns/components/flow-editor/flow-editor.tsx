@@ -33,6 +33,7 @@ import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
 import { InsertStepPicker } from './insert-step-picker';
+import { variablesProducedByStep } from './step-produced-variables';
 import {
   StepDetailPanel,
   type SessionGateRuntimeContext
@@ -1433,6 +1434,9 @@ function collectVariableNames(steps: FlowStep[]): string[] {
         if (k.trim()) names.add(k.trim());
       });
     }
+    // Variables the step writes (save_as, leased CANDIDATE_*, …) — without this
+    // an OCR or resolver result is invisible to every step after it.
+    variablesProducedByStep(step).forEach((name) => names.add(name));
 
     if ('steps' in step && Array.isArray(step.steps)) {
       step.steps.forEach(collectFromStep);

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import hashlib
 import inspect
 import json
@@ -871,8 +872,20 @@ def _op_dump(dev: Any, act: dict) -> str:
 
 
 def _op_screenshot(dev: Any, act: dict) -> str:
-    png = dev.screenshot(format="raw")
-    return base64.b64encode(png).decode("ascii")
+    """Return the screen as base64 PNG.
+
+    uiautomator2 dropped ``format="raw"`` — it now only knows "pillow" and
+    "opencv" — so take the Pillow image and encode it here. u2 fetches a JPEG
+    internally; re-encoding as PNG keeps that decode lossless instead of
+    stacking a second lossy pass on top, which matters for OCR accuracy.
+    """
+    del act
+    image = dev.screenshot(format="pillow")
+    if image is None:
+        raise RuntimeError("screenshot: device returned no image")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def _op_app_start(dev: Any, act: dict) -> None:

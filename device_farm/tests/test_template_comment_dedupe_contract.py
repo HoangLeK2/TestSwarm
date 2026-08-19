@@ -925,3 +925,32 @@ def test_seed_template_passes_sequence_body_validator() -> None:
 
     assert result.status == "valid", result.errors
     assert result.errors == []
+
+
+def test_seed_template_returns_to_the_feed_before_each_group() -> None:
+    """launch_app resumes Facebook wherever the last run stopped.
+
+    Observed on a real device: a tap during search navigation opened a group
+    photo fullscreen, and every selector afterwards missed — the run reported
+    "group not found" when the truth was "we were never on the search screen".
+    """
+    template = BUILTIN_TEMPLATE_BY_NAME[_SEED_TEMPLATE]
+    flat_steps = _walk_steps(template["steps"])
+    types = [step.get("type") for step in flat_steps]
+
+    resets = [
+        step for step in flat_steps if str(step.get("id", "")).startswith(
+            "seed_friends_return_to_feed"
+        )
+    ]
+    assert resets, "no return-to-feed guard in the template"
+    # Bounded: it must never be able to walk the account out of the app.
+    assert len(resets) <= 3
+    for reset in resets:
+        assert reset["value"] == "Trang chủ"
+        # Back is only pressed when the feed is NOT already visible.
+        assert reset["then"] == []
+        assert any(s.get("key") == "back" for s in reset["else"])
+
+    reset_at = types.index("if_element")
+    assert reset_at < types.index("tap_xml_match")

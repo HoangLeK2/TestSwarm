@@ -255,6 +255,44 @@ def _fb_open_search_tab_steps(
     ]
 
 
+def _fb_return_to_feed_steps(prefix: str) -> List[Dict[str, Any]]:
+    """Back out of whatever Facebook was left showing, until the feed is up.
+
+    `launch_app` resumes Facebook on its last screen, so a run inherits wherever
+    the previous one stopped — a photo viewer, a profile, a comment sheet. Every
+    selector afterwards then misses, and the failure reads as "group not found"
+    rather than "we were never on the search screen". Observed on a real device:
+    a tap during search navigation opened a group photo fullscreen and the whole
+    run unwound from there.
+
+    Bounded, and it never presses Back once the feed is visible, so it cannot
+    walk the account out of the app.
+    """
+    # Guarded Backs rather than repeat_until: that step's stop condition only
+    # supports exact text / resource-id / content-desc, and the home tab carries
+    # "Trang chủ, Tab 1/6" — an index that shifts between builds. if_element
+    # does support descriptionContains, so each Back is skipped once the tab bar
+    # is back in view.
+    step: List[Dict[str, Any]] = []
+    for attempt in range(3):
+        step.append(
+            {
+                "id": f"{prefix}_return_to_feed_{attempt}",
+                "type": "if_element",
+                "by": "descriptionContains",
+                "value": "Trang chủ",
+                "timeout": 2,
+                "then": [],
+                "else": [
+                    {"type": "key", "key": "back"},
+                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                ],
+            }
+        )
+    step.append({"type": "dismiss_popup", "retries": 1})
+    return step
+
+
 def _fb_commenter_connect_steps(
     *,
     prefix: str,
@@ -1969,6 +2007,9 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "loop_var": "GROUP_INDEX",
                         "duration_seconds": "${POST_RUN_SECONDS}",
                         "steps": [
+                            # Start every group from the feed, not from wherever
+                            # the previous iteration happened to stop.
+                            *_fb_return_to_feed_steps("seed_friends"),
                             {
                                 "type": "set_variable",
                                 "name": "GROUP_SEARCH_CURRENT",

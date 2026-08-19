@@ -1044,6 +1044,7 @@ async def test_fb_scan_posts_interact_likes_and_comments_keyword_post(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["tuyển dụng", "AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1115,6 +1116,7 @@ async def test_fb_scan_posts_interact_closes_comment_overlay_before_scan(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1192,6 +1194,7 @@ async def test_fb_scan_posts_interact_closes_comment_filter_sheet_before_input(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1263,6 +1266,7 @@ async def test_fb_scan_posts_interact_closes_existing_comment_filter_sheet_befor
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1314,6 +1318,7 @@ async def test_fb_scan_posts_interact_ignores_subscribe_text_when_submitting_com
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1378,6 +1383,7 @@ async def test_fb_scan_posts_interact_scrolls_comment_sheet_to_input_node(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1426,6 +1432,7 @@ async def test_social_scan_posts_interact_uses_configured_node_terms(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["workflow"],
             "comment_text": "Useful note",
             "target_count": 1,
@@ -1508,6 +1515,7 @@ async def test_fb_scan_posts_interact_expands_see_more_before_keyword_match(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["tuyển dụng AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1580,6 +1588,7 @@ async def test_fb_scan_posts_interact_expands_parent_see_more_label(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["tuyển dụng AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1616,6 +1625,7 @@ async def test_fb_scan_posts_interact_rejects_profile_surface(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["Chip AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,

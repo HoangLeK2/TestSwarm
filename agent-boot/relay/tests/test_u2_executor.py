@@ -2381,3 +2381,179 @@ def test_flow_fb_connect_visible_people_still_detects_a_tap_that_missed(monkeypa
     assert result["verified"] is False
     assert result["reason"] == "request_not_verified"
     assert result["sent_count"] == 0
+
+
+def _feed_post_xml(like_label: str) -> str:
+    """One keyword-matching feed post with the given like-button state."""
+    return _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("Bai viet ve AI rat hay", bounds="[40,150][900,200]"),
+        _fb_node(like_label, bounds="[100,300][250,360]", clickable=True),
+        _fb_node("Binh luan", bounds="[300,300][450,360]", clickable=True),
+    )
+
+
+def test_post_identity_survives_being_liked():
+    """The like button sits inside the post's own context band.
+
+    Hashing that band wholesale gave a post one identity before the like and
+    another after, so the seen-set stopped recognising it the moment it was
+    liked — and the same post could be commented on again on the next sweep.
+    """
+    terms = u2_exec_mod._DEFAULT_SOCIAL_POST_TERMS
+    seen = set()
+    for label in ("Thich", "Bo thich"):
+        candidates, _q, _e = u2_exec_mod._fb_visible_post_candidates(
+            _feed_post_xml(label),
+            keywords=["ai"],
+            match_mode="any",
+            seen_fingerprints=set(),
+            seen_expand_keys=set(),
+            like_terms=terms["like_terms"],
+            liked_terms=terms["liked_terms"],
+            comment_terms=terms["comment_terms"],
+            forbidden_context_terms=terms["forbidden_context_terms"],
+        )
+        seen.add(candidates[0]["fingerprint"])
+
+    assert len(seen) == 1
+
+
+def test_like_is_confirmed_against_the_post_it_was_aimed_at(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    dev = _FlowDevice(_feed_post_xml("Thich"), _feed_post_xml("Bo thich"))
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "platform": "facebook",
+            "keywords": ["ai"],
+            "match_mode": "any",
+            "like_post": True,
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["actions"][0]["liked"] is True
+    assert result["actions"][0]["like_verified"] is True
+
+
+def test_a_like_that_did_not_register_is_not_reported_as_liked(monkeypatch):
+    """The tap used to be assumed successful — a miss looked exactly like a hit.
+
+    This is the most frequently executed action in the system, so silently
+    counting misses as likes makes every downstream number wrong.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    # Button unchanged after the tap: nothing happened.
+    dev = _FlowDevice(_feed_post_xml("Thich"))
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "platform": "facebook",
+            "keywords": ["ai"],
+            "match_mode": "any",
+            "like_post": True,
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["actions"][0]["liked"] is False
+    assert result["actions"][0]["like_verified"] is False
+
+
+def test_verification_can_be_declined_for_throughput(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    dev = _FlowDevice(_feed_post_xml("Thich"))
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "platform": "facebook",
+            "keywords": ["ai"],
+            "match_mode": "any",
+            "like_post": True,
+            "verify_like": False,
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    action = result["actions"][0]
+    # "liked" then means "tapped", and the payload says so rather than implying
+    # a check that never ran.
+    assert action["liked"] is True
+    assert action["like_verified"] is False
+
+
+def test_destructive_controls_are_never_tapped(monkeypatch):
+    """Last line of defence, independent of whatever picked the coordinates.
+
+    Every locating mistake ends the same way: a tap on the wrong control. On the
+    friends surface the neighbour of "Thêm bạn bè" is "Gỡ", and one tap further
+    is "Ẩn những người bạn có thể biết" — which removes the account's entire
+    suggestion source permanently.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    # The Add Friend button's bounds overlap a "Gỡ" control: whatever the
+    # scoring decided, the tap must not land.
+    xml = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("3 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+        _fb_node("Gỡ", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(xml)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert dev.clicks == []
+    assert result["sent_count"] == 0
+    assert result["skipped"][0]["reason"] == "blocked_destructive_control"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Gỡ",
+        "Xóa",
+        "Ẩn những người bạn có thể biết",
+        "Báo cáo bài viết",
+        "Chặn",
+        "Bỏ theo dõi",
+        "Hủy kết bạn",
+        "Rời nhóm",
+        "Chấp nhận",
+        # Observed on a real device: the dismiss button carries the name.
+        "Xóa Dat P. Nguyen",
+    ],
+)
+def test_destructive_label_vocabulary(label: str) -> None:
+    assert u2_exec_mod._fb_is_destructive_label(label) is True
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Thêm bạn bè",
+        "Bình luận",
+        "Thích",
+        # Short tokens must match as words, not as fragments of a name.
+        "Gogo Nguyen",
+        # Vietnamese name syllables that fold onto button words.
+        "Chan Thi Mai",
+        "Xoan Nguyen",
+        "Go Thi Lan",
+    ],
+)
+def test_ordinary_controls_are_not_blocked(label: str) -> None:
+    assert u2_exec_mod._fb_is_destructive_label(label) is False

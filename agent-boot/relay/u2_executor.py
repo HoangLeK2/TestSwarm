@@ -1132,6 +1132,93 @@ def _fb_is_clickable(node: Any) -> bool:
     return str(node.attrib.get("clickable", "") or "").casefold() == "true"
 
 
+# Controls that destroy something the automation depends on, or act on the
+# account's behalf in a way no scenario asked for. Every locating mistake ends
+# the same way — a tap on the wrong control — so this is checked at the moment
+# of tapping, independently of whatever logic chose the coordinates. A screenshot
+# from a real run showed the friends-surface overflow sheet open with "Ẩn những
+# người bạn có thể biết" one tap away: pressing it removes the account's entire
+# suggestion source, permanently.
+# Distinctive phrases: safe to look for anywhere in the label.
+_FB_DESTRUCTIVE_PHRASES: tuple[str, ...] = (
+    "an nhung nguoi ban co the biet",
+    "hide people you may know",
+    "an bai viet",
+    "hide post",
+    "bao cao",
+    "report",
+    "bo theo doi",
+    "unfollow",
+    "huy ket ban",
+    "unfriend",
+    "dang xuat",
+    "log out",
+    "roi nhom",
+    "leave group",
+    "chap nhan",     # accepting a stranger's request is not ours to decide
+    "delete comment",
+    "block",
+)
+
+# Short button words that are also ordinary Vietnamese name syllables. "Chặn",
+# "Gỡ" and "Xóa" fold to "chan", "go" and "xoa" — and so do parts of Chân Thị
+# Mai, Gogo Nguyen and Xoan Nguyen. Matched only as a complete label, which is
+# what a button carries and a person's row never does.
+_FB_DESTRUCTIVE_EXACT: frozenset[str] = frozenset({"go", "xoa", "chan", "an"})
+
+# Observed on a real device: the dismiss control next to Add Friend is labelled
+# "Xóa <name>", so this one needs a prefix rule. Deliberately only this one —
+# "Gỡ" and "Chặn" appear bare, while "Gỡ"/"Chặn" as a prefix would swallow names
+# like "Go Thi Lan" and "Chan Thi Mai".
+_FB_DESTRUCTIVE_PREFIXES: tuple[str, ...] = ("xoa ",)
+
+
+def _fb_is_destructive_label(label: str) -> bool:
+    folded = _fb_fold(label)
+    if not folded:
+        return False
+    if folded in _FB_DESTRUCTIVE_EXACT:
+        return True
+    if any(phrase in folded for phrase in _FB_DESTRUCTIVE_PHRASES):
+        return True
+    # A prefix only counts when what follows is a person's name, not another
+    # word that happens to start the same way ("Xoan Nguyen" is not "Xóa ...").
+    return any(folded.startswith(prefix) for prefix in _FB_DESTRUCTIVE_PREFIXES)
+
+
+def _fb_guarded_click(dev: Any, root: Any, x: int, y: int) -> dict[str, Any]:
+    """Tap (x, y) unless the control there is one we must never press.
+
+    Returns {"tapped": bool, "blocked_label": str}. The caller decides what to
+    do about a refusal; this function's only job is to make sure a mislocated
+    tap cannot be the thing that destroys the account's suggestion source.
+    """
+    blocked = _fb_label_at_point(root, x, y)
+    if blocked:
+        return {"tapped": False, "blocked_label": blocked}
+    dev.click(x, y)
+    return {"tapped": True, "blocked_label": ""}
+
+
+def _fb_label_at_point(root: Any, x: int, y: int) -> str:
+    """Destructive label of the smallest clickable node covering (x, y)."""
+    best: tuple[int, str] | None = None
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds or not _fb_is_clickable(node):
+            continue
+        left, top, right, bottom = bounds
+        if not (left <= x <= right and top <= y <= bottom):
+            continue
+        label = _fb_node_label(node)
+        if not _fb_is_destructive_label(label):
+            continue
+        area = max(1, (right - left) * (bottom - top))
+        if best is None or area < best[0]:
+            best = (area, label)
+    return best[1] if best else ""
+
+
 def _fb_is_add_friend_label(label: str) -> bool:
     folded = _fb_fold(label)
     return any(
@@ -2353,6 +2440,72 @@ def _fb_author_candidate_near_post(
     return candidates[0][1]
 
 
+def _fb_like_took_effect(
+    dev: Any,
+    *,
+    fingerprint: str,
+    keywords: list[str],
+    match_mode: str,
+    terms: dict[str, list[str]],
+) -> bool:
+    """Did the like actually register on the post it was aimed at?
+
+    Re-finds the post by content fingerprint rather than by position, so a feed
+    that scrolled or loaded new items above does not turn a successful like into
+    a failure — or, worse, let another post's button answer for this one.
+
+    A post that has scrolled out of view cannot be checked; that reports as
+    unverified rather than as success, because the honest answer to "did it
+    work" is "unknown" and a caller that needs certainty should be able to see
+    the difference.
+    """
+    try:
+        after_xml = dev.dump_hierarchy(compressed=False)
+    except Exception:
+        return False
+    candidates, _qualified, _expands = _fb_visible_post_candidates(
+        after_xml,
+        keywords=keywords,
+        match_mode=match_mode,
+        seen_fingerprints=set(),
+        seen_expand_keys=set(),
+        like_terms=terms["like_terms"],
+        liked_terms=terms["liked_terms"],
+        comment_terms=terms["comment_terms"],
+        forbidden_context_terms=terms["forbidden_context_terms"],
+    )
+    for item in candidates:
+        if str(item.get("fingerprint")) == fingerprint:
+            return bool(item.get("already_liked"))
+    return False
+
+
+def _fb_post_fingerprint(
+    context_labels: list[str],
+    *,
+    like_terms: list[str],
+    liked_terms: list[str],
+    comment_terms: list[str],
+) -> str:
+    """Identify a post by its content, independent of its own action state.
+
+    The action labels sit inside the same context band as the post text, so
+    hashing the band wholesale gave a post one identity before it was liked and
+    a different one after — "Thích" becomes "Bỏ thích". That broke the two
+    things the identity exists for: the seen-set stopped recognising a post the
+    moment it was liked (so it could be commented on twice on the next sweep),
+    and a like could not be verified by re-finding the post it was aimed at.
+    """
+    action_terms = [*like_terms, *liked_terms, *comment_terms]
+    stable = [
+        label
+        for label in dict.fromkeys(context_labels)
+        if not _social_label_matches(label, action_terms)
+    ]
+    text = " ".join(stable)
+    return hashlib.sha256(_fb_fold(text[:512]).encode("utf-8")).hexdigest()
+
+
 def _fb_visible_post_candidates(
     hierarchy_xml: str,
     *,
@@ -2441,9 +2594,12 @@ def _fb_visible_post_candidates(
         )
         if not matched:
             continue
-        fingerprint = hashlib.sha256(
-            _fb_fold(context_text[:512]).encode("utf-8")
-        ).hexdigest()
+        fingerprint = _fb_post_fingerprint(
+            context_labels,
+            like_terms=like_terms,
+            liked_terms=liked_terms,
+            comment_terms=comment_terms,
+        )
         if fingerprint in seen_fingerprints:
             continue
         candidates.append(
@@ -2487,6 +2643,10 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     scroll_wait_s = max(0.0, min(float(p.get("scroll_wait_s", 0.7) or 0.7), 5.0))
     require_comment = _fb_bool_param(p.get("require_comment"), bool(comment_text))
     like_post = _fb_bool_param(p.get("like_post"), True)
+    # Verification costs one hierarchy read per liked post. That is the price of
+    # knowing whether the most-executed action in the system did anything; a
+    # throughput-first run can decline it, but then `liked` means "tapped".
+    verify_like = _fb_bool_param(p.get("verify_like"), True)
     seen_fingerprints: set[str] = set()
     seen_expand_keys: set[str] = set()
     actions: list[dict[str, Any]] = []
@@ -2540,11 +2700,26 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
         for candidate in qualified:
             seen_fingerprints.add(str(candidate["fingerprint"]))
             liked = bool(candidate.get("already_liked"))
+            like_verified = liked
             if like_post and not liked:
                 left, top, right, bottom = candidate["like_bounds"]
                 dev.click((left + right) // 2, (top + bottom) // 2)
                 time.sleep(submit_wait_s)
-                liked = True
+                # The tap used to be assumed successful. It is the most
+                # frequently executed action in the system and it was the only
+                # one that never checked, so a miss looked exactly like a hit.
+                like_verified = (
+                    _fb_like_took_effect(
+                        dev,
+                        fingerprint=str(candidate["fingerprint"]),
+                        keywords=keywords,
+                        match_mode=match_mode,
+                        terms=terms,
+                    )
+                    if verify_like
+                    else False
+                )
+                liked = True if not verify_like else like_verified
 
             commented = False
             comment_error = ""
@@ -2643,6 +2818,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
                         "author_bounds": candidate.get("author_bounds"),
                         "author_tap": candidate.get("author_tap"),
                         "liked": liked,
+                        "like_verified": like_verified,
                         "commented": False,
                         "error": comment_error or "comment not submitted",
                     }
@@ -2663,6 +2839,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
                     "author_bounds": candidate.get("author_bounds"),
                     "author_tap": candidate.get("author_tap"),
                     "liked": liked,
+                    "like_verified": like_verified,
                     "commented": commented,
                 }
             )
@@ -3719,7 +3896,23 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 left, top, right, bottom = next_candidate["action_bounds"]
                 tap_x = (left + right) // 2
                 tap_y = (top + bottom) // 2
-                dev.click(tap_x, tap_y)
+                guard = _fb_guarded_click(dev, _xml_parse_root(before_xml), tap_x, tap_y)
+                if not guard["tapped"]:
+                    # Last line of defence: whatever picked these coordinates,
+                    # the control sitting there is one that must never be
+                    # pressed. On this surface the neighbour is "Gỡ", and the
+                    # overflow sheet behind it can hide the suggestion feed for
+                    # good.
+                    skipped.append(
+                        {
+                            "reason": "blocked_destructive_control",
+                            "blocked_label": guard["blocked_label"],
+                            "target_id": next_candidate.get("target_id"),
+                            "display_name": next_candidate.get("display_name"),
+                            "action_bounds": next_candidate.get("action_bounds"),
+                        }
+                    )
+                    break
                 time.sleep(wait_s)
 
                 after_xml = dev.dump_hierarchy(compressed=False)

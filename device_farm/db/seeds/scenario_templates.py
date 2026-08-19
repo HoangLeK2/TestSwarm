@@ -2038,10 +2038,19 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                         prefix="seed_friends",
                                         action_index=0,
                                     ),
-                                    *_fb_commenter_connect_steps(
-                                        prefix="seed_friends",
-                                        action_index=1,
-                                    ),
+                                    {
+                                        "id": "seed_friends_second_connect",
+                                        "type": "if_variable",
+                                        "name": "CONNECTS_PER_CYCLE",
+                                        "greater_than": 1,
+                                        "then": [
+                                            *_fb_commenter_connect_steps(
+                                                prefix="seed_friends",
+                                                action_index=1,
+                                            )
+                                        ],
+                                        "else": [],
+                                    },
                                     {
                                         "type": "scroll_down",
                                         "repeats": 1,

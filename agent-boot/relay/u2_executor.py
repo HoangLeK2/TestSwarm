@@ -1145,19 +1145,29 @@ def _fb_is_add_friend_label(label: str) -> bool:
     ) and not any(token in folded for token in ("huy loi moi", "cancel request"))
 
 
-def _fb_is_connection_action_label(label: str) -> bool:
+# Post-tap states meaning "the request left". Kept in ONE place: this list and
+# the verification in _fb_pending_request_near used to drift apart, so a row that
+# turned into "Đã gửi lời mời" counted as a failed tap and aborted the batch.
+_FB_REQUEST_SENT_TOKENS = (
+    "huy loi moi",
+    "huy yeu cau",
+    "cancel request",
+    "cancel friend request",
+    "request sent",
+    "friend request sent",
+    "da gui loi moi",
+    "da gui yeu cau",
+    "loi moi da gui",
+)
+
+
+def _fb_is_request_sent_label(label: str) -> bool:
     folded = _fb_fold(label)
-    return _fb_is_add_friend_label(label) or any(
-        token in folded
-        for token in (
-            "huy loi moi",
-            "huy yeu cau",
-            "cancel request",
-            "cancel friend request",
-            "request sent",
-            "da gui loi moi",
-        )
-    )
+    return any(token in folded for token in _FB_REQUEST_SENT_TOKENS)
+
+
+def _fb_is_connection_action_label(label: str) -> bool:
+    return _fb_is_add_friend_label(label) or _fb_is_request_sent_label(label)
 
 
 def _fb_same_row_labels(root: Any, bounds: tuple[int, int, int, int]) -> list[str]:
@@ -1438,6 +1448,59 @@ def _fb_visible_person_row_labels(
     return list(dict.fromkeys(labels))
 
 
+def _fb_parent_map(root: Any) -> dict[Any, Any]:
+    return {child: parent for parent in root.iter("node") for child in parent}
+
+
+def _fb_person_row_scope(root: Any, parents: dict[Any, Any], button: Any) -> Any | None:
+    """Nearest ancestor that represents the whole suggestion card.
+
+    Facebook renders each suggestion as a container whose content-desc is the
+    row summary ("Thai Hanh, 2 bạn chung"), with the avatar, name, Add Friend
+    and Remove buttons nested inside. Reading the card is exact; the geometric
+    window this replaces guessed a pixel band around the button and, on a dense
+    real screen, swept in the neighbouring person's name — so a request could be
+    recorded against the wrong identity.
+    """
+    node = parents.get(button)
+    depth = 0
+    while node is not None and depth < 8:
+        label = _fb_node_label(node)
+        if label and not _fb_is_connection_action_label(label):
+            children = list(node.iter("node"))
+            # A card holds the button plus the surrounding text; a bare wrapper
+            # around the button alone tells us nothing.
+            if len(children) > 2:
+                return node
+        node = parents.get(node)
+        depth += 1
+    return None
+
+
+def _fb_row_labels_in_scope(scope: Any) -> list[str]:
+    """Labels belonging to one suggestion card, in document order."""
+    labels: list[str] = []
+    for node in scope.iter("node"):
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        if not folded:
+            continue
+        package_name = str(node.attrib.get("package", "") or "")
+        if package_name and not package_name.startswith("com.facebook"):
+            continue
+        if _fb_is_connection_action_label(label):
+            continue
+        # "Xóa <name>" / "Gỡ" dismiss the suggestion; they repeat the name and
+        # would otherwise win the display-name pick.
+        if folded.startswith("xoa ") or folded.replace(" ", "") in {"go", "gogo"}:
+            continue
+        labels.append(label)
+    scope_label = _fb_node_label(scope)
+    if scope_label:
+        labels.insert(0, scope_label)
+    return list(dict.fromkeys(labels))
+
+
 def _fb_mutual_count_from_text(text: str) -> int:
     folded = _fb_fold(text)
     for pattern in (r"(\d+)\s+ban chung", r"(\d+)\s+mutual friend"):
@@ -1481,22 +1544,57 @@ def _fb_display_name_from_row(labels: list[str], row_text: str) -> str:
     return row_text[:120]
 
 
-def _fb_pending_request_near(hierarchy_xml: str, tap_y: int) -> bool:
+def _fb_still_offering_add_friend(hierarchy_xml: str, target_id: str) -> bool:
+    """Is this exact person still showing an Add Friend button on screen?
+
+    Identity beats coordinates for verifying a send. Facebook re-flows the
+    friends surface constantly — a "X accepted your request" banner appears, the
+    sent row is removed — so a position-based check reads whichever button
+    happened to slide into the tapped spot and calls a successful send a
+    failure. Matching on the row fingerprint is immune to that.
+    """
+    wanted = str(target_id or "")
+    if not wanted:
+        return False
+    candidates, _qualified, _rejected = _fb_visible_connectable_people(
+        hierarchy_xml,
+        common_keywords=[],
+        forbidden_keywords=[],
+        min_score=0,
+        require_common=False,
+    )
+    return any(str(item.get("target_id") or "") == wanted for item in candidates)
+
+
+def _fb_connection_state_near(hierarchy_xml: str, tap_y: int) -> str:
+    """State of the connection control around tap_y after a tap.
+
+    Returns "sent" (button flipped to a cancel/sent state), "add_friend" (the
+    button is still offering to add — the tap did not take), or "gone" (no
+    connection control there at all).
+
+    "gone" counts as success: Facebook usually removes a suggestion row once the
+    request is sent, and the old check only looked for a cancel label — so every
+    successful send on that UI was reported as an unverified tap.
+    """
     after_root = _xml_parse_root(hierarchy_xml)
+    still_offering = False
     for node in after_root.iter("node"):
-        label = _fb_node_label(node)
         bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
         if not bounds:
             continue
-        folded = _fb_fold(label)
-        if not any(
-            token in folded
-            for token in ("huy loi moi", "huy yeu cau", "cancel request", "request sent")
-        ):
+        if abs(((bounds[1] + bounds[3]) // 2) - tap_y) > 260:
             continue
-        if abs(((bounds[1] + bounds[3]) // 2) - tap_y) <= 260:
-            return True
-    return False
+        label = _fb_node_label(node)
+        if _fb_is_request_sent_label(label):
+            return "sent"
+        if _fb_is_add_friend_label(label):
+            still_offering = True
+    return "add_friend" if still_offering else "gone"
+
+
+def _fb_pending_request_near(hierarchy_xml: str, tap_y: int) -> bool:
+    return _fb_connection_state_near(hierarchy_xml, tap_y) != "add_friend"
 
 
 def _fb_scroll_people_surface(dev: Any, p: dict) -> bool:
@@ -3290,20 +3388,49 @@ _FB_COMMON_CONTEXT_TOKENS = (
     "cung nhom",
     "same group",
 )
+
+# Same-group used to score 30 against a default floor of 40, so it could never
+# qualify a row on its own. That made the token dead weight exactly where it
+# matters: an account with no friends has no mutuals, and shared groups are the
+# only common context it can build. Group context is now worth as much as a
+# mutual friend.
+_FB_COMMON_CONTEXT_SCORES = {
+    "ban chung": 40,
+    "mutual friend": 40,
+    "mutual friends": 40,
+    "cung nhom": 40,
+    "same group": 40,
+}
+# Substring match on the whole row. Only unambiguous phrases belong here.
+#
+# "trang" and "page" used to live in this list, which silently discarded every
+# suggestion named Trang — one of the most common Vietnamese given names — since
+# the row text is folded and matched as a substring. "theo doi"/"follow" was just
+# as wrong: a person row carries a Follow button next to Add Friend. A row that
+# exposes an Add Friend button is a person by construction, so the guard only
+# needs to catch ads and anonymised entries.
 _FB_NON_PERSON_CONTEXT_TOKENS = (
-    "trang",
-    "page",
-    "tham gia",
-    "join",
-    "follow",
-    "theo doi",
     "like page",
+    "thich trang",
     "advertisement",
     "duoc tai tro",
     "sponsored",
     "anonymous",
     "nguoi tham gia an danh",
 )
+
+# Matched on word boundaries only, so "Tham gia" (a group card) is caught while
+# a name containing the same letters is not.
+_FB_NON_PERSON_WORD_TOKENS = ("tham gia", "join")
+
+
+def _fb_has_non_person_marker(folded_row_text: str) -> bool:
+    if any(token in folded_row_text for token in _FB_NON_PERSON_CONTEXT_TOKENS):
+        return True
+    return any(
+        re.search(rf"\b{re.escape(token)}\b", folded_row_text)
+        for token in _FB_NON_PERSON_WORD_TOKENS
+    )
 
 
 def _fb_visible_connectable_people(
@@ -3313,15 +3440,29 @@ def _fb_visible_connectable_people(
     forbidden_keywords: list[str],
     min_score: int,
     require_common: bool,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Returns (candidates, qualified, rejected).
+
+    `rejected` carries the row text and the exact gate that dropped it. A cold
+    account rejects every row, and without this the flow could only report the
+    count — leaving no way to tell "Facebook shows no context" apart from "our
+    token list does not match this build's wording".
+    """
     root = _xml_parse_root(hierarchy_xml)
+    parents = _fb_parent_map(root)
     candidates: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     common_tokens = tuple(
         token for token in (_fb_fold(item) for item in common_keywords) if token
     )
     forbidden_tokens = tuple(
         token for token in (_fb_fold(item) for item in forbidden_keywords) if token
     )
+
+    def _reject(reason: str, row_text: str, **extra: Any) -> None:
+        if len(rejected) < 24:
+            rejected.append({"reason": reason, "row_text": row_text[:256], **extra})
+
     for node in root.iter("node"):
         label = _fb_node_label(node)
         bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
@@ -3331,12 +3472,19 @@ def _fb_visible_connectable_people(
         if package_name and not package_name.startswith("com.facebook"):
             continue
 
-        row_labels = _fb_visible_person_row_labels(root, bounds)
+        scope = _fb_person_row_scope(root, parents, node)
+        row_labels = (
+            _fb_row_labels_in_scope(scope)
+            if scope is not None
+            else _fb_visible_person_row_labels(root, bounds)
+        )
         row_text = " ".join(dict.fromkeys(row_labels))
         folded = _fb_fold(row_text)
         if any(token and token in folded for token in forbidden_tokens):
+            _reject("forbidden_keyword", row_text)
             continue
-        if any(token in folded for token in _FB_NON_PERSON_CONTEXT_TOKENS):
+        if _fb_has_non_person_marker(folded):
+            _reject("non_person_row", row_text)
             continue
 
         matched_common: list[str] = []
@@ -3345,7 +3493,7 @@ def _fb_visible_connectable_people(
         for token in _FB_COMMON_CONTEXT_TOKENS:
             if token in folded:
                 matched_common.append(token)
-                score += 40 if "mutual" in token or "ban chung" in token else 30
+                score += _FB_COMMON_CONTEXT_SCORES.get(token, 30)
         if mutual_count > 0:
             score += min(mutual_count, 10) * 5
         for token in common_tokens:
@@ -3354,28 +3502,37 @@ def _fb_visible_connectable_people(
                 score += 20
         matched_common = list(dict.fromkeys(matched_common))
         if require_common and not matched_common:
+            _reject("no_common_context", row_text)
             continue
 
         display_name = _fb_display_name_from_row(row_labels, row_text)
         folded_name = _fb_fold(display_name)
         if not folded_name or folded_name.replace(" ", "") in {"go", "gogo"}:
+            _reject("no_display_name", row_text)
             continue
         fingerprint_src = (
             f"{folded_name}|{mutual_count}|{'|'.join(sorted(matched_common))}"
         )
-        candidates.append(
-            {
-                "score": score,
-                "row_text": row_text[:512],
-                "display_name": display_name,
-                "matched_common": matched_common,
-                "mutual_count": mutual_count,
-                "action_bounds": list(bounds),
-                "target_id": "ui:" + hashlib.sha256(
-                    fingerprint_src.encode("utf-8")
-                ).hexdigest(),
-            }
-        )
+        candidate = {
+            "score": score,
+            "row_text": row_text[:512],
+            "display_name": display_name,
+            "matched_common": matched_common,
+            "mutual_count": mutual_count,
+            "action_bounds": list(bounds),
+            "target_id": "ui:" + hashlib.sha256(
+                fingerprint_src.encode("utf-8")
+            ).hexdigest(),
+        }
+        candidates.append(candidate)
+        if int(score) < min_score:
+            _reject(
+                "below_min_score",
+                row_text,
+                score=int(score),
+                min_score=int(min_score),
+                matched_common=matched_common,
+            )
 
     qualified = [item for item in candidates if int(item["score"]) >= min_score]
     qualified.sort(
@@ -3386,7 +3543,41 @@ def _fb_visible_connectable_people(
             int(item["action_bounds"][0]),
         )
     )
-    return candidates, qualified
+    return candidates, qualified, rejected
+
+
+# A moving list settles quickly; a few re-scans is generous. Beyond that the
+# surface is churning and tapping into it is not safe.
+_FB_MAX_RELOCATE_ATTEMPTS = 3
+
+
+def _fb_confirm_candidate_bounds(dev: Any, candidate: dict[str, Any]) -> dict[str, Any] | None:
+    """Re-locate the candidate immediately before tapping.
+
+    Returns the candidate with fresh bounds, or None when the same person is no
+    longer offering an Add Friend button at a matching position. Coordinates
+    captured from an earlier dump are only trustworthy while the list is still;
+    Facebook's friends surface is not, because it inserts pending-request cards
+    above the suggestions after the first render.
+    """
+    target_id = str(candidate.get("target_id") or "")
+    if not target_id:
+        return candidate
+    try:
+        fresh_xml = dev.dump_hierarchy(compressed=False)
+    except Exception:
+        return candidate
+    fresh, _qualified, _rejected = _fb_visible_connectable_people(
+        fresh_xml,
+        common_keywords=[],
+        forbidden_keywords=[],
+        min_score=0,
+        require_common=False,
+    )
+    for item in fresh:
+        if str(item.get("target_id") or "") == target_id:
+            return {**candidate, "action_bounds": item["action_bounds"]}
+    return None
 
 
 def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
@@ -3438,14 +3629,20 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
         total_candidates = 0
         total_qualified = 0
         no_more_common_screens = 0
+        relocate_attempts = 0
+        rejected_sample: list[dict[str, Any]] = []
         last_xml = initial_xml
 
         for screen_index in range(max_scrolls + 1):
             made_progress_on_screen = False
             while len(sent) < target_count:
+                # Reused XML is second-hand: it came from the surface opener or
+                # from the dump taken right after the previous tap, and the list
+                # re-flows in between. Track that so the tap can be re-aimed.
+                reused_xml = last_xml is not None
                 before_xml = (
                     last_xml
-                    if last_xml is not None
+                    if reused_xml
                     else dev.dump_hierarchy(compressed=False)
                 )
                 last_xml = None
@@ -3454,7 +3651,7 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                     time.sleep(wait_s)
                     before_xml = dev.dump_hierarchy(compressed=False)
                     root = _xml_parse_root(before_xml)
-                candidates, qualified = _fb_visible_connectable_people(
+                candidates, qualified, rejected = _fb_visible_connectable_people(
                     before_xml,
                     common_keywords=common_keywords,
                     forbidden_keywords=forbidden_keywords,
@@ -3463,6 +3660,9 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 )
                 total_candidates += len(candidates)
                 total_qualified += len(qualified)
+                for entry in rejected:
+                    if len(rejected_sample) < 24:
+                        rejected_sample.append(entry)
                 next_candidate = next(
                     (
                         item
@@ -3472,7 +3672,11 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                     None,
                 )
                 if next_candidate is None:
-                    if not made_progress_on_screen:
+                    if made_progress_on_screen:
+                        # Reset, not accumulate: no_more_common_limit is meant to
+                        # stop after N *consecutive* barren screens.
+                        no_more_common_screens = 0
+                    else:
                         no_more_common_screens += 1
                     break
 
@@ -3484,6 +3688,34 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                         break
                     continue
 
+                confirmed = (
+                    _fb_confirm_candidate_bounds(dev, next_candidate)
+                    if reused_xml
+                    else next_candidate
+                )
+                if confirmed is None:
+                    # The list moved between the dump and the tap — on a real
+                    # device an incoming friend-request card can appear at the
+                    # top after the surface renders and push every row down, so
+                    # the stored coordinates now point at someone else. Re-scan
+                    # instead of tapping blind.
+                    skipped.append(
+                        {
+                            "reason": "row_moved_before_tap",
+                            "target_id": next_candidate.get("target_id"),
+                            "display_name": next_candidate.get("display_name"),
+                            "action_bounds": next_candidate.get("action_bounds"),
+                        }
+                    )
+                    seen_target_ids.discard(str(next_candidate.get("target_id") or ""))
+                    if eligible and eligible[-1] is next_candidate:
+                        eligible.pop()
+                    if relocate_attempts >= _FB_MAX_RELOCATE_ATTEMPTS:
+                        break
+                    relocate_attempts += 1
+                    continue
+
+                next_candidate = confirmed
                 left, top, right, bottom = next_candidate["action_bounds"]
                 tap_x = (left + right) // 2
                 tap_y = (top + bottom) // 2
@@ -3491,7 +3723,16 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 time.sleep(wait_s)
 
                 after_xml = dev.dump_hierarchy(compressed=False)
-                if not _fb_pending_request_near(after_xml, tap_y):
+                # Identity first: the row is gone or its button changed => sent.
+                # Fall back to the positional read only when the name is unknown.
+                candidate_id = str(next_candidate.get("target_id") or "")
+                if candidate_id:
+                    request_sent = not _fb_still_offering_add_friend(
+                        after_xml, candidate_id
+                    )
+                else:
+                    request_sent = _fb_pending_request_near(after_xml, tap_y)
+                if not request_sent:
                     skipped.append(
                         {
                             "reason": "request_not_verified",
@@ -3568,6 +3809,7 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 "eligible": eligible[:target_count],
                 "candidate_count": total_candidates,
                 "qualified_count": total_qualified,
+                "rejected": rejected_sample,
                 "skipped": skipped,
                 "screens_scanned": screens_scanned,
                 "scrolls": scrolls,
@@ -3586,6 +3828,7 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 "eligible_count": len(eligible),
                 "candidate_count": total_candidates,
                 "qualified_count": total_qualified,
+                "rejected": rejected_sample,
                 "skipped": skipped,
                 "screens_scanned": screens_scanned,
                 "scrolls": scrolls,
@@ -3611,7 +3854,7 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
         }
 
     before_xml = dev.dump_hierarchy(compressed=False)
-    candidates, qualified = _fb_visible_connectable_people(
+    candidates, qualified, rejected = _fb_visible_connectable_people(
         before_xml,
         common_keywords=common_keywords,
         forbidden_keywords=forbidden_keywords,
@@ -3624,6 +3867,7 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
             "reason": "no_common_connectable_people",
             "message": "no visible Add Friend row satisfied common-context score",
             "candidate_count": len(candidates),
+            "rejected": rejected,
             "before_xml_chars": len(before_xml or ""),
         }
 

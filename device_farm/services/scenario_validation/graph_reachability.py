@@ -12,8 +12,8 @@ _CONTAINER_TYPES = frozenset({
     "repeat_until",
     "if_element",
     "if_variable",
-    "tap_fb_comment_button",
-    "fb_tap_comment_button",
+    "social_open_comments",
+    "social_open_comments",
     "random_pick",
 })
 _NATURAL_LEAF_TYPE_PREFIXES = (

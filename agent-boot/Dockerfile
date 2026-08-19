@@ -42,6 +42,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     adb \
     ca-certificates \
     ffmpeg \
+    # OCR runs here now: media goes straight from media-adapter to go2rtc, so
+    # the farm has no frame of its own to read. Without these the relay reports
+    # has_ocr=false and every extract_text_ocr step fails.
+    # `vie` is not optional — OCR defaults to Vietnamese + English.
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-vie \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 

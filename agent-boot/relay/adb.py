@@ -194,6 +194,25 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = _os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# How long the periodic atx-agent /ping health check waits for a reply. The old
+# hardcoded 2.0s was too aggressive on a host running several emulators: a
+# device that is alive but slow to answer under CPU/memory pressure was marked
+# unhealthy, its u2 session evicted, and the device flapped as disconnected in
+# the UI. 5s tolerates load-induced slowness while still detecting real death in
+# a few seconds. Bootstrap checks keep their own explicit (shorter) timeouts.
+_ATX_PING_TIMEOUT_S = max(0.5, _env_float("AGENT_BOOT_ATX_PING_TIMEOUT_S", 5.0))
+
+
 _CAPABILITY_CACHE_TTL_SECONDS = max(
     0,
     min(3600, _env_int("AGENT_BOOT_CAPABILITY_CACHE_TTL_SECONDS", 300)),
@@ -740,7 +759,7 @@ def _record_atx_forward_ping_failure(serial: str) -> int:
         return count
 
 
-def _atx_http_ping_via_adb_forward(serial: str, timeout: float = 2.0) -> tuple[bool, str]:
+def _atx_http_ping_via_adb_forward(serial: str, timeout: float = _ATX_PING_TIMEOUT_S) -> tuple[bool, str]:
     if not serial or ":" in serial:
         return False, "adb forward unavailable for tcp serial"
     endpoint = _ensure_atx_forward_endpoint(serial)
@@ -766,7 +785,7 @@ def _atx_http_ping_via_adb_forward(serial: str, timeout: float = 2.0) -> tuple[b
         return False, f"adb-forward ping failed: {exc}"
 
 
-def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -> tuple[bool, str]:
+def _atx_http_ping(serial: str, timeout: float = _ATX_PING_TIMEOUT_S, host: str | None = None) -> tuple[bool, str]:
     host = host or _resolve_device_lan_ip(serial)
     if not host:
         return _atx_http_ping_via_adb_forward(serial, timeout=timeout)

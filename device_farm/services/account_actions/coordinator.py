@@ -23,7 +23,14 @@ def resolve_action_identity(
     scenario: dict[str, Any],
     variables: dict[str, Any],
     execution_id: str | None,
+    device_serial: str | None = None,
 ) -> dict[str, str | None]:
+    """Identify who/where an action belongs to.
+
+    ``device_serial`` is which phone ran it — without it the activity feed
+    cannot answer "what did this device do", and the ledger cannot be filtered
+    by device at all.
+    """
     sources = (
         ("step", step.get("account_id")),
         ("scenario", scenario.get("account_id")),
@@ -46,10 +53,12 @@ def resolve_action_identity(
             )
         )
     step_id = step.get("id") or step.get("_id")
+    serial = device_serial or step.get("device_serial") or scenario.get("device_serial")
     return {
         "account_id": next(iter(values), None),
         "execution_id": str(execution_id).strip() if execution_id else None,
         "step_id": str(step_id).strip() if step_id else None,
+        "device_serial": str(serial).strip() if serial else None,
     }
 
 
@@ -145,6 +154,7 @@ async def _prepare_action(
                 action_type=action_type,
                 platform=platform,
                 target=target,
+                device_serial=identity.get("device_serial"),
             )
         if row.status == AccountActionStatus.SUCCEEDED.value:
             return {
@@ -234,6 +244,7 @@ async def _observe_action(
             action_type=action_type,
             platform=platform,
             target=target,
+            device_serial=identity.get("device_serial"),
             result=result,
             observed=True,
         )

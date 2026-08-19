@@ -9,7 +9,9 @@ import shlex
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from typing import Optional
+
+from pydantic import BaseModel, Field
 
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id, device_visible_to_user
@@ -735,6 +737,65 @@ async def get_relay_agent(relay_id: str, db: DB, user: CurrentUser):
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("relay-agents", "create"))],
 )
+async def _claim_relay_serial(db, row, serial: str, user) -> str:
+    """Claim/update one reported serial. No commit, no bootstrap — the caller
+    owns the transaction so a single register and a bulk register share exactly
+    the same per-device work and cannot drift apart.
+
+    Returns the canonical device serial. Raises DeviceRegistrationError /
+    ValueError for the caller to map.
+    """
+    serial = (serial or "").strip()
+    if not serial or serial.startswith("pending-"):
+        raise ValueError("invalid device serial")
+    if serial not in set(row.serials or []):
+        raise ValueError("serial is not reported by this relay agent")
+
+    caps = _get_live_caps(serial)
+    display_name = _cap_display_name(serial, caps)
+    existing = await get_or_claim_device_for_user(
+        db,
+        serial=serial,
+        display_name=display_name,
+        user_id=user.id,
+        org_id=getattr(user, "org_id", None),
+    )
+    canonical = str(getattr(existing, "serial", "") or serial)
+
+    if caps:
+        await repo.update_device_metadata(
+            db,
+            canonical,
+            brand=str(caps.get("brand") or ""),
+            model=str(caps.get("model") or ""),
+            android_version=str(caps.get("android_version") or ""),
+            sdk_version=int(caps.get("sdk") or 0),
+            screen_width=int(caps.get("screen_width") or 0),
+            screen_height=int(caps.get("screen_height") or 0),
+            adb_serial=serial,
+            adb_ip=str(caps.get("wlan_ip") or "") or None,
+            adb_port=5555,
+        )
+
+    await repo.update_device_adb_identity(db, canonical, adb_serial=serial)
+
+    # The device row now exists and this relay already reports the serial online
+    # (checked above against row.serials), so advance the FSM to online here.
+    # Without this the state stayed `unknown` until the agent happened to
+    # re-emit its online transition — the relay bridge fires on that transition,
+    # and if it arrived before the row existed it found nothing and gave up.
+    # Registration is exactly the moment both facts are true, so it must not
+    # depend on an agent restart to become usable.
+    from services.device_state.relay_bridge import apply_relay_online
+
+    try:
+        await apply_relay_online(serial, db=db)
+    except Exception as exc:
+        log.warning("relay FSM online on register failed serial=%s: %s", serial, exc)
+
+    return canonical
+
+
 async def register_relay_device(
     relay_id: str,
     serial: str,
@@ -747,51 +808,111 @@ async def register_relay_device(
     if not row or row.status != "online":
         raise HTTPException(status_code=404, detail="relay agent not online")
 
-    serial = (serial or "").strip()
-    if not serial or serial.startswith("pending-"):
-        raise HTTPException(status_code=400, detail="invalid device serial")
-    if serial not in set(row.serials or []):
-        raise HTTPException(status_code=409, detail="serial is not reported by this relay agent")
-    # TEMP: same-WiFi/LAN check disabled (RELAY_SAME_WIFI_FILTER_ENABLED=False).
-    # if not _serial_is_same_wifi(serial, row):
-    #     raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
-
-    caps = _get_live_caps(serial)
-    display_name = _cap_display_name(serial, caps)
     try:
-        existing = await get_or_claim_device_for_user(
-            db,
-            serial=serial,
-            display_name=display_name,
-            user_id=user.id,
-            org_id=getattr(user, "org_id", None),
-        )
+        canonical = await _claim_relay_serial(db, row, serial, user)
+    except ValueError as exc:
+        code = 409 if "not reported" in str(exc) else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     except DeviceRegistrationError as exc:
         raise http_exception_from_registration(exc) from exc
 
-    if caps:
-        await repo.update_device_metadata(
-            db,
-            str(getattr(existing, "serial", "") or serial),
-            brand=str(caps.get("brand") or ""),
-            model=str(caps.get("model") or ""),
-            android_version=str(caps.get("android_version") or ""),
-            sdk_version=int(caps.get("sdk") or 0),
-            screen_width=int(caps.get("screen_width") or 0),
-            screen_height=int(caps.get("screen_height") or 0),
-            adb_serial=serial,
-            adb_ip=str(caps.get("wlan_ip") or "") or None,
-            adb_port=5555,
-        )
-
-    await repo.update_device_adb_identity(db, str(getattr(existing, "serial", "") or serial), adb_serial=serial)
     await db.commit()
 
-    device = await repo.get_device_by_serial(db, str(getattr(existing, "serial", "") or serial))
+    device = await repo.get_device_by_serial(db, canonical)
     if not device:
         raise HTTPException(status_code=500, detail="device registration failed")
-    _schedule_bootstrap_for_registered_relay_device(serial)
+    _schedule_bootstrap_for_registered_relay_device((serial or "").strip())
     return _device_to_out(device, relay_id=relay_id)
+
+
+class RegisterRelayDevicesBody(BaseModel):
+    # Empty / omitted → register every serial the agent currently reports.
+    serials: list[str] = Field(default_factory=list)
+
+
+class RegisterRelayDeviceItemOut(BaseModel):
+    serial: str
+    status: str  # "registered" | "failed"
+    device_id: Optional[str] = None
+    name: Optional[str] = None
+    message: Optional[str] = None
+
+
+class RegisterRelayDevicesOut(BaseModel):
+    results: list[RegisterRelayDeviceItemOut]
+
+
+@router.post(
+    "/{relay_id}/devices/register",
+    response_model=RegisterRelayDevicesOut,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("relay-agents", "create"))],
+)
+async def register_relay_devices_bulk(
+    relay_id: str,
+    body: RegisterRelayDevicesBody,
+    db: DB,
+    user: CurrentUser,
+):
+    """Register several reported serials in one call.
+
+    Partial success by design (same shape as DLQ bulk retry): one bad serial
+    must not sink the rest, so each is committed on its own and reported
+    individually. An empty `serials` list means "everything this agent reports".
+    """
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    if not row or row.status != "online":
+        raise HTTPException(status_code=404, detail="relay agent not online")
+
+    reported = [str(s).strip() for s in (row.serials or []) if str(s).strip()]
+    requested = [str(s).strip() for s in (body.serials or []) if str(s).strip()]
+    targets = requested or reported
+
+    results: list[RegisterRelayDeviceItemOut] = []
+    to_bootstrap: list[str] = []
+
+    for serial in targets:
+        try:
+            canonical = await _claim_relay_serial(db, row, serial, user)
+            # Per-serial commit so a later failure cannot roll back an earlier
+            # success — the whole point of a partial-success bulk.
+            await db.commit()
+        except (ValueError, DeviceRegistrationError) as exc:
+            await db.rollback()
+            results.append(
+                RegisterRelayDeviceItemOut(serial=serial, status="failed", message=str(exc))
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001 — never let one device sink the batch
+            await db.rollback()
+            log.warning("bulk register serial=%s failed: %s", serial, exc)
+            results.append(
+                RegisterRelayDeviceItemOut(serial=serial, status="failed", message=str(exc))
+            )
+            continue
+
+        device = await repo.get_device_by_serial(db, canonical)
+        if not device:
+            results.append(
+                RegisterRelayDeviceItemOut(
+                    serial=serial, status="failed", message="device lookup failed after claim"
+                )
+            )
+            continue
+        to_bootstrap.append(serial)
+        results.append(
+            RegisterRelayDeviceItemOut(
+                serial=serial,
+                status="registered",
+                device_id=str(getattr(device, "id", "") or ""),
+                name=str(getattr(device, "name", "") or ""),
+            )
+        )
+
+    for serial in to_bootstrap:
+        _schedule_bootstrap_for_registered_relay_device(serial)
+
+    return RegisterRelayDevicesOut(results=results)
 
 
 @router.post(

@@ -10,12 +10,13 @@ import {
 } from './bracket-step-tree.ts';
 
 const fbTapWithExtract: FlowStep = {
-  type: 'fb_tap_comment_button',
+  type: 'social_open_comments',
   timeout: 6,
   then: [
     {
       type: 'extract',
-      strategy: 'fb_comments',
+      entity: 'comments',
+      platform: 'facebook',
       max_items: 500,
       comment_scroll_passes: 48
     },
@@ -24,11 +25,11 @@ const fbTapWithExtract: FlowStep = {
   else: [{ type: 'wait', seconds: 0.5 }]
 };
 
-test('getChildStep reads extract step from fb_tap_comment_button then branch', () => {
+test('getChildStep reads extract step from social_open_comments then branch', () => {
   const child = getChildStep(fbTapWithExtract, 'then', 0);
   assert.ok(child);
   assert.equal(child.type, 'extract');
-  assert.equal(child.strategy, 'fb_comments');
+  assert.equal(child.entity, 'comments');
   assert.equal(child.max_items, 500);
 });
 

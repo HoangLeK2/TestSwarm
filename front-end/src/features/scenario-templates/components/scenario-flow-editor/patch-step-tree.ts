@@ -19,8 +19,8 @@ function hasThenElseBranches(type: string): boolean {
     type === 'if' ||
     type === 'if_element' ||
     type === 'if_variable' ||
-    type === 'tap_fb_comment_button' ||
-    type === 'fb_tap_comment_button'
+    type === 'social_open_comments' ||
+    type === 'social_open_comments'
   );
 }
 

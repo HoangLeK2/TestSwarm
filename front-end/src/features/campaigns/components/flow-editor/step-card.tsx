@@ -22,6 +22,7 @@ import {
   getStepCategory
 } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
+import { useImageTemplateUrl } from './image-template-scenario';
 import { StepIcon } from './step-icon';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
@@ -38,6 +39,29 @@ function getTapStepImage(step: FlowStep): string {
     | undefined;
   const raw = screen?.screenshot || '';
   return raw ? stepImageSrc(raw) : '';
+}
+
+/**
+ * Template thumbnail for a tap_image step.
+ *
+ * Unlike `tap`, whose screenshot rides along inside the step, the template is an
+ * object-storage key — the point of the card image here is that "ảnh mẫu đã
+ * gắn" tells you nothing about *which* button the step taps.
+ */
+function TapImageThumb({ step }: { step: FlowStep }) {
+  const templateKey = step.template_key as string | undefined;
+  const { url, forget } = useImageTemplateUrl(templateKey);
+  if (!url) return null;
+  return (
+    <img
+      src={url}
+      alt=''
+      loading='lazy'
+      decoding='async'
+      onError={forget}
+      className='h-12 w-12 shrink-0 rounded border border-border/40 bg-muted/40 object-contain'
+    />
+  );
 }
 
 interface Props {
@@ -212,18 +236,22 @@ export function StepCard({
           )}
         </div>
 
-        {(() => {
-          const imgSrc = step.type === 'tap' ? getTapStepImage(step) : '';
-          return imgSrc ? (
-            <img
-              src={imgSrc}
-              alt=''
-              loading='lazy'
-              decoding='async'
-              className='h-12 w-8 shrink-0 rounded border border-border/40 object-cover object-top'
-            />
-          ) : null;
-        })()}
+        {step.type === 'tap_image' ? (
+          <TapImageThumb step={step} />
+        ) : (
+          (() => {
+            const imgSrc = step.type === 'tap' ? getTapStepImage(step) : '';
+            return imgSrc ? (
+              <img
+                src={imgSrc}
+                alt=''
+                loading='lazy'
+                decoding='async'
+                className='h-12 w-8 shrink-0 rounded border border-border/40 object-cover object-top'
+              />
+            ) : null;
+          })()
+        )}
 
         <div className='flex shrink-0 items-center gap-0.5'>
           {reorderControls && (

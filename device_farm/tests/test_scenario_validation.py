@@ -47,7 +47,7 @@ def test_graph_unreachable_node() -> None:
 def test_graph_nested_scope_nodes_are_reachable() -> None:
     result = _result()
     nodes = [
-        {"id": "root", "type": "tap_fb_comment_button", "order": "a0", "config": {}},
+        {"id": "root", "type": "social_open_comments", "order": "a0", "config": {}},
         {
             "id": "child",
             "type": "extract",

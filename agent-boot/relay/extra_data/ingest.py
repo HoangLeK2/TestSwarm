@@ -25,12 +25,38 @@ _SUPPORTED_CONTENT_STRATEGIES = (
 )
 _SUPPORTED_ENTITY_STRATEGIES = {"fb_groups", "fb_pages"}
 
+# device_farm speaks platform-neutral (entity, platform); the parser dispatch
+# below is keyed by an internal token. This is the single translation point —
+# the token never leaves agent-boot.
+_PLATFORM_TOKEN: dict[str, str] = {
+    "facebook": "fb",
+    "instagram": "ig",
+    "tiktok": "tiktok",
+    "linkedin": "linkedin",
+    "auto": "auto",
+}
+
+
+def resolve_content_strategy(entity: str, platform: str) -> str:
+    """Map a platform-neutral ``(entity, platform)`` pair to an internal token."""
+    clean_entity = (entity or "").strip().casefold()
+    clean_platform = (platform or "auto").strip().casefold()
+    if clean_entity == "text_nodes":
+        return "text_nodes"
+    token = _PLATFORM_TOKEN.get(clean_platform)
+    if token is None:
+        return f"{clean_platform}_{clean_entity}"
+    if clean_entity in {"groups", "pages"}:
+        # Catalog entities only have a Facebook implementation today.
+        return f"{token}_{clean_entity}"
+    return f"{token}_{clean_entity}"
+
 
 def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, str]:
     """Map Facebook post ids (_pid / fb_post_id) to scoped content_hash for comment parent linking."""
     dedupe_field = str(
         context.get("posts_dedupe_field")
-        or context.get("_fb_posts_dedupe_field")
+        or context.get("_posts_dedupe_field")
         or context.get("dedupe_field")
         or "text"
     )
@@ -100,13 +126,28 @@ def _multi_platform_items(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from lxml import etree
 
-    from relay.extra_data.parsers.platform_detector import detect_from_hierarchy, detect_parser
+    from relay.extra_data.parsers.platform_detector import (
+        detect_from_hierarchy,
+        detect_parser,
+        detect_platform,
+        detect_platform_from_hierarchy,
+    )
 
     root = etree.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
     is_comments = strategy in _MULTI_PLATFORM_COMMENT_STRATEGIES
     parser = None
     package_name = str(context.get("package_name") or context.get("current_package") or "").strip()
     if strategy.startswith("auto_"):
+        # Facebook has no BasePlatformParser — auto-detecting it must fall back to
+        # the dedicated facebook pipeline, not report "parser not found".
+        detected = (
+            (detect_platform(package_name) if package_name else None)
+            or detect_platform_from_hierarchy(root)
+        )
+        if detected == "facebook":
+            return _parse_items(
+                "fb_comments" if is_comments else "fb_posts", xml, context
+            )
         parser = detect_parser(package_name) if package_name else None
         if parser is None:
             parser = detect_from_hierarchy(root)
@@ -177,9 +218,15 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         locked_anchor = context.get("_active_comment_parent_anchor")
         if not isinstance(locked_anchor, dict) or not locked_anchor:
             locked_anchor = None
+        # Posts already commented on in this run, so a feed loop cannot tap the
+        # same card again once it scrolls back past it.
+        exclude_anchors = context.get("comment_exclude_anchors")
+        if not isinstance(exclude_anchors, list):
+            exclude_anchors = []
         top, ranked = resolve_comment_targets_from_xml(
             xml,
             locked_anchor=locked_anchor,
+            exclude_post_anchors=exclude_anchors,
         )
         if not top:
             diag = diagnose_comment_target_resolution(xml)
@@ -192,7 +239,7 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
             }
         dedupe_field = str(
             context.get("posts_dedupe_field")
-            or context.get("_fb_posts_dedupe_field")
+            or context.get("_posts_dedupe_field")
             or context.get("dedupe_field")
             or "text"
         )
@@ -686,7 +733,7 @@ def _comment_parent_source(context: dict[str, Any]) -> str:
 
 def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
     source = _comment_parent_source(context)
-    session = context.get("_fb_comment_session")
+    session = context.get("_comment_session")
     has_session = isinstance(session, dict) and bool(session.get("session_id"))
     if has_session:
         context_parent = str(context.get("parent_id") or "").strip()
@@ -695,7 +742,7 @@ def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
             return False
         context_pid = str(
             context.get("parent_post_id")
-            or context.get("_fb_comment_parent_pid")
+            or context.get("_comment_parent_pid")
             or ""
         ).strip()
         session_pid = str(session.get("parent_post_id") or "").strip()
@@ -736,7 +783,7 @@ def _drop_stale_comment_parent_context(
     """Prefer parser-observed parent PID over stale tap context for comment rows."""
     context_pid = str(
         context.get("parent_post_id")
-        or context.get("_fb_comment_parent_pid")
+        or context.get("_comment_parent_pid")
         or ""
     ).strip()
     parsed_pids = _parsed_comment_parent_post_ids(items)
@@ -757,10 +804,10 @@ def _drop_stale_comment_parent_context(
     corrected["parent_id_already_scoped"] = False
     if len(parsed_pids) == 1:
         corrected["parent_post_id"] = parsed_pids[0]
-        corrected["_fb_comment_parent_pid"] = parsed_pids[0]
+        corrected["_comment_parent_pid"] = parsed_pids[0]
     else:
         corrected.pop("parent_post_id", None)
-        corrected.pop("_fb_comment_parent_pid", None)
+        corrected.pop("_comment_parent_pid", None)
 
     diagnostic["parent_context_corrected"] = True
     diagnostic["context_parent_post_id"] = context_pid
@@ -781,7 +828,7 @@ def _with_comment_parent_context(
 ) -> list[dict[str, Any]]:
     parent_post_id = str(
         context.get("parent_post_id")
-        or context.get("_fb_comment_parent_pid")
+        or context.get("_comment_parent_pid")
         or ""
     ).strip()
     parent_hash = str(
@@ -1100,7 +1147,18 @@ class ExtraDataIngestServer:
         started = time.perf_counter()
         context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
         serial = str(payload.get("serial") or context.get("device_serial") or "")
-        strategy = str(payload.get("strategy") or context.get("strategy") or "fb_posts")
+        # Content extraction arrives as (entity, platform); internal RPC ops
+        # (comment target/filter probes) still arrive as a bare strategy name.
+        entity = str(payload.get("entity") or context.get("entity") or "").strip()
+        if entity:
+            strategy = resolve_content_strategy(
+                entity,
+                str(payload.get("platform") or context.get("platform") or "auto"),
+            )
+        else:
+            strategy = str(payload.get("strategy") or context.get("strategy") or "")
+        if not strategy:
+            return {"ok": False, "error": "entity_or_strategy_required"}
         xml = str(payload.get("xml") or "")
         if not serial:
             return {"ok": False, "error": "serial_required"}

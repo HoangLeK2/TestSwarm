@@ -769,7 +769,7 @@ async def test_execute_device_action_batch_propagates_runtime_context():
 
     inp = DeviceActionBatchInput(
         device_serial="SN001",
-        steps=[{"type": "fb_tap_comment_button", "pre_scroll": True}],
+        steps=[{"type": "social_open_comments", "pre_scroll": True}],
         step_indices=[2],
         context={
             "_active_comment_parent_source": "post_detail",
@@ -781,13 +781,13 @@ async def test_execute_device_action_batch_propagates_runtime_context():
     def fake_run_scenario_task(_device, _scenario, context=None, **_kwargs):
         captured_contexts.append(dict(context or {}))
         ctx = dict(context or {})
-        ctx["_fb_comment_filter_applied"] = "all_comments"
+        ctx["_comment_filter_applied"] = "all_comments"
         return {
             "success": True,
             "step_results": [
                 {
                     "index": 0,
-                    "type": "fb_tap_comment_button",
+                    "type": "social_open_comments",
                     "ok": True,
                     "message": "tap ok",
                     "tapped": True,
@@ -816,4 +816,4 @@ async def test_execute_device_action_batch_propagates_runtime_context():
     assert captured_contexts
     assert captured_contexts[0]["_active_comment_parent_source"] == "post_detail"
     assert captured_contexts[0]["_active_comment_parent_hash"] == "post-hash-1"
-    assert result.context["_fb_comment_filter_applied"] == "all_comments"
+    assert result.context["_comment_filter_applied"] == "all_comments"

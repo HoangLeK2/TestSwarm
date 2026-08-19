@@ -151,6 +151,12 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
     if not typed:
         result["ok"] = False
         result["message"] = f"input_text: all strategies failed for {text!r}"
+    else:
+        # Record exactly what went to the device. The account-action ledger uses
+        # this as comment evidence — re-deriving it later would be wrong,
+        # because a ${VAR} holding a list of spintax variants resolves to a
+        # random pick each time it is evaluated.
+        result["typed_text"] = text[:2000]
 
 
 @register_step("input_selector")

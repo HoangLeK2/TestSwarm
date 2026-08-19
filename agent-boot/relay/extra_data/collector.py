@@ -3100,7 +3100,7 @@ def _diag_sheet_opened(xml: str | None) -> bool:
         return False
 
 
-async def collect_fb_comment_target_with_tap(
+async def collect_comment_target_with_tap(
     executor: Any,
     serial: str,
     context: dict[str, Any],

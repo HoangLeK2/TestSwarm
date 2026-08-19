@@ -16,6 +16,8 @@ from temporalio.worker import (
     Interceptor,
 )
 
+from temporal.payload_guard import strip_oversized_values
+
 trace_log = importlib.import_module("structlog").get_logger("temporal_trace")
 
 
@@ -247,6 +249,16 @@ class _TemporalTraceActivityInbound(ActivityInboundInterceptor):
             trace_log.warning("temporal_activity_retry", **ctx)
         try:
             result = await self.next.execute_activity(input)
+            # Last point before the result becomes a durable Temporal payload.
+            with contextlib.suppress(Exception):
+                dropped = strip_oversized_values(result)
+                if dropped:
+                    trace_log.warning(
+                        "temporal_activity_payload_trimmed",
+                        **ctx,
+                        dropped_fields=dropped[:20],
+                        dropped_count=len(dropped),
+                    )
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             duration_ms = round(elapsed_ms, 1)
             trace_log.debug(

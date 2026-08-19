@@ -195,9 +195,19 @@ class TemporalConfig:
     server_url: str = "localhost:7233"       # Temporal gRPC endpoint
     namespace: str = "default"
     task_queue: str = "device-scenario"
+    # Short control-plane activities (finalize, claim heartbeat, schedule
+    # dispatch). Separate queue and workers so they never queue behind long
+    # device work — see temporal/shared.py CONTROL_TASK_QUEUE_NAME.
+    control_task_queue: str = "device-control"
+    control_worker_count: int = 2
+    control_worker_max_concurrent_activities: int = 40
     worker_count: int = 1                    # parallel worker threads per process; each has own event loop + thread pool
     worker_max_concurrent_activities: int = 10
     worker_max_concurrent_workflows: int = 50
+    # Sticky-cache size per worker. Left unset the SDK defaults to 1000, and
+    # this process runs worker_count workers, so the real ceiling was up to
+    # 6000 cached workflow instances — each holding its own step log.
+    worker_max_cached_workflows: int = 200
     workflow_execution_timeout: int = 0   # seconds; 0 = unlimited
     activity_start_to_close_timeout: int = 60  # seconds
     activity_retry_max_attempts: int = 3
@@ -323,6 +333,18 @@ def _build_temporal_config(raw: dict) -> TemporalConfig:
     _apply_int_env(
         "TEMPORAL_WORKER_MAX_CONCURRENT_WORKFLOWS",
         "worker_max_concurrent_workflows",
+    )
+    _apply_int_env(
+        "TEMPORAL_WORKER_MAX_CACHED_WORKFLOWS",
+        "worker_max_cached_workflows",
+    )
+    env_control_queue = os.environ.get("TEMPORAL_CONTROL_TASK_QUEUE")
+    if env_control_queue:
+        cfg.control_task_queue = env_control_queue
+    _apply_int_env("TEMPORAL_CONTROL_WORKER_COUNT", "control_worker_count", minimum=0)
+    _apply_int_env(
+        "TEMPORAL_CONTROL_WORKER_MAX_CONCURRENT_ACTIVITIES",
+        "control_worker_max_concurrent_activities",
     )
     _apply_int_env(
         "TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT",

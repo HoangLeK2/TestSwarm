@@ -885,6 +885,8 @@ class U2JsonRpcClient:
         # Serialize every HTTP transaction: Session is not thread-safe, and a
         # second TCP to the local tunnel (e.g. from a parallel Session) breaks u2.
         self._http_lock = threading.RLock()
+        # Monotonic stamp of the last verified AdbKeyboard IME check (0 = unknown).
+        self._adb_keyboard_ime_ok_at = 0.0
         self._req_id = 0
         self.settings: Dict[str, Any] = {}
         self._implicitly_wait: float = 10.0
@@ -1100,15 +1102,28 @@ class U2JsonRpcClient:
         m = re.search(r"result=(-?\d+)", output or "")
         return int(m.group(1)) if m else None
 
-    def adb_keyboard_ensure_ime(self) -> None:
-        current = self._adb_shell_run("settings get secure default_input_method").strip()
-        if current == self._ADB_KEYBOARD_IME:
+    # Re-verifying the default IME costs a full `settings get` round-trip — over
+    # the relay that is the dominant cost of a keystroke, and it is asked twice
+    # per replace. The IME only changes when something else sets it, so cache the
+    # verified state briefly and drop the cache whenever a broadcast fails (which
+    # is exactly how a stolen IME surfaces).
+    _ADB_KEYBOARD_IME_TTL_S = 30.0
+
+    def _invalidate_adb_keyboard_ime(self) -> None:
+        self._adb_keyboard_ime_ok_at = 0.0
+
+    def adb_keyboard_ensure_ime(self, *, force: bool = False) -> None:
+        ok_at = getattr(self, "_adb_keyboard_ime_ok_at", 0.0)
+        if not force and time.monotonic() - ok_at < self._ADB_KEYBOARD_IME_TTL_S:
             return
-        self._adb_shell_run(f"ime enable {self._ADB_KEYBOARD_IME}")
-        self._adb_shell_run(f"ime set {self._ADB_KEYBOARD_IME}")
-        self._adb_shell_run(
-            f"settings put secure default_input_method {self._ADB_KEYBOARD_IME}"
-        )
+        current = self._adb_shell_run("settings get secure default_input_method").strip()
+        if current != self._ADB_KEYBOARD_IME:
+            self._adb_shell_run(f"ime enable {self._ADB_KEYBOARD_IME}")
+            self._adb_shell_run(f"ime set {self._ADB_KEYBOARD_IME}")
+            self._adb_shell_run(
+                f"settings put secure default_input_method {self._ADB_KEYBOARD_IME}"
+            )
+        self._adb_keyboard_ime_ok_at = time.monotonic()
 
     def adb_keyboard_input_text(self, text: str, *, hide: bool = False) -> None:
         import base64
@@ -1121,6 +1136,7 @@ class U2JsonRpcClient:
             f"am broadcast -a ADB_KEYBOARD_INPUT_TEXT --es text {b64}"
         )
         if self._adb_broadcast_code(out) != self._ADB_BROADCAST_OK:
+            self._invalidate_adb_keyboard_ime()
             raise RuntimeError(f"ADB_KEYBOARD_INPUT_TEXT failed: {out!r}")
         if hide:
             self._adb_shell_run("am broadcast -a ADB_KEYBOARD_HIDE")
@@ -1129,6 +1145,7 @@ class U2JsonRpcClient:
         self.adb_keyboard_ensure_ime()
         out = self._adb_shell_run("am broadcast -a ADB_KEYBOARD_CLEAR_TEXT")
         if self._adb_broadcast_code(out) != self._ADB_BROADCAST_OK:
+            self._invalidate_adb_keyboard_ime()
             raise RuntimeError(f"ADB_KEYBOARD_CLEAR_TEXT failed: {out!r}")
 
     def adb_keyboard_replace_text(self, text: str) -> None:
@@ -1716,6 +1733,16 @@ class U2JsonRpcClient:
         """Append text via IME injection (AdbKeyboard broadcast — incremental typing)."""
         if not text:
             return
+        # AdbKeyboard first: it is the IME the agent pins as default, and it is
+        # what clear/replace drive. Leading with setFastInputText targeted a
+        # *different* u2 IME, so a live session alternated between the two —
+        # each switch tears down the input connection and drops keystrokes.
+        if self._adb_shell is not None:
+            try:
+                self.adb_keyboard_input_text(text, hide=False)
+                return
+            except Exception:
+                pass
         for method in ("setFastInputText", "sendKeys"):
             try:
                 self._rpc(method, text)

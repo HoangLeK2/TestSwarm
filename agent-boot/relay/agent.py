@@ -11,6 +11,8 @@ Protocol:
 from __future__ import annotations
 
 import asyncio
+import base64
+import functools
 import logging
 import os
 import random
@@ -18,6 +20,7 @@ import socket
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from concurrent.futures import Future
 from typing import Any, Optional
 
@@ -71,6 +74,8 @@ from relay.runtime         import (
     extra_data_sem,
     init_executors,
     init_semaphores,
+    cv_executor,
+    cv_sem,
     register_stats_source,
     shutdown_executors,
     loads,
@@ -290,6 +295,30 @@ CMD_BOOTSTRAP       = 4  # push binaries + install APKs + start atx-agent + u2
 CMD_SCREENCAP       = 5  # adb exec-out screencap -p → base64 PNG
 CMD_PROBE_CAPS      = 6  # _probe_capabilities() → JSON dict in output
 CMD_RESTART_SCRCPY  = 7  # stop + resume scrcpy session for a device
+
+
+# Templates are ~5-15 KB each; this bounds a long-lived agent's cache.
+_TEMPLATE_CACHE_MAX = 64
+
+
+def _ocr_available() -> bool:
+    """Whether this host can serve OCR. Result is cached inside relay.ocr."""
+    try:
+        from relay import ocr as _ocr
+
+        return _ocr.available()
+    except Exception:
+        return False
+
+
+def _image_match_available() -> bool:
+    """Whether this host can serve template matching (needs OpenCV)."""
+    try:
+        from relay import image_match as _im
+
+        return _im.available()
+    except Exception:
+        return False
 
 
 def _auto_bootstrap_enabled() -> bool:
@@ -558,6 +587,12 @@ class RelayAgent:
         self._stream_tasks: TaskRegistry = TaskRegistry()
         self._extra_data_tasks: dict[str, asyncio.Task] = {}
         self._extra_data_cancel_events: dict[str, asyncio.Event] = {}
+        self._ocr_tasks: dict[str, asyncio.Task] = {}
+        self._ocr_cancel_events: dict[str, asyncio.Event] = {}
+        self._image_match_tasks: dict[str, asyncio.Task] = {}
+        self._image_match_cancel_events: dict[str, asyncio.Event] = {}
+        # sha256 -> template bytes, so a looping scenario ships each image once.
+        self._template_cache: "OrderedDict[str, bytes]" = OrderedDict()
         self._u2_batch_tasks: dict[str, asyncio.Task] = {}
         self._u2_batch_cancel_events: dict[str, asyncio.Event] = {}
         self._command_max_queue = max(8, _env_int("COMMAND_MAX_QUEUE_PER_DEVICE", 128))
@@ -1790,6 +1825,12 @@ class RelayAgent:
                     "ram_gb":          c.get("ram_gb", 0),
                     "has_u2":          bool(c.get("u2", False)),
                     "has_stf":         bool(c.get("stf", False)),
+                    # Lets the farm route OCR here instead of failing on a
+                    # host whose image has no tesseract yet. Host-level, but
+                    # reported per device because that is the shape the farm
+                    # already looks capabilities up by.
+                    "has_ocr":         _ocr_available(),
+                    "has_image_match": _image_match_available(),
                     "tags":            list(c.get("tags", [])),
                 })
 
@@ -1940,6 +1981,59 @@ class RelayAgent:
 
         elif mtype == "extra_data_cancel":
             self._cancel_extra_data_task(str(message_get(msg, "id", "") or ""))
+
+        elif mtype == "ocr":
+            msg_dict = message_to_dict(msg)
+            req_id = str(msg_dict.get("id", "") or "")
+            cancel_event: Optional[asyncio.Event] = None
+            if req_id:
+                cancel_event = asyncio.Event()
+                self._ocr_cancel_events[req_id] = cancel_event
+            # Not wrapped in _guarded: the OCR semaphore is a CPU admission
+            # token, and this handler spends most of its time waiting on an adb
+            # screenshot. Holding the token across that I/O would roughly halve
+            # the host's OCR throughput, so _handle_ocr takes it around the
+            # tesseract call only.
+            task = self._stream_tasks.add(
+                self._handle_ocr(msg_dict, send_queue, cancel_event),
+                name="ocr",
+            )
+            if req_id:
+                self._ocr_tasks[req_id] = task
+                task.add_done_callback(
+                    lambda _task, _req_id=req_id: (
+                        self._ocr_tasks.pop(_req_id, None),
+                        self._ocr_cancel_events.pop(_req_id, None),
+                    )
+                )
+
+        elif mtype == "ocr_cancel":
+            self._cancel_ocr_task(str(message_get(msg, "id", "") or ""))
+
+        elif mtype == "image_match":
+            msg_dict = message_to_dict(msg)
+            req_id = str(msg_dict.get("id", "") or "")
+            cancel_event = None
+            if req_id:
+                cancel_event = asyncio.Event()
+                self._image_match_cancel_events[req_id] = cancel_event
+            # Not wrapped in _guarded for the same reason as ocr: the handler
+            # waits on an adb screenshot, and the CV token is for CPU only.
+            task = self._stream_tasks.add(
+                self._handle_image_match(msg_dict, send_queue, cancel_event),
+                name="image-match",
+            )
+            if req_id:
+                self._image_match_tasks[req_id] = task
+                task.add_done_callback(
+                    lambda _task, _req_id=req_id: (
+                        self._image_match_tasks.pop(_req_id, None),
+                        self._image_match_cancel_events.pop(_req_id, None),
+                    )
+                )
+
+        elif mtype == "image_match_cancel":
+            self._cancel_image_match_task(str(message_get(msg, "id", "") or ""))
 
         elif mtype == "a11y_action":
             await self._handle_a11y_action(message_to_dict(msg), send_queue, loop)
@@ -3206,7 +3300,7 @@ class RelayAgent:
         from relay.extra_data.collector import (
             build_ingest_payload,
             collect_fb_comment_filter_apply,
-            collect_fb_comment_target_with_tap,
+            collect_comment_target_with_tap,
             collect_xml_snapshots,
             strip_private_context,
         )
@@ -3244,7 +3338,7 @@ class RelayAgent:
 
             if strategy == "fb_comment_target_tap":
                 snapshots, collect_err, agent_tapped, diagnostic = (
-                    await collect_fb_comment_target_with_tap(
+                    await collect_comment_target_with_tap(
                         self._u2_executor,
                         serial,
                         context,
@@ -3360,6 +3454,295 @@ class RelayAgent:
             logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, exc)
             reply["error"] = str(exc)
         await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
+
+    async def _handle_ocr(
+        self,
+        msg: dict,
+        send_queue: asyncio.Queue,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> None:
+        """Screenshot + OCR on this host; reply ocr_result with text, not pixels.
+
+        The farm used to read frames out of its scrcpy cache, but media now goes
+        straight from media-adapter to go2rtc, so that cache is never filled and
+        the backend has no view of the screen at all. Doing the OCR here also
+        keeps a ~800 KB screenshot off the wire on every extraction step.
+        """
+        loop = asyncio.get_running_loop()
+        started = time.perf_counter()
+        req_id = str(msg.get("id", "") or "")
+        serial = str(msg.get("serial", "") or "")
+        reply: dict[str, Any] = {
+            "type": "ocr_result",
+            "id": req_id,
+            "ok": False,
+            "route": "relay_ocr",
+            "error": "",
+        }
+
+        async def _send() -> None:
+            reply.setdefault("latency_ms", round((time.perf_counter() - started) * 1000, 1))
+            await bounded_put(
+                send_queue, await dumps_maybe_offload(reply), serial=serial, label="ocr_result"
+            )
+
+        if not serial:
+            reply["error"] = "serial_required"
+            await _send()
+            return
+        if self._u2_executor is None:
+            reply["error"] = "u2_batch_not_enabled"
+            await _send()
+            return
+
+        from relay import ocr as ocr_engine
+
+        if not ocr_engine.available():
+            reply["error"] = "ocr_engine_unavailable"
+            await _send()
+            return
+
+        # Capture on the u2 pool (device I/O), OCR on the dedicated OCR pool
+        # (CPU). Keeping them apart is what stops a burst of extraction steps
+        # from queueing ahead of taps and swipes.
+        try:
+            shot = await self._u2_executor.run_batch(
+                serial=serial,
+                actions=[{"op": "screenshot"}],
+                cancel_event=cancel_event,
+                deadline_ms=msg.get("deadline_ms") or msg.get("timeout_ms"),
+            )
+        except Exception as exc:
+            reply["error"] = f"screenshot_failed: {exc}"
+            await _send()
+            return
+
+        entries = shot.get("results") or []
+        entry = entries[0] if entries else {}
+        if not shot.get("ok") or not entry.get("ok") or not entry.get("value"):
+            reply["error"] = str(entry.get("error") or shot.get("error") or "screenshot_unavailable")
+            await _send()
+            return
+
+        try:
+            image_bytes = base64.b64decode(entry["value"])
+        except Exception as exc:
+            reply["error"] = f"screenshot_decode_failed: {exc}"
+            await _send()
+            return
+
+        if cancel_event is not None and cancel_event.is_set():
+            reply["error"] = "cancelled"
+            reply["cancelled"] = True
+            await _send()
+            return
+
+        region = msg.get("region") if isinstance(msg.get("region"), dict) else None
+        try:
+            # Admission is taken here, not around the whole handler: the
+            # screenshot above is device I/O, and holding a CPU token through it
+            # would cut how many OCRs this host can actually run.
+            async with cv_sem():
+                results = await loop.run_in_executor(
+                    cv_executor(),
+                    functools.partial(
+                        ocr_engine.run_ocr,
+                        image_bytes,
+                        languages=msg.get("languages"),
+                        region=region,
+                        min_confidence=float(msg.get("min_confidence", 0.5) or 0.5),
+                    ),
+                )
+        except Exception as exc:
+            logger.warning("ocr failed serial=%s: %s", serial, exc)
+            reply["error"] = f"ocr_failed: {exc}"
+            await _send()
+            return
+
+        reply["ok"] = True
+        reply["error"] = ""
+        reply["results"] = results
+        reply["count"] = len(results)
+        # An empty read is the case an operator actually needs a picture for, so
+        # ship the frame only then — the normal path stays a few KB of text.
+        if not results and bool(msg.get("want_image_on_empty")):
+            reply["image_b64"] = entry["value"]
+        logger.info(
+            "ocr done serial=%s boxes=%d region=%s ms=%.0f",
+            serial, len(results), bool(region), (time.perf_counter() - started) * 1000,
+        )
+        await _send()
+
+    async def _handle_image_match(
+        self,
+        msg: dict,
+        send_queue: asyncio.Queue,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> None:
+        """Find a cropped template on the device screen; reply with a coordinate.
+
+        Same reasoning as _handle_ocr: the farm has no frame of its own since
+        media moved to go2rtc, and a coordinate is a few hundred bytes where a
+        screenshot is ~800 KB.
+
+        Templates are cached by sha256 so a scenario looping over one image only
+        ships the bytes once — the farm may send just the hash, and we ask for
+        the bytes with need_template if we have not seen it.
+        """
+        loop = asyncio.get_running_loop()
+        started = time.perf_counter()
+        req_id = str(msg.get("id", "") or "")
+        serial = str(msg.get("serial", "") or "")
+        reply: dict[str, Any] = {
+            "type": "image_match_result",
+            "id": req_id,
+            "ok": False,
+            "route": "relay_image_match",
+            "error": "",
+        }
+
+        async def _send() -> None:
+            reply.setdefault("latency_ms", round((time.perf_counter() - started) * 1000, 1))
+            await bounded_put(
+                send_queue, await dumps_maybe_offload(reply), serial=serial,
+                label="image_match_result",
+            )
+
+        if not serial:
+            reply["error"] = "serial_required"
+            await _send()
+            return
+        if self._u2_executor is None:
+            reply["error"] = "u2_batch_not_enabled"
+            await _send()
+            return
+
+        from relay import image_match as matcher
+
+        if not matcher.available():
+            reply["error"] = "image_match_unavailable"
+            await _send()
+            return
+
+        digest = str(msg.get("template_sha256", "") or "")
+        template = self._resolve_template(digest, msg.get("template_b64"))
+        if template is None:
+            # Farm sent only a hash we have never seen; ask for the bytes.
+            reply["need_template"] = True
+            reply["error"] = "need_template"
+            await _send()
+            return
+
+        try:
+            shot = await self._u2_executor.run_batch(
+                serial=serial,
+                actions=[{"op": "screenshot"}],
+                cancel_event=cancel_event,
+                deadline_ms=msg.get("deadline_ms") or msg.get("timeout_ms"),
+            )
+        except Exception as exc:
+            reply["error"] = f"screenshot_failed: {exc}"
+            await _send()
+            return
+
+        entries = shot.get("results") or []
+        entry = entries[0] if entries else {}
+        if not shot.get("ok") or not entry.get("ok") or not entry.get("value"):
+            reply["error"] = str(entry.get("error") or shot.get("error") or "screenshot_unavailable")
+            await _send()
+            return
+
+        try:
+            screen = base64.b64decode(entry["value"])
+        except Exception as exc:
+            reply["error"] = f"screenshot_decode_failed: {exc}"
+            await _send()
+            return
+
+        if cancel_event is not None and cancel_event.is_set():
+            reply["error"] = "cancelled"
+            reply["cancelled"] = True
+            await _send()
+            return
+
+        try:
+            async with cv_sem():
+                hit = await loop.run_in_executor(
+                    cv_executor(),
+                    functools.partial(
+                        matcher.match_template,
+                        screen,
+                        template,
+                        threshold=float(msg.get("threshold") or matcher.DEFAULT_THRESHOLD),
+                        scale=float(msg.get("scale") or matcher.DEFAULT_SCALE),
+                        template_screen_w=msg.get("template_screen_w") or None,
+                    ),
+                )
+        except Exception as exc:
+            logger.warning("image match failed serial=%s: %s", serial, exc)
+            reply["error"] = f"image_match_failed: {exc}"
+            await _send()
+            return
+
+        reply["ok"] = True
+        reply["error"] = ""
+        reply["found"] = hit is not None
+        if hit:
+            reply.update(hit)
+        logger.info(
+            "image_match serial=%s found=%s conf=%s ms=%.0f",
+            serial, hit is not None, (hit or {}).get("conf"),
+            (time.perf_counter() - started) * 1000,
+        )
+        await _send()
+
+    def _resolve_template(self, digest: str, b64: Any) -> Optional[bytes]:
+        """Return template bytes from the cache, storing them when supplied."""
+        if b64:
+            try:
+                data = base64.b64decode(b64)
+            except Exception:
+                return None
+            if digest:
+                self._template_cache[digest] = data
+                # Bounded: templates are small (~5-15 KB) but a long-lived agent
+                # would otherwise accumulate one per scenario edit.
+                while len(self._template_cache) > _TEMPLATE_CACHE_MAX:
+                    self._template_cache.pop(next(iter(self._template_cache)))
+            return data
+        if digest:
+            data = self._template_cache.get(digest)
+            if data is not None:
+                # Refresh LRU position.
+                self._template_cache.move_to_end(digest)
+            return data
+        return None
+
+    def _cancel_image_match_task(self, req_id: str) -> bool:
+        if not req_id:
+            return False
+        event = self._image_match_cancel_events.pop(req_id, None)
+        if event is not None:
+            event.set()
+        task = self._image_match_tasks.pop(req_id, None)
+        if task is None or task.done():
+            return event is not None
+        task.cancel()
+        logger.info("image_match cancelled request_id=%s", req_id)
+        return True
+
+    def _cancel_ocr_task(self, req_id: str) -> bool:
+        if not req_id:
+            return False
+        event = self._ocr_cancel_events.pop(req_id, None)
+        if event is not None:
+            event.set()
+        task = self._ocr_tasks.pop(req_id, None)
+        if task is None or task.done():
+            return event is not None
+        task.cancel()
+        logger.info("ocr cancelled request_id=%s", req_id)
+        return True
 
     def _cancel_extra_data_task(self, req_id: str) -> bool:
         if not req_id:
@@ -4021,7 +4404,7 @@ class RelayAgent:
     async def _guarded(self, sem: asyncio.Semaphore, coro, *, label: str = "work") -> Any:
         """
         Run `coro` while holding a global semaphore so total concurrency for
-        this class of work (extra_data / u2_batch / u2_flow) is bounded
+        this class of work (extra_data / u2_batch / u2_flow / ocr) is bounded
         regardless of how many phones the farm fans out to.
 
         Without this, a burst of 50 farm requests can spawn 50 parallel u2

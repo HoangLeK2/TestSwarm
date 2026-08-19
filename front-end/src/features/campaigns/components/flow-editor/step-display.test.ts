@@ -7,7 +7,7 @@ import {
 } from './constants.ts';
 
 const labels: Record<string, string> = {
-  'typeName.facebook_session_gate': 'KIỂM TRA PHIÊN NỀN TẢNG',
+  'typeName.platform_session_gate': 'KIỂM TRA PHIÊN NỀN TẢNG',
   'display.platformSessionPreflight': 'Kiểm tra trước khi tiếp tục',
   'systemVariable.platformSessionReady': 'Phiên nền tảng sẵn sàng'
 };
@@ -16,15 +16,15 @@ const t = (key: string) => labels[key] ?? `campaignsFeature.flowStep.${key}`;
 
 test('localizes the platform session node without exposing Facebook internals', () => {
   assert.equal(
-    getStepTypeName('facebook_session_gate', t),
+    getStepTypeName('platform_session_gate', t),
     'KIỂM TRA PHIÊN NỀN TẢNG'
   );
   assert.deepEqual(
-    getStepDisplay({ type: 'facebook_session_gate', phase: 'preflight' }, t),
+    getStepDisplay({ type: 'platform_session_gate', phase: 'preflight' }, t),
     { target: 'Kiểm tra trước khi tiếp tục' }
   );
   assert.equal(
-    getVariableDisplayName('FACEBOOK_SESSION_READY', t),
+    getVariableDisplayName('PLATFORM_SESSION_READY', t),
     'Phiên nền tảng sẵn sàng'
   );
 });

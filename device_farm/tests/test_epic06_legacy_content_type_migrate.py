@@ -57,7 +57,7 @@ def test_migrate_nested_steps():
                     "content_type": "group_post",
                 },
                 {
-                    "type": "tap_fb_comment_button",
+                    "type": "social_open_comments",
                     "then": [
                         {
                             "type": "extract",

@@ -54,7 +54,12 @@ def validate_connection_budget(env: Mapping[str, str]) -> ConnectionBudget:
     configured_limit = _int_value(env, "DB_CONNECTION_LIMIT", 0)
     limit = configured_limit or None
     reserve = _int_value(env, "DB_CONNECTION_RESERVE", 15)
-    worker_count = _int_value(env, "TEMPORAL_WORKER_COUNT", 7)
+    # Control workers run in the same process with their own event loop, so each
+    # gets its own activity pool exactly like a device worker. Counting only
+    # TEMPORAL_WORKER_COUNT would under-report the real demand.
+    worker_count = _int_value(env, "TEMPORAL_WORKER_COUNT", 7) + _int_value(
+        env, "TEMPORAL_CONTROL_WORKER_COUNT", 2
+    )
     web_max = _int_value(env, "DB_POOL_SIZE", 12) + _int_value(
         env, "DB_MAX_OVERFLOW", 3
     )

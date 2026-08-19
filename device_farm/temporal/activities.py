@@ -37,9 +37,9 @@ from services.extraction_usecase import (
 from services.execution.dsl_runtime import materialize_legacy_step
 from services.execution.trace_context import build_step_trace_context
 from services.scenario_step_contract import (
-    extract_data_var_for_strategy,
+    extract_data_var_for_entity,
     normalize_extract_step,
-    normalize_fb_tap_comment_step,
+    normalize_social_comment_step,
     normalize_save_extraction_step,
 )
 
@@ -61,11 +61,22 @@ def _finalize_step_results(
     success: bool,
     step_results: list,
     persisted_step_results: list,
+    prefer_persisted: bool = False,
 ) -> list[dict[str, Any]]:
+    """Pick the more complete of the two step-result sources.
+
+    prefer_persisted is set when the workflow checkpointed results to
+    execution_steps and continued with a trimmed payload: the database then
+    holds the whole run and the workflow only holds the tail, so counting the
+    payload would under-report passed/failed steps.
+    """
     workflow_results = [s for s in step_results if isinstance(s, dict)]
+    persisted = [s for s in persisted_step_results if isinstance(s, dict)]
+    if prefer_persisted and len(persisted) > len(workflow_results):
+        return persisted
     if success or workflow_results:
         return workflow_results
-    return [s for s in persisted_step_results if isinstance(s, dict)]
+    return persisted
 
 
 def _finalize_error_message(
@@ -209,8 +220,8 @@ def _prepare_activity_step(step: dict[str, Any]) -> dict[str, Any]:
     prepared = materialize_legacy_step(dict(step))
     if prepared.get("type") == "extract":
         prepared = normalize_extract_step(prepared)
-    elif prepared.get("type") in {"fb_tap_comment_button", "tap_fb_comment_button"}:
-        prepared = normalize_fb_tap_comment_step(prepared)
+    elif prepared.get("type") in {"social_open_comments", "social_open_comments"}:
+        prepared = normalize_social_comment_step(prepared)
     elif prepared.get("type") == "save_extraction":
         prepared = normalize_save_extraction_step(prepared)
     # Workflow-level durable retry (DF-T-04-011) owns the attempt loop in Temporal.
@@ -1948,7 +1959,7 @@ class DeviceActivities:
     @activity.defn
     async def execute_extract(self, inp: ExtractInput) -> ExtractResult:
         """
-        Execute an 'extract' step (fb_posts / text_nodes / fb_comments strategies).
+        Execute an 'extract' step (posts / comments / text_nodes entities).
 
         Returns updated context (posts, text_nodes, comments, _no_new_streak) and
         break_requested flag when stop_if_no_new triggers.
@@ -1963,7 +1974,7 @@ class DeviceActivities:
         device = _get_device(inp.device_serial)
         step = _prepare_activity_step(dict(inp.step))
         idx = inp.step_index
-        activity.heartbeat(f"extract:{idx}:{step.get('strategy', 'fb_posts')}")
+        activity.heartbeat(f"extract:{idx}:{step.get('entity', 'posts')}")
 
         # Work on a deep-enough copy so we never mutate the input.
         # Lists (posts, text_nodes) are copied explicitly to prevent shared-reference mutation.
@@ -1973,10 +1984,14 @@ class DeviceActivities:
         ctx.setdefault("posts", [])
         ctx.setdefault("comments", [])
 
-        strategy = str(step.get("strategy", "fb_posts"))
-        from tasks.scenario.steps.extraction import EDGE_CONTENT_STRATEGIES
+        from tasks.scenario.steps.extraction import (
+            EDGE_CONTENT_ENTITIES,
+            resolve_extract_target,
+        )
 
-        if strategy in EDGE_CONTENT_STRATEGIES:
+        entity, platform = resolve_extract_target(step)
+
+        if entity in EDGE_CONTENT_ENTITIES:
             from db.database import activity_session
             from services.content.campaign_ref import resolve_persist_campaign_id
 
@@ -2058,7 +2073,8 @@ class DeviceActivities:
                         ctx=ctx,
                         scenario=scenario_meta,
                         step=step,
-                        strategy=strategy,
+                        entity=entity,
+                        platform=platform,
                         result=edge_result,
                         cancel_event=cancel_event,
                         cooperative_cancel_event=cancel_event,
@@ -2085,7 +2101,7 @@ class DeviceActivities:
             return ExtractResult(
                 ok=False,
                 message=(
-                    f"extract {strategy}: device_farm content XML parser was removed; "
+                    f"extract {entity}: device_farm content XML parser was removed; "
                     "enable edge_extra_data so phone/APK sends XML to agent-boot"
                 ),
                 context=ctx,
@@ -2093,7 +2109,7 @@ class DeviceActivities:
 
         return ExtractResult(
             ok=False,
-            message=f"extract: unknown strategy {strategy!r}",
+            message=f"extract: unknown entity {entity!r}",
             context=ctx,
         )
 
@@ -2252,6 +2268,60 @@ class DeviceActivities:
             return False
 
     @activity.defn
+    async def persist_step_checkpoint(self, inp: dict) -> int:
+        """Write accumulated step results to execution_steps mid-run.
+
+        continue_as_new exists to reset workflow history, but the step results
+        were carried across every boundary because execution_steps is only
+        written once, at finalize — so dropping them would lose the audit trail.
+        Flushing here lets the workflow continue with an empty payload instead,
+        which is what keeps a long scenario from growing toward the 2MB blob
+        limit one kilobyte-per-step at a time.
+
+        Idempotent: bulk_upsert_execution_steps keys on (execution_id,
+        step_index), so finalize re-writing the same rows later is harmless.
+        """
+        execution_id = str(inp.get("execution_id") or "")
+        step_results = inp.get("step_results") or []
+        if not execution_id or not step_results:
+            return 0
+
+        from db.database import activity_session
+        from services.execution.event_publisher import resolve_execution_org_id
+        from db.crud.device import get_device_by_serial
+        from db.crud.execution import get_execution
+        from services.execution.step_store import persist_execution_steps_from_results
+        from tenancy.context import tenant_context
+
+        async with activity_session() as db:
+            org_id = (inp.get("org_id") or "").strip()
+            if not org_id:
+                ex_row = await get_execution(db, execution_id)
+                org_id = await resolve_execution_org_id(db, ex_row) if ex_row else ""
+            if not org_id:
+                log.warning(
+                    "persist_step_checkpoint: no org for execution %s", execution_id
+                )
+                return 0
+            with tenant_context(org_id):
+                # Same lookup finalize_campaign uses, so checkpointed rows carry
+                # the device just like the ones written at the end.
+                device_serial = str(inp.get("device_serial") or "")
+                device_row = (
+                    await get_device_by_serial(db, device_serial)
+                    if device_serial
+                    else None
+                )
+                await persist_execution_steps_from_results(
+                    db,
+                    execution_id=execution_id,
+                    step_results=step_results,
+                    device_id=getattr(device_row, "id", None),
+                )
+            await db.commit()
+        return len(step_results)
+
+    @activity.defn
     async def finalize_campaign(self, inp: dict) -> None:
         """Update Execution + Campaign DB status when a workflow ends.
 
@@ -2330,6 +2400,7 @@ class DeviceActivities:
                                     execution_id=execution_id,
                                     step_results=step_results,
                                     default_ended_at=finished_at,
+                                    device_id=device.id,
                                 )
                             except Exception as exc:
                                 log.warning(
@@ -2339,7 +2410,22 @@ class DeviceActivities:
                                     device_serial,
                                     exc,
                                 )
-                            if not success and not step_results:
+                            # A complete payload starts at step 0. The checkpoint
+                            # path flushes the earliest results to execution_steps
+                            # and drops them, so what arrives here starts partway
+                            # in — that, not a count, is the signal the database
+                            # holds more than we were sent. (A resume from
+                            # start_step looks the same, and wants the same
+                            # treatment.) Comparing against checkpoint_step would
+                            # be wrong: it is an absolute step index, not a count,
+                            # so branching scenarios would trip it on every run.
+                            _indices = [
+                                int(s["index"])
+                                for s in step_results
+                                if isinstance(s, dict) and str(s.get("index", "")).lstrip("-").isdigit()
+                            ]
+                            payload_is_partial = bool(_indices) and min(_indices) > 0
+                            if (not success and not step_results) or payload_is_partial:
                                 try:
                                     from db.crud.execution_steps import list_execution_steps
 
@@ -2361,6 +2447,7 @@ class DeviceActivities:
                                     success=success,
                                     step_results=step_results,
                                     persisted_step_results=persisted_step_results,
+                                    prefer_persisted=payload_is_partial,
                                 )
                             else:
                                 step_results = _finalize_step_results(

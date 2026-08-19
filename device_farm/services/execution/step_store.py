@@ -110,6 +110,7 @@ def build_execution_step_payload(
     ended_at: datetime | None = None,
     duration_ms: float | None = None,
     runtime_context: dict[str, Any] | None = None,
+    device_id: str | None = None,
 ) -> dict[str, Any]:
     flat = normalize_workflow_step_result(step_result)
     idx = int(flat.get("index", step_result.get("index", 0)))
@@ -160,6 +161,13 @@ def build_execution_step_payload(
     }
     if artifacts:
         payload["artifacts_json"] = artifacts
+    # execution_steps.device_id and upsert_execution_step have accepted this all
+    # along; only this builder never set it, so the column sat at 0 of 616 rows
+    # and "which phone ran this step" was unanswerable. It is also why the
+    # account-action device backfill, which joins through execution_steps,
+    # recovered nothing.
+    if device_id:
+        payload["device_id"] = device_id
     return payload
 
 
@@ -168,6 +176,7 @@ def build_execution_step_payload_from_result(
     step_result: dict[str, Any],
     *,
     ended_at: datetime | None = None,
+    device_id: str | None = None,
 ) -> dict[str, Any]:
     """Finalize path when the original resolved step dict is unavailable."""
     return build_execution_step_payload(
@@ -175,7 +184,38 @@ def build_execution_step_payload_from_result(
         step_result,
         step_result,
         ended_at=ended_at,
+        device_id=device_id,
     )
+
+
+# serial -> devices.id. This runs once per step, so without a cache it would add
+# a SELECT to every step write; a serial's row id does not change under us.
+_DEVICE_ID_BY_SERIAL: dict[str, str] = {}
+
+
+async def _device_id_for_serial(db, serial: str | None) -> str | None:
+    """Best-effort lookup. Metadata, so a miss must never fail the step write."""
+    if not serial:
+        return None
+    cached = _DEVICE_ID_BY_SERIAL.get(serial)
+    if cached:
+        return cached
+    try:
+        # Raw-SQL lookup that does not need a tenant context. The scenario
+        # executor writes steps without setting current_org_id, so the
+        # ORM-scoped get_device_by_serial raises TENANCY_STRICT_MODE here and
+        # the device_id was silently lost — which is exactly why the column
+        # stayed empty for every executor-written step.
+        from tenancy.background import lookup_device_by_serial
+
+        row = await lookup_device_by_serial(db, serial)
+    except Exception as exc:
+        log.debug("device id lookup failed for %s (non-fatal): %s", serial, exc)
+        return None
+    device_id = getattr(row, "device_id", None) or getattr(row, "id", None)
+    if device_id:
+        _DEVICE_ID_BY_SERIAL[serial] = device_id
+    return device_id
 
 
 def schedule_persist_step(
@@ -210,6 +250,9 @@ def schedule_persist_step(
             from db.database import activity_session
 
             async with activity_session() as db:
+                device_id = await _device_id_for_serial(db, sc.serial)
+                if device_id:
+                    payload["device_id"] = device_id
                 await upsert_execution_step(db, **payload)
                 await db.commit()
         except Exception as exc:
@@ -274,13 +317,16 @@ async def persist_execution_steps_from_results(
     execution_id: str,
     step_results: list[dict[str, Any]],
     default_ended_at: datetime | None = None,
+    device_id: str | None = None,
 ) -> None:
     """Bulk upsert when only in-memory step_results are available (finalize path)."""
     from db.crud.execution_steps import bulk_upsert_execution_steps
 
     ended_at = default_ended_at or datetime.now(timezone.utc)
     rows = [
-        build_execution_step_payload_from_result(execution_id, result, ended_at=ended_at)
+        build_execution_step_payload_from_result(
+            execution_id, result, ended_at=ended_at, device_id=device_id
+        )
         for result in step_results
         if isinstance(result, dict)
     ]

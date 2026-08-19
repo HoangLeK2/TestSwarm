@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useMemo } from 'react';
+import { memo, useMemo, type MutableRefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Device } from '../../types';
 import { DeviceTile } from '../device-tile';
@@ -9,7 +9,7 @@ import { ManualControlBlockedBanner } from './manual-control-blocked-banner';
 import { isManualControlBlockedByAutomation } from '../../lib/control-record-device-state';
 import { fetchConfig } from '../../services/api';
 import type { ScrcpyAttachOptions } from '../../services/scrcpy-stream';
-import type { DeviceScreenTransport } from '../device-screen';
+import type { DeviceScreenTransport, RegionSelect } from '../device-screen';
 
 type Props = {
   device: Device;
@@ -35,6 +35,10 @@ type Props = {
   /** Mirror scale in multi-phone layouts. */
   mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
   deviceOps?: DeviceOpsConfig;
+  /** Receives a grabber for the on-screen frame (tap_image template cropping). */
+  captureFrameRef?: MutableRefObject<(() => string | null) | null>;
+  /** Drag-to-select a region on the mirror (tap_image crop). */
+  regionSelect?: RegionSelect;
 };
 
 function controlScrcpyInt(
@@ -89,6 +93,8 @@ function deviceMirrorPropsEqual(prev: Props, next: Props) {
   if (prev.onTakeControl !== next.onTakeControl) return false;
   if (prev.mirrorSize !== next.mirrorSize) return false;
   if (prev.deviceOps !== next.deviceOps) return false;
+  // Without this the memo swallows entering/leaving crop mode entirely.
+  if (prev.regionSelect !== next.regionSelect) return false;
   if (prev.highlightBounds !== next.highlightBounds) {
     const pb = prev.highlightBounds;
     const nb = next.highlightBounds;
@@ -136,7 +142,9 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   canTakeControl = false,
   onTakeControl,
   mirrorSize = 'default',
-  deviceOps
+  deviceOps,
+  captureFrameRef,
+  regionSelect
 }: Props) {
   const { data: appConfig } = useQuery({
     queryKey: ['device-farm', 'config'],
@@ -199,6 +207,8 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
             mockupScreenWidth={mockupScreenWidth}
             streamFetchPriority='high'
             streamTransport={streamTransport}
+            captureFrameRef={captureFrameRef}
+            regionSelect={regionSelect}
             streamFit='contain'
             scrcpyAttachOptions={CONTROL_RECORD_SCRCPY_OPTIONS}
             hideAppCaption={compactPadding}

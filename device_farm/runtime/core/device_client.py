@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -2488,14 +2489,22 @@ class DeviceClient:
         self,
         *,
         endpoint: str = "",
-        strategy: str,
+        strategy: str = "",
+        entity: str = "",
+        platform: str = "",
         context: Dict[str, Any],
         token: str = "",
         timeout: float = 45.0,
         cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
-        """PA B relay-only: dump + parse on agent-boot via relay.extra_data."""
+        """PA B relay-only: dump + parse on agent-boot via relay.extra_data.
+
+        Content extraction passes ``entity``/``platform`` (platform-neutral);
+        agent-boot's internal probes still pass a bare ``strategy`` name.
+        """
         del endpoint, token  # relay path does not use HTTP ingest or APK WS
+        if entity:
+            context = {**context, "entity": entity, "platform": platform or "auto"}
         if not _env_bool("EDGE_EXTRA_RELAY_ENABLED", True):
             return {"ok": False, "error": "edge_extra_relay_disabled"}
         if self._loop is None:
@@ -2538,6 +2547,201 @@ class DeviceClient:
             return result
         except Exception as exc:
             self._log(f"edge_extra relay failed: {exc}", level=logging.WARNING)
+            return {"ok": False, "error": str(exc)}
+
+    def ocr_supported(self) -> bool:
+        """Whether the agent hosting this device ships an OCR engine.
+
+        Reported per device in the relay heartbeat capabilities, but it is really
+        a property of the agent host's image.
+        """
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return False
+            caps = relay.get_capabilities(self._resolve_relay_serial())
+            return bool(caps and caps.get("has_ocr"))
+        except Exception:
+            return False
+
+    def request_ocr(
+        self,
+        *,
+        languages: Optional[List[str]] = None,
+        region: Optional[Dict[str, float]] = None,
+        min_confidence: float = 0.5,
+        want_image_on_empty: bool = False,
+        timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Screenshot + OCR on agent-boot; returns text boxes, not an image.
+
+        ``take_screenshot()`` is deliberately not used here: it only reads the
+        scrcpy JPEG cache, and since media moved to go2rtc nothing fills that
+        cache any more.
+        """
+        if self._loop is None:
+            return {"ok": False, "error": "no_event_loop"}
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._ocr_via_relay_async(
+                    languages=languages,
+                    region=region,
+                    min_confidence=min_confidence,
+                    want_image_on_empty=want_image_on_empty,
+                    timeout=timeout,
+                    cancel_event=cancel_event,
+                ),
+                self._loop,
+            )
+            deadline = time.monotonic() + timeout + 15.0
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    try:
+                        return fut.result(timeout=0.75)
+                    except concurrent.futures.TimeoutError:
+                        fut.cancel()
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    fut.cancel()
+                    return {"ok": False, "error": f"relay timeout ({timeout}s)"}
+                try:
+                    return fut.result(timeout=min(0.25, remaining))
+                except concurrent.futures.TimeoutError:
+                    continue
+        except Exception as exc:
+            self._log(f"ocr relay failed: {exc}", level=logging.WARNING)
+            return {"ok": False, "error": str(exc)}
+
+    async def _ocr_via_relay_async(
+        self,
+        *,
+        languages: Optional[List[str]],
+        region: Optional[Dict[str, float]],
+        min_confidence: float,
+        want_image_on_empty: bool,
+        timeout: float,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is None:
+            return {"ok": False, "error": "no_relay_manager"}
+        serial = self._resolve_relay_serial()
+        if not relay.relay_for_serial(serial):
+            return {"ok": False, "error": "no_relay"}
+        return await relay.ocr(
+            serial,
+            languages=languages,
+            region=region,
+            min_confidence=min_confidence,
+            want_image_on_empty=want_image_on_empty,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
+
+    def image_match_supported(self) -> bool:
+        """Whether the agent hosting this device can run template matching."""
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return False
+            caps = relay.get_capabilities(self._resolve_relay_serial())
+            return bool(caps and caps.get("has_image_match"))
+        except Exception:
+            return False
+
+    def request_image_match(
+        self,
+        *,
+        template: bytes,
+        threshold: float = 0.8,
+        scale: float = 0.25,
+        template_screen_w: Optional[int] = None,
+        timeout: float = 20.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Locate ``template`` on the device screen. Returns the agent's reply.
+
+        Sends the hash first and only ships the bytes when the agent says it has
+        not seen that template — one round trip more on a cold cache, but a
+        scenario looping over the same image stops resending it every step.
+        """
+        if self._loop is None:
+            return {"ok": False, "error": "no_event_loop"}
+        digest = hashlib.sha256(template).hexdigest()
+
+        def _call(include_bytes: bool) -> Dict[str, Any]:
+            return self._run_relay_coro(
+                lambda relay, serial: relay.image_match(
+                    serial,
+                    template_sha256=digest,
+                    template_b64=base64.b64encode(template).decode() if include_bytes else None,
+                    threshold=threshold,
+                    scale=scale,
+                    template_screen_w=template_screen_w,
+                    timeout=timeout,
+                    cancel_event=cancel_event,
+                ),
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+
+        reply = _call(include_bytes=False)
+        if reply.get("need_template"):
+            reply = _call(include_bytes=True)
+        return reply
+
+    def _run_relay_coro(
+        self,
+        make_coro,
+        *,
+        timeout: float,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Run a relay coroutine from this (sync) thread and wait for its reply."""
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
+
+        async def _run() -> Dict[str, Any]:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return {"ok": False, "error": "no_relay_manager"}
+            serial = self._resolve_relay_serial()
+            if not relay.relay_for_serial(serial):
+                return {"ok": False, "error": "no_relay"}
+            return await make_coro(relay, serial)
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(_run(), self._loop)
+            deadline = time.monotonic() + timeout + 15.0
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    try:
+                        return fut.result(timeout=0.75)
+                    except concurrent.futures.TimeoutError:
+                        fut.cancel()
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    fut.cancel()
+                    return {"ok": False, "error": f"relay timeout ({timeout}s)"}
+                try:
+                    return fut.result(timeout=min(0.25, remaining))
+                except concurrent.futures.TimeoutError:
+                    continue
+        except Exception as exc:
+            self._log(f"relay call failed: {exc}", level=logging.WARNING)
             return {"ok": False, "error": str(exc)}
 
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
@@ -5178,10 +5382,24 @@ class DeviceClient:
 
     def status_dict(self) -> Dict[str, Any]:
         u2_ok = self._u2 is not None
+        agent_ok = self._agent_send is not None
         if u2_ok:
             touch_method = "u2"
         else:
-            touch_method = "agent_shell" if self._agent_send is not None else "none"
+            touch_method = "agent_shell" if agent_ok else "none"
+
+        # Report the state a client should act on, not the raw watchdog label.
+        # The watchdog can leave a device DEAD after a transient stall, but if
+        # u2 (or the agent shell) is answering the device is fully controllable
+        # — verified: a DEAD-labelled emulator ran a scenario to completion.
+        # /api/devices/live already corrects this via _apply_realtime_connectivity;
+        # the WS status feed did not, so the control/record dropdown filtered
+        # these alive devices out (its predicate rejects state==DEAD outright).
+        # This keeps the WS feed consistent with the HTTP view. Only the report
+        # is adjusted; the internal state machine is untouched.
+        reported_state = self.state.value
+        if self.state == DeviceState.DEAD and (u2_ok or agent_ok):
+            reported_state = DeviceState.READY.value
         try:
             from services.manual_takeover import is_manual_takeover_local
 
@@ -5195,7 +5413,7 @@ class DeviceClient:
             "model":            self.model,
             "android":          self.android_version,
             "sdk":              self.sdk_version,
-            "state":            self.state.value,
+            "state":            reported_state,
             "battery":          self.battery_level,
             "battery_status":   self.battery_status,
             "battery_source":   self.battery_source,
@@ -5207,7 +5425,7 @@ class DeviceClient:
             "current_app":      self.current_app,
             "screen_width":     self.screen_width,
             "screen_height":    self.screen_height,
-            "agent_connected":  self._agent_send is not None,
+            "agent_connected":  agent_ok,
             "u2_ready":         u2_ok,
             "touch_method":     touch_method,
             "stf_connected":    self._stf_service is not None and self._stf_service.connected,

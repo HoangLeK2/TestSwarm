@@ -93,12 +93,13 @@ def test_fb_groups_persists_without_content_collection_and_keeps_query(
             "edge_extra_data": True,
             "search_query": "${SEARCH_QUERY}",
         },
-        strategy="fb_groups",
+        entity="groups",
+        platform="facebook",
         result=result,
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "fb_groups"
+    assert device.calls[0]["entity"] == "groups" and device.calls[0]["platform"] == "facebook"
     assert device.calls[0]["context"]["persist"] is True
     assert device.calls[0]["context"]["return_items"] is True
     assert device.calls[0]["context"]["search_query"] == "${SEARCH_QUERY}"
@@ -136,7 +137,8 @@ def test_fb_groups_delegates_bounded_crawl_to_agent_and_breaks_legacy_loop(
             "no_new_threshold": 2,
             "entity_scroll_pause_s": 0.25,
         },
-        strategy="fb_groups",
+        entity="groups",
+        platform="facebook",
         result=result,
     )
 
@@ -169,7 +171,8 @@ def test_fb_groups_does_not_break_unrelated_outer_loop(monkeypatch) -> None:
             "search_query": "openclaw",
             "max_pages": 5,
         },
-        strategy="fb_groups",
+        entity="groups",
+        platform="facebook",
         result={},
     )
 
@@ -196,7 +199,8 @@ def test_fb_groups_fails_the_step_when_visible_results_parse_to_zero(
         ctx=ctx,
         scenario={"_execution_id": "execution-a"},
         step={"edge_extra_data": True, "search_query": "openclaw"},
-        strategy="fb_groups",
+        entity="groups",
+        platform="facebook",
         result=result,
     )
 
@@ -231,12 +235,13 @@ def test_fb_pages_persists_without_content_collection_and_keeps_query(
             "max_pages": 6,
             "max_items": "${MAX_ITEMS_PER_KEYWORD}",
         },
-        strategy="fb_pages",
+        entity="pages",
+        platform="facebook",
         result=result,
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "fb_pages"
+    assert device.calls[0]["entity"] == "pages" and device.calls[0]["platform"] == "facebook"
     assert device.calls[0]["context"]["persist"] is True
     assert device.calls[0]["context"]["return_items"] is True
     assert device.calls[0]["context"]["search_query"] == "${_PAGE_SEARCH_QUERY}"
@@ -262,7 +267,8 @@ def test_fb_pages_fails_the_step_when_visible_results_parse_to_zero(
         ctx={},
         scenario={"_execution_id": "execution-a"},
         step={"edge_extra_data": True, "search_query": "go2joy"},
-        strategy="fb_pages",
+        entity="pages",
+        platform="facebook",
         result=result,
     )
 
@@ -277,14 +283,14 @@ def test_group_discovery_template_uses_one_agent_owned_crawl_step() -> None:
     group_steps = [
         step
         for step in template["steps"]
-        if step.get("strategy") == "fb_groups"
+        if step.get("entity") == "groups"
     ]
 
     assert len(group_steps) == 1
     assert not any(step.get("type") == "loop" for step in template["steps"])
     assert group_steps[0] == {
         "type": "extract",
-        "strategy": "fb_groups",
+        "entity": "groups", "platform": "facebook",
         "edge_extra_data": True,
         "search_query": "${SEARCH_QUERY}",
         "max_pages": "${MAX_PAGES}",
@@ -315,7 +321,7 @@ def test_page_discovery_template_uses_keyword_loop_and_fb_pages_extract() -> Non
     page_extracts = [
         step
         for step in steps
-        if step.get("type") == "extract" and step.get("strategy") == "fb_pages"
+        if step.get("type") == "extract" and step.get("entity") == "pages"
     ]
     tab_swipes = [
         step

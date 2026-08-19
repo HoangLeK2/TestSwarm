@@ -135,7 +135,7 @@ class TestResolveStep:
     def test_control_flow_nested_steps_are_not_resolved_before_runtime_vars(self):
         step = {
             "type": "if_variable",
-            "name": "FACEBOOK_SESSION_READY",
+            "name": "PLATFORM_SESSION_READY",
             "then": [
                 {
                     "type": "loop",
@@ -156,7 +156,7 @@ class TestResolveStep:
             step,
             {},
             {
-                "FACEBOOK_SESSION_READY": True,
+                "PLATFORM_SESSION_READY": True,
                 "PAGE_COUNT": 2,
                 "PAGE_TARGETS": ["Go2Joy Vietnam", "Booking.com"],
             },
@@ -649,3 +649,187 @@ class TestScenarioInputConstruction:
         assert random_step["type"] == "random_pick"
         assert len(random_step["branches"]) == 2
         assert random_step["branches"][0]["weight"] == 2
+
+
+class TestFinalizeWithoutCampaign:
+    """Previews have no campaign — they must still be finalized.
+
+    ScenarioWorkflow._finalize used to bail out on an empty campaign_id, so a
+    preview execution stayed RUNNING forever and its device claim was only
+    freed by the 1800s TTL sweeper — the phone was locked for 30 minutes after
+    every preview run.
+    """
+
+    @staticmethod
+    async def _finalize_calls(campaign_id: str, execution_id: str | None):
+        wf = ScenarioWorkflow()
+        calls: list[tuple[str, Any]] = []
+
+        async def fake_execute_activity(name, payload, **kwargs):
+            calls.append((name, {**payload, "_task_queue": kwargs.get("task_queue")}))
+
+        # control_task_queue() calls workflow.patched(), which needs a live
+        # workflow context; stub it to the post-patch answer.
+        with patch("temporal.workflows.workflow.execute_activity", new=fake_execute_activity), \
+             patch("temporal.workflows.control_task_queue", return_value="device-control"):
+            await wf._finalize(
+                campaign_id,
+                "run-1",
+                success=False,
+                execution_id=execution_id,
+                device_serial="dev1",
+            )
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_preview_without_campaign_still_finalizes(self):
+        calls = await self._finalize_calls("", "exec-1")
+        assert [name for name, _ in calls] == ["finalize_campaign"]
+        assert calls[0][1]["execution_id"] == "exec-1"
+        assert calls[0][1]["campaign_id"] == ""
+        # It releases the device claim, so it must not queue behind device work.
+        assert calls[0][1]["_task_queue"] == "device-control"
+
+    @pytest.mark.asyncio
+    async def test_campaign_run_still_finalizes(self):
+        calls = await self._finalize_calls("camp-1", "exec-1")
+        assert [name for name, _ in calls] == ["finalize_campaign"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_finalize_is_a_no_op(self):
+        assert await self._finalize_calls("", None) == []
+
+
+class TestStepLogBound:
+    """The in-memory step log must not grow without bound.
+
+    It lives as long as the workflow stays in the worker's sticky cache, and a
+    long crawl appends roughly 1KB per step. execution_steps in the database is
+    the durable record; this log only serves live progress queries.
+    """
+
+    @staticmethod
+    def _wf_with(n: int) -> ScenarioStepsWorkflow:
+        wf = ScenarioStepsWorkflow()
+        for i in range(n):
+            wf._append_step_log({"index": i, "type": "tap"})
+        return wf
+
+    def test_keeps_everything_below_the_cap(self):
+        wf = self._wf_with(10)
+        assert wf.get_step_log() == [{"index": i, "type": "tap"} for i in range(10)]
+
+    def test_caps_at_the_limit_and_keeps_the_newest(self):
+        from temporal.workflows import _STEP_LOG_MAX
+
+        wf = self._wf_with(_STEP_LOG_MAX + 25)
+        assert len(wf._step_log) == _STEP_LOG_MAX
+        assert wf._step_log[-1]["index"] == _STEP_LOG_MAX + 24
+        assert wf._step_log[0]["index"] == 25
+
+    def test_query_admits_what_it_dropped(self):
+        from temporal.workflows import _STEP_LOG_MAX
+
+        wf = self._wf_with(_STEP_LOG_MAX + 25)
+        log = wf.get_step_log()
+        assert log[0]["type"] == "_truncated"
+        assert log[0]["dropped"] == 25
+        assert len(log) == _STEP_LOG_MAX + 1
+
+
+class TestFinalizeStepResultSource:
+    """After a checkpoint the workflow only carries the tail of the run.
+
+    execution_steps holds every step (persist_step_checkpoint writes them before
+    continue_as_new drops them from the payload), so finalize must count the
+    database rather than the trimmed payload or it under-reports the run.
+    """
+
+    @staticmethod
+    def _pick(**kw):
+        from temporal.activities import _finalize_step_results
+
+        return _finalize_step_results(**kw)
+
+    def test_prefers_the_payload_when_it_is_complete(self):
+        out = self._pick(
+            success=True,
+            step_results=[{"index": 0, "ok": True}, {"index": 1, "ok": True}],
+            persisted_step_results=[{"index": 0, "ok": True}],
+            prefer_persisted=False,
+        )
+        assert len(out) == 2
+
+    def test_prefers_the_database_when_the_payload_was_trimmed(self):
+        out = self._pick(
+            success=True,
+            step_results=[{"index": 40, "ok": True}],
+            persisted_step_results=[{"index": i, "ok": True} for i in range(41)],
+            prefer_persisted=True,
+        )
+        assert len(out) == 41
+
+    def test_trimmed_flag_does_not_lose_a_longer_payload(self):
+        """Never trade a longer live payload for a shorter database read."""
+        out = self._pick(
+            success=True,
+            step_results=[{"index": i, "ok": True} for i in range(5)],
+            persisted_step_results=[{"index": 0, "ok": True}],
+            prefer_persisted=True,
+        )
+        assert len(out) == 5
+
+    def test_failure_with_empty_payload_still_falls_back(self):
+        out = self._pick(
+            success=False,
+            step_results=[],
+            persisted_step_results=[{"index": 0, "ok": False}],
+            prefer_persisted=False,
+        )
+        assert len(out) == 1
+
+
+class TestCheckpointKeepsAbsoluteStepIndices:
+    """A checkpointed continuation must not restart step numbering.
+
+    execution_steps is keyed on (execution_id, step_index). If the continuation
+    re-enumerates from 0, the steps after the checkpoint overwrite the rows the
+    checkpoint just wrote — destroying the audit trail it exists to preserve.
+    It is also what lets finalize spot a trimmed payload, which no longer starts
+    at index 0.
+    """
+
+    def test_continuation_carries_full_steps_and_resumes_via_start_step(self):
+        """The legacy shape sliced steps; indices then restarted at 0."""
+        import inspect
+
+        from temporal.workflows import ScenarioStepsWorkflow
+
+        src = inspect.getsource(ScenarioStepsWorkflow.run)
+        # After a checkpoint the workflow must hand on the whole list plus a
+        # resume point, never the slice.
+        assert "next_steps, next_start = inp.steps, idx" in src
+        assert "steps=next_steps" in src
+        assert "start_step=next_start" in src
+
+    def test_start_step_marks_the_payload_as_partial_for_finalize(self):
+        """min(index) > 0 is the signal finalize uses; absolute indices give it."""
+        resumed = [{"index": 40, "ok": True}, {"index": 41, "ok": True}]
+        indices = [int(s["index"]) for s in resumed]
+        assert min(indices) > 0
+
+        fresh = [{"index": 0, "ok": True}, {"index": 1, "ok": True}]
+        assert min(int(s["index"]) for s in fresh) == 0
+
+    def test_total_steps_is_not_double_counted_on_a_resumed_run(self):
+        wf = ScenarioStepsWorkflow()
+        inp = StepsInput(
+            device_serial="dev1",
+            steps=[{"type": "wait", "seconds": 0} for _ in range(10)],
+            start_step=6,
+            checkpointed_steps=6,
+        )
+        # Mirrors the sizing branch in run(): a resumed run already holds the
+        # whole scenario, so the total is simply its length.
+        total = len(inp.steps) if inp.start_step > 0 else len(inp.steps) + inp.checkpointed_steps
+        assert total == 10

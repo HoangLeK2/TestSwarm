@@ -330,6 +330,27 @@ class TapPositionStep(StepBase):
     type: Literal["tap_position"]
     pos: Literal["top_center", "middle_center", "bottom_center", "search_bar"]
 
+class TapImageStep(StepBase):
+    """Tap wherever a cropped template appears on screen.
+
+    The template is an object-storage key, not inline bytes: a scenario with a
+    dozen image steps would otherwise carry a dozen base64 blobs in its JSON.
+    Matching runs on agent-boot, which is the only side that still has a frame.
+    """
+    type: Literal["tap_image"]
+    template_key: str = Field(min_length=1)
+    # 0.8 is a deliberate default: real cross-screen matches score 0.96-1.00,
+    # and a genuinely absent template lands well below.
+    threshold: float = Field(0.8, ge=0.0, le=1.0)
+    # 0.25 is 20-30x faster than full resolution with no measured accuracy cost.
+    scale: float = Field(0.25, gt=0.0, le=1.0)
+    # Screen width the crop was taken on, so a phone with a different resolution
+    # rescales the template instead of quietly losing confidence.
+    template_screen_w: Optional[int] = Field(None, gt=0)
+    template_screen_h: Optional[int] = Field(None, gt=0)
+    timeout: float = Field(8.0, ge=0.1, le=60)
+    poll: float = Field(0.5, ge=0.1, le=10)
+
 class SwipeRatioStep(StepBase):
     type: Literal["swipe_ratio"]
     x1: float = Field(ge=0.0, le=1.0)
@@ -337,6 +358,29 @@ class SwipeRatioStep(StepBase):
     x2: float = Field(ge=0.0, le=1.0)
     y2: float = Field(ge=0.0, le=1.0)
     duration_ms: int = Field(300, ge=50, le=5000)
+
+class TapXmlMatchStep(StepBase):
+    """Fallback tap: re-dump the screen XML and tap the first attribute match.
+
+    Used when the uiautomator2 selector surface is unstable.
+    """
+
+    type: Literal["tap_xml_match"]
+    attr: Optional[str] = None
+    by: Optional[str] = None
+    contains: Optional[str] = None
+    equals: Optional[str] = None
+    value: Optional[str] = None
+    clickable: bool = True
+    timeout: float = Field(6.0, ge=0.1, le=60)
+    poll: float = Field(0.25, ge=0.05, le=5.0)
+
+    @model_validator(mode="after")
+    def _needs_a_match(self):
+        if not (self.contains or self.equals or self.value):
+            raise ValueError("tap_xml_match requires contains, equals or value")
+        return self
+
 
 class TapSelectorStep(StepBase):
     type: Literal["tap_selector"]
@@ -434,7 +478,7 @@ class LoginIfNeededStep(StepBase):
 
 
 class FacebookSessionGateStep(StepBase):
-    type: Literal["facebook_session_gate"]
+    type: Literal["platform_session_gate"]
     phase: Literal["preflight", "confirm"] = "preflight"
     timeout: float = Field(15.0, ge=0.0, le=30.0)
     poll_interval: float = Field(0.5, ge=0.1, le=2.0)
@@ -550,8 +594,9 @@ class IfVariableStep(StepBase):
     greater_than: Optional[float] = None
     else_steps: Optional[List[StepModel]] = Field(None, alias="else")
 
-class TapFbCommentButtonStep(StepBase):
-    type: Literal["tap_fb_comment_button"]
+class SocialOpenCommentsStep(StepBase):
+    type: Literal["social_open_comments"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
     timeout: NumOrVar = 6.0
     poll: NumOrVar = 0.4
     dedupe_field: str = "post_key"
@@ -562,11 +607,9 @@ class TapFbCommentButtonStep(StepBase):
     then: List[StepModel] = []
     else_steps: List[StepModel] = Field(default_factory=list, alias="else")
 
-class FbTapCommentButtonStep(TapFbCommentButtonStep):
-    type: Literal["fb_tap_comment_button"]
-
-class FbFindCommentButtonStep(StepBase):
-    type: Literal["fb_find_comment_button"]
+class SocialFindCommentButtonStep(StepBase):
+    type: Literal["social_find_comment_button"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
     timeout: NumOrVar = 6.0
     poll: NumOrVar = 0.4
     dedupe_field: str = "post_key"
@@ -574,13 +617,15 @@ class FbFindCommentButtonStep(StepBase):
     switch_to_all_comments: bool = True
     comment_filter: Optional[str] = None
 
-class FbTapCommentTargetStep(StepBase):
-    type: Literal["fb_tap_comment_target"]
+class SocialTapCommentTargetStep(StepBase):
+    type: Literal["social_tap_comment_target"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
     ignore_error: bool = True
     post_tap_wait_s: NumOrVar = 0.35
 
-class FbApplyCommentFilterStep(StepBase):
-    type: Literal["fb_apply_comment_filter"]
+class SocialApplyCommentFilterStep(StepBase):
+    type: Literal["social_apply_comment_filter"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
     switch_to_all_comments: bool = True
     comment_filter: Optional[str] = "all_comments"
     comment_filter_settle_s: NumOrVar = 0.45
@@ -633,21 +678,24 @@ class UseSourcePoolStep(StepBase):
 
 class ExtractStep(StepBase):
     type: Literal["extract"]
-    strategy: Literal[
-        "fb_posts",
+    # What to collect. The platform is a separate field so one node serves every app.
+    entity: Literal[
+        "posts",
+        "comments",
+        "groups",
+        "pages",
         "text_nodes",
-        "fb_comments",
-        "fb_groups",
-        "fb_pages",
-        "ig_posts",
-        "tiktok_posts",
-        "linkedin_posts",
-        "auto_posts",
-        "ig_comments",
-        "tiktok_comments",
-        "linkedin_comments",
-        "auto_comments",
     ]
+    # "auto" lets agent-boot pick the parser from the app on screen.
+    platform: Literal[
+        "auto",
+        "facebook",
+        "instagram",
+        "tiktok",
+        "linkedin",
+        "threads",
+        "ui",
+    ] = "auto"
     search_query: Optional[str] = None
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=1000)
@@ -662,7 +710,7 @@ class ExtractStep(StepBase):
     expand_see_more_scroll: Optional[bool] = None
     expand_see_more_scroll_distance: Optional[NumOrVar] = None
     expand_completion_retries: Optional[IntOrVar] = None
-    # fb_comments-specific
+    # entity=comments specific
     parent_post_id_var: Optional[str] = None  # ctx var holding parent post id
     # int or "${VAR}" string — resolved at runtime before use
     max_items: Optional[Union[int, str]] = None
@@ -740,11 +788,20 @@ class LeaseSourceTargetStep(StepBase):
     search: Optional[str] = Field(None, max_length=1000)
 
 
-class FbSelectPeopleProfileStep(StepBase):
-    type: Literal["fb_select_people_profile"]
+class SocialSelectTargetStep(StepBase):
+    """One resolver node for every platform and both target kinds.
+
+    ``target_type`` picks which fields apply: ``person`` uses display_name /
+    profile_wait_s, ``post`` uses display_text / detail_wait_s / current_detail.
+    """
+
+    type: Literal["social_select_target"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    target_type: Literal["person", "post"] = "person"
     search: Optional[str] = Field(None, max_length=512)
     display_name: Optional[str] = Field(None, max_length=256)
-    row_text: Optional[str] = Field(None, max_length=256)
+    display_text: Optional[str] = Field(None, max_length=512)
+    row_text: Optional[str] = Field(None, max_length=512)
     required_keywords: Optional[List[str]] = None
     optional_keywords: Optional[List[str]] = None
     forbidden_keywords: Optional[List[str]] = None
@@ -752,11 +809,15 @@ class FbSelectPeopleProfileStep(StepBase):
     require_unique: bool = True
     timeout: float = Field(12.0, ge=1.0, le=60.0)
     profile_wait_s: float = Field(1.0, ge=0.0, le=10.0)
-    save_as: str = Field("_people_target", min_length=1, max_length=128)
+    detail_wait_s: float = Field(1.0, ge=0.0, le=10.0)
+    current_detail: bool = False
+    save_as: Optional[str] = Field(None, min_length=1, max_length=128)
+    save_success_as: Optional[str] = Field(None, min_length=1, max_length=128)
+    skip_candidate_on_not_verified: bool = False
 
 
-class FbConnectVisiblePeopleStep(StepBase):
-    type: Literal["fb_connect_visible_people"]
+class SocialConnectVisiblePeopleStep(StepBase):
+    type: Literal["social_connect_visible_people"]
     platform: str = Field("facebook", min_length=1, max_length=32)
     min_score: Union[int, str] = 40
     require_common: bool = True
@@ -768,23 +829,8 @@ class FbConnectVisiblePeopleStep(StepBase):
     account_action_id: Optional[str] = Field(None, min_length=1, max_length=128)
 
 
-class FbSelectPostTargetStep(StepBase):
-    type: Literal["fb_select_post_target"]
-    search: Optional[str] = Field(None, max_length=512)
-    display_text: Optional[str] = Field(None, max_length=512)
-    row_text: Optional[str] = Field(None, max_length=512)
-    required_keywords: Optional[List[str]] = None
-    optional_keywords: Optional[List[str]] = None
-    forbidden_keywords: Optional[List[str]] = None
-    min_score: int = Field(80, ge=0, le=200)
-    require_unique: bool = True
-    timeout: float = Field(12.0, ge=1.0, le=60.0)
-    detail_wait_s: float = Field(1.0, ge=0.0, le=10.0)
-    save_as: str = Field("_post_target", min_length=1, max_length=128)
-
-
-class FbScanPostsInteractStep(StepBase):
-    type: Literal["fb_scan_posts_interact"]
+class SocialScanPostsInteractStep(StepBase):
+    type: Literal["social_scan_posts_interact"]
     platform: str = Field("facebook", min_length=1, max_length=32)
     keywords: Optional[Union[List[str], str]] = None
     match_mode: Union[Literal["any", "all"], str] = "any"
@@ -801,7 +847,47 @@ class FbScanPostsInteractStep(StepBase):
     comment_wait_s: Union[float, str] = 0.8
     submit_wait_s: Union[float, str] = 0.6
     require_comment: Union[bool, str] = True
+    like_post: Union[bool, str] = True
     save_as: Optional[str] = Field(None, min_length=1, max_length=128)
+
+
+class SocialOpenAuthorFromPostMatchStep(StepBase):
+    type: Literal["social_open_author_from_post_match"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    source_var: str = Field("_post_scan", min_length=1, max_length=128)
+    action_index: Union[int, str] = 0
+    search: Optional[str] = Field(None, max_length=512)
+    display_name: Optional[str] = Field(None, max_length=256)
+    required_keywords: Optional[Union[List[str], str]] = None
+    optional_keywords: Optional[Union[List[str], str]] = None
+    forbidden_keywords: Optional[Union[List[str], str]] = None
+    min_score: Union[int, str] = 80
+    timeout: Union[float, str] = 12.0
+    profile_wait_s: Union[float, str] = 1.0
+    save_as: str = Field("_people_target", min_length=1, max_length=128)
+    save_success_as: str = Field("PEOPLE_PROFILE_SELECTED", min_length=1, max_length=128)
+    save_opened_as: str = Field("AUTHOR_PROFILE_OPENED", min_length=1, max_length=128)
+
+
+class SocialOpenCommenterFromPostMatchStep(StepBase):
+    type: Literal["social_open_commenter_from_post_match"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    source_var: str = Field("_post_scan", min_length=1, max_length=128)
+    action_index: Union[int, str] = 0
+    search: Optional[str] = Field(None, max_length=512)
+    display_name: Optional[str] = Field(None, max_length=256)
+    required_keywords: Optional[Union[List[str], str]] = None
+    optional_keywords: Optional[Union[List[str], str]] = None
+    forbidden_keywords: Optional[Union[List[str], str]] = None
+    min_score: Union[int, str] = 80
+    timeout: Union[float, str] = 12.0
+    comment_wait_s: Union[float, str] = 1.0
+    profile_wait_s: Union[float, str] = 1.0
+    max_commenters: Union[int, str] = 5
+    save_as: str = Field("_people_target", min_length=1, max_length=128)
+    save_success_as: str = Field("PEOPLE_PROFILE_SELECTED", min_length=1, max_length=128)
+    save_opened_as: str = Field("COMMENTER_PROFILE_OPENED", min_length=1, max_length=128)
+    save_sheet_opened_as: str = Field("COMMENT_SHEET_OPENED", min_length=1, max_length=128)
 
 
 class ContentInteractionStep(SocialActionStepBase):
@@ -893,8 +979,10 @@ StepModel = Annotated[
         Annotated[TapStep, Tag("tap")],
         Annotated[TapRatioStep, Tag("tap_ratio")],
         Annotated[TapPositionStep, Tag("tap_position")],
+        Annotated[TapImageStep, Tag("tap_image")],
         Annotated[SwipeRatioStep, Tag("swipe_ratio")],
         Annotated[TapSelectorStep, Tag("tap_selector")],
+        Annotated[TapXmlMatchStep, Tag("tap_xml_match")],
         Annotated[WaitElementStep, Tag("wait_element")],
         Annotated[AssertElementStep, Tag("assert_element")],
         Annotated[InputSelectorStep, Tag("input_selector")],
@@ -902,7 +990,7 @@ StepModel = Annotated[
         Annotated[ScrollToStep, Tag("scroll_to")],
         Annotated[InputTextStep, Tag("input_text")],
         Annotated[LoginIfNeededStep, Tag("login_if_needed")],
-        Annotated[FacebookSessionGateStep, Tag("facebook_session_gate")],
+        Annotated[FacebookSessionGateStep, Tag("platform_session_gate")],
         Annotated[FillFormStep, Tag("fill_form")],
         Annotated[AssertAppStateStep, Tag("assert_app_state")],
         Annotated[KeyStep, Tag("key")],
@@ -916,15 +1004,21 @@ StepModel = Annotated[
         Annotated[RepeatUntilStep, Tag("repeat_until")],
         Annotated[IfElementStep, Tag("if_element")],
         Annotated[IfVariableStep, Tag("if_variable")],
-        Annotated[TapFbCommentButtonStep, Tag("tap_fb_comment_button")],
-        Annotated[FbTapCommentButtonStep, Tag("fb_tap_comment_button")],
-        Annotated[FbFindCommentButtonStep, Tag("fb_find_comment_button")],
-        Annotated[FbTapCommentTargetStep, Tag("fb_tap_comment_target")],
-        Annotated[FbApplyCommentFilterStep, Tag("fb_apply_comment_filter")],
-        Annotated[FbSelectPeopleProfileStep, Tag("fb_select_people_profile")],
-        Annotated[FbConnectVisiblePeopleStep, Tag("fb_connect_visible_people")],
-        Annotated[FbSelectPostTargetStep, Tag("fb_select_post_target")],
-        Annotated[FbScanPostsInteractStep, Tag("fb_scan_posts_interact")],
+        Annotated[SocialOpenCommentsStep, Tag("social_open_comments")],
+        Annotated[SocialFindCommentButtonStep, Tag("social_find_comment_button")],
+        Annotated[SocialTapCommentTargetStep, Tag("social_tap_comment_target")],
+        Annotated[SocialApplyCommentFilterStep, Tag("social_apply_comment_filter")],
+        Annotated[SocialSelectTargetStep, Tag("social_select_target")],
+        Annotated[SocialConnectVisiblePeopleStep, Tag("social_connect_visible_people")],
+        Annotated[SocialScanPostsInteractStep, Tag("social_scan_posts_interact")],
+        Annotated[
+            SocialOpenAuthorFromPostMatchStep,
+            Tag("social_open_author_from_post_match"),
+        ],
+        Annotated[
+            SocialOpenCommenterFromPostMatchStep,
+            Tag("social_open_commenter_from_post_match"),
+        ],
         Annotated[ContentInteractionStep, Tag("content_interaction")],
         Annotated[ConnectionRequestStep, Tag("connection_request")],
         Annotated[LeaseConnectionCandidateStep, Tag("lease_connection_candidate")],

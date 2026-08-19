@@ -161,7 +161,7 @@ async def test_process_payload_does_not_claim_partial_when_post_count_is_unknown
     assert "coverage_ratio" not in result["diagnostic"]
 
 
-def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
+def test_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     class Module:
         pass
 
@@ -210,7 +210,7 @@ def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     assert diagnostic["alternates"][0]["pid"] == "pid-2"
 
 
-def test_fb_comment_target_uses_body_fallback_for_parent_anchor(monkeypatch) -> None:
+def test_comment_target_uses_body_fallback_for_parent_anchor(monkeypatch) -> None:
     def fake_resolve(_xml, **_kwargs):
         top = {
             "post": {
@@ -236,7 +236,7 @@ def test_fb_comment_target_uses_body_fallback_for_parent_anchor(monkeypatch) -> 
     assert diagnostic["target"]["text_prefix"] == "body text from parsed post"
 
 
-def test_fb_comment_target_reports_empty_when_no_candidate(monkeypatch) -> None:
+def test_comment_target_reports_empty_when_no_candidate(monkeypatch) -> None:
     class Module:
         pass
 
@@ -2157,7 +2157,7 @@ async def test_process_payload_keeps_post_detail_parent_when_comment_parser_pid_
                     "pid": "detail-pid",
                     "text_prefix": "opened detail post",
                 },
-                "_fb_comment_session": {
+                "_comment_session": {
                     "schema_version": 1,
                     "session_id": "session-detail",
                     "parent_id": "detail-parent-hash",
@@ -2523,7 +2523,7 @@ async def test_process_payload_rejects_comment_session_parent_mismatch(
                 "parent_id_already_scoped": True,
                 "parent_post_id": "post-a-pid",
                 "parent_context_source": "post_detail",
-                "_fb_comment_session": {
+                "_comment_session": {
                     "schema_version": 1,
                     "session_id": "session-post-b",
                     "parent_id": "post-b-hash",
@@ -2587,7 +2587,7 @@ async def test_process_payload_rejects_comment_session_missing_context_pid(
                 "parent_id_already_scoped": True,
                 "parent_post_id": "stale-post-a-pid",
                 "parent_context_source": "post_detail",
-                "_fb_comment_session": {
+                "_comment_session": {
                     "schema_version": 1,
                     "session_id": "session-post-b",
                     "parent_id": "post-b-hash",
@@ -2734,7 +2734,7 @@ async def test_process_payload_persists_comments_when_pid_lookup_misses_scoped_p
                 "parent_post_id": "pid-from-posts",
                 "parent_context_source": "post_detail",
                 "require_verified_parent": True,
-                "_fb_comment_session": {
+                "_comment_session": {
                     "schema_version": 1,
                     "session_id": "session-from-posts",
                     "parent_id": "scoped-parent-from-posts",

@@ -31,6 +31,7 @@ export type LoginRecipe = {
   detect_logged_in?: { any_text?: string[] };
   fields?: Record<string, LoginField>;
   submit?: LoginSubmit;
+  post_submit_actions?: LoginPostSubmitAction[];
   post_submit_fields?: Record<string, LoginField>;
   post_submit?: LoginSubmit;
 };
@@ -46,6 +47,13 @@ export type LoginSubmit = {
   tap_text?: string;
   tap_text_any?: string[];
   locator?: string;
+};
+
+export type LoginPostSubmitAction = LoginSubmit & {
+  when_text_any?: string[];
+  timeout_s?: number;
+  poll_s?: number;
+  wait_after_s?: number;
 };
 
 export type LoginSetupRequirement =

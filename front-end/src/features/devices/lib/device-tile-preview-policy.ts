@@ -18,7 +18,9 @@ export function isGridH264Enabled(rawValue: string | undefined): boolean {
   return (rawValue ?? '1').trim() !== '0';
 }
 
-export function isGridWebRtcPreviewEnabled(rawValue: string | undefined): boolean {
+export function isGridWebRtcPreviewEnabled(
+  rawValue: string | undefined
+): boolean {
   return (rawValue ?? '1').trim() !== '0';
 }
 

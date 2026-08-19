@@ -93,14 +93,15 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "dedupe_field": "post_key", "edge_extra_data": True},
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
     assert handled is True
     assert result["extracted"] == 1
     assert result["duplicate_count"] == 1
-    assert device.calls[0]["strategy"] == "fb_posts"
+    assert device.calls[0]["entity"] == "posts" and device.calls[0]["platform"] == "facebook"
     assert device.calls[0]["context"]["user_id"] == "user"
     assert "endpoint" not in device.calls[0]
     assert device.calls[0]["context"]["persist"] is True
@@ -130,7 +131,8 @@ def test_try_edge_extra_data_forwards_post_open_fast_defaults(monkeypatch) -> No
             "dedupe_field": "post_key",
             "edge_extra_data": True,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -168,7 +170,8 @@ def test_try_edge_extra_data_forwards_explicit_post_open_canonical_keys(monkeypa
             "post_open_verify_retries": 2,
             "post_open_verify_retry_pause_s": 0.25,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -210,7 +213,8 @@ def test_try_edge_extra_data_accepts_partial_known_comment_target(monkeypatch) -
             "max_items": 220,
             "comment_require_complete": True,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         result,
     )
 
@@ -253,7 +257,8 @@ def test_try_edge_extra_data_fails_zero_comments_for_required_target(monkeypatch
             "max_items": 20,
             "comment_require_complete": True,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         result,
     )
 
@@ -293,7 +298,8 @@ def test_try_edge_extra_data_reports_bounded_partial_without_retrying(monkeypatc
             "edge_extra_data": True,
             "max_items": 220,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         result,
     )
 
@@ -325,14 +331,14 @@ def test_try_edge_extra_data_fails_when_opened_post_detail_is_incomplete(
     sc.ctx.update(
         {
             "_active_comment_parent_hash": "previous-post-hash",
-            "_fb_comment_parent_pid": "previous-post-pid",
+            "_comment_parent_pid": "previous-post-pid",
             "_active_comment_parent_anchor": {
                 "pid": "previous-post-pid",
                 "post_key": "previous-post-key",
             },
             "_active_comment_anchor_verified": True,
             "_active_comment_parent_source": "post_detail",
-            "_fb_comment_session": {"session_id": "previous-post-session"},
+            "_comment_session": {"session_id": "previous-post-session"},
         }
     )
 
@@ -345,21 +351,22 @@ def test_try_edge_extra_data_fails_when_opened_post_detail_is_incomplete(
             "open_post_before_extract": True,
             "expand_see_more": True,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
     assert handled is True
     assert result["ok"] is False
     assert result["reason_code"] == "post_detail_incomplete"
-    assert "fb_posts incomplete" in result["message"]
+    assert "posts incomplete" in result["message"]
     assert "_active_comment_parent_hash" not in sc.ctx
-    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_comment_parent_pid" not in sc.ctx
     assert "_active_comment_parent_anchor" not in sc.ctx
     assert "_active_comment_anchor_verified" not in sc.ctx
     assert "_active_comment_parent_source" not in sc.ctx
-    assert "_fb_comment_session" not in sc.ctx
-    assert sc.ctx["_fb_comment_target_missing"]["reason_code"] == "post_extract_pending"
+    assert "_comment_session" not in sc.ctx
+    assert sc.ctx["_pending_scroll_target"]["reason_code"] == "post_extract_pending"
 
     comment_result = {}
     comment_handled = extraction_mod._try_edge_extra_data(
@@ -370,7 +377,8 @@ def test_try_edge_extra_data_fails_when_opened_post_detail_is_incomplete(
             "edge_extra_data": True,
             "max_items": 500,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         comment_result,
     )
 
@@ -402,7 +410,8 @@ def test_fb_posts_forces_root_item_level_for_malformed_step(monkeypatch) -> None
             "edge_extra_data": True,
             "item_level": 1,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -410,7 +419,7 @@ def test_fb_posts_forces_root_item_level_for_malformed_step(monkeypatch) -> None
     assert device.calls[-1]["context"]["item_level"] == 0
 
 
-def test_fb_comment_session_created_and_forwarded_to_comment_extract(monkeypatch) -> None:
+def test_comment_session_created_and_forwarded_to_comment_extract(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
     device = _SequenceFakeDevice([
@@ -452,11 +461,12 @@ def test_fb_comment_session_created_and_forwarded_to_comment_extract(monkeypatch
             "edge_extra_data": True,
             "open_post_before_extract": True,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
-    session = sc.ctx.get("_fb_comment_session")
+    session = sc.ctx.get("_comment_session")
     assert isinstance(session, dict)
     assert session["parent_id"] == "parent-hash-1"
     assert session["parent_post_id"] == "pid-1"
@@ -471,12 +481,13 @@ def test_fb_comment_session_created_and_forwarded_to_comment_extract(monkeypatch
             "edge_extra_data": True,
             "open_post_press_back_after_extract": True,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     comment_context = device.calls[1]["context"]
-    assert comment_context["_fb_comment_session"] == session
+    assert comment_context["_comment_session"] == session
     assert comment_context["parent_id"] == "parent-hash-1"
     assert comment_context["parent_post_id"] == "pid-1"
 
@@ -496,7 +507,8 @@ def test_try_edge_extra_data_propagates_cancel_event(monkeypatch) -> None:
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "dedupe_field": "post_key", "edge_extra_data": True},
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -514,7 +526,8 @@ def test_try_edge_extra_data_no_relay(monkeypatch) -> None:
     handled = extraction_mod._try_edge_extra_data(
         _ctx(device),
         {"collection": "fb", "edge_extra_data": True},
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -547,7 +560,8 @@ def test_try_edge_extra_data_can_return_items_when_requested(monkeypatch) -> Non
             "edge_extra_data": True,
             "return_items": True,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -556,7 +570,7 @@ def test_try_edge_extra_data_can_return_items_when_requested(monkeypatch) -> Non
     assert sc.ctx["posts"] == [{"post_key": "p1", "text": "hello"}]
 
 
-def test_fb_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
+def test_social_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
     device = _FakeDevice({
         "ok": True,
@@ -579,11 +593,11 @@ def test_fb_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
     })
     sc = _ctx(device)
     sc.ctx["_active_comment_parent_hash"] = "parent-filter"
-    sc.ctx["_fb_comment_parent_pid"] = "pid-filter"
+    sc.ctx["_comment_parent_pid"] = "pid-filter"
     sc.ctx["_active_comment_parent_anchor"] = {"post_key": "post-filter"}
     result = {}
 
-    control_flow.handle_fb_apply_comment_filter(
+    control_flow.handle_social_apply_comment_filter(
         sc,
         {"comment_filter": "newest", "comment_filter_settle_s": 0},
         0,
@@ -603,7 +617,7 @@ def test_fb_apply_comment_filter_exposes_extra_data_timing(monkeypatch) -> None:
     assert device.calls[0]["context"]["post_key"] == "post-filter"
 
 
-def test_fb_apply_comment_filter_skips_settle_after_agent_verified_state(monkeypatch) -> None:
+def test_social_apply_comment_filter_skips_settle_after_agent_verified_state(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
     slept: list[float] = []
     monkeypatch.setattr(control_flow.time, "sleep", slept.append)
@@ -621,7 +635,7 @@ def test_fb_apply_comment_filter_skips_settle_after_agent_verified_state(monkeyp
     sc = _ctx(device)
     result = {}
 
-    control_flow.handle_fb_apply_comment_filter(
+    control_flow.handle_social_apply_comment_filter(
         sc,
         {"comment_filter": "newest", "comment_filter_settle_s": 0.45},
         0,
@@ -632,7 +646,7 @@ def test_fb_apply_comment_filter_skips_settle_after_agent_verified_state(monkeyp
     assert slept == []
 
 
-def test_fb_apply_comment_filter_skips_settle_on_noop(monkeypatch) -> None:
+def test_social_apply_comment_filter_skips_settle_on_noop(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
     slept: list[float] = []
     monkeypatch.setattr(control_flow.time, "sleep", lambda seconds: slept.append(seconds))
@@ -649,7 +663,7 @@ def test_fb_apply_comment_filter_skips_settle_on_noop(monkeypatch) -> None:
     sc = _ctx(device)
     result = {}
 
-    control_flow.handle_fb_apply_comment_filter(
+    control_flow.handle_social_apply_comment_filter(
         sc,
         {"comment_filter": "newest", "comment_filter_settle_s": 0.45},
         0,
@@ -657,21 +671,21 @@ def test_fb_apply_comment_filter_skips_settle_on_noop(monkeypatch) -> None:
     )
 
     assert result["filter_applied"] is False
-    assert result["message"] == "fb_apply_comment_filter: not_comment_sheet"
+    assert result["message"] == "social_apply_comment_filter: not_comment_sheet"
     assert slept == []
 
 
-def test_fb_apply_comment_filter_skips_after_comment_target_missing(monkeypatch) -> None:
+def test_social_apply_comment_filter_skips_after_comment_target_missing(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_COMMENT_FILTER_AGENT_APPLY", "1")
     device = _FakeDevice({"ok": True, "ingest": {"diagnostic": {"reason_code": "ok"}}})
     sc = _ctx(device)
-    sc.ctx["_fb_comment_target_missing"] = {
+    sc.ctx["_pending_scroll_target"] = {
         "selector": "description='Bình luận'",
         "max_swipes_effective": 8,
     }
     result = {}
 
-    control_flow.handle_fb_apply_comment_filter(
+    control_flow.handle_social_apply_comment_filter(
         sc,
         {"comment_filter": "newest", "comment_filter_settle_s": 0.45},
         0,
@@ -680,7 +694,7 @@ def test_fb_apply_comment_filter_skips_after_comment_target_missing(monkeypatch)
 
     assert result["filter_applied"] is False
     assert result["comment_target_missing"] is True
-    assert result["message"] == "fb_apply_comment_filter: skipped — comment target missing"
+    assert result["message"] == "social_apply_comment_filter: skipped — comment target missing"
     assert device.calls == []
 
 
@@ -688,7 +702,7 @@ def test_fb_comments_extract_skips_after_comment_target_missing(monkeypatch) -> 
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 99}})
     sc = _ctx(device)
-    sc.ctx["_fb_comment_target_missing"] = {
+    sc.ctx["_pending_scroll_target"] = {
         "selector": "description='Bình luận'",
         "max_swipes_effective": 8,
     }
@@ -700,7 +714,8 @@ def test_fb_comments_extract_skips_after_comment_target_missing(monkeypatch) -> 
         ctx=sc.ctx,
         scenario=sc.scenario,
         step={"collection": "fb", "edge_extra_data": True},
-        strategy="fb_comments",
+        entity="comments",
+        platform="facebook",
         result=result,
     )
 
@@ -708,7 +723,7 @@ def test_fb_comments_extract_skips_after_comment_target_missing(monkeypatch) -> 
     assert result["ok"] is True
     assert result["skipped"] is True
     assert result["comment_target_missing"] is True
-    assert result["message"] == "edge extra_data fb_comments: skipped — comment target missing"
+    assert result["message"] == "edge extra_data comments: skipped — comment target missing"
     assert device.calls == []
 
 
@@ -739,13 +754,14 @@ def test_fb_posts_batch_sets_active_parent_for_later_comments(monkeypatch) -> No
     handled_posts = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
     assert handled_posts is True
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-hash"
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-1"
+    assert sc.ctx["_comment_parent_pid"] == "pid-1"
     assert sc.ctx["_active_comment_parent_anchor"] == {
         "pid": "pid-1",
         "post_key": "post-1",
@@ -768,7 +784,8 @@ def test_fb_posts_batch_sets_active_parent_for_later_comments(monkeypatch) -> No
     handled_comments = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True},
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
@@ -826,20 +843,21 @@ def test_fb_posts_partial_parent_replaces_previous_parent_state(monkeypatch) -> 
     sc = _ctx(device)
     post_step = {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"}
 
-    extraction_mod._try_edge_extra_data(sc, post_step, "fb_posts", {})
-    extraction_mod._try_edge_extra_data(sc, post_step, "fb_posts", {})
+    extraction_mod._try_edge_extra_data(sc, post_step, "posts", "facebook", {})
+    extraction_mod._try_edge_extra_data(sc, post_step, "posts", "facebook", {})
     extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True},
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert sc.ctx["_active_comment_parent_hash"] == "parent-b"
-    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_comment_parent_pid" not in sc.ctx
     assert "_active_comment_parent_anchor" not in sc.ctx
-    assert sc.ctx["_fb_comment_session"]["parent_id"] == "parent-b"
-    assert sc.ctx["_fb_comment_session"]["parent_post_id"] is None
+    assert sc.ctx["_comment_session"]["parent_id"] == "parent-b"
+    assert sc.ctx["_comment_session"]["parent_post_id"] is None
     comment_context = device.calls[-1]["context"]
     assert comment_context["parent_id"] == "parent-b"
     assert comment_context["parent_post_id"] is None
@@ -892,7 +910,8 @@ def test_fb_comments_back_marks_parent_consumed_for_next_post_open(monkeypatch) 
     extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
     extraction_mod._try_edge_extra_data(
@@ -902,18 +921,20 @@ def test_fb_comments_back_marks_parent_consumed_for_next_post_open(monkeypatch) 
             "edge_extra_data": True,
             "open_post_press_back_after_extract": True,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
     extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
     assert "_active_comment_parent_anchor" not in sc.ctx
-    consumed = sc.ctx["_fb_consumed_post_anchors"]
+    consumed = sc.ctx["_consumed_post_anchors"]
     assert consumed == [
         {
             "pid": "pid-1",
@@ -926,7 +947,7 @@ def test_fb_comments_back_marks_parent_consumed_for_next_post_open(monkeypatch) 
             "parent_id": "scoped-parent-hash",
         }
     ]
-    assert device.calls[2]["strategy"] == "fb_posts"
+    assert device.calls[2]["entity"] == "posts" and device.calls[2]["platform"] == "facebook"
     assert device.calls[2]["context"]["open_post_exclude_anchors"] == consumed
 
 
@@ -971,7 +992,8 @@ def test_fb_posts_post_open_verify_failed_in_loop_skips_without_excluding_anchor
             "edge_extra_data": True,
             "dedupe_field": "post_key",
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -982,7 +1004,7 @@ def test_fb_posts_post_open_verify_failed_in_loop_skips_without_excluding_anchor
     assert result["post_open_attempted_anchor_count"] == 1
     assert result["post_open_retryable_failure"] is True
     assert "_break" not in sc.ctx
-    assert "_fb_consumed_post_anchors" not in sc.ctx
+    assert "_consumed_post_anchors" not in sc.ctx
 
     extraction_mod._try_edge_extra_data(
         sc,
@@ -991,7 +1013,8 @@ def test_fb_posts_post_open_verify_failed_in_loop_skips_without_excluding_anchor
             "edge_extra_data": True,
             "dedupe_field": "post_key",
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -1016,7 +1039,8 @@ def test_fb_posts_post_open_verify_failed_without_anchor_breaks_loop(monkeypatch
             "edge_extra_data": True,
             "dedupe_field": "post_key",
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -1070,7 +1094,8 @@ def test_fb_posts_reconcile_failed_in_loop_skips_and_excludes_opened_anchor(monk
             "edge_extra_data": True,
             "dedupe_field": "post_key",
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -1079,7 +1104,7 @@ def test_fb_posts_reconcile_failed_in_loop_skips_and_excludes_opened_anchor(monk
     assert result["skipped"] is True
     assert result["reason_code"] == "post_detail_target_not_reconciled"
     assert "_break" not in sc.ctx
-    consumed = sc.ctx["_fb_consumed_post_anchors"]
+    consumed = sc.ctx["_consumed_post_anchors"]
     assert consumed == [opened_anchor]
 
     extraction_mod._try_edge_extra_data(
@@ -1089,7 +1114,8 @@ def test_fb_posts_reconcile_failed_in_loop_skips_and_excludes_opened_anchor(monk
             "edge_extra_data": True,
             "dedupe_field": "post_key",
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -1128,7 +1154,8 @@ def test_fb_posts_reconcile_failed_with_opened_anchor_skips_even_without_loop_it
             "edge_extra_data": True,
             "dedupe_field": "post_key",
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -1137,7 +1164,7 @@ def test_fb_posts_reconcile_failed_with_opened_anchor_skips_even_without_loop_it
     assert result["skipped"] is True
     assert result["reason_code"] == "post_detail_target_not_reconciled"
     assert result["post_open_consumed_anchor_count"] == 1
-    assert sc.ctx["_fb_consumed_post_anchors"] == [opened_anchor]
+    assert sc.ctx["_consumed_post_anchors"] == [opened_anchor]
 
 
 def test_fb_post_detail_parent_source_is_forwarded_to_comment_extract(monkeypatch) -> None:
@@ -1163,7 +1190,8 @@ def test_fb_post_detail_parent_source_is_forwarded_to_comment_extract(monkeypatc
     handled_posts = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -1182,7 +1210,8 @@ def test_fb_post_detail_parent_source_is_forwarded_to_comment_extract(monkeypatc
     handled_comments = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True},
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
@@ -1210,14 +1239,15 @@ def test_fb_posts_multi_post_map_does_not_guess_active_comment_parent(monkeypatc
     })
     sc = _ctx(device)
     sc.ctx["_active_comment_parent_hash"] = "stale-parent"
-    sc.ctx["_fb_comment_parent_pid"] = "stale-pid"
+    sc.ctx["_comment_parent_pid"] = "stale-pid"
     sc.ctx["_active_comment_parent_anchor"] = {"pid": "stale-pid"}
     sc.ctx["_active_comment_anchor_verified"] = True
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
@@ -1227,7 +1257,7 @@ def test_fb_posts_multi_post_map_does_not_guess_active_comment_parent(monkeypatc
         "pid-2": "scoped-parent-2",
     }
     assert "_active_comment_parent_hash" not in sc.ctx
-    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_comment_parent_pid" not in sc.ctx
     assert "_active_comment_parent_anchor" not in sc.ctx
     assert "_active_comment_anchor_verified" not in sc.ctx
 
@@ -1258,13 +1288,14 @@ def test_fb_posts_active_parent_metadata_wins_over_multi_post_map(monkeypatch) -
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
     assert handled is True
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-2"
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-2"
+    assert sc.ctx["_comment_parent_pid"] == "pid-2"
     assert sc.ctx["_active_comment_parent_anchor"] == {
         "pid": "pid-2",
         "author": "Bob",
@@ -1289,13 +1320,14 @@ def test_fb_posts_pid_map_single_entry_forwards_post_detail_source(monkeypatch) 
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb_group_posts", "edge_extra_data": True, "dedupe_field": "post_key"},
-        "fb_posts",
+        "posts",
+        "facebook",
         {},
     )
 
     assert handled is True
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-opened"
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-opened"
+    assert sc.ctx["_comment_parent_pid"] == "pid-opened"
     assert sc.ctx["_active_comment_parent_source"] == "post_detail"
     assert sc.ctx["_active_comment_anchor_verified"] is True
 
@@ -1315,7 +1347,8 @@ def test_fb_posts_pid_map_single_entry_forwards_post_detail_source(monkeypatch) 
             "edge_extra_data": True,
             "require_verified_parent": True,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
     comment_context = device.calls[-1]["context"]
@@ -1339,13 +1372,14 @@ def test_fb_comments_without_active_parent_does_not_forward_stale_parent_context
     handled = extraction_mod._try_edge_extra_data(
         _ctx(device),
         {"collection": "fb", "edge_extra_data": True},
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
     request = device.calls[-1]
-    assert request["strategy"] == "fb_comments"
+    assert request["entity"] == "comments" and request["platform"] == "facebook"
     context = request["context"]
     assert context["parent_id"] is None
     assert context["parent_id_already_scoped"] is False
@@ -1367,7 +1401,7 @@ def test_comment_target_request_forwards_locked_post_anchor(monkeypatch) -> None
     sc = _ctx(device)
     sc.ctx["_active_comment_parent_source"] = "post_detail"
     sc.ctx["_active_comment_parent_hash"] = "scoped-parent"
-    sc.ctx["_fb_comment_parent_pid"] = "pid-1"
+    sc.ctx["_comment_parent_pid"] = "pid-1"
     sc.ctx["_active_comment_parent_anchor"] = {
         "pid": "pid-1",
         "post_key": "post-1",
@@ -1401,7 +1435,8 @@ def test_try_edge_extra_data_reports_failure_without_server_fallback(monkeypatch
     handled = extraction_mod._try_edge_extra_data(
         _ctx(device),
         {"collection": "fb", "edge_extra_data": True},
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -1418,12 +1453,13 @@ def test_try_edge_extra_data_defaults_content_strategy_to_agent_boot(monkeypatch
     handled = extraction_mod._try_edge_extra_data(
         _ctx(device),
         {"collection": "fb"},
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "fb_posts"
+    assert device.calls[0]["entity"] == "posts" and device.calls[0]["platform"] == "facebook"
 
 
 def test_text_nodes_routes_to_agent_boot_without_collection(monkeypatch) -> None:
@@ -1445,11 +1481,12 @@ def test_text_nodes_routes_to_agent_boot_without_collection(monkeypatch) -> None
         sc,
         {"edge_extra_data": True},
         "text_nodes",
+        "ui",
         result,
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "text_nodes"
+    assert device.calls[0]["entity"] == "text_nodes" and device.calls[0]["platform"] == "ui"
     assert device.calls[0]["context"]["persist"] is False
     assert device.calls[0]["context"]["return_items"] is True
     assert sc.ctx["text_nodes"] == ["hello", "world"]
@@ -1474,13 +1511,14 @@ def test_text_nodes_null_edge_extra_flag_still_routes_to_agent_boot(monkeypatch)
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
-        {"strategy": "text_nodes", "edge_extra_data": None},
+        {"entity": "text_nodes", "platform": "ui", "edge_extra_data": None},
         "text_nodes",
+        "ui",
         result,
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "text_nodes"
+    assert device.calls[0]["entity"] == "text_nodes" and device.calls[0]["platform"] == "ui"
     assert sc.ctx["text_nodes"] == ["line"]
 
 
@@ -1499,12 +1537,13 @@ def test_non_fb_content_strategy_routes_to_agent_boot(monkeypatch) -> None:
     handled = extraction_mod._try_edge_extra_data(
         _ctx(device),
         {"collection": "social", "edge_extra_data": True},
-        "tiktok_posts",
+        "posts",
+        "tiktok",
         {},
     )
 
     assert handled is True
-    assert device.calls[0]["strategy"] == "tiktok_posts"
+    assert device.calls[0]["entity"] == "posts" and device.calls[0]["platform"] == "tiktok"
     assert device.calls[0]["context"]["platform"] == "tiktok"
     assert device.calls[0]["context"]["content_type"] == "tiktok_video"
 
@@ -1532,7 +1571,7 @@ def test_edge_extra_endpoint_for_device_keeps_lan_url(monkeypatch) -> None:
     assert endpoint == "http://192.168.1.10:8765/extra-data/xml"
 
 
-def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> None:
+def test_social_open_comments_resolves_target_via_agent_boot(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -1556,12 +1595,12 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
 
     device.tap = tap
     sc = _ctx(device)
-    sc.ctx["_fb_comment_target_missing"] = {
+    sc.ctx["_pending_scroll_target"] = {
         "reason_code": "scroll_target_missing",
     }
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(
+    control_flow.handle_social_open_comments(
         sc,
         {},
         0,
@@ -1573,11 +1612,11 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
     assert device.taps == [(60, 40)]
     assert sc.ctx["_edge_comment_parent_base_hash"] == "base-hash"
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
-    assert sc.ctx["_active_comment_parent_source"] == "tap_fb_comment_button"
-    assert "_fb_comment_target_missing" not in sc.ctx
+    assert sc.ctx["_active_comment_parent_source"] == "social_open_comments"
+    assert "_pending_scroll_target" not in sc.ctx
 
 
-def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) -> None:
+def test_social_open_comments_preserves_post_detail_parent_hash(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -1600,7 +1639,7 @@ def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) ->
     sc = _ctx(device)
     sc.ctx["_active_comment_parent_hash"] = "detail-parent-hash"
     sc.ctx["_first_new_post_hash"] = "detail-parent-hash"
-    sc.ctx["_fb_comment_parent_pid"] = "detail-pid"
+    sc.ctx["_comment_parent_pid"] = "detail-pid"
     sc.ctx["_active_comment_parent_source"] = "post_detail"
     sc.ctx["_active_comment_parent_anchor"] = {
         "pid": "detail-pid",
@@ -1608,7 +1647,7 @@ def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) ->
         "text_prefix": "detail parent text",
     }
     sc.ctx["_active_comment_anchor_verified"] = True
-    sc.ctx["_fb_comment_session"] = {
+    sc.ctx["_comment_session"] = {
         "session_id": "detail-session",
         "parent_id": "detail-parent-hash",
         "parent_post_id": "detail-pid",
@@ -1617,7 +1656,7 @@ def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) ->
     }
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+    control_flow.handle_social_open_comments(sc, {}, 0, result)
 
     assert result["tapped"] is True
     assert result["parent_context_preserved"] is True
@@ -1626,17 +1665,17 @@ def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) ->
     assert sc.ctx["_first_new_post_hash"] == "detail-parent-hash"
     assert sc.ctx["_active_comment_parent_source"] == "post_detail"
     assert "_edge_comment_parent_base_hash" not in sc.ctx
-    assert sc.ctx["_fb_comment_parent_pid"] == "detail-pid"
+    assert sc.ctx["_comment_parent_pid"] == "detail-pid"
     assert sc.ctx["_active_comment_parent_anchor"] == {
         "pid": "detail-pid",
         "post_key": "detail-post",
         "text_prefix": "detail parent text",
     }
-    assert sc.ctx["_fb_comment_session"]["parent_post_id"] == "detail-pid"
-    assert sc.ctx["_fb_tapped_comment_target"]["pid"] == "pid-1"
+    assert sc.ctx["_comment_session"]["parent_post_id"] == "detail-pid"
+    assert sc.ctx["_tapped_comment_target"]["pid"] == "pid-1"
 
 
-def test_tap_fb_comment_button_does_not_preserve_incomplete_post_detail_parent(monkeypatch) -> None:
+def test_social_open_comments_does_not_preserve_incomplete_post_detail_parent(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -1661,22 +1700,22 @@ def test_tap_fb_comment_button_does_not_preserve_incomplete_post_detail_parent(m
     sc.ctx["_first_new_post_hash"] = "stale-detail-parent-hash"
     sc.ctx["_active_comment_parent_source"] = "post_detail"
     sc.ctx["_active_comment_anchor_verified"] = True
-    sc.ctx["_fb_comment_session"] = {
+    sc.ctx["_comment_session"] = {
         "session_id": "stale-session",
         "parent_id": "different-detail-parent-hash",
         "parent_post_id": "different-detail-pid",
         "source": "post_detail",
     }
-    sc.ctx["_fb_tapped_comment_target"] = {
+    sc.ctx["_tapped_comment_target"] = {
         "pid": "old-tapped-pid",
         "parent_id": "old-tapped-hash",
     }
-    sc.ctx["_fb_comment_target_missing"] = {
+    sc.ctx["_pending_scroll_target"] = {
         "reason_code": "post_extract_pending",
     }
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+    control_flow.handle_social_open_comments(sc, {}, 0, result)
 
     assert result["tapped"] is True
     assert result["parent_context_preserved"] is False
@@ -1686,15 +1725,15 @@ def test_tap_fb_comment_button_does_not_preserve_incomplete_post_detail_parent(m
     assert sc.ctx["_edge_comment_parent_base_hash"] == "target-base-hash"
     assert sc.ctx["_active_comment_parent_hash"] == "target-scoped-hash"
     assert sc.ctx["_first_new_post_hash"] == "target-scoped-hash"
-    assert sc.ctx["_fb_comment_parent_pid"] == "target-pid"
-    assert sc.ctx["_active_comment_parent_source"] == "tap_fb_comment_button"
+    assert sc.ctx["_comment_parent_pid"] == "target-pid"
+    assert sc.ctx["_active_comment_parent_source"] == "social_open_comments"
     assert sc.ctx["_active_comment_anchor_verified"] is True
-    assert "_fb_comment_session" not in sc.ctx
-    assert "_fb_tapped_comment_target" not in sc.ctx
-    assert "_fb_comment_target_missing" not in sc.ctx
+    assert "_comment_session" not in sc.ctx
+    assert "_tapped_comment_target" not in sc.ctx
+    assert "_pending_scroll_target" not in sc.ctx
 
 
-def test_tap_fb_comment_button_uses_persisted_post_dedupe_field(monkeypatch) -> None:
+def test_social_open_comments_uses_persisted_post_dedupe_field(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
         "agent_tapped": True,
@@ -1713,16 +1752,16 @@ def test_tap_fb_comment_button_uses_persisted_post_dedupe_field(monkeypatch) -> 
         },
     })
     sc = _ctx(device)
-    sc.ctx["_fb_posts_dedupe_field"] = "post_key"
+    sc.ctx["_posts_dedupe_field"] = "post_key"
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+    control_flow.handle_social_open_comments(sc, {}, 0, result)
 
     assert result["tapped"] is True
     assert device.calls[0]["context"]["posts_dedupe_field"] == "post_key"
 
 
-def test_tap_fb_comment_button_stores_parent_pid_in_anchor(monkeypatch) -> None:
+def test_social_open_comments_stores_parent_pid_in_anchor(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
         "agent_tapped": True,
@@ -1745,7 +1784,7 @@ def test_tap_fb_comment_button_stores_parent_pid_in_anchor(monkeypatch) -> None:
     sc = _ctx(device)
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+    control_flow.handle_social_open_comments(sc, {}, 0, result)
 
     assert sc.ctx["_active_comment_parent_anchor"] == {
         "pid": "pid-1",
@@ -1758,7 +1797,7 @@ def test_tap_fb_comment_button_stores_parent_pid_in_anchor(monkeypatch) -> None:
     }
 
 
-def test_tap_fb_comment_button_already_on_sheet_clears_existing_anchor() -> None:
+def test_social_open_comments_already_on_sheet_clears_existing_anchor() -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -1770,7 +1809,7 @@ def test_tap_fb_comment_button_already_on_sheet_clears_existing_anchor() -> None
         },
     })
     sc = _ctx(device)
-    sc.ctx["_fb_comment_parent_pid"] = "pid-existing"
+    sc.ctx["_comment_parent_pid"] = "pid-existing"
     sc.ctx["_active_comment_parent_anchor"] = {
         "pid": "pid-existing",
         "author": "Alice",
@@ -1779,16 +1818,16 @@ def test_tap_fb_comment_button_already_on_sheet_clears_existing_anchor() -> None
     }
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+    control_flow.handle_social_open_comments(sc, {}, 0, result)
 
     assert result["tapped"] is True
-    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_comment_parent_pid" not in sc.ctx
     assert "_active_comment_parent_hash" not in sc.ctx
     assert "_active_comment_parent_anchor" not in sc.ctx
     assert "_active_comment_anchor_verified" not in sc.ctx
 
 
-def test_tap_fb_comment_button_already_on_sheet_preserves_verified_parent_context() -> None:
+def test_social_open_comments_already_on_sheet_preserves_verified_parent_context() -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -1800,9 +1839,9 @@ def test_tap_fb_comment_button_already_on_sheet_preserves_verified_parent_contex
         },
     })
     sc = _ctx(device)
-    sc.ctx["_fb_comment_parent_pid"] = "pid-verified"
+    sc.ctx["_comment_parent_pid"] = "pid-verified"
     sc.ctx["_active_comment_parent_hash"] = "scoped-parent-hash"
-    sc.ctx["_active_comment_parent_source"] = "tap_fb_comment_button"
+    sc.ctx["_active_comment_parent_source"] = "social_open_comments"
     sc.ctx["_active_comment_parent_anchor"] = {
         "pid": "pid-verified",
         "author": "Alice",
@@ -1812,18 +1851,18 @@ def test_tap_fb_comment_button_already_on_sheet_preserves_verified_parent_contex
     sc.ctx["_active_comment_anchor_verified"] = True
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+    control_flow.handle_social_open_comments(sc, {}, 0, result)
 
     assert result["tapped"] is True
     assert result["parent_id"] == "scoped-parent-hash"
     assert result["parent_context_preserved"] is True
     assert result.get("parent_context_cleared") is not True
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-verified"
+    assert sc.ctx["_comment_parent_pid"] == "pid-verified"
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-hash"
     assert sc.ctx["_active_comment_anchor_verified"] is True
 
 
-def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_sheet() -> None:
+def test_social_open_comments_post_detail_precheck_skips_prescroll_on_comment_sheet() -> None:
     device = _SwipeTrackingFakeDevice({
         "ok": True,
         "ingest": {
@@ -1835,7 +1874,7 @@ def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_s
         },
     })
     sc = _ctx(device)
-    sc.ctx["_fb_comment_parent_pid"] = "pid-detail"
+    sc.ctx["_comment_parent_pid"] = "pid-detail"
     sc.ctx["_active_comment_parent_hash"] = "detail-parent-hash"
     sc.ctx["_active_comment_parent_source"] = "post_detail"
     sc.ctx["_active_comment_parent_anchor"] = {
@@ -1844,7 +1883,7 @@ def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_s
         "text_prefix": "detail parent text",
     }
     sc.ctx["_active_comment_anchor_verified"] = True
-    sc.ctx["_fb_comment_session"] = {
+    sc.ctx["_comment_session"] = {
         "session_id": "detail-session",
         "parent_id": "detail-parent-hash",
         "parent_post_id": "pid-detail",
@@ -1853,7 +1892,7 @@ def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_s
     }
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {"pre_scroll": True}, 0, result)
+    control_flow.handle_social_open_comments(sc, {"pre_scroll": True}, 0, result)
 
     assert result["ok"] is True
     assert result["tapped"] is True
@@ -1866,7 +1905,7 @@ def test_tap_fb_comment_button_post_detail_precheck_skips_prescroll_on_comment_s
     ]
 
 
-def test_tap_fb_comment_button_skips_prescroll_when_not_on_post_detail() -> None:
+def test_social_open_comments_skips_prescroll_when_not_on_post_detail() -> None:
     device = _SwipeTrackingFakeDevice({
         "ok": True,
         "ingest": {
@@ -1879,13 +1918,13 @@ def test_tap_fb_comment_button_skips_prescroll_when_not_on_post_detail() -> None
     sc = _ctx(device)
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(sc, {"pre_scroll": True}, 0, result)
+    control_flow.handle_social_open_comments(sc, {"pre_scroll": True}, 0, result)
 
     assert device.swipes == []
     assert result.get("pre_scroll_skipped") == "not_on_post_detail"
 
 
-def test_tap_fb_comment_button_skips_comments_without_verified_post_detail() -> None:
+def test_social_open_comments_skips_comments_without_verified_post_detail() -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -1903,7 +1942,7 @@ def test_tap_fb_comment_button_skips_comments_without_verified_post_detail() -> 
     sc = _ctx(device)
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(
+    control_flow.handle_social_open_comments(
         sc,
         {"require_post_before_comment": True, "then": [{"type": "wait", "seconds": 0.1}]},
         0,
@@ -1942,7 +1981,8 @@ def test_fb_posts_fails_when_open_post_detail_not_established(monkeypatch) -> No
             "open_post_before_extract": True,
             "require_open_post_detail": True,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -1982,7 +2022,8 @@ def test_fb_posts_remembers_parent_from_opened_post_diagnostic(monkeypatch) -> N
             "open_post_before_extract": True,
             "require_open_post_detail": True,
         },
-        "fb_posts",
+        "posts",
+        "facebook",
         result,
     )
 
@@ -1990,10 +2031,10 @@ def test_fb_posts_remembers_parent_from_opened_post_diagnostic(monkeypatch) -> N
     assert result["ok"] is True
     assert "post detail not opened" not in result.get("message", "")
     assert sc.ctx["_active_comment_anchor_verified"] is True
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-opened"
+    assert sc.ctx["_comment_parent_pid"] == "pid-opened"
 
 
-def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -> None:
+def test_social_open_comments_skips_server_tap_when_agent_tapped(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
         "agent_tapped": True,
@@ -2014,7 +2055,7 @@ def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -
     device.tap = lambda x, y: device.taps.append((x, y))
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(
+    control_flow.handle_social_open_comments(
         _ctx(device),
         {},
         0,
@@ -2026,7 +2067,7 @@ def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -
     assert device.taps == []
 
 
-def test_tap_fb_comment_button_skips_then_when_verify_failed() -> None:
+def test_social_open_comments_skips_then_when_verify_failed() -> None:
     device = _FakeDevice({
         "ok": True,
         "agent_tapped": True,
@@ -2052,7 +2093,7 @@ def test_tap_fb_comment_button_skips_then_when_verify_failed() -> None:
 
     control_flow._run_nested = _run_nested
     try:
-        control_flow.handle_tap_fb_comment_button(
+        control_flow.handle_social_open_comments(
             sc,
             {"then": [{"type": "sleep", "seconds": 0.01}]},
             0,
@@ -2109,29 +2150,29 @@ def test_split_fb_comment_nodes_find_tap_filter_sequentially() -> None:
     sc = _ctx(device)
 
     find_result = {}
-    control_flow.handle_fb_find_comment_button(sc, {}, 0, find_result)
+    control_flow.handle_social_find_comment_button(sc, {}, 0, find_result)
 
     assert find_result["target_found"] is True
     assert device.calls[0]["strategy"] == "fb_comment_target"
     assert device.taps == []
-    assert sc.ctx["_fb_comment_target"]["post_key"] == "post-1"
-    sc.ctx["_fb_comment_target_missing"] = {
+    assert sc.ctx["_comment_target"]["post_key"] == "post-1"
+    sc.ctx["_pending_scroll_target"] = {
         "reason_code": "scroll_target_missing",
     }
 
     tap_result = {}
-    control_flow.handle_fb_tap_comment_target(sc, {}, 1, tap_result)
+    control_flow.handle_social_tap_comment_target(sc, {}, 1, tap_result)
 
     assert tap_result["target_verified"] is True
     assert device.calls[1]["strategy"] == "fb_comment_target"
     assert device.taps == [(60, 40)]
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
-    assert sc.ctx["_active_comment_parent_source"] == "fb_tap_comment_target"
-    assert "_fb_comment_target" not in sc.ctx
-    assert "_fb_comment_target_missing" not in sc.ctx
+    assert sc.ctx["_active_comment_parent_source"] == "social_tap_comment_target"
+    assert "_comment_target" not in sc.ctx
+    assert "_pending_scroll_target" not in sc.ctx
 
     filter_result = {}
-    control_flow.handle_fb_apply_comment_filter(
+    control_flow.handle_social_apply_comment_filter(
         sc,
         {"comment_filter": "newest"},
         2,
@@ -2141,7 +2182,7 @@ def test_split_fb_comment_nodes_find_tap_filter_sequentially() -> None:
     assert filter_result["filter_applied"] is True
     assert device.calls[2]["strategy"] == "fb_comment_filter_apply"
     assert device.calls[2]["context"]["comment_filter"] == "newest"
-    assert sc.ctx["_fb_comment_filter_applied"] == "newest"
+    assert sc.ctx["_comment_filter_applied"] == "newest"
 
 
 def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch) -> None:
@@ -2158,8 +2199,8 @@ def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch
     sc = _ctx(device)
     sc.ctx["_edge_comment_parent_base_hash"] = "base-hash"
     sc.ctx["_active_comment_parent_hash"] = "scoped-hash"
-    sc.ctx["_fb_comment_parent_pid"] = "pid-1"
-    sc.ctx["_fb_comment_filter_target"] = "newest"
+    sc.ctx["_comment_parent_pid"] = "pid-1"
+    sc.ctx["_comment_filter_target"] = "newest"
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
@@ -2168,13 +2209,14 @@ def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch
             "edge_extra_data": True,
             "save_parent_id_var": "_active_comment_parent_hash",
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
     request = device.calls[-1]
-    assert request["strategy"] == "fb_comments"
+    assert request["entity"] == "comments" and request["platform"] == "facebook"
     assert request["context"]["parent_id"] == "scoped-hash"
     assert request["context"]["parent_id_already_scoped"] is True
     assert request["context"]["parent_post_id"] == "pid-1"
@@ -2200,13 +2242,14 @@ def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> Non
             "comment_no_new_threshold": 7,
             "no_new_threshold": 9,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
     request = device.calls[-1]
-    assert request["strategy"] == "fb_comments"
+    assert request["entity"] == "comments" and request["platform"] == "facebook"
     context = request["context"]
     assert context["comment_scroll_passes"] == 4
     assert context["comment_scroll_distance"] == 0.25
@@ -2238,7 +2281,8 @@ def test_try_edge_extra_data_forwards_custom_comment_crawl_budget(monkeypatch) -
             "stop_if_no_new": False,
             "no_new_threshold": 6,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
@@ -2283,7 +2327,8 @@ def test_try_edge_extra_data_forwards_comment_fast_scroll_and_coverage_knobs(mon
             "comment_coverage_gap_backoff": 0.7,
             "comment_coverage_tail_no_new_threshold": 3,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
@@ -2329,7 +2374,8 @@ def test_try_edge_extra_data_normalizes_legacy_balanced_comment_budget(monkeypat
             "stop_if_no_new": False,
             "no_new_threshold": 4,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
@@ -2371,12 +2417,13 @@ def test_try_edge_extra_data_preserves_stored_balanced_comment_tuning(monkeypatc
             "comment_scroll_duration_ms": 120,
             "comment_scroll_pause_s": 0.03,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
-    fb_call = next(c for c in device.calls if c["strategy"] == "fb_comments")
+    fb_call = next(c for c in device.calls if c["entity"] == "comments" and c["platform"] == "facebook")
     context = fb_call["context"]
     assert context["comment_scroll_passes"] == 16
     assert context["comment_swipes_per_dump"] == 4
@@ -2412,12 +2459,13 @@ def test_try_edge_extra_data_preserves_frontend_user_scroll_edit(monkeypatch) ->
             "comment_scroll_duration_ms": 120,
             "comment_scroll_pause_s": 0.03,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
-    fb_call = next(c for c in device.calls if c["strategy"] == "fb_comments")
+    fb_call = next(c for c in device.calls if c["entity"] == "comments" and c["platform"] == "facebook")
     context = fb_call["context"]
     assert context["comment_scroll_passes"] == 120
     assert context["comment_swipes_per_dump"] == 4
@@ -2453,12 +2501,13 @@ def test_try_edge_extra_data_preserves_explicit_comment_timing(monkeypatch) -> N
             "comment_scroll_pause_s": 0.5,
             "comment_scroll_settle_s": 0.4,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
-    fb_call = next(c for c in device.calls if c["strategy"] == "fb_comments")
+    fb_call = next(c for c in device.calls if c["entity"] == "comments" and c["platform"] == "facebook")
     context = fb_call["context"]
     assert context["comment_scroll_duration_ms"] == 300
     assert context["comment_scroll_pause_s"] == 0.5
@@ -2476,13 +2525,14 @@ def test_try_edge_extra_data_forwards_require_verified_parent(monkeypatch) -> No
             "edge_extra_data": True,
             "require_verified_parent": True,
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
     request = device.calls[-1]
-    assert request["strategy"] == "fb_comments"
+    assert request["entity"] == "comments" and request["platform"] == "facebook"
     assert request["context"]["require_verified_parent"] is True
 
 
@@ -2503,14 +2553,15 @@ def test_fb_comments_direct_extract_does_not_auto_filter(monkeypatch) -> None:
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True},
-        "fb_comments",
+        "comments",
+        "facebook",
         result,
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert [(call["entity"], call["platform"]) for call in device.calls] == [("comments", "facebook")]
     assert "comment_filter_on_extract" not in result
-    assert "_fb_comment_filter_applied" not in sc.ctx
+    assert "_comment_filter_applied" not in sc.ctx
     assert result["extracted"] == 2
 
 
@@ -2526,20 +2577,21 @@ def test_fb_comments_explicit_filter_verify_state_does_not_block_extract(monkeyp
         },
     })
     sc = _ctx(device)
-    sc.ctx["_fb_comment_filter_applied"] = "newest"
+    sc.ctx["_comment_filter_applied"] = "newest"
     result = {}
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "comment_filter": "newest"},
-        "fb_comments",
+        "comments",
+        "facebook",
         result,
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert [(call["entity"], call["platform"]) for call in device.calls] == [("comments", "facebook")]
     assert result["extracted"] == 2
-    assert sc.ctx["_fb_comment_filter_applied"] == "newest"
+    assert sc.ctx["_comment_filter_applied"] == "newest"
 
 
 def test_fb_comments_does_not_request_filter_before_extract(monkeypatch) -> None:
@@ -2563,12 +2615,13 @@ def test_fb_comments_does_not_request_filter_before_extract(monkeypatch) -> None
             "comment_filter_on_extract": True,
             "comment_filter": "all_comments",
         },
-        "fb_comments",
+        "comments",
+        "facebook",
         result,
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert [(call["entity"], call["platform"]) for call in device.calls] == [("comments", "facebook")]
     assert result["extracted"] == 2
 
 
@@ -2588,18 +2641,19 @@ def test_fb_comments_nested_extract_does_not_auto_filter(monkeypatch) -> None:
         sc.ctx,
         {"comment_filter": "newest", "switch_to_all_comments": True},
     )
-    sc.ctx["_fb_comment_filter_applied"] = "all_comments"
+    sc.ctx["_comment_filter_applied"] = "all_comments"
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True},
-        "fb_comments",
+        "comments",
+        "facebook",
         {},
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
-    assert sc.ctx["_fb_comment_filter_applied"] == "all_comments"
+    assert [(call["entity"], call["platform"]) for call in device.calls] == [("comments", "facebook")]
+    assert sc.ctx["_comment_filter_applied"] == "all_comments"
 
 
 def test_fb_comments_does_not_reapply_already_applied_filter(monkeypatch) -> None:
@@ -2614,26 +2668,27 @@ def test_fb_comments_does_not_reapply_already_applied_filter(monkeypatch) -> Non
         },
     })
     sc = _ctx(device)
-    sc.ctx["_fb_comment_filter_applied"] = "newest"
+    sc.ctx["_comment_filter_applied"] = "newest"
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
         {"collection": "fb", "edge_extra_data": True, "comment_filter": "newest"},
-        "fb_comments",
+        "comments",
+        "facebook",
         result := {},
     )
 
     assert handled is True
-    assert [call["strategy"] for call in device.calls] == ["fb_comments"]
+    assert [(call["entity"], call["platform"]) for call in device.calls] == [("comments", "facebook")]
     assert "comment_filter_on_extract" not in result
-    assert sc.ctx["_fb_comment_filter_applied"] == "newest"
+    assert sc.ctx["_comment_filter_applied"] == "newest"
 
 
-def test_tap_fb_comment_button_ignore_error_keeps_step_ok(monkeypatch) -> None:
+def test_social_open_comments_ignore_error_keeps_step_ok(monkeypatch) -> None:
     device = _FakeDevice({"ok": False, "error": "not_found"})
     result = {}
 
-    control_flow.handle_tap_fb_comment_button(
+    control_flow.handle_social_open_comments(
         _ctx(device),
         {},
         0,

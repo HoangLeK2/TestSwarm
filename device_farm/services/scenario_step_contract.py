@@ -5,7 +5,7 @@ from typing import Any
 
 from services.extract_profiles import (
     DEFAULT_EXTRACT_PROFILE,
-    EXTRACT_STRATEGY_VERSION_DEFAULTS,
+    EXTRACT_ENTITY_VERSION_DEFAULTS,
     get_profile_defaults,
     is_supported_profile,
 )
@@ -30,15 +30,14 @@ def _normalize_nested_steps(step: dict[str, Any], normalizer) -> None:
             step[branch] = [normalizer(item) for item in nested if isinstance(item, dict)]
 
 
-def normalize_fb_tap_comment_step(raw_step: dict[str, Any]) -> dict[str, Any]:
+def normalize_social_comment_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     step = deepcopy(raw_step)
     step_type = str(step.get("type") or "")
     if step_type not in {
-        "fb_tap_comment_button",
-        "tap_fb_comment_button",
-        "fb_find_comment_button",
-        "fb_tap_comment_target",
-        "fb_apply_comment_filter",
+        "social_open_comments",
+        "social_find_comment_button",
+        "social_tap_comment_target",
+        "social_apply_comment_filter",
     }:
         return step
     for key, val in _FB_TAP_COMMENT_DEFAULTS.items():
@@ -55,56 +54,45 @@ def normalize_scenario_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     if step_type == "extract":
         return normalize_extract_step(step)
     if step_type in {
-        "fb_tap_comment_button",
-        "tap_fb_comment_button",
-        "fb_find_comment_button",
-        "fb_tap_comment_target",
-        "fb_apply_comment_filter",
+        "social_open_comments",
+        "social_find_comment_button",
+        "social_tap_comment_target",
+        "social_apply_comment_filter",
     }:
-        return normalize_fb_tap_comment_step(step)
+        return normalize_social_comment_step(step)
     _normalize_nested_steps(step, normalize_scenario_step)
     return step
 
 
 def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
+    from tasks.scenario.steps.extraction import (
+        EDGE_CONTENT_ENTITIES,
+        resolve_extract_target,
+    )
+
     step = deepcopy(raw_step)
-    strategy = str(step.get("strategy") or "fb_posts")
+    entity, platform = resolve_extract_target(step)
     profile = str(step.get("extract_profile") or step.get("profile") or "")
 
     resolved_profile = profile if profile and is_supported_profile(profile) else DEFAULT_EXTRACT_PROFILE
-    defaults = get_profile_defaults(resolved_profile, strategy)
-    if not defaults and strategy.endswith("_posts"):
-        # ig_posts / tiktok_posts / … reuse fb_posts expand defaults when no profile slice exists.
-        defaults = get_profile_defaults(resolved_profile, "fb_posts")
+    defaults = get_profile_defaults(resolved_profile, entity)
     if defaults:
         for key, val in defaults.items():
             step.setdefault(key, val)
-    elif strategy.endswith("_posts"):
+    elif entity == "posts":
         step.setdefault("expand_see_more", True)
         step.setdefault("expand_see_more_max_passes", 4)
         step.setdefault("expand_completion_retries", 4)
 
-    step.setdefault("strategy", strategy)
+    step.setdefault("entity", entity)
+    step.setdefault("platform", platform)
     if profile:
         step.setdefault("extract_profile", profile)
     step.setdefault(
-        "strategy_version",
-        EXTRACT_STRATEGY_VERSION_DEFAULTS.get(strategy, f"{strategy}:v1"),
+        "entity_version",
+        EXTRACT_ENTITY_VERSION_DEFAULTS.get(entity, f"{entity}:v1"),
     )
-    if strategy in {
-        "fb_posts",
-        "fb_comments",
-        "fb_pages",
-        "text_nodes",
-        "ig_posts",
-        "tiktok_posts",
-        "linkedin_posts",
-        "auto_posts",
-        "ig_comments",
-        "tiktok_comments",
-        "linkedin_comments",
-        "auto_comments",
-    }:
+    if entity in EDGE_CONTENT_ENTITIES and entity != "groups":
         if step.get("edge_extra_data") is None:
             step.pop("edge_extra_data", None)
         step.setdefault("edge_extra_data", True)
@@ -133,13 +121,11 @@ def normalize_save_extraction_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     return step
 
 
-def extract_data_var_for_strategy(step: dict[str, Any]) -> str:
-    strategy = str(step.get("strategy") or "fb_posts")
+def extract_data_var_for_entity(step: dict[str, Any]) -> str:
     override = str(step.get("extract_var") or "").strip()
     if override:
         return override
-    if strategy.endswith("_comments"):
-        return "comments"
-    if strategy == "text_nodes":
-        return "text_nodes"
+    entity = str(step.get("entity") or "posts").strip().casefold()
+    if entity in {"comments", "text_nodes", "groups", "pages"}:
+        return entity
     return "posts"

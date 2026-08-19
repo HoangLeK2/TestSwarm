@@ -34,8 +34,8 @@ function hasThenElseBlocks(step: FlowStep): boolean {
     step.type === 'if' ||
     step.type === 'if_element' ||
     step.type === 'if_variable' ||
-    step.type === 'tap_fb_comment_button' ||
-    step.type === 'fb_tap_comment_button' ||
+    step.type === 'social_open_comments' ||
+    step.type === 'social_open_comments' ||
     hasArrayField(step, 'then') ||
     hasArrayField(step, 'else')
   );
@@ -56,8 +56,8 @@ function hasLoopBody(step: FlowStep): boolean {
 
 function thenElseTitles(step: FlowStep): [string, string] {
   const isFbTap =
-    step.type === 'tap_fb_comment_button' ||
-    step.type === 'fb_tap_comment_button';
+    step.type === 'social_open_comments' ||
+    step.type === 'social_open_comments';
   if (isFbTap) {
     return ['Khi bấm được nút Bình luận', 'Khi không thấy nút Bình luận'];
   }

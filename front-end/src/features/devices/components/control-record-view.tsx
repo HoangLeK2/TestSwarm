@@ -13,6 +13,11 @@ import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
 import { ControlRecordTopBar } from './control-record/control-record-top-bar';
 import { ControlRecordHierarchyPanel } from './control-record/control-record-hierarchy-panel';
 import { ControlRecordMirrorPanel } from './control-record/control-record-mirror-panel';
+import type { ImageTemplatePick } from '@/features/campaigns/components/flow-editor/image-template-dialog';
+import {
+  ImageTemplateScenarioProvider,
+  type MirrorRegion
+} from '@/features/campaigns/components/flow-editor/image-template-scenario';
 import { ControlRecordEditorToolbar } from './control-record/control-record-editor-toolbar';
 import {
   ControlRecordDeviceVarsDialog,
@@ -88,6 +93,8 @@ import {
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
 import { normalizeInternalAppPath } from '@/lib/i18n-path';
+import type { RegionSelect, RegionSelectRect } from './device-screen';
+import { orgScenariosApi } from '@/features/org-scenarios/services/api';
 import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
@@ -126,6 +133,7 @@ import {
   type CoordinatePickTarget
 } from '@/features/campaigns/components/flow-editor/coordinate-pick';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
+import type { StepRunResult } from '@/features/campaigns/components/flow-editor/step-run-result';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { deriveNestedInlineRunStates } from '@/features/campaigns/components/flow-editor/inline-run-key';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
@@ -555,6 +563,9 @@ export function ControlRecordView({
   const [stepRunStates, setStepRunStates] = useState<
     Record<string, 'idle' | 'running' | 'ok' | 'error'>
   >({});
+  const [stepRunResults, setStepRunResults] = useState<
+    Record<string, StepRunResult>
+  >({});
   const stepRunAbortRef = useRef<AbortController | null>(null);
   // Track active SSE preview trace so unmount (navigation away) can both
   // abort the fetch AND hit the server's explicit cancel endpoint — the SSE
@@ -672,6 +683,13 @@ export function ControlRecordView({
 
   const handleFlowStepsChange = useCallback(
     (newSteps: FlowStep[]) => {
+      // Inline run results are keyed by *position* (`rootIndex/listKey:childIndex`),
+      // so inserting or removing a step re-points every key below it. Rather than
+      // show a result under the wrong card, drop them whenever the shape changes.
+      if (newSteps.length !== steps.items.length) {
+        setStepRunResults({});
+        setStepRunStates({});
+      }
       steps.setItems(
         newSteps.map((s: FlowStep, i: number) => ({
           ...s,
@@ -791,6 +809,159 @@ export function ControlRecordView({
     (savingOrgScenario ? (initialCampaignId ?? null) : null);
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
   const activeDeviceVarScenarioId = savingOrgScenario ? null : activeScenarioId;
+  // Image templates are stored under a per-scenario prefix, and this screen
+  // edits scenarios in two shapes: one owned by a campaign (editingContext) and
+  // a standalone org one. `activeScenarioId` only covers the first, so cropping
+  // silently had no home to save to while editing an org scenario.
+  const templateScenarioId =
+    activeScenarioId ?? save.orgScenarioContext?.scenarioId ?? null;
+  // Grabber installed by DeviceScreen: reads the frame already on screen so
+  // cropping a tap_image template needs no backend screenshot round trip.
+  const captureFrameRef = useRef<(() => string | null) | null>(null);
+  const [regionSelecting, setRegionSelecting] = useState(false);
+  // Frame pinned when selection starts — what the user drags on is what gets
+  // cut, instead of a frame grabbed a moment later from a moving stream.
+  const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
+  const regionResolverRef = useRef<
+    ((rect: RegionSelectRect | null) => void) | null
+  >(null);
+
+  const settleRegion = useCallback((rect: RegionSelectRect | null) => {
+    regionResolverRef.current?.(rect);
+    regionResolverRef.current = null;
+    setRegionSelecting(false);
+    setFrozenFrame(null);
+  }, []);
+
+  /**
+   * Drag a rectangle on the mirror; resolves with the ratios plus the frame
+   * they were drawn on, so callers cut the pixels the user actually saw.
+   */
+  const requestRegionRect = useCallback((hintToast: string) => {
+    // A pending request is abandoned, not queued: the user just asked for a
+    // different one and only the newest can own the mirror.
+    regionResolverRef.current?.(null);
+    const frame = captureFrameRef.current?.() ?? null;
+    setFrozenFrame(frame);
+    setRegionSelecting(true);
+    toast.info(hintToast);
+    return new Promise<{ rect: RegionSelectRect; frame: string | null } | null>(
+      (resolve) => {
+        regionResolverRef.current = (rect) =>
+          resolve(rect ? { rect, frame } : null);
+      }
+    );
+  }, []);
+
+  const regionSelect = useMemo<RegionSelect>(
+    () => ({
+      active: regionSelecting,
+      onComplete: (rect) => settleRegion(rect),
+      onCancel: () => settleRegion(null),
+      hint: 'Kéo chọn vùng trên màn hình. Nhấn Esc để huỷ.',
+      frozenFrame
+    }),
+    [regionSelecting, settleRegion, frozenFrame]
+  );
+
+  // Shared by both step editors on this screen: the graph detail panel gets it
+  // as a prop, the step-list one through the image-template context (it sits
+  // under FlowEditor, which has no prop for this).
+  // Always defined: hiding the button when there is nowhere to save left the
+  // user hunting for a control that had silently disappeared. Say why instead.
+  const requestCropImage =
+    useCallback(async (): Promise<ImageTemplatePick | null> => {
+      if (!templateScenarioId) {
+        toast.warning(
+          'Lưu kịch bản trước đã — ảnh mẫu được lưu kèm theo kịch bản.'
+        );
+        return null;
+      }
+      if (!captureFrameRef.current?.()) {
+        toast.warning(
+          'Chưa lấy được hình từ mirror — đợi hình hiện lên rồi thử lại.'
+        );
+        return null;
+      }
+      // Cut on the mirror itself rather than in a dialog: the phone view is right
+      // there, and it matches how selector/coordinate picking already works here.
+      const picked = await requestRegionRect(
+        'Kéo chọn vùng cần nhận diện trên màn hình điện thoại.'
+      );
+      if (!picked) return null;
+      const { rect, frame } = picked;
+
+      // Cut the frozen frame, not a fresh grab: the ratios were drawn against
+      // that image, and it covers the whole screen so they index its pixels.
+      if (!frame) {
+        toast.warning('Chưa lấy được hình từ mirror — thử lại.');
+        return null;
+      }
+      try {
+        const img = new Image();
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error('decode failed'));
+          img.src = frame;
+        });
+        const x = Math.round(rect.rx1 * img.naturalWidth);
+        const y = Math.round(rect.ry1 * img.naturalHeight);
+        const w = Math.max(
+          1,
+          Math.round((rect.rx2 - rect.rx1) * img.naturalWidth)
+        );
+        const h = Math.max(
+          1,
+          Math.round((rect.ry2 - rect.ry1) * img.naturalHeight)
+        );
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('no 2d context');
+        ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+        const preview = canvas.toDataURL('image/png');
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, 'image/png')
+        );
+        if (!blob) throw new Error('encode failed');
+        const out = await orgScenariosApi.uploadImageTemplate(
+          templateScenarioId,
+          blob,
+          { w: img.naturalWidth, h: img.naturalHeight }
+        );
+        toast.success('Đã gắn ảnh mẫu cho bước.');
+        return {
+          templateKey: out.template_key,
+          screenW: out.screen_w ?? img.naturalWidth,
+          screenH: out.screen_h ?? img.naturalHeight,
+          preview,
+          warning: out.warning
+        };
+      } catch (e) {
+        toast.error(
+          e instanceof Error ? e.message : 'Không lưu được ảnh mẫu, thử lại.'
+        );
+        return null;
+      }
+    }, [requestRegionRect, templateScenarioId]);
+
+  /** Bound an OCR read to one area — same drag, rectangle kept as-is. */
+  const requestRegion = useCallback(async (): Promise<MirrorRegion | null> => {
+    const picked = await requestRegionRect(
+      'Kéo chọn vùng cần đọc chữ trên màn hình điện thoại.'
+    );
+    if (!picked) return null;
+    const { rect } = picked;
+    const round = (v: number) => Math.round(v * 1000) / 1000;
+    return {
+      x1: round(rect.rx1),
+      y1: round(rect.ry1),
+      x2: round(rect.rx2),
+      y2: round(rect.ry2)
+    };
+  }, [requestRegionRect]);
+
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
   const [recoveryPolicy, setRecoveryPolicy] = useState<RecoveryPolicy>({});
   const usesCampaignDeviceOverrides = Boolean(
@@ -1748,6 +1919,20 @@ export function ControlRecordView({
                 [runKey]: event.ok ? 'ok' : 'error',
                 ...deriveNestedInlineRunStates(runKey, event)
               }));
+              // Keep what the step produced so the card can show it — a green
+              // tick alone never told the author what was actually read.
+              setStepRunResults((s) => ({
+                ...s,
+                [runKey]: {
+                  ok: !!event.ok,
+                  message: event.message as string | undefined,
+                  savedAs: event.saved_as as string | undefined,
+                  textPreview: event.text_preview as string | undefined,
+                  textLength: event.text_length as number | undefined,
+                  textTruncated: event.text_truncated as boolean | undefined,
+                  boxCount: event.box_count as number | undefined
+                }
+              }));
               if (!event.ok) toast.error(`${label}: ${event.message ?? 'Lỗi'}`);
             }
           }),
@@ -2470,7 +2655,7 @@ export function ControlRecordView({
     wsDisconnected: t('wsDisconnected')
   };
 
-  return (
+  const content = (
     <div className='flex h-[calc(100vh-80px)] min-h-0 flex-col overflow-hidden bg-background'>
       <SafeModeBanner className='mx-3 mt-2' poll={false} />
       {noConnectedDevices ? (
@@ -2681,6 +2866,8 @@ export function ControlRecordView({
               canExecuteDevice={canExecuteDevice}
               onTakeControl={handleTakeControl}
               deviceOps={mirrorDeviceOps}
+              captureFrameRef={captureFrameRef}
+              regionSelect={regionSelect}
               hasMultiFollowers={hasMultiFollowers}
               multiFocusMode={multiFocusMode}
               selectedMultiFollowerDevices={selectedMultiFollowerDevices}
@@ -2852,7 +3039,7 @@ export function ControlRecordView({
                           <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
                           <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
                             {flowCoordPick.kind === 'tap'
-                              ? 'FLOW — chạm mirror để gán tọa độ cho node đang chọn. Esc để hủy.'
+                              ? 'FLOW — chạm mirror để gán toạ độ cho bước đang chọn. Esc để huỷ.'
                               : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
                           </p>
                           <button
@@ -3047,7 +3234,7 @@ export function ControlRecordView({
                                 {!flowDetailStep ? (
                                   <div className='pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md border border-border/70 bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur'>
                                     <MousePointerClick className='size-3.5 shrink-0' />
-                                    <span>Chọn node để cấu hình bước</span>
+                                    <span>Chọn một bước để cấu hình</span>
                                   </div>
                                 ) : null}
                               </div>
@@ -3081,6 +3268,7 @@ export function ControlRecordView({
                                           }
                                         : undefined
                                     }
+                                    onRequestCropImage={requestCropImage}
                                     onRequestPickTapCoords={
                                       flowSelectedFgId
                                         ? () => {
@@ -3091,7 +3279,7 @@ export function ControlRecordView({
                                             setCoordinatePickTarget(null);
                                             setFlowSelectorPickFgId(null);
                                             toast.info(
-                                              'Chạm mirror để gán tọa độ cho node này'
+                                              'Chạm mirror để gán toạ độ cho bước này'
                                             );
                                           }
                                         : undefined
@@ -3192,6 +3380,7 @@ export function ControlRecordView({
                                       : undefined
                                   }
                                   stepRunStates={stepRunStates}
+                                  stepRunResults={stepRunResults}
                                   sessionGateRuntimeContext={
                                     sessionGateRuntimeContext
                                   }
@@ -3397,8 +3586,8 @@ export function ControlRecordView({
                 )}
 
                 {/* Account-group picker — bound to the scenario on save. Empty
-                  means "do not use a pool; fall back to the device's primary
-                  account" (legacy behavior). */}
+                means "do not use a pool; fall back to the device's primary
+                account" (legacy behavior). */}
                 <div className='space-y-1 rounded-md border border-border/60 bg-muted/30 p-2'>
                   <p className='text-[11px] font-medium text-foreground/80'>
                     {t('accountGroupLabel')}
@@ -3413,7 +3602,7 @@ export function ControlRecordView({
                       <SelectValue />
                     </SelectTrigger>
                     {/* Dialog renders at z=10000; bump SelectContent above it so
-                      the dropdown is not clipped/hidden behind the modal. */}
+                    the dropdown is not clipped/hidden behind the modal. */}
                     <SelectContent className='z-[10010]'>
                       <SelectItem value='_none' className='text-xs'>
                         {t('accountGroupNone')}
@@ -3577,5 +3766,15 @@ export function ControlRecordView({
         }}
       />
     </div>
+  );
+
+  return (
+    <ImageTemplateScenarioProvider
+      scenarioId={templateScenarioId}
+      requestCropImage={requestCropImage}
+      requestRegion={requestRegion}
+    >
+      {content}
+    </ImageTemplateScenarioProvider>
   );
 }

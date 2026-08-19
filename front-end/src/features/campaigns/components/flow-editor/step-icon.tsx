@@ -67,7 +67,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   assert_element: CheckCircle,
   dismiss_popup: XCircle,
   login_if_needed: CheckCircle,
-  facebook_session_gate: CheckCircle,
+  platform_session_gate: CheckCircle,
   fill_form: Keyboard,
   assert_app_state: CheckCircle,
   set_variable: Variable,
@@ -92,14 +92,15 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   extract_screen_data: Search,
   if: GitBranch,
   break_if: GitBranch,
-  fb_tap_comment_button: GitBranch,
-  tap_fb_comment_button: GitBranch,
-  fb_find_comment_button: Search,
-  fb_tap_comment_target: MousePointerClick,
-  fb_apply_comment_filter: CheckCircle,
-  fb_scan_posts_interact: MessageCircle,
-  extract_fb_comments: Search,
-  extract_fb_posts: Search
+  social_open_comments: GitBranch,
+  social_find_comment_button: Search,
+  social_tap_comment_target: MousePointerClick,
+  social_apply_comment_filter: CheckCircle,
+  social_scan_posts_interact: MessageCircle,
+  social_open_author_from_post_match: UserPlus,
+  social_open_commenter_from_post_match: UserPlus,
+  extract_comments: Search,
+  extract_posts: Search
 };
 
 const COLOR_MAP: Record<string, string> = {
@@ -131,7 +132,7 @@ const COLOR_MAP: Record<string, string> = {
   assert_element: 'text-green-600',
   dismiss_popup: 'text-red-400',
   login_if_needed: 'text-emerald-500',
-  facebook_session_gate: 'text-emerald-600',
+  platform_session_gate: 'text-emerald-600',
   fill_form: 'text-cyan-600',
   assert_app_state: 'text-green-600',
   double_tap: 'text-blue-400',
@@ -156,14 +157,15 @@ const COLOR_MAP: Record<string, string> = {
   extract_screen_data: 'text-fuchsia-500',
   if: 'text-amber-500',
   break_if: 'text-amber-500',
-  fb_tap_comment_button: 'text-blue-600',
-  tap_fb_comment_button: 'text-blue-600',
-  fb_find_comment_button: 'text-sky-600',
-  fb_tap_comment_target: 'text-blue-600',
-  fb_apply_comment_filter: 'text-emerald-600',
-  fb_scan_posts_interact: 'text-blue-600',
-  extract_fb_comments: 'text-fuchsia-500',
-  extract_fb_posts: 'text-fuchsia-500'
+  social_open_comments: 'text-blue-600',
+  social_find_comment_button: 'text-sky-600',
+  social_tap_comment_target: 'text-blue-600',
+  social_apply_comment_filter: 'text-emerald-600',
+  social_scan_posts_interact: 'text-blue-600',
+  social_open_author_from_post_match: 'text-emerald-700',
+  social_open_commenter_from_post_match: 'text-emerald-700',
+  extract_comments: 'text-fuchsia-500',
+  extract_posts: 'text-fuchsia-500'
 };
 
 interface Props {

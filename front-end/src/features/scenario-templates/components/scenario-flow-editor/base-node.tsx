@@ -22,8 +22,7 @@ const BORDER_COLORS: Record<string, string> = {
   tap_ratio: '#3b82f6',
   tap_position: '#3b82f6',
   tap: '#3b82f6',
-  fb_tap_comment_button: '#2563eb',
-  tap_fb_comment_button: '#2563eb',
+  social_open_comments: '#2563eb',
   long_tap_selector: '#3b82f6',
   swipe_ratio: '#3b82f6',
   double_tap: '#60a5fa',
@@ -72,8 +71,8 @@ function getFlowSummary(step?: FlowStep): string[] {
     step.type === 'if' ||
     step.type === 'if_element' ||
     step.type === 'if_variable' ||
-    step.type === 'tap_fb_comment_button' ||
-    step.type === 'fb_tap_comment_button' ||
+    step.type === 'social_open_comments' ||
+    step.type === 'social_open_comments' ||
     Array.isArray(step.then) ||
     Array.isArray(step.else)
   ) {

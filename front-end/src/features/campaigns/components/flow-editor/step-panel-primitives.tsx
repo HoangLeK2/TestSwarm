@@ -18,7 +18,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
-import { formatStepLabelForCard, getStepSummary } from './constants';
+import { formatStepLabelForCard } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import {
@@ -243,7 +243,7 @@ export function StepPanelToggle({
 }
 
 export function StepPanelHeader({ step }: { step: FlowStep }) {
-  const { getStepTypeName } = useCampaignFlowI18n();
+  const { getStepTypeName, getStepSummary } = useCampaignFlowI18n();
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
   const userTitle = String((step as { title?: string }).title ?? '').trim();
   const summary = getStepSummary(step).trim();

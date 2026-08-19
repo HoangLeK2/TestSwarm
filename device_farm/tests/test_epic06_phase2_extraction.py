@@ -53,7 +53,26 @@ class FakeDevice:
 
 
 class TestCaptureService:
-    def test_png_normalization_from_jpeg(self):
+    def test_png_normalization_when_persisting(self, monkeypatch):
+        """Stored artifacts are declared image/png, so they must really be PNG."""
+        from services import minio_store
+
+        monkeypatch.setattr(minio_store, "enabled", lambda: False)
+        monkeypatch.setattr(minio_store, "local_image_fallback_enabled", lambda: True)
+        device = FakeDevice()
+        svc = ExtractionCaptureService()
+        ctx = ExecutionCaptureContext(execution_id="e-png", step_index=0, kind="screenshot_ocr")
+        handle = svc.capture_screenshot(device, persist=True, execution_ctx=ctx)
+        assert handle.image_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+        assert handle.size_bytes > 0
+
+    def test_png_normalization_even_when_not_persisting(self):
+        """Callers write these bytes out as .png regardless of `persist`.
+
+        epic06_capture_adapter stores handle.image_bytes to `<prefix>_full.png`
+        with content_type image/png on both branches, so returning the device's
+        raw JPEG here would put a JPEG inside a file claiming to be a PNG.
+        """
         device = FakeDevice()
         svc = ExtractionCaptureService()
         handle = svc.capture_screenshot(device, persist=False)
@@ -145,106 +164,131 @@ class TestRetentionPolicy:
         assert _retention_days_for(execution, artifact, policy) == 90
 
 
-class TestOCRHelpers:
-    def test_tesseract_lang_mapping(self):
-        from services.content.extraction.ocr_service import _tesseract_lang
+class _OcrDevice:
+    """Device whose OCR runs on agent-boot, as it does in production."""
 
-        assert _tesseract_lang(["vi", "en"]) == "vie+eng"
+    serial = "dev-ocr"
 
+    def __init__(self, *, supported: bool = True, reply: dict | None = None) -> None:
+        self._supported = supported
+        self._reply = reply if reply is not None else {"ok": True, "results": [], "count": 0}
+        self.calls: list[dict] = []
 
-class TestCapturePersist:
-    def test_persist_artifact_writes_row(self):
-        from unittest.mock import AsyncMock, MagicMock, patch
+    def ocr_supported(self) -> bool:
+        return self._supported
 
-        from services.content.extraction.capture_service import _try_persist_artifact
-        from services.content.extraction.models import ExecutionCaptureContext
-
-        ctx = ExecutionCaptureContext(
-            execution_id="exec-1",
-            step_index=2,
-            kind="screenshot_pre",
-            org_id="org-1",
-        )
-        captured_at = datetime.now(timezone.utc)
-
-        with patch("db.database.run_activity_coro") as run_coro:
-            run_coro.side_effect = lambda coro: __import__("asyncio").run(coro)
-            with patch("db.database.activity_session") as session_cm:
-                db = AsyncMock()
-                session_cm.return_value.__aenter__ = AsyncMock(return_value=db)
-                session_cm.return_value.__aexit__ = AsyncMock(return_value=False)
-                with patch(
-                    "services.content.extraction.capture_service.persist_capture_artifact",
-                    new=AsyncMock(return_value="art-99"),
-                ) as persist:
-                    artifact_id = _try_persist_artifact(
-                        ctx,
-                        db=None,
-                        object_key="org-1/exec-1/step-2/screenshot_pre-ts.png",
-                        mime="image/png",
-                        size=123,
-                        sha256="abc",
-                        captured_at=captured_at,
-                    )
-        assert artifact_id == "art-99"
-        persist.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_persist_capture_artifact_includes_org_id(self):
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from services.content.extraction.capture_service import persist_capture_artifact
-        from services.content.extraction.models import ExecutionCaptureContext
-
-        ctx = ExecutionCaptureContext(
-            execution_id="exec-1",
-            step_index=3,
-            kind="screenshot_post",
-            org_id=None,
-        )
-        captured_at = datetime.now(timezone.utc)
-        db = AsyncMock()
-        db.get = AsyncMock(return_value=MagicMock(org_id="org-99"))
-        db.scalar = AsyncMock(return_value="device-1")
-
-        with patch(
-            "db.crud.execution_artifact.create_execution_artifact",
-            new=AsyncMock(return_value=MagicMock(id="art-42")),
-        ) as create:
-            artifact_id = await persist_capture_artifact(
-                db,
-                ctx,
-                object_key="org-99/exec-1/step-3/screenshot_post.png",
-                mime="image/png",
-                size=2048,
-                sha256="deadbeef",
-                captured_at=captured_at,
-            )
-
-        assert artifact_id == "art-42"
-        create.assert_awaited_once()
-        kwargs = create.await_args.kwargs
-        assert kwargs["org_id"] == "org-99"
-        assert kwargs["device_id"] == "device-1"
+    def request_ocr(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._reply
 
 
-class TestScenarioBridge:
-    def test_map_ocr_languages_legacy_eng(self):
-        from services.content.extraction.scenario_bridge import map_ocr_languages
+class TestOCROnDevice:
+    """OCR reads the screen on the agent; the farm never sees the frame.
 
-        assert map_ocr_languages("eng") == ["en"]
+    Since media moved to go2rtc, DeviceClient.take_screenshot() only reads a
+    scrcpy JPEG cache that nothing fills any more — the farm has no frame of its
+    own, so this path is the only one that works.
+    """
 
-    def test_execution_capture_ctx_from_scenario(self):
-        from types import SimpleNamespace
+    async def test_returns_boxes_and_no_image_on_success(self):
+        from services.content.extraction.ocr_service import OCRService
 
-        from services.content.extraction.scenario_bridge import execution_capture_ctx
+        device = _OcrDevice(reply={
+            "ok": True,
+            "count": 2,
+            "results": [
+                {"text": "Hello", "left": 10, "top": 20, "width": 50, "height": 15, "conf": 91},
+                {"text": "", "left": 10, "top": 60, "width": 40, "height": 15, "conf": 88},
+            ],
+        })
+        result, image = await OCRService(confidence_threshold=0.5).extract_on_device(device)
 
-        sc = SimpleNamespace(
-            execution_id=None,
-            scenario={"execution_id": "e-42", "org_id": "o-1"},
-        )
-        ctx = execution_capture_ctx(sc, 3, "hierarchy_snapshot")
-        assert ctx is not None
-        assert ctx.execution_id == "e-42"
-        assert ctx.step_index == 3
-        assert ctx.org_id == "o-1"
+        assert image is None
+        # Whitespace-only boxes are dropped; the agent already applied the
+        # confidence threshold, so everything it returns is above the bar.
+        assert [r["text"] for r in result.results] == ["Hello"]
+        assert result.low_confidence_results == []
+        assert result.results[0]["bbox"] == {"x": 10, "y": 20, "w": 50, "h": 15}
+        assert result.results[0]["confidence"] == pytest.approx(0.91)
+        assert device.calls[0]["min_confidence"] == 0.5, "threshold must reach the agent"
+
+    async def test_unsupported_agent_fails_fast_with_actionable_code(self):
+        """Must not fall through to a 30s relay timeout on every OCR step."""
+        from services.content.extraction.models import OCRError
+        from services.content.extraction.ocr_service import OCRService
+
+        device = _OcrDevice(supported=False)
+        with pytest.raises(OCRError) as exc:
+            await OCRService().extract_on_device(device)
+        assert exc.value.code == "OCR_AGENT_UNSUPPORTED"
+        assert device.calls == [], "should not reach the relay at all"
+
+    async def test_agent_error_surfaces(self):
+        from services.content.extraction.models import OCRError
+        from services.content.extraction.ocr_service import OCRService
+
+        device = _OcrDevice(reply={"ok": False, "error": "screenshot_unavailable"})
+        with pytest.raises(OCRError) as exc:
+            await OCRService().extract_on_device(device)
+        assert exc.value.code == "OCR_AGENT_ERROR"
+        assert "screenshot_unavailable" in str(exc.value)
+
+    async def test_image_returned_only_when_requested_and_empty(self):
+        import base64 as _b64
+
+        from services.content.extraction.ocr_service import OCRService
+
+        device = _OcrDevice(reply={
+            "ok": True, "results": [], "count": 0,
+            "image_b64": _b64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode(),
+        })
+        result, image = await OCRService().extract_on_device(device, want_image_on_empty=True)
+        assert result.results == []
+        assert image and image.startswith(b"\x89PNG")
+        assert device.calls[0]["want_image_on_empty"] is True
+
+
+class TestComposeOcrText:
+    """Boxes must come back as lines, not one word per line.
+
+    Tesseract emits a box per word. Joining every box with a newline made the
+    saved variable a column of single words, which is unreadable in the editor
+    and — worse — makes any `contains "two words"` check impossible.
+    """
+
+    @staticmethod
+    def _box(text: str, x: int, y: int, w: int = 40, h: int = 20):
+        return {"text": text, "bbox": {"x": x, "y": y, "w": w, "h": h}}
+
+    def test_groups_words_into_visual_lines_in_reading_order(self):
+        from services.content.extraction.ocr_service import compose_text
+
+        # Deliberately out of order, with the few-pixel baseline jitter real
+        # OCR produces within one line.
+        boxes = [
+            self._box("delays", 300, 102),
+            self._box("US", 100, 100),
+            self._box("president", 160, 101),
+            self._box("tariffs", 120, 140),
+            self._box("50%", 60, 141),
+            self._box("by", 220, 139),
+        ]
+        assert compose_text(boxes) == "US president delays\n50% tariffs by"
+
+    def test_line_tolerance_scales_with_font_size(self):
+        from services.content.extraction.ocr_service import compose_text
+
+        # Tall boxes: a 12px baseline difference is still the same line.
+        boxes = [self._box("A", 0, 100, h=60), self._box("B", 80, 112, h=60)]
+        assert compose_text(boxes) == "A B"
+        # Small boxes: the same 12px gap is a new line.
+        boxes = [self._box("A", 0, 100, h=10), self._box("B", 80, 112, h=10)]
+        assert compose_text(boxes) == "A\nB"
+
+    def test_blank_and_missing_bbox_inputs_stay_safe(self):
+        from services.content.extraction.ocr_service import compose_text
+
+        assert compose_text([]) == ""
+        assert compose_text([self._box("   ", 0, 0)]) == ""
+        # The agent can send a bare text entry; that must not raise.
+        assert compose_text([{"text": "a"}, {"text": "b"}]) == "a b"

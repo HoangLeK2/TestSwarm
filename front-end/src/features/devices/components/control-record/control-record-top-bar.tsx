@@ -4,21 +4,10 @@ import { ArrowLeft } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import type { Device } from '@/features/devices/types';
-import {
-  deviceSelectFullTitle,
-  formatDeviceSelectLabel
-} from '@/features/devices/lib/device-select-label';
-import { isManualControlBlockedByAutomation } from '@/features/devices/lib/control-record-device-state';
 
+import { DeviceSelectPicker } from './device-select-picker';
 import { MultiDevicePicker } from './multi-device-picker';
 
 type ControlRecordTopBarLabels = {
@@ -52,10 +41,6 @@ type ControlRecordTopBarProps = {
   multiPickerDisabledTitle?: string;
   wsConnected: boolean;
 };
-
-function isDeviceBusy(d: Device) {
-  return isManualControlBlockedByAutomation(d);
-}
 
 export function ControlRecordTopBar({
   title,
@@ -122,44 +107,13 @@ export function ControlRecordTopBar({
           {labels.deviceLabel}
         </span>
         <div className='min-w-0 flex-1 md:max-w-[min(240px,calc(100vw-16rem))]'>
-          <Select
+          <DeviceSelectPicker
+            devices={devices}
             value={deviceSelectValue}
-            onValueChange={(v) => onDeviceChange(v || null)}
-          >
-            <SelectTrigger
-              id='control-record-device-select'
-              className={cn(
-                'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
-                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
-              )}
-            >
-              <SelectValue placeholder={labels.selectPhonePlaceholder} />
-            </SelectTrigger>
-            <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
-              {devices.map((d) => (
-                <SelectItem
-                  key={d.serial}
-                  value={d.serial}
-                  title={deviceSelectFullTitle(d)}
-                  className='text-xs'
-                >
-                  <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
-                    <span className='min-w-0 truncate'>
-                      {formatDeviceSelectLabel(d)}
-                    </span>
-                    {isDeviceBusy(d) ? (
-                      <Badge
-                        variant='outline'
-                        className='h-4 shrink-0 border-amber-400/40 bg-amber-400/10 px-1 text-[9px] font-medium text-amber-700 dark:text-amber-300'
-                      >
-                        {labels.deviceCampaignBadge}
-                      </Badge>
-                    ) : null}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={onDeviceChange}
+            placeholder={labels.selectPhonePlaceholder}
+            busyBadgeLabel={labels.deviceCampaignBadge}
+          />
         </div>
 
         <MultiDevicePicker

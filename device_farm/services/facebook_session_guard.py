@@ -19,7 +19,8 @@ from services.device_platform_session import (
     get_platform_session,
     mark_readiness_observed,
 )
-from services.facebook_readiness import FacebookReadinessResult, FacebookReadinessStatus, resolve_facebook_readiness
+from services.facebook_readiness import resolve_facebook_readiness
+from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 
 log = logging.getLogger(__name__)
 _DEVICE_LOCKS: dict[str, asyncio.Lock] = {}
@@ -77,7 +78,7 @@ def facebook_session_guard_mode() -> FacebookSessionGuardMode:
 
 def _ready_ttl_seconds() -> int:
     try:
-        return max(0, min(3600, int(os.environ.get("FACEBOOK_SESSION_READY_TTL_SECONDS", "300"))))
+        return max(0, min(3600, int(os.environ.get("PLATFORM_SESSION_READY_TTL_SECONDS", "300"))))
     except ValueError:
         return 300
 
@@ -113,7 +114,7 @@ def _decision(
     reason: str,
     session: DevicePlatformSession | None,
     expected_account_id: str | None,
-    readiness: FacebookReadinessResult | None = None,
+    readiness: PlatformReadinessResult | None = None,
     evidence: dict[str, Any] | None = None,
 ) -> FacebookSessionGuardDecision:
     outcome = (
@@ -187,12 +188,12 @@ async def observe_facebook_readiness_for_device(
     manager: Any,
     package: str = FACEBOOK_APP_PACKAGE,
     app_version: str | None = None,
-) -> FacebookReadinessResult:
+) -> PlatformReadinessResult:
     started = time.perf_counter()
     client = manager.get_device(device_serial) if manager is not None else None
     if client is None:
-        return FacebookReadinessResult(
-            FacebookReadinessStatus.INCONCLUSIVE,
+        return PlatformReadinessResult(
+            PlatformReadinessStatus.INCONCLUSIVE,
             "device_offline",
             _utcnow(),
             app_package=package,
@@ -200,11 +201,11 @@ async def observe_facebook_readiness_for_device(
         )
     lock = await _device_lock(device_serial)
 
-    def inspect() -> FacebookReadinessResult:
+    def inspect() -> PlatformReadinessResult:
         client.launch_app(package)
         hierarchy = client.hierarchy_xml(force_refresh=True) or ""
         result = resolve_facebook_readiness(hierarchy, package=package, app_version=app_version)
-        return FacebookReadinessResult(
+        return PlatformReadinessResult(
             status=result.status,
             reason=result.reason,
             attempted_at=result.attempted_at,
@@ -220,10 +221,10 @@ async def observe_facebook_readiness_for_device(
     try:
         result = await asyncio.wait_for(asyncio.shield(inspection), timeout=_check_timeout_seconds())
     except TimeoutError:
-        result = FacebookReadinessResult(FacebookReadinessStatus.INCONCLUSIVE, "inspection_timeout", _utcnow(), app_package=package, app_version=app_version)
+        result = PlatformReadinessResult(PlatformReadinessStatus.INCONCLUSIVE, "inspection_timeout", _utcnow(), app_package=package, app_version=app_version)
     except Exception as exc:
         log.warning("facebook readiness inspection failed device=%s: %s", device_serial, exc)
-        result = FacebookReadinessResult(FacebookReadinessStatus.INCONCLUSIVE, "inspection_failed", _utcnow(), app_package=package, app_version=app_version)
+        result = PlatformReadinessResult(PlatformReadinessStatus.INCONCLUSIVE, "inspection_failed", _utcnow(), app_package=package, app_version=app_version)
     try:
         from web.metrics import facebook_readiness_checks_total
 
@@ -285,7 +286,7 @@ async def guard_facebook_session(
     manager: Any = None,
     device_serial: str | None = None,
     live_check: bool = False,
-    readiness: FacebookReadinessResult | None = None,
+    readiness: PlatformReadinessResult | None = None,
 ) -> FacebookSessionGuardDecision:
     selected_mode = mode or facebook_session_guard_mode()
     session = await get_platform_session(db, org_id=org_id, device_id=device_id, platform=FACEBOOK_PLATFORM)
@@ -302,7 +303,7 @@ async def guard_facebook_session(
         readiness = await observe_facebook_readiness_for_device(device_serial=device_serial, manager=manager)
     evidence = readiness.evidence()
     updated = session
-    if readiness.status == FacebookReadinessStatus.READY:
+    if readiness.status == PlatformReadinessStatus.READY:
         if session and session.state == DevicePlatformSessionState.ACTIVE.value and session.account_id == account_id:
             updated = await mark_readiness_observed(
                 db,
@@ -324,10 +325,10 @@ async def guard_facebook_session(
         )
         return _decision(mode=selected_mode, would_block=True, reason="facebook_ready_without_matching_provenance", session=updated, expected_account_id=account_id, readiness=readiness, evidence=evidence)
     state_by_readiness = {
-        FacebookReadinessStatus.LOGGED_OUT: DevicePlatformSessionState.LOGGED_OUT,
-        FacebookReadinessStatus.CHECKPOINT: DevicePlatformSessionState.CHECKPOINT,
-        FacebookReadinessStatus.UNRESPONSIVE: DevicePlatformSessionState.FAILED,
-        FacebookReadinessStatus.UNSUPPORTED_BUILD: DevicePlatformSessionState.FAILED,
+        PlatformReadinessStatus.LOGGED_OUT: DevicePlatformSessionState.LOGGED_OUT,
+        PlatformReadinessStatus.CHECKPOINT: DevicePlatformSessionState.CHECKPOINT,
+        PlatformReadinessStatus.UNRESPONSIVE: DevicePlatformSessionState.FAILED,
+        PlatformReadinessStatus.UNSUPPORTED_BUILD: DevicePlatformSessionState.FAILED,
     }
     next_state = state_by_readiness.get(readiness.status)
     if next_state is not None:
@@ -335,7 +336,7 @@ async def guard_facebook_session(
             db,
             org_id=org_id,
             device_id=device_id,
-            account_id=account_id if readiness.status == FacebookReadinessStatus.CHECKPOINT else None,
+            account_id=account_id if readiness.status == PlatformReadinessStatus.CHECKPOINT else None,
             state=next_state,
             reason=readiness.reason,
             evidence=evidence,

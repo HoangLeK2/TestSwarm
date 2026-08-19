@@ -402,7 +402,7 @@ def test_epic06_capture_payload_skips_xml_artifact_by_default(monkeypatch):
     payload = epic06_capture_adapter.build_step_capture_payload(
         sc,
         0,
-        "tap_fb_comment_button_pre",
+        "social_open_comments_pre",
     )
 
     assert payload["full"] == "http://minio/artifact"
@@ -443,7 +443,7 @@ def test_epic06_capture_payload_xml_artifact_opt_in_uses_db_safe_kinds(monkeypat
     payload = epic06_capture_adapter.build_step_capture_payload(
         sc,
         0,
-        "tap_fb_comment_button_pre",
+        "social_open_comments_pre",
     )
 
     assert payload["full"] == "http://minio/artifact"

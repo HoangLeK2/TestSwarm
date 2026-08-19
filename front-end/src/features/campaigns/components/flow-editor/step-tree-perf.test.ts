@@ -61,7 +61,7 @@ test('perf: walkFlowStepsWithPaths stays fast on real crawl scenario', () => {
 test('perf: resolveStepAtPath for deepest comment extract stays fast', () => {
   const steps = loadSteps();
   const extractVisit = walkFlowStepsWithPaths(steps).find(
-    (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+    (v) => v.step.type === 'extract' && v.step.entity === 'comments'
   );
   assert.ok(extractVisit);
   const path = extractVisit.path;
@@ -76,7 +76,7 @@ test('perf: resolveStepAtPath for deepest comment extract stays fast', () => {
 test('perf: updateStepAtPath on comment extract stays fast', () => {
   const steps = loadSteps();
   const extractVisit = walkFlowStepsWithPaths(steps).find(
-    (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+    (v) => v.step.type === 'extract' && v.step.entity === 'comments'
   );
   assert.ok(extractVisit);
   const { step, path } = extractVisit;
@@ -133,7 +133,7 @@ test('perf summary logs node count and budgets', () => {
   const steps = loadSteps();
   const visits = walkFlowStepsWithPaths(steps);
   const extract = visits.find(
-    (v) => v.step.type === 'extract' && v.step.strategy === 'fb_comments'
+    (v) => v.step.type === 'extract' && v.step.entity === 'comments'
   );
   assert.ok(extract);
   const walk = bench(

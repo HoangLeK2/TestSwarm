@@ -11,6 +11,7 @@ from datetime import timedelta
 import pytest
 
 from temporal.shared import (
+    CONTROL_TASK_QUEUE_NAME,
     DeviceActionBatchResult,
     ScenarioInput,
     StepsInput,
@@ -87,8 +88,8 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
         raw_context = inp.get("context", {}) if isinstance(inp, dict) else inp.context
         executed_types.extend(str(step.get("type") or "") for step in steps)
         context = dict(raw_context)
-        if steps[0].get("type") == "facebook_session_gate":
-            context["vars"] = {"FACEBOOK_SESSION_READY": True}
+        if steps[0].get("type") == "platform_session_gate":
+            context["vars"] = {"PLATFORM_SESSION_READY": True}
         return DeviceActionBatchResult(
             results=[
                 {
@@ -105,10 +106,10 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
     steps_inp = StepsInput(
         device_serial="V2352A",
         steps=[
-            {"type": "facebook_session_gate", "phase": "preflight"},
+            {"type": "platform_session_gate", "phase": "preflight"},
             {
                 "type": "if_variable",
-                "name": "FACEBOOK_SESSION_READY",
+                "name": "PLATFORM_SESSION_READY",
                 "then": [{"type": "wait", "seconds": 0}],
                 "else": [{"type": "key", "key": "back"}],
             },
@@ -131,7 +132,7 @@ async def test_leaf_activity_context_vars_drive_following_if_variable():
             )
 
     assert result.success is True
-    assert executed_types == ["facebook_session_gate", "wait"]
+    assert executed_types == ["platform_session_gate", "wait"]
 
 
 @pytest.mark.asyncio
@@ -239,12 +240,12 @@ async def test_preexisting_context_vars_drive_nested_if_variable():
         steps=[
             {
                 "type": "if_variable",
-                "name": "FACEBOOK_SESSION_READY",
+                "name": "PLATFORM_SESSION_READY",
                 "then": [{"type": "wait", "seconds": 0}],
                 "else": [{"type": "key", "key": "back"}],
             }
         ],
-        context={"vars": {"FACEBOOK_SESSION_READY": True}},
+        context={"vars": {"PLATFORM_SESSION_READY": True}},
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -953,6 +954,10 @@ async def test_scenario_workflow_forwards_pause_and_resume_to_child(pause_coord)
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1029,6 +1034,10 @@ async def test_campaign_keepalive_starts_during_initial_multi_day_pause():
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1099,6 +1108,10 @@ async def test_initial_pause_claim_loss_is_non_retryable_and_finalized():
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             result = await asyncio.wait_for(
                 env.client.execute_workflow(
@@ -1147,6 +1160,10 @@ async def test_cancel_before_child_start_is_finalized():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
             activities=[mock_finalize],
         ):
             result = await env.client.execute_workflow(
@@ -1222,6 +1239,10 @@ async def test_paused_campaign_keeps_device_claim_alive_across_multi_day_gap():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
@@ -1357,6 +1378,10 @@ async def test_scenario_workflow_treats_child_temporal_cancel_as_cancelled(pause
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from services.scenario_dsl.step_family import COMPOSITION_RUN_SCENARIO
-from services.scenario_dsl.step_registry import StepRegistry
+from services.social_ext.contract import SOCIAL_ENTITIES, SOCIAL_STEP_TYPES
 
 StepEntry = tuple[dict, str, str | None]
 
@@ -19,20 +19,10 @@ _INTERACTION_PREFIXES = (
     "launch_app",
     "open_url",
 )
-_SOCIAL_MARKERS = ("tap_fb", "fb_", "ig_", "tiktok_", "linkedin_", "platform_specific.")
-_GENERIC_SOCIAL_TYPES = frozenset(
-    {
-        "content_interaction",
-        "connection_request",
-        "lease_connection_candidate",
-        "lease_source_target",
-        "community_membership",
-        "fb_select_people_profile",
-        "fb_connect_visible_people",
-        "fb_select_post_target",
-        "fb_scan_posts_interact",
-    }
-)
+# DSL steps carry a dotted family prefix; platform-specific ones stay social.
+_SOCIAL_MARKERS = ("platform_specific.",)
+_GENERIC_SOCIAL_TYPES = SOCIAL_STEP_TYPES | {"lease_source_target"}
+_SOCIAL_ENTITIES = SOCIAL_ENTITIES - {"text_nodes"}
 
 
 @dataclass(frozen=True)
@@ -98,15 +88,10 @@ def _is_social_step(step: dict) -> bool:
         return True
     if any(marker in t for marker in _SOCIAL_MARKERS):
         return True
-    if StepRegistry.get(t) is not None and not t.startswith("interaction."):
-        if any(marker in t for marker in ("fb_", "ig_", "tiktok_", "linkedin_")):
-            return True
-    config = step.get("config")
-    if isinstance(config, dict):
-        strategy = str(config.get("strategy") or "")
-        if any(marker in strategy for marker in ("fb_", "ig_", "tiktok_", "linkedin_")):
-            return True
-    return False
+    # Graph nodes keep their step fields under `config`.
+    config = step.get("config") if isinstance(step.get("config"), dict) else {}
+    entity = str(step.get("entity") or config.get("entity") or "").strip().casefold()
+    return entity in _SOCIAL_ENTITIES
 
 
 def _walk_steps(

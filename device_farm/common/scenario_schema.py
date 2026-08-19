@@ -15,6 +15,7 @@ SCENARIO_STEP_TYPES = [
     "wait",
     "tap_position",
     "tap_ratio",
+    "tap_image",
     "swipe_ratio",
     "tap",
     "tap_selector",
@@ -26,7 +27,7 @@ SCENARIO_STEP_TYPES = [
     "scroll_to",
     "input_text",
     "login_if_needed",
-    "facebook_session_gate",
+    "platform_session_gate",
     "fill_form",
     "assert_app_state",
     "key",
@@ -40,15 +41,15 @@ SCENARIO_STEP_TYPES = [
     "repeat_until",
     "if_element",
     "if_variable",
-    "fb_tap_comment_button",
-    "tap_fb_comment_button",
-    "fb_find_comment_button",
-    "fb_tap_comment_target",
-    "fb_apply_comment_filter",
-    "fb_select_people_profile",
-    "fb_connect_visible_people",
-    "fb_select_post_target",
-    "fb_scan_posts_interact",
+    "social_open_comments",
+    "social_find_comment_button",
+    "social_tap_comment_target",
+    "social_apply_comment_filter",
+    "social_select_target",
+    "social_connect_visible_people",
+    "social_scan_posts_interact",
+    "social_open_author_from_post_match",
+    "social_open_commenter_from_post_match",
     "content_interaction",
     "connection_request",
     "lease_connection_candidate",
@@ -139,6 +140,21 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [],
         "description": "Tap tại tỷ lệ màn hình (0–1). Fallback khi không có selector.",
     },
+    "tap_image": {
+        "required": ["template_key"],
+        "optional": [
+            "threshold", "scale", "template_screen_w", "template_screen_h",
+            "timeout", "poll",
+        ],
+        "description": (
+            "Tap vào vị trí khớp ảnh mẫu trên màn hình. "
+            "template_key: khoá ảnh trong object storage (cắt từ màn hình lúc thiết kế). "
+            "threshold: ngưỡng khớp 0–1 (mặc định 0.8; khớp thật thường 0.96–1.00). "
+            "scale: tỷ lệ thu nhỏ khi tìm (mặc định 0.25 — nhanh hơn ~70 lần mà không giảm độ chính xác). "
+            "template_screen_w/h: kích thước màn lúc cắt, để hiệu chỉnh khi máy khác độ phân giải. "
+            "Khớp chạy trên agent-boot; mỗi lần thử tốn 1 ảnh chụp + ~11ms so khớp."
+        ),
+    },
     "swipe_ratio": {
         "required": ["x1", "y1", "x2", "y2"],
         "optional": ["duration_ms"],
@@ -200,17 +216,25 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ],
         "description": "Atomically reserve the next unused device target for the bound account and action.",
     },
-    "fb_select_people_profile": {
+    "social_select_target": {
         "required": [],
         "optional": [
-            "search", "display_name", "row_text", "required_keywords", "optional_keywords",
-            "forbidden_keywords", "min_score", "require_unique", "timeout", "profile_wait_s",
+            "platform", "target_type",
+            "search", "display_name", "display_text", "row_text",
+            "required_keywords", "optional_keywords",
+            "forbidden_keywords", "min_score", "require_unique", "timeout",
+            "profile_wait_s", "detail_wait_s", "current_detail",
             "save_as", "save_success_as", "skip_candidate_on_not_verified",
             "candidate_entity_id", "candidate_lease_token", "skip_candidate_defer_hours",
         ],
-        "description": "Agent-boot resolver: score Facebook People results, open one verified profile, and save the target proof.",
+        "description": (
+            "Agent-boot resolver: score search results for the platform, open one "
+            "verified target, and save the target proof. target_type: 'person' "
+            "(default, uses display_name/profile_wait_s) or 'post' (uses "
+            "display_text/detail_wait_s/current_detail). platform defaults to facebook."
+        ),
     },
-    "fb_connect_visible_people": {
+    "social_connect_visible_people": {
         "required": [],
         "optional": [
             "platform", "min_score", "require_common", "common_keywords",
@@ -219,30 +243,47 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "max_scrolls", "no_more_common_limit", "dry_run", "scroll_wait_s",
             "surface_wait_s", "stop_on_unverified",
         ],
-        "description": "Agent-boot flow: open Facebook friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
+        "description": "Agent-boot flow: open the platform friend suggestions, scan visible Add Friend rows, require common-context score, send verified requests in a bounded batch, and ledger each request.",
     },
-    "fb_select_post_target": {
-        "required": [],
-        "optional": [
-            "search", "display_text", "row_text", "required_keywords", "optional_keywords",
-            "forbidden_keywords", "min_score", "require_unique", "timeout", "detail_wait_s",
-            "current_detail",
-            "save_as",
-        ],
-        "description": "Agent-boot resolver: score Facebook post results, open one verified post, and save the target proof.",
-    },
-    "fb_scan_posts_interact": {
+    "social_scan_posts_interact": {
         "required": [],
         "optional": [
             "platform", "keywords", "match_mode", "comment_text", "target_count",
             "batch_size", "max_scrolls", "timeout", "scroll_x_ratio",
             "scroll_y1_ratio", "scroll_y2_ratio", "scroll_duration_s",
             "scroll_wait_s", "comment_wait_s", "submit_wait_s",
-            "require_comment", "save_as",
+            "require_comment", "like_post", "save_as",
         ],
         "description": (
-            "Agent-boot flow: scan visible Facebook feed/group posts, match configured "
-            "keywords, then perform real like and comment on matched posts."
+            "Agent-boot flow: scan visible feed/group posts, match configured "
+            "keywords, then optionally like and comment on matched posts."
+        ),
+    },
+    "social_open_author_from_post_match": {
+        "required": [],
+        "optional": [
+            "platform", "source_var", "action_index", "search", "display_name",
+            "required_keywords", "optional_keywords", "forbidden_keywords",
+            "min_score", "timeout", "profile_wait_s", "save_as",
+            "save_success_as", "save_opened_as",
+        ],
+        "description": (
+            "Platform adapter flow: open the author profile from a previously matched "
+            "post action, verify profile suitability, and save target proof."
+        ),
+    },
+    "social_open_commenter_from_post_match": {
+        "required": [],
+        "optional": [
+            "platform", "source_var", "action_index", "search", "display_name",
+            "required_keywords", "optional_keywords", "forbidden_keywords",
+            "min_score", "timeout", "comment_wait_s", "profile_wait_s",
+            "max_commenters", "save_as", "save_success_as", "save_opened_as",
+            "save_sheet_opened_as",
+        ],
+        "description": (
+            "Platform adapter flow: open comments for a previously matched feed post, "
+            "open a commenter profile, verify suitability, and save target proof."
         ),
     },
     "community_membership": {
@@ -307,14 +348,16 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": ["profile", "clear_first", "implicit_wait"],
         "description": (
             "Profile-driven login. Detects logged-in state first, fills login_recipe fields from "
-            "account/scenario/variables/secret references, then submits."
+            "account/scenario/variables/secret references, then submits. Optional "
+            "login_recipe.post_submit_actions can navigate intermediate 2FA screens before "
+            "post_submit_fields such as account.totp_code are entered."
         ),
     },
-    "facebook_session_gate": {
+    "platform_session_gate": {
         "required": [],
         "optional": ["phase", "timeout", "poll_interval"],
         "description": (
-            "Account-scoped Facebook session gate. preflight reuses only a matching trusted "
+            "Account-scoped platform session gate. preflight reuses only a matching trusted "
             "session or requests login; confirm establishes provenance after this run logged in."
         ),
     },
@@ -439,26 +482,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "then: steps chạy khi đúng. else: steps chạy khi sai (optional)."
         ),
     },
-    "fb_tap_comment_button": {
-        "required": [],
-        "optional": [
-            "timeout",
-            "poll",
-            "dedupe_field",
-            "ignore_error",
-            "switch_to_all_comments",
-            "comment_filter",
-            "post_tap_wait_s",
-            "then",
-            "else",
-        ],
-        "description": (
-            "Canonical Facebook comment-button step. Same behavior as legacy "
-            "tap_fb_comment_button: find + tap the visible Facebook comment "
-            "button and set parent context for following extract fb_comments."
-        ),
-    },
-    "fb_find_comment_button": {
+    "social_find_comment_button": {
         "required": [],
         "optional": [
             "timeout",
@@ -469,19 +493,19 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "comment_filter",
         ],
         "description": (
-            "Find the visible Facebook comment button for the current post and "
-            "cache its target without tapping. Use before fb_tap_comment_target."
+            "Find the visible comment button for the current post and "
+            "cache its target without tapping. Use before social_tap_comment_target."
         ),
     },
-    "fb_tap_comment_target": {
+    "social_tap_comment_target": {
         "required": [],
         "optional": ["ignore_error", "post_tap_wait_s"],
         "description": (
-            "Tap the cached Facebook comment target from fb_find_comment_button, "
-            "verify the comment sheet opened, and set parent context for following fb_comments extraction."
+            "Tap the cached comment target from social_find_comment_button, "
+            "verify the comment sheet opened, and set parent context for following entity=comments extraction."
         ),
     },
-    "fb_apply_comment_filter": {
+    "social_apply_comment_filter": {
         "required": [],
         "optional": [
             "switch_to_all_comments",
@@ -491,13 +515,14 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "comment_filter_post_select_s",
         ],
         "description": (
-            "Apply the Facebook comment sheet filter. "
+            "Apply the comment sheet filter. "
             "comment_filter: most_relevant | newest | all_comments, or none to skip."
         ),
     },
-    "tap_fb_comment_button": {
+    "social_open_comments": {
         "required": [],
         "optional": [
+            "platform",
             "timeout",
             "poll",
             "dedupe_field",
@@ -509,10 +534,11 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "else",
         ],
         "description": (
-            "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed Facebook, "
-            "tự set parent context cho extract fb_comments. "
+            "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed, "
+            "tự set parent context cho extract entity=comments. "
+            "platform: mặc định facebook. "
             "then: steps chạy khi tap thành công. else: chạy khi không tap được. "
-            "comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định FB). "
+            "comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định của app). "
             "Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments."
         ),
     },
@@ -555,7 +581,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ),
     },
     "extract": {
-        "required": ["strategy"],
+        "required": ["entity"],
         "optional": [
             "stop_if_no_new",
             "no_new_threshold",
@@ -563,7 +589,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "extract_profile",
             "open_post_before_extract",
             "open_post_press_back_after_extract",
-            "strategy_version",
+            "entity_version",
             "collection",
             "platform",
             "content_type",
@@ -591,20 +617,21 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ],
         "description": (
             "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. "
-            "strategy: 'fb_posts' — parse FB post cards (author/text/timestamp/reactions/"
+            "entity: 'posts' — parse post card (author/text/timestamp/reactions/"
             "comments/shares/post_type/image_desc/comment_preview); "
-            "'text_nodes' — thu thập text node vào context['text_nodes']; "
-            "'fb_comments' — parse comment rows + stats trong comment view/feed preview; "
-            "'fb_groups'/'fb_pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; "
-            "ig/tiktok/linkedin/auto posts/comments — parse content tương ứng trong agent-boot. "
+            "'comments' — parse comment rows + stats trong comment view/feed preview; "
+            "'groups'/'pages' — cào kết quả tìm kiếm và lưu vào external entity catalog; "
+            "'text_nodes' — thu thập text node vào context['text_nodes']. "
+            "platform: facebook|instagram|tiktok|linkedin, hoặc 'auto' (mặc định) để "
+            "agent-boot tự nhận diện parser theo app đang mở. "
             "extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). "
-            "strategy_version: lock behavior parser/runtime (vd: fb_comments:v1). "
+            "entity_version: lock behavior parser/runtime (vd: comments:v1). "
             "stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới "
             "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
-            "open_post_before_extract (fb_posts): mở màn chi tiết bài trước extract. "
-            "open_post_press_back_after_extract: tự Back sau extract; với fb_comments chỉ back khi còn ở comment sheet. "
-            "fb_comments supports bounded crawl tuning: max_items, comment_scroll_passes, "
+            "open_post_before_extract (entity=posts): mở màn chi tiết bài trước extract. "
+            "open_post_press_back_after_extract: tự Back sau extract; với entity=comments chỉ back khi còn ở comment sheet. "
+            "entity=comments supports bounded crawl tuning: max_items, comment_scroll_passes, "
             "comment_swipes_per_dump, comment_max_snapshots, comment_scroll_wall_s. "
             "Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp "
             "vào content DB. "

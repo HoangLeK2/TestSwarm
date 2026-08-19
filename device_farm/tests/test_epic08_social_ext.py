@@ -25,7 +25,7 @@ def test_social_ext_contract_exports_stable_interfaces() -> None:
         PlatformScenarioLib,
     )
 
-    assert CONTRACT_VERSION == "1.0.0"
+    assert CONTRACT_VERSION == "2.0.0"
     assert PlatformParser
     assert PlatformHandler
     assert PlatformScenarioLib
@@ -47,9 +47,8 @@ def test_default_social_registry_loads_facebook_and_agent_boot_storage_boundary(
     assert facebook is not None
     assert facebook.coverage == "L2 Active"
     assert facebook.enabled_by_default is True
-    assert "fb_tap_comment_button" in facebook.scenario_lib.step_types
-    assert facebook.aliases["tap_fb_comment_button"] == "fb_tap_comment_button"
-    assert set(facebook.scenario_lib.extraction_strategies) >= {"fb_posts", "fb_comments"}
+    assert "social_open_comments" in facebook.scenario_lib.step_types
+    assert set(facebook.scenario_lib.entities) >= {"posts", "comments"}
 
     for content_type in facebook.content_schema.content_types:
         assert content_type.storage_owner == "agent-boot"
@@ -75,7 +74,7 @@ def test_social_registry_rejects_parser_without_handler() -> None:
         coverage="Draft",
         parser=ParserOnly(),
         handlers={},
-        scenario_lib=PlatformScenarioLib(step_types=["fake_tap"], extraction_strategies=[]),
+        scenario_lib=PlatformScenarioLib(step_types=[], entities=[]),
         content_schema=PlatformContentTypeSchema(platform="fake", content_types=[]),
     )
 
@@ -107,18 +106,17 @@ def test_social_registry_lifecycle_semver_and_history() -> None:
 
     registry = SocialPlatformRegistry(load_defaults=True)
 
-    migrated = registry.migrate_platform("facebook", "1.1.0", actor="admin-1")
-    assert migrated.version == "1.1.0"
-    assert migrated.aliases["tap_fb_comment_button"] == "fb_tap_comment_button"
+    migrated = registry.migrate_platform("facebook", "2.1.0", actor="admin-1")
+    assert migrated.version == "2.1.0"
 
     with pytest.raises(ValueError, match="PLUGIN_INCOMPATIBLE_MAJOR_BUMP"):
-        registry.migrate_platform("facebook", "2.0.0", actor="admin-1")
+        registry.migrate_platform("facebook", "3.0.0", actor="admin-1")
 
     unloaded = registry.unload_platform("facebook", actor="admin-1")
     assert unloaded["platform"] == "facebook"
     assert registry.get_platform("facebook") is None
 
-    loaded = registry.load_platform("facebook", version="1.0.0", actor="admin-1")
+    loaded = registry.load_platform("facebook", version="2.0.0", actor="admin-1")
     assert loaded.name == "facebook"
     assert registry.get_platform("facebook") is not None
 
@@ -156,9 +154,8 @@ async def test_social_ext_routes_discover_platforms_and_flags() -> None:
 
     assert steps.status_code == 200
     body = steps.json()
-    assert "fb_tap_comment_button" in body["step_types"]
-    assert "tap_fb_comment_button" in body["legacy_aliases"]
-    assert body["extraction_strategies"]["fb_posts"]["storage_owner"] == "agent-boot"
+    assert "social_open_comments" in body["step_types"]
+    assert body["extraction_strategies"]["posts"]["storage_owner"] == "agent-boot"
 
     assert flags.status_code == 200
     assert flags.json()["platforms"]["facebook"]["enabled"] is True
@@ -187,27 +184,27 @@ async def test_social_ext_lifecycle_routes() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         migrated = await client.post(
             "/api/social-ext/platforms/facebook/migrate",
-            json={"version": "1.1.0"},
+            json={"version": "2.1.0"},
         )
         rejected = await client.post(
             "/api/social-ext/platforms/facebook/migrate",
-            json={"version": "2.0.0"},
+            json={"version": "3.0.0"},
         )
         unloaded = await client.post("/api/social-ext/platforms/facebook/unload")
         reloaded = await client.post(
             "/api/social-ext/platforms/facebook/load",
-            json={"version": "1.0.0"},
+            json={"version": "2.0.0"},
         )
         history = await client.get("/api/social-ext/platforms/facebook/version-history")
 
     assert migrated.status_code == 200
-    assert migrated.json()["version"] == "1.1.0"
+    assert migrated.json()["version"] == "2.1.0"
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "PLUGIN_INCOMPATIBLE_MAJOR_BUMP"
     assert unloaded.status_code == 200
     assert unloaded.json()["event"] == "unloaded"
     assert reloaded.status_code == 200
-    assert reloaded.json()["version"] == "1.0.0"
+    assert reloaded.json()["version"] == "2.0.0"
     assert history.status_code == 200
     assert [event["event"] for event in history.json()["events"]] == [
         "loaded",
@@ -286,7 +283,7 @@ def test_canonical_facebook_comment_button_schema_and_handler_alias() -> None:
     from api.schemas.scenario import ScenarioModel
     from tasks.scenario.steps import _STEP_HANDLERS
 
-    errors = ScenarioModel.validate_dict({"steps": [{"type": "fb_tap_comment_button"}]})
+    errors = ScenarioModel.validate_dict({"steps": [{"type": "social_open_comments"}]})
 
     assert errors == []
-    assert _STEP_HANDLERS["fb_tap_comment_button"] is _STEP_HANDLERS["tap_fb_comment_button"]
+    assert _STEP_HANDLERS["social_open_comments"] is _STEP_HANDLERS["social_open_comments"]

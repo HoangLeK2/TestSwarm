@@ -3,9 +3,42 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from temporalio import workflow
+
 
 MAX_NESTING_DEPTH = 10
 TASK_QUEUE_NAME = "device-scenario"
+
+# Short control-plane activities live on their own queue so they never wait
+# behind long device work. Measured on the shared queue: with 140 slots busy, a
+# 34ms activity waited 20.5s to start — and finalize_campaign, the activity that
+# releases the phone, is one of those. Workflows are not split: workflow tasks
+# use a separate slot pool and were never starved.
+#
+# Workflow code cannot read config, so the name is a constant here;
+# TemporalConfig.control_task_queue mirrors it for the worker side.
+CONTROL_TASK_QUEUE_NAME = "device-control"
+
+# Changing an activity's task queue changes the command a workflow emits, so an
+# in-flight workflow replaying old history would fail the determinism check.
+# The patch keeps old runs scheduling on their original queue while new runs use
+# the control queue; device workers keep these activities registered so the old
+# runs still find someone to execute them.
+CONTROL_QUEUE_PATCH = "control-task-queue-v1"
+
+
+def control_task_queue() -> str | None:
+    """Task queue for short control-plane activities, or None before the patch.
+
+    None is what temporalio already means by "the workflow's own task queue", so
+    unpatched histories behave exactly as they did.
+
+    The temporalio import is at module scope on purpose. Importing inside this
+    function crashed the claim keepalive with "coroutine ignored GeneratorExit":
+    it is called from a coroutine that gets cancelled, and the import machinery
+    swallows the GeneratorExit that cancellation raises.
+    """
+    return CONTROL_TASK_QUEUE_NAME if workflow.patched(CONTROL_QUEUE_PATCH) else None
 
 
 @dataclass
@@ -46,6 +79,9 @@ class StepsInput:
     # Accumulates step_results across continue_as_new boundaries so retry/history-reset
     # workflows still return the full result set to the parent ScenarioWorkflow.
     accumulated_results: list[dict[str, Any]] = field(default_factory=list)
+    # Steps already flushed to execution_steps and dropped from
+    # accumulated_results, so counters stay right without carrying the payload.
+    checkpointed_steps: int = 0
     start_step: int = 0
 
 

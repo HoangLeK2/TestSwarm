@@ -392,7 +392,7 @@ async def run_walk(
 ) -> dict[str, Any]:
     from relay.extra_data.collector import (
         collect_fb_comment_filter_apply,
-        collect_fb_comment_target_with_tap,
+        collect_comment_target_with_tap,
         collect_xml_snapshots,
     )
     from relay.extra_data.ingest import _parse_items
@@ -550,7 +550,7 @@ async def run_walk(
         "parent_post_id": posts[0].get("_pid") if posts else None,
     }
 
-    _, _snap, tapped, tap_diag = await collect_fb_comment_target_with_tap(
+    _, _snap, tapped, tap_diag = await collect_comment_target_with_tap(
         executor, serial, comment_ctx
     )
     report["steps"]["comment_target_tap"] = {

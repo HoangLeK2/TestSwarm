@@ -36,6 +36,30 @@ _XML_WITH_AUTH_CODE = """
 </hierarchy>
 """
 
+_XML_WAITING_FOR_APPROVAL = """
+<hierarchy>
+  <node text="Kiểm tra thông báo trên thiết bị khác" class="android.widget.TextView" bounds="[56,405][1204,635]" />
+  <node text="Đang chờ phê duyệt" class="android.widget.TextView" bounds="[210,1626][701,1700]" />
+  <node text="Thử cách khác" class="android.widget.Button" bounds="[456,2014][805,2088]" />
+</hierarchy>
+"""
+
+_XML_CONFIRM_METHODS = """
+<hierarchy>
+  <node text="Chọn một cách để xác nhận đó là bạn" class="android.widget.TextView" bounds="[56,315][1204,545]" />
+  <node text="Ứng dụng xác thực" class="android.widget.TextView" bounds="[238,1120][702,1194]" />
+  <node text="Tiếp tục" class="android.widget.Button" bounds="[531,2630][730,2704]" />
+</hierarchy>
+"""
+
+_XML_WITH_FACEBOOK_AUTH_CODE = """
+<hierarchy>
+  <node text="Đi đến ứng dụng xác thực" class="android.widget.TextView" bounds="[56,405][1204,527]" />
+  <node text="" content-desc="Mã," class="android.widget.EditText" bounds="[112,1560][1022,1632]" />
+  <node text="Tiếp tục" class="android.widget.Button" bounds="[531,1933][730,2007]" />
+</hierarchy>
+"""
+
 
 def _profile() -> dict:
     return {
@@ -86,8 +110,45 @@ def _auth_code_profile() -> dict:
     return profile
 
 
+def _facebook_auth_code_profile() -> dict:
+    profile = _account_profile()
+    profile["semantic_locators"]["auth_code_field"] = {
+        "candidates": [{"by": "description", "value": "Mã,"}]
+    }
+    profile["login_recipe"]["post_submit_actions"] = [
+        {
+            "when_text_any": ["Kiểm tra thông báo trên thiết bị khác", "Đang chờ phê duyệt"],
+            "tap_text_any": ["Thử cách khác"],
+            "timeout_s": 0,
+            "wait_after_s": 0,
+        },
+        {
+            "when_text_any": ["Chọn một cách để xác nhận đó là bạn", "Ứng dụng xác thực"],
+            "tap_text_any": ["Ứng dụng xác thực"],
+            "timeout_s": 0,
+            "wait_after_s": 0,
+        },
+        {
+            "when_text_any": ["Chọn một cách để xác nhận đó là bạn", "Ứng dụng xác thực"],
+            "tap_text_any": ["Tiếp tục"],
+            "timeout_s": 0,
+            "wait_after_s": 0,
+        },
+    ]
+    profile["login_recipe"]["post_submit_fields"] = {
+        "auth_code": {
+            "locator": "auth_code_field",
+            "value_from": "account.totp_code",
+            "required": False,
+        }
+    }
+    profile["login_recipe"]["post_submit"] = {"tap_text_any": ["Tiếp tục"]}
+    return profile
+
+
 class FakeU2:
-    def __init__(self) -> None:
+    def __init__(self, device=None) -> None:
+        self.device = device
         self.clicked: list[str] = []
         self.sent: list[str] = []
         self.cleared = 0
@@ -98,6 +159,8 @@ class FakeU2:
 
     def element_click(self, eid: str) -> None:
         self.clicked.append(eid)
+        if self.device is not None:
+            self.device.advance_on_click(eid)
 
     def clear_text(self) -> None:
         self.cleared += 1
@@ -114,13 +177,19 @@ class FakeDevice:
     screen_width = 1080
     screen_height = 1920
 
-    def __init__(self, xml: str = _XML) -> None:
-        self.u2 = FakeU2()
-        self._xml = xml
+    def __init__(self, xml: str | list[str] = _XML) -> None:
+        self._xmls = xml if isinstance(xml, list) else [xml]
+        self._xml_idx = 0
+        self.u2 = FakeU2(self)
         self.taps: list[tuple[int, int]] = []
 
     def hierarchy_xml(self, force_refresh: bool = False) -> str:
-        return self._xml
+        return self._xmls[self._xml_idx]
+
+    def advance_on_click(self, eid: str) -> None:
+        transition_labels = ("Login", "Thử cách khác", "Ứng dụng xác thực", "Tiếp tục", "Continue")
+        if any(label in eid for label in transition_labels) and self._xml_idx < len(self._xmls) - 1:
+            self._xml_idx += 1
 
     def ensure_u2_healthy(self) -> None:
         return None
@@ -260,6 +329,27 @@ def test_login_if_needed_generates_totp_from_activity_local_secret(monkeypatch):
 
     assert result["ok"] is True
     assert sc.device.u2.sent == ["account-user", "account-pw", "totp-SECRET1"]
+
+
+def test_login_if_needed_navigates_facebook_approval_before_totp():
+    sc = _sc([
+        _XML,
+        _XML_WAITING_FOR_APPROVAL,
+        _XML_CONFIRM_METHODS,
+        _XML_CONFIRM_METHODS,
+        _XML_WITH_FACEBOOK_AUTH_CODE,
+    ])
+    sc.scenario = {"app_automation_profile": _facebook_auth_code_profile()}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(sc, {"type": "login_if_needed"}, 0, result)
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "123456"]
+    assert [trace["executed"] for trace in result["post_submit_action_trace"]] == [True, True, True]
+    assert any("Thử cách khác" in clicked for clicked in sc.device.u2.clicked)
+    assert any("Ứng dụng xác thực" in clicked for clicked in sc.device.u2.clicked)
+    assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
 
 
 def test_fill_form_inputs_values_and_submits():

@@ -85,25 +85,26 @@ def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 10
     return _bounded_int(raw, default, min_value=min_value, max_value=max_value)
 
 
-def _is_fb_comment_scroll_target(step: Dict[str, Any], by: str, value: str) -> bool:
+def _is_comment_scroll_target(step: Dict[str, Any], by: str, value: str) -> bool:
+    """Whether this scroll_to is hunting a comment entry point.
+
+    Purely a property of the selector: any app whose comment affordance is
+    labelled "comment"/"bình luận" qualifies. No package allow-list — a scroll
+    that misses its target gets the same retry budget on every platform.
+    """
     raw_value = str(step.get("value") or value or "").strip().lower()
     raw_by = str(step.get("by") or by or "").strip().lower()
     if not raw_value or raw_by not in {"description", "descriptionstartswith", "text"}:
         return False
-    if "bình luận" not in raw_value and "comment" not in raw_value:
-        return False
-    selector = step.get("selector") if isinstance(step.get("selector"), dict) else {}
-    conditions = selector.get("conditions") if isinstance(selector.get("conditions"), dict) else {}
-    package_name = str(conditions.get("packageName") or step.get("package_name") or "").strip()
-    return not package_name or package_name == "com.facebook.katana"
+    return "bình luận" in raw_value or "comment" in raw_value
 
 
-def _mark_fb_comment_target_found(sc: ScenarioContext, result: Dict[str, Any]) -> None:
-    sc.ctx.pop("_fb_comment_target_missing", None)
+def _mark_comment_target_found(sc: ScenarioContext, result: Dict[str, Any]) -> None:
+    sc.ctx.pop("_pending_scroll_target", None)
     result["comment_target_missing"] = False
 
 
-def _mark_fb_comment_target_missing(
+def _mark_pending_scroll_target(
     sc: ScenarioContext,
     result: Dict[str, Any],
     *,
@@ -118,7 +119,7 @@ def _mark_fb_comment_target_missing(
         "max_swipes_effective": effective_max_swipes,
         "swipes_done": swipes_done,
     }
-    sc.ctx["_fb_comment_target_missing"] = marker
+    sc.ctx["_pending_scroll_target"] = marker
     result["comment_target_missing"] = True
     result["comment_target_missing_detail"] = marker
 
@@ -518,10 +519,10 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         result["message"] = "scroll_to: empty selector"
         return
     lbl = selector_summary(spec)
-    is_fb_comment_target = _is_fb_comment_scroll_target(step, by, value)
-    pending_post = sc.ctx.get("_fb_comment_target_missing")
+    is_comment_target = _is_comment_scroll_target(step, by, value)
+    pending_post = sc.ctx.get("_pending_scroll_target")
     if (
-        is_fb_comment_target
+        is_comment_target
         and isinstance(pending_post, dict)
         and pending_post.get("reason_code") == "post_extract_pending"
     ):
@@ -530,9 +531,9 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         result["comment_target_missing_detail"] = pending_post
         result["message"] = "scroll_to: skipped — current post extract not ready"
         return
-    if is_fb_comment_target:
+    if is_comment_target:
         comment_cap = _env_int(
-            "FB_COMMENT_SCROLL_TO_MAX_SWIPES",
+            "COMMENT_SCROLL_TO_MAX_SWIPES",
             8,
             min_value=1,
             max_value=max(1, requested_max_swipes),
@@ -575,13 +576,13 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
             result["scroll_to_flow_ms"] = round((time.monotonic() - flow_started) * 1000.0, 1)
             result["scroll_to_swipes"] = swipes_done
             if found:
-                if is_fb_comment_target:
-                    _mark_fb_comment_target_found(sc, result)
+                if is_comment_target:
+                    _mark_comment_target_found(sc, result)
                 result["message"] = f"scroll_to found {lbl} after {swipes_done} swipe(s)"
             else:
                 result["ok"] = False
-                if is_fb_comment_target:
-                    _mark_fb_comment_target_missing(
+                if is_comment_target:
+                    _mark_pending_scroll_target(
                         sc,
                         result,
                         selector=lbl,
@@ -633,8 +634,8 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         return
     if not found:
         result["ok"] = False
-        if is_fb_comment_target:
-            _mark_fb_comment_target_missing(
+        if is_comment_target:
+            _mark_pending_scroll_target(
                 sc,
                 result,
                 selector=lbl,
@@ -644,6 +645,6 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
             )
         result["message"] = f"scroll_to {lbl} not found after {max_swipes} swipes"
     else:
-        if is_fb_comment_target:
-            _mark_fb_comment_target_found(sc, result)
+        if is_comment_target:
+            _mark_comment_target_found(sc, result)
         result["message"] = f"scroll_to found {lbl} after {swipes_done} swipe(s)"

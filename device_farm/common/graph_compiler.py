@@ -28,8 +28,7 @@ _CONTAINER_STEP_TYPES = {"loop", "repeat", "repeat_until"}
 _CONTAINER_IF_TYPES = {
     "if_element",
     "if_variable",
-    "tap_fb_comment_button",
-    "fb_tap_comment_button",
+    "social_open_comments",
 }
 _CONTAINER_PICK_TYPES = {"random_pick"}
 _CONTAINER_TYPES = _CONTAINER_STEP_TYPES | _CONTAINER_IF_TYPES | _CONTAINER_PICK_TYPES

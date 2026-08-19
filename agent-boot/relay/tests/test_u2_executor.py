@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import threading
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
@@ -351,6 +352,243 @@ def test_flow_fb_connect_visible_people_closes_detail_before_opening_surface(
         "tap_find_friends",
     ]
     assert dev.clicks[:3] == [(98, 210), (90, 208), (285, 1220)]
+
+
+def test_flow_social_open_author_from_post_match_verifies_profile(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node(
+            "Ảnh đại diện của Nguyen Van A",
+            bounds="[42,451][182,591]",
+            clickable=True,
+        ),
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node(
+            "Nút Thích",
+            bounds="[0,1505][223,1659]",
+            clickable=True,
+        ),
+        _fb_node(
+            "Bình luận",
+            bounds="[227,1505][457,1659]",
+            clickable=True,
+        ),
+    )
+    profile = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[80,320][620,390]"),
+        _fb_node("AI automation builder", bounds="[80,430][820,490]"),
+        _fb_node("Thêm bạn bè", bounds="[600,720][980,810]", clickable=True),
+    )
+    dev = _FlowDevice(feed, profile)
+
+    result = u2_exec_mod._flow_social_open_author_from_post_match(
+        dev,
+        {
+            "platform": "facebook",
+            "action": {
+                "verified": True,
+                "target_id": "ui_post:abc",
+                "author_label": "Nguyen Van A",
+                "author_tap": [393, 485],
+                "like_bounds": [0, 1505, 223, 1659],
+                "comment_bounds": [227, 1505, 457, 1659],
+                "matched_keywords": ["AI"],
+            },
+            "required_keywords": ["AI"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["source"] == "matched_feed_post_author"
+    assert result["name"] == "Nguyen Van A"
+    assert result["source_post_target_id"] == "ui_post:abc"
+    assert result["action_bounds"] == [600, 720, 980, 810]
+    assert dev.clicks == [(393, 485)]
+
+
+def test_flow_social_open_author_closes_comment_overlay_before_author_tap(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    overlay = _fb_xml(
+        _fb_node("Viết bình luận", bounds="[80,2080][920,2180]"),
+        _fb_node("Đóng", bounds="[980,120][1060,200]", clickable=True),
+    )
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    profile = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[80,320][620,390]"),
+        _fb_node("AI automation builder", bounds="[80,430][820,490]"),
+        _fb_node("Thêm bạn bè", bounds="[600,720][980,810]", clickable=True),
+    )
+    dev = _FlowDevice(overlay, feed, profile)
+
+    result = u2_exec_mod._flow_social_open_author_from_post_match(
+        dev,
+        {
+            "platform": "facebook",
+            "action": {
+                "verified": True,
+                "target_id": "ui_post:abc",
+                "author_label": "Nguyen Van A",
+                "author_tap": [393, 485],
+                "like_bounds": [0, 1505, 223, 1659],
+                "comment_bounds": [227, 1505, 457, 1659],
+                "matched_keywords": ["AI"],
+            },
+            "required_keywords": ["AI"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["verified"] is True
+    assert dev.clicks == [(1020, 160), (393, 485)]
+
+
+def test_fb_visible_post_candidates_include_author_binding():
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node(
+            "Nút Thích",
+            bounds="[0,1505][223,1659]",
+            clickable=True,
+        ),
+        _fb_node(
+            "Bình luận",
+            bounds="[227,1505][457,1659]",
+            clickable=True,
+        ),
+    )
+
+    _candidates, qualified, _expand = u2_exec_mod._fb_visible_post_candidates(
+        feed,
+        keywords=u2_exec_mod._fb_scan_keyword_terms(["AI"]),
+        match_mode="any",
+        seen_fingerprints=set(),
+        seen_expand_keys=set(),
+        like_terms=["nut thich", "thich", "like"],
+        liked_terms=["da thich", "liked"],
+        comment_terms=["binh luan", "comment"],
+        forbidden_context_terms=[],
+    )
+
+    assert len(qualified) == 1
+    assert qualified[0]["author_label"] == "Nguyen Van A"
+    assert qualified[0]["author_tap"] == [393, 485]
+
+
+def test_flow_social_scan_posts_interact_forwards_author_binding(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    dev = _FlowDevice(feed)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["AI"],
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["actions"][0]["author_label"] == "Nguyen Van A"
+    assert result["actions"][0]["author_tap"] == [393, 485]
+
+
+def test_flow_social_scan_posts_interact_can_skip_like_and_comment(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    feed = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[210,452][576,518]", clickable=True),
+        _fb_node("AI automation builder", bounds="[105,840][1155,1320]"),
+        _fb_node("Nút Thích", bounds="[0,1505][223,1659]", clickable=True),
+        _fb_node("Bình luận", bounds="[227,1505][457,1659]", clickable=True),
+    )
+    dev = _FlowDevice(feed)
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "keywords": ["AI"],
+            "target_count": 1,
+            "max_scrolls": 0,
+            "like_post": False,
+            "require_comment": False,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["liked_count"] == 0
+    assert result["commented_count"] == 0
+    assert result["actions"][0]["liked"] is False
+    assert dev.clicks == []
+
+
+def test_flow_social_open_commenter_from_post_match_verifies_profile(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    comments = _fb_xml(
+        _fb_node("Phù hợp nhất", bounds="[40,450][400,500]"),
+        _fb_node("Tran Van B", bounds="[180,740][420,790]", clickable=True),
+        _fb_node("Mình đang làm AI automation", bounds="[180,800][1000,860]"),
+        _fb_node("Viết bình luận…", bounds="[40,2280][1040,2340]"),
+    )
+    profile = _fb_xml(
+        _fb_node("Tran Van B", bounds="[80,320][620,390]"),
+        _fb_node("AI automation consultant", bounds="[80,430][820,490]"),
+        _fb_node("Thêm bạn bè", bounds="[600,720][980,810]", clickable=True),
+    )
+    dev = _FlowDevice(comments, profile)
+
+    result = u2_exec_mod._flow_social_open_commenter_from_post_match(
+        dev,
+        {
+            "platform": "facebook",
+            "action": {
+                "verified": True,
+                "target_id": "ui_post:abc",
+                "comment_bounds": [227, 1505, 457, 1659],
+            },
+            "required_keywords": ["AI"],
+            "min_score": 80,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["source"] == "matched_feed_post_commenter"
+    assert result["name"] == "Tran Van B"
+    assert result["comment_sheet_opened"] is True
+    assert result["action_bounds"] == [600, 720, 980, 810]
+    assert dev.clicks == [(342, 1582), (260, 765)]
+
+
+def test_flow_social_open_author_from_post_match_skips_unsupported_platform():
+    result = u2_exec_mod._flow_social_open_author_from_post_match(
+        _FlowDevice(_fb_xml()),
+        {"platform": "instagram", "action": {}},
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "unsupported_platform"
+
+
+def test_flow_fb_open_author_from_post_match_fails_closed_without_binding():
+    result = u2_exec_mod._flow_fb_open_author_from_post_match(
+        _FlowDevice(_fb_xml()),
+        {"action": {"verified": True, "target_id": "ui_post:abc"}},
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "author_binding_missing"
 
 
 # ── Batch tests ───────────────────────────────────────────────────────────────
@@ -1654,16 +1892,52 @@ async def test_dump_hierarchy_breaker_drops_background_visible_bypasses(event_lo
 
 
 @pytest.mark.asyncio
-async def test_screenshot_returns_base64(executor):
+async def test_screenshot_uses_the_device_jpeg_without_re_encoding(executor):
+    """takeScreenshot already returns base64 JPEG — pass it straight through.
+
+    Decoding it and re-encoding as PNG cost ~370ms and 2.2MB per capture on a
+    real 1260x2800 screen without improving OCR at all (identical box count and
+    mean confidence), because the pixels went through JPEG either way.
+    """
     exc, dev, pool = executor
-    dev.screenshot.return_value = b"\x89PNG\r\n"
+    dev.jsonrpc.takeScreenshot.return_value = "QUJD"  # base64 for "ABC"
 
     result = await exc.run_batch("serial", [
         {"op": "screenshot"},
     ])
     assert result["ok"] is True
-    b64_val = result["results"][0]["value"]
-    assert base64.b64decode(b64_val) == b"\x89PNG\r\n"
+    assert result["results"][0]["value"] == "QUJD"
+    dev.screenshot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_screenshot_falls_back_to_pillow_when_rpc_unusable(executor):
+    """A stub or changed API must not be shipped to the farm as an image."""
+    from PIL import Image
+
+    exc, dev, pool = executor
+    dev.jsonrpc.takeScreenshot.return_value = None
+    dev.screenshot.return_value = Image.new("RGB", (4, 3), (1, 2, 3))
+
+    result = await exc.run_batch("serial", [
+        {"op": "screenshot"},
+    ])
+    assert result["ok"] is True
+    decoded = Image.open(io.BytesIO(base64.b64decode(result["results"][0]["value"])))
+    assert decoded.format == "JPEG"
+    assert decoded.size == (4, 3)
+
+
+@pytest.mark.asyncio
+async def test_screenshot_fails_loudly_when_device_returns_nothing(executor):
+    exc, dev, pool = executor
+    dev.jsonrpc.takeScreenshot.return_value = None
+    dev.screenshot.return_value = None
+
+    result = await exc.run_batch("serial", [
+        {"op": "screenshot"},
+    ])
+    assert result["ok"] is False
 
 
 @pytest.mark.asyncio

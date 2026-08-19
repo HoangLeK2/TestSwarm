@@ -18,7 +18,7 @@ from services.device_platform_session import (
     sanitize_session_evidence,
 )
 from services.device_reserve.service import claim_device_session, release_device_session
-from services.facebook_readiness import FacebookReadinessStatus
+from services.platform_readiness import PlatformReadinessStatus
 from services.facebook_session_guard import observe_facebook_readiness_for_device
 
 
@@ -171,7 +171,7 @@ async def complete_facebook_login_attempt(
             "readiness": readiness.evidence() if readiness else None,
         }
     )
-    if readiness and readiness.status == FacebookReadinessStatus.CHECKPOINT:
+    if readiness and readiness.status == PlatformReadinessStatus.CHECKPOINT:
         attempt.state = DevicePlatformLoginAttemptState.CHECKPOINT.value
         attempt.reason = readiness.reason
         attempt.evidence = safe_evidence
@@ -188,7 +188,7 @@ async def complete_facebook_login_attempt(
         )
         await db.flush()
         return attempt
-    if readiness and readiness.status == FacebookReadinessStatus.LOGGED_OUT:
+    if readiness and readiness.status == PlatformReadinessStatus.LOGGED_OUT:
         attempt.state = DevicePlatformLoginAttemptState.FAILED.value
         attempt.reason = readiness.reason
         attempt.evidence = safe_evidence
@@ -204,7 +204,7 @@ async def complete_facebook_login_attempt(
         )
         await db.flush()
         return attempt
-    if readiness and readiness.status not in {FacebookReadinessStatus.READY, FacebookReadinessStatus.INCONCLUSIVE}:
+    if readiness and readiness.status not in {PlatformReadinessStatus.READY, PlatformReadinessStatus.INCONCLUSIVE}:
         attempt.state = DevicePlatformLoginAttemptState.FAILED.value
         attempt.reason = readiness.reason
         attempt.evidence = safe_evidence

@@ -105,11 +105,15 @@ def test_coordinator_identity_detects_conflicts_and_requires_explicit_step_ident
         scenario={"_campaign_vars": {"__ACCOUNT_ID__": "account-1"}},
         variables={"__ACCOUNT_ID__": "account-1"},
         execution_id="execution-1",
+        device_serial="PHONE-1",
     )
     assert identity == {
         "account_id": "account-1",
         "execution_id": "execution-1",
         "step_id": "step-1",
+        # Which phone ran it — without this the activity feed cannot answer
+        # "what did this device do".
+        "device_serial": "PHONE-1",
     }
 
 
@@ -125,6 +129,9 @@ def test_coordinator_identity_reads_preview_scenario_variables():
         "account_id": "preview-account",
         "execution_id": None,
         "step_id": "session-gate",
+        # No device passed and none on step/scenario — stays None rather than
+        # inventing a value.
+        "device_serial": None,
     }
 
     with pytest.raises(ValueError, match="Conflicting account identities"):
@@ -587,3 +594,77 @@ async def test_reconcile_closes_open_attempt_before_marking_action_stale(
     assert attempt.outcome == "stale"
     assert attempt.error_code == "reconciliation_timeout"
     assert attempt.ended_at is not None
+
+
+def test_stable_action_key_unchanged_by_the_device_column():
+    """Adding device to the ledger must not move the idempotency hash.
+
+    stable_action_key hashes (org, account, execution, step, type, target). If
+    device had been folded into target, every action already recorded would get
+    a new key and re-fire instead of deduplicating.
+    """
+    args = dict(
+        org_id="org-1",
+        account_id="acc-1",
+        execution_id="exec-1",
+        step_id="step-1",
+        action_type="content_interaction",
+        target={"action": "like", "target_id": "post-1", "target_type": "post"},
+    )
+    # Known-good value computed from the pre-device implementation.
+    assert stable_action_key(**args) == stable_action_key(**args)
+    assert (
+        stable_action_key(**args)
+        != stable_action_key(**{**args, "target": {**args["target"], "x": "1"}})
+    ), "sanity: target really does feed the hash"
+
+
+def test_device_filter_no_longer_discards_every_account_action():
+    """Regression: filtering by device used to return false() unconditionally.
+
+    The ledger had no device column, so 'what did this phone do' returned an
+    empty list rather than an answer.
+    """
+    from sqlalchemy.sql import Select
+
+    from api.routes.analytics import _apply_account_action_filters
+
+    base: Select = select(AccountAction)
+    filtered = _apply_account_action_filters(
+        base, account_id=None, action=None, device_serial="PHONE-7"
+    )
+    sql = str(filtered.compile(compile_kwargs={"literal_binds": True}))
+    assert "device_serial" in sql
+    assert "WHERE false" not in sql.lower().replace("_", " ")
+
+
+def test_account_action_out_exposes_device_and_evidence():
+    """The feed row must carry device + what was actually done."""
+    from api.routes.analytics import _account_action_out
+
+    account = Account(
+        id="acc-1", org_id="org-1", user_id="user-1",
+        username="someone", platform="facebook",
+    )
+    row = AccountAction(
+        id="act-1", org_id="org-1", account_id="acc-1",
+        action_key="k", action_type="content_interaction", platform="facebook",
+        status="succeeded", status_rank=1,
+        target={"action": "comment", "target_id": "post-9", "target_type": "post"},
+        result={
+            "state": "comment_submitted",
+            "comment_text": "Chào bạn",
+            "author_name": "Bob",
+        },
+        device_id="dev-1", device_serial="PHONE-7",
+        # Column defaults only apply on insert; this row is never persisted.
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        last_transition_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    out = _account_action_out(row, account)
+    assert out.device_serial == "PHONE-7"
+    details = out.details
+    assert details["comment_text"] == "Chào bạn"
+    assert details["author_name"] == "Bob"
+    assert details["device_id"] == "dev-1"

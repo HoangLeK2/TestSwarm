@@ -369,9 +369,21 @@ async def list_devices(
             group_id,
             q,
         )
+        # Hide dead devices from the general list: an unplugged/removed device
+        # (agent no longer reports it → authoritative state DEAD) should not
+        # clutter the fleet. Escape hatches kept so dead devices stay reachable
+        # for revive/removal: an explicit state filter, or a direct lookup by
+        # id/serial, returns them as asked. `dead` is partly computed from agent
+        # presence, not just the DB column, so this must filter after the
+        # authoritative recompute rather than in SQL.
+        hide_dead = state is None and device_id is None and device_serial is None
+        dropped_dead = 0
         items: list[FleetDeviceItemOut] = []
         for row in page.items:
             effective_state = row.state if state else _agent_boot_authoritative_state(row, row.state)
+            if hide_dead and effective_state == DeviceFsmState.DEAD.value:
+                dropped_dead += 1
+                continue
             items.append(
                 FleetDeviceItemOut(
                     db_id=row.db_id,
@@ -394,7 +406,10 @@ async def list_devices(
         return FleetDeviceListOut(
             items=items,
             next_cursor=page.next_cursor,
-            total=page.total,
+            # Keep total honest with what was returned. It is a display hint,
+            # so subtracting the dead devices dropped on this page is close
+            # enough without a second count query.
+            total=max(0, page.total - dropped_dead),
         )
 
     devices = await repo.list_devices(
@@ -452,15 +467,23 @@ async def list_devices(
         state = row.state if row else DeviceFsmState.UNKNOWN.value
         return _agent_boot_authoritative_state(device, state)
 
-    return [
-        _to_out(
-            d,
-            relay_id=_resolve_relay_id(d),
-            adb_serial=_resolve_runtime_adb_serial(d),
-            state=_state_for(d, states_map),
+    # Same rule as fleet mode: drop dead devices from the unfiltered list. This
+    # path has no query params (fleet_mode is False), so there is no explicit
+    # state filter to honor — dead here always means "hide".
+    out = []
+    for d in devices:
+        d_state = _state_for(d, states_map)
+        if d_state == DeviceFsmState.DEAD.value:
+            continue
+        out.append(
+            _to_out(
+                d,
+                relay_id=_resolve_relay_id(d),
+                adb_serial=_resolve_runtime_adb_serial(d),
+                state=d_state,
+            )
         )
-        for d in devices
-    ]
+    return out
 
 
 async def _can_view_owner_details(user, db) -> bool:

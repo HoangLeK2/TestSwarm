@@ -31,8 +31,8 @@ def test_comment_fast_scroll_profile_marks_nested_fb_comment_extracts():
         {
             "type": "loop",
             "steps": [
-                {"type": "extract", "strategy": "fb_posts"},
-                {"type": "extract", "strategy": "fb_comments"},
+                {"type": "extract", "entity": "posts", "platform": "facebook"},
+                {"type": "extract", "entity": "comments", "platform": "facebook"},
             ],
         }
     ]

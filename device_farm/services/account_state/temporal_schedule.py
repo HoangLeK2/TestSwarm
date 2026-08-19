@@ -10,8 +10,14 @@ from temporal.account_state_workflows import AccountCooldownTickWorkflow
 log = logging.getLogger(__name__)
 
 COOLDOWN_SCHEDULE_ID = "df-account-cooldown-tick"
+# Cooldown expiry runs on two independent paths: this Temporal schedule and the
+# in-process loop in web/server.py, which sleeps COOLDOWN_TICK_INTERVAL_SECONDS
+# between passes. Both call the same idempotent process_expired_cooldowns, so
+# the effective granularity is the faster of the two — the in-process loop.
+# The Temporal schedule is deliberately slower: it exists as the durable
+# backstop, and a tick every 15 minutes keeps the workflow list readable.
 COOLDOWN_TICK_INTERVAL_SECONDS = 300
-_CRON = "*/5 * * * *"
+_CRON = "*/15 * * * *"
 
 
 async def _sync_cooldown_schedule_cron(client: Client) -> None:

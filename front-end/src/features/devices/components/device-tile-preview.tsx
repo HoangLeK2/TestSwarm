@@ -778,7 +778,9 @@ function DeviceTilePreviewInner({
                     aria-hidden={hasFrame}
                   >
                     {!isUnresponsive ? (
-                      <PreviewLoadingSurface label={t('streamWaitingFirstFrame')} />
+                      <PreviewLoadingSurface
+                        label={t('streamWaitingFirstFrame')}
+                      />
                     ) : (
                       <PreviewLoadingSurface
                         label={t('streamUnresponsive')}

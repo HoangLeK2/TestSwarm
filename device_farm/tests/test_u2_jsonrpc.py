@@ -1287,6 +1287,56 @@ class TestSendKeys(unittest.TestCase):
         self.assertTrue(any("ADB_KEYBOARD_INPUT_TEXT" in c for c in call_log))
         self.assertNotIn("setText", [c for c in call_log])
 
+    def test_send_keys_append_prefers_adb_keyboard_over_jsonrpc_ime(self):
+        """Live typing must stay on one IME — mixing IMEs drops keystrokes."""
+        shell_log = []
+        rpc_log = []
+
+        def adb_shell(cmd: str) -> str:
+            shell_log.append(cmd)
+            if "ADB_KEYBOARD_INPUT_TEXT" in cmd:
+                return "Broadcast completed: result=-1"
+            return "com.github.uiautomator/.AdbKeyboard"
+
+        self.client._adb_shell = adb_shell
+        self.client._rpc = lambda method, *a, **kw: rpc_log.append(method)
+        self.client.send_keys_append("chào")
+        self.assertTrue(any("ADB_KEYBOARD_INPUT_TEXT" in c for c in shell_log))
+        self.assertEqual(rpc_log, [])
+
+    def test_adb_keyboard_ime_check_is_cached_between_keystrokes(self):
+        """The default-IME probe is a full round-trip; one per burst is enough."""
+        shell_log = []
+
+        def adb_shell(cmd: str) -> str:
+            shell_log.append(cmd)
+            if "ADB_KEYBOARD_INPUT_TEXT" in cmd:
+                return "Broadcast completed: result=-1"
+            return "com.github.uiautomator/.AdbKeyboard"
+
+        self.client._adb_shell = adb_shell
+        for _ in range(3):
+            self.client.adb_keyboard_input_text("a")
+        probes = [c for c in shell_log if "settings get secure" in c]
+        self.assertEqual(len(probes), 1)
+
+    def test_adb_keyboard_ime_cache_drops_after_failed_broadcast(self):
+        """A stolen IME shows up as a failed broadcast — re-probe on the next try."""
+        shell_log = []
+
+        def adb_shell(cmd: str) -> str:
+            shell_log.append(cmd)
+            if "ADB_KEYBOARD_INPUT_TEXT" in cmd:
+                return "Broadcast completed: result=0"
+            return "com.github.uiautomator/.AdbKeyboard"
+
+        self.client._adb_shell = adb_shell
+        for _ in range(2):
+            with self.assertRaises(RuntimeError):
+                self.client.adb_keyboard_input_text("a")
+        probes = [c for c in shell_log if "settings get secure" in c]
+        self.assertEqual(len(probes), 2)
+
     def test_set_text_focused(self):
         call_log = []
         def rpc(method, *args, **kw):

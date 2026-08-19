@@ -5,7 +5,8 @@ import React, {
   useEffect,
   useLayoutEffect,
   useRef,
-  useState
+  useState,
+  type MutableRefObject
 } from 'react';
 import { useGesture } from '@use-gesture/react';
 import type { Device } from '../types';
@@ -249,7 +250,46 @@ interface DeviceScreenProps {
   scrcpyAttachOptions?: ScrcpyAttachOptions;
   /** Stable for this mounted screen; controls backend profile arbitration. */
   scrcpyViewerRole?: ScrcpyViewerRole;
+  /**
+   * Receives a grabber for the current frame as a PNG data URL, or null when no
+   * frame has decoded yet. Lets callers (e.g. cropping a tap_image template)
+   * read the pixels already on screen instead of asking the backend for a
+   * screenshot — since media moved to go2rtc the backend has no frame to give.
+   */
+  captureFrameRef?: MutableRefObject<(() => string | null) | null>;
+  /**
+   * Drag a rectangle on the mirror instead of tapping through to the device —
+   * used to cut a tap_image template out of the screen the user is looking at.
+   * Ratios are in device space (letterboxing already removed), matching what
+   * `captureFrameRef` returns, so callers can crop the grabbed frame directly.
+   */
+  regionSelect?: RegionSelect;
 }
+
+export type RegionSelectRect = {
+  rx1: number;
+  ry1: number;
+  rx2: number;
+  ry2: number;
+};
+
+export type RegionSelect = {
+  active: boolean;
+  onComplete: (rect: RegionSelectRect) => void;
+  onCancel: () => void;
+  /** Shown over the mirror while selecting. */
+  hint?: string;
+  /**
+   * Still frame to drag on, pinned when selection started.
+   *
+   * Without it the user drags over a live stream and the caller crops a frame
+   * grabbed after the drag — a different moment, so the cut content does not
+   * match what was under the selection. Freezing makes what you see the thing
+   * you cut. Rendered with the same object-fit as the stream so the ratios
+   * `clientToDevice` produces address the same pixels.
+   */
+  frozenFrame?: string | null;
+};
 
 export function DeviceScreen({
   device,
@@ -268,7 +308,9 @@ export function DeviceScreen({
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
   scrcpyAttachOptions,
-  scrcpyViewerRole = 'control-screen'
+  scrcpyViewerRole = 'control-screen',
+  captureFrameRef,
+  regionSelect
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const pathname = usePathname();
@@ -1430,6 +1472,59 @@ export function DeviceScreen({
   const showH264Canvas =
     !showWebRtcVideo && (h264Active || (h264Only && hasFrame));
 
+  // Grab the frame that is actually on screen. Three surfaces can be live
+  // (WebRTC video, H264 canvas, MJPEG img) and only one is visible at a time,
+  // so read whichever is currently showing.
+  useEffect(() => {
+    if (!captureFrameRef) return;
+    captureFrameRef.current = () => {
+      const draw = (
+        source: CanvasImageSource,
+        width: number,
+        height: number
+      ): string | null => {
+        if (!width || !height) return null;
+        const scratch = document.createElement('canvas');
+        scratch.width = width;
+        scratch.height = height;
+        const ctx = scratch.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(source, 0, 0, width, height);
+        try {
+          return scratch.toDataURL('image/png');
+        } catch {
+          // Tainted canvas (cross-origin MJPEG). Nothing usable here.
+          return null;
+        }
+      };
+
+      if (showWebRtcVideo) {
+        const video = videoRef.current;
+        if (video?.videoWidth) {
+          return draw(video, video.videoWidth, video.videoHeight);
+        }
+      }
+      if (showH264Canvas) {
+        const canvas = canvasRef.current;
+        if (canvas?.width) {
+          try {
+            return canvas.toDataURL('image/png');
+          } catch {
+            return null;
+          }
+        }
+      }
+      const img = imageRef.current;
+      if (img?.naturalWidth) {
+        return draw(img, img.naturalWidth, img.naturalHeight);
+      }
+      return null;
+    };
+    return () => {
+      captureFrameRef.current = null;
+    };
+  }, [captureFrameRef, showWebRtcVideo, showH264Canvas]);
+
   const requestStreamRefreshAfterInput = useCallback(() => {
     if (!h264SubscriptionAllowed) return;
 
@@ -1630,6 +1725,87 @@ export function DeviceScreen({
     ]
   );
 
+  // ── Region select (tap_image crop) ────────────────────────────────────────
+  // Kept in wrapper-relative pixels while dragging so the box tracks the cursor
+  // exactly; converted to device ratios only once, on release.
+  const regionActive = Boolean(regionSelect?.active);
+  const [regionDrag, setRegionDrag] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
+  const regionStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!regionActive) setRegionDrag(null);
+  }, [regionActive]);
+
+  useEffect(() => {
+    if (!regionActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') regionSelect?.onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [regionActive, regionSelect]);
+
+  const regionPoint = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }, []);
+
+  const handleRegionPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const p = regionPoint(e);
+      regionStartRef.current = p;
+      setRegionDrag({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+    },
+    [regionPoint]
+  );
+
+  const handleRegionPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!regionStartRef.current) return;
+      e.stopPropagation();
+      const p = regionPoint(e);
+      const start = regionStartRef.current;
+      setRegionDrag({ x1: start.x, y1: start.y, x2: p.x, y2: p.y });
+    },
+    [regionPoint]
+  );
+
+  const handleRegionPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const start = regionStartRef.current;
+      if (!start) return;
+      e.stopPropagation();
+      regionStartRef.current = null;
+      const el = e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const p = regionPoint(e);
+      setRegionDrag(null);
+
+      // A click with no drag is almost always a misunderstanding of the mode,
+      // not a request to crop a 1px template. Leave the mode on so the hint
+      // stays visible and the user can try again.
+      if (Math.abs(p.x - start.x) < 8 || Math.abs(p.y - start.y) < 8) return;
+
+      const a = clientToDevice(start.x, start.y, rect.width, rect.height);
+      const b = clientToDevice(p.x, p.y, rect.width, rect.height);
+      regionSelect?.onComplete({
+        rx1: Math.min(a.rx, b.rx),
+        ry1: Math.min(a.ry, b.ry),
+        rx2: Math.max(a.rx, b.rx),
+        ry2: Math.max(a.ry, b.ry)
+      });
+    },
+    [clientToDevice, regionPoint, regionSelect]
+  );
+
   const handleWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
       if (!e.ctrlKey) return; // Ctrl+scroll = pinch
@@ -1659,11 +1835,15 @@ export function DeviceScreen({
   return (
     <div className='flex h-full min-h-0 w-full flex-col'>
       <div
-        {...(interactive ? bind() : {})}
+        {...(interactive && !regionActive ? bind() : {})}
         ref={wrapRef}
-        onClick={interactive || onTap ? handleClick : undefined}
-        onDoubleClick={interactive ? handleDoubleClick : undefined}
-        onWheel={interactive ? handleWheel : undefined}
+        onClick={
+          (interactive || onTap) && !regionActive ? handleClick : undefined
+        }
+        onDoubleClick={
+          interactive && !regionActive ? handleDoubleClick : undefined
+        }
+        onWheel={interactive && !regionActive ? handleWheel : undefined}
         className={`relative min-h-0 w-full flex-1 overflow-hidden bg-black ${
           !interactive && !onTap
             ? 'cursor-default'
@@ -1731,6 +1911,46 @@ export function DeviceScreen({
             className='pointer-events-none absolute border-2 border-red-500 bg-red-500/15 transition-all duration-150'
             style={highlightStyle}
           />
+        )}
+
+        {/* Frozen frame under the selection UI: the stream keeps running
+            underneath, but the user drags on — and cuts from — this exact image. */}
+        {regionActive && regionSelect?.frozenFrame && (
+          // eslint-disable-next-line @next/next/no-img-element -- local data URL
+          <img
+            src={regionSelect.frozenFrame}
+            alt=''
+            draggable={false}
+            className={`pointer-events-none absolute inset-0 z-20 h-full w-full ${streamObjectClass}`}
+          />
+        )}
+
+        {/* Region select: sits above the stream so the drag never taps through */}
+        {regionActive && (
+          <div
+            className='absolute inset-0 z-30 cursor-crosshair touch-none'
+            onPointerDown={handleRegionPointerDown}
+            onPointerMove={handleRegionPointerMove}
+            onPointerUp={handleRegionPointerUp}
+            onPointerCancel={handleRegionPointerUp}
+          >
+            <div className='pointer-events-none absolute inset-0 bg-black/35' />
+            {regionDrag && (
+              <div
+                className='pointer-events-none absolute border-2 border-sky-400 bg-sky-400/10 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]'
+                style={{
+                  left: Math.min(regionDrag.x1, regionDrag.x2),
+                  top: Math.min(regionDrag.y1, regionDrag.y2),
+                  width: Math.abs(regionDrag.x2 - regionDrag.x1),
+                  height: Math.abs(regionDrag.y2 - regionDrag.y1)
+                }}
+              />
+            )}
+            <div className='pointer-events-none absolute inset-x-2 top-2 rounded-md bg-sky-950/85 px-2 py-1.5 text-center text-[10px] leading-snug text-sky-100'>
+              {regionSelect?.hint ??
+                'Kéo chọn vùng cần nhận diện trên màn hình. Nhấn Esc để huỷ.'}
+            </div>
+          </div>
         )}
 
         {/* Status badge: avoid "loading forever" when offline/unresponsive */}

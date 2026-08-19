@@ -244,8 +244,8 @@ def test_legacy_runtime_step_types_are_known():
         "tap_ratio",
         "wait_stable",
         "scroll_down",
-        "tap_fb_comment_button",
-        "fb_tap_comment_button",
+        "social_open_comments",
+        "social_open_comments",
     ]
     for step_type in legacy:
         assert StepRegistry.is_known_type(step_type), step_type
@@ -322,7 +322,7 @@ def test_ac6_variable_resolve_priority():
 
 @pytest.mark.asyncio
 async def test_tc08_custom_step_registry(session_factory):
-    StepRegistry.register("fb_tap_comment_button", _StubHandler())
+    StepRegistry.register("social_open_comments", _StubHandler())
 
     await _seed_orgs(session_factory)
     app = _build_app(session_factory)
@@ -334,7 +334,7 @@ async def test_tc08_custom_step_registry(session_factory):
             f"/api/scenarios/{scenario_id}/body",
             json={
                 "steps": [
-                    {"id": "fb1", "type": "fb_tap_comment_button", "config": {"post_id": "123"}},
+                    {"id": "fb1", "type": "social_open_comments", "config": {"post_id": "123"}},
                 ]
             },
         )

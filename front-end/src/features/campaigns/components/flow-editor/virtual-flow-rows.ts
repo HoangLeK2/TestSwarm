@@ -38,8 +38,8 @@ function isConditional(step: FlowStep): boolean {
     step.type === 'if' ||
     step.type === 'if_element' ||
     step.type === 'if_variable' ||
-    step.type === 'fb_tap_comment_button' ||
-    step.type === 'tap_fb_comment_button'
+    step.type === 'social_open_comments' ||
+    step.type === 'social_open_comments'
   );
 }
 
@@ -99,8 +99,8 @@ function projectList(
 
     if (isConditional(step)) {
       const isFbTap =
-        step.type === 'fb_tap_comment_button' ||
-        step.type === 'tap_fb_comment_button';
+        step.type === 'social_open_comments' ||
+        step.type === 'social_open_comments';
       const thenSteps = step.then ?? [];
       const elseSteps = step.else ?? [];
       rows.push({

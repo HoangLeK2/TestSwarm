@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl';
 import {
   getInsertMenuForUi,
   getStepDisplay,
+  getStepSummary,
   getStepTypeName,
   getVariableDisplayName,
   type FlowStepTranslator
@@ -31,6 +32,8 @@ export function useCampaignFlowI18n() {
     getVariableDisplayName: (name: string) =>
       getVariableDisplayName(name, stepT),
     getStepDisplay: (step: Parameters<typeof getStepDisplay>[0]) =>
-      getStepDisplay(step, stepT)
+      getStepDisplay(step, stepT),
+    getStepSummary: (step: Parameters<typeof getStepSummary>[0]) =>
+      getStepSummary(step, stepT)
   };
 }

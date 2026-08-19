@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Coroutine, TypeVar
 
 from services.content.extraction.models import ExecutionCaptureContext
+
+log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -70,21 +73,25 @@ def map_ocr_languages(raw: Any) -> list[str]:
     return ["vi", "en"]
 
 
-async def capture_screenshot_async(
+async def persist_image_artifact_async(
     capture: Any,
-    device: Any,
+    image: bytes,
     *,
-    region: dict[str, float] | None,
-    persist: bool,
     execution_ctx: ExecutionCaptureContext | None,
-) -> Any:
+) -> str | None:
+    """Store a frame captured on agent-boot as an execution artifact.
+
+    Best-effort: an artifact that fails to upload must not fail the step that
+    produced usable text.
+    """
+    if not image or execution_ctx is None:
+        return None
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: capture.capture_screenshot(
-            device,
-            region=region,
-            persist=persist,
-            execution_ctx=execution_ctx,
-        ),
-    )
+    try:
+        return await loop.run_in_executor(
+            None,
+            lambda: capture.persist_image(image, execution_ctx=execution_ctx),
+        )
+    except Exception as exc:
+        log.warning("ocr screenshot artifact persist failed: %s", exc)
+        return None

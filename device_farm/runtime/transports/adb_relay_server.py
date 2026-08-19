@@ -42,6 +42,18 @@ CMD_SCREENCAP    = 5  # screencap → base64 PNG in result["output"]
 CMD_PROBE_CAPS       = 6  # probe_capabilities() → JSON dict in result["output"]
 CMD_RESTART_SCRCPY   = 7  # stop + resume scrcpy session (must match agent-boot)
 
+# Reply types that carry an "id" matching a pending send_json_request future.
+# Every request/reply message type the agent can answer must be listed here, or
+# its caller silently waits out the full timeout — shared by both the WebSocket
+# and gRPC relay servers so a new type only has to be added once.
+_REQUEST_REPLY_TYPES = frozenset({
+    "u2_batch_result",
+    "u2_flow_result",
+    "extra_data_result",
+    "ocr_result",
+    "image_match_result",
+})
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -469,7 +481,12 @@ class AdbRelayManager:
 
         Each item is a plain dict with keys: serial, android_version, sdk,
         brand, model, abi, screen_width, screen_height, ram_gb, has_u2,
-        has_stf, tags.
+        has_stf, has_ocr, tags.
+
+        NOTE: the copy below is an explicit whitelist, so a capability the agent
+        starts sending is silently dropped until it is added here — the feature
+        that reads it just stays off, with no error anywhere. Add new keys in
+        both branches.
         """
         for cap in caps_list:
             if isinstance(cap, dict):
@@ -496,6 +513,8 @@ class AdbRelayManager:
                     "ram_gb":          cap.get("ram_gb", 0),
                     "has_u2":          bool(cap.get("has_u2", False)),
                     "has_stf":         bool(cap.get("has_stf", False)),
+                    "has_ocr":         bool(cap.get("has_ocr", False)),
+                    "has_image_match": bool(cap.get("has_image_match", False)),
                     "hardware_serial": cap.get("hardware_serial", ""),
                     "tags":            list(cap.get("tags", [])),
                 }
@@ -516,6 +535,8 @@ class AdbRelayManager:
                     "ram_gb":          cap.ram_gb,
                     "has_u2":          cap.has_u2,
                     "has_stf":         cap.has_stf,
+                    "has_ocr":         bool(getattr(cap, "has_ocr", False)),
+                    "has_image_match": bool(getattr(cap, "has_image_match", False)),
                     "tags":            list(cap.tags),
                 }
             self._pool_state.setdefault(serial, "available")
@@ -1346,6 +1367,158 @@ class AdbRelayManager:
             }
         return result
 
+    async def ocr(
+        self,
+        serial: str,
+        *,
+        languages: Optional[list] = None,
+        region: Optional[dict] = None,
+        min_confidence: float = 0.5,
+        want_image_on_empty: bool = False,
+        timeout: float = 30.0,
+        cancel_event: Any = None,
+    ) -> dict:
+        """Screenshot + OCR on agent-boot; returns text boxes, not an image.
+
+        Media now flows media-adapter → go2rtc without passing through the farm,
+        so there is no local frame to OCR. Running it on the agent also keeps a
+        ~800 KB screenshot off the wire on every extraction step.
+        """
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"ocr-{uuid.uuid4().hex[:10]}"
+        grace = max(5.0, min(30.0, timeout * 0.15))
+        msg = {
+            "type": "ocr",
+            "id": req_id,
+            "serial": actual,
+            "languages": list(languages or []),
+            "region": region or None,
+            "min_confidence": float(min_confidence),
+            "want_image_on_empty": bool(want_image_on_empty),
+            "timeout_ms": int(timeout * 1000),
+        }
+        cancel_msg = {"type": "ocr_cancel", "id": req_id, "serial": actual}
+        request_task = asyncio.create_task(
+            conn.send_json_request(
+                msg=msg,
+                reply_id=req_id,
+                timeout=timeout,
+                timeout_grace=grace,
+            )
+        )
+        try:
+            if cancel_event is None:
+                # Common case. OCR takes ~230ms, so a sleep-poll like the one
+                # extra_data uses (a 45s operation, where it costs nothing)
+                # would add up to 100ms — a 40% latency tax — for no benefit.
+                result = await request_task
+            else:
+                while True:
+                    if request_task.done():
+                        result = await request_task
+                        break
+                    if cancel_event.is_set():
+                        with contextlib.suppress(Exception):
+                            await conn.send_json_message(cancel_msg)
+                        request_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await request_task
+                        return {"ok": False, "error": "cancelled", "cancelled": True}
+                    # cancel_event is a threading.Event, so it cannot be awaited;
+                    # poll fast enough that cancellation latency stays well under
+                    # the OCR itself.
+                    await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await conn.send_json_message(cancel_msg)
+            request_task.cancel()
+            raise
+        if result.get("type") != "ocr_result":
+            with contextlib.suppress(Exception):
+                await conn.send_json_message(cancel_msg)
+            return {
+                "ok": False,
+                "error": str(result.get("error") or result.get("body") or "invalid_ocr_result"),
+            }
+        return result
+
+    async def image_match(
+        self,
+        serial: str,
+        *,
+        template_sha256: str,
+        template_b64: Optional[str] = None,
+        threshold: float = 0.8,
+        scale: float = 0.25,
+        template_screen_w: Optional[int] = None,
+        timeout: float = 20.0,
+        cancel_event: Any = None,
+    ) -> dict:
+        """Find a template on the device screen; the agent returns a coordinate.
+
+        Pass ``template_b64=None`` to try the agent's cache: it replies
+        ``need_template`` when it has not seen that hash, and the caller resends
+        with bytes. Saves reshipping the same image on every loop iteration.
+        """
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"imatch-{uuid.uuid4().hex[:10]}"
+        grace = max(5.0, min(30.0, timeout * 0.15))
+        msg: dict[str, Any] = {
+            "type": "image_match",
+            "id": req_id,
+            "serial": actual,
+            "template_sha256": template_sha256,
+            "threshold": float(threshold),
+            "scale": float(scale),
+            "timeout_ms": int(timeout * 1000),
+        }
+        if template_b64:
+            msg["template_b64"] = template_b64
+        if template_screen_w:
+            msg["template_screen_w"] = int(template_screen_w)
+        cancel_msg = {"type": "image_match_cancel", "id": req_id, "serial": actual}
+        request_task = asyncio.create_task(
+            conn.send_json_request(
+                msg=msg, reply_id=req_id, timeout=timeout, timeout_grace=grace,
+            )
+        )
+        try:
+            if cancel_event is None:
+                # Matching takes ~9ms; a sleep-poll would dominate the call.
+                result = await request_task
+            else:
+                while True:
+                    if request_task.done():
+                        result = await request_task
+                        break
+                    if cancel_event.is_set():
+                        with contextlib.suppress(Exception):
+                            await conn.send_json_message(cancel_msg)
+                        request_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await request_task
+                        return {"ok": False, "error": "cancelled", "cancelled": True}
+                    await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await conn.send_json_message(cancel_msg)
+            request_task.cancel()
+            raise
+        if result.get("type") != "image_match_result":
+            with contextlib.suppress(Exception):
+                await conn.send_json_message(cancel_msg)
+            return {
+                "ok": False,
+                "error": str(result.get("error") or result.get("body") or "invalid_image_match_result"),
+            }
+        return result
+
     # ── A11y action relay (gRPC/WS meta JSON channel) ────────────────────────
 
     def next_a11y_seq(self, serial: str) -> int:
@@ -1611,7 +1784,7 @@ class WsRelayAgentSession:
                         },
                     )
 
-                elif mtype in ("u2_batch_result", "u2_flow_result", "extra_data_result"):
+                elif mtype in _REQUEST_REPLY_TYPES:
                     if conn is None:
                         continue
                     conn.resolve(msg.get("id", ""), msg)

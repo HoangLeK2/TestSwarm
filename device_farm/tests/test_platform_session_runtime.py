@@ -15,20 +15,20 @@ from db.models.enums import DevicePlatformSessionState
 from services.campaign.account_resolver import ResolvedDeviceAccount
 from services.campaign.dispatcher import _apply_facebook_session_guard_to_accounts
 from services.device_platform_session import get_platform_session, mark_active
-from services.facebook_readiness import FacebookReadinessResult, FacebookReadinessStatus
+from services.platform_readiness import PlatformReadinessResult, PlatformReadinessStatus
 from services.facebook_session_guard import (
     FacebookSessionGuardDecision,
     FacebookSessionGuardMode,
     FacebookSessionGuardOutcome,
 )
-from services.facebook_session_runtime import (
+from services.platform_session_runtime import (
     _resolve_runtime_target,
-    apply_facebook_session_gate,
+    apply_platform_session_gate,
     guard_reason_allows_login_recovery,
-    scenario_registry_has_facebook_login_gate,
+    scenario_registry_has_platform_login_gate,
 )
 from tenancy.context import tenant_context, use_tenant_scope
-from tasks.scenario.steps.facebook_session import handle_facebook_session_gate
+from tasks.scenario.steps.platform_session import handle_platform_session_gate
 
 
 @pytest_asyncio.fixture
@@ -41,8 +41,8 @@ async def session_factory():
     await engine.dispose()
 
 
-def _readiness(status: FacebookReadinessStatus) -> FacebookReadinessResult:
-    return FacebookReadinessResult(
+def _readiness(status: PlatformReadinessStatus) -> PlatformReadinessResult:
+    return PlatformReadinessResult(
         status=status,
         reason=f"test_{status.value}",
         attempted_at=datetime.now(timezone.utc),
@@ -64,27 +64,27 @@ def test_nested_session_gate_reads_account_from_effective_variable_context(
         }
 
     monkeypatch.setattr(
-        "tasks.scenario.steps.facebook_session._observe_readiness",
-        lambda *args, **kwargs: _readiness(FacebookReadinessStatus.READY),
+        "tasks.scenario.steps.platform_session._observe_readiness",
+        lambda *args, **kwargs: _readiness(PlatformReadinessStatus.READY),
     )
     monkeypatch.setattr(
-        "services.facebook_session_runtime.run_facebook_session_gate",
+        "services.platform_session_runtime.run_platform_session_gate",
         fake_gate,
     )
     sc = SimpleNamespace(
         var_ctx=VariableContext(scenario_vars={"__ACCOUNT_ID__": "account-1"}),
         ctx={"vars": {}},
-        scenario={"steps": [{"type": "facebook_session_gate"}]},
+        scenario={"steps": [{"type": "platform_session_gate"}]},
         execution_id=None,
         serial="SERIAL1",
         cancel_event=None,
         device=SimpleNamespace(),
     )
-    result = {"index": 0, "type": "facebook_session_gate", "ok": True}
+    result = {"index": 0, "type": "platform_session_gate", "ok": True}
 
-    handle_facebook_session_gate(
+    handle_platform_session_gate(
         sc,
-        {"id": "confirm", "type": "facebook_session_gate", "phase": "confirm"},
+        {"id": "confirm", "type": "platform_session_gate", "phase": "confirm"},
         0,
         result,
     )
@@ -94,8 +94,11 @@ def test_nested_session_gate_reads_account_from_effective_variable_context(
         "account_id": "account-1",
         "execution_id": None,
         "step_id": "confirm",
+        # The ledger records which phone ran the action, so the activity feed
+        # can answer "what did this device do".
+        "device_serial": "SERIAL1",
     }
-    assert sc.ctx["vars"]["FACEBOOK_SESSION_READY"] is True
+    assert sc.ctx["vars"]["PLATFORM_SESSION_READY"] is True
 
 
 @pytest.mark.asyncio
@@ -131,13 +134,13 @@ async def test_runtime_target_resolves_account_org_before_tenant_scope(
 async def test_preflight_logged_out_requests_login(session_factory):
     async with session_factory() as db:
         with use_tenant_scope("org-1"):
-            decision = await apply_facebook_session_gate(
+            decision = await apply_platform_session_gate(
                 db,
                 org_id="org-1",
                 device_id="device-1",
                 account_id="account-1",
                 phase="preflight",
-                readiness=_readiness(FacebookReadinessStatus.LOGGED_OUT),
+                readiness=_readiness(PlatformReadinessStatus.LOGGED_OUT),
             )
             session = await get_platform_session(
                 db, org_id="org-1", device_id="device-1"
@@ -154,13 +157,13 @@ async def test_preflight_logged_out_requests_login(session_factory):
 async def test_confirm_requires_same_run_login_provenance(session_factory):
     async with session_factory() as db:
         with use_tenant_scope("org-1"):
-            decision = await apply_facebook_session_gate(
+            decision = await apply_platform_session_gate(
                 db,
                 org_id="org-1",
                 device_id="device-1",
                 account_id="account-1",
                 phase="confirm",
-                readiness=_readiness(FacebookReadinessStatus.READY),
+                readiness=_readiness(PlatformReadinessStatus.READY),
                 login_provenance=None,
             )
 
@@ -178,13 +181,13 @@ async def test_confirm_marks_expected_account_active(session_factory):
     }
     async with session_factory() as db:
         with use_tenant_scope("org-1"):
-            decision = await apply_facebook_session_gate(
+            decision = await apply_platform_session_gate(
                 db,
                 org_id="org-1",
                 device_id="device-1",
                 account_id="account-1",
                 phase="confirm",
-                readiness=_readiness(FacebookReadinessStatus.READY),
+                readiness=_readiness(PlatformReadinessStatus.READY),
                 login_provenance=provenance,
             )
             session = await get_platform_session(
@@ -211,13 +214,13 @@ async def test_preflight_blocks_another_active_account(session_factory):
                 establishment_method="test",
                 reason="test",
             )
-            decision = await apply_facebook_session_gate(
+            decision = await apply_platform_session_gate(
                 db,
                 org_id="org-1",
                 device_id="device-1",
                 account_id="account-1",
                 phase="preflight",
-                readiness=_readiness(FacebookReadinessStatus.READY),
+                readiness=_readiness(PlatformReadinessStatus.READY),
             )
 
     assert decision["allowed"] is False
@@ -234,7 +237,7 @@ def test_only_recoverable_guard_reasons_are_deferred_to_login():
 
 
 def test_registry_gate_detection_follows_selected_run_scenario_only():
-    login = {"steps": [{"type": "facebook_session_gate", "phase": "preflight"}]}
+    login = {"steps": [{"type": "platform_session_gate", "phase": "preflight"}]}
     selected = {
         "steps": [
             {"type": "run_scenario", "scenario_name": "Đăng nhập Facebook"},
@@ -248,13 +251,13 @@ def test_registry_gate_detection_follows_selected_run_scenario_only():
     }
 
     assert (
-        scenario_registry_has_facebook_login_gate(
+        scenario_registry_has_platform_login_gate(
             registry, [{"scenario_id": "selected"}]
         )
         is True
     )
     assert (
-        scenario_registry_has_facebook_login_gate(registry, [{"scenario_id": "other"}])
+        scenario_registry_has_platform_login_gate(registry, [{"scenario_id": "other"}])
         is False
     )
 

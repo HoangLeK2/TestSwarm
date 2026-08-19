@@ -607,3 +607,150 @@ def test_normalize_ws_base_url_accepts_dashboard_lan_origin(monkeypatch):
         == "ws://172.16.0.182:8081"
     )
     assert _ws_base_for_push(request, None) == "ws://127.0.0.1:8080"
+
+
+def test_register_relay_device_brings_device_online_not_just_bootstrap():
+    """Registration must emit the FSM online event, not only schedule a bootstrap.
+
+    The relay already reports the serial online (checked against row.serials) and
+    the device row now exists, so both facts needed for `online` are true at
+    registration. Before this, the endpoint only scheduled a bootstrap, so the
+    device stayed `unknown` until the agent happened to re-emit its online
+    transition — proven live: forcing a registered device to `unknown` and
+    calling register flipped it back to `online` with no agent restart.
+    """
+    import inspect
+
+    from api.routes.relay_agents import _claim_relay_serial, register_relay_device
+
+    # The online transition lives in the shared claim helper now, so both the
+    # single and bulk endpoints get it. Guard the helper, and that the single
+    # endpoint still commits after claiming.
+    assert "apply_relay_online" in inspect.getsource(_claim_relay_serial), (
+        "claim helper no longer advances the FSM to online — a device will sit "
+        "in `unknown` until the agent restarts"
+    )
+    assert "db.commit()" in inspect.getsource(register_relay_device)
+
+
+@pytest.mark.asyncio
+async def test_register_relay_devices_bulk_partial_success():
+    """One bad serial must not sink the others, and each is reported on its own.
+
+    Mirrors the DLQ bulk-retry partial-success shape: a per-item results list.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from api.routes.relay_agents import (
+        RegisterRelayDevicesBody,
+        register_relay_devices_bulk,
+    )
+
+    row = MagicMock()
+    row.status = "online"
+    row.serials = ["emulator-5554", "emulator-5556"]  # 5558 is NOT reported
+
+    fake_db = AsyncMock()
+    fake_user = MagicMock()
+    fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
+
+    async def _claim(db, r, serial, user):
+        # Mirror the real helper: reject a serial the agent does not report.
+        if serial not in set(r.serials or []):
+            raise ValueError("serial is not reported by this relay agent")
+        return serial  # canonical == serial for emulators
+
+    def _device(_db, serial):
+        d = MagicMock()
+        d.id = f"id-{serial}"
+        d.name = serial
+        return d
+
+    booted: list[str] = []
+
+    with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents._claim_relay_serial", side_effect=_claim), \
+         patch(
+             "api.routes.relay_agents._schedule_bootstrap_for_registered_relay_device",
+             side_effect=lambda s: booted.append(s) or True,
+         ):
+        mock_repo.get_relay_agent = AsyncMock(return_value=row)
+        mock_repo.get_device_by_serial = AsyncMock(side_effect=_device)
+
+        out = await register_relay_devices_bulk(
+            relay_id="relay-x",
+            body=RegisterRelayDevicesBody(serials=["emulator-5554", "emulator-5558"]),
+            db=fake_db,
+            user=fake_user,
+        )
+
+    by_serial = {r.serial: r for r in out.results}
+    assert by_serial["emulator-5554"].status == "registered"
+    assert by_serial["emulator-5554"].device_id == "id-emulator-5554"
+    assert by_serial["emulator-5558"].status == "failed"
+    assert "not reported" in (by_serial["emulator-5558"].message or "")
+    # Only the successful one is bootstrapped.
+    assert booted == ["emulator-5554"]
+
+
+@pytest.mark.asyncio
+async def test_register_relay_devices_bulk_empty_means_all_reported():
+    """An empty serials list registers everything the agent reports."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from api.routes.relay_agents import (
+        RegisterRelayDevicesBody,
+        register_relay_devices_bulk,
+    )
+
+    row = MagicMock()
+    row.status = "online"
+    row.serials = ["emulator-5554", "emulator-5556", "emulator-5558"]
+
+    fake_db = AsyncMock()
+    fake_user = MagicMock()
+    fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
+
+    with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents._claim_relay_serial", side_effect=lambda db, r, s, u: s), \
+         patch("api.routes.relay_agents._schedule_bootstrap_for_registered_relay_device", return_value=True):
+        mock_repo.get_relay_agent = AsyncMock(return_value=row)
+        mock_repo.get_device_by_serial = AsyncMock(
+            side_effect=lambda _db, s: MagicMock(id=f"id-{s}", name=s)
+        )
+
+        out = await register_relay_devices_bulk(
+            relay_id="relay-x",
+            body=RegisterRelayDevicesBody(serials=[]),
+            db=fake_db,
+            user=fake_user,
+        )
+
+    assert [r.serial for r in out.results] == row.serials
+    assert all(r.status == "registered" for r in out.results)
+
+
+@pytest.mark.asyncio
+async def test_register_relay_devices_bulk_rejects_offline_agent():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    from api.routes.relay_agents import (
+        RegisterRelayDevicesBody,
+        register_relay_devices_bulk,
+    )
+
+    with patch("api.routes.relay_agents.repo") as mock_repo:
+        mock_repo.get_relay_agent = AsyncMock(return_value=None)
+        with _pytest.raises(HTTPException) as ei:
+            await register_relay_devices_bulk(
+                relay_id="relay-x",
+                body=RegisterRelayDevicesBody(serials=["emulator-5554"]),
+                db=AsyncMock(),
+                user=MagicMock(id="user-a", org_id="org-a"),
+            )
+    assert ei.value.status_code == 404

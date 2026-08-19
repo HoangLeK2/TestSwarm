@@ -25,6 +25,7 @@ class _BenchDevice:
     def request_extra_data_xml(self, **kwargs):
         self.calls.append(kwargs)
         strategy = kwargs.get("strategy", "")
+        entity = kwargs.get("entity", "")
         if strategy in {"fb_comment_target", "fb_comment_target_tap"}:
             return {
                 "ok": True,
@@ -41,7 +42,7 @@ class _BenchDevice:
                 },
                 "agent_tapped": True,
             }
-        if strategy == "fb_comments":
+        if entity == "comments":
             return {
                 "ok": True,
                 "ingest": {
@@ -75,7 +76,7 @@ def _ctx(device: _BenchDevice) -> SimpleNamespace:
         ctx={
             "_active_comment_parent_source": "post_detail",
             "_active_comment_parent_hash": "hash-bench",
-            "_fb_comment_parent_pid": "pid-bench",
+            "_comment_parent_pid": "pid-bench",
             "_active_comment_anchor_verified": True,
         },
         scenario={
@@ -95,7 +96,7 @@ def _relay_available(monkeypatch):
     monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
 
 
-def test_fb_tap_comment_button_handler_benchmark(monkeypatch) -> None:
+def test_social_open_comments_handler_benchmark(monkeypatch) -> None:
     monkeypatch.setattr(
         "tasks.scenario.steps.extraction.run_edge_comment_filter_switch",
         lambda **_: {"switched": False, "reason_code": "already_all_comments"},
@@ -118,20 +119,20 @@ def test_fb_tap_comment_button_handler_benchmark(monkeypatch) -> None:
     sc = _ctx(device)
     sc.ctx.pop("_active_comment_parent_source", None)
     step = {
-        "type": "fb_tap_comment_button",
+        "type": "social_open_comments",
         "pre_scroll": True,
         "pre_scroll_distance": 0.24,
         "post_tap_wait_s": 0,
         "pre_scroll_pause_s": 0,
         "switch_to_all_comments": False,
-        "then": [{"type": "extract", "strategy": "fb_comments"}],
+        "then": [{"type": "extract", "entity": "comments", "platform": "facebook"}],
         "else": [],
     }
     samples: list[float] = []
     for _ in range(20):
         result: dict[str, Any] = {}
         t0 = time.perf_counter()
-        control_flow.handle_tap_fb_comment_button(sc, step, 0, result)
+        control_flow.handle_social_open_comments(sc, step, 0, result)
         samples.append((time.perf_counter() - t0) * 1000)
         assert result.get("ok") is not False
 
@@ -140,7 +141,7 @@ def test_fb_tap_comment_button_handler_benchmark(monkeypatch) -> None:
     assert len(device.swipes) >= 20
     assert avg < 5, f"handler avg {avg}ms too slow (mocked relay/sleep)"
     print(
-        f"\n[handler-bench] fb_tap_comment_button 20x avg={avg:.2f}ms p95={p95:.2f}ms "
+        f"\n[handler-bench] social_open_comments 20x avg={avg:.2f}ms p95={p95:.2f}ms "
         f"swipes={len(device.swipes)}"
     )
 
@@ -157,10 +158,10 @@ def test_fb_comments_extract_handler_benchmark(monkeypatch) -> None:
     )
     device = _BenchDevice()
     sc = _ctx(device)
-    sc.ctx["_fb_comment_filter_applied"] = "all_comments"
+    sc.ctx["_comment_filter_applied"] = "all_comments"
     step = {
         "type": "extract",
-        "strategy": "fb_comments",
+        "entity": "comments", "platform": "facebook",
         "edge_extra_data": True,
         "max_items": 500,
         "comment_scroll_passes": 48,
@@ -172,17 +173,17 @@ def test_fb_comments_extract_handler_benchmark(monkeypatch) -> None:
     for _ in range(20):
         result: dict[str, Any] = {}
         t0 = time.perf_counter()
-        handled = extraction_mod._try_edge_extra_data(sc, step, "fb_comments", result)
+        handled = extraction_mod._try_edge_extra_data(sc, step, "comments", "facebook", result)
         samples.append((time.perf_counter() - t0) * 1000)
         assert handled is True
         assert result.get("extracted") == 10
 
     avg = statistics.mean(samples)
     p95 = sorted(samples)[18]
-    comment_calls = [c for c in device.calls if c.get("strategy") == "fb_comments"]
+    comment_calls = [c for c in device.calls if c.get("entity") == "comments"]
     assert len(comment_calls) == 20
     assert avg < 30, f"extract handler avg {avg}ms too slow"
     print(
-        f"\n[handler-bench] fb_comments extract 20x avg={avg:.2f}ms p95={p95:.2f}ms "
+        f"\n[handler-bench] comments extract 20x avg={avg:.2f}ms p95={p95:.2f}ms "
         f"relay_calls={len(comment_calls)}"
     )

@@ -9,10 +9,10 @@ import {
 test('allows if_variable to no-op on then and run login recovery from else', () => {
   const result = validateScenarioStepsForApi([
     { type: 'launch_app', package: 'com.facebook.katana' },
-    { type: 'facebook_session_gate', phase: 'preflight' },
+    { type: 'platform_session_gate', phase: 'preflight' },
     {
       type: 'if_variable',
-      name: 'FACEBOOK_SESSION_READY',
+      name: 'PLATFORM_SESSION_READY',
       then: [],
       else: [
         {
@@ -38,7 +38,7 @@ test('rejects if_variable with no executable branch steps', () => {
   const result = validateScenarioStepsForApi([
     {
       type: 'if_variable',
-      name: 'FACEBOOK_SESSION_READY',
+      name: 'PLATFORM_SESSION_READY',
       then: [],
       else: []
     }

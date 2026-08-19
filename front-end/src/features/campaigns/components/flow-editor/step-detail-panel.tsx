@@ -1,7 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MousePointerClick, Move } from 'lucide-react';
+import {
+  Crop as CropIcon,
+  Monitor,
+  MousePointerClick,
+  Move
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +25,12 @@ import { ExtractStepFields } from './extract-fields';
 import { AppAutomationStepFields } from './app-automation-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
+import { PlatformSelect } from './platform-select';
+import { PLATFORM_AWARE_STEP_TYPES } from './platform-aware-steps';
+import {
+  normalizeSystemVariableCondition,
+  PLATFORM_SESSION_READY_VARIABLE
+} from './system-variable-condition';
 import {
   AppLifecycleStepFields,
   F,
@@ -37,6 +48,7 @@ import {
   defaultSocialAction,
   getSocialActionOptions
 } from './social-action-options';
+import { TapImageFields } from './tap-image-fields';
 
 interface Props {
   step: FlowStep;
@@ -49,6 +61,23 @@ interface Props {
   onRequestPickTapCoords?: () => void;
   /** Pick swipe segment on mirror (swipe_ratio). */
   onRequestPickSwipeCoords?: () => void;
+  /**
+   * Crop a region of the mirror as a tap_image template. Resolves with the
+   * stored key plus the screen size it was cropped at — matching needs that to
+   * correct for phones with a different resolution.
+   */
+  onRequestCropImage?: () => Promise<{
+    templateKey: string;
+    screenW?: number;
+    screenH?: number;
+    preview: string;
+    warning: string;
+  } | null>;
+  /**
+   * Drag a rectangle on the mirror to bound an OCR read. Like the pickers
+   * above it closes the panel first, so the caller applies the result itself.
+   */
+  onRequestPickRegion?: () => Promise<null>;
   /** Other scenarios in the campaign — for run_scenario picker (templates always loaded inside RunScenarioFields). */
   campaignScenarios?: RunScenarioCampaignOption[];
   runtimeContext?: SessionGateRuntimeContext;
@@ -62,6 +91,86 @@ export type SessionGateRuntimeContext = {
   loading?: boolean;
   error?: boolean;
 };
+
+/**
+ * OCR read area: whole screen, or a rectangle dragged on the device mirror.
+ *
+ * The raw JSON textarea stays as the escape hatch — a scenario may carry a
+ * region computed elsewhere, and hand-typing ratios must keep working — but
+ * nobody should have to guess four numbers when the phone is on screen.
+ */
+function OcrRegionField({
+  region,
+  onChange,
+  onRequestPickRegion
+}: {
+  region: unknown;
+  onChange: (next: unknown | undefined) => void;
+  onRequestPickRegion?: () => Promise<null>;
+}) {
+  const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
+  const rect = region as
+    | { x1?: number; y1?: number; x2?: number; y2?: number }
+    | undefined;
+  const hasRegion =
+    rect != null &&
+    typeof rect === 'object' &&
+    ['x1', 'y1', 'x2', 'y2'].every(
+      (k) => typeof (rect as never)[k] === 'number'
+    );
+  const pct = (v: number | undefined) => `${Math.round((v ?? 0) * 100)}%`;
+
+  return (
+    <div className='space-y-2'>
+      <div className='grid grid-cols-2 gap-2'>
+        <Button
+          type='button'
+          size='sm'
+          variant={hasRegion ? 'outline' : 'secondary'}
+          className='h-7 gap-1.5 text-[10px]'
+          onClick={() => onChange(undefined)}
+        >
+          <Monitor size={12} />
+          {tOcr('wholeScreen')}
+        </Button>
+        <Button
+          type='button'
+          size='sm'
+          variant={hasRegion ? 'secondary' : 'outline'}
+          className='h-7 gap-1.5 text-[10px]'
+          disabled={!onRequestPickRegion}
+          title={
+            onRequestPickRegion ? undefined : tOcr('pickRegionUnavailable')
+          }
+          onClick={() => {
+            void onRequestPickRegion?.();
+          }}
+        >
+          <CropIcon size={12} />
+          {hasRegion ? tOcr('pickRegionAgain') : tOcr('pickRegion')}
+        </Button>
+      </div>
+
+      <p className='text-[10px] text-muted-foreground'>
+        {hasRegion
+          ? tOcr('regionSummary', {
+              x1: pct(rect?.x1),
+              y1: pct(rect?.y1),
+              x2: pct(rect?.x2),
+              y2: pct(rect?.y2)
+            })
+          : tOcr('wholeScreenHint')}
+      </p>
+
+      <JsonTextarea
+        label={tOcr('region')}
+        value={region}
+        onCommit={onChange}
+        placeholder='{"x1":0,"y1":0.3,"x2":1,"y2":0.7}'
+      />
+    </div>
+  );
+}
 
 /** Value field + variable insert: stacks on narrow widths so the select never squeezes the input. */
 function valueInsertRowClassName() {
@@ -218,6 +327,8 @@ export function StepDetailPanel({
   onRequestPickSelector,
   onRequestPickTapCoords,
   onRequestPickSwipeCoords,
+  onRequestCropImage,
+  onRequestPickRegion,
   campaignScenarios = [],
   runtimeContext
 }: Props) {
@@ -225,7 +336,12 @@ export function StepDetailPanel({
   const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
-  const [step, setStep] = useState(stepProp);
+  const tIfVar = useTranslations('campaignsFeature.stepEditor.ifVariable');
+  const tTarget = useTranslations('campaignsFeature.stepEditor.selectTarget');
+  const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
+  const [step, setStep] = useState(() =>
+    normalizeSystemVariableCondition(stepProp)
+  );
   const stepRef = useRef(step);
   stepRef.current = step;
   const pendingCommitRef = useRef<FlowStep | null>(null);
@@ -242,7 +358,9 @@ export function StepDetailPanel({
   useEffect(() => {
     if (stepIdentityRef.current === stepIdentity) return;
     stepIdentityRef.current = stepIdentity;
-    setStep(stepProp);
+    const normalized = normalizeSystemVariableCondition(stepProp);
+    setStep(normalized);
+    if (normalized !== stepProp) onChangeRef.current(normalized);
   }, [stepProp, stepIdentity]);
 
   useEffect(() => {
@@ -795,7 +913,15 @@ export function StepDetailPanel({
                 />
               )}
 
-              {step.type === 'facebook_session_gate' && (
+              {PLATFORM_AWARE_STEP_TYPES.has(step.type) && (
+                <PlatformSelect
+                  value={step.platform}
+                  onChange={(platform) => update({ platform })}
+                  stepType={step.type}
+                />
+              )}
+
+              {step.type === 'platform_session_gate' && (
                 <div className='space-y-3'>
                   <div className='space-y-2 rounded-md border bg-muted/30 p-3 text-xs'>
                     <p className='font-medium'>
@@ -1150,6 +1276,18 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
+                  <F label='Biến profile đã mở'>
+                    <Input
+                      className='h-8 font-mono text-xs'
+                      value={step.save_opened_as ?? 'AUTHOR_PROFILE_OPENED'}
+                      onChange={(e) =>
+                        update({
+                          save_opened_as:
+                            e.target.value || 'AUTHOR_PROFILE_OPENED'
+                        })
+                      }
+                    />
+                  </F>
                 </>
               )}
 
@@ -1168,25 +1306,39 @@ export function StepDetailPanel({
                 </F>
               )}
 
-              {['fb_select_people_profile', 'fb_select_post_target'].includes(
-                step.type
-              ) && (
+              {step.type === 'social_select_target' && (
                 <>
                   <StepPanelHint>
-                    Chạy resolver trên agent-boot: dump XML, score keyword, mở
-                    đúng{' '}
-                    {step.type === 'fb_select_post_target'
-                      ? 'bài viết'
-                      : 'profile'}{' '}
-                    và lưu target proof. Step này không thực hiện
-                    like/share/comment hay gửi lời mời kết bạn.
+                    {tTarget('hint', {
+                      kind:
+                        step.target_type === 'post'
+                          ? tTarget('kindPost')
+                          : tTarget('kindPerson')
+                    })}
                   </StepPanelHint>
+                  <F label={tTarget('targetTypeLabel')}>
+                    <select
+                      className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                      value={step.target_type ?? 'person'}
+                      onChange={(e) =>
+                        update({
+                          target_type: e.target.value,
+                          ...(e.target.value === 'post'
+                            ? { display_name: undefined }
+                            : { display_text: undefined })
+                        })
+                      }
+                    >
+                      <option value='person'>{tTarget('optionPerson')}</option>
+                      <option value='post'>{tTarget('optionPost')}</option>
+                    </select>
+                  </F>
                   <F label='Từ khoá search'>
                     <Input
                       className='h-8 text-xs'
                       value={step.search ?? ''}
                       placeholder={
-                        step.type === 'fb_select_post_target'
+                        step.target_type === 'post'
                           ? '${POST_SEARCH}'
                           : '${PEOPLE_SEARCH}'
                       }
@@ -1197,7 +1349,7 @@ export function StepDetailPanel({
                   </F>
                   <F
                     label={
-                      step.type === 'fb_select_post_target'
+                      step.target_type === 'post'
                         ? 'Text bài viết cần match'
                         : 'Tên hiển thị cần match'
                     }
@@ -1205,18 +1357,18 @@ export function StepDetailPanel({
                     <Input
                       className='h-8 text-xs'
                       value={
-                        step.type === 'fb_select_post_target'
+                        step.target_type === 'post'
                           ? (step.display_text ?? '')
                           : (step.display_name ?? '')
                       }
                       placeholder={
-                        step.type === 'fb_select_post_target'
+                        step.target_type === 'post'
                           ? '${POST_ROW_TEXT}'
                           : '${PEOPLE_ROW_TEXT}'
                       }
                       onChange={(e) =>
                         update(
-                          step.type === 'fb_select_post_target'
+                          step.target_type === 'post'
                             ? { display_text: e.target.value || undefined }
                             : { display_name: e.target.value || undefined }
                         )
@@ -1305,7 +1457,7 @@ export function StepDetailPanel({
                         className='h-8 font-mono text-xs'
                         value={
                           step.save_as ??
-                          (step.type === 'fb_select_post_target'
+                          (step.target_type === 'post'
                             ? '_post_target'
                             : '_people_target')
                         }
@@ -1313,7 +1465,7 @@ export function StepDetailPanel({
                           update({
                             save_as:
                               e.target.value ||
-                              (step.type === 'fb_select_post_target'
+                              (step.target_type === 'post'
                                 ? '_post_target'
                                 : '_people_target')
                           })
@@ -1334,7 +1486,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_connect_visible_people' && (
+              {step.type === 'social_connect_visible_people' && (
                 <>
                   <StepPanelHint>
                     Scan các row/card đang hiện có nút Thêm bạn bè, chỉ gửi lời
@@ -1446,13 +1598,9 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_scan_posts_interact' && (
+              {step.type === 'social_scan_posts_interact' && (
                 <>
-                  <StepPanelHint>
-                    Agent-boot scan XML trên màn hình Facebook hiện tại, chỉ
-                    like/comment bài post có keyword khớp. Step này không search
-                    từng bài và không nhận profile/page/group làm post.
-                  </StepPanelHint>
+                  <StepPanelHint>{t('scanPostsHint')}</StepPanelHint>
                   <F label='Keyword bài viết'>
                     <Input
                       className='h-8 text-xs'
@@ -1558,6 +1706,14 @@ export function StepDetailPanel({
                   <label className='flex items-center gap-2 text-xs text-muted-foreground'>
                     <input
                       type='checkbox'
+                      checked={step.like_post ?? true}
+                      onChange={(e) => update({ like_post: e.target.checked })}
+                    />
+                    Like post khi match
+                  </label>
+                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                    <input
+                      type='checkbox'
                       checked={step.require_comment ?? true}
                       onChange={(e) =>
                         update({ require_comment: e.target.checked })
@@ -1565,6 +1721,134 @@ export function StepDetailPanel({
                     />
                     Chỉ tính thành công khi comment đã được submit
                   </label>
+                </>
+              )}
+
+              {(step.type === 'social_open_author_from_post_match' ||
+                step.type === 'social_open_commenter_from_post_match') && (
+                <>
+                  <StepPanelHint>
+                    {step.type === 'social_open_commenter_from_post_match'
+                      ? 'Chạy platform adapter: lấy post action đã match, mở comment sheet, chọn commenter, verify profile rồi lưu target proof cho bước gửi kết bạn.'
+                      : 'Chạy platform adapter: lấy post action đã match từ biến scan, mở author profile, verify profile rồi lưu target proof cho bước gửi kết bạn.'}
+                  </StepPanelHint>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Biến scan'>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.source_var ?? '_post_scan'}
+                        onChange={(e) =>
+                          update({ source_var: e.target.value || '_post_scan' })
+                        }
+                      />
+                    </F>
+                    <F label='Action index'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={20}
+                        className='h-8 text-xs'
+                        value={step.action_index ?? 0}
+                        onChange={(e) =>
+                          update({
+                            action_index: Math.max(
+                              0,
+                              Math.min(20, Number(e.target.value) || 0)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <F label='Keyword bắt buộc trên profile'>
+                    <Input
+                      className='h-8 text-xs'
+                      value={keywordInputValue(step.required_keywords)}
+                      placeholder='AI, tuyển dụng, founder'
+                      onChange={(e) =>
+                        update({
+                          required_keywords: keywordListFromInput(
+                            e.target.value
+                          )
+                        })
+                      }
+                    />
+                  </F>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label='Keyword cộng điểm'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.optional_keywords)}
+                        placeholder='công nghệ, startup'
+                        onChange={(e) =>
+                          update({
+                            optional_keywords: keywordListFromInput(
+                              e.target.value
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Keyword cấm'>
+                      <Input
+                        className='h-8 text-xs'
+                        value={keywordInputValue(step.forbidden_keywords)}
+                        placeholder='page, group, anonymous'
+                        onChange={(e) =>
+                          update({
+                            forbidden_keywords: keywordListFromInput(
+                              e.target.value
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
+                  <div className='grid grid-cols-3 gap-2'>
+                    <F label='Điểm tối thiểu'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={200}
+                        className='h-8 text-xs'
+                        value={step.min_score ?? 80}
+                        onChange={(e) =>
+                          update({
+                            min_score: Math.max(
+                              0,
+                              Math.min(200, Number(e.target.value) || 80)
+                            )
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Timeout'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={60}
+                        step={0.5}
+                        className='h-8 text-xs'
+                        value={step.timeout ?? 12}
+                        onChange={(e) =>
+                          update({
+                            timeout: Math.max(1, Number(e.target.value) || 12)
+                          })
+                        }
+                      />
+                    </F>
+                    <F label='Lưu target'>
+                      <Input
+                        className='h-8 font-mono text-xs'
+                        value={step.save_as ?? '_people_target'}
+                        onChange={(e) =>
+                          update({
+                            save_as: e.target.value || '_people_target'
+                          })
+                        }
+                      />
+                    </F>
+                  </div>
                 </>
               )}
 
@@ -1580,15 +1864,6 @@ export function StepDetailPanel({
                     đúng một target; màn hình search có nhiều nút sẽ bị chặn.
                     Kết quả được xác minh trước khi bước hoàn tất.
                   </StepPanelHint>
-                  <F label='Nền tảng'>
-                    <select
-                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
-                      value={step.platform ?? 'facebook'}
-                      onChange={(e) => update({ platform: e.target.value })}
-                    >
-                      <option value='facebook'>Facebook</option>
-                    </select>
-                  </F>
                   <F label='Hành động'>
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
@@ -1677,7 +1952,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_find_comment_button' && (
+              {step.type === 'social_find_comment_button' && (
                 <>
                   <div className='rounded-md border border-sky-400/40 bg-sky-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-sky-950 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-100'>
                     Tìm nút Bình luận đúng bài viết và cache target trong
@@ -1724,7 +1999,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_tap_comment_target' && (
+              {step.type === 'social_tap_comment_target' && (
                 <>
                   <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
                     Bấm target đã được cache bởi bước Tìm nút Bình luận, rồi xác
@@ -1758,7 +2033,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {step.type === 'fb_apply_comment_filter' && (
+              {step.type === 'social_apply_comment_filter' && (
                 <>
                   <div className='rounded-md border border-emerald-400/40 bg-emerald-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-emerald-950 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-100'>
                     Đổi bộ lọc trong sheet bình luận đang mở. Đặt step này sau
@@ -1816,8 +2091,7 @@ export function StepDetailPanel({
                 </>
               )}
 
-              {(step.type === 'fb_tap_comment_button' ||
-                step.type === 'tap_fb_comment_button') && (
+              {step.type === 'social_open_comments' && (
                 <>
                   <div className='rounded-md border border-amber-400/50 bg-amber-50/70 px-3 py-2.5 text-[11px] leading-relaxed text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100'>
                     <div className='mb-1 font-semibold'>
@@ -1846,13 +2120,21 @@ export function StepDetailPanel({
                   </div>
                   <StepPanelToggle
                     label='Bỏ qua khi không thấy nút'
-                    description='Compatibility setting cho scenario cũ. Flow mới nên cấu hình lỗi trên node Tìm/Bấm riêng.'
+                    description='Tuỳ chọn tương thích cho kịch bản cũ. Luồng mới nên cấu hình lỗi trên từng bước Tìm/Bấm riêng.'
                     checked={step.ignore_error !== false}
                     onCheckedChange={(checked) =>
                       update({ ignore_error: checked })
                     }
                   />
                 </>
+              )}
+
+              {step.type === 'tap_image' && (
+                <TapImageFields
+                  step={step}
+                  update={update}
+                  onRequestCropImage={onRequestCropImage}
+                />
               )}
 
               {step.type === 'tap_position' && (
@@ -1982,24 +2264,39 @@ export function StepDetailPanel({
 
               {step.type === 'if_variable' && (
                 <>
-                  <F label='Tên biến'>
+                  <F label={tIfVar('nameLabel')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.name ?? ''}
-                      onChange={(e) => update({ name: e.target.value })}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        if (name === PLATFORM_SESSION_READY_VARIABLE) {
+                          commitStep(
+                            normalizeSystemVariableCondition({
+                              ...stepRef.current,
+                              name
+                            })
+                          );
+                          return;
+                        }
+                        update({ name });
+                      }}
                     />
                   </F>
-                  <F label='Điều kiện'>
+                  <F label={tIfVar('operatorLabel')}>
                     <select
                       className='w-full rounded border bg-background px-2 py-1.5 text-xs'
+                      disabled={step.name === PLATFORM_SESSION_READY_VARIABLE}
                       value={
-                        step.equals != null
+                        step.name === PLATFORM_SESSION_READY_VARIABLE
                           ? 'equals'
-                          : step.not_equals != null
-                            ? 'not_equals'
-                            : step.contains != null
-                              ? 'contains'
-                              : 'greater_than'
+                          : step.equals != null
+                            ? 'equals'
+                            : step.not_equals != null
+                              ? 'not_equals'
+                              : step.contains != null
+                                ? 'contains'
+                                : 'greater_than'
                       }
                       onChange={(e) => {
                         const val =
@@ -2016,59 +2313,74 @@ export function StepDetailPanel({
                         onChange({ ...c, [e.target.value]: val });
                       }}
                     >
-                      <option value='equals'>Bằng (==)</option>
-                      <option value='not_equals'>Khác (!=)</option>
-                      <option value='contains'>Chứa</option>
-                      <option value='greater_than'>Lớn hơn (&gt;)</option>
+                      <option value='equals'>{tIfVar('equals')}</option>
+                      <option value='not_equals'>{tIfVar('notEquals')}</option>
+                      <option value='contains'>{tIfVar('contains')}</option>
+                      <option value='greater_than'>
+                        {tIfVar('greaterThan')}
+                      </option>
                     </select>
                   </F>
-                  <F label='Giá trị'>
-                    <div className={valueInsertRowClassName()}>
-                      <Input
-                        className='h-9 min-w-0 flex-1 text-xs'
-                        value={
-                          step.equals ??
-                          step.not_equals ??
-                          step.contains ??
-                          step.greater_than ??
-                          ''
+                  <F label={tIfVar('valueLabel')}>
+                    {step.name === PLATFORM_SESSION_READY_VARIABLE ? (
+                      <select
+                        className='w-full rounded border bg-background px-2 py-1.5 text-xs'
+                        value={String(step.equals ?? true)}
+                        onChange={(e) =>
+                          update({ equals: e.target.value === 'true' })
                         }
-                        onChange={(e) => {
-                          const op =
-                            step.equals != null
-                              ? 'equals'
-                              : step.not_equals != null
-                                ? 'not_equals'
-                                : step.contains != null
-                                  ? 'contains'
-                                  : 'greater_than';
-                          update({ [op]: e.target.value });
-                        }}
-                      />
-                      <VariableInsertSelect
-                        availableVariables={availableVariables}
-                        t={t}
-                        onInsert={(token) => {
-                          const op =
-                            step.equals != null
-                              ? 'equals'
-                              : step.not_equals != null
-                                ? 'not_equals'
-                                : step.contains != null
-                                  ? 'contains'
-                                  : 'greater_than';
-                          const current =
+                      >
+                        <option value='true'>{tIfVar('true')}</option>
+                        <option value='false'>{tIfVar('false')}</option>
+                      </select>
+                    ) : (
+                      <div className={valueInsertRowClassName()}>
+                        <Input
+                          className='h-9 min-w-0 flex-1 text-xs'
+                          value={
                             step.equals ??
                             step.not_equals ??
                             step.contains ??
                             step.greater_than ??
-                            '';
-                          update({
-                            [op]: insertToken(String(current), token)
-                          } as Partial<FlowStep>);
-                        }}
-                      />
-                    </div>
+                            ''
+                          }
+                          onChange={(e) => {
+                            const op =
+                              step.equals != null
+                                ? 'equals'
+                                : step.not_equals != null
+                                  ? 'not_equals'
+                                  : step.contains != null
+                                    ? 'contains'
+                                    : 'greater_than';
+                            update({ [op]: e.target.value });
+                          }}
+                        />
+                        <VariableInsertSelect
+                          availableVariables={availableVariables}
+                          t={t}
+                          onInsert={(token) => {
+                            const op =
+                              step.equals != null
+                                ? 'equals'
+                                : step.not_equals != null
+                                  ? 'not_equals'
+                                  : step.contains != null
+                                    ? 'contains'
+                                    : 'greater_than';
+                            const current =
+                              step.equals ??
+                              step.not_equals ??
+                              step.contains ??
+                              step.greater_than ??
+                              '';
+                            update({
+                              [op]: insertToken(String(current), token)
+                            } as Partial<FlowStep>);
+                          }}
+                        />
+                      </div>
+                    )}
                   </F>
                 </>
               )}
@@ -2107,14 +2419,16 @@ export function StepDetailPanel({
                   <F label={t('setVariable.randomListLabel')}>
                     <Input
                       className='h-9 text-sm'
-                      value={(step.from_list ?? []).join(', ')}
+                      value={keywordInputValue(step.from_list)}
                       placeholder={t('setVariable.randomListPlaceholder')}
                       onChange={(e) =>
                         update({
-                          from_list: e.target.value
-                            .split(',')
-                            .map((s: string) => s.trim())
-                            .filter(Boolean)
+                          from_list: isVarRef(e.target.value.trim())
+                            ? e.target.value.trim()
+                            : e.target.value
+                                .split(',')
+                                .map((s: string) => s.trim())
+                                .filter(Boolean)
                         })
                       }
                     />
@@ -2643,63 +2957,51 @@ export function StepDetailPanel({
 
               {step.type === 'extract_text_ocr' && (
                 <>
-                  <F label='save_as'>
+                  <StepPanelHint>{tOcr('hint')}</StepPanelHint>
+                  <F label={tOcr('saveAs')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.save_as ?? 'ocr_text'}
+                      placeholder='ocr_text'
                       onChange={(e) =>
                         update({ save_as: e.target.value || undefined })
                       }
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='language'>
+                    <F label={tOcr('language')}>
                       <Input
                         className='h-8 font-mono text-xs'
-                        value={step.language ?? 'eng'}
+                        value={step.language ?? 'vie+eng'}
+                        placeholder='vie+eng'
                         onChange={(e) =>
-                          update({ language: e.target.value || 'eng' })
+                          update({ language: e.target.value || 'vie+eng' })
                         }
                       />
                     </F>
-                    <F label='psm'>
+                    <F label={tOcr('confidence')}>
                       <Input
                         type='number'
-                        min={1}
+                        min={0}
+                        max={1}
+                        step={0.05}
                         className='h-8 text-xs'
-                        value={step.psm ?? 11}
-                        onChange={(e) =>
-                          update({ psm: Number(e.target.value) || 11 })
-                        }
-                      />
-                    </F>
-                    <F label='scale_factor'>
-                      <Input
-                        type='number'
-                        min={0.1}
-                        step={0.1}
-                        className='h-8 text-xs'
-                        value={step.scale_factor ?? 2.0}
+                        value={step.confidence_threshold ?? 0.5}
                         onChange={(e) =>
                           update({
-                            scale_factor: Number(e.target.value) || 2.0
+                            confidence_threshold: Math.min(
+                              1,
+                              Math.max(0, Number(e.target.value) || 0.5)
+                            )
                           })
                         }
                       />
                     </F>
                   </div>
-                  <JsonTextarea
-                    label='region (JSON)'
-                    value={step.region}
-                    onCommit={(next) => update({ region: next })}
-                    placeholder='{"x":0,"y":0,"w":100,"h":100}'
-                  />
-                  <StepPanelToggle
-                    label='preprocess'
-                    checked={step.preprocess ?? true}
-                    onCheckedChange={(checked) =>
-                      update({ preprocess: checked })
-                    }
+                  <OcrRegionField
+                    region={step.region}
+                    onChange={(next) => update({ region: next })}
+                    onRequestPickRegion={onRequestPickRegion}
                   />
                 </>
               )}
@@ -3098,15 +3400,6 @@ export function StepDetailPanel({
                   <StepPanelHint>
                     {t('leaseTarget.connectionHint')}
                   </StepPanelHint>
-                  <F label={t('leaseTarget.platform')}>
-                    <Input
-                      className='h-8 text-xs'
-                      value={step.platform ?? 'facebook'}
-                      onChange={(event) =>
-                        update({ platform: event.target.value || 'facebook' })
-                      }
-                    />
-                  </F>
                   <div className='rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-5 text-muted-foreground'>
                     CANDIDATE_AVAILABLE · CANDIDATE_NAME · CANDIDATE_LEASE_TOKEN
                     · TARGET_ENTITY_ID

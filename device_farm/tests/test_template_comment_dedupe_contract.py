@@ -35,7 +35,7 @@ def _walk_steps(steps: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
 def _assert_comment_extract_dedupe_comment_key(steps: list[dict[str, Any]]) -> None:
     comment_extracts = [
         s for s in _walk_steps(steps)
-        if s.get("type") == "extract" and s.get("strategy") == "fb_comments"
+        if s.get("type") == "extract" and s.get("entity") == "comments"
     ]
     assert comment_extracts, "expected at least one fb_comments extract step"
     for step in comment_extracts:
@@ -45,7 +45,7 @@ def _assert_comment_extract_dedupe_comment_key(steps: list[dict[str, Any]]) -> N
 
 def _assert_comment_flow_stays_on_detail_until_comments(steps: list[dict[str, Any]]) -> None:
     sibling_flows = _post_comment_sibling_flows(steps)
-    assert sibling_flows, "expected at least one fb_posts -> split comment node sibling flow"
+    assert sibling_flows, "expected at least one posts -> split comment node sibling flow"
     for flow_steps, post_index, find_index, tap_index, filter_index, comment_index in sibling_flows:
         assert post_index < find_index < tap_index < filter_index < comment_index
 
@@ -106,13 +106,13 @@ def test_facebook_nurture_template_branches_by_target_object() -> None:
         for step in flat_steps
     ) is False
     assert any(
-        step.get("type") == "fb_select_post_target"
+        step.get("type") == "social_select_target" and step.get("target_type") == "post"
         and step.get("display_text") == "${POST_ROW_TEXT}"
         and step.get("save_as") == "_post_target"
         for step in flat_steps
     )
     assert any(
-        step.get("type") == "fb_select_people_profile"
+        step.get("type") == "social_select_target" and step.get("target_type") == "person"
         and step.get("display_name") == "${PEOPLE_ROW_TEXT}"
         and step.get("save_as") == "_people_target"
         for step in flat_steps
@@ -174,12 +174,12 @@ def test_fanpage_templates_use_assigned_page_without_relogin(template_name: str)
     flat_steps = _walk_steps(template["steps"])
 
     assert template["variables"]["PAGE_SEARCH"] == "ten fanpage"
-    assert template["steps"][3]["type"] == "facebook_session_gate"
+    assert template["steps"][3]["type"] == "platform_session_gate"
     assert template["steps"][3]["phase"] == "preflight"
     assert not any(step.get("type") == "login_if_needed" for step in flat_steps)
     assert any(
         step.get("type") == "if_variable"
-        and step.get("name") == "FACEBOOK_SESSION_READY"
+        and step.get("name") == "PLATFORM_SESSION_READY"
         for step in flat_steps
     )
     assert any(
@@ -214,12 +214,12 @@ def test_fanpage_crawl_template_collects_posts_and_comments() -> None:
     post_extract = next(
         step
         for step in flat_steps
-        if step.get("type") == "extract" and step.get("strategy") == "fb_posts"
+        if step.get("type") == "extract" and step.get("entity") == "posts"
     )
     comment_extract = next(
         step
         for step in flat_steps
-        if step.get("type") == "extract" and step.get("strategy") == "fb_comments"
+        if step.get("type") == "extract" and step.get("entity") == "comments"
     )
 
     assert post_extract["collection"] == "${SAVE_COLLECTION}"
@@ -426,7 +426,7 @@ def test_connection_template_uses_visible_common_context_scan() -> None:
     ]
     flat_steps = _walk_steps(template["steps"])
     connector = next(
-        step for step in flat_steps if step.get("type") == "fb_connect_visible_people"
+        step for step in flat_steps if step.get("type") == "social_connect_visible_people"
     )
     open_surface = next(
         step
@@ -441,7 +441,7 @@ def test_connection_template_uses_visible_common_context_scan() -> None:
     assert "group" not in connector["forbidden_keywords"]
     assert "nhóm" not in connector["forbidden_keywords"]
     assert all(step.get("type") != "lease_connection_candidate" for step in flat_steps)
-    assert all(step.get("type") != "fb_select_people_profile" for step in flat_steps)
+    assert all(not (step.get("type") == "social_select_target" and step.get("target_type") == "person") for step in flat_steps)
     assert all(step.get("type") != "connection_request" for step in flat_steps)
 
 
@@ -473,17 +473,17 @@ def test_candidate_templates_process_configurable_unique_batches() -> None:
     assert group_post["variables"]["POST_SCAN_CYCLES"] == 9999
     assert friend["variables"]["CONNECTION_TARGET_COUNT"] == 20
     assert any(
-        step.get("type") == "fb_connect_visible_people"
+        step.get("type") == "social_connect_visible_people"
         and step.get("target_count") == "${CONNECTION_TARGET_COUNT}"
         for step in friend_steps
     )
     feed_scan = next(
-        step for step in post_steps if step.get("type") == "fb_scan_posts_interact"
+        step for step in post_steps if step.get("type") == "social_scan_posts_interact"
     )
     group_scan = next(
         step
         for step in group_post_steps
-        if step.get("type") == "fb_scan_posts_interact"
+        if step.get("type") == "social_scan_posts_interact"
     )
     feed_loop = next(
         step for step in post_steps if step.get("id") == "feed_post_scan_8h_loop"
@@ -550,10 +550,10 @@ def test_candidate_templates_process_configurable_unique_batches() -> None:
     )
     assert group_post_steps.index(back_to_search) > group_post_steps.index(group_scan)
     assert all(step.get("type") != "lease_source_target" for step in post_steps)
-    assert all(step.get("type") != "fb_select_post_target" for step in post_steps)
+    assert all(not (step.get("type") == "social_select_target" and step.get("target_type") == "post") for step in post_steps)
     assert all(step.get("type") != "content_interaction" for step in post_steps)
     assert any(
-        step.get("type") == "fb_connect_visible_people"
+        step.get("type") == "social_connect_visible_people"
         and step.get("require_common") is True
         for step in friend_steps
     )
@@ -562,10 +562,10 @@ def test_candidate_templates_process_configurable_unique_batches() -> None:
 def test_login_template_establishes_account_scoped_session_provenance() -> None:
     template = BUILTIN_TEMPLATE_BY_NAME["Đăng nhập Facebook"]
     flat_steps = _walk_steps(template["steps"])
-    gates = [step for step in flat_steps if step.get("type") == "facebook_session_gate"]
+    gates = [step for step in flat_steps if step.get("type") == "platform_session_gate"]
 
     assert [gate["phase"] for gate in gates] == ["preflight", "confirm"]
-    assert template["steps"][3]["type"] == "facebook_session_gate"
+    assert template["steps"][3]["type"] == "platform_session_gate"
     assert template["steps"][4]["type"] == "if_variable"
 
 
@@ -580,7 +580,7 @@ def test_login_template_establishes_account_scoped_session_provenance() -> None:
 def test_candidate_nurture_templates_run_login_gate_first(template_name: str) -> None:
     template = BUILTIN_TEMPLATE_BY_NAME[template_name]
     flat_steps = _walk_steps(template["steps"])
-    gates = [step for step in flat_steps if step.get("type") == "facebook_session_gate"]
+    gates = [step for step in flat_steps if step.get("type") == "platform_session_gate"]
     login_steps = [
         step for step in flat_steps if step.get("type") == "login_if_needed"
     ]
@@ -589,8 +589,8 @@ def test_candidate_nurture_templates_run_login_gate_first(template_name: str) ->
         for index, step in enumerate(flat_steps)
         if step.get("type") in {
             "loop",
-            "fb_connect_visible_people",
-            "fb_scan_posts_interact",
+            "social_connect_visible_people",
+            "social_scan_posts_interact",
         }
     )
     session_wrapper = template["steps"][4]
@@ -601,7 +601,7 @@ def test_candidate_nurture_templates_run_login_gate_first(template_name: str) ->
     assert all(step.get("type") != "run_scenario" for step in flat_steps)
     assert first_work_index > 3
     assert session_wrapper["type"] == "if_variable"
-    assert session_wrapper["name"] == "FACEBOOK_SESSION_READY"
+    assert session_wrapper["name"] == "PLATFORM_SESSION_READY"
 
 
 def test_login_template_uses_facebook_credentials_only() -> None:
@@ -629,7 +629,7 @@ def test_publish_post_template_posts_then_likes_and_comments_verified_post() -> 
 
     assert template["variables"]["POST_TEXT"] == ""
     assert template["variables"]["COMMENT_TEXT"]
-    assert [step["phase"] for step in flat_steps if step.get("type") == "facebook_session_gate"] == [
+    assert [step["phase"] for step in flat_steps if step.get("type") == "platform_session_gate"] == [
         "preflight",
         "confirm",
     ]
@@ -674,7 +674,8 @@ def test_publish_post_template_posts_then_likes_and_comments_verified_post() -> 
     target = next(
         step for step in flat_steps if step.get("id") == "publish_post_select_created_post"
     )
-    assert target["type"] == "fb_select_post_target"
+    assert target["type"] == "social_select_target"
+    assert target["target_type"] == "post"
     assert target["search"] == "${POST_TEXT}"
     assert target["required_keywords"] == ["${POST_TEXT}"]
     assert target["save_as"] == "_published_post_target"
@@ -735,7 +736,7 @@ def test_post_template_runs_real_like_and_comment() -> None:
     ]
     flat_steps = _walk_steps(template["steps"])
     scan = next(
-        step for step in flat_steps if step.get("type") == "fb_scan_posts_interact"
+        step for step in flat_steps if step.get("type") == "social_scan_posts_interact"
     )
 
     assert scan["require_comment"] is True
@@ -744,14 +745,52 @@ def test_post_template_runs_real_like_and_comment() -> None:
     assert scan["target_count"] == "${POST_TARGET_COUNT}"
 
 
+def test_home_post_commenter_connect_template_opens_comments_without_commenting() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME[
+        "Nuôi Facebook - Kết bạn từ người bình luận post Home đúng keyword"
+    ]
+    assert ScenarioModel.validate_dict(
+        {"steps": template["steps"], "variables": template["variables"]}
+    ) == []
+    flat_steps = _walk_steps(template["steps"])
+    scan = next(
+        step for step in flat_steps if step.get("type") == "social_scan_posts_interact"
+    )
+    commenter_steps = [
+        step
+        for step in flat_steps
+        if step.get("type") == "social_open_commenter_from_post_match"
+    ]
+    connection_steps = [
+        step for step in flat_steps if step.get("type") == "connection_request"
+    ]
+    back_steps = [step for step in flat_steps if step.get("type") == "key" and step.get("key") == "back"]
+
+    assert scan["target_count"] == "${POSTS_PER_BATCH}"
+    assert scan["max_scrolls"] == 0
+    assert scan["comment_text"] == ""
+    assert scan["require_comment"] is False
+    assert scan["like_post"] is False
+    assert [step["action_index"] for step in commenter_steps] == [0, 1]
+    assert all(step["platform"] == "facebook" for step in commenter_steps)
+    assert all(step["source_var"] == "_post_scan" for step in commenter_steps)
+    assert all(
+        step["required_keywords"] == "${PROFILE_REQUIRED_KEYWORDS}"
+        for step in commenter_steps
+    )
+    assert len(connection_steps) == 2
+    assert all(step["require_verified_target"] == "_people_target" for step in connection_steps)
+    assert len(back_steps) == 4
+
+
 def _post_comment_sibling_flows(
     steps: list[dict[str, Any]],
 ) -> list[tuple[list[dict[str, Any]], int, int, int, int, int]]:
     flows: list[tuple[list[dict[str, Any]], int, int, int, int, int]] = []
     post_index = _first_step_index(steps, _is_fb_post_extract)
-    find_index = _first_step_index(steps, lambda step: step.get("type") == "fb_find_comment_button")
-    tap_index = _first_step_index(steps, lambda step: step.get("type") == "fb_tap_comment_target")
-    filter_index = _first_step_index(steps, lambda step: step.get("type") == "fb_apply_comment_filter")
+    find_index = _first_step_index(steps, lambda step: step.get("type") == "social_find_comment_button")
+    tap_index = _first_step_index(steps, lambda step: step.get("type") == "social_tap_comment_target")
+    filter_index = _first_step_index(steps, lambda step: step.get("type") == "social_apply_comment_filter")
     comment_index = _first_step_index(steps, _is_fb_comment_extract)
     if (
         post_index is not None
@@ -780,11 +819,11 @@ def _first_step_index(steps: list[dict[str, Any]], predicate) -> int | None:
 
 
 def _is_fb_post_extract(step: dict[str, Any]) -> bool:
-    return step.get("type") == "extract" and step.get("strategy") == "fb_posts"
+    return step.get("type") == "extract" and step.get("entity") == "posts"
 
 
 def _is_fb_comment_extract(step: dict[str, Any]) -> bool:
-    return step.get("type") == "extract" and step.get("strategy") == "fb_comments"
+    return step.get("type") == "extract" and step.get("entity") == "comments"
 
 
 def _is_back_step(step: dict[str, Any]) -> bool:

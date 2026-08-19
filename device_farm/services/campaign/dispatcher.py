@@ -216,7 +216,7 @@ async def _apply_facebook_session_guard_to_accounts(
 ) -> dict[str, ResolvedDeviceAccount]:
     guarded: dict[str, ResolvedDeviceAccount] = dict(account_by_device)
     from services.facebook_session_guard import guard_facebook_session
-    from services.facebook_session_runtime import guard_reason_allows_login_recovery
+    from services.platform_session_runtime import guard_reason_allows_login_recovery
 
     for device_id, resolved in account_by_device.items():
         if not resolved.account_id:
@@ -597,9 +597,9 @@ class CampaignDispatcher:
             if scenario_refs
             else {"by_id": {}, "by_campaign_name": {}, "by_template_name": {}}
         )
-        from services.facebook_session_runtime import scenario_registry_has_facebook_login_gate
+        from services.platform_session_runtime import scenario_registry_has_platform_login_gate
 
-        allows_facebook_login_recovery = scenario_registry_has_facebook_login_gate(
+        allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
         )
@@ -1446,12 +1446,12 @@ class CampaignDispatcher:
             org_id=org_id,
             scenario_refs=scenario_refs,
         )
-        from services.facebook_session_runtime import (
+        from services.platform_session_runtime import (
             guard_reason_allows_login_recovery,
-            scenario_registry_has_facebook_login_gate,
+            scenario_registry_has_platform_login_gate,
         )
 
-        allows_facebook_login_recovery = scenario_registry_has_facebook_login_gate(
+        allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
             scenario_registry,
             scenario_refs,
         )

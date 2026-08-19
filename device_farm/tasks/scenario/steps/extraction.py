@@ -14,72 +14,54 @@ from tasks.scenario.context import ScenarioContext
 
 log = logging.getLogger(__name__)
 
-EDGE_CONTENT_STRATEGIES = {
-    "fb_posts",
-    "fb_comments",
-    "fb_groups",
-    "fb_pages",
+# What an ``extract`` step can collect. Platform-neutral: the platform is a
+# separate ``platform`` field on the step, never baked into these names.
+EDGE_CONTENT_ENTITIES = {
+    "posts",
+    "comments",
+    "groups",
+    "pages",
     "text_nodes",
-    "ig_posts",
-    "tiktok_posts",
-    "linkedin_posts",
-    "auto_posts",
-    "ig_comments",
-    "tiktok_comments",
-    "linkedin_comments",
-    "auto_comments",
 }
-ENTITY_STRATEGIES = {"fb_groups", "fb_pages"}
+# Entities persisted into the external-entity catalog rather than content items.
+CATALOG_ENTITIES = {"groups", "pages"}
 
-COMMENT_STRATEGIES = {
-    "fb_comments",
-    "ig_comments",
-    "tiktok_comments",
-    "linkedin_comments",
-    "auto_comments",
-}
+DEFAULT_ENTITY = "posts"
+# ``text_nodes`` is a raw UI scrape, not a social feed — it has no platform.
+_UI_ENTITY_PLATFORM = "ui"
 
 
-def _platform_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
-    if step.get("platform"):
-        return str(step["platform"])
-    if strategy.startswith("ig_"):
-        return "instagram"
-    if strategy.startswith("tiktok_"):
-        return "tiktok"
-    if strategy.startswith("linkedin_"):
-        return "linkedin"
-    if strategy.startswith("auto_"):
-        return "auto"
-    if strategy == "text_nodes":
-        return str(step.get("platform") or "ui")
-    return "facebook"
+def resolve_extract_target(step: Dict[str, Any]) -> tuple[str, str]:
+    """Return the ``(entity, platform)`` pair an extract step targets.
+
+    ``platform`` defaults to ``auto`` so the parser is chosen from the app on
+    screen — there is no implicit Facebook fallback.
+    """
+    entity = str(step.get("entity") or DEFAULT_ENTITY).strip().casefold()
+    platform = str(step.get("platform") or "").strip().casefold()
+    if entity == "text_nodes":
+        return entity, platform or _UI_ENTITY_PLATFORM
+    return entity, platform or "auto"
 
 
-def _content_type_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
-    from services.content.legacy_type_map import default_content_type_for_strategy
+def _content_type_for_entity(entity: str, platform: str, step: Dict[str, Any]) -> str:
+    from services.content.legacy_type_map import default_content_type_for_entity
 
-    return default_content_type_for_strategy(strategy, step)
+    return default_content_type_for_entity(entity, platform, step)
 
 
-def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
+def _data_var_for_entity(entity: str, step: Dict[str, Any]) -> str:
     explicit = step.get("data_var") or step.get("save_as")
     if explicit:
         return str(explicit)
-    if strategy == "text_nodes":
-        return "text_nodes"
-    if strategy == "fb_groups":
-        return "groups"
-    if strategy == "fb_pages":
-        return "pages"
-    if strategy in COMMENT_STRATEGIES:
-        return "comments"
+    if entity in {"text_nodes", "groups", "pages", "comments"}:
+        return entity
     return "posts"
 
 
-def _store_returned_items(ctx: Dict[str, Any], strategy: str, step: Dict[str, Any], items: list[Any]) -> None:
-    data_var = _data_var_for_edge_strategy(strategy, step)
-    if strategy == "text_nodes":
+def _store_returned_items(ctx: Dict[str, Any], entity: str, step: Dict[str, Any], items: list[Any]) -> None:
+    data_var = _data_var_for_entity(entity, step)
+    if entity == "text_nodes":
         values = [
             str(item.get("text") or item.get("body") or "").strip()
             for item in items
@@ -109,19 +91,43 @@ _COMMENT_PARENT_ANCHOR_KEYS = (
 _ACTIVE_COMMENT_PARENT_CTX_KEYS = (
     "_active_comment_parent_hash",
     "_first_new_post_hash",
-    "_fb_comment_parent_pid",
+    "_comment_parent_pid",
     "_active_comment_parent_anchor",
     "_active_comment_anchor_verified",
     "_active_comment_parent_source",
-    "_fb_comment_session",
+    "_comment_session",
 )
-_CONSUMED_POST_ANCHORS_CTX_KEY = "_fb_consumed_post_anchors"
+_CONSUMED_POST_ANCHORS_CTX_KEY = "_consumed_post_anchors"
 _MAX_CONSUMED_POST_ANCHORS = 100
 _POST_OPEN_CONTEXT_ALIASES = {
     "open_post_tap_settle_s": "post_open_tap_settle_s",
     "open_post_max_attempts": "post_open_max_attempts",
     "open_post_scan_window": "post_open_scan_window",
 }
+
+
+# The resolver only matches on identifiers plus author/timestamp/text-prefix, and
+# it compares text by prefix. Sending the full stored anchor (a 100-post list can
+# reach ~70 KB) wastes relay bandwidth on every comment resolve, so project each
+# anchor down to what the matcher reads and clip the text.
+_EXCLUDE_ANCHOR_ID_KEYS = ("pid", "post_key", "stable_post_id", "fb_post_id")
+_EXCLUDE_ANCHOR_TEXT_CHARS = 120
+
+
+def _compact_exclude_anchor(anchor: Dict[str, Any]) -> Dict[str, Any]:
+    compact: Dict[str, Any] = {}
+    for key in _EXCLUDE_ANCHOR_ID_KEYS:
+        value = str(anchor.get(key) or "").strip()
+        if value:
+            compact[key] = value
+    author = str(anchor.get("author") or "").strip()
+    timestamp = str(anchor.get("timestamp") or "").strip()
+    text = str(anchor.get("text_prefix") or anchor.get("text") or "").strip()
+    if author and timestamp and text:
+        compact["author"] = author
+        compact["timestamp"] = timestamp
+        compact["text_prefix"] = text[:_EXCLUDE_ANCHOR_TEXT_CHARS]
+    return compact
 
 
 def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -153,7 +159,7 @@ def _remember_consumed_comment_parent(ctx: Dict[str, Any]) -> None:
         anchor = {}
     cleaned = _clean_comment_parent_anchor(anchor)
     parent_hash = str(ctx.get("_active_comment_parent_hash") or "").strip()
-    parent_pid = str(ctx.get("_fb_comment_parent_pid") or "").strip()
+    parent_pid = str(ctx.get("_comment_parent_pid") or "").strip()
     if parent_pid and "pid" not in cleaned:
         cleaned["pid"] = parent_pid
     if parent_hash and "parent_id" not in cleaned:
@@ -228,7 +234,7 @@ def _normalize_post_open_context_aliases(context: Dict[str, Any]) -> None:
             context[canonical_key] = context[legacy_key]
 
 
-def _build_fb_comment_session(
+def _build_comment_session(
     *,
     parent_id: Any,
     pid: Any,
@@ -316,7 +322,7 @@ def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any])
         replacement["_active_comment_parent_hash"] = parent_id
         replacement["_first_new_post_hash"] = parent_id
     if pid:
-        replacement["_fb_comment_parent_pid"] = pid
+        replacement["_comment_parent_pid"] = pid
     source = str(active_parent.get("source") or "").strip()
     if not source and (parent_id or pid):
         source = "post_detail"
@@ -324,14 +330,14 @@ def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any])
         replacement["_active_comment_parent_source"] = source
     if anchor:
         replacement["_active_comment_parent_anchor"] = anchor
-    session = _build_fb_comment_session(
+    session = _build_comment_session(
         parent_id=parent_id,
         pid=pid,
         source=source,
         anchor=anchor,
     )
     if session:
-        replacement["_fb_comment_session"] = session
+        replacement["_comment_session"] = session
 
     _clear_active_comment_parent(ctx)
     ctx.update(replacement)
@@ -352,7 +358,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-_BALANCED_FB_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
+_BALANCED_COMMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "max_items",
     "comment_require_complete",
     "comment_auto_coverage_target_max",
@@ -422,7 +428,7 @@ def _apply_balanced_comment_runtime_overrides(
         return
     if not _looks_like_legacy_balanced_comment_crawl(context):
         return
-    for key in _BALANCED_FB_COMMENT_RUNTIME_KEYS:
+    for key in _BALANCED_COMMENT_RUNTIME_KEYS:
         if key in profile_defaults:
             if key == "max_items":
                 continue
@@ -750,11 +756,11 @@ def _resolve_campaign_id_for_edge(scenario: Dict[str, Any]) -> str | None:
         return None
 
 
-def _edge_extra_explicit_enabled(step: Dict[str, Any], strategy: str) -> bool:
-    """True when edge extra-data should run for this step/strategy pair."""
+def _edge_extra_explicit_enabled(step: Dict[str, Any], entity: str) -> bool:
+    """True when edge extra-data should run for this step/entity pair."""
     raw = step.get("edge_extra_data")
     if "edge_extra_data" not in step or raw is None:
-        return strategy in EDGE_CONTENT_STRATEGIES
+        return entity in EDGE_CONTENT_ENTITIES
     return _coerce_bool(raw, default=False)
 
 
@@ -765,62 +771,63 @@ def request_edge_extra_data(
     ctx: Dict[str, Any],
     scenario: Dict[str, Any],
     step: Dict[str, Any],
-    strategy: str,
+    entity: str,
+    platform: str,
     result: Dict[str, Any],
     cancel_event: Any = None,
 ) -> bool:
-    explicit_enabled = _edge_extra_explicit_enabled(step, strategy)
+    explicit_enabled = _edge_extra_explicit_enabled(step, entity)
     enabled = explicit_enabled or _env_bool("EDGE_EXTRA_DATA_ENABLED", False)
     if not enabled:
         return False
     if not explicit_enabled and not _env_bool("EDGE_EXTRA_APPLY_GLOBALLY", False):
         return False
-    if strategy not in EDGE_CONTENT_STRATEGIES:
+    if entity not in EDGE_CONTENT_ENTITIES:
         return False
-    if strategy == "fb_posts":
+    if entity == "posts":
         # A new post attempt invalidates the previous post→comment binding.
         # Keep the marker until this attempt establishes a verified replacement,
         # so ignored post failures cannot crawl comments under a stale parent.
         _remember_consumed_comment_parent(ctx)
         _clear_active_comment_parent(ctx)
-        ctx["_fb_comment_target_missing"] = {
+        ctx["_pending_scroll_target"] = {
             "reason_code": "post_extract_pending",
             "source_index": int(ctx.get("_loop_iter", 0) or 0),
         }
-    if strategy == "fb_comments" and isinstance(ctx.get("_fb_comment_target_missing"), dict):
+    if entity == "comments" and isinstance(ctx.get("_pending_scroll_target"), dict):
         result["ok"] = True
         result["skipped"] = True
         result["comment_target_missing"] = True
-        result["comment_target_missing_detail"] = ctx.get("_fb_comment_target_missing")
+        result["comment_target_missing_detail"] = ctx.get("_pending_scroll_target")
         result["extracted"] = 0
         result["duplicate_count"] = 0
-        result["message"] = "edge extra_data fb_comments: skipped — comment target missing"
+        result["message"] = "edge extra_data comments: skipped — comment target missing"
         return True
     if cancel_event is not None and cancel_event.is_set():
         result["ok"] = False
-        result["message"] = f"edge extra_data {strategy}: cancelled"
+        result["message"] = f"edge extra_data {entity}: cancelled"
         result["cancelled"] = True
         return True
     collection = step.get("collection")
     if not _relay_extra_data_available(device):
         result["ok"] = False
         result["message"] = (
-            f"edge extra_data {strategy}: no relay for device "
+            f"edge extra_data {entity}: no relay for device "
             "(start agent-boot relay and ensure device is registered)"
         )
         return True
     if step.get("edge_extra_requires_context"):
         log.info("[%s] edge extra_data skipped because step requires in-memory extraction context", serial)
         result["ok"] = False
-        result["message"] = f"edge extra_data {strategy}: step requires in-memory extraction context"
+        result["message"] = f"edge extra_data {entity}: step requires in-memory extraction context"
         return True
 
     parent_post_id_var = step.get("parent_post_id_var")
-    parent_post_id = ctx.get(parent_post_id_var) if parent_post_id_var else ctx.get("_fb_comment_parent_pid")
+    parent_post_id = ctx.get(parent_post_id_var) if parent_post_id_var else ctx.get("_comment_parent_pid")
     parent_var = step.get("save_parent_id_var") or step.get("parent_id_var")
     parent_id_already_scoped = False
     parent_id = None
-    if strategy == "fb_comments":
+    if entity == "comments":
         # Prefer tap-scoped hash (matches persisted fb_post row). Base hash uses
         # comment-target dedupe and must not override the scoped parent_id.
         parent_id = ctx.get("_active_comment_parent_hash")
@@ -831,17 +838,17 @@ def request_edge_extra_data(
         if parent_id is None and parent_var:
             parent_id = ctx.get(parent_var)
             parent_id_already_scoped = bool(parent_id)
-    if strategy == "fb_posts" and step.get("dedupe_field"):
-        ctx["_fb_posts_dedupe_field"] = step.get("dedupe_field")
+    if entity == "posts" and step.get("dedupe_field"):
+        ctx["_posts_dedupe_field"] = step.get("dedupe_field")
     return_items = (
-        True if strategy in ENTITY_STRATEGIES else _edge_extra_should_return_items(step, collection)
+        True if entity in CATALOG_ENTITIES else _edge_extra_should_return_items(step, collection)
     )
     comment_defaults: dict[str, Any] = {}
-    if strategy in COMMENT_STRATEGIES:
+    if entity == "comments":
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
         from services.scenario_step_contract import resolve_extract_profile
 
-        comment_defaults = get_profile_defaults(resolve_extract_profile(step), strategy)
+        comment_defaults = get_profile_defaults(resolve_extract_profile(step), entity)
     campaign_vars = (
         scenario.get("_campaign_vars")
         if isinstance(scenario.get("_campaign_vars"), dict)
@@ -858,7 +865,7 @@ def request_edge_extra_data(
     except (TypeError, ValueError):
         group_max_pages = 20
     entity_max_items = 500
-    if strategy in ENTITY_STRATEGIES:
+    if entity in CATALOG_ENTITIES:
         entity_max_items_raw = step.get("max_items")
         if (
             entity_max_items_raw is None
@@ -876,16 +883,16 @@ def request_edge_extra_data(
         **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "collection": collection,
-        "platform": _platform_for_strategy(strategy, step),
-        "content_type": _content_type_for_strategy(strategy, step),
+        "platform": platform,
+        "content_type": _content_type_for_entity(entity, platform, step),
         "scenario_name": scenario.get("name") or scenario.get("scenario_name"),
         "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
         "dedupe_field": step.get("dedupe_field"),
         "tags": step.get("tags", ""),
         "item_level": (
             0
-            if strategy.endswith("_posts")
-            else int(step.get("item_level") or (1 if strategy in COMMENT_STRATEGIES else 0))
+            if entity == "posts"
+            else int(step.get("item_level") or (1 if entity == "comments" else 0))
         ),
         "parent_id": parent_id,
         "parent_id_already_scoped": parent_id_already_scoped,
@@ -893,35 +900,35 @@ def request_edge_extra_data(
         "parent_context_source": ctx.get("_active_comment_parent_source"),
         "comment_filter": (
             resolve_step_comment_filter(comment_filter_effective_step(step, ctx))
-            if strategy == "fb_comments"
+            if entity == "comments"
             else None
         ),
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
         "_post_id_map": ctx.get("_post_id_map"),
-        "_fb_posts_dedupe_field": ctx.get("_fb_posts_dedupe_field"),
-        "posts_dedupe_field": ctx.get("_fb_posts_dedupe_field")
+        "_posts_dedupe_field": ctx.get("_posts_dedupe_field"),
+        "posts_dedupe_field": ctx.get("_posts_dedupe_field")
         or step.get("posts_dedupe_field"),
         "posts": ctx.get("posts"),
         "_active_comment_parent_anchor": ctx.get("_active_comment_parent_anchor"),
-        "_fb_comment_session": ctx.get("_fb_comment_session"),
+        "_comment_session": ctx.get("_comment_session"),
         "max_items": (
             entity_max_items
-            if strategy in ENTITY_STRATEGIES
+            if entity in CATALOG_ENTITIES
             else int(
                 step.get("max_items")
                 or comment_defaults.get("max_items")
-                or (400 if strategy in COMMENT_STRATEGIES else 50)
+                or (400 if entity == "comments" else 50)
             )
         ),
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
-        "persist": bool(collection) or strategy in ENTITY_STRATEGIES,
+        "persist": bool(collection) or entity in CATALOG_ENTITIES,
         "return_items": return_items,
         "search_query": step.get("search_query") or step.get("query"),
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
-    if strategy in ENTITY_STRATEGIES:
+    if entity in CATALOG_ENTITIES:
         context["max_pages"] = group_max_pages
-    if strategy == "fb_posts":
+    if entity == "posts":
         consumed_anchors = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
         if isinstance(consumed_anchors, list) and consumed_anchors:
             context["open_post_exclude_anchors"] = [
@@ -1003,7 +1010,7 @@ def request_edge_extra_data(
     ):
         if key in step:
             context[key] = step[key]
-    if strategy in COMMENT_STRATEGIES:
+    if entity == "comments":
         _normalize_legacy_balanced_comment_budget(
             step=step,
             context=context,
@@ -1012,14 +1019,14 @@ def request_edge_extra_data(
         context["expand_see_more"] = False
     elif "expand_see_more" in step:
         context["expand_see_more"] = step["expand_see_more"]
-    if strategy not in COMMENT_STRATEGIES:
+    if entity != "comments":
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
         from services.scenario_step_contract import resolve_extract_profile
 
         profile_name = resolve_extract_profile(step)
-        profile_defaults = get_profile_defaults(profile_name, strategy)
-        if not profile_defaults and strategy.endswith("_posts"):
-            profile_defaults = get_profile_defaults(profile_name, "fb_posts")
+        # Profiles are keyed by entity, so every platform's "posts" extraction
+        # shares one tuning slice — no per-platform fallback needed.
+        profile_defaults = get_profile_defaults(profile_name, entity)
         for ek, ev in (profile_defaults or {}).items():
             context.setdefault(ek, ev)
         if "expand_see_more" not in context:
@@ -1031,7 +1038,8 @@ def request_edge_extra_data(
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
-            strategy=strategy,
+            entity=entity,
+            platform=platform,
             context=context,
             timeout=timeout,
             cancel_event=cancel_event,
@@ -1042,14 +1050,14 @@ def request_edge_extra_data(
     if not summary.get("ok"):
         if summary.get("cancelled"):
             result["ok"] = False
-            result["message"] = f"edge extra_data {strategy}: cancelled"
+            result["message"] = f"edge extra_data {entity}: cancelled"
             result["edge_extra_summary"] = summary
             result["cancelled"] = True
             return True
         error_text = str(summary.get("error") or "unknown")
         diagnostic = summary.get("diagnostic") if isinstance(summary.get("diagnostic"), dict) else {}
         if (
-            strategy == "fb_posts"
+            entity == "posts"
             and error_text.startswith("post_open_required:")
             and "_loop_iter" in ctx
         ):
@@ -1072,7 +1080,7 @@ def request_edge_extra_data(
             result["reason_code"] = reason_code
             result["post_open_attempted_anchor_count"] = attempted_count
             result["post_open_retryable_failure"] = retryable_open_failure
-            result["message"] = f"edge extra_data fb_posts skipped: {error_text}"
+            result["message"] = f"edge extra_data posts skipped: {error_text}"
             result["edge_extra_summary"] = summary
             log.info(
                 "[%s] %s remembered_open_post_anchors=%d attempted_open_post_anchors=%d retryable=%s break=%s",
@@ -1129,17 +1137,17 @@ def request_edge_extra_data(
         else {}
     )
     result["reason_code"] = diagnostic.get("reason_code", "ok")
-    if strategy in ENTITY_STRATEGIES and parsed_count == 0:
-        entity_label = "page" if strategy == "fb_pages" else "group"
+    if entity in CATALOG_ENTITIES and parsed_count == 0:
+        entity_label = "page" if entity == "pages" else "group"
         result["ok"] = False
         result["message"] = (
-            f"edge extra_data {strategy}: không đọc được {entity_label} nào "
+            f"edge extra_data {entity}: không đọc được {entity_label} nào "
             f"({result['reason_code']})"
         )
         log.warning("[%s] %s", serial, result["message"])
         return True
     if (
-        strategy == "fb_groups"
+        entity == "groups"
         and parsed_count > 0
         and "_loop_iter" in ctx
         and int(context.get("max_pages") or 1) > 1
@@ -1157,7 +1165,7 @@ def request_edge_extra_data(
         # unrelated loops that happen to contain a group extract.
         ctx["_break"] = True
     if (
-        strategy == "fb_posts"
+        entity == "posts"
         and result["reason_code"]
         in {"post_detail_incomplete", "post_detail_target_not_reconciled"}
     ):
@@ -1174,7 +1182,7 @@ def request_edge_extra_data(
             if remembered <= 0 and not has_opened_post_anchor:
                 result["ok"] = False
                 result["message"] = (
-                    "edge extra_data fb_posts incomplete: "
+                    "edge extra_data posts incomplete: "
                     f"{result['reason_code']}"
                 )
                 log.warning("[%s] %s", serial, result["message"])
@@ -1183,7 +1191,7 @@ def request_edge_extra_data(
             result["post_open_consumed_anchor_count"] = remembered
             result["post_open_retryable_failure"] = False
             result["message"] = (
-                "edge extra_data fb_posts skipped: "
+                "edge extra_data posts skipped: "
                 f"{result['reason_code']}"
             )
             log.info(
@@ -1196,13 +1204,13 @@ def request_edge_extra_data(
             return True
         result["ok"] = False
         result["message"] = (
-            "edge extra_data fb_posts incomplete: "
+            "edge extra_data posts incomplete: "
             f"{result['reason_code']}"
         )
         log.warning("[%s] %s", serial, result["message"])
         return True
     if (
-        strategy == "fb_comments"
+        entity == "comments"
         and result["reason_code"] == "partial_target"
         and _coerce_bool(step.get("comment_require_complete"), False)
         and not _coerce_bool(step.get("allow_partial_comments"), False)
@@ -1215,25 +1223,25 @@ def request_edge_extra_data(
         if returned > 0:
             result["partial"] = True
             result["message"] = (
-                f"edge extra_data fb_comments partial: {returned}/{target} "
+                f"edge extra_data comments partial: {returned}/{target} "
                 f"comments ({stopped_reason})"
             )
             log.info("[%s] %s", serial, result["message"])
             return True
         result["ok"] = False
         result["message"] = (
-            f"edge extra_data fb_comments incomplete: {returned}/{target} "
+            f"edge extra_data comments incomplete: {returned}/{target} "
             f"comments ({stopped_reason})"
         )
         log.warning("[%s] %s", serial, result["message"])
         return True
-    if strategy == "fb_comments" and _coerce_bool(
+    if entity == "comments" and _coerce_bool(
         step.get("open_post_press_back_after_extract"),
         False,
     ):
         _remember_consumed_comment_parent(ctx)
         _clear_active_comment_parent(ctx)
-    if strategy == "fb_posts":
+    if entity == "posts":
         pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
         if pid_map:
             merged = ctx.setdefault("_post_id_map", {})
@@ -1247,19 +1255,19 @@ def request_edge_extra_data(
         ):
             result["ok"] = False
             result["message"] = (
-                "edge extra_data fb_posts: post detail not opened — "
+                "edge extra_data posts: post detail not opened — "
                 "cannot safely enter comment pass"
             )
             result["edge_extra_summary"] = edge_extra_summary
             return True
         if ctx.get("_active_comment_anchor_verified"):
-            ctx.pop("_fb_comment_target_missing", None)
+            ctx.pop("_pending_scroll_target", None)
     items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
     if items:
-        _store_returned_items(ctx, strategy, step, items)
+        _store_returned_items(ctx, entity, step, items)
         result["items"] = len(items)
     result["message"] = (
-        f"edge extra_data {strategy}: parsed={parsed_count} "
+        f"edge extra_data {entity}: parsed={parsed_count} "
         f"inserted={inserted_count} duplicate={duplicate_count}"
     )
     log.info("[%s] %s", serial, result["message"])
@@ -1276,14 +1284,14 @@ _COMMENT_FILTER_APPLIED_REASONS = frozenset({
 
 def stage_comment_filter_for_post(ctx: Dict[str, Any], step: Dict[str, Any]) -> Optional[str]:
     """Reset per-post filter state and remember the tap step's filter target."""
-    ctx.pop("_fb_comment_filter_applied", None)
+    ctx.pop("_comment_filter_applied", None)
     target = resolve_step_comment_filter(step)
     if target:
-        ctx["_fb_comment_filter_target"] = target
-        ctx["_fb_comment_filter_switch_to_all"] = bool(step.get("switch_to_all_comments", True))
+        ctx["_comment_filter_target"] = target
+        ctx["_comment_filter_switch_to_all"] = bool(step.get("switch_to_all_comments", True))
     else:
-        ctx.pop("_fb_comment_filter_target", None)
-        ctx.pop("_fb_comment_filter_switch_to_all", None)
+        ctx.pop("_comment_filter_target", None)
+        ctx.pop("_comment_filter_switch_to_all", None)
     for key in (
         "comment_filter_settle_s",
         "comment_filter_step_pause_s",
@@ -1300,13 +1308,13 @@ def stage_comment_filter_for_post(ctx: Dict[str, Any], step: Dict[str, Any]) -> 
 def comment_filter_effective_step(step: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Merge tap-step filter config stored in ctx into nested extract steps."""
     merged = dict(step)
-    if merged.get("comment_filter") is None and ctx.get("_fb_comment_filter_target"):
-        merged["comment_filter"] = ctx["_fb_comment_filter_target"]
+    if merged.get("comment_filter") is None and ctx.get("_comment_filter_target"):
+        merged["comment_filter"] = ctx["_comment_filter_target"]
     if (
         merged.get("switch_to_all_comments") is None
-        and ctx.get("_fb_comment_filter_switch_to_all") is not None
+        and ctx.get("_comment_filter_switch_to_all") is not None
     ):
-        merged["switch_to_all_comments"] = ctx["_fb_comment_filter_switch_to_all"]
+        merged["switch_to_all_comments"] = ctx["_comment_filter_switch_to_all"]
     for key in (
         "comment_filter_settle_s",
         "comment_filter_step_pause_s",
@@ -1333,7 +1341,7 @@ def resolve_step_comment_filter(
     if step.get("switch_to_all_comments") is False:
         return None
     if ctx:
-        inherited = ctx.get("_fb_comment_filter_target")
+        inherited = ctx.get("_comment_filter_target")
         if inherited in _COMMENT_FILTER_MODES:
             return str(inherited)
     return "all_comments"
@@ -1352,11 +1360,11 @@ def request_edge_comment_target(
 ) -> dict[str, Any] | None:
     if not _relay_extra_data_available(device):
         result["ok"] = False
-        result["message"] = "tap_fb_comment_button: no relay for device"
+        result["message"] = "social_open_comments: no relay for device"
         return None
     if cancel_event is not None and cancel_event.is_set():
         result["ok"] = False
-        result["message"] = "tap_fb_comment_button: cancelled"
+        result["message"] = "social_open_comments: cancelled"
         result["cancelled"] = True
         return None
     context = {
@@ -1366,7 +1374,7 @@ def request_edge_comment_target(
         "device_serial": serial,
         "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
         "dedupe_field": step.get("dedupe_field") or "post_key",
-        "posts_dedupe_field": ctx.get("_fb_posts_dedupe_field")
+        "posts_dedupe_field": ctx.get("_posts_dedupe_field")
         or step.get("posts_dedupe_field")
         or "text",
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
@@ -1389,12 +1397,23 @@ def request_edge_comment_target(
     ):
         if ctx_key in step:
             context[ctx_key] = step[ctx_key]
+    # Posts already commented on in this run — the resolver must skip them so a
+    # feed loop cannot tap the same card again after scrolling back past it.
+    consumed = ctx.get(_CONSUMED_POST_ANCHORS_CTX_KEY)
+    if isinstance(consumed, list) and consumed:
+        compact = [
+            compacted
+            for anchor in consumed
+            if isinstance(anchor, dict) and (compacted := _compact_exclude_anchor(anchor))
+        ]
+        if compact:
+            context["comment_exclude_anchors"] = compact
     anchor = ctx.get("_active_comment_parent_anchor")
     if isinstance(anchor, dict) and anchor:
         context["_active_comment_parent_anchor"] = anchor
-    comment_session = ctx.get("_fb_comment_session")
+    comment_session = ctx.get("_comment_session")
     if isinstance(comment_session, dict) and comment_session:
-        context["_fb_comment_session"] = comment_session
+        context["_comment_session"] = comment_session
     parent_source = ctx.get("_active_comment_parent_source")
     if parent_source:
         context["parent_context_source"] = parent_source
@@ -1402,7 +1421,7 @@ def request_edge_comment_target(
     if parent_hash:
         context["parent_id"] = parent_hash
         context["parent_id_already_scoped"] = True
-    parent_pid = ctx.get("_fb_comment_parent_pid")
+    parent_pid = ctx.get("_comment_parent_pid")
     if parent_pid:
         context["parent_post_id"] = parent_pid
     timeout = float(
@@ -1424,12 +1443,12 @@ def request_edge_comment_target(
         )
     except Exception as exc:
         result["ok"] = False
-        result["message"] = f"tap_fb_comment_button: edge target request failed: {exc}"
+        result["message"] = f"social_open_comments: edge target request failed: {exc}"
         return None
     if not summary.get("ok"):
         result["ok"] = False
         result["edge_extra_summary"] = summary
-        result["message"] = f"tap_fb_comment_button: edge target failed: {summary.get('error') or 'unknown'}"
+        result["message"] = f"social_open_comments: edge target failed: {summary.get('error') or 'unknown'}"
         return None
     ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
     diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
@@ -1501,7 +1520,7 @@ def run_edge_comment_filter_switch(
         **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "parent_id": runtime_ctx.get("_active_comment_parent_hash"),
-        "parent_post_id": runtime_ctx.get("_fb_comment_parent_pid"),
+        "parent_post_id": runtime_ctx.get("_comment_parent_pid"),
         "post_key": step.get("post_key") or active_anchor.get("post_key"),
         "comment_filter": target_filter,
         "switch_to_all_comments": True,
@@ -1620,36 +1639,86 @@ def run_edge_comment_filter_switch(
     return report
 
 
-def _try_edge_extra_data(sc: ScenarioContext, step: Dict[str, Any], strategy: str, result: Dict[str, Any]) -> bool:
+def _try_edge_extra_data(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    entity: str,
+    platform: str,
+    result: Dict[str, Any],
+) -> bool:
     return request_edge_extra_data(
         device=sc.device,
         serial=sc.serial,
         ctx=sc.ctx,
         scenario=sc.scenario,
         step=step,
-        strategy=strategy,
+        entity=entity,
+        platform=platform,
         result=result,
         cancel_event=sc.cancel_event,
     )
+
 
 @register_step("extract")
 def handle_extract(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     from services.scenario_step_contract import normalize_extract_step
 
     step = normalize_extract_step(step)
-    strategy = str(step.get("strategy", "fb_posts"))
-    if strategy in EDGE_CONTENT_STRATEGIES:
-        if _try_edge_extra_data(sc, step, strategy, result):
-            return
+    entity, platform = resolve_extract_target(step)
+    result["entity"] = entity
+    result["platform"] = platform
+    if entity not in EDGE_CONTENT_ENTITIES:
         result["ok"] = False
         result["message"] = (
-            f"extract {strategy}: device_farm content XML parser was removed; "
-            "enable edge_extra_data so phone/APK sends XML to agent-boot"
+            f"extract: unknown entity {entity!r}; "
+            f"expected one of {sorted(EDGE_CONTENT_ENTITIES)}"
         )
         return
 
+    if _try_edge_extra_data(sc, step, entity, platform, result):
+        return
     result["ok"] = False
-    result["message"] = f"extract: unknown strategy {strategy!r}"
+    result["message"] = (
+        f"extract {entity}: device_farm content XML parser was removed; "
+        "enable edge_extra_data so phone/APK sends XML to agent-boot"
+    )
+
+
+# A screenful of OCR text runs past 800 characters, so 400 cut the preview in
+# half and the author could not tell whether the step had read the rest. This
+# rides an SSE event that already carries the step result, and a few KB there
+# is nothing next to the frames this farm moves.
+_RESULT_PREVIEW_CHARS = 2000
+
+
+def _attach_produced_value(
+    result: Dict[str, Any],
+    *,
+    save_as: str,
+    value: Any,
+    box_count: int | None = None,
+) -> None:
+    """Expose what a step wrote so the editor can show it after a test run.
+
+    The step result dict is spread straight into the preview SSE event, so a
+    field added here reaches the UI with no transport change. Only a bounded
+    preview travels — the full value stays in the runtime variable.
+    """
+    if isinstance(value, str):
+        text = value
+    elif value is None:
+        text = ""
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(value)
+    result["saved_as"] = save_as
+    result["text_length"] = len(text)
+    result["text_preview"] = text[:_RESULT_PREVIEW_CHARS]
+    result["text_truncated"] = len(text) > _RESULT_PREVIEW_CHARS
+    if box_count is not None:
+        result["box_count"] = box_count
 
 
 @register_step("extract_text_hierarchy")
@@ -1688,14 +1757,21 @@ def handle_extract_text_hierarchy(sc: ScenarioContext, step: Dict[str, Any], idx
         hr = run_extraction_async(_run())
         items = hr.data if isinstance(hr.data, list) else [hr.data]
         fmt = step.get("format", "text")
-        if fmt == "json":
-            sc.var_ctx.set(save_as, items)
-        else:
-            sc.var_ctx.set(
-                save_as,
-                "\n".join(i["text"] for i in items if isinstance(i, dict) and i.get("text")),
+        saved_value: Any = (
+            items
+            if fmt == "json"
+            else "\n".join(
+                i["text"] for i in items if isinstance(i, dict) and i.get("text")
             )
-        result["message"] = f"Extracted {len(items)} text elements"
+        )
+        sc.var_ctx.set(save_as, saved_value)
+        _attach_produced_value(
+            result,
+            save_as=save_as,
+            value=saved_value,
+            box_count=len(items),
+        )
+        result["message"] = f"Đọc được {len(items)} phần tử văn bản vào ${{{save_as}}}"
         if hr.raw_data.get("artifact_id"):
             result["artifact_id"] = hr.raw_data["artifact_id"]
     except (CaptureError, StrategyMismatchError) as exc:
@@ -1716,11 +1792,11 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
     try:
         from services.content.extraction.capture_service import ExtractionCaptureService
         from services.content.extraction.models import CaptureError, OCRError
-        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.ocr_service import OCRService, compose_text
         from services.content.extraction.scenario_bridge import (
-            capture_screenshot_async,
             execution_capture_ctx,
             map_ocr_languages,
+            persist_image_artifact_async,
             run_extraction_async,
             should_persist_artifact,
         )
@@ -1730,28 +1806,43 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
         region = step.get("region")
 
         async def _run():
-            capture = ExtractionCaptureService()
-            handle = await capture_screenshot_async(
-                capture,
-                sc.device,
-                region=region,
-                persist=persist,
-                execution_ctx=exec_ctx,
-            )
-            ocr = OCRService(confidence_threshold=float(step.get("confidence_threshold", 0.5)))
+            # OCR runs on agent-boot: it screenshots and reads the text there,
+            # returning a few KB instead of a ~800 KB frame. The farm cannot do
+            # this itself any more — media goes media-adapter → go2rtc, so the
+            # scrcpy JPEG cache take_screenshot() reads is never filled.
+            threshold = float(step.get("confidence_threshold", 0.5))
+            ocr = OCRService(confidence_threshold=threshold)
             langs = map_ocr_languages(step.get("languages") or step.get("language", "eng"))
-            ocr_result = await ocr.extract(
-                handle.image_bytes,
+            ocr_result, image = await ocr.extract_on_device(
+                sc.device,
                 lang=langs,
                 region=region,
-                confidence_threshold=float(step.get("confidence_threshold", 0.5)),
+                confidence_threshold=threshold,
+                # Only pay for the frame when the read came back empty — that is
+                # the case someone actually needs a picture to debug.
+                want_image_on_empty=persist,
             )
-            return ocr_result, handle.artifact_id
+            artifact_id = None
+            if image and persist:
+                artifact_id = await persist_image_artifact_async(
+                    ExtractionCaptureService(), image, execution_ctx=exec_ctx
+                )
+            return ocr_result, artifact_id
 
         ocr_result, artifact_id = run_extraction_async(_run())
-        text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
+        text = compose_text(ocr_result.results)
         sc.var_ctx.set(save_as, text)
-        result["message"] = f"OCR extracted {len(text)} chars"
+        _attach_produced_value(
+            result,
+            save_as=save_as,
+            value=text,
+            box_count=len(ocr_result.results),
+        )
+        result["message"] = (
+            f"OCR đọc được {len(text)} ký tự vào ${{{save_as}}}"
+            if text
+            else f"OCR không đọc được chữ nào (biến ${{{save_as}}} rỗng)"
+        )
         if artifact_id:
             result["artifact_id"] = artifact_id
     except (CaptureError, OCRError) as exc:
@@ -1782,7 +1873,8 @@ def handle_extract_text_ai(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
                                output_format=step.get("format", "json"), model=step.get("model"),
                                region=step.get("region"))
         sc.var_ctx.set(save_as, ai_result)
-        result["message"] = f"AI extracted {type(ai_result).__name__}"
+        _attach_produced_value(result, save_as=save_as, value=ai_result)
+        result["message"] = f"AI trích xuất xong vào ${{{save_as}}}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"extract_text_ai failed: {exc}"
@@ -1802,11 +1894,11 @@ def handle_extract_screen_data(sc: ScenarioContext, step: Dict[str, Any], idx: i
         from services.content.extraction.capture_service import ExtractionCaptureService
         from services.content.extraction.hierarchy.service import HierarchyService
         from services.content.extraction.models import CaptureError, OCRError, StrategyMismatchError
-        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.ocr_service import OCRService, compose_text
         from services.content.extraction.scenario_bridge import (
-            capture_screenshot_async,
             execution_capture_ctx,
             map_ocr_languages,
+            persist_image_artifact_async,
             run_extraction_async,
             should_persist_artifact,
         )
@@ -1845,19 +1937,19 @@ def handle_extract_screen_data(sc: ScenarioContext, step: Dict[str, Any], idx: i
             ocr_persist = persist and ocr_ctx is not None
 
             async def _ocr():
-                capture = ExtractionCaptureService()
-                handle = await capture_screenshot_async(
-                    capture,
-                    sc.device,
-                    region=None,
-                    persist=ocr_persist,
-                    execution_ctx=ocr_ctx,
-                )
+                # Reads the screen on agent-boot — see handle_extract_text_ocr.
                 ocr = OCRService()
                 langs = map_ocr_languages(step.get("language", "eng"))
-                ocr_result = await ocr.extract(handle.image_bytes, lang=langs)
-                text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
-                return text, handle.artifact_id
+                ocr_result, image = await ocr.extract_on_device(
+                    sc.device, lang=langs, want_image_on_empty=ocr_persist
+                )
+                text = compose_text(ocr_result.results)
+                artifact_id = None
+                if image and ocr_persist:
+                    artifact_id = await persist_image_artifact_async(
+                        ExtractionCaptureService(), image, execution_ctx=ocr_ctx
+                    )
+                return text, artifact_id
 
             try:
                 text, artifact_id = run_extraction_async(_ocr())

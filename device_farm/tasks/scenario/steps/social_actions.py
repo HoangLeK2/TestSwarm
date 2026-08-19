@@ -10,16 +10,21 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from services.platform_readiness import DEFAULT_PLATFORM
 from services.social_actions import get_social_action_adapter
 from services.social_actions.contract import (
     SocialActionObservation,
     UnsupportedSocialAction,
 )
+from services.social_ext import supports_step
 
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.steps import register_step
 
 log = logging.getLogger(__name__)
+
+_SELECT_TARGET_STEP = "social_select_target"
+_SELECT_TARGET_TYPES = frozenset({"person", "post"})
 
 _DEFAULT_ACTIONS = {
     "content_interaction": "like",
@@ -266,6 +271,21 @@ def _lookup_verified_target(sc: ScenarioContext, name: str) -> dict[str, Any] | 
     return value if isinstance(value, dict) else None
 
 
+def _lookup_runtime_dict(sc: ScenarioContext, name: str) -> dict[str, Any] | None:
+    clean = str(name or "").strip()
+    if clean.startswith("${") and clean.endswith("}"):
+        clean = clean[2:-1].strip()
+    value = sc.ctx.get("vars", {}).get(clean)
+    if isinstance(value, dict):
+        return value
+    lookup_raw = getattr(sc.var_ctx, "lookup_raw", None)
+    if callable(lookup_raw):
+        raw_value = lookup_raw(clean)
+        if isinstance(raw_value, dict):
+            return raw_value
+    return None
+
+
 def _verified_target_summary(name: str, target: dict[str, Any]) -> dict[str, Any]:
     summary = {
         "name": name,
@@ -496,13 +516,14 @@ def _release_unperformed_candidate_lease(
     result["_candidate_lease_release_attempted"] = True
     try:
         from services.account_actions import resolve_action_identity
-        from services.facebook_candidate_runtime import release_connection_candidate
+        from services.candidate_runtime import release_connection_candidate
 
         identity = resolve_action_identity(
             step=step,
             scenario=sc.scenario,
             variables=sc.ctx.get("vars", {}),
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         result["candidate_lease_release"] = release_connection_candidate(
             identity=identity,
@@ -629,13 +650,14 @@ def _defer_unverified_connection_candidate(
     next_eligible_at = datetime.now(UTC) + timedelta(hours=defer_hours)
     try:
         from services.account_actions import resolve_action_identity
-        from services.facebook_candidate_runtime import defer_connection_candidate
+        from services.candidate_runtime import defer_connection_candidate
 
         identity = resolve_action_identity(
             step=step,
             scenario=sc.scenario,
             variables=sc.ctx.get("vars", {}),
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         result["candidate_skip"] = defer_connection_candidate(
             identity=identity,
@@ -659,18 +681,14 @@ def _defer_unverified_connection_candidate(
         return False
 
 
-@register_step(
-    "fb_select_people_profile",
-)
-def handle_fb_select_people_profile(
+def _select_person_target(
     sc: ScenarioContext,
     step: dict[str, Any],
-    idx: int,
     result: dict[str, Any],
+    *,
+    platform: str,
+    label: str,
 ) -> None:
-    """Delegate Facebook people target selection to agent-boot and save proof."""
-
-    del idx
     save_as = str(step.get("save_as") or _DEFAULT_PEOPLE_TARGET_VAR).strip()
     success_var = str(
         step.get("save_success_as") or _DEFAULT_PEOPLE_SELECTED_VAR
@@ -681,13 +699,15 @@ def handle_fb_select_people_profile(
         save_as=save_as,
         target_type="person",
         outcome="target_not_checked",
-        message="fb_select_people_profile: target has not been verified",
+        message=f"{label}: target has not been verified",
     )
     _handle_agent_boot_target_resolver(
         sc,
         result,
-        flow_name="fb_select_people_profile",
+        flow_name=_SELECT_TARGET_STEP,
         params={
+            "platform": platform,
+            "target_type": "person",
             "search": step.get("search"),
             "display_name": step.get("display_name") or step.get("row_text"),
             "required_keywords": step.get("required_keywords") or [],
@@ -700,10 +720,10 @@ def handle_fb_select_people_profile(
         timeout=max(1.0, float(step.get("timeout", 12.0) or 12.0)),
         save_as=save_as,
         target_type="person",
-        success_message="fb_select_people_profile: verified people profile is open",
-        unavailable_message="fb_select_people_profile: agent-boot flow failed",
-        invalid_message="fb_select_people_profile: agent-boot returned an invalid payload",
-        not_verified_message="fb_select_people_profile: no unique verified people target",
+        success_message=f"{label}: verified people profile is open",
+        unavailable_message=f"{label}: agent-boot flow failed",
+        invalid_message=f"{label}: agent-boot returned an invalid payload",
+        not_verified_message=f"{label}: no unique verified people target",
     )
     if result.get("ok") is True and result.get("outcome") == "target_verified":
         _set_runtime_variable(sc, success_var, True)
@@ -715,7 +735,7 @@ def handle_fb_select_people_profile(
         save_as=save_as,
         target_type="person",
         outcome=str(result.get("outcome") or "target_not_verified"),
-        message=str(result.get("message") or "fb_select_people_profile failed"),
+        message=str(result.get("message") or f"{label} failed"),
     )
     if not bool(step.get("skip_candidate_on_not_verified", False)):
         return
@@ -732,7 +752,7 @@ def handle_fb_select_people_profile(
             "ok": True,
             "outcome": "candidate_skipped",
             "message": (
-                "fb_select_people_profile: skipped candidate because no unique "
+                f"{label}: skipped candidate because no unique "
                 f"verified People profile was found ({original_outcome}: "
                 f"{original_message})"
             ),
@@ -740,8 +760,89 @@ def handle_fb_select_people_profile(
     )
 
 
-@register_step("fb_connect_visible_people")
-def handle_fb_connect_visible_people(
+def _select_post_target(
+    sc: ScenarioContext,
+    step: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    platform: str,
+    label: str,
+) -> None:
+    _handle_agent_boot_target_resolver(
+        sc,
+        result,
+        flow_name=_SELECT_TARGET_STEP,
+        params={
+            "platform": platform,
+            "target_type": "post",
+            "search": step.get("search"),
+            "display_text": step.get("display_text") or step.get("row_text"),
+            "required_keywords": step.get("required_keywords") or [],
+            "optional_keywords": step.get("optional_keywords") or [],
+            "forbidden_keywords": step.get("forbidden_keywords") or [],
+            "min_score": step.get("min_score", 80),
+            "require_unique": step.get("require_unique", True),
+            "current_detail": step.get("current_detail", False),
+            "detail_wait_s": step.get("detail_wait_s", 1.0),
+        },
+        timeout=max(1.0, float(step.get("timeout", 12.0) or 12.0)),
+        save_as=str(step.get("save_as") or _DEFAULT_POST_TARGET_VAR).strip(),
+        target_type="post",
+        success_message=f"{label}: verified post target is open",
+        unavailable_message=f"{label}: agent-boot flow failed",
+        invalid_message=f"{label}: agent-boot returned an invalid payload",
+        not_verified_message=f"{label}: no unique verified post target",
+    )
+
+
+@register_step(_SELECT_TARGET_STEP)
+def handle_social_select_target(
+    sc: ScenarioContext,
+    step: dict[str, Any],
+    idx: int,
+    result: dict[str, Any],
+) -> None:
+    """Resolve and open a verified person/post target via the platform resolver."""
+
+    del idx
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    target_type = str(step.get("target_type") or "person").strip().casefold()
+    label = f"{_SELECT_TARGET_STEP}[{target_type}]"
+
+    if target_type not in _SELECT_TARGET_TYPES:
+        _fail(
+            sc,
+            step,
+            result,
+            outcome="invalid_target_type",
+            message=(
+                f"{_SELECT_TARGET_STEP}: target_type must be one of "
+                f"{sorted(_SELECT_TARGET_TYPES)}, got {target_type!r}"
+            ),
+        )
+        return
+    if not supports_step(platform, _SELECT_TARGET_STEP):
+        _fail(
+            sc,
+            step,
+            result,
+            outcome="unsupported_platform",
+            message=(
+                f"{_SELECT_TARGET_STEP}: platform {platform!r} does not "
+                "implement this step"
+            ),
+        )
+        return
+
+    result["platform"] = platform
+    if target_type == "person":
+        _select_person_target(sc, step, result, platform=platform, label=label)
+    else:
+        _select_post_target(sc, step, result, platform=platform, label=label)
+
+
+@register_step("social_connect_visible_people")
+def handle_social_connect_visible_people(
     sc: ScenarioContext,
     step: dict[str, Any],
     idx: int,
@@ -749,14 +850,17 @@ def handle_fb_connect_visible_people(
 ) -> None:
     """Click one visible Add Friend row only when the UI exposes common context."""
 
-    platform = str(step.get("platform") or "facebook").strip().casefold()
-    if platform != "facebook":
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    if not supports_step(platform, "social_connect_visible_people"):
         _fail(
             sc,
             step,
             result,
             outcome="unsupported_platform",
-            message=f"fb_connect_visible_people: unsupported {platform!r}",
+            message=(
+                f"social_connect_visible_people: platform {platform!r} does not "
+                "implement this step"
+            ),
         )
         return
 
@@ -779,7 +883,7 @@ def handle_fb_connect_visible_people(
     )
     try:
         flow_result = sc.device.u2_flow(
-            "fb_connect_visible_people",
+            "social_connect_visible_people",
             {
                 "min_score": max(0, int(min_score or 40)),
                 "require_common": _bool_value(
@@ -822,7 +926,7 @@ def handle_fb_connect_visible_people(
             step,
             result,
             outcome="target_resolver_unavailable",
-            message=f"fb_connect_visible_people: agent-boot flow failed: {exc}",
+            message=f"social_connect_visible_people: agent-boot flow failed: {exc}",
         )
         return
 
@@ -837,7 +941,7 @@ def handle_fb_connect_visible_people(
             step,
             result,
             outcome="target_resolver_failed",
-            message="fb_connect_visible_people: agent-boot returned an invalid payload",
+            message="social_connect_visible_people: agent-boot returned an invalid payload",
         )
         return
 
@@ -872,7 +976,7 @@ def handle_fb_connect_visible_people(
                     "outcome": reason or "target_resolver_failed",
                     "message": str(
                         target.get("message")
-                        or "fb_connect_visible_people: batch resolver failed"
+                        or "social_connect_visible_people: batch resolver failed"
                     ),
                     "action_performed": False,
                     "batch": True,
@@ -894,7 +998,7 @@ def handle_fb_connect_visible_people(
                 "outcome": "applied" if sent_count > 0 else (reason or "no_action"),
                 "message": str(
                     target.get("message")
-                    or f"fb_connect_visible_people: sent {sent_count} visible requests"
+                    or f"social_connect_visible_people: sent {sent_count} visible requests"
                 ),
                 "action_performed": sent_count > 0,
                 "state": "request_pending" if sent_count > 0 else None,
@@ -935,6 +1039,7 @@ def handle_fb_connect_visible_people(
                     scenario=sc.scenario,
                     variables=sc.ctx.get("vars", {}),
                     execution_id=sc.execution_id,
+                    device_serial=sc.serial,
                 )
                 ledger_records: list[dict[str, Any]] = []
                 for offset, verified_target in enumerate(verified_targets):
@@ -988,7 +1093,7 @@ def handle_fb_connect_visible_people(
                     result,
                     outcome="ledger_prepare_failed",
                     message=(
-                        "fb_connect_visible_people: durable batch action ledger "
+                        "social_connect_visible_people: durable batch action ledger "
                         f"failed: {exc}"
                     ),
                 )
@@ -1004,7 +1109,7 @@ def handle_fb_connect_visible_people(
                 "outcome": str(target.get("reason") or "target_not_verified"),
                 "message": str(
                     target.get("message")
-                    or "fb_connect_visible_people: no eligible visible row"
+                    or "social_connect_visible_people: no eligible visible row"
                 ),
                 "action_performed": False,
                 "resolver": target,
@@ -1025,7 +1130,7 @@ def handle_fb_connect_visible_people(
         {
             "ok": True,
             "outcome": "applied",
-            "message": "fb_connect_visible_people: sent request from common-context row",
+            "message": "social_connect_visible_people: sent request from common-context row",
             "action_performed": True,
             "state": "request_pending",
             "verified_target": verified_target,
@@ -1056,6 +1161,7 @@ def handle_fb_connect_visible_people(
                 scenario=sc.scenario,
                 variables=sc.ctx.get("vars", {}),
                 execution_id=sc.execution_id,
+                device_serial=sc.serial,
             )
             ledger_target = {
                 "action": "request",
@@ -1097,7 +1203,7 @@ def handle_fb_connect_visible_people(
                 step,
                 result,
                 outcome="ledger_prepare_failed",
-                message=f"fb_connect_visible_people: durable action ledger failed: {exc}",
+                message=f"social_connect_visible_people: durable action ledger failed: {exc}",
             )
             return
 
@@ -1204,6 +1310,7 @@ def _handle_social_scan_posts_interact(
                 "comment_wait_s": step.get("comment_wait_s", 0.8),
                 "submit_wait_s": step.get("submit_wait_s", 0.6),
                 "require_comment": _bool_value(step.get("require_comment"), True),
+                "like_post": _bool_value(step.get("like_post"), True),
                 **selector_config,
             },
             timeout=timeout,
@@ -1286,58 +1393,227 @@ def handle_social_scan_posts_interact(
     )
 
 
-@register_step("fb_scan_posts_interact")
-def handle_fb_scan_posts_interact(
-    sc: ScenarioContext,
-    step: dict[str, Any],
-    idx: int,
-    result: dict[str, Any],
-) -> None:
-    _handle_social_scan_posts_interact(
-        sc,
-        step,
-        idx,
-        result,
-        flow_name="fb_scan_posts_interact",
-        step_name="fb_scan_posts_interact",
-    )
-
-
 @register_step(
-    "fb_select_post_target",
+    "social_open_author_from_post_match",
+    "social_open_commenter_from_post_match",
 )
-def handle_fb_select_post_target(
+def handle_social_open_author_from_post_match(
     sc: ScenarioContext,
     step: dict[str, Any],
     idx: int,
     result: dict[str, Any],
 ) -> None:
-    """Delegate Facebook post target selection to agent-boot and save proof."""
+    """Open and verify a profile from a previously matched post action."""
 
-    del idx
-    _handle_agent_boot_target_resolver(
-        sc,
-        result,
-        flow_name="fb_select_post_target",
-        params={
-            "search": step.get("search"),
-            "display_text": step.get("display_text") or step.get("row_text"),
-            "required_keywords": step.get("required_keywords") or [],
-            "optional_keywords": step.get("optional_keywords") or [],
-            "forbidden_keywords": step.get("forbidden_keywords") or [],
-            "min_score": step.get("min_score", 80),
-            "require_unique": step.get("require_unique", True),
-            "current_detail": step.get("current_detail", False),
-            "detail_wait_s": step.get("detail_wait_s", 1.0),
-        },
-        timeout=max(1.0, float(step.get("timeout", 12.0) or 12.0)),
-        save_as=str(step.get("save_as") or _DEFAULT_POST_TARGET_VAR).strip(),
-        target_type="post",
-        success_message="fb_select_post_target: verified post target is open",
-        unavailable_message="fb_select_post_target: agent-boot flow failed",
-        invalid_message="fb_select_post_target: agent-boot returned an invalid payload",
-        not_verified_message="fb_select_post_target: no unique verified post target",
+    is_commenter = str(step.get("type") or "").startswith("social_open_commenter")
+    step_name = (
+        "social_open_commenter_from_post_match"
+        if is_commenter
+        else "social_open_author_from_post_match"
     )
+    flow_name = step_name
+    source_var = str(step.get("source_var") or "_post_scan").strip()
+    save_as = str(step.get("save_as") or _DEFAULT_PEOPLE_TARGET_VAR).strip()
+    success_var = str(
+        step.get("save_success_as") or _DEFAULT_PEOPLE_SELECTED_VAR
+    ).strip()
+    opened_var = str(
+        step.get("save_opened_as")
+        or ("COMMENTER_PROFILE_OPENED" if is_commenter else "AUTHOR_PROFILE_OPENED")
+    ).strip()
+    sheet_opened_var = str(step.get("save_sheet_opened_as") or "COMMENT_SHEET_OPENED").strip()
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    _set_runtime_variable(sc, success_var, False)
+    _set_runtime_variable(sc, opened_var, False)
+    if is_commenter:
+        _set_runtime_variable(sc, sheet_opened_var, False)
+    _save_unverified_target(
+        sc,
+        save_as=save_as,
+        target_type="person",
+        outcome="target_not_checked",
+        message=f"{step_name}: target has not been verified",
+    )
+
+    source = _lookup_runtime_dict(sc, source_var)
+    actions = source.get("actions") if isinstance(source, dict) else None
+    if not isinstance(actions, list):
+        result.update(
+            {
+                "ok": True,
+                "outcome": "source_actions_missing",
+                "message": (
+                    f"{step_name}: source scan has no actions to inspect"
+                ),
+                "action_performed": False,
+                "source_var": source_var,
+            }
+        )
+        return
+
+    try:
+        action_index = int(
+            sc.var_ctx.resolve(step.get("action_index", 0), step_index=idx) or 0
+        )
+    except (TypeError, ValueError):
+        action_index = 0
+    if action_index < 0 or action_index >= len(actions):
+        result.update(
+            {
+                "ok": True,
+                "outcome": "source_action_index_missing",
+                "message": (
+                    f"{step_name}: requested post action index is not available"
+                ),
+                "action_performed": False,
+                "source_var": source_var,
+                "source_action_index": action_index,
+                "source_action_count": len(actions),
+            }
+        )
+        return
+
+    action = actions[action_index]
+    if not isinstance(action, dict) or action.get("verified") is not True:
+        result.update(
+            {
+                "ok": True,
+                "outcome": "source_action_not_verified",
+                "message": (
+                    f"{step_name}: selected post action was not verified"
+                ),
+                "action_performed": False,
+                "source_var": source_var,
+                "source_action_index": action_index,
+            }
+        )
+        return
+
+    required_keywords = _resolve_keyword_list(
+        sc,
+        {"var": step.get("required_keywords_var")}
+        if step.get("required_keywords_var")
+        else step.get("required_keywords"),
+        step_index=idx,
+    )
+    optional_keywords = _resolve_keyword_list(
+        sc,
+        {"var": step.get("optional_keywords_var")}
+        if step.get("optional_keywords_var")
+        else step.get("optional_keywords"),
+        step_index=idx,
+    )
+    forbidden_keywords = _resolve_keyword_list(
+        sc,
+        {"var": step.get("forbidden_keywords_var")}
+        if step.get("forbidden_keywords_var")
+        else step.get("forbidden_keywords"),
+        step_index=idx,
+    )
+
+    timeout = max(1.0, float(step.get("timeout", 12.0) or 12.0))
+    try:
+        flow_result = sc.device.u2_flow(
+            flow_name,
+            {
+                "platform": platform,
+                "action": action,
+                "search": step.get("search") or action.get("author_label"),
+                "display_name": step.get("display_name") or action.get("author_label"),
+                "required_keywords": required_keywords or [],
+                "optional_keywords": optional_keywords or [],
+                "forbidden_keywords": forbidden_keywords or [],
+                "min_score": step.get("min_score", 80),
+                "profile_wait_s": step.get("profile_wait_s", 1.0),
+                "comment_wait_s": step.get("comment_wait_s", 1.0),
+                "max_commenters": step.get("max_commenters", 5),
+            },
+            timeout=timeout,
+            priority="visible",
+        )
+    except Exception as exc:
+        result.update(
+            {
+                "ok": False,
+                "outcome": "target_resolver_unavailable",
+                "message": (
+                    f"{step_name}: agent-boot flow failed: {exc}"
+                ),
+                "action_performed": False,
+            }
+        )
+        return
+
+    target = (
+        flow_result.get("value")
+        if isinstance(flow_result.get("value"), dict)
+        else flow_result
+    )
+    if not isinstance(target, dict):
+        result.update(
+            {
+                "ok": False,
+                "outcome": "target_resolver_failed",
+                "message": (
+                    f"{step_name}: agent-boot returned an invalid payload"
+                ),
+                "action_performed": False,
+            }
+        )
+        return
+
+    target.setdefault("target_type", "person")
+    target.setdefault("source", "matched_feed_post_author")
+    result.update(
+        {
+            "ok": target.get("verified") is True,
+            "outcome": (
+                    "target_verified"
+                    if target.get("verified") is True
+                    else str(target.get("reason") or "target_not_verified")
+            ),
+            "message": str(
+                target.get("message")
+                or (
+                    "social_open_author_from_post_match: verified author profile is open"
+                    if target.get("verified") is True and not is_commenter
+                    else (
+                        "social_open_commenter_from_post_match: verified commenter profile is open"
+                        if target.get("verified") is True
+                        else f"{step_name}: profile not verified"
+                    )
+                )
+            ),
+            "action_performed": target.get("verified") is True,
+            "target_type": "person",
+            "platform": platform,
+            "source_var": source_var,
+            "source_action_index": action_index,
+            "source_post_target_id": action.get("target_id"),
+            "profile_opened": target.get("profile_opened") is True,
+            "resolver": target,
+        }
+    )
+    _set_runtime_variable(sc, opened_var, target.get("profile_opened") is True)
+    if is_commenter:
+        _set_runtime_variable(sc, sheet_opened_var, target.get("comment_sheet_opened") is True)
+    if target.get("verified") is True:
+        target["verified"] = True
+        _save_verified_target(sc, save_as=save_as, target=target)
+        _set_runtime_variable(sc, success_var, True)
+        result["verified_target"] = _verified_target_summary(save_as, target)
+        result["action_bounds"] = target.get("action_bounds")
+        result["_bounds"] = target.get("action_bounds")
+    else:
+        result["ok"] = True
+        _set_runtime_variable(sc, success_var, False)
+        _save_unverified_target(
+            sc,
+            save_as=save_as,
+            target_type="person",
+            outcome=str(result.get("outcome") or "target_not_verified"),
+            message=str(result.get("message") or "author profile not verified"),
+        )
 
 
 @register_step(
@@ -1354,7 +1630,7 @@ def handle_social_action(
     """Act only on the current screen and verify the resulting UI state."""
 
     action_type = str(step.get("type") or "")
-    platform = str(step.get("platform") or "facebook").strip().casefold()
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
     action = (
         str(step.get("action") or _DEFAULT_ACTIONS.get(action_type) or "")
         .strip()
@@ -1414,6 +1690,7 @@ def handle_social_action(
                 scenario=sc.scenario,
                 variables=sc.ctx.get("vars", {}),
                 execution_id=sc.execution_id,
+                device_serial=sc.serial,
             )
         except Exception as exc:
             ledger_identity_error = exc
@@ -1442,7 +1719,7 @@ def handle_social_action(
         return
     if action_type == "connection_request" and candidate_entity_id:
         from services.account_actions import resolve_action_identity
-        from services.facebook_candidate_runtime import (
+        from services.candidate_runtime import (
             assert_connection_candidate_allowed,
         )
 
@@ -1453,6 +1730,7 @@ def handle_social_action(
                     scenario=sc.scenario,
                     variables=sc.ctx.get("vars", {}),
                     execution_id=sc.execution_id,
+                    device_serial=sc.serial,
                 )
             required_status = str(
                 step.get("require_candidate_status") or "ready_to_connect"
@@ -1622,7 +1900,7 @@ def handle_social_action(
         return
     if before.is_satisfied:
         if action_type == "connection_request" and candidate_lease_token:
-            from services.facebook_candidate_runtime import complete_connection_candidate
+            from services.candidate_runtime import complete_connection_candidate
 
             candidate_guard = result.get("candidate_guard") or {}
             try:
@@ -1964,7 +2242,7 @@ def handle_social_action(
         after_state = after.state
 
     if action_type == "connection_request" and candidate_lease_token:
-        from services.facebook_candidate_runtime import complete_connection_candidate
+        from services.candidate_runtime import complete_connection_candidate
 
         candidate_guard = result.get("candidate_guard") or {}
         try:
@@ -2006,6 +2284,64 @@ def handle_social_action(
     _save_result(sc, step, result)
 
 
+def _collect_action_evidence(
+    sc: ScenarioContext, step: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """What a human needs to audit this action later.
+
+    The ledger's `result` only carried engine state (`state`, `outcome`,
+    `matched_label`, …) — enough to know a comment was submitted, not enough to
+    know *what* was commented. Everything here is text the runtime already has,
+    so it costs nothing to keep.
+    """
+    evidence: dict[str, Any] = {}
+
+    # Prefer what the device was actually told to type: nested completion steps
+    # report it back in `typed_text`.
+    for entry in result.get("completion_results") or []:
+        if isinstance(entry, dict) and entry.get("typed_text"):
+            evidence["comment_text"] = str(entry["typed_text"])[:2000]
+            break
+
+    # Fall back to the step config, read verbatim.
+    #
+    # Deliberately NOT re-resolved: VariableContext.resolve() calls
+    # random.choice() when a variable holds a list (spintax comment variants are
+    # configured exactly that way), so resolving here would record a *different*
+    # variant than the one typed on the phone — silently wrong, in the one field
+    # whose whole purpose is "what was actually commented". Verified: the same
+    # step yielded 3 different strings across 30 calls.
+    if "comment_text" not in evidence:
+        candidates = [step, *(step.get("completion_steps") or [])]
+        verify = step.get("completion_verify")
+        if isinstance(verify, dict):
+            candidates.append(verify)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key in ("comment_text", "text", "message"):
+                raw = candidate.get(key)
+                if raw and isinstance(raw, str) and raw.strip():
+                    evidence["comment_text"] = raw[:2000]
+                    break
+            if "comment_text" in evidence:
+                break
+
+    # No post URL here on purpose: the target is identified from the Android
+    # view hierarchy, which does not carry a permalink. What identifies the post
+    # is target_id plus the text snippet already stored in `target.name`.
+    target = result.get("verified_target")
+    if isinstance(target, dict):
+        for key in ("post_id", "author_name", "group_name"):
+            value = target.get(key)
+            if value and not isinstance(value, (dict, list, tuple)):
+                evidence[key] = str(value)[:1000]
+
+    if sc.serial:
+        evidence["device_serial"] = sc.serial
+    return evidence
+
+
 def _finalize_social_action_ledger(
     sc: ScenarioContext,
     step: dict[str, Any],
@@ -2020,6 +2356,12 @@ def _finalize_social_action_ledger(
     try:
         from services.account_actions import finalize_action
 
+        # Audit evidence goes in `result`, never in `target`: target feeds
+        # stable_action_key, so adding fields there would change the idempotency
+        # hash of actions already in the ledger.
+        evidence = _collect_action_evidence(sc, step, result)
+        ledger_result = {**result, **evidence} if evidence else result
+
         result["account_action_ledger"] = finalize_action(
             claim=claim,
             succeeded=succeeded,
@@ -2027,7 +2369,7 @@ def _finalize_social_action_ledger(
                 True if succeeded else _account_action_failure_is_terminal(step, result)
             ),
             reason=reason,
-            result=result,
+            result=ledger_result,
         )
     except Exception as exc:
         result.update(

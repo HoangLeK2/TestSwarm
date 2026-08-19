@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isContainerType, type FlowStep } from '../scenario-steps/types';
-import { BRACKET_COLORS, getStepSummary } from './constants';
+import { BRACKET_COLORS } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
@@ -74,6 +74,7 @@ import {
 } from './bracket-step-tree';
 import { shouldUseStepEditOverlay } from './nested-step-edit';
 import { useFlowEditorEditSession } from './flow-editor-edit-session';
+import { useMirrorStepActions } from './use-mirror-step-actions';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -540,7 +541,8 @@ export function BracketBlock({
   enableDragDrop = true
 }: BracketBlockProps) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
-  const { getStepTypeName, getVariableDisplayName } = useCampaignFlowI18n();
+  const { getStepTypeName, getVariableDisplayName, getStepSummary } =
+    useCampaignFlowI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [editingChildPath, setEditingChildPath] = useState<{
     listKey: string;
@@ -569,6 +571,22 @@ export function BracketBlock({
   const handleEditingChildChange = useCallback((s: FlowStep) => {
     pendingEditingChildRef.current = s;
   }, []);
+
+  const mirrorActions = useMirrorStepActions(() => {
+    const path = editingChildPathRef.current;
+    if (!path) return null;
+    const step =
+      pendingEditingChildRef.current ??
+      getChildStep(stepRef.current, path.listKey, path.ci);
+    if (!step) return null;
+    return {
+      step,
+      apply: (next) => {
+        const updated = applyChildStepEdit(stepRef.current, path, next);
+        if (updated) onUpdate(updated);
+      }
+    };
+  }, closeEditingChild);
   useEffect(() => {
     if (!editingChildPath) {
       pendingEditingChildRef.current = null;
@@ -605,8 +623,8 @@ export function BracketBlock({
         return tFlow('blockTitle.if_variable');
       case 'if':
         return tFlow('blockTitle.if');
-      case 'fb_tap_comment_button':
-      case 'tap_fb_comment_button':
+      case 'social_open_comments':
+      case 'social_open_comments':
         return getStepTypeName(step.type);
       case 'random_pick':
         return tFlow('blockTitle.random_pick');
@@ -627,7 +645,7 @@ export function BracketBlock({
       });
     }
     return getStepSummary(step);
-  }, [step, tFlow, getVariableDisplayName]);
+  }, [step, tFlow, getVariableDisplayName, getStepSummary]);
 
   const ifElementCondition = useMemo(() => {
     if (step.type !== 'if_element') return null;
@@ -707,6 +725,8 @@ export function BracketBlock({
               onClose={closeEditingChild}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
+              onRequestCropImage={mirrorActions.cropImage}
+              onRequestPickRegion={mirrorActions.pickRegion}
               onRequestPickSelector={
                 onTogglePickSelector
                   ? () => {
@@ -791,6 +811,8 @@ export function BracketBlock({
                 onClose={closeEditingChild}
                 campaignScenarios={campaignScenarios}
                 runtimeContext={sessionGateRuntimeContext}
+                onRequestCropImage={mirrorActions.cropImage}
+                onRequestPickRegion={mirrorActions.pickRegion}
                 onRequestPickSelector={
                   onTogglePickSelector
                     ? () => {
@@ -863,8 +885,8 @@ export function BracketBlock({
           step.type === 'if_element' ||
             step.type === 'if_variable' ||
             step.type === 'if' ||
-            step.type === 'fb_tap_comment_button' ||
-            step.type === 'tap_fb_comment_button'
+            step.type === 'social_open_comments' ||
+            step.type === 'social_open_comments'
             ? 'border-l-[3px] border-l-amber-500'
             : step.type === 'repeat' || step.type === 'repeat_until'
               ? 'border-l-[3px] border-l-orange-500'
@@ -884,8 +906,8 @@ export function BracketBlock({
             (step.type === 'if_element' ||
               step.type === 'if_variable' ||
               step.type === 'if' ||
-              step.type === 'fb_tap_comment_button' ||
-              step.type === 'tap_fb_comment_button') &&
+              step.type === 'social_open_comments' ||
+              step.type === 'social_open_comments') &&
               'bg-amber-500/[0.06] dark:bg-amber-950/15'
           )}
           onClick={onSelectSelf}
@@ -1082,14 +1104,12 @@ export function BracketBlock({
             {(step.type === 'if_element' ||
               step.type === 'if_variable' ||
               step.type === 'if' ||
-              step.type === 'fb_tap_comment_button' ||
-              step.type === 'tap_fb_comment_button') &&
+              step.type === 'social_open_comments' ||
+              step.type === 'social_open_comments') &&
               (() => {
                 const thenSteps = step.then ?? [];
                 const elseSteps = step.else ?? [];
-                const isFbTap =
-                  step.type === 'fb_tap_comment_button' ||
-                  step.type === 'tap_fb_comment_button';
+                const isFbTap = step.type === 'social_open_comments';
                 const thenLabel = isFbTap
                   ? tFlow('fbTapBranchOnSuccess')
                   : tFlow('branchThen');

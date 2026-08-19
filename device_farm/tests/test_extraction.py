@@ -216,6 +216,45 @@ class TestOCREngineExtract:
             assert "top" in box
             assert "conf" in box
 
+    def test_extract_with_boxes_actually_finds_text(self, ocr):
+        """Regression: the TSV path silently returned [] for every image.
+
+        `_run_tesseract_tsv` passed "--psm 11" and "--oem 3" as single argv
+        entries, so tesseract exited 1 and the empty list looked like "no text
+        on screen". Asserting the list *type* (as the test above does) cannot
+        catch that — only asserting content can.
+        """
+        boxes = ocr.extract_with_boxes(_make_text_image("Hello World"))
+        assert boxes, "OCR returned no boxes for an image that clearly has text"
+        found = " ".join(b["text"] for b in boxes).lower()
+        assert "hello" in found or "world" in found
+
+    def test_region_is_applied_exactly_once(self, ocr):
+        """Regression: callers cropped, then handed the same region to the engine.
+
+        The engine crops relative to whatever it receives, so applying a
+        30%-60% band twice yields a band of a band — wrong height and wrong
+        offset. Text placed in the lower half must be readable when the region
+        selects the lower half.
+        """
+        from PIL import ImageDraw, ImageFont
+
+        img = Image.new("RGB", (400, 400), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+        draw.text((20, 260), "Bottom", fill=(0, 0, 0), font=font)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        boxes = ocr.extract_with_boxes(
+            buf.getvalue(), region={"x1": 0.0, "y1": 0.5, "x2": 1.0, "y2": 1.0}
+        )
+        found = " ".join(b["text"] for b in boxes).lower()
+        assert "bottom" in found
+
     def test_available_property(self):
         engine = OCREngine()
         assert isinstance(engine.available, bool)

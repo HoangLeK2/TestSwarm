@@ -54,7 +54,7 @@ def test_resolve_comment_parent_hash_prefers_pid_map() -> None:
     }
     # Direct pid map hit — always preferred.
     assert resolve_comment_parent_hash(ctx, "pid1") == "hash_from_pid"
-    # Miss on pid map → fall back to explicit hash set by tap_fb_comment_button.
+    # Miss on pid map → fall back to explicit hash set by social_open_comments.
     assert resolve_comment_parent_hash(ctx, "pid2") == "explicit_tap_hash"
 
 

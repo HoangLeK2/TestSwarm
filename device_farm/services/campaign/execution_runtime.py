@@ -717,12 +717,12 @@ async def start_execution_runtime(
             org_id=org_id,
             scenario_refs=registry_refs,
         )
-    from services.facebook_session_runtime import (
+    from services.platform_session_runtime import (
         guard_reason_allows_login_recovery,
-        scenario_registry_has_facebook_login_gate,
+        scenario_registry_has_platform_login_gate,
     )
 
-    allows_facebook_login_recovery = scenario_registry_has_facebook_login_gate(
+    allows_facebook_login_recovery = scenario_registry_has_platform_login_gate(
         scenario_registry,
         scenario_refs,
     )

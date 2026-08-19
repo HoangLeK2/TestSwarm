@@ -430,7 +430,22 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         result["message"] = f"if_element(element_found={element_found}): no steps for {branch_name}, skip"
 
 
-def _remember_fb_comment_target(
+def _mark_post_commented(sc: ScenarioContext) -> None:
+    """Record the post whose comment button was just opened.
+
+    Without this, a feed loop re-resolves "the comment button nearest mid-screen"
+    every iteration and taps the same card again. The anchor list is per-run and
+    bounded, and is the same one the post-open resolver already honours.
+    """
+    from tasks.scenario.steps.extraction import _remember_consumed_comment_parent
+
+    try:
+        _remember_consumed_comment_parent(sc.ctx)
+    except Exception as exc:  # never fail a tap because bookkeeping broke
+        log.warning("[%s] could not record commented post: %s", sc.serial, exc)
+
+
+def _remember_comment_target(
     sc: ScenarioContext,
     target: Dict[str, Any],
     result: Dict[str, Any],
@@ -440,7 +455,7 @@ def _remember_fb_comment_target(
     keep_post_detail_parent = _has_verified_post_detail_comment_parent(sc.ctx)
     parent_base_hash = target.get("parent_base_hash")
     if keep_post_detail_parent:
-        sc.ctx["_fb_tapped_comment_target"] = {
+        sc.ctx["_tapped_comment_target"] = {
             "pid": target.get("pid"),
             "post_key": target.get("post_key"),
             "stable_post_id": target.get("stable_post_id"),
@@ -453,21 +468,22 @@ def _remember_fb_comment_target(
             "source": source,
         }
         sc.ctx["_active_comment_anchor_verified"] = True
-        sc.ctx.pop("_fb_comment_target_missing", None)
+        sc.ctx.pop("_pending_scroll_target", None)
+        _mark_post_commented(sc)
         result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
-        result["_pid"] = sc.ctx.get("_fb_comment_parent_pid") or target.get("pid")
+        result["_pid"] = sc.ctx.get("_comment_parent_pid") or target.get("pid")
         result["tapped_target_pid"] = target.get("pid")
         result["parent_context_preserved"] = True
         return
-    sc.ctx.pop("_fb_comment_session", None)
-    sc.ctx.pop("_fb_tapped_comment_target", None)
+    sc.ctx.pop("_comment_session", None)
+    sc.ctx.pop("_tapped_comment_target", None)
     if parent_base_hash and not keep_post_detail_parent:
         sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
     if target.get("parent_id") and not keep_post_detail_parent:
         sc.ctx["_active_comment_parent_hash"] = target.get("parent_id")
         sc.ctx["_first_new_post_hash"] = target.get("parent_id")
     if target.get("pid"):
-        sc.ctx["_fb_comment_parent_pid"] = target.get("pid")
+        sc.ctx["_comment_parent_pid"] = target.get("pid")
     if not keep_post_detail_parent:
         sc.ctx["_active_comment_parent_source"] = source
     sc.ctx["_active_comment_parent_anchor"] = {
@@ -480,7 +496,8 @@ def _remember_fb_comment_target(
         "text_prefix": target.get("text_prefix"),
     }
     sc.ctx["_active_comment_anchor_verified"] = True
-    sc.ctx.pop("_fb_comment_target_missing", None)
+    sc.ctx.pop("_pending_scroll_target", None)
+    _mark_post_commented(sc)
     result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
     result["_pid"] = target.get("pid")
     result["parent_context_preserved"] = keep_post_detail_parent
@@ -492,13 +509,13 @@ def _has_verified_post_detail_comment_parent(ctx: Dict[str, Any]) -> bool:
         return False
     if not ctx.get("_active_comment_anchor_verified"):
         return False
-    session = ctx.get("_fb_comment_session")
+    session = ctx.get("_comment_session")
     if not isinstance(session, dict) or not session.get("session_id"):
         return False
     session_parent_id = str(session.get("parent_id") or "").strip()
     if session_parent_id != parent_id:
         return False
-    parent_pid = str(ctx.get("_fb_comment_parent_pid") or "").strip()
+    parent_pid = str(ctx.get("_comment_parent_pid") or "").strip()
     session_parent_pid = str(session.get("parent_post_id") or "").strip()
     return bool(parent_pid and session_parent_pid == parent_pid)
 
@@ -512,18 +529,42 @@ def _has_verified_existing_comment_parent(ctx: Dict[str, Any]) -> bool:
     return bool(ctx.get("_active_comment_anchor_verified"))
 
 
-@register_step("fb_find_comment_button")
-def handle_fb_find_comment_button(
+def _reject_unsupported_platform(
+    step: Dict[str, Any], result: Dict[str, Any], step_type: str
+) -> bool:
+    """Fail the step when the requested platform does not implement it.
+
+    Returns True when the caller should stop.
+    """
+    from services.platform_readiness import DEFAULT_PLATFORM
+    from services.social_ext import supports_step
+
+    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    result["platform"] = platform
+    if supports_step(platform, step_type):
+        return False
+    result["ok"] = False
+    result["outcome"] = "unsupported_platform"
+    result["message"] = (
+        f"{step_type}: platform {platform!r} does not implement this step"
+    )
+    return True
+
+
+@register_step("social_find_comment_button")
+def handle_social_find_comment_button(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
-    """Resolve the visible Facebook comment button without tapping it."""
-    from services.scenario_step_contract import normalize_fb_tap_comment_step
+    """Resolve the visible comment button on the current screen without tapping."""
+    if _reject_unsupported_platform(step, result, "social_find_comment_button"):
+        return
+    from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import (
         request_edge_comment_target,
         stage_comment_filter_for_post,
     )
 
-    step = normalize_fb_tap_comment_step(step)
+    step = normalize_social_comment_step(step)
     stage_comment_filter_for_post(sc.ctx, step)
     target = request_edge_comment_target(
         device=sc.device,
@@ -536,37 +577,39 @@ def handle_fb_find_comment_button(
         agent_tap=False,
     )
     if result.get("reason_code") == "already_on_comment_sheet":
-        sc.ctx.pop("_fb_comment_target", None)
+        sc.ctx.pop("_comment_target", None)
         result["target_found"] = True
         result["already_on_comment_sheet"] = True
-        result["message"] = "fb_find_comment_button: comment sheet already open"
+        result["message"] = "social_find_comment_button: comment sheet already open"
         return
     if not target:
         result["target_found"] = False
-        result["message"] = result.get("message") or "fb_find_comment_button: no visible comment button"
+        result["message"] = result.get("message") or "social_find_comment_button: no visible comment button"
         if not bool(step.get("ignore_error", True)):
             result["ok"] = False
         else:
             result["ok"] = True
         return
-    sc.ctx["_fb_comment_target"] = target
+    sc.ctx["_comment_target"] = target
     result["target_found"] = True
     result["_bounds"] = target.get("bounds")
     result["_pid"] = target.get("pid")
     result["target_score"] = target.get("score")
-    result["message"] = "fb_find_comment_button: target cached"
+    result["message"] = "social_find_comment_button: target cached"
 
 
-@register_step("fb_tap_comment_target")
-def handle_fb_tap_comment_target(
+@register_step("social_tap_comment_target")
+def handle_social_tap_comment_target(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
-    """Tap the cached Facebook comment target and verify that comments opened."""
-    from services.scenario_step_contract import normalize_fb_tap_comment_step
+    """Tap the cached comment target and verify that comments opened."""
+    if _reject_unsupported_platform(step, result, "social_tap_comment_target"):
+        return
+    from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import request_edge_comment_target
 
-    step = normalize_fb_tap_comment_step(step)
-    target = sc.ctx.get("_fb_comment_target")
+    step = normalize_social_comment_step(step)
+    target = sc.ctx.get("_comment_target")
     if not isinstance(target, dict):
         target = request_edge_comment_target(
             device=sc.device,
@@ -581,12 +624,12 @@ def handle_fb_tap_comment_target(
     if result.get("reason_code") == "already_on_comment_sheet":
         result["tapped"] = True
         result["target_verified"] = True
-        result["message"] = "fb_tap_comment_target: comment sheet already open"
+        result["message"] = "social_tap_comment_target: comment sheet already open"
         return
     bounds = target.get("bounds") if isinstance(target, dict) else None
     if not isinstance(bounds, list) or len(bounds) != 4:
         result["tapped"] = False
-        result["message"] = result.get("message") or "fb_tap_comment_target: missing cached target"
+        result["message"] = result.get("message") or "social_tap_comment_target: missing cached target"
         if not bool(step.get("ignore_error", True)):
             result["ok"] = False
         else:
@@ -599,7 +642,7 @@ def handle_fb_tap_comment_target(
         sc.device.tap(cx, cy)
     except Exception as exc:
         result["ok"] = False
-        result["message"] = f"fb_tap_comment_target: tap failed: {exc}"
+        result["message"] = f"social_tap_comment_target: tap failed: {exc}"
         return
     wait_s = float(step.get("post_tap_wait_s", 0.35) or 0.35)
     if wait_s > 0:
@@ -608,7 +651,7 @@ def handle_fb_tap_comment_target(
         else:
             time.sleep(wait_s)
     if _cancelled(sc):
-        _mark_cancelled(result, "fb_tap_comment_target: cancelled")
+        _mark_cancelled(result, "social_tap_comment_target: cancelled")
         return
 
     verify_result: Dict[str, Any] = {}
@@ -624,8 +667,8 @@ def handle_fb_tap_comment_target(
     )
     verified = verify_result.get("reason_code") == "already_on_comment_sheet"
     if verified:
-        _remember_fb_comment_target(sc, target, result, source="fb_tap_comment_target")
-        sc.ctx.pop("_fb_comment_target", None)
+        _remember_comment_target(sc, target, result, source="social_tap_comment_target")
+        sc.ctx.pop("_comment_target", None)
     result["tapped"] = True
     result["target_verified"] = verified
     result["verify"] = verify_result
@@ -636,35 +679,37 @@ def handle_fb_tap_comment_target(
     elif not verified:
         result["ok"] = True
     result["message"] = (
-        "fb_tap_comment_target: opened comments"
+        "social_tap_comment_target: opened comments"
         if verified
-        else "fb_tap_comment_target: comment sheet did not verify"
+        else "social_tap_comment_target: comment sheet did not verify"
     )
 
 
-@register_step("fb_apply_comment_filter")
-def handle_fb_apply_comment_filter(
+@register_step("social_apply_comment_filter")
+def handle_social_apply_comment_filter(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
-    """Apply the Facebook comment filter after the comment sheet is open."""
-    from services.scenario_step_contract import normalize_fb_tap_comment_step
+    """Apply the comment filter after the comment sheet is open."""
+    if _reject_unsupported_platform(step, result, "social_apply_comment_filter"):
+        return
+    from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import (
         resolve_step_comment_filter,
         run_edge_comment_filter_switch,
     )
 
-    step = normalize_fb_tap_comment_step(step)
-    missing_target = sc.ctx.get("_fb_comment_target_missing")
+    step = normalize_social_comment_step(step)
+    missing_target = sc.ctx.get("_pending_scroll_target")
     if isinstance(missing_target, dict):
         result["filter_applied"] = False
         result["comment_target_missing"] = True
         result["comment_target_missing_detail"] = missing_target
-        result["message"] = "fb_apply_comment_filter: skipped — comment target missing"
+        result["message"] = "social_apply_comment_filter: skipped — comment target missing"
         return
     target_filter = resolve_step_comment_filter(step, sc.ctx)
     if not target_filter:
         result["filter_applied"] = False
-        result["message"] = "fb_apply_comment_filter: disabled"
+        result["message"] = "social_apply_comment_filter: disabled"
         return
     filter_report = run_edge_comment_filter_switch(
         device=sc.device,
@@ -683,10 +728,10 @@ def handle_fb_apply_comment_filter(
         "ok",
     }
     if applied:
-        sc.ctx["_fb_comment_filter_applied"] = target_filter
+        sc.ctx["_comment_filter_applied"] = target_filter
     settle_s = float(
         step.get("comment_filter_settle_s")
-        or sc.ctx.get("_fb_comment_filter_settle_s")
+        or sc.ctx.get("_comment_filter_settle_s")
         or 0.45
     )
     settle_needed = (
@@ -708,19 +753,21 @@ def handle_fb_apply_comment_filter(
         else:
             time.sleep(settle_s)
     if _cancelled(sc):
-        _mark_cancelled(result, "fb_apply_comment_filter: cancelled")
+        _mark_cancelled(result, "social_apply_comment_filter: cancelled")
         return
     result["filter_applied"] = applied
     result["filter_switch"] = filter_report
-    result["message"] = f"fb_apply_comment_filter: {reason or 'ok'}"
+    result["message"] = f"social_apply_comment_filter: {reason or 'ok'}"
 
 
-@register_step("tap_fb_comment_button", "fb_tap_comment_button")
-def handle_tap_fb_comment_button(
+@register_step("social_open_comments")
+def handle_social_open_comments(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
-    """Resolve the visible FB comment button via agent-boot, then tap locally."""
-    from services.scenario_step_contract import normalize_fb_tap_comment_step
+    """Resolve the visible comment button via agent-boot, then tap locally."""
+    if _reject_unsupported_platform(step, result, "social_open_comments"):
+        return
+    from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import (
         _clear_active_comment_parent,
         request_edge_comment_target,
@@ -729,7 +776,7 @@ def handle_tap_fb_comment_button(
         stage_comment_filter_for_post,
     )
 
-    step = normalize_fb_tap_comment_step(step)
+    step = normalize_social_comment_step(step)
 
     require_post_before_comment = step.get("require_post_before_comment")
     if require_post_before_comment is None:
@@ -742,7 +789,7 @@ def handle_tap_fb_comment_button(
             return False
         return bool(
             sc.ctx.get("_active_comment_parent_hash")
-            or sc.ctx.get("_fb_comment_parent_pid")
+            or sc.ctx.get("_comment_parent_pid")
             or sc.ctx.get("_active_comment_anchor_verified")
         )
 
@@ -814,17 +861,17 @@ def handle_tap_fb_comment_button(
                         time.sleep(pause_s)
                 if _cancelled(sc):
                     result["ok"] = False
-                    result["message"] = "tap_fb_comment_button: cancelled"
+                    result["message"] = "social_open_comments: cancelled"
                     result["cancelled"] = True
                     return
                 result["pre_scrolled"] = True
             except Exception as exc:
-                log.warning("[%s] tap_fb_comment_button: pre_scroll failed: %s", sc.serial, exc)
+                log.warning("[%s] social_open_comments: pre_scroll failed: %s", sc.serial, exc)
 
     if require_post_before_comment and not _post_detail_parent_ready():
         result["post_not_ready"] = True
         result["message"] = (
-            "tap_fb_comment_button: skip — post detail parent not verified"
+            "social_open_comments: skip — post detail parent not verified"
         )
     elif target is None and result.get("reason_code") != "already_on_comment_sheet":
         target = request_edge_comment_target(
@@ -847,17 +894,17 @@ def handle_tap_fb_comment_button(
         tapped = True
         keep_existing_parent = _has_verified_existing_comment_parent(sc.ctx)
         if keep_existing_parent:
-            sc.ctx.pop("_fb_comment_target_missing", None)
+            sc.ctx.pop("_pending_scroll_target", None)
             result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
-            result["_pid"] = sc.ctx.get("_fb_comment_parent_pid")
+            result["_pid"] = sc.ctx.get("_comment_parent_pid")
             result["parent_context_preserved"] = True
             result["message"] = (
-                "tap_fb_comment_button: comment sheet already open; preserved verified parent context"
+                "social_open_comments: comment sheet already open; preserved verified parent context"
             )
         else:
             _clear_active_comment_parent(sc.ctx)
             result["parent_context_cleared"] = True
-            result["message"] = "tap_fb_comment_button: comment sheet already open"
+            result["message"] = "social_open_comments: comment sheet already open"
     elif target:
         bounds = target.get("bounds")
         if isinstance(bounds, list) and len(bounds) == 4:
@@ -877,15 +924,15 @@ def handle_tap_fb_comment_button(
                 elif not verified:
                     result["target_verified"] = False
                     result["message"] = (
-                        "tap_fb_comment_button: comment sheet did not open after tap"
+                        "social_open_comments: comment sheet did not open after tap"
                     )
                 if verified:
                     tapped = True
-                    _remember_fb_comment_target(
+                    _remember_comment_target(
                         sc,
                         target,
                         result,
-                        source="tap_fb_comment_button",
+                        source="social_open_comments",
                     )
                     result["tapped_at"] = [cx, cy]
                     result["agent_tapped"] = agent_tapped
@@ -896,7 +943,7 @@ def handle_tap_fb_comment_button(
                     result["target_candidate_count"] = diag.get("candidate_count") if diag else None
             except Exception as exc:
                 result["ok"] = False
-                result["message"] = f"tap_fb_comment_button: tap failed: {exc}"
+                result["message"] = f"social_open_comments: tap failed: {exc}"
                 return
 
     target_filter = resolve_step_comment_filter(step, sc.ctx)
@@ -919,12 +966,12 @@ def handle_tap_fb_comment_button(
                 "already_all_comments",
                 "ok",
             }:
-                sc.ctx["_fb_comment_filter_applied"] = target_filter
+                sc.ctx["_comment_filter_applied"] = target_filter
         except Exception as exc:
-            log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
+            log.warning("[%s] social_open_comments: filter switch failed: %s", sc.serial, exc)
         settle_s = float(
             step.get("comment_filter_settle_s")
-            or sc.ctx.get("_fb_comment_filter_settle_s")
+            or sc.ctx.get("_comment_filter_settle_s")
             or 0.45
         )
         filter_state_verified = bool(
@@ -938,7 +985,7 @@ def handle_tap_fb_comment_button(
                 time.sleep(settle_s)
         if _cancelled(sc):
             result["ok"] = False
-            result["message"] = "tap_fb_comment_button: cancelled"
+            result["message"] = "social_open_comments: cancelled"
             result["cancelled"] = True
             return
 
@@ -948,7 +995,7 @@ def handle_tap_fb_comment_button(
     result["branch"] = branch_name
 
     if not tapped:
-        result["message"] = result.get("message") or "tap_fb_comment_button: no visible comment button"
+        result["message"] = result.get("message") or "social_open_comments: no visible comment button"
         if not ignore_error:
             result["ok"] = False
             return
@@ -960,15 +1007,15 @@ def handle_tap_fb_comment_button(
         if not sub.get("success"):
             result["ok"] = False
             attach_nested_failure_details(result, sub)
-            result["message"] = f"tap_fb_comment_button: {branch_name} branch failed"
+            result["message"] = f"social_open_comments: {branch_name} branch failed"
             return
         result["ok"] = True
-        result["message"] = f"tap_fb_comment_button(tapped={tapped}): took {branch_name}"
+        result["message"] = f"social_open_comments(tapped={tapped}): took {branch_name}"
         return
 
     result["ok"] = True
     result["message"] = (
-        f"tap_fb_comment_button(tapped={tapped}): "
+        f"social_open_comments(tapped={tapped}): "
         f"{'tapped correct post comment button' if tapped else 'no steps for else, skip'}"
     )
 

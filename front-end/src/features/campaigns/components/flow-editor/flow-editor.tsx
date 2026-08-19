@@ -25,6 +25,8 @@ import {
 } from '@dnd-kit/sortable';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { isContainerType, type FlowStep } from '../scenario-steps/types';
 import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
 import { StepCard } from './step-card';
@@ -32,9 +34,16 @@ import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
 import { InsertStepPicker } from './insert-step-picker';
 import {
+  primaryProducedVariable,
+  variablesProducedByStep
+} from './step-produced-variables';
+import { StepRunResultStrip, type StepRunResult } from './step-run-result';
+import { UseResultActions } from './use-result-actions';
+import {
   StepDetailPanel,
   type SessionGateRuntimeContext
 } from './step-detail-panel';
+import { useMirrorStepActions } from './use-mirror-step-actions';
 import type { SelectorPickTarget } from './selector-pick';
 import {
   selectorPickTargetEquals,
@@ -88,6 +97,8 @@ interface Props {
   campaignScenarios?: RunScenarioCampaignOption[];
   /** Enable drag-and-drop registration. Heavy control surfaces can disable it until the user enters sort mode. */
   enableDragDrop?: boolean;
+  /** What each step produced on its last inline run, keyed by runKey. */
+  stepRunResults?: Record<string, StepRunResult>;
   /** Show lightweight reorder controls in the virtualized editor. */
   virtualReorderMode?: boolean;
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
@@ -112,6 +123,7 @@ export function FlowEditor({
   campaignScenarios = [],
   sessionGateRuntimeContext,
   enableDragDrop = true,
+  stepRunResults,
   virtualReorderMode = false
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -309,6 +321,22 @@ export function FlowEditor({
     [onChange]
   );
 
+  const closeDetailForCrop = useCallback(() => {
+    if (pendingDetailRef.current != null && selectedIndex != null) {
+      updateAt(selectedIndex, pendingDetailRef.current);
+    }
+    pendingDetailRef.current = null;
+    setSelectedIndex(null);
+  }, [selectedIndex, updateAt]);
+
+  const mirrorActions = useMirrorStepActions(() => {
+    const idx = selectedIndex;
+    if (idx == null) return null;
+    const step = pendingDetailRef.current ?? stepsRef.current[idx];
+    if (!step) return null;
+    return { step, apply: (next) => updateAt(idx, next) };
+  }, closeDetailForCrop);
+
   const removeChild = useCallback(
     (parentIndex: number, key: string, childIndex: number) => {
       const parent = stepsRef.current[parentIndex];
@@ -377,6 +405,7 @@ export function FlowEditor({
           sessionGateRuntimeContext={sessionGateRuntimeContext}
           availableVariables={availableVariables}
           reorderMode={virtualReorderMode}
+          stepRunResults={stepRunResults}
         />
       </FlowEditorEditSessionProvider>
     );
@@ -414,6 +443,8 @@ export function FlowEditor({
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
+              onRequestCropImage={mirrorActions.cropImage}
+              onRequestPickRegion={mirrorActions.pickRegion}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -462,7 +493,7 @@ export function FlowEditor({
 
       <div className='min-w-0'>
         <div
-          className='min-w-0 overflow-y-auto overflow-x-hidden'
+          className='group/flowlist min-w-0 overflow-y-auto overflow-x-hidden'
           style={{ maxHeight }}
         >
           <DndContext
@@ -516,6 +547,7 @@ export function FlowEditor({
                 </div>
               ))}
               <InsertGap
+                persistent
                 onInsert={(s) => insertAt(stepsRef.current.length, s)}
               />
             </SortableContext>
@@ -696,7 +728,8 @@ function VirtualizedFlowEditor({
   campaignScenarios,
   sessionGateRuntimeContext,
   availableVariables,
-  reorderMode
+  reorderMode,
+  stepRunResults
 }: {
   steps: FlowStep[];
   onChange: (steps: FlowStep[]) => void;
@@ -713,6 +746,7 @@ function VirtualizedFlowEditor({
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
   availableVariables: string[];
   reorderMode: boolean;
+  stepRunResults?: Record<string, StepRunResult>;
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const stepsRef = useRef(steps);
@@ -758,6 +792,14 @@ function VirtualizedFlowEditor({
     pendingDetailRef.current = step;
   }, []);
 
+  const mirrorActions = useMirrorStepActions(() => {
+    const path = selectedPath;
+    if (!path) return null;
+    const step = pendingDetailRef.current ?? resolveStepAtPath(steps, path);
+    if (!step) return null;
+    return { step, apply: (next) => updatePath(path, next) };
+  }, closeDetail);
+
   const removePath = useCallback(
     (path: BracketChildRef[]) => {
       onChange(removeStepAtPath(stepsRef.current, path));
@@ -787,6 +829,17 @@ function VirtualizedFlowEditor({
     [onChange]
   );
 
+  /** insertStepAtPath splices *at* the index, so +1 lands after the step. */
+  const insertAfterPath = useCallback(
+    (path: BracketChildRef[], step: FlowStep) => {
+      const last = path[path.length - 1];
+      if (!last) return;
+      const after = [...path.slice(0, -1), { ...last, ci: last.ci + 1 }];
+      onChange(insertStepAtPath(stepsRef.current, after, step));
+    },
+    [onChange]
+  );
+
   return (
     <>
       <Dialog
@@ -807,6 +860,8 @@ function VirtualizedFlowEditor({
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
+              onRequestCropImage={mirrorActions.cropImage}
+              onRequestPickRegion={mirrorActions.pickRegion}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -849,181 +904,231 @@ function VirtualizedFlowEditor({
       </Dialog>
 
       <div
-        ref={parentRef}
-        className='min-w-0 overflow-y-auto overflow-x-hidden bg-muted/[0.12]'
-        style={{ maxHeight, height: maxHeight === '100%' ? '100%' : undefined }}
+        className='flex min-h-0 w-full flex-col'
+        style={{ height: maxHeight === '100%' ? '100%' : undefined }}
       >
         <div
-          className='relative w-full'
-          style={{ height: `${virtualizer.getTotalSize()}px` }}
+          ref={parentRef}
+          className='group/flowlist min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-muted/[0.12]'
+          style={{ maxHeight: maxHeight === '100%' ? undefined : maxHeight }}
         >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const row = rows[virtualRow.index];
-            if (!row) return null;
-            if (row.kind !== 'step') {
+          <div
+            className='relative w-full'
+            style={{ height: `${virtualizer.getTotalSize()}px` }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index];
+              if (!row) return null;
+              if (row.kind !== 'step') {
+                return (
+                  <div
+                    key={virtualRow.key}
+                    ref={virtualizer.measureElement}
+                    data-index={virtualRow.index}
+                    className='absolute left-0 top-0 w-full px-1.5 py-1'
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    <VirtualScopeMarker row={row} />
+                  </div>
+                );
+              }
+              const target = targetFromPath(row.path);
+              const runKey = runKeyFromPath(row.path);
+              const runResult = stepRunResults?.[runKey];
+              const producedVar = primaryProducedVariable(row.step);
+              const selected =
+                selectedPath != null &&
+                pathKey(selectedPath) === pathKey(row.path);
+              const coordPickActive =
+                coordinatePickTarget &&
+                coordinatePickTargetEquals(coordinatePickTarget, {
+                  ...target,
+                  mode: 'tap_point'
+                })
+                  ? 'tap_point'
+                  : coordinatePickTarget &&
+                      coordinatePickTargetEquals(coordinatePickTarget, {
+                        ...target,
+                        mode: 'swipe_segment'
+                      })
+                    ? 'swipe_segment'
+                    : null;
+              const siblingCount = listAtPath(steps, row.path).length;
+              const childIndex = row.path[row.path.length - 1]?.ci ?? 0;
+              const canMoveUp = childIndex > 0;
+              const canMoveDown = childIndex < siblingCount - 1;
               return (
                 <div
                   key={virtualRow.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
                   className='absolute left-0 top-0 w-full px-1.5 py-1'
-                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  style={{
+                    transform: `translateY(${virtualRow.start}px)`
+                  }}
                 >
-                  <VirtualScopeMarker row={row} />
-                </div>
-              );
-            }
-            const target = targetFromPath(row.path);
-            const runKey = runKeyFromPath(row.path);
-            const selected =
-              selectedPath != null &&
-              pathKey(selectedPath) === pathKey(row.path);
-            const coordPickActive =
-              coordinatePickTarget &&
-              coordinatePickTargetEquals(coordinatePickTarget, {
-                ...target,
-                mode: 'tap_point'
-              })
-                ? 'tap_point'
-                : coordinatePickTarget &&
-                    coordinatePickTargetEquals(coordinatePickTarget, {
-                      ...target,
-                      mode: 'swipe_segment'
-                    })
-                  ? 'swipe_segment'
-                  : null;
-            const siblingCount = listAtPath(steps, row.path).length;
-            const childIndex = row.path[row.path.length - 1]?.ci ?? 0;
-            const canMoveUp = childIndex > 0;
-            const canMoveDown = childIndex < siblingCount - 1;
-            return (
-              <div
-                key={virtualRow.key}
-                ref={virtualizer.measureElement}
-                data-index={virtualRow.index}
-                className='absolute left-0 top-0 w-full px-1.5 py-1'
-                style={{
-                  transform: `translateY(${virtualRow.start}px)`
-                }}
-              >
-                <div className='flex min-w-0 items-stretch gap-2'>
-                  <VirtualFlowStepRail
-                    label={localStepNumber(row.path)}
-                    fullLabel={outlineNumber(row.path)}
-                    showLine={virtualRow.index < rows.length - 1}
-                    root={row.depth === 0}
-                  />
-                  <VirtualBranchRail
-                    listKey={row.path.at(-1)?.listKey}
-                    depth={row.depth}
-                  />
-                  <div
-                    className='min-w-0 flex-1'
-                    style={{
-                      paddingLeft: row.depth > 0 ? '4px' : undefined
-                    }}
-                  >
-                    {!reorderMode ? (
-                      <div className='group/insert mb-1 flex h-4 items-center gap-1.5'>
-                        <span className='h-px min-w-0 flex-1 bg-border/0 transition-colors group-hover/insert:bg-border/70' />
-                        <InsertStepPicker
-                          contentSide='bottom'
-                          contentAlign='center'
-                          sideOffset={4}
-                          onInsert={(step) => insertBeforePath(row.path, step)}
-                          trigger={
-                            <button
-                              type='button'
-                              className='flex h-5 items-center rounded-full border border-border/0 px-2 text-[10px] font-medium text-muted-foreground/0 transition-all hover:border-border hover:bg-background hover:text-primary focus-visible:border-border focus-visible:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/insert:border-border/70 group-hover/insert:bg-background group-hover/insert:text-muted-foreground'
-                              aria-label={`Thêm thao tác trước bước ${outlineNumber(row.path)}`}
-                            >
-                              + Thêm tại đây
-                            </button>
+                  <div className='flex min-w-0 items-stretch gap-2'>
+                    <VirtualFlowStepRail
+                      label={localStepNumber(row.path)}
+                      fullLabel={outlineNumber(row.path)}
+                      showLine={virtualRow.index < rows.length - 1}
+                      root={row.depth === 0}
+                    />
+                    <VirtualBranchRail
+                      listKey={row.path.at(-1)?.listKey}
+                      depth={row.depth}
+                    />
+                    <div
+                      className='min-w-0 flex-1'
+                      style={{
+                        paddingLeft: row.depth > 0 ? '4px' : undefined
+                      }}
+                    >
+                      {!reorderMode ? (
+                        <div className='group/insert mb-1 flex h-4 items-center gap-1.5'>
+                          <span className='h-px min-w-0 flex-1 bg-border/0 transition-colors group-hover/insert:bg-border/70' />
+                          <InsertStepPicker
+                            contentSide='bottom'
+                            contentAlign='center'
+                            sideOffset={4}
+                            onInsert={(step) =>
+                              insertBeforePath(row.path, step)
+                            }
+                            trigger={
+                              <button
+                                type='button'
+                                className='flex h-5 items-center rounded-full border border-border/0 px-2 text-[10px] font-medium text-muted-foreground/0 transition-all hover:border-border hover:bg-background hover:text-primary focus-visible:border-border focus-visible:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/flowlist:border-border/40 group-hover/insert:border-border/70 group-hover/insert:bg-background group-hover/flowlist:text-muted-foreground/60 group-hover/insert:text-muted-foreground'
+                                aria-label={`Thêm thao tác trước bước ${outlineNumber(row.path)}`}
+                              >
+                                + Thêm tại đây
+                              </button>
+                            }
+                          />
+                          <span className='h-px min-w-0 flex-1 bg-border/0 transition-colors group-hover/insert:bg-border/70' />
+                        </div>
+                      ) : null}
+                      <StepCard
+                        step={row.step}
+                        index={virtualRow.index}
+                        selected={!compact && selected}
+                        compact={compact}
+                        onClick={() => {
+                          if (compact) return;
+                          setSelectedPath(selected ? null : row.path);
+                        }}
+                        onRemove={() => removePath(row.path)}
+                        onRun={
+                          onRunStep
+                            ? () => onRunStep(row.step, runKey)
+                            : undefined
+                        }
+                        runState={stepRunStates[runKey] ?? 'idle'}
+                        onStopInlineRun={onStopInlineRun}
+                        isPickTarget={
+                          selectorPickTarget != null &&
+                          selectorPickTargetEquals(selectorPickTarget, target)
+                        }
+                        onTogglePickSelector={
+                          onSelectorPickTargetChange &&
+                          isSelectorPickableStep(row.step)
+                            ? () =>
+                                onSelectorPickTargetChange(
+                                  selectorPickTargetEquals(
+                                    selectorPickTarget,
+                                    target
+                                  )
+                                    ? null
+                                    : target
+                                )
+                            : undefined
+                        }
+                        coordPickActive={coordPickActive}
+                        onTogglePickTapCoords={
+                          onCoordinatePickTargetChange &&
+                          isTapCoordinatePickableStep(row.step)
+                            ? () =>
+                                onCoordinatePickTargetChange(
+                                  coordPickActive === 'tap_point'
+                                    ? null
+                                    : { ...target, mode: 'tap_point' }
+                                )
+                            : undefined
+                        }
+                        onTogglePickSwipeCoords={
+                          onCoordinatePickTargetChange &&
+                          isSwipeCoordinatePickableStep(row.step)
+                            ? () =>
+                                onCoordinatePickTargetChange(
+                                  coordPickActive === 'swipe_segment'
+                                    ? null
+                                    : { ...target, mode: 'swipe_segment' }
+                                )
+                            : undefined
+                        }
+                        reorderControls={
+                          reorderMode
+                            ? {
+                                canMoveUp,
+                                canMoveDown,
+                                onMoveUp: () => movePath(row.path, -1),
+                                onMoveDown: () => movePath(row.path, 1)
+                              }
+                            : undefined
+                        }
+                      />
+                      {runResult && (
+                        <StepRunResultStrip
+                          result={runResult}
+                          action={
+                            producedVar ? (
+                              <UseResultActions
+                                variable={producedVar}
+                                onInsert={(next) =>
+                                  insertAfterPath(row.path, next)
+                                }
+                              />
+                            ) : undefined
                           }
                         />
-                        <span className='h-px min-w-0 flex-1 bg-border/0 transition-colors group-hover/insert:bg-border/70' />
-                      </div>
-                    ) : null}
-                    <StepCard
-                      step={row.step}
-                      index={virtualRow.index}
-                      selected={!compact && selected}
-                      compact={compact}
-                      onClick={() => {
-                        if (compact) return;
-                        setSelectedPath(selected ? null : row.path);
-                      }}
-                      onRemove={() => removePath(row.path)}
-                      onRun={
-                        onRunStep
-                          ? () => onRunStep(row.step, runKey)
-                          : undefined
-                      }
-                      runState={stepRunStates[runKey] ?? 'idle'}
-                      onStopInlineRun={onStopInlineRun}
-                      isPickTarget={
-                        selectorPickTarget != null &&
-                        selectorPickTargetEquals(selectorPickTarget, target)
-                      }
-                      onTogglePickSelector={
-                        onSelectorPickTargetChange &&
-                        isSelectorPickableStep(row.step)
-                          ? () =>
-                              onSelectorPickTargetChange(
-                                selectorPickTargetEquals(
-                                  selectorPickTarget,
-                                  target
-                                )
-                                  ? null
-                                  : target
-                              )
-                          : undefined
-                      }
-                      coordPickActive={coordPickActive}
-                      onTogglePickTapCoords={
-                        onCoordinatePickTargetChange &&
-                        isTapCoordinatePickableStep(row.step)
-                          ? () =>
-                              onCoordinatePickTargetChange(
-                                coordPickActive === 'tap_point'
-                                  ? null
-                                  : { ...target, mode: 'tap_point' }
-                              )
-                          : undefined
-                      }
-                      onTogglePickSwipeCoords={
-                        onCoordinatePickTargetChange &&
-                        isSwipeCoordinatePickableStep(row.step)
-                          ? () =>
-                              onCoordinatePickTargetChange(
-                                coordPickActive === 'swipe_segment'
-                                  ? null
-                                  : { ...target, mode: 'swipe_segment' }
-                              )
-                          : undefined
-                      }
-                      reorderControls={
-                        reorderMode
-                          ? {
-                              canMoveUp,
-                              canMoveDown,
-                              onMoveUp: () => movePath(row.path, -1),
-                              onMoveDown: () => movePath(row.path, 1)
-                            }
-                          : undefined
-                      }
-                    />
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+
+          {rows.length === 0 && (
+            <p className='py-6 text-center text-xs text-muted-foreground'>
+              Nhấn <strong>+</strong> để thêm bước, hoặc ghi thao tác từ thiết
+              bị.
+            </p>
+          )}
         </div>
 
-        {rows.length === 0 && (
-          <p className='py-6 text-center text-xs text-muted-foreground'>
-            Nhấn <strong>+</strong> để thêm bước, hoặc ghi thao tác từ thiết bị.
-          </p>
+        {/* Always-visible append action. The per-row "+ Thêm tại đây" controls are
+          hover-only and there was nothing at all after the last step, so the
+          panel read as having no way to add anything. This sits outside the
+          scroll area so it stays reachable however long the list gets. */}
+        {!reorderMode && (
+          <div className='shrink-0 border-t border-border/60 bg-background px-1.5 py-1.5'>
+            <InsertStepPicker
+              contentSide='top'
+              contentAlign='center'
+              sideOffset={6}
+              onInsert={(step) => onChange([...steps, step])}
+              trigger={
+                <Button
+                  type='button'
+                  variant='outline'
+                  className='h-8 w-full justify-center gap-1.5 rounded-md border-dashed border-muted-foreground/40 text-xs font-medium text-muted-foreground hover:border-primary/60 hover:bg-primary/5 hover:text-primary'
+                >
+                  <Plus className='size-3.5' strokeWidth={2} />
+                  Thêm bước
+                </Button>
+              }
+            />
+          </div>
         )}
       </div>
     </>
@@ -1397,6 +1502,9 @@ function collectVariableNames(steps: FlowStep[]): string[] {
         if (k.trim()) names.add(k.trim());
       });
     }
+    // Variables the step writes (save_as, leased CANDIDATE_*, …) — without this
+    // an OCR or resolver result is invisible to every step after it.
+    variablesProducedByStep(step).forEach((name) => names.add(name));
 
     if ('steps' in step && Array.isArray(step.steps)) {
       step.steps.forEach(collectFromStep);

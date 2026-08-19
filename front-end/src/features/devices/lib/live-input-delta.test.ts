@@ -23,10 +23,29 @@ test('computeLiveInputDeltas deletes trailing chars', () => {
   ]);
 });
 
-test('computeLiveInputDeltas resets on paste or middle edit', () => {
+test('computeLiveInputDeltas replaces atomically when nothing is shared', () => {
   assert.deepEqual(computeLiveInputDeltas('abc', 'xyz'), [
-    { kind: 'delete', count: 3 },
     { kind: 'reset_append', text: 'xyz' }
+  ]);
+});
+
+test('computeLiveInputDeltas edits only the tail after the common prefix', () => {
+  assert.deepEqual(computeLiveInputDeltas('chao ban', 'chao anh'), [
+    { kind: 'delete', count: 3 },
+    { kind: 'append', text: 'anh' }
+  ]);
+});
+
+test('computeLiveInputDeltas rewrites one char for a telex accent', () => {
+  assert.deepEqual(computeLiveInputDeltas('cha', 'chà'), [
+    { kind: 'delete', count: 1 },
+    { kind: 'append', text: 'à' }
+  ]);
+});
+
+test('computeLiveInputDeltas counts deletes in code points, not utf-16 units', () => {
+  assert.deepEqual(computeLiveInputDeltas('hi🙂', 'hi'), [
+    { kind: 'delete', count: 1 }
   ]);
 });
 

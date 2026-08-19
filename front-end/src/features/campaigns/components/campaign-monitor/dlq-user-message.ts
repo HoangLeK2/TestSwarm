@@ -76,7 +76,7 @@ function humanizeCore(text: string, t: Translate): string | null {
     return t('monitorDlqErrExtraDataFailed');
   }
 
-  if (/tap_fb_comment_button:\s*then branch failed/i.test(msg)) {
+  if (/social_open_comments:\s*then branch failed/i.test(msg)) {
     return t('monitorDlqErrCommentTapFailed');
   }
 

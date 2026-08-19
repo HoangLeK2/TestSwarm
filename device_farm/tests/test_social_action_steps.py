@@ -402,7 +402,7 @@ def test_social_action_is_idempotent_when_membership_is_already_satisfied() -> N
     assert device.keys == []
 
 
-def test_fb_select_people_profile_delegates_to_agent_boot_and_saves_target() -> None:
+def test_social_select_target_delegates_to_agent_boot_and_saves_target() -> None:
     from tasks.scenario.steps import dispatch_step
 
     device = _FakeDevice(_xml())
@@ -421,7 +421,7 @@ def test_fb_select_people_profile_delegates_to_agent_boot_and_saves_target() -> 
     result = dispatch_step(
         sc,
         {
-            "type": "fb_select_people_profile",
+            "type": "social_select_target", "target_type": "person",
             "search": "Hoang Le",
             "display_name": "Hoang Le",
             "required_keywords": ["Hoang Le"],
@@ -433,7 +433,7 @@ def test_fb_select_people_profile_delegates_to_agent_boot_and_saves_target() -> 
 
     assert result["ok"] is True
     assert result["outcome"] == "target_verified"
-    assert device.flows[0][0] == "fb_select_people_profile"
+    assert device.flows[0][0] == "social_select_target"
     assert device.flows[0][1]["required_keywords"] == ["Hoang Le"]
     assert sc.ctx["vars"]["_people_target"]["verified"] is True
     assert sc.var_ctx.values["_people_target"]["action_bounds"] == [42, 988, 655, 1114]
@@ -465,7 +465,7 @@ def test_fb_connect_visible_people_delegates_to_agent_boot_and_saves_result(
     result = dispatch_step(
         sc,
         {
-            "type": "fb_connect_visible_people",
+            "type": "social_connect_visible_people",
             "platform": "facebook",
             "min_score": 40,
             "require_common": True,
@@ -481,7 +481,7 @@ def test_fb_connect_visible_people_delegates_to_agent_boot_and_saves_result(
     assert result["outcome"] == "applied"
     assert result["state"] == "request_pending"
     assert result["action_performed"] is True
-    assert device.flows[0][0] == "fb_connect_visible_people"
+    assert device.flows[0][0] == "social_connect_visible_people"
     assert device.flows[0][1]["common_keywords"] == ["bạn chung", "cùng nhóm"]
     assert (
         sc.var_ctx.values["_visible_connection_action"]["verified_target"]["target_id"]
@@ -504,7 +504,7 @@ def test_fb_connect_visible_people_continues_when_no_common_row(
     result = dispatch_step(
         _context(device),
         {
-            "type": "fb_connect_visible_people",
+            "type": "social_connect_visible_people",
             "platform": "facebook",
             "save_as": "_visible_connection_action",
         },
@@ -514,7 +514,7 @@ def test_fb_connect_visible_people_continues_when_no_common_row(
     assert result["ok"] is True
     assert result["outcome"] == "no_common_connectable_people"
     assert result["action_performed"] is False
-    assert device.flows[0][0] == "fb_connect_visible_people"
+    assert device.flows[0][0] == "social_connect_visible_people"
 
 
 def test_fb_connect_visible_people_batch_saves_sent_counters(
@@ -568,7 +568,7 @@ def test_fb_connect_visible_people_batch_saves_sent_counters(
     result = dispatch_step(
         sc,
         {
-            "type": "fb_connect_visible_people",
+            "type": "social_connect_visible_people",
             "platform": "facebook",
             "open_surface": True,
             "target_count": "${CONNECTION_TARGET_COUNT}",
@@ -591,7 +591,7 @@ def test_fb_connect_visible_people_batch_saves_sent_counters(
     assert saved["verified_targets"][0]["target_id"] == "ui:candidate-1"
 
 
-def test_fb_select_people_profile_skips_and_defers_unverified_candidate(
+def test_social_select_target_skips_and_defers_unverified_candidate(
     monkeypatch,
 ) -> None:
     from tasks.scenario.steps import dispatch_step
@@ -602,7 +602,7 @@ def test_fb_select_people_profile_skips_and_defers_unverified_candidate(
     )
     deferred: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.defer_connection_candidate",
+        "services.candidate_runtime.defer_connection_candidate",
         lambda **kwargs: deferred.append(kwargs)
         or {
             "candidate_id": "candidate-1",
@@ -625,7 +625,7 @@ def test_fb_select_people_profile_skips_and_defers_unverified_candidate(
     result = dispatch_step(
         sc,
         {
-            "type": "fb_select_people_profile",
+            "type": "social_select_target", "target_type": "person",
             "search": "Nguyen Van A",
             "display_name": "Nguyen Van A",
             "required_keywords": ["Nguyen Van A"],
@@ -647,7 +647,7 @@ def test_fb_select_people_profile_skips_and_defers_unverified_candidate(
     assert deferred[0]["lease_token"] == "lease-1"
 
 
-def test_fb_select_post_target_delegates_to_agent_boot_and_saves_target() -> None:
+def test_social_select_target_delegates_to_agent_boot_and_saves_target() -> None:
     from tasks.scenario.steps import dispatch_step
 
     device = _FakeDevice(_xml())
@@ -668,7 +668,7 @@ def test_fb_select_post_target_delegates_to_agent_boot_and_saves_target() -> Non
     result = dispatch_step(
         sc,
         {
-            "type": "fb_select_post_target",
+            "type": "social_select_target", "target_type": "post",
             "search": "launch text",
             "display_text": "launch text",
             "required_keywords": ["launch text"],
@@ -681,7 +681,7 @@ def test_fb_select_post_target_delegates_to_agent_boot_and_saves_target() -> Non
 
     assert result["ok"] is True
     assert result["outcome"] == "target_verified"
-    assert device.flows[0][0] == "fb_select_post_target"
+    assert device.flows[0][0] == "social_select_target"
     assert device.flows[0][1]["required_keywords"] == ["launch text"]
     assert device.flows[0][1]["current_detail"] is True
     assert sc.ctx["vars"]["_post_target"]["verified"] is True
@@ -712,7 +712,7 @@ def test_fb_scan_posts_interact_delegates_to_agent_boot() -> None:
     result = dispatch_step(
         sc,
         {
-            "type": "fb_scan_posts_interact",
+            "type": "social_scan_posts_interact",
             "keywords": "${POST_KEYWORDS}",
             "keywords_var": "POST_KEYWORDS",
             "comment_text": "${COMMENT_TEXT}",
@@ -728,11 +728,12 @@ def test_fb_scan_posts_interact_delegates_to_agent_boot() -> None:
     assert result["interacted_count"] == 2
     assert result["liked_count"] == 2
     assert result["commented_count"] == 2
-    assert device.flows[0][0] == "fb_scan_posts_interact"
+    assert device.flows[0][0] == "social_scan_posts_interact"
     assert device.flows[0][1]["keywords"] == ["AI", "tuyển dụng"]
     assert device.flows[0][1]["comment_text"] == "Bài viết hữu ích"
     assert device.flows[0][1]["target_count"] == 2
     assert device.flows[0][1]["max_scrolls"] == 4
+    assert device.flows[0][1]["like_post"] is True
     assert sc.ctx["vars"]["_post_scan"]["interacted_count"] == 2
 
 
@@ -762,7 +763,7 @@ def test_fb_scan_posts_interact_resolves_runtime_variable_fields() -> None:
     result = dispatch_step(
         sc,
         {
-            "type": "fb_scan_posts_interact",
+            "type": "social_scan_posts_interact",
             "keywords_var": "POST_KEYWORDS",
             "comment_text": "${COMMENT_TEXT}",
             "target_count_var": "POST_TARGET_COUNT",
@@ -776,7 +777,7 @@ def test_fb_scan_posts_interact_resolves_runtime_variable_fields() -> None:
 
     flow_name, params, timeout, priority, _deadline_ms = device.flows[0]
     assert result["ok"] is True
-    assert flow_name == "fb_scan_posts_interact"
+    assert flow_name == "social_scan_posts_interact"
     assert priority == "visible"
     assert timeout == 360
     assert params["keywords"] == ["AI", "MCP"]
@@ -806,7 +807,7 @@ def test_fb_scan_posts_interact_no_match_is_non_terminal() -> None:
     result = dispatch_step(
         _context(device),
         {
-            "type": "fb_scan_posts_interact",
+            "type": "social_scan_posts_interact",
             "keywords": ["AI"],
             "comment_text": "Bài viết hữu ích",
             "target_count": 1,
@@ -819,6 +820,151 @@ def test_fb_scan_posts_interact_no_match_is_non_terminal() -> None:
     assert result["outcome"] == "no_matching_post"
     assert result["action_performed"] is False
     assert result["screens_scanned"] == 3
+
+
+def test_social_open_author_from_post_match_delegates_and_saves_target() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    device.flow_result = {
+        "verified": True,
+        "target_type": "person",
+        "source": "matched_feed_post_author",
+        "confidence": 95,
+        "target_id": "ui_author:abc",
+        "display_name": "Nguyen Van A",
+        "matched_keywords": ["AI"],
+        "selected_bounds": [210, 452, 576, 518],
+        "action_bounds": [600, 720, 980, 810],
+        "profile_opened": True,
+        "source_post_target_id": "ui_post:abc",
+    }
+    sc = _context(device)
+    sc.var_ctx.set(
+        "_post_scan",
+        {
+            "actions": [
+                {
+                    "verified": True,
+                    "target_id": "ui_post:abc",
+                    "author_label": "Nguyen Van A",
+                    "author_tap": [393, 485],
+                    "like_bounds": [0, 1505, 223, 1659],
+                    "comment_bounds": [227, 1505, 457, 1659],
+                    "matched_keywords": ["AI"],
+                }
+            ]
+        },
+    )
+
+    result = dispatch_step(
+        sc,
+        {
+            "type": "social_open_author_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 0,
+            "required_keywords": ["AI"],
+            "save_as": "_people_target",
+            "save_success_as": "PEOPLE_PROFILE_SELECTED",
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "target_verified"
+    assert device.flows[0][0] == "social_open_author_from_post_match"
+    assert device.flows[0][1]["platform"] == "facebook"
+    assert device.flows[0][1]["action"]["target_id"] == "ui_post:abc"
+    assert device.flows[0][1]["required_keywords"] == ["AI"]
+    assert sc.ctx["vars"]["_people_target"]["verified"] is True
+    assert sc.ctx["vars"]["PEOPLE_PROFILE_SELECTED"] is True
+    assert sc.ctx["vars"]["AUTHOR_PROFILE_OPENED"] is True
+
+
+def test_social_open_commenter_from_post_match_delegates_and_saves_target() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    device.flow_result = {
+        "verified": True,
+        "target_type": "person",
+        "source": "matched_feed_post_commenter",
+        "confidence": 92,
+        "target_id": "ui_commenter:abc",
+        "display_name": "Tran Van B",
+        "matched_keywords": ["AI"],
+        "selected_bounds": [180, 740, 420, 790],
+        "action_bounds": [600, 720, 980, 810],
+        "profile_opened": True,
+        "comment_sheet_opened": True,
+        "source_post_target_id": "ui_post:abc",
+    }
+    sc = _context(device)
+    sc.var_ctx.set(
+        "_post_scan",
+        {
+            "actions": [
+                {
+                    "verified": True,
+                    "target_id": "ui_post:abc",
+                    "comment_bounds": [227, 1505, 457, 1659],
+                    "matched_keywords": ["AI"],
+                }
+            ]
+        },
+    )
+
+    result = dispatch_step(
+        sc,
+        {
+            "type": "social_open_commenter_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 0,
+            "required_keywords": ["AI"],
+            "max_commenters": 5,
+            "save_as": "_people_target",
+            "save_success_as": "PEOPLE_PROFILE_SELECTED",
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "target_verified"
+    assert device.flows[0][0] == "social_open_commenter_from_post_match"
+    assert device.flows[0][1]["action"]["target_id"] == "ui_post:abc"
+    assert device.flows[0][1]["max_commenters"] == 5
+    assert sc.ctx["vars"]["_people_target"]["verified"] is True
+    assert sc.ctx["vars"]["PEOPLE_PROFILE_SELECTED"] is True
+    assert sc.ctx["vars"]["COMMENTER_PROFILE_OPENED"] is True
+    assert sc.ctx["vars"]["COMMENT_SHEET_OPENED"] is True
+
+
+def test_social_open_author_from_post_match_skips_missing_action_index() -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    device = _FakeDevice(_xml())
+    sc = _context(device)
+    sc.var_ctx.set("_post_scan", {"actions": []})
+
+    result = dispatch_step(
+        sc,
+        {
+            "type": "social_open_author_from_post_match",
+            "platform": "facebook",
+            "source_var": "_post_scan",
+            "action_index": 1,
+            "save_as": "_people_target",
+        },
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["outcome"] == "source_action_index_missing"
+    assert result["action_performed"] is False
+    assert device.flows == []
+    assert sc.ctx["vars"]["_people_target"]["verified"] is False
 
 
 def test_social_action_requires_verified_target_before_tapping() -> None:
@@ -1138,7 +1284,7 @@ def test_connection_request_checks_account_candidate_before_tap(monkeypatch) -> 
 
     checked: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.assert_connection_candidate_allowed",
+        "services.candidate_runtime.assert_connection_candidate_allowed",
         lambda **kwargs: checked.append(kwargs) or {"status": "ready_to_connect"},
     )
     device = _FakeDevice(
@@ -1176,7 +1322,7 @@ def test_lease_connection_candidate_sets_branch_variables(monkeypatch) -> None:
         lambda **_kwargs: {"account_id": "account-1"},
     )
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.lease_connection_candidate",
+        "services.candidate_runtime.lease_connection_candidate",
         lambda **_kwargs: {
             "available": True,
             "outcome": "leased",
@@ -1246,7 +1392,7 @@ def test_connection_request_completes_candidate_lease_after_verified_tap(
     from tasks.scenario.steps import dispatch_step
 
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.assert_connection_candidate_allowed",
+        "services.candidate_runtime.assert_connection_candidate_allowed",
         lambda **_kwargs: {
             "candidate_id": "candidate-1",
             "status": "ready_to_connect",
@@ -1254,7 +1400,7 @@ def test_connection_request_completes_candidate_lease_after_verified_tap(
     )
     completed: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.complete_connection_candidate",
+        "services.candidate_runtime.complete_connection_candidate",
         lambda **kwargs: completed.append(kwargs)
         or {"candidate_id": "candidate-1", "status": "request_pending"},
     )
@@ -1295,7 +1441,7 @@ def test_connection_request_completes_candidate_lease_when_already_pending(
     from tasks.scenario.steps import dispatch_step
 
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.assert_connection_candidate_allowed",
+        "services.candidate_runtime.assert_connection_candidate_allowed",
         lambda **_kwargs: {
             "candidate_id": "candidate-1",
             "status": "ready_to_connect",
@@ -1303,7 +1449,7 @@ def test_connection_request_completes_candidate_lease_when_already_pending(
     )
     completed: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.complete_connection_candidate",
+        "services.candidate_runtime.complete_connection_candidate",
         lambda **kwargs: completed.append(kwargs)
         or {"candidate_id": "candidate-1", "status": "request_pending"},
     )
@@ -1357,7 +1503,7 @@ def test_connection_request_releases_lease_when_target_fails_before_tap(
     from tasks.scenario.steps import dispatch_step
 
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.assert_connection_candidate_allowed",
+        "services.candidate_runtime.assert_connection_candidate_allowed",
         lambda **_kwargs: {
             "candidate_id": "candidate-1",
             "status": "ready_to_connect",
@@ -1365,7 +1511,7 @@ def test_connection_request_releases_lease_when_target_fails_before_tap(
     )
     released: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.release_connection_candidate",
+        "services.candidate_runtime.release_connection_candidate",
         lambda **kwargs: released.append(kwargs) or {"released": True},
     )
     device = _FakeDevice(_xml(_node("Thêm bạn bè")))
@@ -1399,7 +1545,7 @@ def test_connection_request_rejects_unapproved_account_candidate(monkeypatch) ->
         raise ValueError("candidate status approved is not ready")
 
     monkeypatch.setattr(
-        "services.facebook_candidate_runtime.assert_connection_candidate_allowed",
+        "services.candidate_runtime.assert_connection_candidate_allowed",
         reject_candidate,
     )
     device = _FakeDevice(_xml(_node("Thêm bạn bè")))

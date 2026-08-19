@@ -50,6 +50,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal.shared import (
         MAX_NESTING_DEPTH,
         TASK_QUEUE_NAME,
+        control_task_queue,
         ConditionCheckInput,
         DeviceActionBatchInput,
         DeviceActionBatchResult,
@@ -170,6 +171,17 @@ _BATCH_TIMEOUT_CAP_SECONDS = 600
 _BATCH_RECOVERY_MARGIN_SECONDS = 30
 _BATCH_TIMEOUT_HARD_CAP_SECONDS = 3600
 _MAX_RETAINED_SUB_RESULTS = 50
+# Cap on the in-memory step log a workflow keeps for its query handler. The
+# durable record is execution_steps in the database; this is only for live
+# progress, so there is no reason to hold an unbounded copy per cached workflow.
+_STEP_LOG_MAX = 500
+# Flushing step results to the database before continue_as_new adds an activity
+# call, which changes the commands a workflow emits — old runs must keep their
+# original shape on replay.
+_STEP_CHECKPOINT_PATCH = "step-checkpoint-before-continue-as-new-v1"
+# The retry-on-pause path has the same index-restart flaw, but it is a separate
+# continuation with its own history, so it gets its own patch id.
+_RETRY_ABSOLUTE_INDEX_PATCH = "retry-absolute-step-index-v1"
 _CAMPAIGN_CLAIM_KEEPALIVE_PATCH = "campaign-device-claim-keepalive-v1"
 _CAMPAIGN_CLAIM_KEEPALIVE_MAX_SECONDS = 600
 
@@ -649,7 +661,15 @@ class ScenarioWorkflow:
         failed_message: str | None = None,
     ) -> None:
         """Call finalize_campaign activity to update DB status when this workflow ends."""
-        if not campaign_id:
+        # Keyed on "is there anything to finalize", not on "is this a campaign".
+        # Scenario previews run with campaign_id="" (preview_runtime builds the
+        # ScenarioInput that way), so gating on campaign_id alone skipped
+        # finalization entirely for them: the execution row stayed RUNNING
+        # forever and its device claim was only freed by the 1800s TTL sweeper,
+        # locking the phone for 30 minutes after every preview.
+        # finalize_campaign itself already guards its campaign-only work behind
+        # `if not campaign_id: return`, so an empty campaign_id is safe here.
+        if not campaign_id and not execution_id:
             return
         payload: dict[str, Any] = {
             "campaign_id": campaign_id,
@@ -664,6 +684,28 @@ class ScenarioWorkflow:
         await workflow.execute_activity(
             "finalize_campaign",
             payload,
+            # 34ms of work, but it is what releases the device claim: every
+            # second it spends queued is a second the phone stays marked busy
+            # after it has already finished. Measured on the shared queue with
+            # every slot taken, that wait was 20.5s — an 8.5s run lost 70% of
+            # its capacity to it, and the effect worsens as the fleet fills.
+            #
+            # Only this call is routed. The claim keepalive stays put: it runs
+            # inside a cancellable coroutine that broke when routed, and it can
+            # afford to wait anyway (campaign claims expire after 1800s per
+            # DEFAULT_SESSION_IDLE_THRESHOLDS), whereas this one cannot.
+            #
+            # This makes a control worker a hard dependency: with nobody polling
+            # device-control the activity is never picked up, and start_to_close
+            # does not run until an activity starts, so it waits rather than
+            # failing. Keep TEMPORAL_CONTROL_WORKER_COUNT >= 1.
+            task_queue=control_task_queue(),
+            # start_to_close only starts counting once an activity *begins*, so
+            # with nobody polling device-control this would wait forever instead
+            # of failing — the phone stays claimed and nothing says why. A
+            # schedule_to_start bound turns a missing control worker into a
+            # visible error that retries.
+            schedule_to_start_timeout=timedelta(seconds=60),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
@@ -679,7 +721,13 @@ class ScenarioStepsWorkflow:
     """
 
     def __init__(self) -> None:
+        # Bounded: this list lives for as long as the workflow stays in the
+        # worker's sticky cache, and a long crawl appends a ~1KB entry per step
+        # forever. Keeping the newest _STEP_LOG_MAX and counting the rest gives
+        # the query what it is actually used for — recent progress — without
+        # letting one long run pin megabytes in every cached workflow.
         self._step_log: list[dict] = []
+        self._step_log_dropped = 0
         self._paused = False
         self._cancelled = False
         self._paused_on_error = False
@@ -954,10 +1002,21 @@ class ScenarioStepsWorkflow:
                 # Restart from the failed step — continue_as_new resets history
                 # while preserving all runtime state. The parent ScenarioWorkflow
                 # transparently follows the continuation.
+                #
+                # Carry the whole list and resume via start_step rather than
+                # slicing. Slicing makes the continuation re-enumerate from 0,
+                # and execution_steps is keyed on (execution_id, step_index), so
+                # every step after a retry would overwrite the rows written
+                # before it. Measured on the sibling history-threshold path: 60
+                # step executions collapsed into 35 distinct indices.
+                retry_steps, retry_start = inp.steps[step_idx:], 0
+                if workflow.patched(_RETRY_ABSOLUTE_INDEX_PATCH):
+                    retry_steps, retry_start = inp.steps, step_idx
                 await workflow.continue_as_new(
                     StepsInput(
                         device_serial=inp.device_serial,
-                        steps=inp.steps[step_idx:],
+                        steps=retry_steps,
+                        start_step=retry_start,
                         variables=inp.variables,
                         campaign_vars=inp.campaign_vars,
                         scenario_registry=inp.scenario_registry,
@@ -982,10 +1041,32 @@ class ScenarioStepsWorkflow:
             context=runtime_context,
         )
 
+    def _append_step_log(self, entry: dict) -> None:
+        self._step_log.append(entry)
+        overflow = len(self._step_log) - _STEP_LOG_MAX
+        if overflow > 0:
+            del self._step_log[:overflow]
+            self._step_log_dropped += overflow
+
     @workflow.query
     def get_step_log(self) -> list[dict]:
-        """Query accumulated step execution log (works while running or after completion)."""
-        return self._step_log
+        """Query accumulated step execution log (works while running or after completion).
+
+        Returns the most recent _STEP_LOG_MAX entries. When older ones were
+        dropped, a marker entry says so rather than silently presenting a
+        truncated log as if it were complete.
+        """
+        if not self._step_log_dropped:
+            return self._step_log
+        marker = {
+            "type": "_truncated",
+            "dropped": self._step_log_dropped,
+            "message": (
+                f"{self._step_log_dropped} earlier step(s) dropped from this "
+                f"in-memory log; execution_steps in the database has them all"
+            ),
+        }
+        return [marker, *self._step_log]
 
     # Trigger continue_as_new when Temporal history approaches the 50K event limit.
     # Each activity execution = ~3 events (Scheduled + Started + Completed).
@@ -1011,15 +1092,25 @@ class ScenarioStepsWorkflow:
         }
         # Seed from accumulated_results so retry/history-reset continue_as_new calls
         # preserve the results of already-completed steps.
+        #
+        # checkpointed_steps counts steps whose results were flushed to
+        # execution_steps and then dropped from the payload, so the running
+        # totals stay right even though the list itself no longer holds them.
         step_results: list[dict[str, Any]] = list(inp.accumulated_results)
-        steps_executed = len(step_results)
-        self._total_steps = max(len(inp.steps), steps_executed + len(inp.steps))
+        checkpointed_steps = max(0, int(getattr(inp, "checkpointed_steps", 0) or 0))
+        steps_executed = checkpointed_steps + len(step_results)
+        if int(getattr(inp, "start_step", 0) or 0) > 0:
+            # Absolute-index continuation: inp.steps is the whole scenario and
+            # start_step says where to resume, so it already is the total.
+            self._total_steps = len(inp.steps)
+        else:
+            self._total_steps = max(len(inp.steps), steps_executed + len(inp.steps))
         self._current_step = max(self._current_step, steps_executed)
         break_requested = False
 
         def _append(entry: dict) -> None:
             step_results.append(entry)
-            self._step_log.append({**entry, "depth": inp.depth})
+            self._append_step_log({**entry, "depth": inp.depth})
             self._mark_step_finished(entry)
 
         def _with_persist_metrics(message: str | None, details: dict[str, Any] | None) -> str:
@@ -1233,10 +1324,43 @@ class ScenarioStepsWorkflow:
             if inp.depth == 0 and idx > 0 and idx % 25 == 0:
                 history_len = workflow.info().get_current_history_length()
                 if history_len >= self._HISTORY_CONTINUE_THRESHOLD:
+                    carried = list(step_results)
+                    carried_count = checkpointed_steps
+                    # Flush the results to execution_steps and continue with an
+                    # empty payload. Without this, continue_as_new resets history
+                    # but drags every past step result along at ~1KB each, so a
+                    # long scenario walks toward the 2MB blob limit — the one
+                    # thing continue_as_new was supposed to prevent.
+                    # Legacy shape: slice the steps, so the continuation
+                    # re-enumerates from 0 and step indices restart.
+                    next_steps, next_start = inp.steps[idx:], 0
+                    if carried and inp.execution_id and workflow.patched(_STEP_CHECKPOINT_PATCH):
+                        # Keep the full list and resume via start_step so indices
+                        # stay absolute. This is not cosmetic: execution_steps is
+                        # keyed on (execution_id, step_index), so restarting the
+                        # numbering would make the steps after this point
+                        # overwrite the rows we are about to write — destroying
+                        # the very audit trail the checkpoint exists to keep.
+                        # It is also what lets finalize recognise a trimmed
+                        # payload, which no longer begins at index 0.
+                        next_steps, next_start = inp.steps, idx
+                        await workflow.execute_activity(
+                            "persist_step_checkpoint",
+                            {
+                                "execution_id": inp.execution_id,
+                                "device_serial": inp.device_serial,
+                                "step_results": carried,
+                            },
+                            start_to_close_timeout=timedelta(seconds=60),
+                            retry_policy=RetryPolicy(maximum_attempts=3),
+                        )
+                        carried_count = checkpointed_steps + len(carried)
+                        carried = []
                     await workflow.continue_as_new(
                         StepsInput(
                             device_serial=inp.device_serial,
-                            steps=inp.steps[idx:],       # remaining steps only
+                            steps=next_steps,
+                            start_step=next_start,
                             variables=inp.variables,
                             campaign_vars=inp.campaign_vars,
                             scenario_registry=inp.scenario_registry,
@@ -1247,7 +1371,8 @@ class ScenarioStepsWorkflow:
                             campaign_id=inp.campaign_id,
                             run_id=inp.run_id,
                             execution_id=inp.execution_id,
-                            accumulated_results=list(step_results),
+                            accumulated_results=carried,
+                            checkpointed_steps=carried_count,
                         ),
                     )
             await self._wait_if_paused()

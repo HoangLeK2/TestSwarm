@@ -53,10 +53,7 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import type { ScenarioOut } from '@/features/campaigns/types';
-import {
-  getStepSummary,
-  STEP_COLORS
-} from '@/features/campaigns/components/flow-editor/constants';
+import { STEP_COLORS } from '@/features/campaigns/components/flow-editor/constants';
 import { useCampaignFlowI18n } from '@/features/campaigns/components/flow-editor/flow-i18n';
 import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
@@ -218,7 +215,8 @@ export function ScenarioPlayer({
 }: ScenarioPlayerProps) {
   const t = useTranslations('devicesControlRecord.scenarioPlayer');
   const tView = useTranslations('devicesControlRecord.view');
-  const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
+  const { getStepTypeName, getStepDisplay, getStepSummary } =
+    useCampaignFlowI18n();
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
     null

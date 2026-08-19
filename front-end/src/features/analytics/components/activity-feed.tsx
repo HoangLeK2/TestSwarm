@@ -542,7 +542,7 @@ function taskStepTypeLabel(
 ): string {
   if (stepType === 'run_scenario') return t('taskLogStepRunScenario');
   if (stepType === 'if_variable') return t('taskLogStepIfVariable');
-  if (stepType === 'facebook_session_gate') {
+  if (stepType === 'platform_session_gate') {
     return t('taskLogStepFacebookSessionGate');
   }
   if (!stepType) return t('taskLogStepFallback');
@@ -559,7 +559,7 @@ function friendlyStepCause(
   }
   if (
     normalized ===
-    'facebook_session_gate failed: Facebook session gate requires an execution account'
+    'platform_session_gate failed: Facebook session gate requires an execution account'
   ) {
     return t('taskLogCauseMissingExecutionAccount');
   }
@@ -864,10 +864,20 @@ function accountContextLine(
   const status = firstText(details.status);
   const device = item.device_serial?.trim();
   const error = firstText(details.error_message, details.error_code);
+  // What was actually typed. There is no post URL on purpose: targets come from
+  // the Android view hierarchy, which carries no permalink — the post is
+  // identified by the text snippet in target_label instead.
+  const comment = firstText(details.comment_text);
+  const author = firstText(details.author_name, details.group_name);
 
   if (platform) parts.push(t('accountPlatformLine', { platform }));
   if (device) parts.push(t('deviceSerial', { serial: device }));
   if (target) parts.push(t('accountTargetLine', { target }));
+  if (author) parts.push(author);
+  if (comment) {
+    const trimmed = comment.length > 140 ? `${comment.slice(0, 140)}…` : comment;
+    parts.push(`“${trimmed}”`);
+  }
   if (status) parts.push(formatActivityStatus(status, t));
   if (error) parts.push(error);
   return parts.join(' · ');

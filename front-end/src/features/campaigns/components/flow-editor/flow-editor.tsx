@@ -33,11 +33,17 @@ import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
 import { InsertStepPicker } from './insert-step-picker';
-import { variablesProducedByStep } from './step-produced-variables';
+import {
+  primaryProducedVariable,
+  variablesProducedByStep
+} from './step-produced-variables';
+import { StepRunResultStrip, type StepRunResult } from './step-run-result';
+import { UseResultActions } from './use-result-actions';
 import {
   StepDetailPanel,
   type SessionGateRuntimeContext
 } from './step-detail-panel';
+import { useMirrorStepActions } from './use-mirror-step-actions';
 import type { SelectorPickTarget } from './selector-pick';
 import {
   selectorPickTargetEquals,
@@ -91,6 +97,8 @@ interface Props {
   campaignScenarios?: RunScenarioCampaignOption[];
   /** Enable drag-and-drop registration. Heavy control surfaces can disable it until the user enters sort mode. */
   enableDragDrop?: boolean;
+  /** What each step produced on its last inline run, keyed by runKey. */
+  stepRunResults?: Record<string, StepRunResult>;
   /** Show lightweight reorder controls in the virtualized editor. */
   virtualReorderMode?: boolean;
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
@@ -115,6 +123,7 @@ export function FlowEditor({
   campaignScenarios = [],
   sessionGateRuntimeContext,
   enableDragDrop = true,
+  stepRunResults,
   virtualReorderMode = false
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -312,6 +321,22 @@ export function FlowEditor({
     [onChange]
   );
 
+  const closeDetailForCrop = useCallback(() => {
+    if (pendingDetailRef.current != null && selectedIndex != null) {
+      updateAt(selectedIndex, pendingDetailRef.current);
+    }
+    pendingDetailRef.current = null;
+    setSelectedIndex(null);
+  }, [selectedIndex, updateAt]);
+
+  const mirrorActions = useMirrorStepActions(() => {
+    const idx = selectedIndex;
+    if (idx == null) return null;
+    const step = pendingDetailRef.current ?? stepsRef.current[idx];
+    if (!step) return null;
+    return { step, apply: (next) => updateAt(idx, next) };
+  }, closeDetailForCrop);
+
   const removeChild = useCallback(
     (parentIndex: number, key: string, childIndex: number) => {
       const parent = stepsRef.current[parentIndex];
@@ -380,6 +405,7 @@ export function FlowEditor({
           sessionGateRuntimeContext={sessionGateRuntimeContext}
           availableVariables={availableVariables}
           reorderMode={virtualReorderMode}
+          stepRunResults={stepRunResults}
         />
       </FlowEditorEditSessionProvider>
     );
@@ -417,6 +443,8 @@ export function FlowEditor({
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
+              onRequestCropImage={mirrorActions.cropImage}
+              onRequestPickRegion={mirrorActions.pickRegion}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -700,7 +728,8 @@ function VirtualizedFlowEditor({
   campaignScenarios,
   sessionGateRuntimeContext,
   availableVariables,
-  reorderMode
+  reorderMode,
+  stepRunResults
 }: {
   steps: FlowStep[];
   onChange: (steps: FlowStep[]) => void;
@@ -717,6 +746,7 @@ function VirtualizedFlowEditor({
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
   availableVariables: string[];
   reorderMode: boolean;
+  stepRunResults?: Record<string, StepRunResult>;
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const stepsRef = useRef(steps);
@@ -762,6 +792,14 @@ function VirtualizedFlowEditor({
     pendingDetailRef.current = step;
   }, []);
 
+  const mirrorActions = useMirrorStepActions(() => {
+    const path = selectedPath;
+    if (!path) return null;
+    const step = pendingDetailRef.current ?? resolveStepAtPath(steps, path);
+    if (!step) return null;
+    return { step, apply: (next) => updatePath(path, next) };
+  }, closeDetail);
+
   const removePath = useCallback(
     (path: BracketChildRef[]) => {
       onChange(removeStepAtPath(stepsRef.current, path));
@@ -791,6 +829,17 @@ function VirtualizedFlowEditor({
     [onChange]
   );
 
+  /** insertStepAtPath splices *at* the index, so +1 lands after the step. */
+  const insertAfterPath = useCallback(
+    (path: BracketChildRef[], step: FlowStep) => {
+      const last = path[path.length - 1];
+      if (!last) return;
+      const after = [...path.slice(0, -1), { ...last, ci: last.ci + 1 }];
+      onChange(insertStepAtPath(stepsRef.current, after, step));
+    },
+    [onChange]
+  );
+
   return (
     <>
       <Dialog
@@ -811,6 +860,8 @@ function VirtualizedFlowEditor({
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
+              onRequestCropImage={mirrorActions.cropImage}
+              onRequestPickRegion={mirrorActions.pickRegion}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -883,6 +934,8 @@ function VirtualizedFlowEditor({
               }
               const target = targetFromPath(row.path);
               const runKey = runKeyFromPath(row.path);
+              const runResult = stepRunResults?.[runKey];
+              const producedVar = primaryProducedVariable(row.step);
               const selected =
                 selectedPath != null &&
                 pathKey(selectedPath) === pathKey(row.path);
@@ -1023,6 +1076,21 @@ function VirtualizedFlowEditor({
                             : undefined
                         }
                       />
+                      {runResult && (
+                        <StepRunResultStrip
+                          result={runResult}
+                          action={
+                            producedVar ? (
+                              <UseResultActions
+                                variable={producedVar}
+                                onInsert={(next) =>
+                                  insertAfterPath(row.path, next)
+                                }
+                              />
+                            ) : undefined
+                          }
+                        />
+                      )}
                     </div>
                   </div>
                 </div>

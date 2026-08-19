@@ -144,7 +144,11 @@ def _apply_account_action_filters(
     if account_id:
         stmt = stmt.where(Account.id == account_id)
     if device_serial:
-        return stmt.where(false())
+        # Used to return false() — the ledger had no device column, so filtering
+        # by device silently dropped every account action. Rows written before
+        # that column existed still have NULL and cannot match; the backfill
+        # script fills them from execution_steps.
+        stmt = stmt.where(AccountAction.device_serial == device_serial)
     if not action:
         return stmt
     if action == "account.action":
@@ -246,14 +250,21 @@ def _account_action_out(row: AccountAction, account: Account) -> ActivityLogOut:
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         "execution_id": row.execution_id,
         "step_id": row.step_id,
+        "device_id": row.device_id,
+        # Audit evidence recorded at finalize time. No post URL: targets come
+        # from the Android view hierarchy, which has no permalink — the post is
+        # identified by target_id plus the snippet in target_label.
+        "comment_text": result.get("comment_text"),
+        "author_name": result.get("author_name"),
+        "group_name": result.get("group_name"),
     }
     return ActivityLogOut(
         id=f"account_action:{row.id}",
         action=f"account.action.{row.action_type}",
         entity_type="account",
         entity_id=row.account_id,
-        device_serial=None,
-        device_display=None,
+        device_serial=row.device_serial,
+        device_display=row.device_serial,
         org_id=account.org_id,
         user_id=account.user_id,
         user_name=None,

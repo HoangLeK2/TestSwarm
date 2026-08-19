@@ -5,11 +5,16 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  type MutableRefObject,
   type ReactNode
 } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
-import { DeviceScreen, type DeviceScreenTransport } from './device-screen';
+import {
+  DeviceScreen,
+  type DeviceScreenTransport,
+  type RegionSelect
+} from './device-screen';
 import type { ScrcpyAttachOptions } from '../services/scrcpy-stream';
 import type { ScrcpyViewerRole } from '../services/scrcpy-viewer-session';
 import {
@@ -73,6 +78,10 @@ interface DeviceTileProps {
   minimalRailControls?: boolean;
   streamFetchPriority?: 'high' | 'low' | 'auto';
   streamTransport?: DeviceScreenTransport;
+  /** Grabber for the on-screen frame (tap_image template cropping). */
+  captureFrameRef?: MutableRefObject<(() => string | null) | null>;
+  /** Drag-to-select a screen region instead of tapping through (tap_image crop). */
+  regionSelect?: RegionSelect;
   streamFit?: 'cover' | 'contain';
   scrcpyAttachOptions?: ScrcpyAttachOptions;
   scrcpyViewerRole?: ScrcpyViewerRole;
@@ -107,6 +116,8 @@ export function DeviceTile({
   minimalRailControls = false,
   streamFetchPriority = 'auto',
   streamTransport = 'auto',
+  captureFrameRef,
+  regionSelect,
   streamFit,
   scrcpyAttachOptions,
   scrcpyViewerRole,
@@ -318,6 +329,8 @@ export function DeviceTile({
                         interactive={!readOnlyPreview}
                         streamFetchPriority={streamFetchPriority}
                         streamTransport={streamTransport}
+                        captureFrameRef={captureFrameRef}
+                        regionSelect={regionSelect}
                         streamFit={streamFit}
                         onStreamSize={handleStreamSize}
                         scrcpyAttachOptions={scrcpyAttachOptions}

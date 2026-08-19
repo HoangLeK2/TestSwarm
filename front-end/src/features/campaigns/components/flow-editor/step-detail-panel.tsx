@@ -1,7 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MousePointerClick, Move } from 'lucide-react';
+import {
+  Crop as CropIcon,
+  Monitor,
+  MousePointerClick,
+  Move
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,6 +48,7 @@ import {
   defaultSocialAction,
   getSocialActionOptions
 } from './social-action-options';
+import { TapImageFields } from './tap-image-fields';
 
 interface Props {
   step: FlowStep;
@@ -55,6 +61,23 @@ interface Props {
   onRequestPickTapCoords?: () => void;
   /** Pick swipe segment on mirror (swipe_ratio). */
   onRequestPickSwipeCoords?: () => void;
+  /**
+   * Crop a region of the mirror as a tap_image template. Resolves with the
+   * stored key plus the screen size it was cropped at — matching needs that to
+   * correct for phones with a different resolution.
+   */
+  onRequestCropImage?: () => Promise<{
+    templateKey: string;
+    screenW?: number;
+    screenH?: number;
+    preview: string;
+    warning: string;
+  } | null>;
+  /**
+   * Drag a rectangle on the mirror to bound an OCR read. Like the pickers
+   * above it closes the panel first, so the caller applies the result itself.
+   */
+  onRequestPickRegion?: () => Promise<null>;
   /** Other scenarios in the campaign — for run_scenario picker (templates always loaded inside RunScenarioFields). */
   campaignScenarios?: RunScenarioCampaignOption[];
   runtimeContext?: SessionGateRuntimeContext;
@@ -68,6 +91,86 @@ export type SessionGateRuntimeContext = {
   loading?: boolean;
   error?: boolean;
 };
+
+/**
+ * OCR read area: whole screen, or a rectangle dragged on the device mirror.
+ *
+ * The raw JSON textarea stays as the escape hatch — a scenario may carry a
+ * region computed elsewhere, and hand-typing ratios must keep working — but
+ * nobody should have to guess four numbers when the phone is on screen.
+ */
+function OcrRegionField({
+  region,
+  onChange,
+  onRequestPickRegion
+}: {
+  region: unknown;
+  onChange: (next: unknown | undefined) => void;
+  onRequestPickRegion?: () => Promise<null>;
+}) {
+  const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
+  const rect = region as
+    | { x1?: number; y1?: number; x2?: number; y2?: number }
+    | undefined;
+  const hasRegion =
+    rect != null &&
+    typeof rect === 'object' &&
+    ['x1', 'y1', 'x2', 'y2'].every(
+      (k) => typeof (rect as never)[k] === 'number'
+    );
+  const pct = (v: number | undefined) => `${Math.round((v ?? 0) * 100)}%`;
+
+  return (
+    <div className='space-y-2'>
+      <div className='grid grid-cols-2 gap-2'>
+        <Button
+          type='button'
+          size='sm'
+          variant={hasRegion ? 'outline' : 'secondary'}
+          className='h-7 gap-1.5 text-[10px]'
+          onClick={() => onChange(undefined)}
+        >
+          <Monitor size={12} />
+          {tOcr('wholeScreen')}
+        </Button>
+        <Button
+          type='button'
+          size='sm'
+          variant={hasRegion ? 'secondary' : 'outline'}
+          className='h-7 gap-1.5 text-[10px]'
+          disabled={!onRequestPickRegion}
+          title={
+            onRequestPickRegion ? undefined : tOcr('pickRegionUnavailable')
+          }
+          onClick={() => {
+            void onRequestPickRegion?.();
+          }}
+        >
+          <CropIcon size={12} />
+          {hasRegion ? tOcr('pickRegionAgain') : tOcr('pickRegion')}
+        </Button>
+      </div>
+
+      <p className='text-[10px] text-muted-foreground'>
+        {hasRegion
+          ? tOcr('regionSummary', {
+              x1: pct(rect?.x1),
+              y1: pct(rect?.y1),
+              x2: pct(rect?.x2),
+              y2: pct(rect?.y2)
+            })
+          : tOcr('wholeScreenHint')}
+      </p>
+
+      <JsonTextarea
+        label={tOcr('region')}
+        value={region}
+        onCommit={onChange}
+        placeholder='{"x1":0,"y1":0.3,"x2":1,"y2":0.7}'
+      />
+    </div>
+  );
+}
 
 /** Value field + variable insert: stacks on narrow widths so the select never squeezes the input. */
 function valueInsertRowClassName() {
@@ -224,6 +327,8 @@ export function StepDetailPanel({
   onRequestPickSelector,
   onRequestPickTapCoords,
   onRequestPickSwipeCoords,
+  onRequestCropImage,
+  onRequestPickRegion,
   campaignScenarios = [],
   runtimeContext
 }: Props) {
@@ -2024,6 +2129,14 @@ export function StepDetailPanel({
                 </>
               )}
 
+              {step.type === 'tap_image' && (
+                <TapImageFields
+                  step={step}
+                  update={update}
+                  onRequestCropImage={onRequestCropImage}
+                />
+              )}
+
               {step.type === 'tap_position' && (
                 <F label='Vị trí'>
                   <select
@@ -2885,11 +2998,10 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <JsonTextarea
-                    label={tOcr('region')}
-                    value={step.region}
-                    onCommit={(next) => update({ region: next })}
-                    placeholder='{"x1":0,"y1":0.3,"x2":1,"y2":0.7}'
+                  <OcrRegionField
+                    region={step.region}
+                    onChange={(next) => update({ region: next })}
+                    onRequestPickRegion={onRequestPickRegion}
                   />
                 </>
               )}

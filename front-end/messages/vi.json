@@ -2689,9 +2689,57 @@
         "saveAs": "Lưu vào biến",
         "language": "Ngôn ngữ",
         "confidence": "Ngưỡng tin cậy (0–1)",
-        "region": "Vùng cắt trước khi đọc (tỉ lệ 0–1, bỏ trống = cả màn hình)"
+        "region": "Vùng cắt trước khi đọc (tỉ lệ 0–1, bỏ trống = cả màn hình)",
+        "wholeScreen": "Cả màn hình",
+        "wholeScreenHint": "Đang đọc cả màn hình. Giới hạn vào một vùng sẽ đọc nhanh và sạch hơn.",
+        "pickRegion": "Chọn vùng trên màn hình",
+        "pickRegionAgain": "Chọn lại vùng",
+        "pickRegionUnavailable": "Mở màn hình điều khiển thiết bị để kéo chọn vùng trên mirror.",
+        "regionSummary": "Đọc vùng ngang {x1}–{x2}, dọc {y1}–{y2}."
       },
-      "scanPostsHint": "Quét các bài viết đang hiển thị trên màn hình, chỉ thích hoặc bình luận bài có nội dung khớp từ khoá. Bước này không tự tìm từng bài, và không nhận nhầm trang cá nhân, trang hay nhóm là bài viết."
+      "scanPostsHint": "Quét các bài viết đang hiển thị trên màn hình, chỉ thích hoặc bình luận bài có nội dung khớp từ khoá. Bước này không tự tìm từng bài, và không nhận nhầm trang cá nhân, trang hay nhóm là bài viết.",
+      "runResult": {
+        "charCount": "{count} ký tự",
+        "boxCount": "{count} ô chữ",
+        "empty": "không đọc được gì",
+        "expand": "Xem đầy đủ",
+        "collapse": "Thu gọn",
+        "copy": "Sao chép giá trị",
+        "useResult": "Dùng kết quả này",
+        "useBranch": "Rẽ nhánh theo giá trị",
+        "useInput": "Nhập giá trị này",
+        "useSave": "Lưu giá trị này",
+        "previewTruncated": "Bản xem trước hiện {shown}/{total} ký tự. Giá trị đầy đủ nằm trong biến khi chạy."
+      },
+      "tapImage": {
+        "cropFromScreen": "Cắt ảnh mẫu từ màn hình",
+        "cropFromFile": "Cắt ảnh mẫu từ ảnh chụp",
+        "cropAgain": "Cắt lại ảnh mẫu",
+        "noScenarioHint": "Lưu kịch bản trước — ảnh mẫu được lưu kèm theo kịch bản.",
+        "noScenarioTitle": "Kịch bản chưa được lưu nên chưa có chỗ lưu ảnh mẫu.",
+        "loadFailed": "Không tải được ảnh mẫu đã lưu — ảnh vẫn được dùng khi chạy, hoặc cắt lại để thay.",
+        "missing": "Chưa gắn ảnh mẫu — bước này sẽ lỗi khi chạy.",
+        "imageAlt": "Ảnh mẫu",
+        "threshold": "Ngưỡng khớp (0-1)",
+        "thresholdHint": "0.8 là mặc định. Khớp thật thường đạt 0.96-1.00.",
+        "timeout": "Chờ tối đa (giây)",
+        "poll": "Nhịp thử lại (giây)",
+        "scale": "Tỉ lệ thu nhỏ khi tìm",
+        "scaleHint": "0.25 nhanh hơn 20-30 lần mà không giảm độ chính xác. Chỉ tăng khi ảnh mẫu quá nhỏ.",
+        "dialogTitle": "Cắt ảnh mẫu để nhận diện",
+        "dialogDescription": "Kéo chọn đúng vùng cần bấm. Chọn vùng có chi tiết riêng (chữ, biểu tượng) — vùng nền trống sẽ khớp nhầm ở nhiều nơi.",
+        "pickFile": "Chọn ảnh chụp màn hình từ máy để cắt",
+        "pickAnotherFile": "Chọn ảnh khác từ máy",
+        "noSource": "Chọn một ảnh ở trên để bắt đầu cắt.",
+        "noMirrorFrame": "Chưa lấy được hình từ màn hình thiết bị. Mở màn hình điều khiển và đợi hình hiện lên rồi thử lại.",
+        "applyCrop": "Cắt vùng đã chọn",
+        "resetCrop": "Chọn lại",
+        "croppedHint": "Đây là ảnh sẽ dùng để tìm trên màn hình lúc chạy.",
+        "cancel": "Huỷ",
+        "useImage": "Dùng ảnh này",
+        "saveFailed": "Không lưu được ảnh mẫu, thử lại.",
+        "croppedAlt": "Ảnh mẫu đã cắt"
+      }
     },
     "flowInsert": {
       "addStepAria": "Thêm bước",
@@ -2777,7 +2825,8 @@
         "social_apply_comment_filter": "Đổi bộ lọc trong khung bình luận đang mở",
         "social_open_comments": "Mở khung bình luận của bài viết hiện tại trong một bước",
         "extract_comments": "Mẫu sẵn: thu thập bình luận",
-        "extract_posts": "Mẫu sẵn: thu thập bài viết trong nhóm"
+        "extract_posts": "Mẫu sẵn: thu thập bài viết trong nhóm",
+        "tap_image": "Chạm vào nơi tìm thấy ảnh mẫu trên màn hình"
       },
       "groups": {
         "dataCollection": {
@@ -2868,7 +2917,8 @@
         "social_apply_comment_filter": "Đổi bộ lọc bình luận",
         "social_open_comments": "Mở bình luận",
         "extract_comments": "Thu thập bình luận",
-        "extract_posts": "Thu thập bài viết"
+        "extract_posts": "Thu thập bài viết",
+        "tap_image": "Chạm theo ảnh"
       }
     },
     "flowStep": {
@@ -2941,7 +2991,9 @@
         "extract_text_hierarchy": "TRÍCH XUẤT VĂN BẢN TỪ CÂY GIAO DIỆN",
         "extract_text_ocr": "ĐỌC CHỮ MÀN HÌNH (OCR)",
         "extract_text_ai": "TRÍCH XUẤT VĂN BẢN BẰNG AI",
-        "extract_screen_data": "TRÍCH XUẤT DỮ LIỆU MÀN HÌNH"
+        "extract_screen_data": "TRÍCH XUẤT DỮ LIỆU MÀN HÌNH",
+        "tap_image": "CHẠM THEO ẢNH",
+        "key_back": "QUAY LẠI"
       },
       "display": {
         "platformSessionPreflight": "Kiểm tra trước khi tiếp tục",
@@ -2963,7 +3015,36 @@
         "commentFilterNewest": "Mới nhất",
         "commentFilterAllComments": "Tất cả bình luận",
         "commentFilterNone": "Không đổi",
-        "fbCommentElse": " / Không thấy {elseCount}"
+        "fbCommentElse": " / Không thấy {elseCount}",
+        "tapImageAttached": "ảnh mẫu",
+        "tapImageMissing": "(chưa gắn ảnh)",
+        "socialOpenCommentsSummary": "OK: {thenCount} bước{extra} · chờ {timeout}s",
+        "socialOpenCommentsExtract": " · có trích xuất bình luận",
+        "socialOpenCommentsRequirePost": " · cần mở bài",
+        "socialOpenCommentsElse": " · Không thấy: {elseCount} bước",
+        "socialFindCommentTarget": "target nút Bình luận · chờ {timeout}s",
+        "socialTapCommentTarget": "tap target đã tìm · chờ {wait}s",
+        "socialSelectTargetPost": "Xác minh bài viết · {label}",
+        "socialSelectTargetPeople": "Xác minh trang cá nhân · {label}",
+        "socialConnectVisible": "Kết bạn người có điểm chung · điểm >= {score}",
+        "socialConnectVisibleShort": "điểm chung · điểm >= {score}",
+        "socialScanPosts": "Scan post · {count} bài · {scrolls} scroll",
+        "socialScanPostsShort": "{keywords} · {count} bài",
+        "socialScanPostsAnyKeyword": "mọi keyword",
+        "socialOpenAuthor": "Mở author · {source}[{index}] · {platform}",
+        "socialOpenCommenter": "Mở commenter · {source}[{index}] · {platform}",
+        "connectionRequestSend": "{platform} · gửi lời mời",
+        "communityMembershipJoin": "{platform} · tham gia nhóm",
+        "dataVarComments": "bình luận",
+        "dataVarPosts": "bài viết",
+        "dataVarTextNodes": "văn bản",
+        "collectionConfigured": "bộ sưu tập đã cấu hình",
+        "collectionByVariable": "bộ sưu tập theo biến",
+        "extractEntityPost": "Bài viết",
+        "extractEntityComment": "Bình luận",
+        "extractEntityGroup": "Nhóm",
+        "extractEntityVisibleText": "Văn bản hiển thị",
+        "extractEntityPage": "Trang"
       },
       "systemVariable": {
         "platformSessionReady": "Phiên nền tảng sẵn sàng"
@@ -3087,6 +3168,13 @@
       "addDevice": "Thêm thiết bị",
       "selectDevice": "Chọn thiết bị",
       "selectPhonePlaceholder": "Chọn điện thoại…",
+      "devicePicker": {
+        "searchPlaceholder": "Tìm theo tên hoặc serial…",
+        "noResults": "Không tìm thấy thiết bị",
+        "pageSummary": "{from}–{to} / {total}",
+        "previousPage": "Trang trước",
+        "nextPage": "Trang sau"
+      },
       "deviceLabel": "Thiết bị",
       "gettingStarted": {
         "title": "Chọn thiết bị để bắt đầu",

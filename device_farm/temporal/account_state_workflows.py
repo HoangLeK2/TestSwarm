@@ -7,6 +7,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 
+
 @workflow.defn(name="AccountCooldownTickWorkflow")
 class AccountCooldownTickWorkflow:
     @workflow.run

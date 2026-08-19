@@ -246,3 +246,49 @@ class TestOCROnDevice:
         assert result.results == []
         assert image and image.startswith(b"\x89PNG")
         assert device.calls[0]["want_image_on_empty"] is True
+
+
+class TestComposeOcrText:
+    """Boxes must come back as lines, not one word per line.
+
+    Tesseract emits a box per word. Joining every box with a newline made the
+    saved variable a column of single words, which is unreadable in the editor
+    and — worse — makes any `contains "two words"` check impossible.
+    """
+
+    @staticmethod
+    def _box(text: str, x: int, y: int, w: int = 40, h: int = 20):
+        return {"text": text, "bbox": {"x": x, "y": y, "w": w, "h": h}}
+
+    def test_groups_words_into_visual_lines_in_reading_order(self):
+        from services.content.extraction.ocr_service import compose_text
+
+        # Deliberately out of order, with the few-pixel baseline jitter real
+        # OCR produces within one line.
+        boxes = [
+            self._box("delays", 300, 102),
+            self._box("US", 100, 100),
+            self._box("president", 160, 101),
+            self._box("tariffs", 120, 140),
+            self._box("50%", 60, 141),
+            self._box("by", 220, 139),
+        ]
+        assert compose_text(boxes) == "US president delays\n50% tariffs by"
+
+    def test_line_tolerance_scales_with_font_size(self):
+        from services.content.extraction.ocr_service import compose_text
+
+        # Tall boxes: a 12px baseline difference is still the same line.
+        boxes = [self._box("A", 0, 100, h=60), self._box("B", 80, 112, h=60)]
+        assert compose_text(boxes) == "A B"
+        # Small boxes: the same 12px gap is a new line.
+        boxes = [self._box("A", 0, 100, h=10), self._box("B", 80, 112, h=10)]
+        assert compose_text(boxes) == "A\nB"
+
+    def test_blank_and_missing_bbox_inputs_stay_safe(self):
+        from services.content.extraction.ocr_service import compose_text
+
+        assert compose_text([]) == ""
+        assert compose_text([self._box("   ", 0, 0)]) == ""
+        # The agent can send a bare text entry; that must not raise.
+        assert compose_text([{"text": "a"}, {"text": "b"}]) == "a b"

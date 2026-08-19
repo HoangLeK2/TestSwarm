@@ -161,5 +161,46 @@ export const orgScenariosApi = {
   }) =>
     farmApi
       .get<PreviewListResponse>('/preview', { params: query })
-      .then((r) => r.data)
+      .then((r) => r.data),
+
+  /**
+   * Store a cropped screen region for a tap_image step.
+   *
+   * `warning` comes back non-empty when the crop is too featureless to identify
+   * one spot — a flat region matches everywhere at full confidence, so the step
+   * would tap the wrong place and still report success. Surface it at crop time.
+   */
+  uploadImageTemplate: async (
+    scenarioId: string,
+    blob: Blob,
+    screen?: { w?: number; h?: number }
+  ): Promise<ImageTemplateUploadOut> => {
+    const form = new FormData();
+    form.append('file', blob, 'template.png');
+    const r = await farmApi.post<ImageTemplateUploadOut>(
+      `/scenarios/${scenarioId}/image-templates`,
+      form,
+      {
+        params: { screen_w: screen?.w ?? 0, screen_h: screen?.h ?? 0 },
+        headers: { 'Content-Type': 'multipart/form-data' }
+      }
+    );
+    return r.data;
+  },
+
+  getImageTemplateUrl: (scenarioId: string, key: string) =>
+    farmApi
+      .get<{ url: string }>(`/scenarios/${scenarioId}/image-templates/url`, {
+        params: { key }
+      })
+      .then((r) => r.data.url)
+};
+
+export type ImageTemplateUploadOut = {
+  template_key: string;
+  size_bytes: number;
+  screen_w: number | null;
+  screen_h: number | null;
+  /** Empty when the crop looks distinctive enough to match reliably. */
+  warning: string;
 };

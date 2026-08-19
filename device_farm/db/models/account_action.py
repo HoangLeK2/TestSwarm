@@ -17,11 +17,21 @@ class AccountAction(TenantScopedModel, Base):
         UniqueConstraint("org_id", "action_key", name="uq_account_actions_org_key"),
         Index("idx_account_actions_account_time", "org_id", "account_id", "created_at", "id"),
         Index("idx_account_actions_execution_time", "org_id", "execution_id", "created_at", "id"),
+        # device_serial leads, not org_id: the activity feed scopes tenancy by
+        # joining `accounts`, so there is no predicate on account_actions.org_id
+        # and an org-leading index would never be used. Sorted by updated_at
+        # because that is the column the feed union orders on.
+        Index("idx_account_actions_device_time", "device_serial", "updated_at", "id"),
         Index("idx_account_actions_active", "status", "last_transition_at", "id"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     account_id: Mapped[str] = mapped_column(String(36), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     execution_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("executions.id", ondelete="SET NULL"))
+    # Which phone actually performed this. Both columns on purpose: device_id
+    # keeps the relation, device_serial keeps the record readable after a device
+    # is removed — an audit trail should not lose meaning to a SET NULL.
+    device_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("devices.id", ondelete="SET NULL"))
+    device_serial: Mapped[Optional[str]] = mapped_column(String(128))
     step_id: Mapped[Optional[str]] = mapped_column(String(128))
     action_key: Mapped[str] = mapped_column(String(64), nullable=False)
     action_type: Mapped[str] = mapped_column(String(64), nullable=False)

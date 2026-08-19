@@ -21,3 +21,11 @@ webrtc:
 streams:
   device-10AE7S00HD002JK:
     - rtsp://host.docker.internal:8556/device-10AE7S00HD002JK
+  device-emulator-5556:
+    - rtsp://host.docker.internal:8556/device-emulator-5556
+  device-emulator-5554:
+    - rtsp://host.docker.internal:8556/device-emulator-5554
+  device-emulator-5558:
+    - rtsp://host.docker.internal:8556/device-emulator-5558
+  device-emulator-5560:
+    - rtsp://host.docker.internal:8556/device-emulator-5560

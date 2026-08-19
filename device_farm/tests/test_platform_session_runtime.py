@@ -94,6 +94,9 @@ def test_nested_session_gate_reads_account_from_effective_variable_context(
         "account_id": "account-1",
         "execution_id": None,
         "step_id": "confirm",
+        # The ledger records which phone ran the action, so the activity feed
+        # can answer "what did this device do".
+        "device_serial": "SERIAL1",
     }
     assert sc.ctx["vars"]["PLATFORM_SESSION_READY"] is True
 

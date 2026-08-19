@@ -1892,27 +1892,46 @@ async def test_dump_hierarchy_breaker_drops_background_visible_bypasses(event_lo
 
 
 @pytest.mark.asyncio
-async def test_screenshot_returns_base64_png(executor):
-    """u2 only returns Pillow/opencv now, so the op encodes the PNG itself."""
+async def test_screenshot_uses_the_device_jpeg_without_re_encoding(executor):
+    """takeScreenshot already returns base64 JPEG — pass it straight through.
+
+    Decoding it and re-encoding as PNG cost ~370ms and 2.2MB per capture on a
+    real 1260x2800 screen without improving OCR at all (identical box count and
+    mean confidence), because the pixels went through JPEG either way.
+    """
+    exc, dev, pool = executor
+    dev.jsonrpc.takeScreenshot.return_value = "QUJD"  # base64 for "ABC"
+
+    result = await exc.run_batch("serial", [
+        {"op": "screenshot"},
+    ])
+    assert result["ok"] is True
+    assert result["results"][0]["value"] == "QUJD"
+    dev.screenshot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_screenshot_falls_back_to_pillow_when_rpc_unusable(executor):
+    """A stub or changed API must not be shipped to the farm as an image."""
     from PIL import Image
 
     exc, dev, pool = executor
+    dev.jsonrpc.takeScreenshot.return_value = None
     dev.screenshot.return_value = Image.new("RGB", (4, 3), (1, 2, 3))
 
     result = await exc.run_batch("serial", [
         {"op": "screenshot"},
     ])
     assert result["ok"] is True
-    dev.screenshot.assert_called_with(format="pillow")
-
     decoded = Image.open(io.BytesIO(base64.b64decode(result["results"][0]["value"])))
-    assert decoded.format == "PNG"
+    assert decoded.format == "JPEG"
     assert decoded.size == (4, 3)
 
 
 @pytest.mark.asyncio
 async def test_screenshot_fails_loudly_when_device_returns_nothing(executor):
     exc, dev, pool = executor
+    dev.jsonrpc.takeScreenshot.return_value = None
     dev.screenshot.return_value = None
 
     result = await exc.run_batch("serial", [

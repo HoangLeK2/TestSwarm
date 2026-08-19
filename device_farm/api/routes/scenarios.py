@@ -1,6 +1,8 @@
 """Org-scoped scenario library CRUD (DF-T-04-001)."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
@@ -52,6 +54,8 @@ from services.org_scenario_io.importer import (
 )
 from services.org_scenario_io.service import clone_system_template, export_scenario_for_org
 from db.crud.scenario_template import list_templates as list_scenario_template_rows
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
 
@@ -645,3 +649,112 @@ async def start_scenario_preview(
         org_scenario_id=result.org_scenario_id,
         device_id=result.device_id,
     )
+
+
+# ── Image templates for tap_image steps ──────────────────────────────────────
+#
+# Note: "templates" elsewhere in this router means *scenario* templates. These
+# are the cropped screen images a tap_image step matches against.
+#
+# Templates live in object storage rather than inline in the scenario JSON: a
+# scenario with a dozen image steps would otherwise carry a dozen base64 blobs.
+# Keyed by org and scenario so deleting a scenario can drop its templates by
+# prefix.
+
+_TEMPLATE_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _template_key(org_id: str, scenario_id: str, digest: str) -> str:
+    return f"{org_id}/scenario-templates/{scenario_id}/{digest}.png"
+
+
+# Not cleaned up on DELETE /scenarios/{id}: that route archives, and there is a
+# /restore beside it — dropping the images would leave a restored scenario with
+# tap_image steps pointing at nothing. The prefix above is per-scenario so a
+# real hard-delete can call minio_store.delete_prefix() when one exists.
+
+
+@router.post(
+    "/{scenario_id}/image-templates",
+    dependencies=[Depends(require_permission("scenarios", "update"))],
+)
+async def upload_step_template_route(
+    scenario_id: str,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    screen_w: int = Query(default=0, ge=0),
+    screen_h: int = Query(default=0, ge=0),
+):
+    """Store a cropped template and report whether it is safe to match on.
+
+    The ambiguity check is the point of doing this server-side: a crop of blank
+    background scores 1.000 everywhere, so it would tap the wrong place while
+    looking perfectly confident. Better to say so while the user is still
+    looking at the crop than to debug it later in a run.
+    """
+    import hashlib
+
+    from services import minio_store
+
+    org_id = _resolve_org_id(user, None)
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail={"code": "TEMPLATE_EMPTY"})
+    if len(content) > _TEMPLATE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "TEMPLATE_TOO_LARGE", "max_bytes": _TEMPLATE_MAX_BYTES},
+        )
+
+    warning = ""
+    try:
+        from runtime.image_quality import looks_ambiguous
+
+        # OpenCV decode + stats; off the event loop so one upload cannot stall
+        # every other request on this worker.
+        ambiguous, reason = await asyncio.to_thread(looks_ambiguous, content)
+        if ambiguous:
+            warning = reason
+    except Exception as exc:  # pragma: no cover - advisory only
+        log.debug("template ambiguity check skipped: %s", exc)
+
+    digest = hashlib.sha256(content).hexdigest()[:32]
+    key = _template_key(org_id, scenario_id, digest)
+    if not minio_store.enabled():
+        raise HTTPException(status_code=503, detail={"code": "OBJECT_STORAGE_UNAVAILABLE"})
+    # Blocking network I/O to object storage — same reason as above.
+    uploaded = await asyncio.to_thread(
+        minio_store.upload, content, key, "image/png"
+    )
+    if not uploaded:
+        raise HTTPException(status_code=502, detail={"code": "TEMPLATE_UPLOAD_FAILED"})
+
+    return {
+        "template_key": key,
+        "size_bytes": len(content),
+        "screen_w": screen_w or None,
+        "screen_h": screen_h or None,
+        "warning": warning,
+    }
+
+
+@router.get(
+    "/{scenario_id}/image-templates/url",
+    dependencies=[Depends(require_permission("scenarios", "read"))],
+)
+async def get_step_template_url_route(
+    scenario_id: str,
+    user: CurrentUser,
+    key: str = Query(...),
+):
+    """Presigned URL so the editor can show the template already attached."""
+    from services import minio_store
+
+    org_id = _resolve_org_id(user, None)
+    # Never let a caller read another org's objects by passing an arbitrary key.
+    if not key.startswith(f"{org_id}/scenario-templates/{scenario_id}/"):
+        raise HTTPException(status_code=404, detail={"code": "TEMPLATE_NOT_FOUND"})
+    url = minio_store.presigned_get(key, expires_seconds=3600)
+    if not url:
+        raise HTTPException(status_code=404, detail={"code": "TEMPLATE_NOT_FOUND"})
+    return {"url": url}

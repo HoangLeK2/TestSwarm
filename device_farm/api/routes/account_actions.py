@@ -118,6 +118,15 @@ def _action_out(row: AccountAction) -> dict:
         <= 16_384
         else {}
     )
+    # The size cutoff is all-or-nothing, so a bulky step result would take the
+    # audit evidence down with it. Carry those few fields regardless — the
+    # analytics feed already exposes them unconditionally, and the two endpoints
+    # disagreeing about whether a comment was recorded is worse than a few
+    # extra bytes. Measured: a 2000-char Vietnamese comment is ~4KB.
+    for key in ("comment_text", "author_name", "group_name"):
+        value = result.get(key)
+        if value and key not in details:
+            details = {**details, key: value}
     target_label = target.get("label") or target.get("name")
     failed = row.status in {"failed", "stale", "cancelled"}
     error_message = (

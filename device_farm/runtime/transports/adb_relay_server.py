@@ -51,6 +51,7 @@ _REQUEST_REPLY_TYPES = frozenset({
     "u2_flow_result",
     "extra_data_result",
     "ocr_result",
+    "image_match_result",
 })
 
 
@@ -513,6 +514,7 @@ class AdbRelayManager:
                     "has_u2":          bool(cap.get("has_u2", False)),
                     "has_stf":         bool(cap.get("has_stf", False)),
                     "has_ocr":         bool(cap.get("has_ocr", False)),
+                    "has_image_match": bool(cap.get("has_image_match", False)),
                     "hardware_serial": cap.get("hardware_serial", ""),
                     "tags":            list(cap.get("tags", [])),
                 }
@@ -534,6 +536,7 @@ class AdbRelayManager:
                     "has_u2":          cap.has_u2,
                     "has_stf":         cap.has_stf,
                     "has_ocr":         bool(getattr(cap, "has_ocr", False)),
+                    "has_image_match": bool(getattr(cap, "has_image_match", False)),
                     "tags":            list(cap.tags),
                 }
             self._pool_state.setdefault(serial, "available")
@@ -1439,6 +1442,80 @@ class AdbRelayManager:
             return {
                 "ok": False,
                 "error": str(result.get("error") or result.get("body") or "invalid_ocr_result"),
+            }
+        return result
+
+    async def image_match(
+        self,
+        serial: str,
+        *,
+        template_sha256: str,
+        template_b64: Optional[str] = None,
+        threshold: float = 0.8,
+        scale: float = 0.25,
+        template_screen_w: Optional[int] = None,
+        timeout: float = 20.0,
+        cancel_event: Any = None,
+    ) -> dict:
+        """Find a template on the device screen; the agent returns a coordinate.
+
+        Pass ``template_b64=None`` to try the agent's cache: it replies
+        ``need_template`` when it has not seen that hash, and the caller resends
+        with bytes. Saves reshipping the same image on every loop iteration.
+        """
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"imatch-{uuid.uuid4().hex[:10]}"
+        grace = max(5.0, min(30.0, timeout * 0.15))
+        msg: dict[str, Any] = {
+            "type": "image_match",
+            "id": req_id,
+            "serial": actual,
+            "template_sha256": template_sha256,
+            "threshold": float(threshold),
+            "scale": float(scale),
+            "timeout_ms": int(timeout * 1000),
+        }
+        if template_b64:
+            msg["template_b64"] = template_b64
+        if template_screen_w:
+            msg["template_screen_w"] = int(template_screen_w)
+        cancel_msg = {"type": "image_match_cancel", "id": req_id, "serial": actual}
+        request_task = asyncio.create_task(
+            conn.send_json_request(
+                msg=msg, reply_id=req_id, timeout=timeout, timeout_grace=grace,
+            )
+        )
+        try:
+            if cancel_event is None:
+                # Matching takes ~9ms; a sleep-poll would dominate the call.
+                result = await request_task
+            else:
+                while True:
+                    if request_task.done():
+                        result = await request_task
+                        break
+                    if cancel_event.is_set():
+                        with contextlib.suppress(Exception):
+                            await conn.send_json_message(cancel_msg)
+                        request_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await request_task
+                        return {"ok": False, "error": "cancelled", "cancelled": True}
+                    await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await conn.send_json_message(cancel_msg)
+            request_task.cancel()
+            raise
+        if result.get("type") != "image_match_result":
+            with contextlib.suppress(Exception):
+                await conn.send_json_message(cancel_msg)
+            return {
+                "ok": False,
+                "error": str(result.get("error") or result.get("body") or "invalid_image_match_result"),
             }
         return result
 

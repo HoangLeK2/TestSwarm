@@ -1684,7 +1684,11 @@ def handle_extract(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: 
     )
 
 
-_RESULT_PREVIEW_CHARS = 400
+# A screenful of OCR text runs past 800 characters, so 400 cut the preview in
+# half and the author could not tell whether the step had read the rest. This
+# rides an SSE event that already carries the step result, and a few KB there
+# is nothing next to the frames this farm moves.
+_RESULT_PREVIEW_CHARS = 2000
 
 
 def _attach_produced_value(
@@ -1788,7 +1792,7 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
     try:
         from services.content.extraction.capture_service import ExtractionCaptureService
         from services.content.extraction.models import CaptureError, OCRError
-        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.ocr_service import OCRService, compose_text
         from services.content.extraction.scenario_bridge import (
             execution_capture_ctx,
             map_ocr_languages,
@@ -1826,7 +1830,7 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
             return ocr_result, artifact_id
 
         ocr_result, artifact_id = run_extraction_async(_run())
-        text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
+        text = compose_text(ocr_result.results)
         sc.var_ctx.set(save_as, text)
         _attach_produced_value(
             result,
@@ -1890,7 +1894,7 @@ def handle_extract_screen_data(sc: ScenarioContext, step: Dict[str, Any], idx: i
         from services.content.extraction.capture_service import ExtractionCaptureService
         from services.content.extraction.hierarchy.service import HierarchyService
         from services.content.extraction.models import CaptureError, OCRError, StrategyMismatchError
-        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.ocr_service import OCRService, compose_text
         from services.content.extraction.scenario_bridge import (
             execution_capture_ctx,
             map_ocr_languages,
@@ -1939,7 +1943,7 @@ def handle_extract_screen_data(sc: ScenarioContext, step: Dict[str, Any], idx: i
                 ocr_result, image = await ocr.extract_on_device(
                     sc.device, lang=langs, want_image_on_empty=ocr_persist
                 )
-                text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
+                text = compose_text(ocr_result.results)
                 artifact_id = None
                 if image and ocr_persist:
                     artifact_id = await persist_image_artifact_async(

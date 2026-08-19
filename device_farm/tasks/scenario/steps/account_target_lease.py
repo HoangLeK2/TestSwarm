@@ -26,6 +26,7 @@ def handle_lease_source_target(
             scenario=sc.scenario,
             variables=sc.ctx.get("vars", {}),
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         lease = lease_account_target_blocking(
             identity=identity,

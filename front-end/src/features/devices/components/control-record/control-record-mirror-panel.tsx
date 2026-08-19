@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef } from 'react';
+import { forwardRef, type MutableRefObject } from 'react';
 import { Circle, Play, Plus, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import type { Device } from '@/features/devices/types';
 import type { DeviceOpsConfig } from '../device-ops-rail';
 
 import { ControlRecordMirror } from './control-record-mirror';
+import type { RegionSelect } from '../device-screen';
 import { MirrorPhonePlaceholder } from './mirror-phone-placeholder';
 import { MultiDeviceStage } from './multi-device-stage';
 
@@ -47,6 +48,10 @@ type ControlRecordMirrorPanelProps = {
   canExecuteDevice: boolean;
   onTakeControl: () => void;
   deviceOps: DeviceOpsConfig | undefined;
+  /** Grabber for the on-screen frame — used when cropping a tap_image template. */
+  captureFrameRef?: MutableRefObject<(() => string | null) | null>;
+  /** Drag-to-select a region on the mirror (tap_image crop). */
+  regionSelect?: RegionSelect;
   hasMultiFollowers: boolean;
   multiFocusMode: boolean;
   selectedMultiFollowerDevices: Device[];
@@ -77,6 +82,8 @@ export const ControlRecordMirrorPanel = forwardRef<
     canExecuteDevice,
     onTakeControl,
     deviceOps,
+    captureFrameRef,
+    regionSelect,
     hasMultiFollowers,
     multiFocusMode,
     selectedMultiFollowerDevices,
@@ -167,6 +174,8 @@ export const ControlRecordMirrorPanel = forwardRef<
                 onTakeControl={onTakeControl}
                 mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
                 deviceOps={deviceOps}
+                captureFrameRef={captureFrameRef}
+                regionSelect={regionSelect}
               />
             }
             devices={selectedMultiFollowerDevices}
@@ -190,6 +199,8 @@ export const ControlRecordMirrorPanel = forwardRef<
               canTakeControl={canExecuteDevice}
               onTakeControl={onTakeControl}
               deviceOps={deviceOps}
+              captureFrameRef={captureFrameRef}
+              regionSelect={regionSelect}
             />
           </div>
         )

@@ -91,8 +91,13 @@ df-admin = "df_admin:main"
 [tool.uv]
 environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'", "sys_platform == 'win32'"]
 override-dependencies = [
-    # Airtest pins old opencv/numpy — override for Python 3.14 compat
-    "opencv-contrib-python>=4.10.0",
+    # Airtest pins old opencv/numpy — override for Python 3.14 compat.
+    # headless, not contrib: the contrib build links libGL, which the slim
+    # runtime image does not ship, so `import cv2` died with
+    # "libGL.so.1: cannot open shared object file" and took every visual-anchor
+    # path down with it. We only use aircv.find_template / find_all_template,
+    # i.e. plain TM_CCOEFF_NORMED — no contrib module is involved.
+    "opencv-python-headless>=4.10.0",
     "numpy>=1.24.0",
     "pywin32>=300; sys_platform == 'win32'",
     "pywinauto>=0.6.3; sys_platform == 'win32'",

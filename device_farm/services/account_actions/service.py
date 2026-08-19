@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -34,6 +35,9 @@ _SECRET_KEYS = frozenset(
         "refresh_token",
     }
 )
+
+
+log = logging.getLogger(__name__)
 
 
 def ledger_mode() -> str:
@@ -96,6 +100,25 @@ def status_rank(status: AccountActionStatus | str) -> int:
     )
 
 
+async def _lookup_device_id(db, *, serial: str | None) -> str | None:
+    """Map a device serial to its row id. Never raises — a missing device must
+    not lose the action record; device_serial alone still identifies the phone.
+
+    Serial is globally unique on `devices`, so no tenant filter is needed here.
+    """
+    if not serial:
+        return None
+    try:
+        from db.models.device import Device
+
+        return (
+            await db.execute(select(Device.id).where(Device.serial == serial))
+        ).scalar_one_or_none()
+    except Exception as exc:  # pragma: no cover - lookup is best effort
+        log.debug("account action device lookup failed serial=%s: %s", serial, exc)
+        return None
+
+
 async def create_action(
     db,
     *,
@@ -109,6 +132,7 @@ async def create_action(
     result: dict[str, Any] | None = None,
     observed: bool = False,
     action_key: str | None = None,
+    device_serial: str | None = None,
 ) -> AccountAction:
     initial = AccountActionStatus.OBSERVED if observed else AccountActionStatus.QUEUED
     key = action_key or stable_action_key(
@@ -120,6 +144,9 @@ async def create_action(
         target=target,
     )
     now = datetime.now(UTC)
+    # device_serial is authoritative (it is what the runtime knows); device_id is
+    # a best-effort lookup so the row still joins to the device table when it can.
+    device_id = await _lookup_device_id(db, serial=device_serial)
     row = AccountAction(
         org_id=org_id,
         account_id=account_id,
@@ -132,6 +159,8 @@ async def create_action(
         status_rank=status_rank(initial),
         target=redact(target or {}),
         result=redact(result or {}),
+        device_id=device_id,
+        device_serial=device_serial or None,
         last_transition_at=now,
     )
     try:

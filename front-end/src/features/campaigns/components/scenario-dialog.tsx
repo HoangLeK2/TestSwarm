@@ -67,6 +67,7 @@ import {
 } from '@/features/devices/lib/preview-run-session';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from './flow-editor/step-detail-panel';
+import { ImageTemplateScenarioProvider } from './flow-editor/image-template-scenario';
 import type { FlowStep } from './scenario-steps/types';
 import {
   findStepByFlowgramId,
@@ -1779,7 +1780,7 @@ export function ScenarioDialog({
     primaryAccount?.platform === 'facebook' ? (runtimeDevice?.id ?? '') : ''
   );
 
-  return (
+  const content = (
     <Dialog open={open} onOpenChange={setOpen} modal={!childStepEditorOpen}>
       <DialogTrigger asChild>
         {children ?? (
@@ -2545,5 +2546,11 @@ export function ScenarioDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+
+  return (
+    <ImageTemplateScenarioProvider scenarioId={effectiveRow?.id}>
+      {content}
+    </ImageTemplateScenarioProvider>
   );
 }

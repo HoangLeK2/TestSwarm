@@ -43,6 +43,7 @@ def handle_lease_connection_candidate(
             scenario=sc.scenario,
             variables=sc.ctx.get("vars", {}),
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         lease = lease_connection_candidate(
             identity=identity, execution_id=sc.execution_id

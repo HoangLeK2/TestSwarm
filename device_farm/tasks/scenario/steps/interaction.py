@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from tasks.scenario.steps import register_step
@@ -475,21 +478,213 @@ def handle_drag(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
 
 @register_step("take_screenshot")
 def handle_take_screenshot(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    import base64
+    """Store the frame and report where it went, rather than inlining the bytes.
+
+    This used to put base64 straight into the step result, which then rode the
+    whole Temporal path: activity result -> step_results -> every continue_as_new
+    payload -> finalize. A measured 499KB JPEG is ~665KB once base64'd, against
+    Temporal's 256KB warn / 2MB error blob limits — three of these steps in one
+    scenario was enough to kill the workflow.
+
+    The pre/post capture path (services/execution/capture_service.py) already
+    stores to object storage and reports a URL; this brings the explicit step in
+    line with it, and readers already accept a URL string here
+    (api/routes/executions.py::_normalize_artifact_url).
+    """
     try:
         frame = sc.device.capture_screenshot()
         if frame is None:
             result["ok"] = False
             result["message"] = "take_screenshot: no frame available"
-        else:
-            save_path = step.get("save_path")
-            if save_path:
-                import os
-                os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-                with open(save_path, "wb") as f:
-                    f.write(frame)
-            result["screenshot"] = base64.b64encode(frame).decode()
-            log.info(f"[{sc.serial}] take_screenshot: {len(frame)} bytes")
+            return
+
+        save_path = step.get("save_path")
+        if save_path:
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+            with open(save_path, "wb") as f:
+                f.write(frame)
+
+        from services import capture_store
+        from services.execution.capture_service import _append_artifact
+        from services.execution.epic06_capture_adapter import _paths
+
+        prefix, capture_dir, minio_prefix = _paths(sc, idx, "take_screenshot")
+        local_path = os.path.join(capture_dir, f"{prefix}.jpg") if capture_dir else ""
+        # save_capture raises when object storage is unavailable and the local
+        # fallback is off. Storing the frame is this step's job, so a failure is
+        # worth reporting — but it must not take the scenario down when the step
+        # already did what the author asked and wrote save_path. Before this
+        # change the step always "succeeded" by inlining base64, which is the
+        # payload bug being fixed; the middle ground is to fail only when there
+        # is nothing to show for the step at all.
+        url = None
+        try:
+            url = capture_store.save_capture(
+                frame,
+                local_path,
+                f"{minio_prefix}/{prefix}.jpg",
+                "image/jpeg",
+                skip_quality=True,
+            )
+        except Exception as store_exc:
+            if not save_path:
+                result["ok"] = False
+                result["message"] = f"take_screenshot: could not store frame: {store_exc}"
+                return
+            log.warning(
+                "[%s] take_screenshot: stored to %s but upload failed: %s",
+                sc.serial, save_path, store_exc,
+            )
+        if not url:
+            result["message"] = result.get("message") or (
+                f"take_screenshot: saved to {save_path}, not uploaded"
+                if save_path else "take_screenshot: frame not stored"
+            )
+            if not save_path:
+                result["ok"] = False
+            return
+
+        result["screenshot"] = url
+        _append_artifact(
+            result,
+            {
+                "type": "take_screenshot",
+                "execution_id": sc.execution_id,
+                "step_id": str(step.get("id") or step.get("_id") or "") or None,
+                "step_type": "take_screenshot",
+                "step_index": idx,
+                "captured_at": datetime.now(timezone.utc).isoformat(),
+                "screenshot_url": url,
+            },
+        )
+        log.info(f"[{sc.serial}] take_screenshot: {len(frame)} bytes -> {url}")
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"take_screenshot failed: {exc}"
+
+
+# Template keys are content-addressed (`{sha256}.png`), so a key's bytes never
+# change and this can be cached for the life of the worker. Without it a
+# tap_image inside a loop step issues one object-storage GET per iteration.
+_TEMPLATE_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
+_TEMPLATE_CACHE_MAX = 32
+
+
+def _load_step_template(template_key: str) -> bytes | None:
+    cached = _TEMPLATE_CACHE.get(template_key)
+    if cached is not None:
+        _TEMPLATE_CACHE.move_to_end(template_key)
+        return cached
+
+    from services import minio_store
+
+    data = minio_store.get_object_bytes(template_key)
+    if data:
+        _TEMPLATE_CACHE[template_key] = data
+        while len(_TEMPLATE_CACHE) > _TEMPLATE_CACHE_MAX:
+            _TEMPLATE_CACHE.popitem(last=False)
+    return data
+
+
+@register_step("tap_image")
+def handle_tap_image(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    """Tap wherever a cropped template appears on screen.
+
+    The match runs on agent-boot, which has the frame; the farm only sends the
+    template and receives a coordinate. Retries until ``timeout`` because the
+    element the user cropped is often still animating in.
+    """
+    template_key = str(step.get("template_key") or "").strip()
+    if not template_key:
+        result["ok"] = False
+        result["message"] = "tap_image: missing template_key"
+        return
+
+    # Imported before the try: `except ImageMatchError` is evaluated only when
+    # something raises, and if the import itself had failed (cv2 missing, say)
+    # that clause would raise NameError and escape as a crash instead of a step
+    # failure — hiding the real cause.
+    try:
+        from services import minio_store
+        from services.content.extraction.image_match_service import (
+            DEFAULT_SCALE,
+            DEFAULT_THRESHOLD,
+            ImageMatchError,
+            ImageMatchService,
+        )
+        from services.content.extraction.scenario_bridge import run_extraction_async
+    except Exception as import_exc:
+        result["ok"] = False
+        result["message"] = f"tap_image unavailable: {import_exc}"
+        return
+
+    try:
+        template = _load_step_template(template_key)
+        if not template:
+            result["ok"] = False
+            result["message"] = f"tap_image: template not found ({template_key})"
+            return
+
+        threshold = float(step.get("threshold", DEFAULT_THRESHOLD) or DEFAULT_THRESHOLD)
+        scale = float(step.get("scale", DEFAULT_SCALE) or DEFAULT_SCALE)
+        screen_w = step.get("template_screen_w")
+        timeout = float(step.get("timeout", 8.0) or 8.0)
+        poll = float(step.get("poll", 0.5) or 0.5)
+
+        service = ImageMatchService(threshold=threshold, scale=scale)
+        deadline = time.monotonic() + timeout
+        hit = None
+        attempts = 0
+
+        while True:
+            if _cancelled(sc):
+                _mark_cancelled(result, "tap_image: cancelled by user")
+                return
+            attempts += 1
+            # Per-attempt budget, not the whole-step budget: passing `timeout`
+            # here let a single slow attempt consume the entire deadline, so the
+            # retry loop never got a second look at the screen. Each attempt is
+            # one screenshot (tens of ms) plus a ~9ms match, so a few seconds is
+            # generous; never exceed what is left of the step.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            hit = run_extraction_async(
+                service.find(
+                    sc.device,
+                    template,
+                    template_screen_w=int(screen_w) if screen_w else None,
+                    timeout=max(1.0, min(5.0, remaining)),
+                )
+            )
+            if hit.found or time.monotonic() >= deadline:
+                break
+            if _wait_or_cancel(sc, poll):
+                _mark_cancelled(result, "tap_image: cancelled by user")
+                return
+
+        if not hit or not hit.found:
+            result["ok"] = False
+            result["message"] = (
+                f"tap_image: template not found on screen after {attempts} attempt(s), "
+                f"threshold={threshold}"
+            )
+            return
+
+        sc.device.tap(hit.cx, hit.cy)
+        result["message"] = (
+            f"tap_image at ({hit.cx},{hit.cy}) conf={hit.confidence:.3f} "
+            f"after {attempts} attempt(s)"
+        )
+        result["match"] = {
+            "x": hit.x, "y": hit.y, "w": hit.w, "h": hit.h,
+            "confidence": hit.confidence,
+        }
+        if _wait_or_cancel(sc, 0.3):
+            _mark_cancelled(result, "tap_image: cancelled by user")
+    except ImageMatchError as exc:
+        result["ok"] = False
+        result["message"] = f"tap_image failed: {exc}"
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"tap_image failed: {exc}"

@@ -2687,9 +2687,57 @@
         "saveAs": "Save to variable",
         "language": "Languages",
         "confidence": "Confidence threshold (0–1)",
-        "region": "Crop region before reading (ratios 0–1, empty = whole screen)"
+        "region": "Crop region before reading (ratios 0–1, empty = whole screen)",
+        "wholeScreen": "Whole screen",
+        "wholeScreenHint": "Reading the whole screen. Narrow it to one area for a faster, cleaner read.",
+        "pickRegion": "Pick area on screen",
+        "pickRegionAgain": "Pick the area again",
+        "pickRegionUnavailable": "Open the device control screen to drag an area on the mirror.",
+        "regionSummary": "Reading the area {x1}–{x2} across, {y1}–{y2} down."
       },
-      "scanPostsHint": "Scans the posts currently on screen and only likes or comments on ones whose text matches your keywords. It does not search for posts one by one, and it will not treat a profile, page or group as a post."
+      "scanPostsHint": "Scans the posts currently on screen and only likes or comments on ones whose text matches your keywords. It does not search for posts one by one, and it will not treat a profile, page or group as a post.",
+      "runResult": {
+        "charCount": "{count} characters",
+        "boxCount": "{count} text boxes",
+        "empty": "nothing was read",
+        "expand": "Show full value",
+        "collapse": "Show less",
+        "copy": "Copy value",
+        "useResult": "Use this result",
+        "useBranch": "Branch on this value",
+        "useInput": "Type this value",
+        "useSave": "Save this value",
+        "previewTruncated": "Preview shows {shown} of {total} characters. The full value is in the variable at run time."
+      },
+      "tapImage": {
+        "cropFromScreen": "Cut sample image from screen",
+        "cropFromFile": "Cut sample image from a screenshot",
+        "cropAgain": "Cut a new sample image",
+        "noScenarioHint": "Save the scenario first — the sample image is stored with it.",
+        "noScenarioTitle": "The scenario is not saved yet, so there is nowhere to store the sample image.",
+        "loadFailed": "Could not load the saved sample image — it is still used at run time, or cut a new one to replace it.",
+        "missing": "No sample image attached — this step will fail at run time.",
+        "imageAlt": "Sample image",
+        "threshold": "Match threshold (0-1)",
+        "thresholdHint": "0.8 is the default. Real matches usually score 0.96-1.00.",
+        "timeout": "Max wait (seconds)",
+        "poll": "Retry interval (seconds)",
+        "scale": "Search downscale",
+        "scaleHint": "0.25 is 20-30× faster with no loss of accuracy. Raise it only when the sample image is very small.",
+        "dialogTitle": "Cut a sample image to match",
+        "dialogDescription": "Drag over exactly the area to tap. Pick something distinctive (text, an icon) — a blank area matches in many places.",
+        "pickFile": "Pick a screenshot from your computer to cut",
+        "pickAnotherFile": "Pick a different image",
+        "noSource": "Pick an image above to start cutting.",
+        "noMirrorFrame": "No frame from the device screen yet. Open the control screen, wait for the picture, then try again.",
+        "applyCrop": "Cut the selected area",
+        "resetCrop": "Start over",
+        "croppedHint": "This is the image that will be searched for on screen at run time.",
+        "cancel": "Cancel",
+        "useImage": "Use this image",
+        "saveFailed": "Could not save the sample image, try again.",
+        "croppedAlt": "Cropped sample image"
+      }
     },
     "flowInsert": {
       "addStepAria": "Add step",
@@ -2775,7 +2823,8 @@
         "social_apply_comment_filter": "Switch the comment filter in the open sheet",
         "social_open_comments": "Open the comment sheet for the current post in one step",
         "extract_comments": "Preset: extract comments",
-        "extract_posts": "Preset: extract group posts"
+        "extract_posts": "Preset: extract group posts",
+        "tap_image": "Tap where a sample image is found on screen"
       },
       "groups": {
         "dataCollection": {
@@ -2866,7 +2915,8 @@
         "social_apply_comment_filter": "Apply comment filter",
         "social_open_comments": "Open comments",
         "extract_comments": "Collect comments",
-        "extract_posts": "Collect posts"
+        "extract_posts": "Collect posts",
+        "tap_image": "Tap by image"
       }
     },
     "flowStep": {
@@ -2939,7 +2989,9 @@
         "extract_text_hierarchy": "TEXT HIERARCHY",
         "extract_text_ocr": "READ ON-SCREEN TEXT (OCR)",
         "extract_text_ai": "TEXT AI",
-        "extract_screen_data": "SCREEN DATA"
+        "extract_screen_data": "SCREEN DATA",
+        "tap_image": "TAP IMAGE",
+        "key_back": "BACK"
       },
       "display": {
         "platformSessionPreflight": "Check before continuing",
@@ -2961,7 +3013,36 @@
         "commentFilterNewest": "Newest",
         "commentFilterAllComments": "All comments",
         "commentFilterNone": "No change",
-        "fbCommentElse": " / not found {elseCount}"
+        "fbCommentElse": " / not found {elseCount}",
+        "tapImageAttached": "sample image",
+        "tapImageMissing": "(no sample image)",
+        "socialOpenCommentsSummary": "OK: {thenCount} steps{extra} · wait {timeout}s",
+        "socialOpenCommentsExtract": " · extracts comments",
+        "socialOpenCommentsRequirePost": " · post must be open",
+        "socialOpenCommentsElse": " · Not found: {elseCount} steps",
+        "socialFindCommentTarget": "target Comment button · wait {timeout}s",
+        "socialTapCommentTarget": "tap the target found · wait {wait}s",
+        "socialSelectTargetPost": "Verify post · {label}",
+        "socialSelectTargetPeople": "Verify profile · {label}",
+        "socialConnectVisible": "Friend people with things in common · score >= {score}",
+        "socialConnectVisibleShort": "in common · score >= {score}",
+        "socialScanPosts": "Scan posts · {count} posts · {scrolls} scrolls",
+        "socialScanPostsShort": "{keywords} · {count} posts",
+        "socialScanPostsAnyKeyword": "any keyword",
+        "socialOpenAuthor": "Open author · {source}[{index}] · {platform}",
+        "socialOpenCommenter": "Open commenter · {source}[{index}] · {platform}",
+        "connectionRequestSend": "{platform} · send request",
+        "communityMembershipJoin": "{platform} · join group",
+        "dataVarComments": "comments",
+        "dataVarPosts": "posts",
+        "dataVarTextNodes": "text",
+        "collectionConfigured": "configured collection",
+        "collectionByVariable": "collection from variable",
+        "extractEntityPost": "Posts",
+        "extractEntityComment": "Comments",
+        "extractEntityGroup": "Groups",
+        "extractEntityVisibleText": "Visible text",
+        "extractEntityPage": "Pages"
       },
       "systemVariable": {
         "platformSessionReady": "Platform session is ready"
@@ -3083,6 +3164,13 @@
       "addDevice": "Add device",
       "selectDevice": "Select device",
       "selectPhonePlaceholder": "Select phone…",
+      "devicePicker": {
+        "searchPlaceholder": "Search by name or serial…",
+        "noResults": "No matching device",
+        "pageSummary": "{from}–{to} of {total}",
+        "previousPage": "Previous page",
+        "nextPage": "Next page"
+      },
       "deviceLabel": "Device",
       "gettingStarted": {
         "title": "Select a device to get started",

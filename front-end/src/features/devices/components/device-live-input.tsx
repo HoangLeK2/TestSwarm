@@ -22,6 +22,13 @@ type LiveInputCoreProps = {
 };
 
 const LIVE_INPUT_SYNC_MS = 80;
+/**
+ * Ceiling on how long a keystroke may sit in the debounce. The 80ms timer
+ * restarts on every key, so sustained typing (faster than one key per 80ms)
+ * would otherwise hold everything back until the typist pauses — the field on
+ * the device stays empty, then fills in one jump.
+ */
+const LIVE_INPUT_MAX_WAIT_MS = 240;
 
 function useLiveInputCore({
   serial,
@@ -33,6 +40,7 @@ function useLiveInputCore({
   const composingRef = useRef(false);
   const syncTimerRef = useRef<number | null>(null);
   const pendingSyncRef = useRef<string | null>(null);
+  const pendingSinceRef = useRef(0);
 
   const flushSync = useCallback(
     (nextRaw: string) => {
@@ -58,9 +66,10 @@ function useLiveInputCore({
               mode: 'live_replace'
             });
           } else if (delta.kind === 'delete') {
-            for (let i = 0; i < delta.count; i += 1) {
-              wsSend({ type: 'key', serial, key: 'delete' });
-            }
+            // One framed message with a repeat count — N separate frames used to
+            // be dispatched as N independent server tasks and could land out of
+            // order against the append that follows them.
+            wsSend({ type: 'key', serial, key: 'delete', count: delta.count });
           }
         }
       }
@@ -71,17 +80,32 @@ function useLiveInputCore({
 
   const scheduleSync = useCallback(
     (nextRaw: string) => {
+      const hadPending = pendingSyncRef.current != null;
       pendingSyncRef.current = nextRaw;
+      if (!hadPending) {
+        pendingSinceRef.current = Date.now();
+      }
       if (syncTimerRef.current != null) {
         window.clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
       }
+      const waited = Date.now() - pendingSinceRef.current;
+      if (waited >= LIVE_INPUT_MAX_WAIT_MS) {
+        pendingSyncRef.current = null;
+        flushSync(nextRaw);
+        return;
+      }
+      const delay = Math.min(
+        LIVE_INPUT_SYNC_MS,
+        LIVE_INPUT_MAX_WAIT_MS - waited
+      );
       syncTimerRef.current = window.setTimeout(() => {
         syncTimerRef.current = null;
         const pending = pendingSyncRef.current;
         pendingSyncRef.current = null;
         if (pending == null) return;
         flushSync(pending);
-      }, LIVE_INPUT_SYNC_MS);
+      }, delay);
     },
     [flushSync]
   );

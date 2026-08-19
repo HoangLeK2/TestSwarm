@@ -15,6 +15,7 @@ SCENARIO_STEP_TYPES = [
     "wait",
     "tap_position",
     "tap_ratio",
+    "tap_image",
     "swipe_ratio",
     "tap",
     "tap_selector",
@@ -138,6 +139,21 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "required": ["x", "y"],
         "optional": [],
         "description": "Tap tại tỷ lệ màn hình (0–1). Fallback khi không có selector.",
+    },
+    "tap_image": {
+        "required": ["template_key"],
+        "optional": [
+            "threshold", "scale", "template_screen_w", "template_screen_h",
+            "timeout", "poll",
+        ],
+        "description": (
+            "Tap vào vị trí khớp ảnh mẫu trên màn hình. "
+            "template_key: khoá ảnh trong object storage (cắt từ màn hình lúc thiết kế). "
+            "threshold: ngưỡng khớp 0–1 (mặc định 0.8; khớp thật thường 0.96–1.00). "
+            "scale: tỷ lệ thu nhỏ khi tìm (mặc định 0.25 — nhanh hơn ~70 lần mà không giảm độ chính xác). "
+            "template_screen_w/h: kích thước màn lúc cắt, để hiệu chỉnh khi máy khác độ phân giải. "
+            "Khớp chạy trên agent-boot; mỗi lần thử tốn 1 ảnh chụp + ~11ms so khớp."
+        ),
     },
     "swipe_ratio": {
         "required": ["x1", "y1", "x2", "y2"],

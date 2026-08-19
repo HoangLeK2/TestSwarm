@@ -31,6 +31,49 @@ def _normalize_region(region: dict[str, float] | tuple | None) -> dict[str, floa
     return region
 
 
+def compose_text(results: list[dict[str, Any]]) -> str:
+    """Join OCR boxes back into readable lines.
+
+    Tesseract returns one box per *word*, so joining every box with a newline
+    turns a headline into a column of single words — unreadable in the editor,
+    and worse, no downstream `contains "some phrase"` can ever match because the
+    words are separated by newlines instead of spaces.
+
+    Boxes on the same visual line are detected by vertical overlap of their
+    centres rather than an equal `y`: word baselines within one line differ by a
+    few pixels, and the tolerance has to scale with font size, so it is derived
+    from the median box height instead of being a fixed constant.
+    """
+    boxes = [b for b in results if (b.get("text") or "").strip()]
+    if not boxes:
+        return ""
+
+    def centre_y(box: dict[str, Any]) -> float:
+        bbox = box.get("bbox") or {}
+        return float(bbox.get("y", 0)) + float(bbox.get("h", 0)) / 2
+
+    def left_x(box: dict[str, Any]) -> float:
+        return float((box.get("bbox") or {}).get("x", 0))
+
+    heights = sorted(float((b.get("bbox") or {}).get("h", 0)) for b in boxes)
+    median_h = heights[len(heights) // 2] or 0.0
+    # Half a line height: tall enough to absorb baseline jitter, short enough
+    # that the next line down never merges into the current one.
+    tolerance = median_h * 0.5 if median_h else 0.0
+
+    lines: list[list[dict[str, Any]]] = []
+    for box in sorted(boxes, key=lambda b: (centre_y(b), left_x(b))):
+        if lines and abs(centre_y(box) - centre_y(lines[-1][-1])) <= tolerance:
+            lines[-1].append(box)
+        else:
+            lines.append([box])
+
+    return "\n".join(
+        " ".join((b.get("text") or "").strip() for b in sorted(line, key=left_x))
+        for line in lines
+    )
+
+
 def _to_bbox(entry: dict[str, Any]) -> dict[str, Any]:
     """Normalise one agent box.
 

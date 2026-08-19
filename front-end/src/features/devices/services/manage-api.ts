@@ -208,6 +208,14 @@ export type RelayCommandOut = {
   error: string;
 };
 
+export type RelayDeviceRegisterResult = {
+  serial: string;
+  status: 'registered' | 'failed';
+  device_id?: string | null;
+  name?: string | null;
+  message?: string | null;
+};
+
 export type BootstrapAllResult = {
   relay_id: string;
   total: number;
@@ -288,6 +296,16 @@ export const relayAgentsApi = {
         body ?? {}
       )
       .then((r) => r.data),
+  // Register several serials in one call. Empty/omitted `serials` = every
+  // device the agent currently reports. Partial success: each device gets its
+  // own result, so one failure does not sink the rest.
+  registerDevices: (relayId: string, serials?: string[]) =>
+    farmApi
+      .post<{ results: RelayDeviceRegisterResult[] }>(
+        `/relay-agents/${encodeURIComponent(relayId)}/devices/register`,
+        { serials: serials ?? [] }
+      )
+      .then((r) => r.data.results),
   pushConnectUrl: (
     relayId: string,
     serial: string,

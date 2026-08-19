@@ -11,6 +11,7 @@ from datetime import timedelta
 import pytest
 
 from temporal.shared import (
+    CONTROL_TASK_QUEUE_NAME,
     DeviceActionBatchResult,
     ScenarioInput,
     StepsInput,
@@ -953,6 +954,10 @@ async def test_scenario_workflow_forwards_pause_and_resume_to_child(pause_coord)
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1029,6 +1034,10 @@ async def test_campaign_keepalive_starts_during_initial_multi_day_pause():
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
                 ScenarioWorkflow.run,
@@ -1099,6 +1108,10 @@ async def test_initial_pause_claim_loss_is_non_retryable_and_finalized():
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             result = await asyncio.wait_for(
                 env.client.execute_workflow(
@@ -1147,6 +1160,10 @@ async def test_cancel_before_child_start_is_finalized():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
             activities=[mock_finalize],
         ):
             result = await env.client.execute_workflow(
@@ -1222,6 +1239,10 @@ async def test_paused_campaign_keeps_device_claim_alive_across_multi_day_gap():
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(
@@ -1357,6 +1378,10 @@ async def test_scenario_workflow_treats_child_temporal_cancel_as_cancelled(pause
             env.client,
             task_queue=TASK_QUEUE_NAME,
             workflows=[ScenarioWorkflow, ScenarioStepsWorkflow],
+            activities=[mock_batch, mock_claim_keepalive, mock_finalize],
+        ), TemporalWorker(
+            env.client,
+            task_queue=CONTROL_TASK_QUEUE_NAME,
             activities=[mock_batch, mock_claim_keepalive, mock_finalize],
         ):
             handle = await env.client.start_workflow(

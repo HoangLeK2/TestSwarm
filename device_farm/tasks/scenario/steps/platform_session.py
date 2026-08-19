@@ -98,6 +98,7 @@ def handle_platform_session_gate(
             scenario=sc.scenario,
             variables=variables,
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         readiness = _observe_readiness(
             sc,

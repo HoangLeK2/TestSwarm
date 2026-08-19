@@ -523,6 +523,7 @@ def _release_unperformed_candidate_lease(
             scenario=sc.scenario,
             variables=sc.ctx.get("vars", {}),
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         result["candidate_lease_release"] = release_connection_candidate(
             identity=identity,
@@ -656,6 +657,7 @@ def _defer_unverified_connection_candidate(
             scenario=sc.scenario,
             variables=sc.ctx.get("vars", {}),
             execution_id=sc.execution_id,
+            device_serial=sc.serial,
         )
         result["candidate_skip"] = defer_connection_candidate(
             identity=identity,
@@ -1037,6 +1039,7 @@ def handle_social_connect_visible_people(
                     scenario=sc.scenario,
                     variables=sc.ctx.get("vars", {}),
                     execution_id=sc.execution_id,
+                    device_serial=sc.serial,
                 )
                 ledger_records: list[dict[str, Any]] = []
                 for offset, verified_target in enumerate(verified_targets):
@@ -1158,6 +1161,7 @@ def handle_social_connect_visible_people(
                 scenario=sc.scenario,
                 variables=sc.ctx.get("vars", {}),
                 execution_id=sc.execution_id,
+                device_serial=sc.serial,
             )
             ledger_target = {
                 "action": "request",
@@ -1686,6 +1690,7 @@ def handle_social_action(
                 scenario=sc.scenario,
                 variables=sc.ctx.get("vars", {}),
                 execution_id=sc.execution_id,
+                device_serial=sc.serial,
             )
         except Exception as exc:
             ledger_identity_error = exc
@@ -1725,6 +1730,7 @@ def handle_social_action(
                     scenario=sc.scenario,
                     variables=sc.ctx.get("vars", {}),
                     execution_id=sc.execution_id,
+                    device_serial=sc.serial,
                 )
             required_status = str(
                 step.get("require_candidate_status") or "ready_to_connect"
@@ -2278,6 +2284,64 @@ def handle_social_action(
     _save_result(sc, step, result)
 
 
+def _collect_action_evidence(
+    sc: ScenarioContext, step: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """What a human needs to audit this action later.
+
+    The ledger's `result` only carried engine state (`state`, `outcome`,
+    `matched_label`, …) — enough to know a comment was submitted, not enough to
+    know *what* was commented. Everything here is text the runtime already has,
+    so it costs nothing to keep.
+    """
+    evidence: dict[str, Any] = {}
+
+    # Prefer what the device was actually told to type: nested completion steps
+    # report it back in `typed_text`.
+    for entry in result.get("completion_results") or []:
+        if isinstance(entry, dict) and entry.get("typed_text"):
+            evidence["comment_text"] = str(entry["typed_text"])[:2000]
+            break
+
+    # Fall back to the step config, read verbatim.
+    #
+    # Deliberately NOT re-resolved: VariableContext.resolve() calls
+    # random.choice() when a variable holds a list (spintax comment variants are
+    # configured exactly that way), so resolving here would record a *different*
+    # variant than the one typed on the phone — silently wrong, in the one field
+    # whose whole purpose is "what was actually commented". Verified: the same
+    # step yielded 3 different strings across 30 calls.
+    if "comment_text" not in evidence:
+        candidates = [step, *(step.get("completion_steps") or [])]
+        verify = step.get("completion_verify")
+        if isinstance(verify, dict):
+            candidates.append(verify)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key in ("comment_text", "text", "message"):
+                raw = candidate.get(key)
+                if raw and isinstance(raw, str) and raw.strip():
+                    evidence["comment_text"] = raw[:2000]
+                    break
+            if "comment_text" in evidence:
+                break
+
+    # No post URL here on purpose: the target is identified from the Android
+    # view hierarchy, which does not carry a permalink. What identifies the post
+    # is target_id plus the text snippet already stored in `target.name`.
+    target = result.get("verified_target")
+    if isinstance(target, dict):
+        for key in ("post_id", "author_name", "group_name"):
+            value = target.get(key)
+            if value and not isinstance(value, (dict, list, tuple)):
+                evidence[key] = str(value)[:1000]
+
+    if sc.serial:
+        evidence["device_serial"] = sc.serial
+    return evidence
+
+
 def _finalize_social_action_ledger(
     sc: ScenarioContext,
     step: dict[str, Any],
@@ -2292,6 +2356,12 @@ def _finalize_social_action_ledger(
     try:
         from services.account_actions import finalize_action
 
+        # Audit evidence goes in `result`, never in `target`: target feeds
+        # stable_action_key, so adding fields there would change the idempotency
+        # hash of actions already in the ledger.
+        evidence = _collect_action_evidence(sc, step, result)
+        ledger_result = {**result, **evidence} if evidence else result
+
         result["account_action_ledger"] = finalize_action(
             claim=claim,
             succeeded=succeeded,
@@ -2299,7 +2369,7 @@ def _finalize_social_action_ledger(
                 True if succeeded else _account_action_failure_is_terminal(step, result)
             ),
             reason=reason,
-            result=result,
+            result=ledger_result,
         )
     except Exception as exc:
         result.update(

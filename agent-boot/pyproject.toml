@@ -23,6 +23,11 @@ dependencies = [
     # used by requests/uiautomator2 and their image/XML helpers.
     "idna>=3.15",
     "pillow>=12.3.0",
+    # Template matching for image-based steps. headless, never contrib: we use
+    # exactly one function (cv2.matchTemplate), and the contrib build links
+    # libGL, which this slim image does not ship — that is what silently killed
+    # the same code path on the farm side.
+    "opencv-python-headless>=4.10.0",
     "urllib3>=2.7.0",
     # perf: orjson is a C-based JSON serializer that releases the GIL on dump,
     # ~5–10x faster than stdlib json. Used everywhere we serialize device

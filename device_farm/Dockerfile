@@ -36,8 +36,17 @@ WORKDIR /app
 COPY pyproject.toml ./
 
 # Install dependencies into .venv (isolated, reproducible)
+#
+# NOTE: `uv pip install -r pyproject.toml` ignores [tool.uv] override-dependencies
+# (and uv.lock) — those only apply to `uv sync`. So airtest's pin wins and pulls
+# opencv-contrib-python, whose binaries link libGL. The slim runtime image has no
+# libGL, so `import cv2` raised "libGL.so.1: cannot open shared object file" and
+# every visual-anchor path was dead. We only use aircv.find_template, i.e. plain
+# TM_CCOEFF_NORMED, so the headless build is a drop-in — and ~90MB smaller.
 RUN uv venv .venv && \
-    uv pip install --python .venv/bin/python -r pyproject.toml
+    uv pip install --python .venv/bin/python -r pyproject.toml && \
+    uv pip uninstall --python .venv/bin/python opencv-contrib-python opencv-python || true && \
+    uv pip install --python .venv/bin/python "opencv-python-headless>=4.10.0"
 
 # ── Stage 2: Copy source ────────────────────────────────────────────────────
 

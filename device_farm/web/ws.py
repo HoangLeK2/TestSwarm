@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import base64
 import ipaddress
@@ -289,7 +290,13 @@ class WebSocketManager:
         self._stream_sender_dropped_total = 0
         self._stream_sender_sent_by_serial: Dict[str, int] = {}
         self._stream_sender_dropped_by_serial: Dict[str, int] = {}
-        self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
+        # Caps how many devices' STATUS a single /ws connection subscribes to.
+        # This is the snapshot the control/record device dropdown is built from,
+        # so a low value silently hides devices — the old default of 3 truncated
+        # a 4-device fleet. Status is cheap JSON; concurrent video is bounded
+        # separately (max_media_streams_per_connection), so the status list can
+        # safely cover the whole fleet. Override with MAX_DEVICES_PER_WS.
+        self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "64")))
         self._lock = asyncio.Lock()
         self._db_enabled = db_enabled
         # Safe-mode: reject write-type frames. BaseHTTPMiddleware can't see
@@ -297,6 +304,34 @@ class WebSocketManager:
         self._read_only = bool(read_only)
         self._media_stream_enabled = bool(media_stream_enabled)
         self._multi_control = MultiControlCoordinator(manager)
+        # Per-device single-worker executors for keystroke-ordered input.
+        # See _typing_executor().
+        self._typing_executors: Dict[str, concurrent.futures.ThreadPoolExecutor] = {}
+        self._typing_executor_used_at: Dict[str, float] = {}
+
+    # Live typing sends a burst of small frames (DEL ×n, then the new text).
+    # On the shared default executor each frame becomes an independent task on
+    # its own thread, and the u2 client's HTTP lock hands out ownership in
+    # arbitrary order — so "chà" could reach the device as "àch". A dedicated
+    # single-worker pool per device makes submission order the execution order.
+    _TYPING_EXECUTOR_IDLE_S = 300.0
+
+    def _typing_executor(self, serial: str) -> concurrent.futures.ThreadPoolExecutor:
+        now = time.monotonic()
+        ex = self._typing_executors.get(serial)
+        if ex is None:
+            for stale, used_at in list(self._typing_executor_used_at.items()):
+                if stale != serial and now - used_at > self._TYPING_EXECUTOR_IDLE_S:
+                    self._typing_executor_used_at.pop(stale, None)
+                    old = self._typing_executors.pop(stale, None)
+                    if old is not None:
+                        old.shutdown(wait=False)
+            ex = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix=f"ws-input-{serial}"
+            )
+            self._typing_executors[serial] = ex
+        self._typing_executor_used_at[serial] = now
+        return ex
 
     def _record_stream_sender_started(self, serial: str) -> None:
         self._stream_sender_started_total += 1
@@ -1163,8 +1198,21 @@ class WebSocketManager:
 
             elif msg_type == "key":
                 key = data.get("key", "home")
-                log.info(f"[INPUT] KEY {serial} key={key} route_hint={device.input_route_hint()}")
-                loop.run_in_executor(None, device.key, key)
+                # `count` coalesces a live-input backspace run into one ordered task.
+                try:
+                    count = max(1, min(64, int(data.get("count", 1) or 1)))
+                except (TypeError, ValueError):
+                    count = 1
+                log.info(
+                    f"[INPUT] KEY {serial} key={key} count={count} "
+                    f"route_hint={device.input_route_hint()}"
+                )
+
+                def _press(dev=device, k=key, n=count) -> None:
+                    for _ in range(n):
+                        dev.key(k)
+
+                loop.run_in_executor(self._typing_executor(serial), _press)
 
             elif msg_type == "long_tap":
                 x, y = int(data.get("x", 0)), int(data.get("y", 0))
@@ -1225,27 +1273,30 @@ class WebSocketManager:
                 text = str(data.get("text", "") or "")
                 mode = str(data.get("mode") or "")
                 append = bool(data.get("append", False))
+                # Every text op shares the device's typing executor with `key`,
+                # so DEL runs and the append that follows stay in frame order.
+                typing_ex = self._typing_executor(serial)
                 if mode in ("live_clear",) or (mode == "u2_sync" and not text):
                     log.info(f"[INPUT] INPUT_CLEAR {serial} route_hint={device.input_route_hint()}")
-                    loop.run_in_executor(None, device.clear_live_input)
+                    loop.run_in_executor(typing_ex, device.clear_live_input)
                 elif mode in ("live_replace", "u2_sync") or bool(data.get("sync", False)):
                     log.info(
                         f"[INPUT] INPUT_REPLACE {serial} len={len(text)} "
                         f"route_hint={device.input_route_hint()}"
                     )
-                    loop.run_in_executor(None, device.apply_live_input_text, text)
+                    loop.run_in_executor(typing_ex, device.apply_live_input_text, text)
                 elif append and text:
                     log.info(
                         f"[INPUT] INPUT_APPEND {serial} len={len(text)} "
                         f"route_hint={device.input_route_hint()}"
                     )
-                    loop.run_in_executor(None, device.append_input_text, text)
+                    loop.run_in_executor(typing_ex, device.append_input_text, text)
                 elif text:
                     log.info(
                         f"[INPUT] INPUT_TEXT {serial} len={len(text)} "
                         f"route_hint={device.input_route_hint()}"
                     )
-                    loop.run_in_executor(None, device.input_text, text)
+                    loop.run_in_executor(typing_ex, device.input_text, text)
 
             elif msg_type == "install":
                 apk_source = data.get("url") or data.get("apk_url", "")

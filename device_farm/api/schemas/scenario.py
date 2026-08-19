@@ -330,6 +330,27 @@ class TapPositionStep(StepBase):
     type: Literal["tap_position"]
     pos: Literal["top_center", "middle_center", "bottom_center", "search_bar"]
 
+class TapImageStep(StepBase):
+    """Tap wherever a cropped template appears on screen.
+
+    The template is an object-storage key, not inline bytes: a scenario with a
+    dozen image steps would otherwise carry a dozen base64 blobs in its JSON.
+    Matching runs on agent-boot, which is the only side that still has a frame.
+    """
+    type: Literal["tap_image"]
+    template_key: str = Field(min_length=1)
+    # 0.8 is a deliberate default: real cross-screen matches score 0.96-1.00,
+    # and a genuinely absent template lands well below.
+    threshold: float = Field(0.8, ge=0.0, le=1.0)
+    # 0.25 is 20-30x faster than full resolution with no measured accuracy cost.
+    scale: float = Field(0.25, gt=0.0, le=1.0)
+    # Screen width the crop was taken on, so a phone with a different resolution
+    # rescales the template instead of quietly losing confidence.
+    template_screen_w: Optional[int] = Field(None, gt=0)
+    template_screen_h: Optional[int] = Field(None, gt=0)
+    timeout: float = Field(8.0, ge=0.1, le=60)
+    poll: float = Field(0.5, ge=0.1, le=10)
+
 class SwipeRatioStep(StepBase):
     type: Literal["swipe_ratio"]
     x1: float = Field(ge=0.0, le=1.0)
@@ -958,6 +979,7 @@ StepModel = Annotated[
         Annotated[TapStep, Tag("tap")],
         Annotated[TapRatioStep, Tag("tap_ratio")],
         Annotated[TapPositionStep, Tag("tap_position")],
+        Annotated[TapImageStep, Tag("tap_image")],
         Annotated[SwipeRatioStep, Tag("swipe_ratio")],
         Annotated[TapSelectorStep, Tag("tap_selector")],
         Annotated[TapXmlMatchStep, Tag("tap_xml_match")],

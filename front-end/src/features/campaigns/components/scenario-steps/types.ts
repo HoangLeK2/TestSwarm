@@ -72,6 +72,7 @@ export type ActionType =
   | 'install_apk'
   | 'wait'
   | 'tap_position'
+  | 'tap_image'
   | 'tap'
   | 'tap_ratio'
   | 'swipe_ratio'
@@ -192,6 +193,7 @@ export function getStepIcon(type: string): LucideIcon {
     case 'tap':
     case 'tap_ratio':
     case 'tap_position':
+    case 'tap_image':
     case 'tap_selector':
     case 'tap_xml_match':
     case 'double_tap':
@@ -482,6 +484,7 @@ export const ALL_STEP_TYPES: {
     group: 'action'
   },
   { value: 'tap_position', label: 'tap_position', group: 'action' },
+  { value: 'tap_image', label: 'Bấm theo hình ảnh', group: 'action' },
   { value: 'swipe_ratio', label: 'swipe_ratio', group: 'action' },
   { value: 'input_text', label: 'input_text', group: 'action' },
   { value: 'input_selector', label: 'input_selector', group: 'action' },
@@ -887,6 +890,18 @@ export function createDefaultStep(
       };
     case 'tap_position':
       return { ...base, type: 'tap_position', pos: 'middle_center' };
+    case 'tap_image':
+      // Defaults mirror TapImageStep on the backend: 0.25 scale is 20-30x
+      // faster than full resolution with no measured accuracy loss.
+      return {
+        ...base,
+        type: 'tap_image',
+        template_key: '',
+        threshold: 0.8,
+        scale: 0.25,
+        timeout: 8,
+        poll: 0.5
+      };
     case 'swipe_ratio':
       return {
         ...base,

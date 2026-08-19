@@ -1743,3 +1743,35 @@ def test_social_action_failure_includes_hierarchy_dump_without_leaking_to_saved_
     assert dump_path.parent == tmp_path
     assert dump_path.read_text(encoding="utf-8") == xml
     assert "debug_hierarchy_xml" not in sc.var_ctx.values["SOCIAL_RESULT"]
+
+
+def test_rate_limited_account_never_taps(monkeypatch) -> None:
+    """A throttled account must skip the action, not perform it and get rejected."""
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setattr(
+        "services.action_pacing.check_action_allowed",
+        lambda **_: {"allowed": False, "reason": "rate_limited"},
+    )
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    result = dispatch_step(_context(device), _ledger_step(), 0)
+
+    assert result["outcome"] == "rate_limited"
+    assert result["action_performed"] is False
+    # ok stays True: the campaign should continue and retry later, not fail.
+    assert result["ok"] is True
+    assert device.taps == []
+
+
+def test_skip_pacing_opts_a_step_out(monkeypatch) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    def _explode(**_):
+        raise AssertionError("pacing must not be consulted when skip_pacing is set")
+
+    monkeypatch.setattr("services.action_pacing.check_action_allowed", _explode)
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    step = {**_ledger_step(), "skip_pacing": True}
+    result = dispatch_step(_context(device), step, 0)
+
+    assert result["outcome"] != "rate_limited"

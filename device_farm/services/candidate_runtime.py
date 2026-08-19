@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from services.account_actions.coordinator import _resolve_tenant
+from services.platform_readiness import DEFAULT_PLATFORM
 from tenancy.context import tenant_context
 
 
@@ -45,10 +46,15 @@ def assert_connection_candidate_allowed(
 
 
 def lease_connection_candidate(
-    *, identity: dict[str, str | None], execution_id: str | None
+    *,
+    identity: dict[str, str | None],
+    execution_id: str | None,
+    platform: str = DEFAULT_PLATFORM,
 ) -> dict[str, Any]:
     from db.database import activity_session, run_activity_coro_blocking
     from services.account_candidate_discovery import discover_and_lease_candidate
+
+    resolved_platform = str(platform or DEFAULT_PLATFORM).strip().casefold()
 
     async def lease_candidate() -> dict[str, Any]:
         async with activity_session() as db:
@@ -58,7 +64,7 @@ def lease_connection_candidate(
             with tenant_context(org_id):
                 discovery_result = await discover_and_lease_candidate(
                     db,
-                    platform="facebook",
+                    platform=resolved_platform,
                     org_id=org_id,
                     account_id=account_id,
                     execution_id=execution_id,
@@ -135,6 +141,73 @@ def complete_connection_candidate(
                 }
 
     return run_activity_coro_blocking(complete_candidate())
+
+
+def record_sent_connection_requests(
+    *,
+    identity: dict[str, str | None],
+    targets: Sequence[dict[str, Any]],
+    platform: str = DEFAULT_PLATFORM,
+    source: str = "visible_people_surface",
+) -> list[dict[str, Any]]:
+    """Fold on-device connection requests into the candidate pipeline.
+
+    The visible-people scan finds people through Facebook's own suggestions, so
+    there is no lease to complete — the candidate row may not exist at all. Each
+    target is recorded (creating entity + candidate as needed) so the pipeline
+    stops re-offering someone this account has already asked.
+
+    Best-effort per target: one bad row must not discard the rest, since the
+    requests have already left the device and the alternative is losing the
+    record entirely.
+    """
+    from db.database import activity_session, run_activity_coro_blocking
+    from services.social_candidates import record_connection_request
+
+    resolved_platform = str(platform or DEFAULT_PLATFORM).strip().casefold()
+    clean_targets = [
+        target
+        for target in targets
+        if isinstance(target, dict)
+        and (
+            str(target.get("name") or "").strip()
+            or str(target.get("external_id") or "").strip()
+        )
+    ]
+    if not clean_targets:
+        return []
+
+    async def record_all() -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        async with activity_session() as db:
+            org_id, account_id, _, _ = await _resolve_tenant(
+                db, identity, require_ids=False
+            )
+            with tenant_context(org_id):
+                for target in clean_targets:
+                    try:
+                        records.append(
+                            await record_connection_request(
+                                db,
+                                org_id=org_id,
+                                account_id=account_id,
+                                platform=resolved_platform,
+                                display_name=str(target.get("name") or ""),
+                                external_id=target.get("external_id"),
+                                source=str(target.get("source") or source),
+                            )
+                        )
+                    except (LookupError, ValueError) as exc:
+                        records.append(
+                            {
+                                "recorded": False,
+                                "name": target.get("name"),
+                                "error": str(exc),
+                            }
+                        )
+        return records
+
+    return run_activity_coro_blocking(record_all())
 
 
 def release_connection_candidate(

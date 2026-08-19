@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
@@ -19,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from db.models.account import Account
 from db.models.external_entity import ExternalEntity
@@ -1331,9 +1333,72 @@ async def lease_next_ready_candidate(
     )
 
 
+def sibling_target_cooldown_days() -> int:
+    """How long one org's accounts avoid re-approaching the same person.
+
+    0 disables the guard. Env: SIBLING_TARGET_COOLDOWN_DAYS.
+    """
+    raw = os.environ.get("SIBLING_TARGET_COOLDOWN_DAYS", "30").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 30
+
+
+def _sibling_targeted_recently(
+    *, org_id: str, account_id: str, now: datetime
+):
+    """EXISTS: another account in this org already approached this person.
+
+    Accounts in one organisation discover candidates from a shared content pool
+    and rank them identically, so without this every account converges on the
+    same top profiles. That person then receives near-simultaneous requests from
+    several unrelated new accounts — the most conspicuous pattern the farm can
+    produce — and the requests after the first are wasted anyway.
+
+    Uses idx_facebook_candidates_entity_status (org_id, external_entity_id,
+    status, account_id).
+    """
+    sibling = aliased(FacebookCandidate)
+    cutoff = now - timedelta(days=sibling_target_cooldown_days())
+    return (
+        select(sibling.id)
+        .where(
+            sibling.org_id == org_id,
+            sibling.external_entity_id == FacebookCandidate.external_entity_id,
+            sibling.account_id != account_id,
+            sibling.status.in_(("request_pending", "connected")),
+            # requested_at is NULL for rows written before migration 113; fall
+            # back to updated_at so historical sends still shield the target.
+            func.coalesce(sibling.requested_at, sibling.updated_at) >= cutoff,
+        )
+        .exists()
+    )
+
+
 def _ready_candidate_lease_query(
     *, org_id: str, account_id: str, now: datetime
 ):
+    conditions = [
+        FacebookCandidate.org_id == org_id,
+        FacebookCandidate.account_id == account_id,
+        FacebookCandidate.status == literal_column("'ready_to_connect'"),
+        or_(
+            FacebookCandidate.lease_token.is_(None),
+            FacebookCandidate.lease_expires_at.is_(None),
+            FacebookCandidate.lease_expires_at <= now,
+        ),
+        or_(
+            FacebookCandidate.next_eligible_at.is_(None),
+            FacebookCandidate.next_eligible_at <= now,
+        ),
+    ]
+    if sibling_target_cooldown_days() > 0:
+        conditions.append(
+            ~_sibling_targeted_recently(
+                org_id=org_id, account_id=account_id, now=now
+            )
+        )
     return (
         select(FacebookCandidate, ExternalEntity)
         .join(
@@ -1341,20 +1406,7 @@ def _ready_candidate_lease_query(
             (ExternalEntity.org_id == FacebookCandidate.org_id)
             & (ExternalEntity.id == FacebookCandidate.external_entity_id),
         )
-        .where(
-            FacebookCandidate.org_id == org_id,
-            FacebookCandidate.account_id == account_id,
-            FacebookCandidate.status == literal_column("'ready_to_connect'"),
-            or_(
-                FacebookCandidate.lease_token.is_(None),
-                FacebookCandidate.lease_expires_at.is_(None),
-                FacebookCandidate.lease_expires_at <= now,
-            ),
-            or_(
-                FacebookCandidate.next_eligible_at.is_(None),
-                FacebookCandidate.next_eligible_at <= now,
-            ),
-        )
+        .where(*conditions)
         .order_by(
             FacebookCandidate.final_score.desc(),
             FacebookCandidate.updated_at.desc(),

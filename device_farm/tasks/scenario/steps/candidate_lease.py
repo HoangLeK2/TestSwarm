@@ -46,7 +46,9 @@ def handle_lease_connection_candidate(
             device_serial=sc.serial,
         )
         lease = lease_connection_candidate(
-            identity=identity, execution_id=sc.execution_id
+            identity=identity,
+            execution_id=sc.execution_id,
+            platform=platform,
         )
     except (LookupError, RuntimeError, ValueError) as exc:
         result.update(

@@ -255,6 +255,90 @@ def _fb_open_search_tab_steps(
     ]
 
 
+def _fb_commenter_connect_steps(
+    *,
+    prefix: str,
+    action_index: int,
+    source_var: str = "_post_scan",
+) -> List[Dict[str, Any]]:
+    """Open one commenter's profile, send the request there, then unwind.
+
+    The friend request is issued on the person's own profile rather than from a
+    suggestion list: the profile shows the shared context before acting, and the
+    button's own state (Add friend → Request sent) is what verifies the send. A
+    list row cannot offer either, which is why this is the path a cold account
+    uses — it needs no mutual friends to work.
+    """
+    return [
+        {
+            "id": f"{prefix}_open_{action_index}",
+            "type": "social_open_commenter_from_post_match",
+            "platform": "facebook",
+            "source_var": source_var,
+            "action_index": action_index,
+            "required_keywords": "${PROFILE_REQUIRED_KEYWORDS}",
+            "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
+            "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
+            "min_score": "${PROFILE_MIN_SCORE}",
+            "max_commenters": "${COMMENTER_SCAN_LIMIT}",
+            "save_as": "_people_target",
+            "save_success_as": "PEOPLE_PROFILE_SELECTED",
+            "save_opened_as": "COMMENTER_PROFILE_OPENED",
+            "save_sheet_opened_as": "COMMENT_SHEET_OPENED",
+        },
+        {
+            "id": f"{prefix}_connect_{action_index}",
+            "type": "if_variable",
+            "name": "PEOPLE_PROFILE_SELECTED",
+            "equals": True,
+            "then": [
+                {
+                    "type": "if_variable",
+                    "name": "ENABLE_CONNECTION_REQUEST",
+                    "equals": True,
+                    "then": [
+                        {
+                            "type": "connection_request",
+                            "platform": "facebook",
+                            "action": "request",
+                            "timeout": 5,
+                            "verify_timeout": 5,
+                            "settle_seconds": 0.4,
+                            "require_verified_target": "_people_target",
+                            "save_as": "_people_connection_action",
+                            "ignore_error": True,
+                        }
+                    ],
+                    "else": [],
+                }
+            ],
+            "else": [],
+        },
+        {
+            "id": f"{prefix}_back_{action_index}",
+            "type": "if_variable",
+            "name": "COMMENTER_PROFILE_OPENED",
+            "equals": True,
+            "then": [
+                {"type": "key", "key": "back"},
+                {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            ],
+            "else": [],
+        },
+        {
+            "id": f"{prefix}_close_comments_{action_index}",
+            "type": "if_variable",
+            "name": "COMMENT_SHEET_OPENED",
+            "equals": True,
+            "then": [
+                {"type": "key", "key": "back"},
+                {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            ],
+            "else": [],
+        },
+    ]
+
+
 def _fb_nurture_feed_steps(
     *,
     tag: str,
@@ -1793,138 +1877,14 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "like_post": False,
                                 "save_as": "_post_scan",
                             },
-                            {
-                                "id": "home_post_author_open_0",
-                                "type": "social_open_commenter_from_post_match",
-                                "platform": "facebook",
-                                "source_var": "_post_scan",
-                                "action_index": 0,
-                                "required_keywords": "${PROFILE_REQUIRED_KEYWORDS}",
-                                "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
-                                "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
-                                "min_score": "${PROFILE_MIN_SCORE}",
-                                "max_commenters": "${COMMENTER_SCAN_LIMIT}",
-                                "save_as": "_people_target",
-                                "save_success_as": "PEOPLE_PROFILE_SELECTED",
-                                "save_opened_as": "COMMENTER_PROFILE_OPENED",
-                                "save_sheet_opened_as": "COMMENT_SHEET_OPENED",
-                            },
-                            {
-                                "id": "home_post_author_connect_0",
-                                "type": "if_variable",
-                                "name": "PEOPLE_PROFILE_SELECTED",
-                                "equals": True,
-                                "then": [
-                                    {
-                                        "type": "if_variable",
-                                        "name": "ENABLE_CONNECTION_REQUEST",
-                                        "equals": True,
-                                        "then": [
-                                            {
-                                                "type": "connection_request",
-                                                "platform": "facebook",
-                                                "action": "request",
-                                                "timeout": 5,
-                                                "verify_timeout": 5,
-                                                "settle_seconds": 0.4,
-                                                "require_verified_target": "_people_target",
-                                                "save_as": "_people_connection_action",
-                                                "ignore_error": True,
-                                            }
-                                        ],
-                                        "else": [],
-                                    }
-                                ],
-                                "else": [],
-                            },
-                            {
-                                "id": "home_post_author_back_0",
-                                "type": "if_variable",
-                                "name": "COMMENTER_PROFILE_OPENED",
-                                "equals": True,
-                                "then": [
-                                    {"type": "key", "key": "back"},
-                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-                                ],
-                                "else": [],
-                            },
-                            {
-                                "id": "home_post_author_close_comments_0",
-                                "type": "if_variable",
-                                "name": "COMMENT_SHEET_OPENED",
-                                "equals": True,
-                                "then": [
-                                    {"type": "key", "key": "back"},
-                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-                                ],
-                                "else": [],
-                            },
-                            {
-                                "id": "home_post_author_open_1",
-                                "type": "social_open_commenter_from_post_match",
-                                "platform": "facebook",
-                                "source_var": "_post_scan",
-                                "action_index": 1,
-                                "required_keywords": "${PROFILE_REQUIRED_KEYWORDS}",
-                                "optional_keywords": "${PROFILE_OPTIONAL_KEYWORDS}",
-                                "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
-                                "min_score": "${PROFILE_MIN_SCORE}",
-                                "max_commenters": "${COMMENTER_SCAN_LIMIT}",
-                                "save_as": "_people_target",
-                                "save_success_as": "PEOPLE_PROFILE_SELECTED",
-                                "save_opened_as": "COMMENTER_PROFILE_OPENED",
-                                "save_sheet_opened_as": "COMMENT_SHEET_OPENED",
-                            },
-                            {
-                                "id": "home_post_author_connect_1",
-                                "type": "if_variable",
-                                "name": "PEOPLE_PROFILE_SELECTED",
-                                "equals": True,
-                                "then": [
-                                    {
-                                        "type": "if_variable",
-                                        "name": "ENABLE_CONNECTION_REQUEST",
-                                        "equals": True,
-                                        "then": [
-                                            {
-                                                "type": "connection_request",
-                                                "platform": "facebook",
-                                                "action": "request",
-                                                "timeout": 5,
-                                                "verify_timeout": 5,
-                                                "settle_seconds": 0.4,
-                                                "require_verified_target": "_people_target",
-                                                "save_as": "_people_connection_action",
-                                                "ignore_error": True,
-                                            }
-                                        ],
-                                        "else": [],
-                                    }
-                                ],
-                                "else": [],
-                            },
-                            {
-                                "id": "home_post_author_back_1",
-                                "type": "if_variable",
-                                "name": "COMMENTER_PROFILE_OPENED",
-                                "equals": True,
-                                "then": [
-                                    {"type": "key", "key": "back"},
-                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-                                ],
-                                "else": [],
-                            },
-                            {
-                                "id": "home_post_author_close_comments_1",
-                                "type": "if_variable",
-                                "name": "COMMENT_SHEET_OPENED",
-                                "equals": True,
-                                "then": [
-                                    {"type": "key", "key": "back"},
-                                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-                                ],
-                                "else": [],
-                            },
+                            *_fb_commenter_connect_steps(
+                                prefix="home_post_author",
+                                action_index=0,
+                            ),
+                            *_fb_commenter_connect_steps(
+                                prefix="home_post_author",
+                                action_index=1,
+                            ),
                             {
                                 "id": "home_post_author_scroll_next",
                                 "type": "scroll_down",
@@ -1937,6 +1897,164 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         ],
                     },
                     {"id": "home_post_author_finish", "type": "key", "key": "home"},
+                ],
+                "else": [{"type": "wait", "seconds": 0.1}],
+            },
+        ],
+    },
+
+    {
+        "name": "Nuôi Facebook - Gieo mầm bạn bè từ Group (account mới)",
+        "display_name": "Nuôi Facebook - Gieo mầm bạn bè từ Group (account mới)",
+        "category": "facebook",
+        "description": (
+            "Dành cho account chưa có bạn. Gợi ý 'Những người bạn có thể biết' của "
+            "một account 0 bạn là người lạ hoàn toàn vì Facebook chưa có tín hiệu "
+            "đồ thị nào, nên kịch bản này không dùng gợi ý. Thay vào đó: vào group "
+            "cùng chủ đề, like và comment thật để có mặt trong group, rồi kết bạn "
+            "với chính những người đang bình luận ở đó. Lời mời được gửi trên trang "
+            "cá nhân của họ — nơi nhìn thấy ngữ cảnh chung trước khi gửi, và nơi "
+            "trạng thái nút tự xác nhận đã gửi hay chưa."
+        ),
+        "tags": "facebook,nurture,cold-start,group,commenter,profile,connection,seed",
+        "variables": {
+            "POST_RUN_SECONDS": 5400,
+            "GROUP_SCAN_SECONDS": 2400,
+            "SEED_CYCLES": 9999,
+            "GROUP_SEARCHES": ["ten group 1", "ten group 2"],
+            "GROUP_ROW_TEXTS": ["Tên group 1", "Tên group 2"],
+            "GROUP_COUNT": 2,
+            "POST_KEYWORDS": ["AI", "công nghệ", "chia sẻ"],
+            "POST_MATCH_MODE": "any",
+            "POST_SCAN_TIMEOUT_SECONDS": 180,
+            # Comment thật trước khi kết bạn: người trong group thấy mặt mình
+            # trước khi nhận lời mời, nên tỉ lệ đồng ý cao hơn hẳn người lạ.
+            "COMMENT_TEXT": "Bài viết hữu ích, cảm ơn bạn đã chia sẻ.",
+            "POSTS_PER_BATCH": 2,
+            "MAX_SCROLLS": 6,
+            "SCROLL_X_RATIO": 0.5,
+            "COMMENTER_SCAN_LIMIT": 5,
+            # Account mới chưa có gì để so khớp, nên đừng đòi hồ sơ phải chứa
+            # keyword — ngữ cảnh ở đây là "cùng group", không phải nội dung profile.
+            "PROFILE_REQUIRED_KEYWORDS": [],
+            "PROFILE_OPTIONAL_KEYWORDS": ["AI", "công nghệ", "chia sẻ"],
+            # KHÔNG đưa "trang"/"page"/"nhóm"/"group" vào đây: forbidden khớp theo
+            # chuỗi con trên toàn bộ text trang cá nhân, nên "trang" loại sạch
+            # người tên Trang, còn "nhóm" loại đúng những người có dấu hiệu cùng
+            # group — tức là loại chính tín hiệu kịch bản này dựa vào.
+            "PROFILE_FORBIDDEN_KEYWORDS": [
+                "được tài trợ",
+                "sponsored",
+                "ẩn danh",
+                "anonymous",
+            ],
+            "PROFILE_MIN_SCORE": 0,
+            # Nhịp rất thấp: account mới gửi nhiều lời mời không ai đồng ý là
+            # cách nhanh nhất để tự huỷ.
+            "CONNECTS_PER_CYCLE": 2,
+            "ENABLE_CONNECTION_REQUEST": True,
+        },
+        "steps": [
+            *_fb_session_guard_steps("seed_friends", allow_login_recovery=False),
+            {
+                "id": "seed_friends_requires_ready_session",
+                "type": "if_variable",
+                "name": "PLATFORM_SESSION_READY",
+                "equals": True,
+                "then": [
+                    {
+                        "id": "seed_friends_group_loop",
+                        "type": "loop",
+                        "count": "${GROUP_COUNT}",
+                        "loop_var": "GROUP_INDEX",
+                        "duration_seconds": "${POST_RUN_SECONDS}",
+                        "steps": [
+                            {
+                                "type": "set_variable",
+                                "name": "GROUP_SEARCH_CURRENT",
+                                "from_list": "${GROUP_SEARCHES}",
+                                "from_list_index": "${GROUP_INDEX}",
+                            },
+                            {
+                                "type": "set_variable",
+                                "name": "GROUP_ROW_TEXT_CURRENT",
+                                "from_list": "${GROUP_ROW_TEXTS}",
+                                "from_list_index": "${GROUP_INDEX}",
+                            },
+                            *_fb_open_search_tab_steps(
+                                search_var="GROUP_SEARCH_CURRENT",
+                                tab_vi="Nhóm",
+                                tab_en="Groups",
+                                tab_description_contains="tab Nhóm",
+                            ),
+                            {
+                                "type": "tap_xml_match",
+                                "attr": "content-desc",
+                                "contains": "${GROUP_ROW_TEXT_CURRENT}",
+                                "clickable": True,
+                                "timeout": 10,
+                            },
+                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+                            # Tham gia nếu chưa là thành viên. Đã vào rồi thì
+                            # community_membership tự nhận trạng thái và bỏ qua.
+                            {
+                                "id": "seed_friends_join_group",
+                                "type": "community_membership",
+                                "platform": "facebook",
+                                "action": "join",
+                                "timeout": 6,
+                                "verify_timeout": 6,
+                                "settle_seconds": 0.4,
+                                "ignore_error": True,
+                                "save_as": "_group_join_action",
+                            },
+                            {
+                                "id": "seed_friends_cycle",
+                                "type": "loop",
+                                "count": "${SEED_CYCLES}",
+                                "duration_seconds": "${GROUP_SCAN_SECONDS}",
+                                "loop_var": "SEED_CYCLE",
+                                "steps": [
+                                    # Bước này làm hai việc cùng lúc: tạo sự hiện
+                                    # diện thật trong group, và sinh ra chính kho
+                                    # người bình luận để kết bạn ngay bên dưới.
+                                    {
+                                        "id": "seed_friends_scan_and_interact",
+                                        "type": "social_scan_posts_interact",
+                                        "platform": "facebook",
+                                        "keywords": "${POST_KEYWORDS}",
+                                        "keywords_var": "POST_KEYWORDS",
+                                        "match_mode": "${POST_MATCH_MODE}",
+                                        "comment_text": "${COMMENT_TEXT}",
+                                        "like_post": True,
+                                        "require_comment": True,
+                                        "target_count": "${POSTS_PER_BATCH}",
+                                        "max_scrolls": "${MAX_SCROLLS}",
+                                        "scroll_x_ratio": "${SCROLL_X_RATIO}",
+                                        "timeout": "${POST_SCAN_TIMEOUT_SECONDS}",
+                                        "save_as": "_post_scan",
+                                    },
+                                    *_fb_commenter_connect_steps(
+                                        prefix="seed_friends",
+                                        action_index=0,
+                                    ),
+                                    *_fb_commenter_connect_steps(
+                                        prefix="seed_friends",
+                                        action_index=1,
+                                    ),
+                                    {
+                                        "type": "scroll_down",
+                                        "repeats": 1,
+                                        "start_x_ratio": "${SCROLL_X_RATIO}",
+                                        "start_y_ratio": 0.65,
+                                        "end_y_ratio": 0.45,
+                                    },
+                                ],
+                            },
+                            *_fb_back_to_page_search_before_next_page_steps(),
+                        ],
+                    },
+                    {"id": "seed_friends_finish", "type": "key", "key": "home"},
                 ],
                 "else": [{"type": "wait", "seconds": 0.1}],
             },

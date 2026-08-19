@@ -828,3 +828,100 @@ def _is_fb_comment_extract(step: dict[str, Any]) -> bool:
 
 def _is_back_step(step: dict[str, Any]) -> bool:
     return step.get("type") == "key" and step.get("key") == "back"
+
+
+_SEED_TEMPLATE = "Nuôi Facebook - Gieo mầm bạn bè từ Group (account mới)"
+
+
+def test_seed_template_never_uses_friend_suggestions() -> None:
+    """A 0-friend account has no social graph, so "People you may know" is noise.
+
+    Facebook builds that list from mutual friends; with none, it falls back to
+    coarse signals and offers strangers. Sending there earns ignored requests —
+    the exact signal that gets a new account restricted.
+    """
+    template = BUILTIN_TEMPLATE_BY_NAME[_SEED_TEMPLATE]
+    flat_steps = _walk_steps(template["steps"])
+
+    assert all(
+        step.get("type") != "social_connect_visible_people" for step in flat_steps
+    )
+    # The friend request is issued on the person's own profile instead.
+    assert any(
+        step.get("type") == "social_open_commenter_from_post_match"
+        for step in flat_steps
+    )
+    assert any(step.get("type") == "connection_request" for step in flat_steps)
+
+
+def test_seed_template_interacts_before_connecting() -> None:
+    """Presence in the group comes first; the request is what follows it.
+
+    The scan step is not decoration: it puts the account in front of the people
+    it is about to add, and it is what harvests the commenters in the first
+    place.
+    """
+    template = BUILTIN_TEMPLATE_BY_NAME[_SEED_TEMPLATE]
+    flat_steps = _walk_steps(template["steps"])
+    types = [step.get("type") for step in flat_steps]
+
+    scan_at = types.index("social_scan_posts_interact")
+    connect_at = types.index("connection_request")
+    assert scan_at < connect_at
+
+    scan = flat_steps[scan_at]
+    assert scan["like_post"] is True
+    assert scan["require_comment"] is True
+    assert scan["comment_text"] == "${COMMENT_TEXT}"
+
+
+def test_seed_template_forbidden_keywords_keep_the_cold_start_signal() -> None:
+    """"nhóm"/"trang" as forbidden terms would veto the only usable signal.
+
+    Profile forbidden terms match as substrings over the whole profile text, so
+    "nhóm" rejects every profile showing a shared group — the one piece of
+    context a friendless account can manufacture — and "trang" rejects everyone
+    named Trang.
+    """
+    template = BUILTIN_TEMPLATE_BY_NAME[_SEED_TEMPLATE]
+    forbidden = template["variables"]["PROFILE_FORBIDDEN_KEYWORDS"]
+
+    for token in ("nhóm", "group", "trang", "page"):
+        assert token not in forbidden
+    # Ads and anonymised rows are still worth excluding.
+    assert "sponsored" in forbidden
+
+
+def test_seed_template_joins_the_group_before_working_it() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME[_SEED_TEMPLATE]
+    flat_steps = _walk_steps(template["steps"])
+    types = [step.get("type") for step in flat_steps]
+
+    assert types.index("community_membership") < types.index(
+        "social_scan_posts_interact"
+    )
+    join = next(s for s in flat_steps if s.get("type") == "community_membership")
+    assert join["action"] == "join"
+    # Already a member is the normal case, not a failure.
+    assert join["ignore_error"] is True
+
+
+def test_seed_template_passes_sequence_body_validator() -> None:
+    template = BUILTIN_TEMPLATE_BY_NAME[_SEED_TEMPLATE]
+
+    async def _validate():
+        return await validate_org_scenario_body(
+            None,
+            org_id="org",
+            scenario_id="scenario",
+            kind=ScenarioKind.SEQUENCE.value,
+            body={
+                "steps": template["steps"],
+                "variables": template["variables"],
+            },
+        )
+
+    result = asyncio.run(_validate())
+
+    assert result.status == "valid", result.errors
+    assert result.errors == []

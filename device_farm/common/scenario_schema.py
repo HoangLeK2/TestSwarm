@@ -50,6 +50,7 @@ SCENARIO_STEP_TYPES = [
     "social_scan_posts_interact",
     "social_open_author_from_post_match",
     "social_open_commenter_from_post_match",
+    "social_sync_connections",
     "content_interaction",
     "connection_request",
     "lease_connection_candidate",
@@ -284,6 +285,15 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "description": (
             "Platform adapter flow: open comments for a previously matched feed post, "
             "open a commenter profile, verify suitability, and save target proof."
+        ),
+    },
+    "social_sync_connections": {
+        "required": [],
+        "optional": ["platform", "metric", "timeout", "persist", "save_as"],
+        "description": (
+            "Read how many connections the account has from the screen it is on, "
+            "publish ACCOUNT_FRIEND_COUNT/ACCOUNT_STAGE for branching, and record "
+            "the observation so growth is measurable."
         ),
     },
     "community_membership": {

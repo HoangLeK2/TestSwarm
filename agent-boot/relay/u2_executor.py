@@ -4202,6 +4202,138 @@ def _flow_social_select_target(dev: Any, p: dict) -> dict:
     return resolver(dev, p)
 
 
+# ── Connection count (the feedback signal) ───────────────────────────────────
+#
+# Everything upstream — which playbook an account runs, whether a candidate
+# source is worth using, whether the account is healthy — depends on one number
+# nobody was reading: how many friends the account actually has. Sending is easy
+# to observe; growing is not, and only the second one matters.
+
+# "1.234 bạn bè", "1,2K friends", "567 người theo dõi". Vietnamese uses "." as
+# the thousands separator and "," as the decimal mark, which is the opposite of
+# the English formatting Facebook also emits, so both have to be handled.
+_FB_COUNT_LABELS: dict[str, tuple[str, ...]] = {
+    "friends": ("ban be", "friends", "friend"),
+    "followers": ("nguoi theo doi", "followers", "follower"),
+}
+_FB_COUNT_RE = r"(\d[\d.,]*)\s*(?:tr|m|k|n)?\s*"
+
+# An account with nobody gets an empty-state sentence instead of "0 bạn bè" —
+# observed on a real cold account. Without this the one account that most needs
+# classifying is the one that reads as "count not visible".
+_FB_EMPTY_COUNT_MARKERS: dict[str, tuple[str, ...]] = {
+    "friends": (
+        "khong co ban be nao de hien thi",
+        "khong co ban be nao",
+        "no friends to show",
+        "no friends yet",
+    ),
+    "followers": (
+        "khong co nguoi theo doi nao",
+        "no followers yet",
+    ),
+}
+
+
+def _fb_parse_count(token: str, suffix: str) -> int | None:
+    """Parse a Facebook count token, honouring both number formats."""
+    cleaned = token.strip()
+    if not cleaned:
+        return None
+    multiplier = {"k": 1_000, "n": 1_000, "m": 1_000_000, "tr": 1_000_000}.get(
+        suffix.strip(), 1
+    )
+    if multiplier > 1:
+        # Abbreviated counts carry a decimal mark: "1,2K" / "1.2K" are both 1200.
+        normalized = cleaned.replace(".", ",").replace(",", ".", 1).replace(",", "")
+        try:
+            return int(float(normalized) * multiplier)
+        except ValueError:
+            return None
+    # Exact counts use separators purely as grouping.
+    digits = re.sub(r"[.,]", "", cleaned)
+    return int(digits) if digits.isdigit() else None
+
+
+def _fb_read_count(hierarchy_xml: str, metric: str = "friends") -> dict[str, Any]:
+    """Read a follower/friend count off the profile screen.
+
+    Returns the highest match rather than the first: the screen can also show a
+    friend's count inside a suggestion row, and the account's own total is the
+    larger number on its own profile.
+    """
+    labels = _FB_COUNT_LABELS.get(metric, ())
+    if not labels:
+        return {"found": False, "reason": "unsupported_metric", "metric": metric}
+    root = _xml_parse_root(hierarchy_xml)
+    all_labels = _fb_all_labels(root)
+    empty_markers = _FB_EMPTY_COUNT_MARKERS.get(metric, ())
+    for label in all_labels:
+        folded = _fb_fold(label)
+        if any(marker in folded for marker in empty_markers):
+            return {
+                "found": True,
+                "metric": metric,
+                "value": 0,
+                "evidence": label[:120],
+                "source": "empty_state",
+            }
+    best: int | None = None
+    evidence = ""
+    for label in all_labels:
+        folded = _fb_fold(label)
+        for token in labels:
+            for match in re.finditer(_FB_COUNT_RE + re.escape(token), folded):
+                raw = match.group(1)
+                suffix = folded[match.end(1) : match.start(0) + len(match.group(0))]
+                suffix = suffix.replace(token, "").strip()
+                value = _fb_parse_count(raw, suffix)
+                if value is not None and (best is None or value > best):
+                    best = value
+                    evidence = label[:120]
+    if best is None:
+        return {"found": False, "reason": "count_not_visible", "metric": metric}
+    return {
+        "found": True,
+        "metric": metric,
+        "value": best,
+        "evidence": evidence,
+        "source": "count_label",
+    }
+
+
+def _flow_fb_read_connection_count(dev: Any, p: dict) -> dict:
+    """Read the account's own friend count from the profile screen."""
+    metric = str(p.get("metric") or "friends").strip().casefold()
+    xml = dev.dump_hierarchy(compressed=False)
+    result = _fb_read_count(xml, metric)
+    result["xml_chars"] = len(xml or "")
+    if not result.get("found"):
+        result["message"] = (
+            f"{metric} count is not visible on the current screen; "
+            "open the account profile first"
+        )
+    return result
+
+
+_READ_CONNECTION_COUNT_FLOWS: dict[str, Any] = {
+    "facebook": _flow_fb_read_connection_count,
+}
+
+
+def _flow_social_sync_connections(dev: Any, p: dict) -> dict:
+    platform = str(p.get("platform") or "facebook").strip().casefold()
+    flow = _READ_CONNECTION_COUNT_FLOWS.get(platform)
+    if flow is None:
+        return {
+            "found": False,
+            "reason": "unsupported_platform",
+            "message": f"connection-count read is not implemented for {platform!r}",
+            "platform": platform,
+        }
+    return flow(dev, p)
+
+
 _CONNECT_VISIBLE_PEOPLE_FLOWS: dict[str, Any] = {
     "facebook": _flow_fb_connect_visible_people,
 }
@@ -4234,6 +4366,7 @@ _FLOW_TABLE: dict[str, Any] = {
     "social_scan_posts_interact": _flow_social_scan_posts_interact,
     "social_open_author_from_post_match": _flow_social_open_author_from_post_match,
     "social_open_commenter_from_post_match": _flow_social_open_commenter_from_post_match,
+    "social_sync_connections": _flow_social_sync_connections,
 }
 
 

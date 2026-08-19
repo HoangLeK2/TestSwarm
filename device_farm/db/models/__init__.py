@@ -70,6 +70,7 @@ from .facebook_candidate import (
     FacebookCandidateReview,
     FacebookCandidateSettings,
 )
+from .account_graph_metric import GRAPH_METRICS, AccountGraphMetric
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
 from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgentToken
@@ -153,6 +154,8 @@ __all__ = [
     "FacebookCandidateEmbedding",
     "FacebookCandidateSettings",
     "FacebookCandidateReview",
+    "AccountGraphMetric",
+    "GRAPH_METRICS",
     "U2RecoveryEvent",
     "DeviceEvent",
     "RelayAgent",

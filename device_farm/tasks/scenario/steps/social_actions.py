@@ -52,6 +52,75 @@ def _wait(sc: ScenarioContext, seconds: float) -> bool:
     return False
 
 
+# uiautomator dies on its own — Funtouch OS reaps background processes, and a
+# long run reliably outlives at least one death. The farm already detects it and
+# asks agent-boot to restart the server, but that recovery is asynchronous: the
+# step that happened to be running when the session went away failed outright
+# and took the whole execution to the dead-letter queue. Two of five runs died
+# this way in one afternoon of real-device testing.
+_U2_TRANSIENT_MARKERS: tuple[str, ...] = (
+    "u2 flow not available",
+    "u2 batch not available",
+    "uiautomator2 not connected",
+    "atx-agent",
+    "jsonrpc http 502",
+    "server likely crashed",
+    "connection refused",
+    "remote end closed connection",
+)
+_U2_RECOVERY_ATTEMPTS = 3
+_U2_RECOVERY_BACKOFF_S = (2.0, 5.0, 9.0)
+
+
+def _is_transient_u2_error(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    return any(marker in text for marker in _U2_TRANSIENT_MARKERS)
+
+
+def _u2_flow_with_recovery(
+    sc: ScenarioContext,
+    name: str,
+    params: dict[str, Any],
+    *,
+    timeout: float,
+    priority: str = "visible",
+    result: dict[str, Any] | None = None,
+) -> Any:
+    """Run an agent-boot flow, waiting out a u2 session that is being rebuilt.
+
+    Retries only errors that mean "the session is gone", never ones that mean
+    "the flow ran and disagreed with you" — a scenario failure must not be
+    retried into a duplicate action.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_U2_RECOVERY_ATTEMPTS):
+        try:
+            return sc.device.u2_flow(name, params, timeout=timeout, priority=priority)
+        except Exception as exc:
+            if not _is_transient_u2_error(exc) or attempt == _U2_RECOVERY_ATTEMPTS - 1:
+                raise
+            last_exc = exc
+            delay = _U2_RECOVERY_BACKOFF_S[
+                min(attempt, len(_U2_RECOVERY_BACKOFF_S) - 1)
+            ]
+            log.warning(
+                "[%s] %s: u2 session unavailable (%s) — waiting %.1fs for recovery "
+                "(attempt %d/%d)",
+                sc.serial,
+                name,
+                exc,
+                delay,
+                attempt + 1,
+                _U2_RECOVERY_ATTEMPTS,
+            )
+            if result is not None:
+                result["u2_recovery_attempts"] = attempt + 1
+            if _wait(sc, delay):
+                raise
+    # Unreachable: the final attempt either returns or re-raises.
+    raise last_exc if last_exc else RuntimeError(f"{name}: u2 flow failed")
+
+
 def _resolve_keyword_list(sc: ScenarioContext, raw: Any, *, step_index: int) -> Any:
     if isinstance(raw, dict):
         var_name = str(raw.get("var") or raw.get("name") or "").strip()
@@ -670,7 +739,8 @@ def _handle_agent_boot_target_resolver(
         }
     )
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             flow_name,
             params,
             timeout=timeout,
@@ -998,7 +1068,8 @@ def handle_social_connect_visible_people(
     ):
         return
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             "social_connect_visible_people",
             {
                 "min_score": max(0, int(min_score or 40)),
@@ -1432,7 +1503,8 @@ def _handle_social_scan_posts_interact(
             )
             if key in step
         }
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             flow_name,
             {
                 "keywords": keywords or [],
@@ -1652,7 +1724,8 @@ def handle_social_open_author_from_post_match(
 
     timeout = max(1.0, float(step.get("timeout", 12.0) or 12.0))
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             flow_name,
             {
                 "platform": platform,

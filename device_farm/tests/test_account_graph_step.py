@@ -187,3 +187,80 @@ def test_followers_do_not_set_the_friend_stage() -> None:
     assert result["count"] == 1500
     assert result["stage"] is None
     assert "ACCOUNT_FRIEND_COUNT" not in sc.var_ctx.values
+
+
+# ── Surviving a uiautomator restart ──────────────────────────────────────────
+
+
+class _FlakyDevice:
+    """Fails with a transient u2 error N times, then succeeds."""
+
+    def __init__(self, failures: int, error: str, result: object) -> None:
+        self.remaining = failures
+        self.error = error
+        self.result = result
+        self.attempts = 0
+
+    def u2_flow(self, name, params, timeout=None, priority=None):
+        self.attempts += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise RuntimeError(self.error)
+        return self.result
+
+
+def _fast_backoff(monkeypatch) -> None:
+    import tasks.scenario.steps.social_actions as sa
+
+    monkeypatch.setattr(sa, "_U2_RECOVERY_BACKOFF_S", (0.0, 0.0, 0.0))
+
+
+def test_step_waits_out_a_uiautomator_restart(monkeypatch) -> None:
+    """uiautomator dies on its own; the farm restarts it asynchronously.
+
+    Before this, the step that happened to be running when the session went
+    away failed outright and took the whole execution to the dead-letter queue —
+    two of five real-device runs died that way in one afternoon.
+    """
+    _fast_backoff(monkeypatch)
+    device = _FlakyDevice(
+        failures=2,
+        error="u2 flow not available for this device",
+        result={"found": True, "value": 7, "source": "count_label"},
+    )
+
+    result, sc = _run(device, _step())
+
+    assert result["ok"] is True
+    assert result["count"] == 7
+    assert device.attempts == 3
+    assert sc.var_ctx.values["ACCOUNT_FRIEND_COUNT"] == 7
+
+
+def test_a_persistently_dead_session_still_fails(monkeypatch) -> None:
+    _fast_backoff(monkeypatch)
+    device = _FlakyDevice(
+        failures=99,
+        error="u2 flow not available for this device",
+        result=None,
+    )
+
+    result, _sc = _run(device, _step())
+
+    assert result["ok"] is False
+    assert result["outcome"] == "count_read_failed"
+
+
+def test_a_real_failure_is_not_retried(monkeypatch) -> None:
+    """Retrying a flow that ran and disagreed would duplicate its side effects."""
+    _fast_backoff(monkeypatch)
+    device = _FlakyDevice(
+        failures=99,
+        error="element not found on screen",
+        result=None,
+    )
+
+    result, _sc = _run(device, _step())
+
+    assert result["ok"] is False
+    assert device.attempts == 1

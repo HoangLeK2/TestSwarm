@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from services.platform_readiness import DEFAULT_PLATFORM
 from services.social_ext import supports_step
 from tasks.scenario.steps import register_step
+from tasks.scenario.steps.social_actions import _u2_flow_with_recovery
 
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
@@ -57,7 +58,8 @@ def handle_social_sync_connections(
     timeout = max(1.0, float(step.get("timeout", 8.0) or 8.0))
 
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             _STEP_TYPE,
             {"platform": platform, "metric": metric},
             timeout=timeout,

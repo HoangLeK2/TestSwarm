@@ -2557,3 +2557,93 @@ def test_destructive_label_vocabulary(label: str) -> None:
 )
 def test_ordinary_controls_are_not_blocked(label: str) -> None:
     assert u2_exec_mod._fb_is_destructive_label(label) is False
+
+
+# ── Screens the scenario did not ask for ─────────────────────────────────────
+
+
+def _screen(*labels: str, sheet: bool = False) -> str:
+    nodes = [_fb_node("", bounds="[0,0][1260,2800]")]
+    nodes += [
+        _fb_node(label, bounds=f"[0,{100 * i}][1260,{100 * i + 80}]")
+        for i, label in enumerate(labels)
+    ]
+    if sheet:
+        # Bottom sheet: full width, anchored to the bottom, partial height.
+        nodes.append(_fb_node("", bounds="[0,1900][1260,2800]"))
+    return _fb_xml(*nodes)
+
+
+def test_ordinary_screen_is_not_treated_as_an_anomaly() -> None:
+    assert (
+        u2_exec_mod._fb_classify_surface(_screen("Bạn bè", "Thêm bạn bè"))["state"]
+        == u2_exec_mod.SURFACE_OK
+    )
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Bạn tạm thời bị chặn",
+        "Xác nhận danh tính của bạn",
+        "Tài khoản của bạn đã bị vô hiệu hóa",
+        "Bạn đang đi quá nhanh",
+    ],
+)
+def test_account_walls_are_never_retryable(label: str) -> None:
+    """Repeating an action against a checkpoint is how a recoverable account
+    becomes an unrecoverable one."""
+    surface = u2_exec_mod._fb_classify_surface(_screen(label))
+
+    assert surface["state"] == u2_exec_mod.SURFACE_BLOCKED
+    assert surface["retryable"] is False
+
+
+def test_a_sheet_is_dismissable_not_a_wall() -> None:
+    """One Back clears it; stopping the run for it would be an overreaction."""
+    surface = u2_exec_mod._fb_classify_surface(
+        _screen("Tại sao tôi nhìn thấy những gợi ý kết bạn này?")
+    )
+
+    assert surface["state"] == u2_exec_mod.SURFACE_DISMISSABLE
+    assert surface["retryable"] is True
+
+
+def test_overlay_is_detected_by_shape_not_by_resource_id() -> None:
+    """Facebook renames ids between builds; a bottom sheet is always a wide
+    container anchored to the bottom edge."""
+    surface = u2_exec_mod._fb_classify_surface(_screen("Bạn bè", sheet=True))
+
+    assert surface["state"] == u2_exec_mod.SURFACE_DISMISSABLE
+    assert surface["overlay_bounds"] is not None
+
+
+def test_blocked_account_stops_the_friend_flow_without_tapping(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    blocked = _fb_xml(
+        _fb_node("Bạn tạm thời bị chặn", bounds="[40,100][900,160]"),
+        _fb_node("Nguyen Van A", bounds="[40,300][400,345]"),
+        _fb_node("3 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    dev = _FlowDevice(blocked)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["reason"] == "account_blocked"
+    assert result["retryable"] is False
+    assert dev.clicks == []
+
+
+def test_screen_fingerprint_is_stable_and_content_addressed() -> None:
+    """Unknown screens are worth counting: what appears forty times deserves a
+    handler, what appears once does not."""
+    first = u2_exec_mod._fb_surface_fingerprint(_screen("Bạn bè", "Gợi ý"))
+    same = u2_exec_mod._fb_surface_fingerprint(_screen("Gợi ý", "Bạn bè"))
+    other = u2_exec_mod._fb_surface_fingerprint(_screen("Marketplace"))
+
+    assert first == same
+    assert first != other

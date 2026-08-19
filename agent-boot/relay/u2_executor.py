@@ -1219,6 +1219,136 @@ def _fb_label_at_point(root: Any, x: int, y: int) -> str:
     return best[1] if best else ""
 
 
+# ── Screens the scenario did not ask for ─────────────────────────────────────
+#
+# A run meets three different kinds of unexpected screen and they need opposite
+# handling, so lumping them into one "not ready" outcome guarantees getting one
+# of them wrong: either retrying something that must stop, or stopping for
+# something a single Back would have cleared.
+
+SURFACE_OK = "ok"
+SURFACE_DISMISSABLE = "dismissable"     # a sheet or dialog over our screen
+SURFACE_BLOCKED = "blocked"             # checkpoint / re-login / restriction
+SURFACE_UNKNOWN = "unknown"
+
+# Account-level walls. These must never be retried: repeating an action against
+# a checkpoint is how a recoverable account becomes an unrecoverable one.
+_FB_BLOCKING_MARKERS: tuple[str, ...] = (
+    "tam thoi bi chan",
+    "temporarily blocked",
+    "ban tam thoi bi chan",
+    "xac nhan danh tinh",
+    "confirm your identity",
+    "xac minh danh tinh",
+    "verify your identity",
+    "tai khoan cua ban da bi vo hieu hoa",
+    "account has been disabled",
+    "dang nhap lai",
+    "log in again",
+    "nhap ma",
+    "enter the code",
+    "chung toi da phat hien hoat dong bat thuong",
+    "unusual activity",
+    "ban dang di qua nhanh",
+    "you're going too fast",
+    "you are going too fast",
+)
+
+# Sheets and dialogs that sit on top of a screen we can still use.
+_FB_DISMISSABLE_MARKERS: tuple[str, ...] = (
+    "nhan goi y ket ban tot hon",
+    "get better friend suggestions",
+    "improve friend suggestions",
+    "tai sao toi nhin thay",
+    "why am i seeing",
+    "an nhung nguoi ban co the biet",
+    "hide people you may know",
+    "bat thong bao",
+    "turn on notifications",
+    "khong phai bay gio",
+    "not now",
+    "de sau",
+    "maybe later",
+)
+
+
+def _fb_overlay_bounds(root: Any) -> tuple[int, int, int, int] | None:
+    """Bounds of a sheet/dialog covering the lower part of the screen.
+
+    Detected by geometry rather than by resource-id: Facebook renames ids freely
+    between builds, but a bottom sheet is always a large container anchored to
+    the bottom edge. The content underneath stays in the hierarchy, so without
+    this a flow happily computes coordinates for buttons nobody can press.
+    """
+    screen_right = _fb_screen_right(root)
+    screen_bottom = 0
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds:
+            screen_bottom = max(screen_bottom, bounds[3])
+    if screen_bottom <= 0 or screen_right <= 0:
+        return None
+
+    for node in root.iter("node"):
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds:
+            continue
+        left, top, right, bottom = bounds
+        width = right - left
+        height = bottom - top
+        covers_width = width >= screen_right * 0.9
+        anchored_to_bottom = bottom >= screen_bottom * 0.97
+        # A sheet covers a good part of the screen but not all of it: full-height
+        # nodes are the page itself.
+        sheet_height = screen_bottom * 0.25 <= height <= screen_bottom * 0.85
+        if covers_width and anchored_to_bottom and sheet_height:
+            return bounds
+    return None
+
+
+def _fb_classify_surface(hierarchy_xml: str) -> dict[str, Any]:
+    """What kind of screen are we on, and what should the caller do about it?"""
+    root = _xml_parse_root(hierarchy_xml)
+    labels = _fb_all_labels(root)
+    folded_all = _fb_fold(" ".join(labels))
+
+    for marker in _FB_BLOCKING_MARKERS:
+        if marker in folded_all:
+            return {
+                "state": SURFACE_BLOCKED,
+                "marker": marker,
+                "retryable": False,
+                "message": (
+                    "account-level block detected; stopping without retrying"
+                ),
+            }
+
+    overlay = _fb_overlay_bounds(root)
+    dismiss_marker = next(
+        (marker for marker in _FB_DISMISSABLE_MARKERS if marker in folded_all), ""
+    )
+    if overlay is not None or dismiss_marker:
+        return {
+            "state": SURFACE_DISMISSABLE,
+            "marker": dismiss_marker,
+            "overlay_bounds": list(overlay) if overlay else None,
+            "retryable": True,
+        }
+
+    return {"state": SURFACE_OK, "retryable": True}
+
+
+def _fb_surface_fingerprint(hierarchy_xml: str) -> str:
+    """Stable id for a screen, so repeat sightings can be counted.
+
+    Unknown screens are worth cataloguing rather than guessing at: what shows up
+    forty times a week deserves a handler, and what shows up once does not.
+    """
+    root = _xml_parse_root(hierarchy_xml)
+    labels = sorted({_fb_fold(label) for label in _fb_all_labels(root) if label})
+    return hashlib.sha256(" ".join(labels[:40]).encode("utf-8")).hexdigest()[:16]
+
+
 def _fb_is_add_friend_label(label: str) -> bool:
     folded = _fb_fold(label)
     return any(
@@ -3824,6 +3954,23 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 )
                 last_xml = None
                 root = _xml_parse_root(before_xml)
+                surface = _fb_classify_surface(before_xml)
+                if surface["state"] == SURFACE_BLOCKED:
+                    # Never retried: repeating an action against a checkpoint is
+                    # how a recoverable account becomes an unrecoverable one.
+                    return {
+                        "verified": False,
+                        "batch": True,
+                        "reason": "account_blocked",
+                        "retryable": False,
+                        "message": str(surface.get("message") or "account-level block"),
+                        "surface_state": surface["state"],
+                        "surface_marker": surface.get("marker"),
+                        "surface_fingerprint": _fb_surface_fingerprint(before_xml),
+                        "sent_count": len(sent),
+                        "sent": sent,
+                        "screens_scanned": screens_scanned,
+                    }
                 if _fb_dismiss_friend_suggestion_prompt(dev, root):
                     time.sleep(wait_s)
                     before_xml = dev.dump_hierarchy(compressed=False)

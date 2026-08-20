@@ -954,3 +954,22 @@ def test_seed_template_returns_to_the_feed_before_each_group() -> None:
 
     reset_at = types.index("if_element")
     assert reset_at < types.index("tap_xml_match")
+
+
+def test_connection_request_steps_carry_a_stable_id() -> None:
+    """The durable ledger keys an action by step id and refuses claims without one.
+
+    Observed on a real device: the request reached connection_request and then
+    failed with "Enabled account action ledger requires execution id and stable
+    step id" — so the send never happened.
+    """
+    for name in (
+        _SEED_TEMPLATE,
+        "Nuôi Facebook - Kết bạn từ người bình luận post Home đúng keyword",
+    ):
+        flat_steps = _walk_steps(BUILTIN_TEMPLATE_BY_NAME[name]["steps"])
+        requests = [s for s in flat_steps if s.get("type") == "connection_request"]
+        assert requests, f"{name} has no connection_request step"
+        ids = [str(s.get("id") or "") for s in requests]
+        assert all(ids), f"{name}: connection_request without an id"
+        assert len(set(ids)) == len(ids), f"{name}: duplicate connection_request ids"

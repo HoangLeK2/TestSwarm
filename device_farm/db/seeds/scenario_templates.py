@@ -336,6 +336,11 @@ def _fb_commenter_connect_steps(
                     "equals": True,
                     "then": [
                         {
+                            # The durable ledger keys an action by step id; without
+                            # one it refuses the claim and the request never goes
+                            # out. Unique per index so two sends in one cycle stay
+                            # distinguishable.
+                            "id": f"{prefix}_connection_request_{action_index}",
                             "type": "connection_request",
                             "platform": "facebook",
                             "action": "request",

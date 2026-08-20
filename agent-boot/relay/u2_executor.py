@@ -1943,6 +1943,51 @@ def _fb_post_partial_score(
     return score, matched_terms
 
 
+def _fb_dedupe_action_buttons(
+    buttons: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Collapse the same on-screen control reported at several nesting levels.
+
+    Facebook renders one button as a clickable Button wrapping a clickable
+    ViewGroup carrying the same label, so counting nodes counts each control
+    twice. Callers use the count to decide "this profile offers exactly one
+    connection action" — with duplicates that test never passes and a perfectly
+    ordinary profile is rejected as ambiguous.
+
+    Two nodes are the same control when their labels agree and their bounds
+    overlap; the outer one is kept because it is the reliable tap target.
+    """
+    groups: list[dict[str, Any]] = []
+    for button in buttons:
+        bounds = button.get("bounds") or []
+        if len(bounds) != 4:
+            continue
+        folded = _fb_fold(str(button.get("label") or ""))
+        merged = False
+        for group in groups:
+            if _fb_fold(str(group.get("label") or "")) != folded:
+                continue
+            other = group.get("bounds") or []
+            if len(other) != 4:
+                continue
+            overlaps = (
+                bounds[0] <= other[2]
+                and other[0] <= bounds[2]
+                and bounds[1] <= other[3]
+                and other[1] <= bounds[3]
+            )
+            if overlaps:
+                area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1])
+                other_area = (other[2] - other[0]) * (other[3] - other[1])
+                if area > other_area:
+                    group["bounds"] = bounds
+                merged = True
+                break
+        if not merged:
+            groups.append(dict(button))
+    return groups
+
+
 def _fb_dedupe_post_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
     for candidate in sorted(
@@ -2593,7 +2638,7 @@ def _fb_like_took_effect(
         after_xml = dev.dump_hierarchy(compressed=False)
     except Exception:
         return False
-    candidates, _qualified, _expands = _fb_visible_post_candidates(
+    candidates, _qualified, _expands, _rows = _fb_visible_post_candidates(
         after_xml,
         keywords=keywords,
         match_mode=match_mode,
@@ -2668,6 +2713,10 @@ def _fb_visible_post_candidates(
 
     candidates: list[dict[str, Any]] = []
     expand_requests: list[dict[str, Any]] = []
+    # Rows whose structure was recognised, counted before any keyword filter.
+    # `candidates` only ever holds posts that already matched, so it cannot tell
+    # "nothing on screen looked like a post" from "posts found, keywords missed".
+    rows_seen = 0
     for comment_bounds, comment_label in comment_nodes:
         comment_center_y = (comment_bounds[1] + comment_bounds[3]) // 2
         nearby_likes = [
@@ -2717,6 +2766,7 @@ def _fb_visible_post_candidates(
             like_bounds=like_bounds,
             comment_bounds=comment_bounds,
         )
+        rows_seen += 1
         matched, matched_terms = _fb_scan_post_keyword_match(
             context_text,
             terms=keywords,
@@ -2754,7 +2804,7 @@ def _fb_visible_post_candidates(
         candidates,
         key=lambda item: (int(item["comment_bounds"][1]), -int(item["score"])),
     )
-    return candidates, qualified, expand_requests
+    return candidates, qualified, expand_requests, rows_seen
 
 
 def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
@@ -2781,6 +2831,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     seen_expand_keys: set[str] = set()
     actions: list[dict[str, Any]] = []
     total_candidates = 0
+    total_rows_seen = 0
     screens_scanned = 0
     scrolls = 0
     overlay_closes = 0
@@ -2802,7 +2853,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
         last_xml = xml
         screen_expands = 0
         while True:
-            candidates, qualified, expand_requests = _fb_visible_post_candidates(
+            candidates, qualified, expand_requests, rows_seen = _fb_visible_post_candidates(
                 xml,
                 keywords=keywords,
                 match_mode=match_mode,
@@ -2825,6 +2876,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
             xml = dev.dump_hierarchy(compressed=False)
             last_xml = xml
         total_candidates += len(candidates)
+        total_rows_seen += rows_seen
         screens_scanned += 1
 
         for candidate in qualified:
@@ -2993,7 +3045,20 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
             "verified": False,
             "batch": True,
             "reason": "no_matching_post",
-            "message": "no visible social post matched configured keywords",
+            # Say which half failed. "Nothing matched" reads the same whether
+            # the scanner saw twenty posts and rejected them all or never
+            # recognised a post at all, and those need opposite fixes: one is a
+            # keyword problem, the other means the action row was not found.
+            "message": (
+                "no post action row was recognised on any screen scanned"
+                if total_rows_seen == 0
+                else (
+                    f"{total_rows_seen} post(s) recognised across "
+                    f"{screens_scanned} screen(s) but none matched keywords "
+                    f"{keywords!r} (match_mode={match_mode!r})"
+                )
+            ),
+            "rows_seen": total_rows_seen,
             "target_count": target_count,
             "interacted_count": 0,
             "candidate_count": total_candidates,
@@ -3018,6 +3083,7 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
             [item for item in verified_actions if item.get("commented")]
         ),
         "candidate_count": total_candidates,
+        "rows_seen": total_rows_seen,
         "screens_scanned": screens_scanned,
         "scrolls": scrolls,
         "overlay_closes": overlay_closes,
@@ -3249,6 +3315,7 @@ def _flow_fb_select_people_profile(dev: Any, p: dict) -> dict:
             and _fb_is_connection_action_label(label)
         ):
             action_buttons.append({"label": label, "bounds": list(bounds)})
+    action_buttons = _fb_dedupe_action_buttons(action_buttons)
 
     if forbidden_hit or missing or profile_score < min_score:
         return {
@@ -3385,6 +3452,7 @@ def _flow_fb_open_author_from_post_match(dev: Any, p: dict) -> dict:
             continue
         if _fb_is_add_friend_label(label) or _fb_is_connection_action_label(label):
             action_buttons.append({"label": label, "bounds": list(bounds)})
+    action_buttons = _fb_dedupe_action_buttons(action_buttons)
 
     if forbidden_hit or missing or profile_score < min_score:
         return {
@@ -3611,6 +3679,7 @@ def _flow_fb_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
                 continue
             if _fb_is_add_friend_label(label) or _fb_is_connection_action_label(label):
                 action_buttons.append({"label": label, "bounds": list(bounds)})
+        action_buttons = _fb_dedupe_action_buttons(action_buttons)
 
         if (
             not forbidden_hit
@@ -3663,10 +3732,22 @@ def _flow_fb_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
             press("back")
             time.sleep(min(max(wait_s, 0.2), 0.8))
 
+    reason_counts: dict[str, int] = {}
+    for item in tried:
+        key = str(item.get("reason") or "unknown")
+        reason_counts[key] = reason_counts.get(key, 0) + 1
+    breakdown = ", ".join(f"{k}×{v}" for k, v in sorted(reason_counts.items()))
     return {
         "verified": False,
         "reason": "no_verified_commenter_profile",
-        "message": "no commenter profile satisfied profile keywords",
+        # Name the reason each profile was turned away. "Satisfied no keywords"
+        # is the same sentence whether the profile scored too low, tripped a
+        # forbidden term, or simply showed more than one connection control —
+        # and those need different fixes.
+        "message": (
+            f"opened {len(tried)} commenter profile(s), none accepted"
+            + (f" ({breakdown})" if breakdown else "")
+        ),
         "profile_opened": False,
         "comment_sheet_opened": True,
         "candidate_count": len(candidates),
@@ -4377,6 +4458,7 @@ def _flow_fb_select_post_target(dev: Any, p: dict) -> dict:
             bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
             if bounds and _fb_is_clickable(node) and _fb_is_content_action_label(label):
                 action_buttons.append({"label": label, "bounds": list(bounds)})
+        action_buttons = _fb_dedupe_action_buttons(action_buttons)
         partial_detail_score, partial_detail_matches = _fb_post_partial_score(
             detail_text,
             display_text=display_text,
@@ -4457,6 +4539,7 @@ def _flow_fb_select_post_target(dev: Any, p: dict) -> dict:
         bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
         if bounds and _fb_is_clickable(node) and _fb_is_content_action_label(label):
             action_buttons.append({"label": label, "bounds": list(bounds)})
+    action_buttons = _fb_dedupe_action_buttons(action_buttons)
 
     partial_detail_score, partial_detail_matches = _fb_post_partial_score(
         detail_text,

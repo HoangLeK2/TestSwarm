@@ -601,7 +601,7 @@ def test_fb_visible_post_candidates_include_author_binding():
         ),
     )
 
-    _candidates, qualified, _expand = u2_exec_mod._fb_visible_post_candidates(
+    _candidates, qualified, _expand, _rows = u2_exec_mod._fb_visible_post_candidates(
         feed,
         keywords=u2_exec_mod._fb_scan_keyword_terms(["AI"]),
         match_mode="any",
@@ -2403,7 +2403,7 @@ def test_post_identity_survives_being_liked():
     terms = u2_exec_mod._DEFAULT_SOCIAL_POST_TERMS
     seen = set()
     for label in ("Thich", "Bo thich"):
-        candidates, _q, _e = u2_exec_mod._fb_visible_post_candidates(
+        candidates, _q, _e, _rows = u2_exec_mod._fb_visible_post_candidates(
             _feed_post_xml(label),
             keywords=["ai"],
             match_mode="any",
@@ -2647,3 +2647,86 @@ def test_screen_fingerprint_is_stable_and_content_addressed() -> None:
 
     assert first == same
     assert first != other
+
+
+def test_empty_scan_says_which_half_failed(monkeypatch):
+    """"Nothing matched" reads the same for two opposite problems.
+
+    Zero recognised posts means the action row was not found — a parsing
+    problem. Posts recognised but none matching means the keywords are wrong.
+    Reporting them identically sends the operator to the wrong fix.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+
+    # No like/comment controls at all.
+    barren = _fb_xml(_fb_node("Chào buổi sáng", bounds="[40,100][900,160]"))
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        _FlowDevice(barren),
+        {"platform": "facebook", "keywords": ["ai"], "target_count": 1, "max_scrolls": 0},
+    )
+    assert result["rows_seen"] == 0
+    assert "no post action row was recognised" in result["message"]
+
+    # A real post, but the keyword is absent from it.
+    post = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("Hom nay troi dep", bounds="[40,150][900,200]"),
+        _fb_node("Thich", bounds="[100,300][250,360]", clickable=True),
+        _fb_node("Binh luan", bounds="[300,300][450,360]", clickable=True),
+    )
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        _FlowDevice(post),
+        {
+            "platform": "facebook",
+            "keywords": ["wordpress"],
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+    assert result["rows_seen"] >= 1
+    assert result["candidate_count"] == 0
+    assert "none matched keywords" in result["message"]
+
+
+def test_one_button_reported_at_two_nesting_levels_counts_once():
+    """Facebook wraps a clickable Button around a clickable ViewGroup.
+
+    Both carry the same label, so counting nodes counts every control twice.
+    The commenter flow accepts a profile only when it offers exactly one
+    connection action — with duplicates that test never passes and an ordinary
+    profile is rejected as ambiguous.
+    """
+    deduped = u2_exec_mod._fb_dedupe_action_buttons(
+        [
+            {"label": "Thêm bạn bè", "bounds": [406, 409, 1218, 535]},
+            {"label": "Thêm bạn bè", "bounds": [645, 443, 978, 505]},
+        ]
+    )
+
+    assert len(deduped) == 1
+    # The outer node is kept: it is the reliable tap target.
+    assert deduped[0]["bounds"] == [406, 409, 1218, 535]
+
+
+def test_two_separate_controls_stay_separate():
+    """Deduping must not hide a genuinely ambiguous profile."""
+    deduped = u2_exec_mod._fb_dedupe_action_buttons(
+        [
+            {"label": "Thêm bạn bè", "bounds": [40, 100, 400, 200]},
+            {"label": "Hủy lời mời", "bounds": [600, 100, 900, 200]},
+        ]
+    )
+
+    assert len(deduped) == 2
+
+
+def test_same_label_far_apart_stays_separate():
+    """Two Add Friend buttons on different rows are two people, not one."""
+    deduped = u2_exec_mod._fb_dedupe_action_buttons(
+        [
+            {"label": "Thêm bạn bè", "bounds": [600, 100, 900, 200]},
+            {"label": "Thêm bạn bè", "bounds": [600, 800, 900, 900]},
+        ]
+    )
+
+    assert len(deduped) == 2

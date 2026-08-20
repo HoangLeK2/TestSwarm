@@ -2730,3 +2730,124 @@ def test_same_label_far_apart_stays_separate():
     )
 
     assert len(deduped) == 2
+
+
+# ── The profile owner's own connection control ───────────────────────────────
+
+
+def _profile_xml(owner: str, owner_button: str, *, suggestions: bool = True) -> str:
+    """A profile page: header with the owner's action row, then suggestions."""
+    nodes = [
+        _fb_node("Quay lại", bounds="[20,60][120,160]", clickable=True),
+        _fb_node(owner, bounds="[300,300][900,380]"),
+        _fb_node(owner_button, bounds="[300,450][900,560]", clickable=True),
+        _fb_node("Nhắn tin", bounds="[920,450][1200,560]", clickable=True),
+    ]
+    if suggestions:
+        nodes += [
+            _fb_node("Những người bạn có thể biết", bounds="[40,900][900,970]"),
+            _fb_node("Nguoi La A", bounds="[40,1000][400,1060]"),
+            _fb_node("Thêm bạn bè", bounds="[600,1000][900,1080]", clickable=True),
+            _fb_node("Nguoi La B", bounds="[40,1200][400,1260]"),
+            _fb_node("Thêm bạn bè", bounds="[600,1200][900,1280]", clickable=True),
+        ]
+    return _fb_xml(*nodes)
+
+
+def test_owner_button_is_found_past_the_suggestion_cards() -> None:
+    """A profile page lists other people with their own Add Friend buttons.
+
+    Counting connection controls can never identify the owner's, and taking the
+    topmost stops being the owner's the moment the page is scrolled — which
+    friends the wrong person silently.
+    """
+    owner = u2_exec_mod._fb_profile_owner_connection(
+        _profile_xml("Tran Van B", "Thêm bạn bè"), "Tran Van B"
+    )
+
+    assert owner["found"] is True
+    assert owner["state"] == u2_exec_mod.FRIEND_STATE_AVAILABLE
+    # The header button, not one belonging to a suggestion row.
+    assert owner["bounds"] == [300, 450, 900, 560]
+
+
+@pytest.mark.parametrize(
+    ("label", "state"),
+    [
+        ("Thêm bạn bè", u2_exec_mod.FRIEND_STATE_AVAILABLE),
+        ("Hủy lời mời", u2_exec_mod.FRIEND_STATE_PENDING),
+        ("Đã gửi lời mời", u2_exec_mod.FRIEND_STATE_PENDING),
+        ("Bạn bè", u2_exec_mod.FRIEND_STATE_CONNECTED),
+    ],
+)
+def test_owner_state_is_read_not_counted(label: str, state: str) -> None:
+    """Already-sent and already-friends are answers, not ambiguity.
+
+    Counting controls lumped them in with the failure cases, so a person who had
+    already been asked looked identical to a page we could not read.
+    """
+    owner = u2_exec_mod._fb_profile_owner_connection(
+        _profile_xml("Le Thi C", label), "Le Thi C"
+    )
+
+    assert owner["found"] is True
+    assert owner["state"] == state
+
+
+def test_unnamed_owner_is_refused_rather_than_guessed() -> None:
+    """No anchor means no safe choice; refusing beats picking one."""
+    owner = u2_exec_mod._fb_profile_owner_connection(
+        _profile_xml("Tran Van B", "Thêm bạn bè"), "Someone Else"
+    )
+
+    assert owner["found"] is False
+    assert owner["reason"] == "owner_name_not_visible"
+
+
+def test_owner_name_matches_whole_label_only() -> None:
+    """Substring matching on folded Vietnamese is how "Trang" ate every Trang."""
+    xml = _fb_xml(
+        _fb_node("Nguyen Thuy Trang", bounds="[300,300][900,380]"),
+        _fb_node("Thêm bạn bè", bounds="[300,450][900,560]", clickable=True),
+    )
+
+    assert u2_exec_mod._fb_profile_owner_connection(xml, "Trang")["found"] is False
+    assert u2_exec_mod._fb_profile_owner_connection(xml, "Nguyen Thuy Trang")["found"] is True
+
+
+def test_profile_without_any_connection_control_is_refused() -> None:
+    xml = _fb_xml(
+        _fb_node("Pham Van D", bounds="[300,300][900,380]"),
+        _fb_node("Nhắn tin", bounds="[300,450][900,560]", clickable=True),
+    )
+
+    owner = u2_exec_mod._fb_profile_owner_connection(xml, "Pham Van D")
+
+    assert owner["found"] is False
+    assert owner["reason"] == "owner_action_row_not_found"
+
+
+def test_scroll_to_top_does_not_read_the_hierarchy() -> None:
+    """A dump is the expensive call; two per swipe pushed the flow past its
+    relay timeout on a real device."""
+
+    class _CountingDevice:
+        def __init__(self) -> None:
+            self.dumps = 0
+            self.swipes = 0
+
+        def window_size(self):
+            return (1260, 2800)
+
+        def dump_hierarchy(self, compressed: bool = False):
+            self.dumps += 1
+            return "<hierarchy/>"
+
+        def swipe(self, *_args, **_kwargs):
+            self.swipes += 1
+
+    dev = _CountingDevice()
+    swipes = u2_exec_mod._fb_scroll_profile_to_top(dev)
+
+    assert swipes > 0
+    assert dev.dumps == 0

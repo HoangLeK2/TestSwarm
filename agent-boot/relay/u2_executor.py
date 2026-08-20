@@ -1943,6 +1943,130 @@ def _fb_post_partial_score(
     return score, matched_terms
 
 
+# Connection state of the profile owner's own control. Facebook shows the same
+# three states everywhere; the farm already speaks this vocabulary in
+# services/social_actions/facebook.py.
+FRIEND_STATE_AVAILABLE = "available"
+FRIEND_STATE_PENDING = "pending"
+FRIEND_STATE_CONNECTED = "connected"
+
+_FB_FRIEND_CONNECTED_LABELS: tuple[str, ...] = ("ban be", "friends", "ban")
+
+# Everything under this heading belongs to other people. A profile page carries
+# suggestion cards with their own Add Friend buttons, which is why counting the
+# connection controls on screen can never identify the owner's.
+_FB_PROFILE_SUGGESTION_HEADINGS: tuple[str, ...] = (
+    "nhung nguoi ban co the biet",
+    "people you may know",
+    "goi y cho ban",
+    "suggested for you",
+)
+
+
+def _fb_scroll_profile_to_top(dev: Any, *, max_swipes: int = 2) -> int:
+    """Swipe a profile page back toward its header. Returns swipes performed.
+
+    Deliberately does not read the hierarchy between swipes: a dump is the
+    expensive call here, and doing two per swipe pushed this flow past its relay
+    timeout. Callers only reach for this when the header was not found, so a
+    couple of blind swipes is the cheaper bet than measuring.
+    """
+    try:
+        width, height = dev.window_size()
+    except Exception:
+        width, height = 1080, 2400
+    x = int(width * 0.5)
+    y1 = int(height * 0.35)
+    y2 = int(height * 0.80)
+    swipes = 0
+    for _ in range(max(0, max_swipes)):
+        try:
+            dev.swipe(x, y1, x, y2, duration=0.3)
+        except Exception:
+            return swipes
+        swipes += 1
+        time.sleep(0.3)
+    return swipes
+
+
+def _fb_profile_suggestion_top(root: Any) -> int | None:
+    """Y of the first suggestion heading, or None when the page has none."""
+    best: int | None = None
+    for node in root.iter("node"):
+        folded = _fb_fold(_fb_node_label(node))
+        if not folded or not any(
+            heading in folded for heading in _FB_PROFILE_SUGGESTION_HEADINGS
+        ):
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds and (best is None or bounds[1] < best):
+            best = bounds[1]
+    return best
+
+
+def _fb_profile_owner_connection(
+    hierarchy_xml: str, display_name: str
+) -> dict[str, Any]:
+    """Find the connection control belonging to the profile's owner.
+
+    Anchored to the owner's name rather than to a position. A profile page also
+    lists friend suggestions, each with its own Add Friend button, so "the only
+    connection control on screen" is not a thing that exists and "the topmost
+    one" stops being the owner's as soon as the page is scrolled — silently
+    friending somebody else.
+
+    Returns {"found": bool, "state": ..., "bounds": [...], "label": ...}.
+    """
+    root = _xml_parse_root(hierarchy_xml)
+    wanted = _fb_fold(display_name)
+    if not wanted:
+        return {"found": False, "reason": "owner_name_unknown"}
+
+    # The owner's name is a whole label on the profile header, never a fragment
+    # of a longer one — matching loosely is how "Trang" swallowed every person
+    # named Trang earlier in this codebase.
+    name_top: int | None = None
+    for node in root.iter("node"):
+        if _fb_fold(_fb_node_label(node)) == wanted:
+            bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+            if bounds and (name_top is None or bounds[1] < name_top):
+                name_top = bounds[1]
+    if name_top is None:
+        return {"found": False, "reason": "owner_name_not_visible"}
+
+    suggestion_top = _fb_profile_suggestion_top(root)
+    best: tuple[int, dict[str, Any]] | None = None
+    for node in root.iter("node"):
+        if not _fb_is_clickable(node):
+            continue
+        label = _fb_node_label(node)
+        folded = _fb_fold(label)
+        if not folded:
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if not bounds:
+            continue
+        if bounds[1] < name_top:
+            continue  # above the owner's name: navigation chrome
+        if suggestion_top is not None and bounds[1] >= suggestion_top:
+            continue  # belongs to a suggestion card
+        if _fb_is_add_friend_label(label):
+            state = FRIEND_STATE_AVAILABLE
+        elif _fb_is_request_sent_label(label):
+            state = FRIEND_STATE_PENDING
+        elif folded in _FB_FRIEND_CONNECTED_LABELS:
+            state = FRIEND_STATE_CONNECTED
+        else:
+            continue
+        # Nearest control below the name is the owner's action row.
+        distance = bounds[1] - name_top
+        if best is None or distance < best[0]:
+            best = (distance, {"state": state, "bounds": list(bounds), "label": label})
+    if best is None:
+        return {"found": False, "reason": "owner_action_row_not_found"}
+    return {"found": True, **best[1]}
+
+
 def _fb_dedupe_action_buttons(
     buttons: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -3671,21 +3795,29 @@ def _flow_fb_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
             optional=optional,
             forbidden=forbidden,
         )
-        action_buttons: list[dict[str, Any]] = []
-        for node in profile_root.iter("node"):
-            label = _fb_node_label(node)
-            bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
-            if not bounds or not _fb_is_clickable(node):
-                continue
-            if _fb_is_add_friend_label(label) or _fb_is_connection_action_label(label):
-                action_buttons.append({"label": label, "bounds": list(bounds)})
-        action_buttons = _fb_dedupe_action_buttons(action_buttons)
+        owner = _fb_profile_owner_connection(profile_xml, author_label)
+        if not owner.get("found"):
+            # A profile opened from a comment can land mid-page, hiding the
+            # owner's action row and leaving suggestion cards as the only
+            # connection controls in view. Pay for the scroll only when the
+            # first read came up empty.
+            if _fb_scroll_profile_to_top(dev):
+                profile_xml = dev.dump_hierarchy(compressed=False)
+                profile_root = _xml_parse_root(profile_xml)
+                profile_text = " ".join(_fb_all_labels(profile_root))
+                owner = _fb_profile_owner_connection(profile_xml, author_label)
+        action_buttons = (
+            [{"label": owner.get("label"), "bounds": owner.get("bounds")}]
+            if owner.get("found")
+            else []
+        )
 
         if (
             not forbidden_hit
             and not missing
             and profile_score >= min_score
-            and len(action_buttons) == 1
+            and owner.get("found")
+            and owner.get("state") == FRIEND_STATE_AVAILABLE
         ):
             target_id_source = (
                 f"{action.get('target_id') or ''}|{candidate.get('comment_key') or ''}|"
@@ -3720,8 +3852,14 @@ def _flow_fb_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
                 "reason": (
                     "profile_not_verified"
                     if forbidden_hit or missing or profile_score < min_score
-                    else "ambiguous_profile_action"
+                    else str(owner.get("reason") or "")
+                    or (
+                        f"already_{owner.get('state')}"
+                        if owner.get("found")
+                        else "owner_action_row_not_found"
+                    )
                 ),
+                "owner_state": owner.get("state"),
                 "missing_keywords": missing,
                 "matched_keywords": matched,
                 "confidence": profile_score,

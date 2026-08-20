@@ -319,6 +319,10 @@ def _fb_commenter_connect_steps(
             "forbidden_keywords": "${PROFILE_FORBIDDEN_KEYWORDS}",
             "min_score": "${PROFILE_MIN_SCORE}",
             "max_commenters": "${COMMENTER_SCAN_LIMIT}",
+            # Opening a profile costs a tap, a settle and a hierarchy read, so
+            # trying several runs well past the 12s step default and the flow is
+            # killed mid-way through a profile it had already opened.
+            "timeout": "${COMMENTER_STEP_TIMEOUT}",
             "save_as": "_people_target",
             "save_success_as": "PEOPLE_PROFILE_SELECTED",
             "save_opened_as": "COMMENTER_PROFILE_OPENED",
@@ -1874,7 +1878,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POSTS_PER_BATCH": 2,
             "POST_MATCH_MODE": "any",
             "POST_SCAN_TIMEOUT_SECONDS": 60,
-            "COMMENTER_SCAN_LIMIT": 5,
+            "COMMENTER_SCAN_LIMIT": 3,
+            "COMMENTER_STEP_TIMEOUT": 60,
             "PROFILE_REQUIRED_KEYWORDS": ["AI", "công nghệ"],
             "PROFILE_OPTIONAL_KEYWORDS": ["tuyển dụng", "startup", "automation"],
             "PROFILE_FORBIDDEN_KEYWORDS": [
@@ -1976,7 +1981,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POSTS_PER_BATCH": 2,
             "MAX_SCROLLS": 6,
             "SCROLL_X_RATIO": 0.5,
-            "COMMENTER_SCAN_LIMIT": 5,
+            "COMMENTER_SCAN_LIMIT": 3,
+            "COMMENTER_STEP_TIMEOUT": 60,
             # Account mới chưa có gì để so khớp, nên đừng đòi hồ sơ phải chứa
             # keyword — ngữ cảnh ở đây là "cùng group", không phải nội dung profile.
             "PROFILE_REQUIRED_KEYWORDS": [],

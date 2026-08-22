@@ -875,7 +875,8 @@ function accountContextLine(
   if (target) parts.push(t('accountTargetLine', { target }));
   if (author) parts.push(author);
   if (comment) {
-    const trimmed = comment.length > 140 ? `${comment.slice(0, 140)}…` : comment;
+    const trimmed =
+      comment.length > 140 ? `${comment.slice(0, 140)}…` : comment;
     parts.push(`“${trimmed}”`);
   }
   if (status) parts.push(formatActivityStatus(status, t));

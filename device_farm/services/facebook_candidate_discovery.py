@@ -22,6 +22,7 @@ from db.models.facebook_candidate import (
     FacebookCandidateKeyword,
 )
 from services.account_candidate_discovery import DiscoveryRunResult
+from services.social_identity import profile_identity_key
 from services.facebook_candidates import (
     CandidateLeaseAttempt,
     get_candidate_settings,
@@ -52,9 +53,27 @@ def _dialect_insert(db: AsyncSession, model):
     raise RuntimeError(f"candidate discovery does not support {dialect}")
 
 
+def _tie_break(identity_key: str, account_id: str) -> str:
+    """Per-account ordering for candidates with equal evidence.
+
+    When an account has no sources of its own, discovery falls back to the whole
+    organisation's content — so every sibling account sees the same authors with
+    the same evidence counts. Ordering by identity key then hands them an
+    identical worklist and they all approach the same people first. Salting the
+    tie-break by account keeps the ranking deterministic per account while
+    spreading the org's accounts across different profiles.
+    """
+    return hashlib.sha256(f"{account_id}:{identity_key}".encode("utf-8")).hexdigest()
+
+
 def _identity_key(author_id: str | None, normalized_author: str) -> str:
-    source = f"id:{author_id}" if author_id else f"name:{normalized_author}"
-    return f"fb-profile:{hashlib.sha256(source.encode('utf-8')).hexdigest()}"
+    # Delegates so the on-device UI scan mints byte-identical keys; see
+    # services/social_identity.py. Key format is unchanged for Facebook.
+    return profile_identity_key(
+        "facebook",
+        external_id=author_id,
+        normalized_name=normalized_author,
+    )
 
 
 def _source_query(*, org_id: str, account_id: str | None, limit: int):
@@ -165,7 +184,7 @@ class FacebookContentAuthorDiscoveryProvider:
 
         ranked_keys = sorted(
             grouped,
-            key=lambda key: (-len(grouped[key]), key),
+            key=lambda key: (-len(grouped[key]), _tie_break(key, account_id)),
         )[: min(100, limit)]
         if not ranked_keys:
             return DiscoveryRunResult(
@@ -229,6 +248,7 @@ class FacebookContentAuthorDiscoveryProvider:
                 "id": str(uuid4()),
                 "org_id": org_id,
                 "account_id": account_id,
+                "platform": self.platform,
                 "external_entity_id": entity_by_key[key].id,
                 "status": "discovered",
                 "relationship_score": 0.0,

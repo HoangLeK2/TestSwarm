@@ -72,6 +72,15 @@ _READY_MARKERS = (
         ),
     ),
     ("feed", r"news feed|stories|reels"),
+    # Facebook hides the tab bar and the composer once the feed is scrolled, so
+    # an account that is logged in and reading its feed had no ready marker at
+    # all and every scenario refused to start. The like/comment/share row is
+    # present on any post and only exists for a signed-in session. Safe to widen
+    # here: the logged-out and checkpoint markers are matched first.
+    (
+        "post_actions",
+        r"\bthích\b|\bbình luận\b|\bchia sẻ\b|\blike\b|\bcomment\b|\bshare\b",
+    ),
     (
         "search_results",
         r"search results in (?:the )?tab|kết quả tìm kiếm trong tab",

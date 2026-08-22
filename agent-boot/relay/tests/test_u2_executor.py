@@ -158,7 +158,11 @@ def test_flow_fb_connect_visible_people_batch_sends_multiple_common_rows(monkeyp
         _fb_node("Tran Van B", bounds="[40,320][400,365]"),
         _fb_node("Hủy lời mời", bounds="[600,340][900,420]", clickable=True),
     )
-    dev = _FlowDevice(before, after_a, after_b)
+    # after_a appears twice: once as the post-tap verification read, once as the
+    # re-aim read before tapping the second row. Sending a request removes the
+    # first card on a real device, so coordinates captured before that must be
+    # re-confirmed rather than reused.
+    dev = _FlowDevice(before, after_a, after_a, after_b)
 
     result = u2_exec_mod._flow_fb_connect_visible_people(
         dev,
@@ -272,6 +276,138 @@ def test_flow_fb_connect_visible_people_stops_after_unverified_tap(monkeypatch):
     assert result["eligible_count"] == 1
     assert len(result["skipped"]) == 1
     assert dev.clicks == [(750, 160)]
+
+
+def test_flow_fb_connect_visible_people_accepts_same_group_only_context(monkeypatch):
+    """Cold start: an account with no friends has no mutuals, only shared groups."""
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Le Thi C", bounds="[40,100][400,145]"),
+        _fb_node("Cùng nhóm Hội Yêu Bếp", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    after = _fb_xml(
+        _fb_node("Le Thi C", bounds="[40,100][400,145]"),
+        _fb_node("Hủy lời mời", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(before, after)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["verified"] is True
+    assert result["sent_count"] == 1
+    assert "cung nhom" in result["sent"][0]["matched_common"]
+
+
+def test_flow_fb_connect_visible_people_keeps_person_named_trang(monkeypatch):
+    """"Trang" is a given name, not evidence of a Page."""
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Nguyen Thuy Trang", bounds="[40,100][400,145]"),
+        _fb_node("2 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    after = _fb_xml(
+        _fb_node("Nguyen Thuy Trang", bounds="[40,100][400,145]"),
+        _fb_node("Đã gửi lời mời", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(before, after)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["verified"] is True
+    assert result["sent"][0]["display_name"] == "Nguyen Thuy Trang"
+
+
+def test_flow_fb_connect_visible_people_keeps_row_with_follow_button(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Pham Van D", bounds="[40,100][400,145]"),
+        _fb_node("5 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Theo dõi", bounds="[420,120][560,200]", clickable=True),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    after = _fb_xml(_fb_node("Pham Van D", bounds="[40,100][400,145]"))
+    dev = _FlowDevice(before, after)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["verified"] is True
+    assert result["sent_count"] == 1
+
+
+def test_flow_fb_connect_visible_people_counts_removed_row_as_sent(monkeypatch):
+    """Facebook drops the suggestion once the request lands — that is a success."""
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Vo Thi E", bounds="[40,100][400,145]"),
+        _fb_node("4 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    after = _fb_xml(_fb_node("Gợi ý khác", bounds="[40,900][400,945]"))
+    dev = _FlowDevice(before, after)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["verified"] is True
+    assert result["sent_count"] == 1
+    assert result["skipped"] == []
+
+
+def test_flow_fb_connect_visible_people_reports_why_rows_were_dropped():
+    """A cold account must be able to tell "no context" from "token mismatch"."""
+    before = _fb_xml(
+        _fb_node("Hoang Van F", bounds="[40,100][400,145]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(before)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["sent_count"] == 0
+    assert result["reason"] == "no_common_connectable_people"
+    reasons = [item["reason"] for item in result["rejected"]]
+    assert "no_common_context" in reasons
+    assert "Hoang Van F" in result["rejected"][0]["row_text"]
+
+
+def test_flow_fb_connect_visible_people_reports_below_min_score_rows():
+    before = _fb_xml(
+        _fb_node("Dang Van G", bounds="[40,100][400,145]"),
+        _fb_node("Sống tại Hà Nội", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(before)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 1,
+            "max_scrolls": 0,
+            "min_score": 40,
+            "require_common": True,
+            "common_keywords": ["sống tại"],
+        },
+    )
+
+    assert result["sent_count"] == 0
+    dropped = [item for item in result["rejected"] if item["reason"] == "below_min_score"]
+    assert dropped and dropped[0]["score"] == 20
 
 
 def test_flow_fb_connect_visible_people_opens_find_friends_surface(monkeypatch):
@@ -465,7 +601,7 @@ def test_fb_visible_post_candidates_include_author_binding():
         ),
     )
 
-    _candidates, qualified, _expand = u2_exec_mod._fb_visible_post_candidates(
+    _candidates, qualified, _expand, _rows = u2_exec_mod._fb_visible_post_candidates(
         feed,
         keywords=u2_exec_mod._fb_scan_keyword_terms(["AI"]),
         match_mode="any",
@@ -2082,3 +2218,636 @@ def test_selector_unknown_keys_raises():
     dev = MagicMock()
     with pytest.raises(ValueError, match="unrecognised"):
         _resolve(dev, {"bogusKey": "val"})
+
+
+def test_fb_row_labels_do_not_bleed_into_the_next_person():
+    """Real Facebook cards sit ~40px apart; a pixel window swept in the neighbour.
+
+    Captured from a physical device (Android 16, 1260x2800): three suggestion
+    cards with no mutual-friend line, where the geometric window produced
+    "Anh Bui Nguyễn Hoài Sơn" and would have recorded the request against the
+    wrong identity.
+    """
+    def _card(name: str, top: int) -> str:
+        return (
+            f'<node class="android.widget.Button" content-desc="{name}" '
+            f'clickable="true" package="com.facebook.katana" '
+            f'bounds="[0,{top}][1260,{top + 438}]">'
+            f'<node class="android.widget.ImageView" content-desc="{name}" '
+            f'package="com.facebook.katana" bounds="[42,{top + 28}][364,{top + 350}]" />'
+            f'<node class="android.view.ViewGroup" text="{name}" '
+            f'package="com.facebook.katana" bounds="[406,{top + 42}][1218,{top + 103}]" />'
+            f'<node class="android.widget.Button" content-desc="Thêm bạn bè" '
+            f'clickable="true" package="com.facebook.katana" '
+            f'bounds="[406,{top + 130}][1218,{top + 256}]" />'
+            f'<node class="android.widget.Button" content-desc="Xóa {name}" '
+            f'clickable="true" package="com.facebook.katana" '
+            f'bounds="[406,{top + 284}][1218,{top + 410}]" />'
+            f"</node>"
+        )
+
+    xml = _fb_xml(_card("Anh Bui", 1260), _card("Nguyễn Hoài Sơn", 1698))
+    candidates, _qualified, _rejected = u2_exec_mod._fb_visible_connectable_people(
+        xml,
+        common_keywords=[],
+        forbidden_keywords=[],
+        min_score=0,
+        require_common=False,
+    )
+
+    assert [item["display_name"] for item in candidates] == [
+        "Anh Bui",
+        "Nguyễn Hoài Sơn",
+    ]
+    # Each row sees only its own card, and never the dismiss button's copy.
+    for item in candidates:
+        assert "Xóa" not in item["row_text"]
+    assert candidates[0]["target_id"] != candidates[1]["target_id"]
+
+
+def test_flow_fb_connect_visible_people_re_aims_when_the_list_shifts(monkeypatch):
+    """A card inserted above the suggestions moves every row down.
+
+    Observed on a physical device: Facebook renders the friends surface, then
+    adds an incoming friend-request card at the top. Coordinates captured before
+    that insertion point at the wrong person, so the tap silently missed and the
+    run reported request_not_verified.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    stale = _fb_xml(
+        _fb_node("Thai Hanh", bounds="[40,300][400,345]"),
+        _fb_node("2 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    # Same person, pushed down 500px by the card that appeared above.
+    shifted = _fb_xml(
+        _fb_node("Lời mời kết bạn", bounds="[20,60][600,120]"),
+        _fb_node("Thai Hanh", bounds="[40,800][400,845]"),
+        _fb_node("2 bạn chung", bounds="[40,846][400,890]"),
+        _fb_node("Thêm bạn bè", bounds="[600,820][900,900]", clickable=True),
+    )
+    sent = _fb_xml(
+        _fb_node("Lời mời kết bạn", bounds="[20,60][600,120]"),
+        _fb_node("Thai Hanh", bounds="[40,800][400,845]"),
+        _fb_node("Đã gửi lời mời", bounds="[600,820][900,900]", clickable=True),
+    )
+    # The surface opener is stubbed, so it consumes no dump: the first read the
+    # flow performs is the re-aim, which must see the shifted layout.
+    dev = _FlowDevice(shifted, sent)
+    # Seeding surface XML is what makes the first scan second-hand, exactly as
+    # open_surface does in production.
+    monkeypatch.setattr(
+        u2_exec_mod,
+        "_fb_open_friend_suggestions_surface",
+        lambda _dev, _p: {"ready": True, "xml": stale},
+    )
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "open_surface": True,
+            "target_count": 1,
+            "max_scrolls": 0,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["sent_count"] == 1
+    # Tapped where the row actually is, not where it used to be.
+    assert dev.clicks == [(750, 860)]
+
+
+def test_flow_fb_connect_visible_people_verifies_by_identity_not_position(monkeypatch):
+    """A banner appearing after the tap must not turn a real send into a failure.
+
+    Observed on a physical device: after the request to "Huy trần" was sent,
+    Facebook removed his row AND inserted a "X accepted your request" banner,
+    which slid another person's Add Friend button into the tapped coordinates.
+    The positional check then reported request_not_verified for a send that had
+    actually gone through.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    before = _fb_xml(
+        _fb_node("Huy trần", bounds="[40,300][400,345]"),
+        _fb_node("2 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    # Huy trần is gone; a banner pushed "Cua Bun Rieu" into the tapped band.
+    after = _fb_xml(
+        _fb_node("Kieuu Duyenzz đã chấp nhận lời mời kết bạn của bạn.",
+                 bounds="[20,60][1200,200]"),
+        _fb_node("Cua Bun Rieu", bounds="[40,300][400,345]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    dev = _FlowDevice(before, after)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 1,
+            "max_scrolls": 0,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["verified"] is True
+    assert result["sent_count"] == 1
+    assert result["sent"][0]["display_name"] == "Huy trần"
+    assert result["skipped"] == []
+
+
+def test_flow_fb_connect_visible_people_still_detects_a_tap_that_missed(monkeypatch):
+    """The identity check must not rubber-stamp every tap as a send."""
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    unchanged = _fb_xml(
+        _fb_node("Huy trần", bounds="[40,300][400,345]"),
+        _fb_node("2 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    dev = _FlowDevice(unchanged)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {
+            "target_count": 1,
+            "max_scrolls": 0,
+            "min_score": 40,
+            "require_common": True,
+        },
+    )
+
+    assert result["verified"] is False
+    assert result["reason"] == "request_not_verified"
+    assert result["sent_count"] == 0
+
+
+def _feed_post_xml(like_label: str) -> str:
+    """One keyword-matching feed post with the given like-button state."""
+    return _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("Bai viet ve AI rat hay", bounds="[40,150][900,200]"),
+        _fb_node(like_label, bounds="[100,300][250,360]", clickable=True),
+        _fb_node("Binh luan", bounds="[300,300][450,360]", clickable=True),
+    )
+
+
+def test_post_identity_survives_being_liked():
+    """The like button sits inside the post's own context band.
+
+    Hashing that band wholesale gave a post one identity before the like and
+    another after, so the seen-set stopped recognising it the moment it was
+    liked — and the same post could be commented on again on the next sweep.
+    """
+    terms = u2_exec_mod._DEFAULT_SOCIAL_POST_TERMS
+    seen = set()
+    for label in ("Thich", "Bo thich"):
+        candidates, _q, _e, _rows = u2_exec_mod._fb_visible_post_candidates(
+            _feed_post_xml(label),
+            keywords=["ai"],
+            match_mode="any",
+            seen_fingerprints=set(),
+            seen_expand_keys=set(),
+            like_terms=terms["like_terms"],
+            liked_terms=terms["liked_terms"],
+            comment_terms=terms["comment_terms"],
+            forbidden_context_terms=terms["forbidden_context_terms"],
+        )
+        seen.add(candidates[0]["fingerprint"])
+
+    assert len(seen) == 1
+
+
+def test_like_is_confirmed_against_the_post_it_was_aimed_at(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    dev = _FlowDevice(_feed_post_xml("Thich"), _feed_post_xml("Bo thich"))
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "platform": "facebook",
+            "keywords": ["ai"],
+            "match_mode": "any",
+            "like_post": True,
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["actions"][0]["liked"] is True
+    assert result["actions"][0]["like_verified"] is True
+
+
+def test_a_like_that_did_not_register_is_not_reported_as_liked(monkeypatch):
+    """The tap used to be assumed successful — a miss looked exactly like a hit.
+
+    This is the most frequently executed action in the system, so silently
+    counting misses as likes makes every downstream number wrong.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    # Button unchanged after the tap: nothing happened.
+    dev = _FlowDevice(_feed_post_xml("Thich"))
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "platform": "facebook",
+            "keywords": ["ai"],
+            "match_mode": "any",
+            "like_post": True,
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    assert result["actions"][0]["liked"] is False
+    assert result["actions"][0]["like_verified"] is False
+
+
+def test_verification_can_be_declined_for_throughput(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    dev = _FlowDevice(_feed_post_xml("Thich"))
+
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        dev,
+        {
+            "platform": "facebook",
+            "keywords": ["ai"],
+            "match_mode": "any",
+            "like_post": True,
+            "verify_like": False,
+            "comment_text": "",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    action = result["actions"][0]
+    # "liked" then means "tapped", and the payload says so rather than implying
+    # a check that never ran.
+    assert action["liked"] is True
+    assert action["like_verified"] is False
+
+
+def test_destructive_controls_are_never_tapped(monkeypatch):
+    """Last line of defence, independent of whatever picked the coordinates.
+
+    Every locating mistake ends the same way: a tap on the wrong control. On the
+    friends surface the neighbour of "Thêm bạn bè" is "Gỡ", and one tap further
+    is "Ẩn những người bạn có thể biết" — which removes the account's entire
+    suggestion source permanently.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    # The Add Friend button's bounds overlap a "Gỡ" control: whatever the
+    # scoring decided, the tap must not land.
+    xml = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("3 bạn chung", bounds="[40,146][400,190]"),
+        _fb_node("Thêm bạn bè", bounds="[600,120][900,200]", clickable=True),
+        _fb_node("Gỡ", bounds="[600,120][900,200]", clickable=True),
+    )
+    dev = _FlowDevice(xml)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert dev.clicks == []
+    assert result["sent_count"] == 0
+    assert result["skipped"][0]["reason"] == "blocked_destructive_control"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Gỡ",
+        "Xóa",
+        "Ẩn những người bạn có thể biết",
+        "Báo cáo bài viết",
+        "Chặn",
+        "Bỏ theo dõi",
+        "Hủy kết bạn",
+        "Rời nhóm",
+        "Chấp nhận",
+        # Observed on a real device: the dismiss button carries the name.
+        "Xóa Dat P. Nguyen",
+    ],
+)
+def test_destructive_label_vocabulary(label: str) -> None:
+    assert u2_exec_mod._fb_is_destructive_label(label) is True
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Thêm bạn bè",
+        "Bình luận",
+        "Thích",
+        # Short tokens must match as words, not as fragments of a name.
+        "Gogo Nguyen",
+        # Vietnamese name syllables that fold onto button words.
+        "Chan Thi Mai",
+        "Xoan Nguyen",
+        "Go Thi Lan",
+    ],
+)
+def test_ordinary_controls_are_not_blocked(label: str) -> None:
+    assert u2_exec_mod._fb_is_destructive_label(label) is False
+
+
+# ── Screens the scenario did not ask for ─────────────────────────────────────
+
+
+def _screen(*labels: str, sheet: bool = False) -> str:
+    nodes = [_fb_node("", bounds="[0,0][1260,2800]")]
+    nodes += [
+        _fb_node(label, bounds=f"[0,{100 * i}][1260,{100 * i + 80}]")
+        for i, label in enumerate(labels)
+    ]
+    if sheet:
+        # Bottom sheet: full width, anchored to the bottom, partial height.
+        nodes.append(_fb_node("", bounds="[0,1900][1260,2800]"))
+    return _fb_xml(*nodes)
+
+
+def test_ordinary_screen_is_not_treated_as_an_anomaly() -> None:
+    assert (
+        u2_exec_mod._fb_classify_surface(_screen("Bạn bè", "Thêm bạn bè"))["state"]
+        == u2_exec_mod.SURFACE_OK
+    )
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Bạn tạm thời bị chặn",
+        "Xác nhận danh tính của bạn",
+        "Tài khoản của bạn đã bị vô hiệu hóa",
+        "Bạn đang đi quá nhanh",
+    ],
+)
+def test_account_walls_are_never_retryable(label: str) -> None:
+    """Repeating an action against a checkpoint is how a recoverable account
+    becomes an unrecoverable one."""
+    surface = u2_exec_mod._fb_classify_surface(_screen(label))
+
+    assert surface["state"] == u2_exec_mod.SURFACE_BLOCKED
+    assert surface["retryable"] is False
+
+
+def test_a_sheet_is_dismissable_not_a_wall() -> None:
+    """One Back clears it; stopping the run for it would be an overreaction."""
+    surface = u2_exec_mod._fb_classify_surface(
+        _screen("Tại sao tôi nhìn thấy những gợi ý kết bạn này?")
+    )
+
+    assert surface["state"] == u2_exec_mod.SURFACE_DISMISSABLE
+    assert surface["retryable"] is True
+
+
+def test_overlay_is_detected_by_shape_not_by_resource_id() -> None:
+    """Facebook renames ids between builds; a bottom sheet is always a wide
+    container anchored to the bottom edge."""
+    surface = u2_exec_mod._fb_classify_surface(_screen("Bạn bè", sheet=True))
+
+    assert surface["state"] == u2_exec_mod.SURFACE_DISMISSABLE
+    assert surface["overlay_bounds"] is not None
+
+
+def test_blocked_account_stops_the_friend_flow_without_tapping(monkeypatch):
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+    blocked = _fb_xml(
+        _fb_node("Bạn tạm thời bị chặn", bounds="[40,100][900,160]"),
+        _fb_node("Nguyen Van A", bounds="[40,300][400,345]"),
+        _fb_node("3 bạn chung", bounds="[40,346][400,390]"),
+        _fb_node("Thêm bạn bè", bounds="[600,320][900,400]", clickable=True),
+    )
+    dev = _FlowDevice(blocked)
+
+    result = u2_exec_mod._flow_fb_connect_visible_people(
+        dev,
+        {"target_count": 1, "max_scrolls": 0, "min_score": 40, "require_common": True},
+    )
+
+    assert result["reason"] == "account_blocked"
+    assert result["retryable"] is False
+    assert dev.clicks == []
+
+
+def test_screen_fingerprint_is_stable_and_content_addressed() -> None:
+    """Unknown screens are worth counting: what appears forty times deserves a
+    handler, what appears once does not."""
+    first = u2_exec_mod._fb_surface_fingerprint(_screen("Bạn bè", "Gợi ý"))
+    same = u2_exec_mod._fb_surface_fingerprint(_screen("Gợi ý", "Bạn bè"))
+    other = u2_exec_mod._fb_surface_fingerprint(_screen("Marketplace"))
+
+    assert first == same
+    assert first != other
+
+
+def test_empty_scan_says_which_half_failed(monkeypatch):
+    """"Nothing matched" reads the same for two opposite problems.
+
+    Zero recognised posts means the action row was not found — a parsing
+    problem. Posts recognised but none matching means the keywords are wrong.
+    Reporting them identically sends the operator to the wrong fix.
+    """
+    monkeypatch.setattr(u2_exec_mod.time, "sleep", lambda _seconds: None)
+
+    # No like/comment controls at all.
+    barren = _fb_xml(_fb_node("Chào buổi sáng", bounds="[40,100][900,160]"))
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        _FlowDevice(barren),
+        {"platform": "facebook", "keywords": ["ai"], "target_count": 1, "max_scrolls": 0},
+    )
+    assert result["rows_seen"] == 0
+    assert "no post action row was recognised" in result["message"]
+
+    # A real post, but the keyword is absent from it.
+    post = _fb_xml(
+        _fb_node("Nguyen Van A", bounds="[40,100][400,145]"),
+        _fb_node("Hom nay troi dep", bounds="[40,150][900,200]"),
+        _fb_node("Thich", bounds="[100,300][250,360]", clickable=True),
+        _fb_node("Binh luan", bounds="[300,300][450,360]", clickable=True),
+    )
+    result = u2_exec_mod._flow_social_scan_posts_interact(
+        _FlowDevice(post),
+        {
+            "platform": "facebook",
+            "keywords": ["wordpress"],
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+    assert result["rows_seen"] >= 1
+    assert result["candidate_count"] == 0
+    assert "none matched keywords" in result["message"]
+
+
+def test_one_button_reported_at_two_nesting_levels_counts_once():
+    """Facebook wraps a clickable Button around a clickable ViewGroup.
+
+    Both carry the same label, so counting nodes counts every control twice.
+    The commenter flow accepts a profile only when it offers exactly one
+    connection action — with duplicates that test never passes and an ordinary
+    profile is rejected as ambiguous.
+    """
+    deduped = u2_exec_mod._fb_dedupe_action_buttons(
+        [
+            {"label": "Thêm bạn bè", "bounds": [406, 409, 1218, 535]},
+            {"label": "Thêm bạn bè", "bounds": [645, 443, 978, 505]},
+        ]
+    )
+
+    assert len(deduped) == 1
+    # The outer node is kept: it is the reliable tap target.
+    assert deduped[0]["bounds"] == [406, 409, 1218, 535]
+
+
+def test_two_separate_controls_stay_separate():
+    """Deduping must not hide a genuinely ambiguous profile."""
+    deduped = u2_exec_mod._fb_dedupe_action_buttons(
+        [
+            {"label": "Thêm bạn bè", "bounds": [40, 100, 400, 200]},
+            {"label": "Hủy lời mời", "bounds": [600, 100, 900, 200]},
+        ]
+    )
+
+    assert len(deduped) == 2
+
+
+def test_same_label_far_apart_stays_separate():
+    """Two Add Friend buttons on different rows are two people, not one."""
+    deduped = u2_exec_mod._fb_dedupe_action_buttons(
+        [
+            {"label": "Thêm bạn bè", "bounds": [600, 100, 900, 200]},
+            {"label": "Thêm bạn bè", "bounds": [600, 800, 900, 900]},
+        ]
+    )
+
+    assert len(deduped) == 2
+
+
+# ── The profile owner's own connection control ───────────────────────────────
+
+
+def _profile_xml(owner: str, owner_button: str, *, suggestions: bool = True) -> str:
+    """A profile page: header with the owner's action row, then suggestions."""
+    nodes = [
+        _fb_node("Quay lại", bounds="[20,60][120,160]", clickable=True),
+        _fb_node(owner, bounds="[300,300][900,380]"),
+        _fb_node(owner_button, bounds="[300,450][900,560]", clickable=True),
+        _fb_node("Nhắn tin", bounds="[920,450][1200,560]", clickable=True),
+    ]
+    if suggestions:
+        nodes += [
+            _fb_node("Những người bạn có thể biết", bounds="[40,900][900,970]"),
+            _fb_node("Nguoi La A", bounds="[40,1000][400,1060]"),
+            _fb_node("Thêm bạn bè", bounds="[600,1000][900,1080]", clickable=True),
+            _fb_node("Nguoi La B", bounds="[40,1200][400,1260]"),
+            _fb_node("Thêm bạn bè", bounds="[600,1200][900,1280]", clickable=True),
+        ]
+    return _fb_xml(*nodes)
+
+
+def test_owner_button_is_found_past_the_suggestion_cards() -> None:
+    """A profile page lists other people with their own Add Friend buttons.
+
+    Counting connection controls can never identify the owner's, and taking the
+    topmost stops being the owner's the moment the page is scrolled — which
+    friends the wrong person silently.
+    """
+    owner = u2_exec_mod._fb_profile_owner_connection(
+        _profile_xml("Tran Van B", "Thêm bạn bè"), "Tran Van B"
+    )
+
+    assert owner["found"] is True
+    assert owner["state"] == u2_exec_mod.FRIEND_STATE_AVAILABLE
+    # The header button, not one belonging to a suggestion row.
+    assert owner["bounds"] == [300, 450, 900, 560]
+
+
+@pytest.mark.parametrize(
+    ("label", "state"),
+    [
+        ("Thêm bạn bè", u2_exec_mod.FRIEND_STATE_AVAILABLE),
+        ("Hủy lời mời", u2_exec_mod.FRIEND_STATE_PENDING),
+        ("Đã gửi lời mời", u2_exec_mod.FRIEND_STATE_PENDING),
+        ("Bạn bè", u2_exec_mod.FRIEND_STATE_CONNECTED),
+    ],
+)
+def test_owner_state_is_read_not_counted(label: str, state: str) -> None:
+    """Already-sent and already-friends are answers, not ambiguity.
+
+    Counting controls lumped them in with the failure cases, so a person who had
+    already been asked looked identical to a page we could not read.
+    """
+    owner = u2_exec_mod._fb_profile_owner_connection(
+        _profile_xml("Le Thi C", label), "Le Thi C"
+    )
+
+    assert owner["found"] is True
+    assert owner["state"] == state
+
+
+def test_unnamed_owner_is_refused_rather_than_guessed() -> None:
+    """No anchor means no safe choice; refusing beats picking one."""
+    owner = u2_exec_mod._fb_profile_owner_connection(
+        _profile_xml("Tran Van B", "Thêm bạn bè"), "Someone Else"
+    )
+
+    assert owner["found"] is False
+    assert owner["reason"] == "owner_name_not_visible"
+
+
+def test_owner_name_matches_whole_label_only() -> None:
+    """Substring matching on folded Vietnamese is how "Trang" ate every Trang."""
+    xml = _fb_xml(
+        _fb_node("Nguyen Thuy Trang", bounds="[300,300][900,380]"),
+        _fb_node("Thêm bạn bè", bounds="[300,450][900,560]", clickable=True),
+    )
+
+    assert u2_exec_mod._fb_profile_owner_connection(xml, "Trang")["found"] is False
+    assert u2_exec_mod._fb_profile_owner_connection(xml, "Nguyen Thuy Trang")["found"] is True
+
+
+def test_profile_without_any_connection_control_is_refused() -> None:
+    xml = _fb_xml(
+        _fb_node("Pham Van D", bounds="[300,300][900,380]"),
+        _fb_node("Nhắn tin", bounds="[300,450][900,560]", clickable=True),
+    )
+
+    owner = u2_exec_mod._fb_profile_owner_connection(xml, "Pham Van D")
+
+    assert owner["found"] is False
+    assert owner["reason"] == "owner_action_row_not_found"
+
+
+def test_scroll_to_top_does_not_read_the_hierarchy() -> None:
+    """A dump is the expensive call; two per swipe pushed the flow past its
+    relay timeout on a real device."""
+
+    class _CountingDevice:
+        def __init__(self) -> None:
+            self.dumps = 0
+            self.swipes = 0
+
+        def window_size(self):
+            return (1260, 2800)
+
+        def dump_hierarchy(self, compressed: bool = False):
+            self.dumps += 1
+            return "<hierarchy/>"
+
+        def swipe(self, *_args, **_kwargs):
+            self.swipes += 1
+
+    dev = _CountingDevice()
+    swipes = u2_exec_mod._fb_scroll_profile_to_top(dev)
+
+    assert swipes > 0
+    assert dev.dumps == 0

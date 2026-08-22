@@ -78,4 +78,5 @@ from tasks.scenario.steps import (  # noqa: E402, F401
     source_pool,
     candidate_lease,
     account_target_lease,
+    account_graph,
 )

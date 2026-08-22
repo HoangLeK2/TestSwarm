@@ -1743,3 +1743,132 @@ def test_social_action_failure_includes_hierarchy_dump_without_leaking_to_saved_
     assert dump_path.parent == tmp_path
     assert dump_path.read_text(encoding="utf-8") == xml
     assert "debug_hierarchy_xml" not in sc.var_ctx.values["SOCIAL_RESULT"]
+
+
+def test_rate_limited_account_never_taps(monkeypatch) -> None:
+    """A throttled account must skip the action, not perform it and get rejected."""
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setattr(
+        "services.action_pacing.check_action_allowed",
+        lambda **_: {"allowed": False, "reason": "rate_limited"},
+    )
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    result = dispatch_step(_context(device), _ledger_step(), 0)
+
+    assert result["outcome"] == "rate_limited"
+    assert result["action_performed"] is False
+    # ok stays True: the campaign should continue and retry later, not fail.
+    assert result["ok"] is True
+    assert device.taps == []
+
+
+def test_skip_pacing_opts_a_step_out(monkeypatch) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    def _explode(**_):
+        raise AssertionError("pacing must not be consulted when skip_pacing is set")
+
+    monkeypatch.setattr("services.action_pacing.check_action_allowed", _explode)
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    step = {**_ledger_step(), "skip_pacing": True}
+    result = dispatch_step(_context(device), step, 0)
+
+    assert result["outcome"] != "rate_limited"
+
+
+# ── pacing for like/comment ─────────────────────────────────────────────────
+#
+# This step consulted no limiter at all. On 20/08 a loop called it as fast as
+# the device could answer and put 9 comments on a live account in 2m27s.
+
+
+def _scan_step(**overrides: object) -> dict[str, object]:
+    step = {
+        "id": "scan-1",
+        "account_id": "account-1",
+        "type": "social_scan_posts_interact",
+        "platform": "facebook",
+        "keywords": ["ai"],
+        "comment_text": "rất hữu ích",
+        "require_comment": True,
+        "target_count": 1,
+        "timeout": 0.1,
+    }
+    step.update(overrides)
+    return step
+
+
+def test_scan_step_skips_the_device_when_rate_limited(monkeypatch) -> None:
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setattr(
+        "services.action_pacing.check_action_allowed",
+        lambda **_: {"allowed": False, "reason": "rate_limited"},
+    )
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    result = dispatch_step(_context(device), _scan_step(), 0)
+
+    assert result["outcome"] == "rate_limited"
+    assert result["action_performed"] is False
+    # Not a failure: the feed will still be there in a minute.
+    assert result["ok"] is True
+    # The whole point — agent-boot is never asked to like or comment.
+    assert device.flows == []
+
+
+def test_scan_step_paces_comments_and_likes_under_different_budgets(
+    monkeypatch,
+) -> None:
+    """A comment is not a like.
+
+    Liking is ordinary browsing; commenting is the one platforms read as spam.
+    Sharing a single bucket would either throttle browsing to comment speed or
+    let comments run at browsing speed — the second is what actually shipped.
+    """
+    from tasks.scenario.steps import dispatch_step
+
+    seen: list[str] = []
+
+    def _record(**kwargs):
+        seen.append(str(kwargs.get("action_type")))
+        return {"allowed": False, "reason": "rate_limited"}
+
+    monkeypatch.setattr("services.action_pacing.check_action_allowed", _record)
+
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    dispatch_step(_context(device), _scan_step(), 0)
+    dispatch_step(
+        _context(device),
+        _scan_step(require_comment=False, comment_text=""),
+        0,
+    )
+
+    assert seen == ["content_comment", "content_like"]
+
+
+def test_scan_step_can_opt_out_of_pacing(monkeypatch) -> None:
+    """Scenarios that pace themselves with delay steps keep control."""
+    from tasks.scenario.steps import dispatch_step
+
+    def _explode(**_):
+        raise AssertionError("pacing must not be consulted when skip_pacing is set")
+
+    monkeypatch.setattr("services.action_pacing.check_action_allowed", _explode)
+    device = _FakeDevice("<hierarchy></hierarchy>")
+    result = dispatch_step(_context(device), _scan_step(skip_pacing=True), 0)
+
+    assert result["outcome"] != "rate_limited"
+
+
+def test_comment_budget_would_have_stopped_the_real_run() -> None:
+    """9 comments in 2m27s against the shipped limits."""
+    from services.rate_limiter import limits_for
+
+    limits = limits_for("facebook", "content_comment")
+    assert limits["per_minute"] == 1, "9 comments in 2.5 minutes must not fit"
+    assert limits["per_hour"] <= 10
+    assert limits["per_day"] <= 40
+    # And liking stays looser than commenting, or browsing looks robotic.
+    likes = limits_for("facebook", "content_like")
+    assert likes["per_minute"] > limits["per_minute"]

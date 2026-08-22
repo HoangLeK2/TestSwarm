@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from services.platform_readiness import DEFAULT_PLATFORM
+from services.rate_limiter import ACTION_CONTENT_COMMENT, ACTION_CONTENT_LIKE
 from services.social_actions import get_social_action_adapter
 from services.social_actions.contract import (
     SocialActionObservation,
@@ -50,6 +51,75 @@ def _wait(sc: ScenarioContext, seconds: float) -> bool:
         return bool(sc.cancel_event.wait(seconds))
     time.sleep(seconds)
     return False
+
+
+# uiautomator dies on its own — Funtouch OS reaps background processes, and a
+# long run reliably outlives at least one death. The farm already detects it and
+# asks agent-boot to restart the server, but that recovery is asynchronous: the
+# step that happened to be running when the session went away failed outright
+# and took the whole execution to the dead-letter queue. Two of five runs died
+# this way in one afternoon of real-device testing.
+_U2_TRANSIENT_MARKERS: tuple[str, ...] = (
+    "u2 flow not available",
+    "u2 batch not available",
+    "uiautomator2 not connected",
+    "atx-agent",
+    "jsonrpc http 502",
+    "server likely crashed",
+    "connection refused",
+    "remote end closed connection",
+)
+_U2_RECOVERY_ATTEMPTS = 3
+_U2_RECOVERY_BACKOFF_S = (2.0, 5.0, 9.0)
+
+
+def _is_transient_u2_error(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    return any(marker in text for marker in _U2_TRANSIENT_MARKERS)
+
+
+def _u2_flow_with_recovery(
+    sc: ScenarioContext,
+    name: str,
+    params: dict[str, Any],
+    *,
+    timeout: float,
+    priority: str = "visible",
+    result: dict[str, Any] | None = None,
+) -> Any:
+    """Run an agent-boot flow, waiting out a u2 session that is being rebuilt.
+
+    Retries only errors that mean "the session is gone", never ones that mean
+    "the flow ran and disagreed with you" — a scenario failure must not be
+    retried into a duplicate action.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_U2_RECOVERY_ATTEMPTS):
+        try:
+            return sc.device.u2_flow(name, params, timeout=timeout, priority=priority)
+        except Exception as exc:
+            if not _is_transient_u2_error(exc) or attempt == _U2_RECOVERY_ATTEMPTS - 1:
+                raise
+            last_exc = exc
+            delay = _U2_RECOVERY_BACKOFF_S[
+                min(attempt, len(_U2_RECOVERY_BACKOFF_S) - 1)
+            ]
+            log.warning(
+                "[%s] %s: u2 session unavailable (%s) — waiting %.1fs for recovery "
+                "(attempt %d/%d)",
+                sc.serial,
+                name,
+                exc,
+                delay,
+                attempt + 1,
+                _U2_RECOVERY_ATTEMPTS,
+            )
+            if result is not None:
+                result["u2_recovery_attempts"] = attempt + 1
+            if _wait(sc, delay):
+                raise
+    # Unreachable: the final attempt either returns or re-raises.
+    raise last_exc if last_exc else RuntimeError(f"{name}: u2 flow failed")
 
 
 def _resolve_keyword_list(sc: ScenarioContext, raw: Any, *, step_index: int) -> Any:
@@ -538,6 +608,116 @@ def _release_unperformed_candidate_lease(
         )
 
 
+def _pacing_blocked(
+    sc: ScenarioContext,
+    step: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    platform: str,
+    action_type: str,
+) -> bool:
+    """Gate an account action on its rate budget; True means "do not act".
+
+    Opt-out via ``skip_pacing`` on the step, for flows that already pace
+    themselves. A blocked action is not an error — the campaign should move on
+    and come back later — so the caller reports ok=True with outcome
+    ``rate_limited``.
+    """
+    if _bool_value(step.get("skip_pacing", False), False):
+        return False
+    try:
+        from services.account_actions import resolve_action_identity
+        from services.action_pacing import check_action_allowed, pace_before_action
+
+        identity = resolve_action_identity(
+            step=step,
+            scenario=sc.scenario,
+            variables=sc.ctx.get("vars", {}),
+            execution_id=sc.execution_id,
+            device_serial=sc.serial,
+        )
+        verdict = check_action_allowed(
+            identity=identity, action_type=action_type, platform=platform
+        )
+    except Exception as exc:
+        log.warning("[%s] pacing check unavailable: %s", sc.serial, exc)
+        return False
+
+    result["pacing"] = verdict
+    if not verdict.get("allowed", True):
+        result.update(
+            {
+                "ok": True,
+                "outcome": "rate_limited",
+                "message": (
+                    f"{action_type}: rate budget reached for this account; "
+                    "skipping without acting"
+                ),
+                "action_performed": False,
+            }
+        )
+        _save_result(sc, step, result)
+        return True
+
+    # Jitter rides with the limiter: when there is no Redis the whole pacing
+    # layer is off (dev boxes, tests), and sleeping there would only slow runs
+    # down without protecting anything.
+    if verdict.get("reason") != "limiter_disabled":
+        result["pacing_delay_s"] = round(pace_before_action(), 3)
+    return False
+
+
+def _record_visible_requests_in_pipeline(
+    sc: ScenarioContext,
+    step: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    platform: str,
+    targets: list[dict[str, Any]],
+) -> None:
+    """Persist on-screen sends so the candidate pipeline stops re-offering them.
+
+    Never fails the step: the requests are already on the device, so a database
+    problem here must be reported, not used to roll back a run that succeeded.
+    """
+    try:
+        from services.account_actions import resolve_action_identity
+        from services.candidate_runtime import record_sent_connection_requests
+
+        identity = resolve_action_identity(
+            step=step,
+            scenario=sc.scenario,
+            variables=sc.ctx.get("vars", {}),
+            execution_id=sc.execution_id,
+            device_serial=sc.serial,
+        )
+        records = record_sent_connection_requests(
+            identity=identity,
+            platform=platform,
+            targets=[
+                {
+                    "name": target.get("name"),
+                    "external_id": target.get("external_id"),
+                    "source": target.get("source"),
+                }
+                for target in targets
+            ],
+        )
+        result["candidate_sync"] = records
+        result["candidate_sync_count"] = sum(
+            1 for record in records if record.get("recorded") is not False
+        )
+    except Exception as exc:
+        # Surfaced on the step result so a silently un-deduplicated run is
+        # visible instead of looking like a clean send.
+        result["candidate_sync_error"] = str(exc)
+        log.warning(
+            "[%s] failed to record visible connection requests: %s",
+            sc.serial,
+            exc,
+        )
+
+
 def _handle_agent_boot_target_resolver(
     sc: ScenarioContext,
     result: dict[str, Any],
@@ -560,7 +740,8 @@ def _handle_agent_boot_target_resolver(
         }
     )
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             flow_name,
             params,
             timeout=timeout,
@@ -881,8 +1062,15 @@ def handle_social_connect_visible_people(
         1.0,
         float(sc.var_ctx.resolve(step.get("timeout", 8.0), step_index=idx) or 8.0),
     )
+    # A dry run only reads the screen, so it must not consume the account's
+    # connection-request budget.
+    if not _bool_value(dry_run, False) and _pacing_blocked(
+        sc, step, result, platform=platform, action_type="connection_request"
+    ):
+        return
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             "social_connect_visible_people",
             {
                 "min_score": max(0, int(min_score or 40)),
@@ -1006,6 +1194,8 @@ def handle_social_connect_visible_people(
                 "target_count": target.get("target_count"),
                 "sent_count": sent_count,
                 "eligible_count": target.get("eligible_count", 0),
+                "candidate_count": target.get("candidate_count", 0),
+                "qualified_count": target.get("qualified_count", 0),
                 "screens_scanned": target.get("screens_scanned", 0),
                 "scrolls": target.get("scrolls", 0),
                 "dry_run": dry_run_result,
@@ -1013,11 +1203,28 @@ def handle_social_connect_visible_people(
                 "resolver": target,
             }
         )
+        if sent_count <= 0 and not dry_run_result:
+            # A run that sends nothing is still ok=True so campaigns keep going,
+            # but it must not read as a successful send: carry why each row was
+            # dropped so an account that never gains a friend is diagnosable
+            # without re-running with dry_run.
+            result["no_action_reason"] = reason or "no_action"
+            result["rejected_sample"] = (target.get("rejected") or [])[:10]
         if verified_targets:
             first_target = verified_targets[0]
             result["verified_target"] = first_target
             result["action_bounds"] = first_target.get("action_bounds")
             result["_bounds"] = first_target.get("action_bounds")
+
+        # Fold these sends into the candidate pipeline. Without this the people
+        # reached through the on-screen suggestions stay `ready_to_connect` in
+        # the database and get leased again later, so the same account asks the
+        # same person twice. Independent of the ledger: this is deduplication,
+        # not audit, and must run even when the ledger is disabled.
+        if sent_count > 0:
+            _record_visible_requests_in_pipeline(
+                sc, step, result, platform=platform, targets=verified_targets
+            )
 
         ledger_mode = (
             os.environ.get("ACCOUNT_ACTION_LEDGER_MODE", "disabled").strip().lower()
@@ -1055,7 +1262,7 @@ def handle_social_connect_visible_people(
                             observe_action(
                                 identity=identity,
                                 action_type="connection_request",
-                                platform="facebook",
+                                platform=platform,
                                 target=ledger_target,
                                 outcome="applied",
                             )
@@ -1064,7 +1271,7 @@ def handle_social_connect_visible_people(
                     claim = prepare_action(
                         identity=identity,
                         action_type="connection_request",
-                        platform="facebook",
+                        platform=platform,
                         target=ledger_target,
                         action_id=reserved_action_id if offset == 0 else None,
                     )
@@ -1142,6 +1349,10 @@ def handle_social_connect_visible_people(
         }
     )
 
+    _record_visible_requests_in_pipeline(
+        sc, step, result, platform=platform, targets=[verified_target]
+    )
+
     ledger_mode = (
         os.environ.get("ACCOUNT_ACTION_LEDGER_MODE", "disabled").strip().lower()
     )
@@ -1174,7 +1385,7 @@ def handle_social_connect_visible_people(
                 result["account_action_ledger"] = observe_action(
                     identity=identity,
                     action_type="connection_request",
-                    platform="facebook",
+                    platform=platform,
                     target=ledger_target,
                     outcome="applied",
                 )
@@ -1182,7 +1393,7 @@ def handle_social_connect_visible_people(
                 claim = prepare_action(
                     identity=identity,
                     action_type="connection_request",
-                    platform="facebook",
+                    platform=platform,
                     target=ledger_target,
                     action_id=reserved_action_id or None,
                 )
@@ -1277,6 +1488,26 @@ def _handle_social_scan_posts_interact(
         0.5,
         step_index=idx,
     )
+    # Pace before touching the device, not after. This step used to consult no
+    # limiter at all, and a real run put 9 comments on the feed in 2m27s — the
+    # loop simply called it as fast as the device could answer. A scenario that
+    # paces itself with delay steps can opt out with ``skip_pacing``.
+    #
+    # Known limit: one call interacts with up to ``target_count`` posts, so this
+    # bounds calls rather than posts. Keep ``target_count`` small in templates.
+    platform_name = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    wants_comment = _bool_value(step.get("require_comment"), True) and bool(comment_text)
+    if _pacing_blocked(
+        sc,
+        step,
+        result,
+        platform=platform_name,
+        action_type=(
+            ACTION_CONTENT_COMMENT if wants_comment else ACTION_CONTENT_LIKE
+        ),
+    ):
+        return
+
     try:
         selector_config = {
             key: step[key]
@@ -1293,7 +1524,8 @@ def _handle_social_scan_posts_interact(
             )
             if key in step
         }
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             flow_name,
             {
                 "keywords": keywords or [],
@@ -1342,7 +1574,14 @@ def _handle_social_scan_posts_interact(
         return
 
     interacted_count = int(target.get("interacted_count") or 0)
-    no_match = target.get("reason") == "no_matching_post"
+    reason = str(target.get("reason") or "")
+    # "Nothing to act on" is not a failure — the feed may simply have nothing on
+    # topic, and a scenario that fails there would stop on every quiet cycle.
+    # ``screen_is_not_a_feed`` joins that group deliberately: one occurrence can
+    # be a transient screen, and it is the loop's ``stall_after`` that decides a
+    # run of them means we are lost. A screen we could not clear, or an account
+    # wall, is a real failure and stops here.
+    no_match = reason in {"no_matching_post", "screen_is_not_a_feed"}
     result.update(
         {
             "ok": True if no_match else target.get("verified") is True,
@@ -1513,7 +1752,8 @@ def handle_social_open_author_from_post_match(
 
     timeout = max(1.0, float(step.get("timeout", 12.0) or 12.0))
     try:
-        flow_result = sc.device.u2_flow(
+        flow_result = _u2_flow_with_recovery(
+            sc,
             flow_name,
             {
                 "platform": platform,
@@ -1670,6 +1910,13 @@ def handle_social_action(
                 "completion_steps and completion_verify"
             ),
         )
+        return
+    # Budget check before any device interaction, so a throttled account never
+    # taps at all rather than tapping and being rejected by the platform.
+    if _pacing_blocked(
+        sc, step, result, platform=platform, action_type=action_type
+    ):
+        _release_unperformed_candidate_lease(sc, step, result)
         return
     ledger_mode = (
         os.environ.get("ACCOUNT_ACTION_LEDGER_MODE", "disabled").strip().lower()

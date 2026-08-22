@@ -22,6 +22,7 @@ SOCIAL_STEP_TYPES: frozenset[str] = frozenset(
         "social_scan_posts_interact",
         "social_open_author_from_post_match",
         "social_open_commenter_from_post_match",
+        "social_sync_connections",
         "content_interaction",
         "connection_request",
         "community_membership",
@@ -40,6 +41,7 @@ SOCIAL_ACCOUNT_BOUND_STEP_TYPES: frozenset[str] = frozenset(
         "social_scan_posts_interact",
         "social_open_author_from_post_match",
         "social_open_commenter_from_post_match",
+        "social_sync_connections",
         "content_interaction",
         "connection_request",
         "community_membership",
@@ -115,6 +117,15 @@ class PlatformScenarioLib:
     templates: list[dict[str, Any]] = field(default_factory=list)
 
 
+# How a connection is formed on this platform. The candidate lifecycle differs:
+# ``friend_request`` needs the other side to accept, so a sent request sits in
+# ``request_pending`` until reconciled; ``follow`` is unilateral and lands in
+# ``connected`` the moment the tap verifies. Code must branch on this instead of
+# assuming Facebook's two-sided model.
+CONNECTION_KINDS: frozenset[str] = frozenset({"friend_request", "follow"})
+DEFAULT_CONNECTION_KIND = "friend_request"
+
+
 @dataclass(frozen=True, slots=True)
 class PlatformExtension:
     name: str
@@ -127,3 +138,4 @@ class PlatformExtension:
     enabled_by_default: bool = False
     lifecycle: str = "loaded"
     min_contract_version: str = CONTRACT_VERSION
+    connection_kind: str = DEFAULT_CONNECTION_KIND

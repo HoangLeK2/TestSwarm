@@ -49,6 +49,7 @@ FACEBOOK_STEP_TYPES = [
     "social_scan_posts_interact",
     "social_open_author_from_post_match",
     "social_open_commenter_from_post_match",
+    "social_sync_connections",
 ]
 
 FACEBOOK_ENTITIES = ["posts", "comments", "groups", "pages"]
@@ -71,6 +72,7 @@ def build_facebook_extension() -> PlatformExtension:
         name="facebook",
         version="2.0.0",
         coverage="L2 Active",
+        connection_kind="friend_request",
         parser=AgentBootDelegatedParser(),
         handlers={step: MetadataOnlyHandler(step) for step in FACEBOOK_STEP_TYPES},
         enabled_by_default=True,

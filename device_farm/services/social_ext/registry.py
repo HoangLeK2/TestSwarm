@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from services.social_ext.contract import (
+    CONNECTION_KINDS,
+    DEFAULT_CONNECTION_KIND,
     SOCIAL_ENTITIES,
     SOCIAL_STEP_TYPES,
     ExtractionStrategySchema,
@@ -27,6 +29,7 @@ def _draft_extension(
     *,
     entities: dict[str, str],
     version: str = "0.1.0",
+    connection_kind: str = DEFAULT_CONNECTION_KIND,
 ) -> PlatformExtension:
     strategy_schemas = {
         entity: ExtractionStrategySchema(
@@ -40,6 +43,7 @@ def _draft_extension(
         name=platform,
         version=version,
         coverage="Draft",
+        connection_kind=connection_kind,
         enabled_by_default=False,
         handlers={},
         scenario_lib=PlatformScenarioLib(
@@ -75,10 +79,12 @@ class SocialPlatformRegistry:
 
     def load_defaults(self) -> None:
         self.register(build_facebook_extension(), actor="system")
+        # TikTok and Threads connect by following — unilateral, no pending state.
         self.register(
             _draft_extension(
                 "tiktok",
                 entities={"posts": "tiktok_video", "comments": "tiktok_comment"},
+                connection_kind="follow",
             ),
             actor="system",
         )
@@ -86,6 +92,7 @@ class SocialPlatformRegistry:
             _draft_extension(
                 "threads",
                 entities={"posts": "threads_post", "comments": "threads_comment"},
+                connection_kind="follow",
             ),
             actor="system",
         )
@@ -93,6 +100,7 @@ class SocialPlatformRegistry:
             _draft_extension(
                 "instagram",
                 entities={"posts": "ig_post", "comments": "ig_comment"},
+                connection_kind="follow",
             ),
             actor="system",
         )
@@ -355,6 +363,17 @@ class SocialPlatformRegistry:
             return False
         return entity in set(ext.scenario_lib.entities)
 
+    def connection_kind(self, platform: str) -> str:
+        """friend_request (two-sided) or follow (unilateral) for ``platform``."""
+        try:
+            ext = self.get_platform(self._clean_platform(platform))
+        except ValueError:
+            return DEFAULT_CONNECTION_KIND
+        if ext is None:
+            return DEFAULT_CONNECTION_KIND
+        kind = str(ext.connection_kind or "").strip().casefold()
+        return kind if kind in CONNECTION_KINDS else DEFAULT_CONNECTION_KIND
+
 
 _REGISTRY = SocialPlatformRegistry(load_defaults=True)
 
@@ -369,3 +388,13 @@ def supports_step(platform: str, step_type: str) -> bool:
 
 def supports_entity(platform: str, entity: str) -> bool:
     return _REGISTRY.supports_entity(platform, entity)
+
+
+def connection_kind(platform: str) -> str:
+    """How ``platform`` forms a connection: friend_request or follow.
+
+    Unknown platforms fall back to the two-sided model, which is the safer
+    assumption: it keeps a sent request in ``request_pending`` awaiting
+    reconciliation rather than declaring a connection that may not exist.
+    """
+    return _REGISTRY.connection_kind(platform)

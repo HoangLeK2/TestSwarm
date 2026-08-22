@@ -5,6 +5,8 @@ event payloads, and benchmarks using the same small set of operational classes.
 """
 from __future__ import annotations
 
+import unicodedata
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +21,26 @@ class FailureClassification:
     retry_hint: str
     operator_summary: str
 
+
+# Account-level walls. Retrying these is how a recoverable account becomes an
+# unrecoverable one, so they are checked before anything else — including the
+# transient class, whose markers a checkpoint screen can otherwise resemble.
+_ACCOUNT_BLOCKED_MARKERS = (
+    "account_blocked",
+    "account-level block",
+    "tam thoi bi chan",
+    "temporarily blocked",
+    "xac nhan danh tinh",
+    "confirm your identity",
+    "xac minh danh tinh",
+    "verify your identity",
+    "da bi vo hieu hoa",
+    "account has been disabled",
+    "dang nhap lai",
+    "log in again",
+    "unusual activity",
+    "going too fast",
+)
 
 _U2_TRANSIENT_MARKERS = (
     U2_TRANSIENT_REASON,
@@ -83,6 +105,21 @@ def _norm(value: object) -> str:
     return str(value or "").strip()
 
 
+def _fold(value: str) -> str:
+    """Lowercase and strip Vietnamese diacritics before matching.
+
+    Facebook talks to the operator in Vietnamese, so a classifier that only
+    lowercased could not recognise a single message the platform actually shows
+    — "Bạn tạm thời bị chặn" never matched anything. Existing markers are ASCII
+    and fold to themselves.
+    """
+    decomposed = unicodedata.normalize("NFKD", value or "")
+    without_marks = "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    )
+    return without_marks.replace("đ", "d").replace("Đ", "D").lower()
+
+
 def _combined_text(
     result: dict[str, Any] | None,
     *,
@@ -114,7 +151,7 @@ def _combined_text(
         parts.append(reason_code)
     if message:
         parts.append(message)
-    return " ".join(parts).lower()
+    return _fold(" ".join(parts))
 
 
 def _step_type(result: dict[str, Any] | None, explicit: str | None) -> str:
@@ -133,6 +170,14 @@ def classify_campaign_failure(
     explicit_reason = _norm(reason_code or (result or {}).get("reason_code")) or None
     stype = _step_type(result, step_type)
 
+    if any(marker in text for marker in _ACCOUNT_BLOCKED_MARKERS):
+        return FailureClassification(
+            failure_class="account_blocked",
+            reason_code=explicit_reason or "account_blocked",
+            retryable=False,
+            retry_hint="freeze_account_operator_review_required",
+            operator_summary="account_blocked",
+        )
     if any(marker in text for marker in _U2_TRANSIENT_MARKERS):
         return FailureClassification(
             failure_class="u2_transient",

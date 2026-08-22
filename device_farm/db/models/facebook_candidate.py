@@ -1,4 +1,10 @@
-"""Org-scoped Facebook connection candidate models."""
+"""Org-scoped social connection candidate models.
+
+The table names still say "facebook" for historical reasons, but the model is
+platform-neutral: every row carries `platform`, and TikTok/Instagram/Threads
+reuse these tables rather than duplicating the schema. New code should import
+the neutral aliases (`SocialCandidate`, `SOCIAL_CANDIDATE_STATUSES`).
+"""
 
 from __future__ import annotations
 
@@ -102,6 +108,11 @@ class FacebookCandidate(TenantScopedModel, Base):
     account_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
     )
+    # Denormalised from accounts.platform so the hot lease query can filter
+    # without a join. See migration 113.
+    platform: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="facebook"
+    )
     external_entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="discovered"
@@ -147,6 +158,12 @@ class FacebookCandidate(TenantScopedModel, Base):
     )
     last_observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
+    )
+    # When the connection request actually left the device. Distinct from
+    # updated_at, which any later write overwrites — this one must survive so
+    # "how long has this been pending?" stays answerable.
+    requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
@@ -352,3 +369,16 @@ class FacebookCandidateReview(TenantScopedModel, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now
     )
+
+
+# ── Platform-neutral aliases ──────────────────────────────────────────────────
+# The tables keep their historical Facebook names, but nothing about the model
+# is Facebook-specific. New code imports these names so a future table rename is
+# a migration rather than a repo-wide edit.
+SOCIAL_CANDIDATE_STATUSES = FACEBOOK_CANDIDATE_STATUSES
+SocialCandidate = FacebookCandidate
+SocialCandidateEvidence = FacebookCandidateEvidence
+SocialCandidateKeyword = FacebookCandidateKeyword
+SocialCandidateEmbedding = FacebookCandidateEmbedding
+SocialCandidateSettings = FacebookCandidateSettings
+SocialCandidateReview = FacebookCandidateReview

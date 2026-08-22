@@ -301,10 +301,9 @@ export const relayAgentsApi = {
   // own result, so one failure does not sink the rest.
   registerDevices: (relayId: string, serials?: string[]) =>
     farmApi
-      .post<{ results: RelayDeviceRegisterResult[] }>(
-        `/relay-agents/${encodeURIComponent(relayId)}/devices/register`,
-        { serials: serials ?? [] }
-      )
+      .post<{
+        results: RelayDeviceRegisterResult[];
+      }>(`/relay-agents/${encodeURIComponent(relayId)}/devices/register`, { serials: serials ?? [] })
       .then((r) => r.data.results),
   pushConnectUrl: (
     relayId: string,

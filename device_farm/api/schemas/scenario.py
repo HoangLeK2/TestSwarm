@@ -869,6 +869,19 @@ class SocialOpenAuthorFromPostMatchStep(StepBase):
     save_opened_as: str = Field("AUTHOR_PROFILE_OPENED", min_length=1, max_length=128)
 
 
+class SocialSyncConnectionsStep(StepBase):
+    """Read the account's own connection count off the current screen."""
+
+    type: Literal["social_sync_connections"]
+    platform: str = Field("facebook", min_length=1, max_length=32)
+    metric: str = Field("friends", min_length=1, max_length=32)
+    timeout: Union[float, str] = 8.0
+    # Off turns the step into a pure read: variables still get published for
+    # branching, nothing is written to the metric history.
+    persist: Union[bool, str] = True
+    save_as: Optional[str] = Field(None, max_length=128)
+
+
 class SocialOpenCommenterFromPostMatchStep(StepBase):
     type: Literal["social_open_commenter_from_post_match"]
     platform: str = Field("facebook", min_length=1, max_length=32)
@@ -1019,6 +1032,7 @@ StepModel = Annotated[
             SocialOpenCommenterFromPostMatchStep,
             Tag("social_open_commenter_from_post_match"),
         ],
+        Annotated[SocialSyncConnectionsStep, Tag("social_sync_connections")],
         Annotated[ContentInteractionStep, Tag("content_interaction")],
         Annotated[ConnectionRequestStep, Tag("connection_request")],
         Annotated[LeaseConnectionCandidateStep, Tag("lease_connection_candidate")],

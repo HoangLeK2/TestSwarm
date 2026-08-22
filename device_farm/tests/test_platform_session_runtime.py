@@ -303,3 +303,48 @@ async def test_dispatch_defers_only_login_recoverable_session_blocks(
     assert bool(
         (result["device-1"].session_guard or {}).get("deferred_to_scenario_login")
     ) is (not expected_unavailable)
+
+
+def test_scrolled_feed_is_recognised_as_ready() -> None:
+    """Facebook hides the tab bar and composer once the feed is scrolled.
+
+    A logged-in account reading its own feed then had no ready marker at all,
+    so `platform_session_gate` blocked every scenario with
+    readiness_markers_not_found — observed on a real device.
+    """
+    from services.facebook_readiness import (
+        PlatformReadinessStatus,
+        resolve_facebook_readiness,
+    )
+
+    xml = (
+        "<hierarchy>"
+        '<node text="Thích" content-desc="Thích" package="com.facebook.katana" />'
+        '<node text="Bình luận" content-desc="Bình luận" package="com.facebook.katana" />'
+        '<node text="Chia sẻ" content-desc="Chia sẻ" package="com.facebook.katana" />'
+        "</hierarchy>"
+    )
+
+    result = resolve_facebook_readiness(xml)
+
+    assert result.status is PlatformReadinessStatus.READY
+
+
+def test_login_screen_still_wins_over_the_widened_ready_markers() -> None:
+    """Widening ready markers must not let a login surface read as ready."""
+    from services.facebook_readiness import (
+        PlatformReadinessStatus,
+        resolve_facebook_readiness,
+    )
+
+    xml = (
+        "<hierarchy>"
+        '<node text="Đăng nhập Facebook" package="com.facebook.katana" />'
+        '<node text="Mật khẩu" package="com.facebook.katana" />'
+        '<node text="Chia sẻ" package="com.facebook.katana" />'
+        "</hierarchy>"
+    )
+
+    result = resolve_facebook_readiness(xml)
+
+    assert result.status is PlatformReadinessStatus.LOGGED_OUT

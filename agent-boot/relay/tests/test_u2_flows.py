@@ -1044,6 +1044,7 @@ async def test_fb_scan_posts_interact_likes_and_comments_keyword_post(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["tuyển dụng", "AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1115,6 +1116,7 @@ async def test_fb_scan_posts_interact_closes_comment_overlay_before_scan(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1192,6 +1194,7 @@ async def test_fb_scan_posts_interact_closes_comment_filter_sheet_before_input(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1263,6 +1266,7 @@ async def test_fb_scan_posts_interact_closes_existing_comment_filter_sheet_befor
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1314,6 +1318,7 @@ async def test_fb_scan_posts_interact_ignores_subscribe_text_when_submitting_com
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1378,6 +1383,7 @@ async def test_fb_scan_posts_interact_scrolls_comment_sheet_to_input_node(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["AI"],
             "comment_text": "Thông tin hữu ích",
             "target_count": 1,
@@ -1426,6 +1432,7 @@ async def test_social_scan_posts_interact_uses_configured_node_terms(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["workflow"],
             "comment_text": "Useful note",
             "target_count": 1,
@@ -1508,6 +1515,7 @@ async def test_fb_scan_posts_interact_expands_see_more_before_keyword_match(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["tuyển dụng AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1580,6 +1588,7 @@ async def test_fb_scan_posts_interact_expands_parent_see_more_label(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["tuyển dụng AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1616,6 +1625,7 @@ async def test_fb_scan_posts_interact_rejects_profile_surface(
         "serial",
         "social_scan_posts_interact",
         {
+            "verify_like": False,
             "keywords": ["Chip AI"],
             "comment_text": "Quan điểm rất hữu ích",
             "target_count": 1,
@@ -1625,7 +1635,10 @@ async def test_fb_scan_posts_interact_rejects_profile_surface(
 
     assert result["ok"] is True
     assert result["value"]["verified"] is False
-    assert result["value"]["reason"] == "no_matching_post"
+    # A profile page is not a feed with nothing on topic — it has no post action
+    # rows at all. The two used to share one reason, which is how a loop could
+    # rescan the wrong screen 88 times and call every attempt normal.
+    assert result["value"]["reason"] == "screen_is_not_a_feed"
     assert result["value"]["interacted_count"] == 0
     dev.click.assert_not_called()
 
@@ -1640,3 +1653,92 @@ async def test_unknown_flow_returns_error(executor_with_device):
 
     assert result["ok"] is False
     assert "unknown flow" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_stops_on_group_join_questionnaire(
+    executor_with_device,
+):
+    """The screen that stalled a real run for 88 iterations.
+
+    Commenting on a post in a group the account has not joined makes Facebook
+    open its join questionnaire — full screen, rules checkbox already ticked,
+    Send one tap away. The scan flow did not classify screens at all, so it kept
+    rescanning and swiping the form and reported ok every time.
+    """
+    exc, dev = executor_with_device
+    join_form = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="Câu hỏi dành cho người tham gia" clickable="false" bounds="[100,180][1160,260]" />
+        <node text="Quy tắc nhóm của quản trị viên" clickable="false" bounds="[40,380][1160,460]" />
+        <node text="Tôi đồng ý với các quy tắc nhóm" clickable="true" bounds="[40,520][1160,600]" />
+        <node text="Gửi" clickable="true" bounds="[40,2380][1220,2520]" />
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = join_form
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "verify_like": False,
+            "keywords": ["ai"],
+            "comment_text": "Bài viết rất hữu ích",
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    value = result["value"]
+    assert value["verified"] is False
+    # Back never clears it here (the mock keeps returning the same screen), so
+    # the flow must say so instead of scrolling a form.
+    assert value["reason"] == "surface_not_dismissable"
+    assert value["retryable"] is False
+    assert value["surface_marker"]
+    # Nothing was pressed on that form beyond the single Back attempt.
+    assert dev.click.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fb_scan_posts_interact_ignores_overlay_shaped_feed(
+    executor_with_device,
+):
+    """Geometry alone must never abort a run.
+
+    _fb_overlay_bounds calls any wide node anchored to the bottom a sheet, and a
+    feed's own list container fits that shape. Acting on that reading would stop
+    healthy runs, so an unnamed overlay is left alone.
+    """
+    exc, dev = executor_with_device
+    feed = """<?xml version='1.0'?>
+    <hierarchy>
+      <node text="" content-desc="" clickable="false" bounds="[0,0][1260,2800]">
+        <node text="" clickable="false" bounds="[0,900][1260,2800]">
+          <node text="Nguyen Van A" clickable="false" bounds="[40,950][400,1010]" />
+          <node text="Hom nay troi dep" clickable="false" bounds="[40,1020][900,1090]" />
+          <node text="Thích" clickable="true" bounds="[100,1200][250,1280]" />
+          <node text="Bình luận" clickable="true" bounds="[300,1200][450,1280]" />
+        </node>
+      </node>
+    </hierarchy>
+    """
+    dev.dump_hierarchy.return_value = feed
+
+    result = await exc.execute_flow(
+        "serial",
+        "social_scan_posts_interact",
+        {
+            "verify_like": False,
+            "keywords": ["wordpress"],
+            "target_count": 1,
+            "max_scrolls": 0,
+        },
+    )
+
+    value = result["value"]
+    # Reached the scanner and reported a keyword miss — not a surface abort.
+    assert value["reason"] == "no_matching_post"
+    assert dev.press.call_count == 0

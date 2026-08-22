@@ -24,7 +24,11 @@ const s = (type: string, id?: string) =>
 
 test('inserts directly below the source step, not above it', () => {
   const steps = [s('extract_text_ocr', 'a'), s('tap', 'b')];
-  const next = insertAfter(steps, [{ listKey: 'steps', ci: 0 }], s('if_variable'));
+  const next = insertAfter(
+    steps,
+    [{ listKey: 'steps', ci: 0 }],
+    s('if_variable')
+  );
   assert.deepEqual(
     next.map((x) => x.type),
     ['extract_text_ocr', 'if_variable', 'tap']
@@ -33,7 +37,11 @@ test('inserts directly below the source step, not above it', () => {
 
 test('appends when the source step is last', () => {
   const steps = [s('tap', 'a'), s('extract_text_ocr', 'b')];
-  const next = insertAfter(steps, [{ listKey: 'steps', ci: 1 }], s('if_variable'));
+  const next = insertAfter(
+    steps,
+    [{ listKey: 'steps', ci: 1 }],
+    s('if_variable')
+  );
   assert.deepEqual(
     next.map((x) => x.type),
     ['tap', 'extract_text_ocr', 'if_variable']

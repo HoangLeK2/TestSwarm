@@ -328,3 +328,357 @@ def test_loop_count_not_capped_by_max_iterations():
     assert result["ok"] is True
     assert result["iterations"] == 7
     assert run_nested.call_count == 7
+
+
+# ── stall detection ─────────────────────────────────────────────────────────
+#
+# A real run spun 88 iterations rescanning a screen that was not a feed. Every
+# nested step returned ok, so the loop kept going and the scenario reported
+# success. These cover the guard that stops that, and — more importantly — the
+# case where it must NOT fire.
+
+
+def _idle_iteration():
+    return {"success": True, "step_results": [{"type": "wait", "ok": True}]}
+
+
+def _busy_iteration():
+    return {
+        "success": True,
+        "step_results": [
+            {"type": "social_scan_posts_interact", "ok": True, "action_performed": True}
+        ],
+    }
+
+
+def test_loop_stops_when_no_iteration_performs_an_action():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 50, "stall_after": 5, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: _idle_iteration(),
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False, "an idle loop must fail loudly, not report success"
+    assert result["outcome"] == "stalled"
+    assert result["stalled_after"] == 5
+    assert run_nested.call_count == 5, "must stop at the threshold, not run on"
+
+
+def test_loop_without_stall_after_keeps_old_behaviour():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 4, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: _idle_iteration(),
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True
+    assert run_nested.call_count == 4
+
+
+def test_action_deep_inside_nested_branches_counts_as_progress():
+    """The case that would silently break every working friend-flow loop.
+
+    ``connection_request`` sits two ``if_variable`` levels down, and each level
+    hangs its branch off ``sub_result``. A shallow read of ``step_results``
+    finds only the ``if_variable`` wrappers, calls the iteration idle, and stops
+    a loop that was sending requests perfectly well.
+    """
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    deep = {
+        "success": True,
+        "step_results": [
+            {
+                "type": "if_variable",
+                "ok": True,
+                "sub_result": {
+                    "success": True,
+                    "step_results": [
+                        {
+                            "type": "if_variable",
+                            "ok": True,
+                            "sub_result": {
+                                "success": True,
+                                "step_results": [
+                                    {
+                                        "type": "connection_request",
+                                        "ok": True,
+                                        "action_performed": True,
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 6, "stall_after": 2, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: deep,
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True
+    assert run_nested.call_count == 6, "progress was buried, not absent"
+
+
+def test_idle_streak_resets_when_an_iteration_acts():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    # idle, idle, busy, idle, idle, busy ... never three idle in a row.
+    pattern = [_idle_iteration(), _idle_iteration(), _busy_iteration()] * 4
+    sc = _make_sc()
+    step = {"type": "loop", "count": 12, "stall_after": 3, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=pattern,
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True
+    assert run_nested.call_count == 12
+
+
+def test_stall_message_says_what_to_look_at():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 20, "stall_after": 3, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: _idle_iteration(),
+    ):
+        handle_loop(sc, step, 0, result)
+
+    assert "3" in result["message"] and "no action" in result["message"]
+
+
+def test_rate_limited_iterations_are_not_a_stall():
+    """A throttled account is working, not lost.
+
+    Observed on a real run: the comment limiter declined 46 iterations. Counting
+    those as idle would trip stall_after and fail the scenario every time an
+    account hit its hourly budget — the rate limiter would become an outage
+    instead of a safety net.
+    """
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    throttled = {
+        "success": True,
+        "step_results": [
+            {
+                "type": "social_scan_posts_interact",
+                "ok": True,
+                "outcome": "rate_limited",
+                "action_performed": False,
+            }
+        ],
+    }
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 9, "stall_after": 3, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: throttled,
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True
+    assert run_nested.call_count == 9
+
+
+def test_a_screen_with_nothing_on_it_is_still_a_stall():
+    """The guard must keep firing for the case it was built for."""
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    lost = {
+        "success": True,
+        "step_results": [
+            {
+                "type": "social_scan_posts_interact",
+                "ok": True,
+                "outcome": "screen_is_not_a_feed",
+                "action_performed": False,
+            }
+        ],
+    }
+
+    sc = _make_sc()
+    step = {"type": "loop", "count": 9, "stall_after": 3, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: lost,
+    ) as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False
+    assert result["outcome"] == "stalled"
+    assert run_nested.call_count == 3
+
+
+# ── long-run behaviour ──────────────────────────────────────────────────────
+#
+# These campaigns are meant to run for 8 hours. A 5-minute device run says
+# nothing about that, so the timescale properties are pinned here instead.
+
+
+def test_idle_iterations_back_off_instead_of_hammering_the_device():
+    """A refused iteration must cost wall-clock, not another hierarchy dump.
+
+    The 20/08 run was refused 46 times in 5 minutes and retried immediately —
+    about 4,400 dumps over an 8-hour campaign, every one answered "no".
+    """
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    throttled = {
+        "success": True,
+        "step_results": [
+            {"type": "social_scan_posts_interact", "ok": True,
+             "outcome": "rate_limited", "action_performed": False}
+        ],
+    }
+    slept: list[float] = []
+
+    sc = _make_sc()
+    step = {
+        "type": "loop", "count": 6, "stall_after": 0,
+        "idle_delay_seconds": 30, "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: throttled,
+    ), patch(
+        "tasks.scenario.steps.control_flow.time.sleep", side_effect=slept.append
+    ):
+        handle_loop(sc, step, 0, result)
+
+    assert slept == [30] * 6
+
+
+def test_productive_iterations_are_never_delayed():
+    """The backoff must not slow a loop that is working."""
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    slept: list[float] = []
+    sc = _make_sc()
+    step = {
+        "type": "loop", "count": 5, "idle_delay_seconds": 30,
+        "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: _busy_iteration(),
+    ), patch(
+        "tasks.scenario.steps.control_flow.time.sleep", side_effect=slept.append
+    ):
+        handle_loop(sc, step, 0, result)
+
+    assert slept == []
+
+
+def test_a_throttled_eight_hour_run_never_stalls():
+    """The combination that only shows up on a long run.
+
+    Once an account reaches its hourly comment budget the limiter refuses every
+    call for the rest of the hour. Those iterations perform nothing, so they
+    must back off — and must NOT count toward the stall streak, or the campaign
+    dies exactly when the safety limit starts working.
+    """
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    throttled = {
+        "success": True,
+        "step_results": [
+            {"type": "social_scan_posts_interact", "ok": True,
+             "outcome": "rate_limited", "action_performed": False}
+        ],
+    }
+    slept: list[float] = []
+
+    sc = _make_sc()
+    step = {
+        "type": "loop", "count": 120, "stall_after": 40,
+        "idle_delay_seconds": 30, "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: throttled,
+    ), patch(
+        "tasks.scenario.steps.control_flow.time.sleep", side_effect=slept.append
+    ):
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is True, "being throttled is not being lost"
+    assert len(slept) == 120
+    assert sum(slept) == 3600, "120 refused iterations should cost an hour, not seconds"
+
+
+def test_a_lost_run_still_stops_within_the_configured_window():
+    """And the guard must still fire on the case it exists for.
+
+    40 idle iterations at 30s apart is ~20 minutes of doing nothing — the right
+    order of magnitude for an 8-hour campaign, where 5 iterations would stop on
+    the first quiet stretch of feed.
+    """
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    lost = {
+        "success": True,
+        "step_results": [
+            {"type": "social_scan_posts_interact", "ok": True,
+             "outcome": "screen_is_not_a_feed", "action_performed": False}
+        ],
+    }
+    slept: list[float] = []
+
+    sc = _make_sc()
+    step = {
+        "type": "loop", "count": 960, "stall_after": 40,
+        "idle_delay_seconds": 30, "steps": [{"type": "wait"}],
+    }
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch(
+        "tasks.scenario.steps.control_flow._run_nested",
+        side_effect=lambda *a, **k: lost,
+    ) as run_nested, patch(
+        "tasks.scenario.steps.control_flow.time.sleep", side_effect=slept.append
+    ):
+        handle_loop(sc, step, 0, result)
+
+    assert result["ok"] is False
+    assert result["outcome"] == "stalled"
+    assert run_nested.call_count == 40
+    assert sum(slept) == 1200, "~20 minutes, not 8 hours and not 2 minutes"

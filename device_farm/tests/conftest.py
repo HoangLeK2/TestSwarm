@@ -14,6 +14,13 @@ os.environ.setdefault(
     "pytest-dev-secret-change-in-ci-32chars!",
 )
 
+# Pinned, not defaulted. The ledger reads this at call time, and the suite picks
+# up the developer's .env — so turning the ledger on for the farm silently
+# rewrote what a dozen step tests asserted, from the step's own outcome to
+# `ledger_prepare_failed` against a database no unit test has. Tests that care
+# about ledger behaviour set this themselves via monkeypatch.
+os.environ["ACCOUNT_ACTION_LEDGER_MODE"] = "disabled"
+
 
 @pytest.fixture(autouse=True)
 def _jwt_cache_reset():

@@ -301,6 +301,57 @@ def _batch_start_to_close_timeout(
     return timedelta(seconds=total_seconds)
 
 
+# Outcomes meaning "this step chose not to act", as opposed to "this step could
+# not find anything". A throttled account is the rate limiter working; calling
+# that a stall would fail every correctly-paced campaign the moment it reached
+# its hourly budget.
+_DELIBERATE_NO_ACTION_OUTCOMES = frozenset({"rate_limited", "paced", "cooldown"})
+
+
+def _walk_loop_step_results(step_results: list[Any]):
+    """Every step result in an iteration, however deeply branches nest it.
+
+    ``if_variable`` hangs its branch off ``sub_result``, and in the friend flow
+    ``connection_request`` sits two levels down — a shallow read sees only the
+    wrappers and would call a working iteration idle.
+    """
+    stack: list[Any] = list(step_results or [])
+    seen = 0
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        seen += 1
+        if seen > 5000:  # pathological nesting; stop walking rather than hang
+            return
+        yield node
+        for key in ("step_results", "sub_results"):
+            value = node.get(key)
+            if isinstance(value, list):
+                stack.extend(value)
+        for key in ("sub_result", "result"):
+            value = node.get(key)
+            if isinstance(value, dict):
+                stack.append(value)
+
+
+def _loop_performed_action(step_results: list[Any]) -> bool:
+    """Did this iteration actually touch the device? Rate-limited counts as no."""
+    return any(
+        node.get("action_performed") is True
+        for node in _walk_loop_step_results(step_results)
+    )
+
+
+def _loop_made_progress(step_results: list[Any]) -> bool:
+    """Did this iteration act, or deliberately decline to act?"""
+    return any(
+        node.get("action_performed") is True
+        or str(node.get("outcome") or "") in _DELIBERATE_NO_ACTION_OUTCOMES
+        for node in _walk_loop_step_results(step_results)
+    )
+
+
 def _append_sub_result(
     sub_results: list[dict[str, Any]],
     state: dict[str, Any],
@@ -1802,6 +1853,22 @@ class ScenarioStepsWorkflow:
         ctx = dict(runtime_context)
         loop_var = str(step.get("loop_var") or "").strip()
 
+        # Campaigns run their loops here, not in tasks/scenario/steps/control_flow.py
+        # — that one only drives directly-run and nested scenarios. Both need the
+        # same two properties, so both carry them; a measured campaign run span
+        # 204 iterations in 8.5 minutes on a screen it could not act on because
+        # only the other copy had been taught to stop.
+        try:
+            stall_after = int(step.get("stall_after", 0) or 0)
+        except (TypeError, ValueError):
+            stall_after = 0
+        try:
+            idle_delay_s = float(step.get("idle_delay_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            idle_delay_s = 0.0
+        idle_delay_s = max(0.0, min(idle_delay_s, 300.0))
+        idle_streak = 0
+
         for i in range(iterations):
             runtime_vars["__LOOP_ITER__"] = i
             if loop_var:
@@ -1849,6 +1916,32 @@ class ScenarioStepsWorkflow:
                     sub_results,
                     ctx,
                 )
+
+            # Back off after an iteration that touched nothing. workflow.sleep,
+            # not time.sleep: this is workflow code, and a blocking sleep would
+            # stall the whole worker rather than this one run.
+            step_results = getattr(child_result, "step_results", None) or []
+            if idle_delay_s > 0 and not _loop_performed_action(step_results):
+                await workflow.sleep(timedelta(seconds=idle_delay_s))
+
+            if stall_after > 0:
+                if _loop_made_progress(step_results):
+                    idle_streak = 0
+                else:
+                    idle_streak += 1
+                    if idle_streak >= stall_after:
+                        ctx.pop("_loop_iter", None)
+                        _finish_sub_results(sub_results, sub_result_state)
+                        return (
+                            False,
+                            (
+                                f"loop: stopped after {idle_streak} consecutive "
+                                f"iteration(s) that performed no action — the "
+                                f"screen is probably not the one this loop expects"
+                            ),
+                            sub_results,
+                            ctx,
+                        )
 
         ctx.pop("_loop_iter", None)
         _finish_sub_results(sub_results, sub_result_state)

@@ -1835,6 +1835,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "loop",
                         "count": "${POST_SCAN_CYCLES}",
                         "duration_seconds": "${POST_RUN_SECONDS}",
+                        "stall_after": 40,
+                        "idle_delay_seconds": 30,
                         "loop_var": "POST_SCAN_CYCLE",
                         "steps": [
                             {
@@ -1880,13 +1882,15 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "POST_SCAN_TIMEOUT_SECONDS": 60,
             "COMMENTER_SCAN_LIMIT": 3,
             "COMMENTER_STEP_TIMEOUT": 60,
-            "PROFILE_REQUIRED_KEYWORDS": ["AI", "công nghệ"],
+            # Các keyword này được khớp dạng chuỗi con trên hàng gợi ý đã bỏ
+            # dấu, nên phải là cụm mà tên người không thể chứa. "AI" từng nằm ở
+            # đây và khớp Mai, Hải, Thái — tức là mọi hàng đều đạt điều kiện.
+            # "trang"/"nhóm" thì ngược lại: loại sạch người tên Trang và giết
+            # luôn tín hiệu cùng nhóm. Xem docs/adr-facebook-ui-reasoning.md.
+            "PROFILE_REQUIRED_KEYWORDS": ["công nghệ"],
             "PROFILE_OPTIONAL_KEYWORDS": ["tuyển dụng", "startup", "automation"],
             "PROFILE_FORBIDDEN_KEYWORDS": [
-                "trang",
-                "page",
-                "nhóm",
-                "group",
+                "thích trang",
                 "ẩn danh",
                 "anonymous",
                 "sponsored",
@@ -1907,7 +1911,13 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "id": "home_post_author_cycle",
                         "type": "loop",
                         "count": "${FEED_ITERATIONS}",
+                        # Ngưỡng tính theo thang 8 tiếng, không phải 5 phút. idle_delay_seconds
+                        # 30s: run 20/08 bị limiter từ chối 46 lần trong 5 phút và lặp lại ngay,
+                        # tức ~4.400 lần dump hierarchy trong một ca 8 tiếng chỉ để bị từ chối.
+                        # Với 30s nghỉ, 40 vòng mù ~ 20 phút không làm gì mới dừng.
                         "duration_seconds": "${POST_RUN_SECONDS}",
+                        "stall_after": 40,
+                        "idle_delay_seconds": 30,
                         "loop_var": "FEED_CYCLE",
                         "steps": [
                             {
@@ -1986,7 +1996,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             # Account mới chưa có gì để so khớp, nên đừng đòi hồ sơ phải chứa
             # keyword — ngữ cảnh ở đây là "cùng group", không phải nội dung profile.
             "PROFILE_REQUIRED_KEYWORDS": [],
-            "PROFILE_OPTIONAL_KEYWORDS": ["AI", "công nghệ", "chia sẻ"],
+            # "AI" gỡ khỏi đây: bỏ dấu rồi khớp chuỗi con thì "ai" nằm trong
+            # Mai, Hải, Thái — cộng điểm cho gần như mọi người, tức là bộ lọc
+            # không còn lọc gì.
+            "PROFILE_OPTIONAL_KEYWORDS": ["công nghệ", "chia sẻ"],
             # KHÔNG đưa "trang"/"page"/"nhóm"/"group" vào đây: forbidden khớp theo
             # chuỗi con trên toàn bộ text trang cá nhân, nên "trang" loại sạch
             # người tên Trang, còn "nhóm" loại đúng những người có dấu hiệu cùng
@@ -2017,6 +2030,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "count": "${GROUP_COUNT}",
                         "loop_var": "GROUP_INDEX",
                         "duration_seconds": "${POST_RUN_SECONDS}",
+                        "stall_after": 40,
+                        "idle_delay_seconds": 30,
                         "steps": [
                             # Start every group from the feed, not from wherever
                             # the previous iteration happened to stop.
@@ -2065,6 +2080,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "type": "loop",
                                 "count": "${SEED_CYCLES}",
                                 "duration_seconds": "${GROUP_SCAN_SECONDS}",
+                                "stall_after": 40,
+                                "idle_delay_seconds": 30,
                                 "loop_var": "SEED_CYCLE",
                                 "steps": [
                                     # Bước này làm hai việc cùng lúc: tạo sự hiện
@@ -2196,6 +2213,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "type": "loop",
                                 "count": "${POST_SCAN_CYCLES}",
                                 "duration_seconds": "${GROUP_SCAN_SECONDS}",
+                                "stall_after": 40,
+                                "idle_delay_seconds": 30,
                                 "loop_var": "POST_SCAN_CYCLE",
                                 "steps": [
                                     {

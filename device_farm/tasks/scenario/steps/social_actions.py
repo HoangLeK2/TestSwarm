@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from services.platform_readiness import DEFAULT_PLATFORM
+from services.rate_limiter import ACTION_CONTENT_COMMENT, ACTION_CONTENT_LIKE
 from services.social_actions import get_social_action_adapter
 from services.social_actions.contract import (
     SocialActionObservation,
@@ -1487,6 +1488,26 @@ def _handle_social_scan_posts_interact(
         0.5,
         step_index=idx,
     )
+    # Pace before touching the device, not after. This step used to consult no
+    # limiter at all, and a real run put 9 comments on the feed in 2m27s — the
+    # loop simply called it as fast as the device could answer. A scenario that
+    # paces itself with delay steps can opt out with ``skip_pacing``.
+    #
+    # Known limit: one call interacts with up to ``target_count`` posts, so this
+    # bounds calls rather than posts. Keep ``target_count`` small in templates.
+    platform_name = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
+    wants_comment = _bool_value(step.get("require_comment"), True) and bool(comment_text)
+    if _pacing_blocked(
+        sc,
+        step,
+        result,
+        platform=platform_name,
+        action_type=(
+            ACTION_CONTENT_COMMENT if wants_comment else ACTION_CONTENT_LIKE
+        ),
+    ):
+        return
+
     try:
         selector_config = {
             key: step[key]
@@ -1553,7 +1574,14 @@ def _handle_social_scan_posts_interact(
         return
 
     interacted_count = int(target.get("interacted_count") or 0)
-    no_match = target.get("reason") == "no_matching_post"
+    reason = str(target.get("reason") or "")
+    # "Nothing to act on" is not a failure — the feed may simply have nothing on
+    # topic, and a scenario that fails there would stop on every quiet cycle.
+    # ``screen_is_not_a_feed`` joins that group deliberately: one occurrence can
+    # be a transient screen, and it is the loop's ``stall_after`` that decides a
+    # run of them means we are lost. A screen we could not clear, or an account
+    # wall, is a real failure and stops here.
+    no_match = reason in {"no_matching_post", "screen_is_not_a_feed"}
     result.update(
         {
             "ok": True if no_match else target.get("verified") is True,

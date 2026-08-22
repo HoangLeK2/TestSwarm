@@ -86,6 +86,71 @@ def _run_nested(sc: ScenarioContext, nested_steps: list, extra_scenario_keys: di
     )
 
 
+# Outcomes that mean "this step chose not to act", as opposed to "this step
+# could not find anything". Being throttled is the rate limiter working, and a
+# loop that called it a stall would fail every correctly-paced account the
+# moment it hit its hourly budget — turning a safety feature into an outage.
+_DELIBERATE_NO_ACTION_OUTCOMES = frozenset({"rate_limited", "paced", "cooldown"})
+
+
+def _walk_step_results(nested_result: Dict[str, Any]):
+    """Every step result in an iteration, however deeply branches nest it.
+
+    ``if_variable`` hangs its branch off ``sub_result``, and in the friend flow
+    ``connection_request`` sits two ``if_variable`` levels down. A shallow read
+    sees only the wrappers.
+    """
+    stack: List[Any] = [nested_result]
+    seen = 0
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        seen += 1
+        if seen > 5000:  # pathological nesting; stop walking rather than hang
+            return
+        yield node
+        for key in ("step_results", "sub_results"):
+            value = node.get(key)
+            if isinstance(value, list):
+                stack.extend(value)
+        for key in ("sub_result", "result"):
+            value = node.get(key)
+            if isinstance(value, dict):
+                stack.append(value)
+
+
+def _performed_action(nested_result: Dict[str, Any]) -> bool:
+    """Did this iteration actually touch the device?
+
+    Stricter than :func:`_made_progress`: a rate-limited iteration counts as
+    *not performed*, which is exactly when backing off is worth it.
+    """
+    return any(
+        node.get("action_performed") is True
+        for node in _walk_step_results(nested_result)
+    )
+
+
+def _made_progress(nested_result: Dict[str, Any]) -> bool:
+    """Did anything in this iteration act, or deliberately decline to act?
+
+    ``action_performed`` is the convention the social steps already use — it is
+    what tells a rate-limited no-op apart from a real send. Reading it here
+    gives ``loop`` a way to notice that it is spinning without every step type
+    having to learn a new field.
+
+    "Deliberately declined" counts as progress on purpose: a throttled account
+    is the limiter doing its job, and calling that a stall would fail every
+    correctly-paced long run the moment it reached its hourly budget.
+    """
+    return any(
+        node.get("action_performed") is True
+        or str(node.get("outcome") or "") in _DELIBERATE_NO_ACTION_OUTCOMES
+        for node in _walk_step_results(nested_result)
+    )
+
+
 @register_step("loop")
 def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     count = sc.var_ctx.resolve(step.get("count"), step_index=idx)
@@ -104,6 +169,27 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     )
     nested_steps = step.get("steps") or []
     loop_var = str(step.get("loop_var") or "").strip()
+    # Stop after this many consecutive iterations that touched nothing. 0 keeps
+    # the old behaviour. A real run spent 88 iterations rescanning a screen that
+    # was not a feed — every step reported ok, so nothing failed and nothing
+    # stopped; with an 8-hour duration budget it would have done that all day.
+    try:
+        stall_after = int(sc.var_ctx.resolve(step.get("stall_after", 0), step_index=idx) or 0)
+    except (TypeError, ValueError):
+        stall_after = 0
+    # Back off after an iteration that did nothing. Without this a throttled
+    # loop retries at device speed: 46 refusals in 5 minutes on a real run, or
+    # roughly 4,400 hierarchy dumps over an 8-hour campaign, every one of them
+    # answered "no". The delay only applies to idle iterations, so a productive
+    # loop runs at full speed.
+    try:
+        idle_delay_s = float(
+            sc.var_ctx.resolve(step.get("idle_delay_seconds", 0), step_index=idx) or 0
+        )
+    except (TypeError, ValueError):
+        idle_delay_s = 0.0
+    idle_delay_s = max(0.0, min(idle_delay_s, 300.0))
+    idle_streak = 0
 
     if not nested_steps:
         result["ok"] = False
@@ -166,6 +252,39 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
                 f"loop: iteration {i} failed — {nested_result.get('failed_message', '')}"
             )
             break
+        # Two different questions about the same iteration, and conflating them
+        # is a bug in both directions. "Did anything happen on the device"
+        # decides whether to back off — a throttled iteration did nothing, so
+        # retrying it immediately is pure waste. "Are we lost" decides whether
+        # to stop, and being throttled is not being lost.
+        if idle_delay_s > 0 and not _performed_action(nested_result):
+            time.sleep(idle_delay_s)
+
+        if stall_after > 0:
+            if _made_progress(nested_result):
+                idle_streak = 0
+            else:
+                idle_streak += 1
+                if idle_streak >= stall_after:
+                    # Reported as a failure on purpose. The iterations "passed",
+                    # but a loop that acts on nothing this many times running is
+                    # not idle — it is lost, and saying ok here is the exact
+                    # silence this guard exists to break.
+                    result["ok"] = False
+                    result["outcome"] = "stalled"
+                    result["stalled_after"] = idle_streak
+                    result["message"] = (
+                        f"loop: stopped after {idle_streak} consecutive iteration(s) "
+                        f"that performed no action — the screen is probably not the "
+                        f"one this loop expects"
+                    )
+                    log.warning(
+                        "[%s] loop: stalled after %d idle iteration(s) at iter %d",
+                        sc.serial,
+                        idle_streak,
+                        i,
+                    )
+                    break
         # F4.1 — persist only successful iterations so resume never skips a failed one.
         _persist_loop_iter(sc, i + 1)
         if sc.ctx.pop("_break", False):

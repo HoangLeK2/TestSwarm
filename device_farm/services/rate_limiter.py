@@ -40,28 +40,50 @@ _LIMIT_FIELDS: dict[str, str] = {
 # `default` applies to any action without its own entry. Connection requests are
 # deliberately far tighter: they are the action platforms police hardest, and a
 # new account sending them at browsing speed is the clearest possible signal.
+#
+# Commenting gets its own bucket, well below `default`. A real run on 20/08 put
+# 9 comments on the feed in 2 minutes 27 seconds because this step consulted no
+# limiter at all — `default` would have allowed 200 an hour, which is still
+# spam-rate for a human. Liking is cheaper and sits between the two: it is the
+# ordinary browsing gesture, and pacing it at comment speed would make an
+# account look stranger, not safer.
 _DEFAULT_LIMITS: Dict[str, Dict[str, Dict[str, int]]] = {
     "facebook": {
         "default": {"per_minute": 10, "per_hour": 200, "per_day": 1000},
         "connection_request": {"per_minute": 1, "per_hour": 8, "per_day": 20},
+        "content_comment": {"per_minute": 1, "per_hour": 8, "per_day": 30},
+        "content_like": {"per_minute": 3, "per_hour": 40, "per_day": 200},
     },
     "instagram": {
         "default": {"per_minute": 5, "per_hour": 100, "per_day": 500},
         "connection_request": {"per_minute": 1, "per_hour": 6, "per_day": 20},
+        "content_comment": {"per_minute": 1, "per_hour": 6, "per_day": 25},
+        "content_like": {"per_minute": 3, "per_hour": 40, "per_day": 200},
     },
     "tiktok": {
         "default": {"per_minute": 8, "per_hour": 150, "per_day": 700},
         "connection_request": {"per_minute": 1, "per_hour": 8, "per_day": 25},
+        "content_comment": {"per_minute": 1, "per_hour": 8, "per_day": 30},
+        "content_like": {"per_minute": 4, "per_hour": 60, "per_day": 300},
     },
     "threads": {
         "default": {"per_minute": 5, "per_hour": 100, "per_day": 500},
         "connection_request": {"per_minute": 1, "per_hour": 6, "per_day": 20},
+        "content_comment": {"per_minute": 1, "per_hour": 6, "per_day": 25},
+        "content_like": {"per_minute": 3, "per_hour": 40, "per_day": 200},
     },
     "linkedin": {
         "default": {"per_minute": 4, "per_hour": 80, "per_day": 300},
         "connection_request": {"per_minute": 1, "per_hour": 5, "per_day": 15},
+        "content_comment": {"per_minute": 1, "per_hour": 5, "per_day": 20},
+        "content_like": {"per_minute": 2, "per_hour": 30, "per_day": 150},
     },
 }
+
+# Action types the scan-and-interact step reports under, so the step and the
+# limiter cannot drift apart on spelling.
+ACTION_CONTENT_COMMENT = "content_comment"
+ACTION_CONTENT_LIKE = "content_like"
 
 DEFAULT_ACTION = "default"
 

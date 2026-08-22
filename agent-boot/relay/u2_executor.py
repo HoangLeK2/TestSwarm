@@ -29,6 +29,8 @@ from relay.adb import _adb_shell, lock_portrait_rotation, lock_rotation_after_sh
 from relay.extra_data.parsers.facebook.comment_pipeline import (
     parse_fb_comments_from_xml_with_diagnostic,
 )
+from relay.fb_labels import MODE_EXACT, MODE_PHRASE, MODE_WORD, LabelSet
+from relay.fb_labels import fold as _fold
 from relay.u2_session_pool import U2SessionPool
 from relay.u2_xpath_util import normalize_u2_xpath
 
@@ -1091,11 +1093,9 @@ def _flow_input_and_confirm(dev: Any, p: dict) -> dict:
 
 
 def _fb_fold(value: Any) -> str:
-    text = unicodedata.normalize("NFKD", str(value or ""))
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = text.casefold()
-    text = text.replace("đ", "d")
-    return re.sub(r"\s+", " ", text).strip()
+    # One normalisation for the whole codebase; see relay/fb_labels.py for why
+    # folding makes naive substring matching unsafe on Vietnamese.
+    return _fold(value)
 
 
 def _fb_keyword_list(raw: Any) -> list[str]:
@@ -1140,31 +1140,55 @@ def _fb_is_clickable(node: Any) -> bool:
 # người bạn có thể biết" one tap away: pressing it removes the account's entire
 # suggestion source, permanently.
 # Distinctive phrases: safe to look for anywhere in the label.
-_FB_DESTRUCTIVE_PHRASES: tuple[str, ...] = (
-    "an nhung nguoi ban co the biet",
-    "hide people you may know",
-    "an bai viet",
-    "hide post",
-    "bao cao",
-    "report",
-    "bo theo doi",
-    "unfollow",
-    "huy ket ban",
-    "unfriend",
-    "dang xuat",
-    "log out",
-    "roi nhom",
-    "leave group",
-    "chap nhan",     # accepting a stranger's request is not ours to decide
-    "delete comment",
-    "block",
+_FB_DESTRUCTIVE_PHRASES = LabelSet(
+    name="destructive_phrases",
+    mode=MODE_PHRASE,
+    why="Multi-word wording no person's name can contain.",
+    tokens=(
+        "an nhung nguoi ban co the biet",
+        "hide people you may know",
+        "an bai viet",
+        "hide post",
+        "bao cao",
+        "report",
+        "bo theo doi",
+        "unfollow",
+        "huy ket ban",
+        "unfriend",
+        "dang xuat",
+        "log out",
+        "roi nhom",
+        "leave group",
+        "chap nhan",   # accepting a stranger's request is not ours to decide
+        "delete comment",
+        "block",
+    ),
+    collides_with_names=("bao cao",),
+    collision_reason=(
+        "'Bảo' and 'Cao' are both common name syllables, so a clickable label "
+        "reading 'Bảo Cao' is refused. Accepted: losing one candidate is "
+        "cheaper than reporting a stranger's post from the account, and this "
+        "check only ever refuses a tap — it never performs one."
+    ),
 )
 
 # Short button words that are also ordinary Vietnamese name syllables. "Chặn",
 # "Gỡ" and "Xóa" fold to "chan", "go" and "xoa" — and so do parts of Chân Thị
 # Mai, Gogo Nguyen and Xoan Nguyen. Matched only as a complete label, which is
 # what a button carries and a person's row never does.
-_FB_DESTRUCTIVE_EXACT: frozenset[str] = frozenset({"go", "xoa", "chan", "an"})
+_FB_DESTRUCTIVE_EXACT = LabelSet(
+    name="destructive_exact",
+    mode=MODE_EXACT,
+    why="Single syllables that are also names; only a whole-label match is a button.",
+    tokens=("go", "xoa", "chan", "an"),
+    collides_with_names=("an",),
+    collision_reason=(
+        "'An' is a complete Vietnamese given name, so a clickable name node "
+        "labelled exactly 'An' will refuse the tap. Accepted: skipping one "
+        "candidate costs a friend request, while tapping 'Ẩn những người bạn "
+        "có thể biết' removes the account's entire suggestion source forever."
+    ),
+)
 
 # Observed on a real device: the dismiss control next to Add Friend is labelled
 # "Xóa <name>", so this one needs a prefix rule. Deliberately only this one —
@@ -1177,9 +1201,9 @@ def _fb_is_destructive_label(label: str) -> bool:
     folded = _fb_fold(label)
     if not folded:
         return False
-    if folded in _FB_DESTRUCTIVE_EXACT:
+    if _FB_DESTRUCTIVE_EXACT.matches_folded(folded):
         return True
-    if any(phrase in folded for phrase in _FB_DESTRUCTIVE_PHRASES):
+    if _FB_DESTRUCTIVE_PHRASES.matches_folded(folded):
         return True
     # A prefix only counts when what follows is a person's name, not another
     # word that happens to start the same way ("Xoan Nguyen" is not "Xóa ...").
@@ -1233,43 +1257,112 @@ SURFACE_UNKNOWN = "unknown"
 
 # Account-level walls. These must never be retried: repeating an action against
 # a checkpoint is how a recoverable account becomes an unrecoverable one.
-_FB_BLOCKING_MARKERS: tuple[str, ...] = (
-    "tam thoi bi chan",
-    "temporarily blocked",
-    "ban tam thoi bi chan",
-    "xac nhan danh tinh",
-    "confirm your identity",
-    "xac minh danh tinh",
-    "verify your identity",
-    "tai khoan cua ban da bi vo hieu hoa",
-    "account has been disabled",
-    "dang nhap lai",
-    "log in again",
-    "nhap ma",
-    "enter the code",
-    "chung toi da phat hien hoat dong bat thuong",
-    "unusual activity",
-    "ban dang di qua nhanh",
-    "you're going too fast",
-    "you are going too fast",
+_FB_BLOCKING_MARKERS = LabelSet(
+    name="blocking_markers",
+    mode=MODE_PHRASE,
+    why=(
+        "Matched against the whole screen's text, so only sentence-length "
+        "wording is safe here — a screen full of names is the normal case."
+    ),
+    tokens=(
+        "tam thoi bi chan",
+        "temporarily blocked",
+        "ban tam thoi bi chan",
+        "xac nhan danh tinh",
+        "confirm your identity",
+        "xac minh danh tinh",
+        "verify your identity",
+        "tai khoan cua ban da bi vo hieu hoa",
+        "account has been disabled",
+        "dang nhap lai",
+        "log in again",
+        "nhap ma",
+        "enter the code",
+        "chung toi da phat hien hoat dong bat thuong",
+        "unusual activity",
+        "ban dang di qua nhanh",
+        "you're going too fast",
+        "you are going too fast",
+    ),
 )
 
 # Sheets and dialogs that sit on top of a screen we can still use.
-_FB_DISMISSABLE_MARKERS: tuple[str, ...] = (
-    "nhan goi y ket ban tot hon",
-    "get better friend suggestions",
-    "improve friend suggestions",
-    "tai sao toi nhin thay",
-    "why am i seeing",
-    "an nhung nguoi ban co the biet",
-    "hide people you may know",
-    "bat thong bao",
-    "turn on notifications",
-    "khong phai bay gio",
-    "not now",
-    "de sau",
-    "maybe later",
+_FB_DISMISSABLE_MARKERS = LabelSet(
+    name="dismissable_markers",
+    mode=MODE_PHRASE,
+    why="Also matched against the whole screen; sentence-length wording only.",
+    tokens=(
+        "nhan goi y ket ban tot hon",
+        "get better friend suggestions",
+        "improve friend suggestions",
+        "tai sao toi nhin thay",
+        "why am i seeing",
+        "an nhung nguoi ban co the biet",
+        "hide people you may know",
+        "bat thong bao",
+        "turn on notifications",
+        "khong phai bay gio",
+        "not now",
+        "de sau",
+        "maybe later",
+        # Commenting on a post in a group the account has not joined makes
+        # Facebook open its join questionnaire, full-screen, with the rules
+        # checkbox already ticked and Send one tap away. Observed on a real run
+        # on 20/08: the flow did not recognise it, kept rescanning and swiping
+        # the form, and reported success for 88 iterations. Dismissable rather
+        # than blocked — it is a modal we can back out of, not an account wall.
+        "cau hoi danh cho nguoi tham gia",
+        "quy tac nhom cua quan tri vien",
+        "answer questions to join",
+        "membership questions",
+    ),
 )
+
+
+def _fb_handle_unexpected_surface(dev: Any, xml: str) -> dict[str, Any]:
+    """Classify the screen and clear it when that is possible.
+
+    Returns ``{"state", "xml", "marker", "cleared"}``. ``xml`` is the hierarchy
+    the caller should keep working from — re-read after a successful dismiss,
+    unchanged otherwise.
+
+    Both flows used to leave SURFACE_DISMISSABLE computed and unused: the only
+    branch anybody wrote was for SURFACE_BLOCKED, so a dialog we knew how to
+    name still stopped nothing. One Back is the whole treatment; if the screen
+    survives it, say so and let the caller stop rather than guess.
+    """
+    surface = _fb_classify_surface(xml)
+    state = surface.get("state")
+    if state != SURFACE_DISMISSABLE:
+        return {**surface, "xml": xml, "cleared": False}
+
+    # Only act on a dialog we can name. _fb_overlay_bounds also reports
+    # DISMISSABLE from geometry alone — a wide node anchored to the bottom —
+    # and a feed's own list container fits that shape. Pressing Back on a
+    # healthy feed, or aborting the run because of it, is far worse than
+    # missing an unnamed sheet. Identity decides; position only assists.
+    if not str(surface.get("marker") or "").strip():
+        return {**surface, "state": SURFACE_OK, "xml": xml, "cleared": False}
+
+    try:
+        dev.press("back")
+    except Exception:
+        return {**surface, "xml": xml, "cleared": False}
+    time.sleep(0.6)
+    try:
+        after_xml = dev.dump_hierarchy(compressed=False)
+    except Exception:
+        return {**surface, "xml": xml, "cleared": False}
+
+    after = _fb_classify_surface(after_xml)
+    if after.get("state") == SURFACE_DISMISSABLE:
+        return {
+            **after,
+            "xml": after_xml,
+            "cleared": False,
+            "fingerprint": _fb_surface_fingerprint(after_xml),
+        }
+    return {**after, "xml": after_xml, "cleared": True}
 
 
 def _fb_overlay_bounds(root: Any) -> tuple[int, int, int, int] | None:
@@ -1312,21 +1405,17 @@ def _fb_classify_surface(hierarchy_xml: str) -> dict[str, Any]:
     labels = _fb_all_labels(root)
     folded_all = _fb_fold(" ".join(labels))
 
-    for marker in _FB_BLOCKING_MARKERS:
-        if marker in folded_all:
-            return {
-                "state": SURFACE_BLOCKED,
-                "marker": marker,
-                "retryable": False,
-                "message": (
-                    "account-level block detected; stopping without retrying"
-                ),
-            }
+    blocking_marker = _FB_BLOCKING_MARKERS.first_match_folded(folded_all)
+    if blocking_marker:
+        return {
+            "state": SURFACE_BLOCKED,
+            "marker": blocking_marker,
+            "retryable": False,
+            "message": "account-level block detected; stopping without retrying",
+        }
 
     overlay = _fb_overlay_bounds(root)
-    dismiss_marker = next(
-        (marker for marker in _FB_DISMISSABLE_MARKERS if marker in folded_all), ""
-    )
+    dismiss_marker = _FB_DISMISSABLE_MARKERS.first_match_folded(folded_all)
     if overlay is not None or dismiss_marker:
         return {
             "state": SURFACE_DISMISSABLE,
@@ -1349,38 +1438,53 @@ def _fb_surface_fingerprint(hierarchy_xml: str) -> str:
     return hashlib.sha256(" ".join(labels[:40]).encode("utf-8")).hexdigest()[:16]
 
 
+_FB_ADD_FRIEND_TOKENS = LabelSet(
+    name="add_friend_tokens",
+    mode=MODE_PHRASE,
+    why="Multi-word button wording; 'ban be'/'friend' alone would hit names.",
+    tokens=("them ban be", "nut them ban be", "add friend", "nut add friend"),
+)
+
+# "Hủy lời mời" also contains no add-friend wording, but the accessibility label
+# of a sent-request button on some builds reads "Nút thêm bạn bè, Hủy lời mời".
+_FB_ADD_FRIEND_NEGATIONS = LabelSet(
+    name="add_friend_negations",
+    mode=MODE_PHRASE,
+    why="Wording that turns an apparent Add Friend button into a sent request.",
+    tokens=("huy loi moi", "cancel request"),
+)
+
+
 def _fb_is_add_friend_label(label: str) -> bool:
     folded = _fb_fold(label)
-    return any(
-        token in folded
-        for token in (
-            "them ban be",
-            "nut them ban be",
-            "add friend",
-            "nut add friend",
-        )
-    ) and not any(token in folded for token in ("huy loi moi", "cancel request"))
+    return _FB_ADD_FRIEND_TOKENS.matches_folded(folded) and not (
+        _FB_ADD_FRIEND_NEGATIONS.matches_folded(folded)
+    )
 
 
 # Post-tap states meaning "the request left". Kept in ONE place: this list and
 # the verification in _fb_pending_request_near used to drift apart, so a row that
 # turned into "Đã gửi lời mời" counted as a failed tap and aborted the batch.
-_FB_REQUEST_SENT_TOKENS = (
-    "huy loi moi",
-    "huy yeu cau",
-    "cancel request",
-    "cancel friend request",
-    "request sent",
-    "friend request sent",
-    "da gui loi moi",
-    "da gui yeu cau",
-    "loi moi da gui",
+_FB_REQUEST_SENT_TOKENS = LabelSet(
+    name="request_sent_tokens",
+    mode=MODE_PHRASE,
+    why="Three-word status wording; no name folds to any of these.",
+    tokens=(
+        "huy loi moi",
+        "huy yeu cau",
+        "cancel request",
+        "cancel friend request",
+        "request sent",
+        "friend request sent",
+        "da gui loi moi",
+        "da gui yeu cau",
+        "loi moi da gui",
+    ),
 )
 
 
 def _fb_is_request_sent_label(label: str) -> bool:
-    folded = _fb_fold(label)
-    return any(token in folded for token in _FB_REQUEST_SENT_TOKENS)
+    return _FB_REQUEST_SENT_TOKENS.matches(label)
 
 
 def _fb_is_connection_action_label(label: str) -> bool:
@@ -1438,6 +1542,16 @@ def _fb_bool_param(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+# The mutual-friends subtitle under a name. Declared once because three call
+# sites used to carry their own copy of the same two strings.
+_FB_MUTUAL_CONTEXT_TOKENS = LabelSet(
+    name="mutual_context_tokens",
+    mode=MODE_PHRASE,
+    why="Two-word subtitle wording; matched against rows that are mostly names.",
+    tokens=("ban chung", "mutual friend"),
+)
+
+
 def _fb_contains_any(root: Any, tokens: tuple[str, ...]) -> bool:
     folded = _fb_fold(" ".join(_fb_all_labels(root)))
     return any(token and token in folded for token in tokens)
@@ -1477,20 +1591,46 @@ def _fb_click_label(
     return True
 
 
+_FB_SUGGESTION_CONTEXT_TOKENS = LabelSet(
+    name="suggestion_context_tokens",
+    mode=MODE_WORD,
+    why=(
+        "Matched against every label on screen at once, which on this surface "
+        "is a list of people. 'goi y' would sit inside a name as a substring."
+    ),
+    tokens=(
+        "nhung nguoi ban co the biet",
+        "people you may know",
+        "goi y",
+        "suggestions",
+    ),
+)
+
+_FB_FRIEND_HEADER_TOKENS = LabelSet(
+    name="friend_header_tokens",
+    mode=MODE_WORD,
+    why="The 'Bạn bè' section header, matched against a screen full of names.",
+    tokens=("ban be", "friends"),
+)
+
+
 def _fb_friend_suggestions_ready(root: Any) -> bool:
     labels = _fb_fold(" ".join(_fb_all_labels(root)))
-    has_suggestion_context = any(
-        token in labels
-        for token in (
-            "nhung nguoi ban co the biet",
-            "people you may know",
-            "goi y",
-            "suggestions",
-        )
-    )
-    has_friend_header = any(token in labels for token in ("ban be", "friends"))
-    has_add_button = any(token in labels for token in ("them ban be", "add friend"))
+    has_suggestion_context = _FB_SUGGESTION_CONTEXT_TOKENS.matches_folded(labels)
+    has_friend_header = _FB_FRIEND_HEADER_TOKENS.matches_folded(labels)
+    has_add_button = _FB_ADD_FRIEND_TOKENS.matches_folded(labels)
     return has_suggestion_context and (has_add_button or has_friend_header)
+
+
+_FB_CLOSE_CONTROL_EXACT = LabelSet(
+    name="close_control_exact",
+    mode=MODE_EXACT,
+    why=(
+        "A dismiss button carries nothing but 'Đóng', 'Close' or 'X'. As a "
+        "substring 'x' matches almost every label there is."
+    ),
+    tokens=("dong", "close", "x"),
+)
 
 
 def _fb_dismiss_friend_suggestion_prompt(dev: Any, root: Any) -> bool:
@@ -1515,7 +1655,7 @@ def _fb_dismiss_friend_suggestion_prompt(dev: Any, root: Any) -> bool:
         width = right - left
         height = bottom - top
         label = _fb_fold(_fb_node_label(node))
-        if label and not any(token in label for token in ("dong", "close", "x")):
+        if label and not _FB_CLOSE_CONTROL_EXACT.matches_folded(label):
             continue
         if right < 700 or top < 500 or width > 220 or height > 220:
             continue
@@ -1627,10 +1767,7 @@ def _fb_visible_person_row_labels(
         folded = _fb_fold(label)
         if not folded:
             continue
-        if (
-            ("ban chung" in folded or "mutual friend" in folded)
-            and n_bottom < top - 80
-        ):
+        if _FB_MUTUAL_CONTEXT_TOKENS.matches_folded(folded) and n_bottom < top - 80:
             continue
         package_name = str(node.attrib.get("package", "") or "")
         if package_name and not package_name.startswith("com.facebook"):
@@ -1730,18 +1867,14 @@ def _fb_mutual_count_from_text(text: str) -> int:
 def _fb_display_name_from_row(labels: list[str], row_text: str) -> str:
     prioritized = sorted(
         labels,
-        key=lambda item: (
-            1
-            if any(token in _fb_fold(item) for token in ("ban chung", "mutual friend"))
-            else 0
-        ),
+        key=lambda item: 1 if _FB_MUTUAL_CONTEXT_TOKENS.matches(item) else 0,
     )
     for label in prioritized:
         clean = str(label or "").strip()
         if not clean:
             continue
         folded_clean = _fb_fold(clean)
-        if any(token in folded_clean for token in ("ban chung", "mutual friend")):
+        if _FB_MUTUAL_CONTEXT_TOKENS.matches_folded(folded_clean):
             continue
         clean = re.split(
             r"\s*,\s*\d+\s+b",
@@ -1950,16 +2083,30 @@ FRIEND_STATE_AVAILABLE = "available"
 FRIEND_STATE_PENDING = "pending"
 FRIEND_STATE_CONNECTED = "connected"
 
-_FB_FRIEND_CONNECTED_LABELS: tuple[str, ...] = ("ban be", "friends", "ban")
+_FB_FRIEND_CONNECTED_LABELS = LabelSet(
+    name="friend_connected_labels",
+    mode=MODE_EXACT,
+    why=(
+        "'Bạn bè' and 'Bạn' are the button labels on a connected profile — and "
+        "also the two most common words in any Vietnamese friend row. Only a "
+        "label that is nothing but this word is the button."
+    ),
+    tokens=("ban be", "friends", "ban"),
+)
 
 # Everything under this heading belongs to other people. A profile page carries
 # suggestion cards with their own Add Friend buttons, which is why counting the
 # connection controls on screen can never identify the owner's.
-_FB_PROFILE_SUGGESTION_HEADINGS: tuple[str, ...] = (
-    "nhung nguoi ban co the biet",
-    "people you may know",
-    "goi y cho ban",
-    "suggested for you",
+_FB_PROFILE_SUGGESTION_HEADINGS = LabelSet(
+    name="profile_suggestion_headings",
+    mode=MODE_PHRASE,
+    why="Section headings, four words or more; nothing shorter belongs here.",
+    tokens=(
+        "nhung nguoi ban co the biet",
+        "people you may know",
+        "goi y cho ban",
+        "suggested for you",
+    ),
 )
 
 
@@ -1994,9 +2141,7 @@ def _fb_profile_suggestion_top(root: Any) -> int | None:
     best: int | None = None
     for node in root.iter("node"):
         folded = _fb_fold(_fb_node_label(node))
-        if not folded or not any(
-            heading in folded for heading in _FB_PROFILE_SUGGESTION_HEADINGS
-        ):
+        if not _FB_PROFILE_SUGGESTION_HEADINGS.matches_folded(folded):
             continue
         bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
         if bounds and (best is None or bounds[1] < best):
@@ -2054,7 +2199,7 @@ def _fb_profile_owner_connection(
             state = FRIEND_STATE_AVAILABLE
         elif _fb_is_request_sent_label(label):
             state = FRIEND_STATE_PENDING
-        elif folded in _FB_FRIEND_CONNECTED_LABELS:
+        elif _FB_FRIEND_CONNECTED_LABELS.matches_folded(folded):
             state = FRIEND_STATE_CONNECTED
         else:
             continue
@@ -2142,22 +2287,62 @@ def _fb_dedupe_post_candidates(candidates: list[dict[str, Any]]) -> list[dict[st
     return deduped
 
 
+_FB_POST_SEARCH_CHROME_TOKENS = LabelSet(
+    name="post_search_chrome_tokens",
+    mode=MODE_PHRASE,
+    why="Multi-word decorations in a search result card.",
+    tokens=(
+        "anh dai dien",
+        "hinh minh hoa",
+        "hinh nen",
+        "lua chon khac",
+        "nut thich",
+        "nut binh luan",
+        "nut chia se",
+    ),
+)
+
+_FB_SEARCH_FIELD_TOKENS = LabelSet(
+    name="search_field_tokens",
+    mode=MODE_WORD,
+    why="Matched against an EditText hint, but kept to words on principle.",
+    tokens=("tim kiem", "search"),
+)
+
+# Chrome inside the comment sheet, used to tell a real commenter's name from the
+# sheet's own controls. "thich"/"like"/"reply" are single words here: as
+# substrings they would discard commenters whose names contain those letters.
+_FB_COMMENT_SHEET_CHROME = LabelSet(
+    name="comment_sheet_chrome",
+    mode=MODE_WORD,
+    why="Matched against candidate commenter names, so never as substrings.",
+    tokens=(
+        "phu hop nhat",
+        "most relevant",
+        "tat ca binh luan",
+        "all comments",
+        "viet binh luan",
+        "write a comment",
+        "tra loi",
+        "reply",
+        "thich",
+        "like",
+    ),
+)
+
+_FB_SEE_MORE_TOKENS = LabelSet(
+    name="see_more_tokens",
+    mode=MODE_PHRASE,
+    why="Two-word expander link.",
+    tokens=("xem them", "see more"),
+)
+
+
 def _fb_is_post_search_chrome_label(label: str) -> bool:
     folded = _fb_fold(label)
     if not folded:
         return True
-    if any(
-        token in folded
-        for token in (
-            "anh dai dien",
-            "hinh minh hoa",
-            "hinh nen",
-            "lua chon khac",
-            "nut thich",
-            "nut binh luan",
-            "nut chia se",
-        )
-    ):
+    if _FB_POST_SEARCH_CHROME_TOKENS.matches_folded(folded):
         return True
     return bool(re.fullmatch(r"\d+\s+(binh luan|comments?|shares?)", folded))
 
@@ -2168,9 +2353,7 @@ def _fb_search_input_focused(root: Any) -> bool:
             continue
         if str(node.attrib.get("focused", "") or "").casefold() != "true":
             continue
-        label = _fb_node_label(node)
-        folded = _fb_fold(label)
-        if "tim kiem" in folded or "search" in folded:
+        if _FB_SEARCH_FIELD_TOKENS.matches(_fb_node_label(node)):
             return True
     return False
 
@@ -2226,77 +2409,124 @@ def _fb_profile_display_name(display_name: str) -> str:
     return base_name or display_name
 
 
+# Post action-bar wording. These are single syllables in Vietnamese, so they are
+# matched as whole words: "thich" sits inside no common name, but "Thi Chi" folds
+# close enough that the substring rule was luck rather than design.
+_FB_CONTENT_ACTION_WORDS = LabelSet(
+    name="content_action_words",
+    mode=MODE_WORD,
+    why="Single-word action-bar labels under a post.",
+    tokens=("thich", "binh luan", "chia se", "like", "comment", "share"),
+)
+
+# Two lists, not one: "remove like" disqualifies a control from being the
+# *available* like button, but it is the accessibility label of the unlike
+# action rather than a state the feed shows, so it does not by itself mean the
+# post is liked.
+_FB_LIKE_NOT_AVAILABLE_WORDS = LabelSet(
+    name="like_not_available_words",
+    mode=MODE_WORD,
+    why="Wording that rules a control out as the pressable like button.",
+    tokens=("bo thich", "unlike", "remove like"),
+)
+
+_FB_LIKE_ACTIVE_WORDS = LabelSet(
+    name="like_active_words",
+    mode=MODE_WORD,
+    why="States meaning the post is already liked.",
+    tokens=("bo thich", "da thich", "unlike"),
+)
+
+_FB_LIKE_AVAILABLE_WORDS = LabelSet(
+    name="like_available_words",
+    mode=MODE_WORD,
+    why="States meaning the like button can still be pressed.",
+    tokens=("nut thich", "thich", "like"),
+)
+
+_FB_COMMENT_ACTION_WORDS = LabelSet(
+    name="comment_action_words",
+    mode=MODE_WORD,
+    why="The comment button under a post.",
+    tokens=("nut binh luan", "binh luan", "comment"),
+)
+
+_FB_COMMENT_INPUT_TOKENS = LabelSet(
+    name="comment_input_tokens",
+    mode=MODE_PHRASE,
+    why="Composer placeholder text; multi-word by construction.",
+    tokens=(
+        "viet binh luan",
+        "binh luan cong khai",
+        "write a comment",
+        "comment as",
+    ),
+)
+
+_FB_COMMENT_SUBMIT_EXACT = LabelSet(
+    name="comment_submit_exact",
+    mode=MODE_EXACT,
+    why="'Đăng', 'Gửi' are also name syllables; only a bare label is the button.",
+    tokens=("dang", "post", "send", "gui"),
+)
+
+_FB_COMMENT_SUBMIT_TOKENS = LabelSet(
+    name="comment_submit_tokens",
+    mode=MODE_PHRASE,
+    why="Accessibility wording that names the button explicitly.",
+    tokens=("nut dang", "nut gui", "post comment", "send comment"),
+)
+
+_FB_COMMENT_CLOSE_EXACT = LabelSet(
+    name="comment_close_exact",
+    mode=MODE_EXACT,
+    why="'Đóng' folds to 'dong', which is inside names like 'Hồng Đông'.",
+    tokens=("dong", "close"),
+)
+
+_FB_COMMENT_CLOSE_TOKENS = LabelSet(
+    name="comment_close_tokens",
+    mode=MODE_PHRASE,
+    why="Accessibility wording that names the close control explicitly.",
+    tokens=("nut dong", "close comments", "close comment"),
+)
+
+
 def _fb_is_content_action_label(label: str) -> bool:
-    folded = _fb_fold(label)
-    return any(
-        token in folded
-        for token in (
-            "thich",
-            "binh luan",
-            "chia se",
-            "like",
-            "comment",
-            "share",
-        )
-    )
+    return _FB_CONTENT_ACTION_WORDS.matches(label)
 
 
 def _fb_is_like_available_label(label: str) -> bool:
     folded = _fb_fold(label)
-    if any(token in folded for token in ("bo thich", "unlike", "remove like")):
+    if _FB_LIKE_NOT_AVAILABLE_WORDS.matches_folded(folded):
         return False
-    return any(token in folded for token in ("nut thich", "thich", "like"))
+    return _FB_LIKE_AVAILABLE_WORDS.matches_folded(folded)
 
 
 def _fb_is_like_active_label(label: str) -> bool:
-    folded = _fb_fold(label)
-    return any(token in folded for token in ("bo thich", "da thich", "unlike"))
+    return _FB_LIKE_ACTIVE_WORDS.matches(label)
 
 
 def _fb_is_comment_action_label(label: str) -> bool:
-    folded = _fb_fold(label)
-    return any(
-        token in folded
-        for token in ("nut binh luan", "binh luan", "comment")
-    )
+    return _FB_COMMENT_ACTION_WORDS.matches(label)
 
 
 def _fb_is_comment_input_label(label: str) -> bool:
-    folded = _fb_fold(label)
-    return any(
-        token in folded
-        for token in (
-            "viet binh luan",
-            "binh luan cong khai",
-            "write a comment",
-            "comment as",
-        )
-    )
+    return _FB_COMMENT_INPUT_TOKENS.matches(label)
 
 
 def _fb_is_comment_submit_label(label: str) -> bool:
     folded = _fb_fold(label)
-    return folded in {"dang", "post", "send", "gui"} or any(
-        token in folded
-        for token in (
-            "nut dang",
-            "nut gui",
-            "post comment",
-            "send comment",
-        )
-    )
+    return _FB_COMMENT_SUBMIT_EXACT.matches_folded(
+        folded
+    ) or _FB_COMMENT_SUBMIT_TOKENS.matches_folded(folded)
 
 
 def _fb_is_comment_overlay_close_label(label: str) -> bool:
     folded = _fb_fold(label)
-    return folded in {"dong", "close"} or any(
-        token in folded
-        for token in (
-            "nut dong",
-            "close comments",
-            "close comment",
-        )
-    )
+    return _FB_COMMENT_CLOSE_EXACT.matches_folded(
+        folded
+    ) or _FB_COMMENT_CLOSE_TOKENS.matches_folded(folded)
 
 
 _DEFAULT_SOCIAL_POST_TERMS: dict[str, list[str]] = {
@@ -2442,6 +2672,30 @@ def _social_submit_label_matches(label: str, terms: list[str]) -> bool:
     return False
 
 
+# The three sort options in the comment filter sheet, one LabelSet each so the
+# caller can tell which of them it saw.
+_FB_COMMENT_SORT_OPTIONS: dict[str, LabelSet] = {
+    "best": LabelSet(
+        name="comment_sort_best",
+        mode=MODE_PHRASE,
+        why="Three-word option label.",
+        tokens=("phu hop nhat",),
+    ),
+    "newest": LabelSet(
+        name="comment_sort_newest",
+        mode=MODE_WORD,
+        why="'moi nhat' is two short syllables; words only.",
+        tokens=("moi nhat",),
+    ),
+    "all": LabelSet(
+        name="comment_sort_all",
+        mode=MODE_PHRASE,
+        why="Three-word option label.",
+        tokens=("tat ca binh luan",),
+    ),
+}
+
+
 def _fb_comment_filter_sheet_open(root: Any) -> bool:
     matched_options: set[str] = set()
     radio_count = 0
@@ -2450,22 +2704,43 @@ def _fb_comment_filter_sheet_open(root: Any) -> bool:
         class_name = str(node.attrib.get("class", "") or "")
         if class_name == "android.widget.RadioButton":
             radio_count += 1
-        if "phu hop nhat" in label:
-            matched_options.add("best")
-        if "moi nhat" in label:
-            matched_options.add("newest")
-        if "tat ca binh luan" in label:
-            matched_options.add("all")
+        for option, label_set in _FB_COMMENT_SORT_OPTIONS.items():
+            if label_set.matches_folded(label):
+                matched_options.add(option)
     return radio_count >= 2 and len(matched_options) >= 2
+
+
+# The sheet header reads "Đang hiển thị <n> bình luận", so both halves have to
+# be present — either alone appears elsewhere.
+_FB_COMMENTS_HEADER_TOKENS = LabelSet(
+    name="comments_header_tokens",
+    mode=MODE_PHRASE,
+    why="Three-word header prefix of the comment sheet.",
+    tokens=("dang hien thi",),
+)
+
+_FB_COMMENTS_HEADER_NOUN = LabelSet(
+    name="comments_header_noun",
+    mode=MODE_WORD,
+    why="'bình luận' as words; only meaningful next to the header prefix.",
+    tokens=("binh luan",),
+)
+
+_FB_COMMENTS_OVERLAY_TOKENS = LabelSet(
+    name="comments_overlay_tokens",
+    mode=MODE_PHRASE,
+    why="Composer and reply placeholders unique to the comment overlay.",
+    tokens=("viet binh luan", "tra loi binh luan"),
+)
 
 
 def _fb_comments_overlay_visible(root: Any) -> bool:
     for node in root.iter("node"):
         label = _fb_fold(_fb_node_label(node))
-        if (
-            "dang hien thi" in label
-            and "binh luan" in label
-        ) or "viet binh luan" in label or "tra loi binh luan" in label:
+        header = _FB_COMMENTS_HEADER_TOKENS.matches_folded(
+            label
+        ) and _FB_COMMENTS_HEADER_NOUN.matches_folded(label)
+        if header or _FB_COMMENTS_OVERLAY_TOKENS.matches_folded(label):
             return True
     return False
 
@@ -2633,26 +2908,41 @@ def _fb_screen_right(root: Any) -> int:
     return right or 1260
 
 
-_FB_AUTHOR_NOISE_TOKENS = (
-    "anh dai dien",
-    "profile picture",
-    "lua chon khac",
-    "more options",
-    "theo doi",
-    "follow",
-    "gio",
-    "phut",
-    "ngay",
-    "chia se voi",
-    "shared with",
-    "cong khai",
-    "public",
-    "nhom cong khai",
-    "sponsored",
-    "duoc tai tro",
-    "xem them",
-    "see more",
+_FB_AUTHOR_NOISE_PHRASES = LabelSet(
+    name="author_noise_phrases",
+    mode=MODE_PHRASE,
+    why="Multi-word chrome around a post header.",
+    tokens=(
+        "anh dai dien",
+        "profile picture",
+        "lua chon khac",
+        "more options",
+        "theo doi",
+        "chia se voi",
+        "shared with",
+        "cong khai",
+        "nhom cong khai",
+        "duoc tai tro",
+        "xem them",
+        "see more",
+    ),
 )
+
+# The timestamp and privacy words a post header carries. As substrings these are
+# name syllables: "gio" is inside "Giới" and "Giỏi", so an author called Nguyễn
+# Văn Giới was silently thrown away as chrome. Whole words only.
+_FB_AUTHOR_NOISE_WORDS = LabelSet(
+    name="author_noise_words",
+    mode=MODE_WORD,
+    why="Single words that are substrings of real Vietnamese names.",
+    tokens=("follow", "gio", "phut", "ngay", "public", "sponsored"),
+)
+
+
+def _fb_is_author_noise(folded: str) -> bool:
+    return _FB_AUTHOR_NOISE_PHRASES.matches_folded(
+        folded
+    ) or _FB_AUTHOR_NOISE_WORDS.matches_folded(folded)
 
 
 def _fb_author_label_from_node(label: str) -> str:
@@ -2676,7 +2966,7 @@ def _fb_author_label_allowed(label: str) -> bool:
     folded = _fb_fold(clean)
     if not folded or len(clean) > 96:
         return False
-    if any(token in folded for token in _FB_AUTHOR_NOISE_TOKENS):
+    if _fb_is_author_noise(folded):
         return False
     if _fb_is_connection_action_label(clean):
         return False
@@ -2962,8 +3252,24 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
     expanded_more_count = 0
     last_xml = ""
 
+    blocked_surface: dict[str, Any] | None = None
+    stuck_surface: dict[str, Any] | None = None
+
     for screen_index in range(max_scrolls + 1):
         xml = dev.dump_hierarchy(compressed=False)
+
+        # This flow never asked what screen it was on. That is how it spent 88
+        # iterations swiping a group-join form: no post rows to find, nothing
+        # failing, ok every time.
+        surface = _fb_handle_unexpected_surface(dev, xml)
+        if surface.get("state") == SURFACE_BLOCKED:
+            blocked_surface = surface
+            break
+        if surface.get("state") == SURFACE_DISMISSABLE and not surface.get("cleared"):
+            stuck_surface = surface
+            break
+        xml = surface.get("xml") or xml
+
         if _fb_close_comment_overlay_if_needed(
             dev,
             xml,
@@ -3164,11 +3470,49 @@ def _flow_social_scan_posts_interact(dev: Any, p: dict) -> dict:
         time.sleep(scroll_wait_s)
 
     verified_actions = [item for item in actions if item.get("verified") is True]
+
+    if blocked_surface is not None and not verified_actions:
+        return {
+            "verified": False,
+            "batch": True,
+            "reason": "account_blocked",
+            "retryable": False,
+            "message": str(
+                blocked_surface.get("message") or "account-level block detected"
+            ),
+            "surface_state": blocked_surface.get("state"),
+            "surface_marker": blocked_surface.get("marker"),
+            "interacted_count": 0,
+            "screens_scanned": screens_scanned,
+        }
+    if stuck_surface is not None and not verified_actions:
+        return {
+            "verified": False,
+            "batch": True,
+            "reason": "surface_not_dismissable",
+            "retryable": False,
+            "message": (
+                "a dialog covered the feed and one Back did not clear it: "
+                f"{stuck_surface.get('marker') or 'unrecognised screen'}"
+            ),
+            "surface_state": stuck_surface.get("state"),
+            "surface_marker": stuck_surface.get("marker"),
+            "surface_fingerprint": stuck_surface.get("fingerprint"),
+            "interacted_count": 0,
+            "screens_scanned": screens_scanned,
+        }
+
     if not verified_actions:
         return {
             "verified": False,
             "batch": True,
-            "reason": "no_matching_post",
+            # Two different problems that used to share one reason. A feed with
+            # nothing on topic is normal and the caller should scroll on; a
+            # screen with no post rows at all means we are not on a feed, and
+            # repeating the scan there is the 88-iteration spin.
+            "reason": (
+                "screen_is_not_a_feed" if total_rows_seen == 0 else "no_matching_post"
+            ),
             # Say which half failed. "Nothing matched" reads the same whether
             # the scanner saw twenty posts and rejected them all or never
             # recognised a post at all, and those need opposite fixes: one is a
@@ -3230,9 +3574,9 @@ def _fb_see_more_bounds_near(
         folded = _fb_fold(label)
         if node_bounds is None:
             continue
-        if folded == "xem them" or folded == "see more":
+        if folded in ("xem them", "see more"):
             tap_bounds = node_bounds
-        elif "xem them" in folded or "see more" in folded:
+        elif _FB_SEE_MORE_TOKENS.matches_folded(folded):
             node_left, node_top, node_right, node_bottom = node_bounds
             tap_bounds = (
                 max(node_left, node_right - 320),
@@ -3671,21 +4015,7 @@ def _fb_commenter_author_nodes(
                 continue
         else:
             matched_author = label
-            if any(
-                token in folded
-                for token in (
-                    "phu hop nhat",
-                    "most relevant",
-                    "tat ca binh luan",
-                    "all comments",
-                    "viet binh luan",
-                    "write a comment",
-                    "tra loi",
-                    "reply",
-                    "thich",
-                    "like",
-                )
-            ):
+            if _FB_COMMENT_SHEET_CHROME.matches_folded(folded):
                 continue
         if not _fb_author_label_allowed(matched_author):
             continue
@@ -3907,12 +4237,21 @@ def _flow_social_open_commenter_from_post_match(dev: Any, p: dict) -> dict:
     }
 
 
-_FB_COMMON_CONTEXT_TOKENS = (
-    "ban chung",
-    "mutual friend",
-    "mutual friends",
-    "cung nhom",
-    "same group",
+_FB_COMMON_CONTEXT_TOKENS = LabelSet(
+    name="common_context_tokens",
+    mode=MODE_PHRASE,
+    why=(
+        "Matched against a whole suggestion row, which is mostly a person's "
+        "name — so two-word wording only. 'nhom'/'ban' alone would qualify "
+        "every row and 'trang' would discard every person named Trang."
+    ),
+    tokens=(
+        "ban chung",
+        "mutual friend",
+        "mutual friends",
+        "cung nhom",
+        "same group",
+    ),
 )
 
 # Same-group used to score 30 against a default floor of 40, so it could never
@@ -3935,28 +4274,41 @@ _FB_COMMON_CONTEXT_SCORES = {
 # as wrong: a person row carries a Follow button next to Add Friend. A row that
 # exposes an Add Friend button is a person by construction, so the guard only
 # needs to catch ads and anonymised entries.
-_FB_NON_PERSON_CONTEXT_TOKENS = (
-    "like page",
-    "thich trang",
-    "advertisement",
-    "duoc tai tro",
-    "sponsored",
-    "anonymous",
-    "nguoi tham gia an danh",
+_FB_NON_PERSON_CONTEXT_TOKENS = LabelSet(
+    name="non_person_context_tokens",
+    mode=MODE_PHRASE,
+    why="Ad and anonymity wording that cannot occur inside a person's name.",
+    tokens=(
+        "like page",
+        "thich trang",
+        "advertisement",
+        "duoc tai tro",
+        "sponsored",
+        "anonymous",
+        "nguoi tham gia an danh",
+    ),
 )
 
 # Matched on word boundaries only, so "Tham gia" (a group card) is caught while
 # a name containing the same letters is not.
-_FB_NON_PERSON_WORD_TOKENS = ("tham gia", "join")
+_FB_NON_PERSON_WORD_TOKENS = LabelSet(
+    name="non_person_word_tokens",
+    mode=MODE_WORD,
+    why="'join' as a substring hits nothing here, but as a rule short verbs stay words.",
+    tokens=("tham gia", "join"),
+    collides_with_names=("tham gia",),
+    collision_reason=(
+        "A row whose text puts 'Thắm' next to 'Gia' is dropped as a group card. "
+        "Accepted: that ordering is rare, while a group's 'Tham gia' button "
+        "entering the person pipeline means friend-requesting a group."
+    ),
+)
 
 
 def _fb_has_non_person_marker(folded_row_text: str) -> bool:
-    if any(token in folded_row_text for token in _FB_NON_PERSON_CONTEXT_TOKENS):
-        return True
-    return any(
-        re.search(rf"\b{re.escape(token)}\b", folded_row_text)
-        for token in _FB_NON_PERSON_WORD_TOKENS
-    )
+    return _FB_NON_PERSON_CONTEXT_TOKENS.matches_folded(
+        folded_row_text
+    ) or _FB_NON_PERSON_WORD_TOKENS.matches_folded(folded_row_text)
 
 
 def _fb_visible_connectable_people(
@@ -4016,10 +4368,9 @@ def _fb_visible_connectable_people(
         matched_common: list[str] = []
         score = 0
         mutual_count = _fb_mutual_count_from_text(row_text)
-        for token in _FB_COMMON_CONTEXT_TOKENS:
-            if token in folded:
-                matched_common.append(token)
-                score += _FB_COMMON_CONTEXT_SCORES.get(token, 30)
+        for token in _FB_COMMON_CONTEXT_TOKENS.all_matches_folded(folded):
+            matched_common.append(token)
+            score += _FB_COMMON_CONTEXT_SCORES.get(token, 30)
         if mutual_count > 0:
             score += min(mutual_count, 10) * 5
         for token in common_tokens:
@@ -4173,7 +4524,30 @@ def _flow_fb_connect_visible_people(dev: Any, p: dict) -> dict:
                 )
                 last_xml = None
                 root = _xml_parse_root(before_xml)
-                surface = _fb_classify_surface(before_xml)
+                surface = _fb_handle_unexpected_surface(dev, before_xml)
+                if surface.get("cleared"):
+                    before_xml = surface.get("xml") or before_xml
+                    root = _xml_parse_root(before_xml)
+                    reused_xml = False
+                elif surface.get("state") == SURFACE_DISMISSABLE:
+                    # Computed and then ignored until now, which meant a sheet we
+                    # could already name still blocked every send silently.
+                    return {
+                        "verified": False,
+                        "batch": True,
+                        "reason": "surface_not_dismissable",
+                        "retryable": False,
+                        "message": (
+                            "a dialog covered the people list and one Back did "
+                            f"not clear it: {surface.get('marker') or 'unrecognised screen'}"
+                        ),
+                        "surface_state": surface.get("state"),
+                        "surface_marker": surface.get("marker"),
+                        "surface_fingerprint": surface.get("fingerprint"),
+                        "sent_count": len(sent),
+                        "sent": sent,
+                        "screens_scanned": screens_scanned,
+                    }
                 if surface["state"] == SURFACE_BLOCKED:
                     # Never retried: repeating an action against a checkpoint is
                     # how a recoverable account becomes an unrecoverable one.
@@ -4773,6 +5147,9 @@ def _flow_social_select_target(dev: Any, p: dict) -> dict:
 # "1.234 bạn bè", "1,2K friends", "567 người theo dõi". Vietnamese uses "." as
 # the thousands separator and "," as the decimal mark, which is the opposite of
 # the English formatting Facebook also emits, so both have to be handled.
+# Not a LabelSet: these are never matched on their own. They are only ever the
+# tail of _FB_COUNT_RE, so a digit must immediately precede them — which is why
+# bare "friend" and "ban be" are safe here and nowhere else.
 _FB_COUNT_LABELS: dict[str, tuple[str, ...]] = {
     "friends": ("ban be", "friends", "friend"),
     "followers": ("nguoi theo doi", "followers", "follower"),
@@ -4782,16 +5159,23 @@ _FB_COUNT_RE = r"(\d[\d.,]*)\s*(?:tr|m|k|n)?\s*"
 # An account with nobody gets an empty-state sentence instead of "0 bạn bè" —
 # observed on a real cold account. Without this the one account that most needs
 # classifying is the one that reads as "count not visible".
-_FB_EMPTY_COUNT_MARKERS: dict[str, tuple[str, ...]] = {
-    "friends": (
-        "khong co ban be nao de hien thi",
-        "khong co ban be nao",
-        "no friends to show",
-        "no friends yet",
+_FB_EMPTY_COUNT_MARKERS: dict[str, LabelSet] = {
+    "friends": LabelSet(
+        name="empty_count_friends",
+        mode=MODE_PHRASE,
+        why="Full empty-state sentences.",
+        tokens=(
+            "khong co ban be nao de hien thi",
+            "khong co ban be nao",
+            "no friends to show",
+            "no friends yet",
+        ),
     ),
-    "followers": (
-        "khong co nguoi theo doi nao",
-        "no followers yet",
+    "followers": LabelSet(
+        name="empty_count_followers",
+        mode=MODE_PHRASE,
+        why="Full empty-state sentences.",
+        tokens=("khong co nguoi theo doi nao", "no followers yet"),
     ),
 }
 
@@ -4828,10 +5212,10 @@ def _fb_read_count(hierarchy_xml: str, metric: str = "friends") -> dict[str, Any
         return {"found": False, "reason": "unsupported_metric", "metric": metric}
     root = _xml_parse_root(hierarchy_xml)
     all_labels = _fb_all_labels(root)
-    empty_markers = _FB_EMPTY_COUNT_MARKERS.get(metric, ())
+    empty_markers = _FB_EMPTY_COUNT_MARKERS.get(metric)
     for label in all_labels:
         folded = _fb_fold(label)
-        if any(marker in folded for marker in empty_markers):
+        if empty_markers is not None and empty_markers.matches_folded(folded):
             return {
                 "found": True,
                 "metric": metric,

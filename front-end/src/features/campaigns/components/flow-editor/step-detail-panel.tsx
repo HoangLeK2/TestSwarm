@@ -5,11 +5,13 @@ import {
   Crop as CropIcon,
   Monitor,
   MousePointerClick,
-  Move
+  Move,
+  ShieldCheck
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   LoopConfigFields,
@@ -26,6 +28,7 @@ import { AppAutomationStepFields } from './app-automation-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import { FallbackRatioFields, SelectorFields } from './selector-fields';
 import { PlatformSelect } from './platform-select';
+import { SessionGateAccountBinder } from './session-gate-account-binder';
 import { PLATFORM_AWARE_STEP_TYPES } from './platform-aware-steps';
 import {
   normalizeSystemVariableCondition,
@@ -85,6 +88,8 @@ interface Props {
 
 export type SessionGateRuntimeContext = {
   deviceLabel: string;
+  /** Phone the editor previews against — lets the panel bind an account to it. */
+  deviceId?: string | null;
   platform: string | null;
   accountLabel: string | null;
   sessionState: string | null;
@@ -319,6 +324,41 @@ function VariableInsertSelect({
   );
 }
 
+/**
+ * One fact row in the session-gate summary.
+ *
+ * An unknown value is the common case while a scenario is still being wired,
+ * so it reads as a muted hint rather than as data — the operator can tell at a
+ * glance which rows are still missing.
+ */
+function SessionGateFact({
+  label,
+  value,
+  placeholder
+}: {
+  label: string;
+  value?: string | null;
+  placeholder: string;
+}) {
+  const filled = Boolean(value);
+  return (
+    <div className='flex items-baseline justify-between gap-3 px-3 py-2'>
+      <dt className='shrink-0 text-[11px] text-muted-foreground'>{label}</dt>
+      <dd
+        className={cn(
+          'min-w-0 truncate text-right text-xs',
+          filled
+            ? 'font-medium text-foreground'
+            : 'italic text-muted-foreground'
+        )}
+        title={value || placeholder}
+      >
+        {value || placeholder}
+      </dd>
+    </div>
+  );
+}
+
 export function StepDetailPanel({
   step: stepProp,
   onChange,
@@ -333,6 +373,7 @@ export function StepDetailPanel({
   runtimeContext
 }: Props) {
   const t = useTranslations('campaignsFeature.stepEditor');
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
@@ -503,7 +544,7 @@ export function StepDetailPanel({
                         }
                       />
                       <span className='text-[11px] text-muted-foreground'>
-                        giây
+                        {tField('unitSeconds')}
                       </span>
                     </div>
                   </StepPanelField>
@@ -590,7 +631,7 @@ export function StepDetailPanel({
                       />
                     </div>
                   </F>
-                  <F label='Package trình duyệt'>
+                  <F label={tField('browserPackage')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.package ?? ''}
@@ -648,7 +689,7 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'wait' && (
-                <F label='Thời gian (giây)'>
+                <F label={tField('durationSeconds')}>
                   <Input
                     type='number'
                     min={0}
@@ -703,14 +744,14 @@ export function StepDetailPanel({
                           }
                         />
                         <span className='text-[11px] text-muted-foreground'>
-                          giây
+                          {tField('unitSeconds')}
                         </span>
                       </div>
                     </StepPanelField>
                   )}
                   {(step.type === 'wait_element' ||
                     step.type === 'assert_element') && (
-                    <F label='Poll interval (giây)'>
+                    <F label={tField('pollIntervalSeconds')}>
                       <Input
                         type='number'
                         min={0.1}
@@ -737,7 +778,7 @@ export function StepDetailPanel({
                   )}
                   {step.type === 'scroll_to' && (
                     <div className='grid grid-cols-2 gap-2'>
-                      <F label='Hướng cuộn'>
+                      <F label={tField('scrollDirection')}>
                         <select
                           className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
                           value={step.direction ?? 'down'}
@@ -763,7 +804,7 @@ export function StepDetailPanel({
                     </div>
                   )}
                   {step.type === 'long_tap_selector' && (
-                    <F label='Thời gian giữ (ms)'>
+                    <F label={tField('holdMs')}>
                       <Input
                         type='number'
                         min={100}
@@ -788,7 +829,7 @@ export function StepDetailPanel({
                       onClick={onRequestPickTapCoords}
                     >
                       <MousePointerClick size={12} />
-                      Chạm trên mirror để lấy tọa độ (CHẠM TỌA ĐỘ)
+                      {tField('pickTapCoordsCta')}
                     </Button>
                   )}
                   <div className='grid grid-cols-2 gap-2'>
@@ -832,11 +873,11 @@ export function StepDetailPanel({
                       onClick={onRequestPickSwipeCoords}
                     >
                       <Move size={12} />
-                      Vuốt trên mirror để lấy đoạn (đầu → cuối)
+                      {tField('pickSwipeCoordsCta')}
                     </Button>
                   )}
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='Từ X'>
+                    <F label={tField('fromX')}>
                       <Input
                         type='number'
                         min={0}
@@ -849,7 +890,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Từ Y'>
+                    <F label={tField('fromY')}>
                       <Input
                         type='number'
                         min={0}
@@ -862,7 +903,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Tới X'>
+                    <F label={tField('toX')}>
                       <Input
                         type='number'
                         min={0}
@@ -875,7 +916,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Tới Y'>
+                    <F label={tField('toY')}>
                       <Input
                         type='number'
                         min={0}
@@ -889,7 +930,7 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <F label='Thời gian vuốt (ms)'>
+                  <F label={tField('swipeMs')}>
                     <Input
                       type='number'
                       min={50}
@@ -923,69 +964,61 @@ export function StepDetailPanel({
 
               {step.type === 'platform_session_gate' && (
                 <div className='space-y-3'>
-                  <div className='space-y-2 rounded-md border bg-muted/30 p-3 text-xs'>
-                    <p className='font-medium'>
-                      {t('sessionGate.contextTitle')}
-                    </p>
-                    <dl className='grid gap-3 sm:grid-cols-2'>
-                      <div>
-                        <dt className='font-medium'>
-                          {t('sessionGate.platform')}
-                        </dt>
-                        <dd className='text-muted-foreground'>
-                          {runtimeContext?.loading
+                  <div className='overflow-hidden rounded-lg border'>
+                    <div className='flex items-center gap-2 border-b bg-muted/40 px-3 py-2'>
+                      <ShieldCheck className='size-3.5 text-muted-foreground' />
+                      <p className='text-xs font-medium'>
+                        {t('sessionGate.contextTitle')}
+                      </p>
+                    </div>
+                    <dl className='divide-y'>
+                      <SessionGateFact
+                        label={t('sessionGate.phone')}
+                        value={runtimeContext?.deviceLabel}
+                        placeholder={t('sessionGate.selectPhone')}
+                      />
+                      <SessionGateFact
+                        label={t('sessionGate.account')}
+                        value={
+                          runtimeContext?.loading
                             ? t('sessionGate.loading')
-                            : runtimeContext?.platform ||
-                              t('sessionGate.notAvailable')}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className='font-medium'>
-                          {t('sessionGate.account')}
-                        </dt>
-                        <dd className='text-muted-foreground'>
-                          {runtimeContext?.loading
+                            : runtimeContext?.accountLabel
+                        }
+                        placeholder={t('sessionGate.noPrimaryAccount')}
+                      />
+                      <SessionGateFact
+                        label={t('sessionGate.platform')}
+                        value={
+                          runtimeContext?.loading
                             ? t('sessionGate.loading')
-                            : runtimeContext?.accountLabel ||
-                              t('sessionGate.noPrimaryAccount')}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className='font-medium'>
-                          {t('sessionGate.session')}
-                        </dt>
-                        <dd className='text-muted-foreground'>
-                          {runtimeContext?.loading
+                            : runtimeContext?.platform
+                        }
+                        placeholder={t('sessionGate.notAvailable')}
+                      />
+                      <SessionGateFact
+                        label={t('sessionGate.session')}
+                        value={
+                          runtimeContext?.loading
                             ? t('sessionGate.loading')
                             : runtimeContext?.error
                               ? t('sessionGate.loadFailed')
-                              : runtimeContext?.sessionState ||
-                                t('sessionGate.noSession')}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className='font-medium'>
-                          {t('sessionGate.phone')}
-                        </dt>
-                        <dd className='text-muted-foreground'>
-                          {runtimeContext?.deviceLabel ||
-                            t('sessionGate.selectPhone')}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className='font-medium'>
-                          {t('sessionGate.output')}
-                        </dt>
-                        <dd className='text-muted-foreground'>
-                          {t('sessionGate.outputDescription')}
-                        </dd>
-                      </div>
+                              : runtimeContext?.sessionState
+                        }
+                        placeholder={t('sessionGate.noSession')}
+                      />
                     </dl>
+                    {!runtimeContext?.loading &&
+                    !runtimeContext?.accountLabel ? (
+                      <SessionGateAccountBinder
+                        deviceId={runtimeContext?.deviceId ?? null}
+                        platform={step.platform ?? 'facebook'}
+                      />
+                    ) : null}
                   </div>
                   <div className='grid grid-cols-2 gap-3'>
                     <F label={t('sessionGate.phase')}>
                       <select
-                        className='h-8 w-full rounded border bg-background px-2 text-xs'
+                        className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
                         value={step.phase ?? 'preflight'}
                         onChange={(e) => {
                           const phase = e.target.value;
@@ -1019,12 +1052,17 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
+                  <p className='text-[11px] leading-snug text-muted-foreground'>
+                    {step.phase === 'confirm'
+                      ? t('sessionGate.phaseHintConfirm')
+                      : t('sessionGate.phaseHintPreflight')}
+                  </p>
                 </div>
               )}
 
               {step.type === 'input_text' && (
                 <>
-                  <F label='Nội dung nhập'>
+                  <F label={tField('textToType')}>
                     <div className='flex items-center gap-2'>
                       <Input
                         className='h-8 text-xs'
@@ -1040,7 +1078,7 @@ export function StepDetailPanel({
                       />
                     </div>
                   </F>
-                  {/* <F label='Cách nhập'>
+                  {/* <F label={tField('inputMethod')}>
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={step.via ?? 'u2'}
@@ -1062,7 +1100,7 @@ export function StepDetailPanel({
                     availableVariables={availableVariables}
                     t={t}
                   />
-                  <F label='Nội dung nhập'>
+                  <F label={tField('textToType')}>
                     <div className='flex items-center gap-2'>
                       <Input
                         className='h-8 text-xs'
@@ -1079,7 +1117,7 @@ export function StepDetailPanel({
                     </div>
                   </F>
                   <StepPanelToggle
-                    label='Xoá nội dung cũ trước khi nhập'
+                    label={tField('clearBeforeTyping')}
                     checked={step.clear_first ?? true}
                     onCheckedChange={(checked) =>
                       update({ clear_first: checked })
@@ -1089,7 +1127,7 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'key' && (
-                <F label='Phím'>
+                <F label={tField('key')}>
                   <select
                     className='w-full rounded border bg-background px-2 py-1.5 text-xs'
                     value={step.key ?? 'enter'}
@@ -1190,7 +1228,7 @@ export function StepDetailPanel({
 
               {step.type === 'wait_stable' && (
                 <div className='grid grid-cols-2 gap-2'>
-                  <F label='Timeout (giây)'>
+                  <F label={tField('timeoutSeconds')}>
                     <Input
                       type='number'
                       min={1}
@@ -1202,7 +1240,7 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
-                  <F label='Ổn định trong (giây)'>
+                  <F label={tField('stableForSeconds')}>
                     <Input
                       type='number'
                       min={0.1}
@@ -1221,7 +1259,7 @@ export function StepDetailPanel({
 
               {step.type === 'verify_screen' && (
                 <>
-                  <F label='screenshot (base64 hoặc URL/path)'>
+                  <F label={tField('screenshotInput')}>
                     <textarea
                       className='min-h-[92px] w-full rounded border bg-background px-2 py-1.5 font-mono text-xs'
                       value={step.screenshot ?? ''}
@@ -1276,7 +1314,7 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <F label='Biến profile đã mở'>
+                  <F label={tField('openedProfileVar')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.save_opened_as ?? 'AUTHOR_PROFILE_OPENED'}
@@ -1292,7 +1330,7 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'dismiss_popup' && (
-                <F label='Số lần thử (retries)'>
+                <F label={tField('retryCount')}>
                   <Input
                     type='number'
                     min={1}
@@ -1333,7 +1371,7 @@ export function StepDetailPanel({
                       <option value='post'>{tTarget('optionPost')}</option>
                     </select>
                   </F>
-                  <F label='Từ khoá search'>
+                  <F label={tField('searchKeyword')}>
                     <Input
                       className='h-8 text-xs'
                       value={step.search ?? ''}
@@ -1350,8 +1388,8 @@ export function StepDetailPanel({
                   <F
                     label={
                       step.target_type === 'post'
-                        ? 'Text bài viết cần match'
-                        : 'Tên hiển thị cần match'
+                        ? tField('matchPostText')
+                        : tField('matchDisplayName')
                     }
                   >
                     <Input
@@ -1375,7 +1413,7 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
-                  <F label='Keyword bắt buộc'>
+                  <F label={tField('requiredKeywords')}>
                     <Input
                       className='h-8 text-xs'
                       value={keywordInputValue(step.required_keywords)}
@@ -1390,7 +1428,7 @@ export function StepDetailPanel({
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='Keyword cộng điểm'>
+                    <F label={tField('bonusKeywords')}>
                       <Input
                         className='h-8 text-xs'
                         value={keywordInputValue(step.optional_keywords)}
@@ -1404,7 +1442,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Keyword cấm'>
+                    <F label={tField('blockedKeywords')}>
                       <Input
                         className='h-8 text-xs'
                         value={keywordInputValue(step.forbidden_keywords)}
@@ -1420,7 +1458,7 @@ export function StepDetailPanel({
                     </F>
                   </div>
                   <div className='grid grid-cols-3 gap-2'>
-                    <F label='Điểm tối thiểu'>
+                    <F label={tField('minScore')}>
                       <Input
                         type='number'
                         min={0}
@@ -1437,7 +1475,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Timeout (giây)'>
+                    <F label={tField('timeoutSeconds')}>
                       <Input
                         type='number'
                         min={1}
@@ -1452,7 +1490,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Lưu target'>
+                    <F label={tField('saveTarget')}>
                       <Input
                         className='h-8 font-mono text-xs'
                         value={
@@ -1481,20 +1519,16 @@ export function StepDetailPanel({
                         update({ require_unique: e.target.checked })
                       }
                     />
-                    Chỉ pass khi có đúng một candidate đạt điểm
+                    {tField('requireUniqueCandidate')}
                   </label>
                 </>
               )}
 
               {step.type === 'social_connect_visible_people' && (
                 <>
-                  <StepPanelHint>
-                    Scan các row/card đang hiện có nút Thêm bạn bè, chỉ gửi lời
-                    mời khi dòng đó có điểm chung như bạn chung hoặc cùng nhóm.
-                    Step này không search tên từng người.
-                  </StepPanelHint>
+                  <StepPanelHint>{tField('connectVisibleHint')}</StepPanelHint>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='Điểm tối thiểu'>
+                    <F label={tField('minScore')}>
                       <Input
                         type='number'
                         min={0}
@@ -1511,7 +1545,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Timeout (giây)'>
+                    <F label={tField('timeoutSeconds')}>
                       <Input
                         type='number'
                         min={1}
@@ -1527,11 +1561,11 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <F label='Keyword điểm chung'>
+                  <F label={tField('mutualKeywords')}>
                     <Input
                       className='h-8 text-xs'
                       value={keywordInputValue(step.common_keywords)}
-                      placeholder='bạn chung, mutual friends, cùng nhóm'
+                      placeholder={tField('phMutualKeywords')}
                       onChange={(e) =>
                         update({
                           common_keywords: keywordListFromInput(e.target.value)
@@ -1539,7 +1573,7 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
-                  <F label='Keyword cấm'>
+                  <F label={tField('blockedKeywords')}>
                     <Input
                       className='h-8 text-xs'
                       value={keywordInputValue(step.forbidden_keywords)}
@@ -1554,7 +1588,7 @@ export function StepDetailPanel({
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='Chờ verify (giây)'>
+                    <F label={tField('waitVerifySeconds')}>
                       <Input
                         type='number'
                         min={0}
@@ -1572,7 +1606,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Lưu kết quả'>
+                    <F label={tField('saveResult')}>
                       <Input
                         className='h-8 font-mono text-xs'
                         value={step.save_as ?? '_visible_connection_action'}
@@ -1593,7 +1627,7 @@ export function StepDetailPanel({
                         update({ require_common: e.target.checked })
                       }
                     />
-                    Yêu cầu có điểm chung trước khi gửi lời mời
+                    {tField('requireCommonBeforeInvite')}
                   </label>
                 </>
               )}
@@ -1601,11 +1635,11 @@ export function StepDetailPanel({
               {step.type === 'social_scan_posts_interact' && (
                 <>
                   <StepPanelHint>{t('scanPostsHint')}</StepPanelHint>
-                  <F label='Keyword bài viết'>
+                  <F label={tField('postKeywords')}>
                     <Input
                       className='h-8 text-xs'
                       value={keywordInputValue(step.keywords)}
-                      placeholder='AI, tuyển dụng, công nghệ'
+                      placeholder={tField('phPostKeywords')}
                       onChange={(e) =>
                         update({
                           keywords: keywordListFromInput(e.target.value)
@@ -1624,7 +1658,7 @@ export function StepDetailPanel({
                     />
                   </F>
                   <div className='grid grid-cols-3 gap-2'>
-                    <F label='Số bài'>
+                    <F label={tField('postCount')}>
                       <Input
                         type='number'
                         min={1}
@@ -1658,7 +1692,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Timeout (giây)'>
+                    <F label={tField('timeoutSeconds')}>
                       <Input
                         type='number'
                         min={1}
@@ -1680,11 +1714,11 @@ export function StepDetailPanel({
                         value={step.match_mode ?? 'any'}
                         onChange={(e) => update({ match_mode: e.target.value })}
                       >
-                        <option value='any'>Ít nhất một keyword</option>
-                        <option value='all'>Tất cả keyword</option>
+                        <option value='any'>{tField('matchModeAny')}</option>
+                        <option value='all'>{tField('matchModeAll')}</option>
                       </select>
                     </F>
-                    <F label='Vị trí vuốt X'>
+                    <F label={tField('swipeXPosition')}>
                       <Input
                         type='number'
                         min={0}
@@ -1719,7 +1753,7 @@ export function StepDetailPanel({
                         update({ require_comment: e.target.checked })
                       }
                     />
-                    Chỉ tính thành công khi comment đã được submit
+                    {tField('requireCommentSubmitted')}
                   </label>
                 </>
               )}
@@ -1729,11 +1763,11 @@ export function StepDetailPanel({
                 <>
                   <StepPanelHint>
                     {step.type === 'social_open_commenter_from_post_match'
-                      ? 'Chạy platform adapter: lấy post action đã match, mở comment sheet, chọn commenter, verify profile rồi lưu target proof cho bước gửi kết bạn.'
-                      : 'Chạy platform adapter: lấy post action đã match từ biến scan, mở author profile, verify profile rồi lưu target proof cho bước gửi kết bạn.'}
+                      ? tField('adapterHintCommenter')
+                      : tField('adapterHintAuthor')}
                   </StepPanelHint>
                   <div className='grid grid-cols-3 gap-2'>
-                    <F label='Biến scan'>
+                    <F label={tField('scanVar')}>
                       <Input
                         className='h-8 font-mono text-xs'
                         value={step.source_var ?? '_post_scan'}
@@ -1760,11 +1794,11 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <F label='Keyword bắt buộc trên profile'>
+                  <F label={tField('requiredProfileKeywords')}>
                     <Input
                       className='h-8 text-xs'
                       value={keywordInputValue(step.required_keywords)}
-                      placeholder='AI, tuyển dụng, founder'
+                      placeholder={tField('phProfileKeywords')}
                       onChange={(e) =>
                         update({
                           required_keywords: keywordListFromInput(
@@ -1775,11 +1809,11 @@ export function StepDetailPanel({
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='Keyword cộng điểm'>
+                    <F label={tField('bonusKeywords')}>
                       <Input
                         className='h-8 text-xs'
                         value={keywordInputValue(step.optional_keywords)}
-                        placeholder='công nghệ, startup'
+                        placeholder={tField('phBonusKeywords')}
                         onChange={(e) =>
                           update({
                             optional_keywords: keywordListFromInput(
@@ -1789,7 +1823,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Keyword cấm'>
+                    <F label={tField('blockedKeywords')}>
                       <Input
                         className='h-8 text-xs'
                         value={keywordInputValue(step.forbidden_keywords)}
@@ -1805,7 +1839,7 @@ export function StepDetailPanel({
                     </F>
                   </div>
                   <div className='grid grid-cols-3 gap-2'>
-                    <F label='Điểm tối thiểu'>
+                    <F label={tField('minScore')}>
                       <Input
                         type='number'
                         min={0}
@@ -1837,7 +1871,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Lưu target'>
+                    <F label={tField('saveTarget')}>
                       <Input
                         className='h-8 font-mono text-xs'
                         value={step.save_as ?? '_people_target'}
@@ -1858,13 +1892,8 @@ export function StepDetailPanel({
                 'community_membership'
               ].includes(step.type) && (
                 <>
-                  <StepPanelHint>
-                    Node chỉ thao tác trên màn hình hiện tại, không tự tìm kiếm,
-                    mở profile/group hoặc bấm Back. Gửi kết bạn chỉ chạy khi có
-                    đúng một target; màn hình search có nhiều nút sẽ bị chặn.
-                    Kết quả được xác minh trước khi bước hoàn tất.
-                  </StepPanelHint>
-                  <F label='Hành động'>
+                  <StepPanelHint>{tField('connectHint')}</StepPanelHint>
+                  <F label={tField('action')}>
                     <select
                       className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={step.action ?? defaultSocialAction(step.type)}
@@ -1878,7 +1907,7 @@ export function StepDetailPanel({
                     </select>
                   </F>
                   <div className='grid grid-cols-3 gap-2'>
-                    <F label='Tìm nút (giây)'>
+                    <F label={tField('findButtonSeconds')}>
                       <Input
                         type='number'
                         min={0.1}
@@ -1893,7 +1922,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Poll (giây)'>
+                    <F label={tField('pollSeconds')}>
                       <Input
                         type='number'
                         min={0.05}
@@ -1908,7 +1937,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Xác minh (giây)'>
+                    <F label={tField('verifySeconds')}>
                       <Input
                         type='number'
                         min={0.1}
@@ -1927,7 +1956,7 @@ export function StepDetailPanel({
                       />
                     </F>
                   </div>
-                  <F label='Lưu kết quả vào biến (tuỳ chọn)'>
+                  <F label={tField('saveResultToVar')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.save_as ?? ''}
@@ -1937,7 +1966,7 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
-                  <F label='Yêu cầu target đã verify'>
+                  <F label={tField('requireVerifiedTarget')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.require_verified_target ?? ''}
@@ -1955,11 +1984,10 @@ export function StepDetailPanel({
               {step.type === 'social_find_comment_button' && (
                 <>
                   <div className='rounded-md border border-sky-400/40 bg-sky-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-sky-950 dark:border-sky-500/30 dark:bg-sky-950/30 dark:text-sky-100'>
-                    Tìm nút Bình luận đúng bài viết và cache target trong
-                    runtime. Step này không bấm.
+                    {tField('findCommentButtonHint')}
                   </div>
                   <div className='grid grid-cols-2 gap-2'>
-                    <F label='Chờ nút tối đa (giây)'>
+                    <F label={tField('waitButtonMaxSeconds')}>
                       <Input
                         type='number'
                         min={0.5}
@@ -1973,7 +2001,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Tần suất kiểm tra (giây)'>
+                    <F label={tField('checkIntervalSeconds')}>
                       <Input
                         type='number'
                         min={0.1}
@@ -1989,8 +2017,8 @@ export function StepDetailPanel({
                     </F>
                   </div>
                   <StepPanelToggle
-                    label='Bỏ qua lỗi nếu không thấy nút'
-                    description='Tắt để scenario fail ngay khi không resolve được nút Bình luận.'
+                    label={tField('ignoreButtonMissingError')}
+                    description={tField('ignoreButtonMissingErrorHint')}
                     checked={step.ignore_error !== false}
                     onCheckedChange={(checked) =>
                       update({ ignore_error: checked })
@@ -2002,10 +2030,9 @@ export function StepDetailPanel({
               {step.type === 'social_tap_comment_target' && (
                 <>
                   <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
-                    Bấm target đã được cache bởi bước Tìm nút Bình luận, rồi xác
-                    minh sheet bình luận đã mở.
+                    {tField('tapCommentTargetHint')}
                   </div>
-                  <F label='Chờ sheet bình luận mở (giây)'>
+                  <F label={tField('waitCommentSheetSeconds')}>
                     <Input
                       type='number'
                       min={0}
@@ -2023,8 +2050,8 @@ export function StepDetailPanel({
                     />
                   </F>
                   <StepPanelToggle
-                    label='Bỏ qua lỗi nếu không mở được sheet'
-                    description='Tắt để scenario fail khi tap xong nhưng sheet bình luận không verify được.'
+                    label={tField('ignoreSheetOpenError')}
+                    description={tField('ignoreSheetOpenErrorHint')}
                     checked={step.ignore_error !== false}
                     onCheckedChange={(checked) =>
                       update({ ignore_error: checked })
@@ -2036,10 +2063,9 @@ export function StepDetailPanel({
               {step.type === 'social_apply_comment_filter' && (
                 <>
                   <div className='rounded-md border border-emerald-400/40 bg-emerald-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-emerald-950 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-100'>
-                    Đổi bộ lọc trong sheet bình luận đang mở. Đặt step này sau
-                    bước Bấm target Bình luận.
+                    {tField('commentFilterHint')}
                   </div>
-                  <F label='Bộ lọc bình luận'>
+                  <F label={tField('commentFilter')}>
                     <select
                       className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
                       value={
@@ -2064,14 +2090,20 @@ export function StepDetailPanel({
                       }}
                     >
                       <option value='none'>
-                        Không đổi — giữ mặc định Facebook
+                        {tField('commentFilterKeep')}
                       </option>
-                      <option value='most_relevant'>Phù hợp nhất</option>
-                      <option value='newest'>Mới nhất</option>
-                      <option value='all_comments'>Tất cả bình luận</option>
+                      <option value='most_relevant'>
+                        {tField('commentFilterMostRelevant')}
+                      </option>
+                      <option value='newest'>
+                        {tField('commentFilterNewest')}
+                      </option>
+                      <option value='all_comments'>
+                        {tField('commentFilterAll')}
+                      </option>
                     </select>
                   </F>
-                  <F label='Chờ sau khi đổi filter (giây)'>
+                  <F label={tField('waitAfterFilterSeconds')}>
                     <Input
                       type='number'
                       min={0}
@@ -2098,18 +2130,17 @@ export function StepDetailPanel({
                       Legacy compound node
                     </div>
                     <div>
-                      Node này được giữ để chạy scenario cũ. Với flow mới, hãy
-                      dùng các node tuần tự riêng:
+                      {tField('legacyCommentNodeHint')}
                       <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
-                        Tìm nút Bình luận
+                        {tField('legacyNodeFind')}
                       </code>
                       →
                       <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
-                        Bấm target Bình luận
+                        {tField('legacyNodeTap')}
                       </code>
                       →
                       <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
-                        Áp dụng bộ lọc
+                        {tField('legacyNodeFilter')}
                       </code>
                       →
                       <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>
@@ -2119,8 +2150,8 @@ export function StepDetailPanel({
                     </div>
                   </div>
                   <StepPanelToggle
-                    label='Bỏ qua khi không thấy nút'
-                    description='Tuỳ chọn tương thích cho kịch bản cũ. Luồng mới nên cấu hình lỗi trên từng bước Tìm/Bấm riêng.'
+                    label={tField('skipWhenButtonMissing')}
+                    description={tField('legacySkipHint')}
                     checked={step.ignore_error !== false}
                     onCheckedChange={(checked) =>
                       update({ ignore_error: checked })
@@ -2138,35 +2169,47 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'tap_position' && (
-                <F label='Vị trí'>
+                <F label={tField('position')}>
                   <select
                     className='w-full rounded border bg-background px-2 py-1.5 text-xs'
                     value={step.pos ?? 'middle_center'}
                     onChange={(e) => update({ pos: e.target.value })}
                   >
-                    <option value='top_left'>Góc trên trái</option>
-                    <option value='top_center'>Giữa trên</option>
-                    <option value='search_bar'>Thanh tìm kiếm</option>
-                    <option value='top_right'>Góc trên phải</option>
-                    <option value='middle_left'>Giữa trái</option>
-                    <option value='middle_center'>Chính giữa</option>
-                    <option value='middle_right'>Giữa phải</option>
-                    <option value='bottom_left'>Góc dưới trái</option>
-                    <option value='bottom_center'>Giữa dưới</option>
-                    <option value='bottom_right'>Góc dưới phải</option>
+                    <option value='top_left'>{tField('posTopLeft')}</option>
+                    <option value='top_center'>{tField('posTopCenter')}</option>
+                    <option value='search_bar'>{tField('posSearchBar')}</option>
+                    <option value='top_right'>{tField('posTopRight')}</option>
+                    <option value='middle_left'>
+                      {tField('posMiddleLeft')}
+                    </option>
+                    <option value='middle_center'>
+                      {tField('posMiddleCenter')}
+                    </option>
+                    <option value='middle_right'>
+                      {tField('posMiddleRight')}
+                    </option>
+                    <option value='bottom_left'>
+                      {tField('posBottomLeft')}
+                    </option>
+                    <option value='bottom_center'>
+                      {tField('posBottomCenter')}
+                    </option>
+                    <option value='bottom_right'>
+                      {tField('posBottomRight')}
+                    </option>
                   </select>
                 </F>
               )}
 
               {step.type === 'loop' && (
-                <F label='Cấu hình vòng lặp'>
+                <F label={tField('loopConfig')}>
                   <LoopConfigFields step={step} onUpdate={update} />
                 </F>
               )}
 
               {step.type === 'repeat' && (
                 <>
-                  <F label='Số lần lặp'>
+                  <F label={tField('iterationCount')}>
                     <Input
                       type='number'
                       min={1}
@@ -2177,7 +2220,7 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
-                  <F label='Delay giữa các lần (giây)'>
+                  <F label={tField('delayBetweenSeconds')}>
                     <Input
                       type='number'
                       min={0}
@@ -2193,7 +2236,7 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'repeat_until' && (
-                <F label='Điều kiện dừng'>
+                <F label={tField('stopCondition')}>
                   <RepeatUntilFields
                     step={step}
                     onChange={(f, v) => update({ [f]: v } as Partial<FlowStep>)}
@@ -2210,7 +2253,7 @@ export function StepDetailPanel({
                     availableVariables={availableVariables}
                     t={t}
                   />
-                  <F label='Timeout (giây)'>
+                  <F label={tField('timeoutSeconds')}>
                     <Input
                       type='number'
                       min={0.1}
@@ -2230,8 +2273,7 @@ export function StepDetailPanel({
               {step.type === 'if' && (
                 <>
                   <p className='rounded bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground'>
-                    Điều kiện tổng quát theo backend (`condition`) — hỗ trợ
-                    element_exists / element_not_exists / variable_equals...
+                    {tField('conditionJsonHint')}
                   </p>
                   <JsonTextarea
                     label='Condition JSON'
@@ -2248,7 +2290,7 @@ export function StepDetailPanel({
               {step.type === 'break_if' && (
                 <>
                   <p className='rounded bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground'>
-                    Nếu condition đúng thì break vòng lặp hiện tại.
+                    {tField('breakLoopHint')}
                   </p>
                   <JsonTextarea
                     label='Condition JSON'
@@ -2461,7 +2503,7 @@ export function StepDetailPanel({
                       placeholder='my_key'
                     />
                   </F>
-                  <F label='Value (JSON hoặc text)'>
+                  <F label={tField('valueJsonOrText')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={
@@ -2484,7 +2526,7 @@ export function StepDetailPanel({
 
               {step.type === 'double_tap' && (
                 <>
-                  <F label='Hệ tọa độ'>
+                  <F label={tField('coordinateSystem')}>
                     <select
                       className='w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={doubleTapCoordMode}
@@ -2581,7 +2623,7 @@ export function StepDetailPanel({
                       </>
                     )}
                   </div>
-                  <F label='Wait sau double tap (giây)'>
+                  <F label={tField('waitAfterDoubleTapSeconds')}>
                     <Input
                       type='number'
                       min={0}
@@ -2598,7 +2640,7 @@ export function StepDetailPanel({
 
               {step.type === 'pinch' && (
                 <>
-                  <F label='Tỉ lệ scale (2.0 = zoom in, 0.5 = zoom out)'>
+                  <F label={tField('scaleRatio')}>
                     <Input
                       type='number'
                       min={0.1}
@@ -2611,7 +2653,7 @@ export function StepDetailPanel({
                       }
                     />
                   </F>
-                  <F label='Hệ tọa độ tâm'>
+                  <F label={tField('centerCoordinateSystem')}>
                     <select
                       className='w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={pinchCoordMode}
@@ -2640,7 +2682,7 @@ export function StepDetailPanel({
                   <div className='grid grid-cols-2 gap-2'>
                     {pinchCoordMode === 'ratio' ? (
                       <>
-                        <F label='Tâm X (0-1)'>
+                        <F label={tField('centerX01')}>
                           <Input
                             type='number'
                             min={0}
@@ -2656,7 +2698,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Tâm Y (0-1)'>
+                        <F label={tField('centerY01')}>
                           <Input
                             type='number'
                             min={0}
@@ -2675,7 +2717,7 @@ export function StepDetailPanel({
                       </>
                     ) : (
                       <>
-                        <F label='Tâm X (px)'>
+                        <F label={tField('centerXPx')}>
                           <Input
                             type='number'
                             min={0}
@@ -2690,7 +2732,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Tâm Y (px)'>
+                        <F label={tField('centerYPx')}>
                           <Input
                             type='number'
                             min={0}
@@ -2708,7 +2750,7 @@ export function StepDetailPanel({
                       </>
                     )}
                   </div>
-                  <F label='Thời gian pinch (ms)'>
+                  <F label={tField('pinchMs')}>
                     <Input
                       type='number'
                       min={50}
@@ -2724,7 +2766,7 @@ export function StepDetailPanel({
 
               {step.type === 'drag' && (
                 <>
-                  <F label='Hệ tọa độ'>
+                  <F label={tField('coordinateSystem')}>
                     <select
                       className='w-full rounded border bg-background px-2 py-1.5 text-xs'
                       value={dragCoordMode}
@@ -2762,7 +2804,7 @@ export function StepDetailPanel({
                   <div className='grid grid-cols-2 gap-2'>
                     {dragCoordMode === 'ratio' ? (
                       <>
-                        <F label='Từ X (0-1)'>
+                        <F label={tField('fromX01')}>
                           <Input
                             type='number'
                             min={0}
@@ -2778,7 +2820,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Từ Y (0-1)'>
+                        <F label={tField('fromY01')}>
                           <Input
                             type='number'
                             min={0}
@@ -2794,7 +2836,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Tới X (0-1)'>
+                        <F label={tField('toX01')}>
                           <Input
                             type='number'
                             min={0}
@@ -2810,7 +2852,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Tới Y (0-1)'>
+                        <F label={tField('toY01')}>
                           <Input
                             type='number'
                             min={0}
@@ -2829,7 +2871,7 @@ export function StepDetailPanel({
                       </>
                     ) : (
                       <>
-                        <F label='Từ X (px)'>
+                        <F label={tField('fromXPx')}>
                           <Input
                             type='number'
                             min={0}
@@ -2844,7 +2886,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Từ Y (px)'>
+                        <F label={tField('fromYPx')}>
                           <Input
                             type='number'
                             min={0}
@@ -2859,7 +2901,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Tới X (px)'>
+                        <F label={tField('toXPx')}>
                           <Input
                             type='number'
                             min={0}
@@ -2874,7 +2916,7 @@ export function StepDetailPanel({
                             }
                           />
                         </F>
-                        <F label='Tới Y (px)'>
+                        <F label={tField('toYPx')}>
                           <Input
                             type='number'
                             min={0}
@@ -2892,7 +2934,7 @@ export function StepDetailPanel({
                       </>
                     )}
                   </div>
-                  <F label='Thời gian (ms)'>
+                  <F label={tField('durationMs')}>
                     <Input
                       type='number'
                       min={200}
@@ -3109,7 +3151,9 @@ export function StepDetailPanel({
                   <F label={t('saveExtraction.collectionLabel')}>
                     <Input
                       className='h-8 font-mono text-xs'
-                      placeholder='default hoặc ${SAVE_COLLECTION}'
+                      placeholder={tField('phCollection', {
+                        token: '${SAVE_COLLECTION}'
+                      })}
                       value={step.collection ?? ''}
                       onChange={(e) => update({ collection: e.target.value })}
                     />
@@ -3230,7 +3274,7 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'take_screenshot' && (
-                <F label='Lưu vào đường dẫn (tuỳ chọn)'>
+                <F label={tField('saveToPath')}>
                   <Input
                     className='h-8 font-mono text-xs'
                     value={step.save_path ?? ''}
@@ -3243,22 +3287,19 @@ export function StepDetailPanel({
               )}
 
               {step.type === 'set_clipboard' && (
-                <F label='Nội dung clipboard'>
+                <F label={tField('clipboardContent')}>
                   <Input
                     className='h-8 text-xs'
                     value={step.text ?? ''}
                     onChange={(e) => update({ text: e.target.value })}
-                    placeholder='Văn bản cần copy'
+                    placeholder={tField('phTextToCopy')}
                   />
                 </F>
               )}
 
               {step.type === 'use_source_pool' && (
                 <div className='space-y-3'>
-                  <StepPanelHint>
-                    Node này chọn loại mục tiêu đã phân công cho từng điện thoại
-                    trước khi chạy campaign.
-                  </StepPanelHint>
+                  <StepPanelHint>{tField('targetTypeHint')}</StepPanelHint>
                   <div className='grid gap-3 sm:grid-cols-2'>
                     <F label='Platform'>
                       <Input
@@ -3269,7 +3310,7 @@ export function StepDetailPanel({
                         }
                       />
                     </F>
-                    <F label='Loại mục tiêu'>
+                    <F label={tField('targetType')}>
                       <select
                         className='h-8 w-full rounded-md border border-input bg-background px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring'
                         value={step.entity_type ?? 'group'}
@@ -3292,21 +3333,23 @@ export function StepDetailPanel({
                       >
                         <option value='group'>Group</option>
                         <option value='page'>Page</option>
-                        <option value='profile'>Cá nhân</option>
+                        <option value='profile'>
+                          {tField('targetTypeProfile')}
+                        </option>
                       </select>
                     </F>
                   </div>
-                  <F label='Lọc theo tên mục tiêu'>
+                  <F label={tField('filterByTargetName')}>
                     <Input
                       className='h-8 text-xs'
                       value={step.search ?? ''}
                       onChange={(e) =>
                         update({ search: e.target.value || undefined })
                       }
-                      placeholder='VD: Tuyển dụng, Nguyễn Văn A'
+                      placeholder={tField('phTargetName')}
                     />
                   </F>
-                  <F label='Prefix biến xuất ra'>
+                  <F label={tField('outputVarPrefix')}>
                     <Input
                       className='h-8 font-mono text-xs'
                       value={step.output_prefix ?? 'GROUP'}

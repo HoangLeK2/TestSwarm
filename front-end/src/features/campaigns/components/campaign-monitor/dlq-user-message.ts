@@ -1,4 +1,5 @@
 import type { CampaignDeviceOut } from '../../types';
+import { humanizeSessionGateMessage } from '../../lib/session-gate-message';
 import { deviceSelectFullTitle } from '@/features/devices/lib/device-select-label';
 
 export type DlqHumanMessage = {
@@ -43,9 +44,18 @@ function operatorTechnical(raw: string, summary: string): string {
   return isU2TransientExtraDataError(raw) ? summary : raw;
 }
 
-function humanizeCore(text: string, t: Translate): string | null {
+function humanizeCore(
+  text: string,
+  t: Translate,
+  tGate?: Translate
+): string | null {
   const msg = normalizeRaw(text);
   if (!msg) return null;
+
+  if (tGate) {
+    const gate = humanizeSessionGateMessage(msg, tGate);
+    if (gate) return gate;
+  }
 
   if (UNKNOWN_MSG_RE.test(msg) || msg.includes('execution_id=')) {
     return t('monitorDlqErrUnknown');
@@ -105,7 +115,11 @@ function humanizeCore(text: string, t: Translate): string | null {
 }
 
 /** Turn raw DLQ/engine text into a short operator-friendly message. */
-export function humanizeDlqMessage(raw: string, t: Translate): DlqHumanMessage {
+export function humanizeDlqMessage(
+  raw: string,
+  t: Translate,
+  tGate?: Translate
+): DlqHumanMessage {
   const technical = normalizeRaw(raw);
   if (!technical) {
     return { summary: t('monitorDlqNoErrorMessage'), technical: '' };
@@ -114,7 +128,7 @@ export function humanizeDlqMessage(raw: string, t: Translate): DlqHumanMessage {
   const withoutScenario = stripRunScenarioPrefix(technical);
   const loop = withoutScenario.match(LOOP_RE);
   if (loop) {
-    const inner = humanizeCore(loop[2], t) ?? loop[2];
+    const inner = humanizeCore(loop[2], t, tGate) ?? loop[2];
     const summary = t('monitorDlqErrLoopIteration', {
       iteration: loop[1],
       detail: inner
@@ -125,7 +139,7 @@ export function humanizeDlqMessage(raw: string, t: Translate): DlqHumanMessage {
     };
   }
 
-  const direct = humanizeCore(withoutScenario, t);
+  const direct = humanizeCore(withoutScenario, t, tGate);
   if (direct) {
     return { summary: direct, technical: operatorTechnical(technical, direct) };
   }

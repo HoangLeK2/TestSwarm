@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { scenariosApi, executionsApi } from '../services/api';
 import { useCampaignFlowI18n } from './flow-editor/flow-i18n';
+import { humanizeSessionGateMessage } from '../lib/session-gate-message';
 import { useExecutionEventStream } from '../hooks/use-execution-event-stream';
 import { useWorkflowProgress, useWorkflowSteps } from '../hooks/use-campaigns';
 import {
@@ -408,6 +409,7 @@ export function StepRow({
   scenarioNamesById: ReadonlyMap<string, string>;
 }) {
   const t = useTranslations('campaignsFeature.list');
+  const tGate = useTranslations('executionMessages');
   const { getStepTypeName, getStepDisplay: getStepDisplayI18n } =
     useCampaignFlowI18n();
   const type =
@@ -426,9 +428,11 @@ export function StepRow({
   const isDone = status === 'completed' || status === 'failed';
   const isFailed = status === 'failed' || (isDone && logEntry?.ok === false);
   const isOk = status === 'completed';
-  const msg = isCurrentlyRunning
+  const rawMsg = isCurrentlyRunning
     ? (logEntry?.message ?? currentMessage)
     : (logEntry?.message ?? '');
+  // The engine writes machine reasons into step messages; operators read this row.
+  const msg = humanizeSessionGateMessage(rawMsg, tGate) ?? rawMsg;
   const adbOutput = stepOutput(logEntry);
   const proofDetails = logEntry?.details ?? {};
   const proofOutcome = String(proofDetails.outcome ?? '').trim();
@@ -566,7 +570,7 @@ export function StepRow({
           {isCurrentlyRunning && msg && (
             <div
               className='truncate text-[10px] italic text-primary/70'
-              title={msg}
+              title={rawMsg}
             >
               {msg}
             </div>
@@ -579,7 +583,7 @@ export function StepRow({
           {isFailed && msg && (
             <div
               className='truncate text-[10px] text-destructive/80'
-              title={msg}
+              title={rawMsg}
             >
               {msg}
             </div>
@@ -695,6 +699,7 @@ export function WorkflowStepList({
   liveProgress
 }: WorkflowStepListProps) {
   const t = useTranslations('campaignsFeature.list');
+  const tGate = useTranslations('executionMessages');
   const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
   const parsedWorkflowId = parseWorkflowId(wf.workflow_id);
   const campaignId = wf.campaign_id || parsedWorkflowId.campaignId;
@@ -858,7 +863,8 @@ export function WorkflowStepList({
   });
   const stepType =
     derivedCursor.currentStepType || progressSource?.current_step_type || '';
-  const message = derivedCursor.message || progressSource?.message || '';
+  const rawMessage = derivedCursor.message || progressSource?.message || '';
+  const message = humanizeSessionGateMessage(rawMessage, tGate) ?? rawMessage;
   const loopIter =
     progressSource?.loop_iteration != null && progressSource.loop_iteration >= 0
       ? progressSource.loop_iteration

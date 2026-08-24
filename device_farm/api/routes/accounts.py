@@ -304,6 +304,11 @@ async def list_accounts_endpoint(
         description="Override default listing; comma-separated in OpenAPI as repeated params",
     ),
     tags: Optional[str] = Query(None),
+    search: Optional[str] = Query(
+        None,
+        max_length=100,
+        description="Substring match on username or display name",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -315,6 +320,7 @@ async def list_accounts_endpoint(
         state=state,
         include_states=include_states,
         tags=tags,
+        search=search,
         user_id=data_owner_user_id(user),
         limit=limit,
         offset=offset,

@@ -54,6 +54,7 @@ import {
   TableRow
 } from '@/components/ui/table';
 import { useExecutionTaskLog } from '@/features/campaigns/hooks/use-campaigns';
+import { humanizeSessionGateMessage } from '@/features/campaigns/lib/session-gate-message';
 import type { ExecutionTaskLogStep } from '@/features/campaigns/types';
 import { useActivityLog } from '../hooks/use-activity-log';
 import type { ActivityLogItem } from '../services/api';
@@ -551,9 +552,12 @@ function taskStepTypeLabel(
 
 function friendlyStepCause(
   cause: string,
-  t: ReturnType<typeof useTranslations>
+  t: ReturnType<typeof useTranslations>,
+  tGate: ReturnType<typeof useTranslations>
 ): string {
   const normalized = cause.trim();
+  const gate = humanizeSessionGateMessage(normalized, tGate);
+  if (gate) return gate;
   if (normalized === 'if_variable: then branch failed') {
     return t('taskLogCauseIfThenFailed');
   }
@@ -574,7 +578,8 @@ function friendlyStepCause(
 
 function taskStepMessage(
   step: ExecutionTaskLogStep,
-  t: ReturnType<typeof useTranslations>
+  t: ReturnType<typeof useTranslations>,
+  tGate: ReturnType<typeof useTranslations>
 ): string {
   const message = step.message?.trim();
   if (!message) return '';
@@ -593,17 +598,18 @@ function taskStepMessage(
   );
   if (failedSubScenarioMatch?.[1]) {
     return t('taskLogMessageSubScenarioFailed', {
-      cause: friendlyStepCause(failedSubScenarioMatch[1], t)
+      cause: friendlyStepCause(failedSubScenarioMatch[1], t, tGate)
     });
   }
 
-  return friendlyStepCause(message, t);
+  return friendlyStepCause(message, t, tGate);
 }
 
 function ActivityTaskStepRow({ step }: { step: ExecutionTaskLogStep }) {
   const t = useTranslations('analyticsFeature.activity');
+  const tGate = useTranslations('executionMessages');
   const stepTitle = taskStepTypeLabel(step.step_type, t);
-  const stepMessage = taskStepMessage(step, t);
+  const stepMessage = taskStepMessage(step, t, tGate);
   const statusLabel = taskStepStatusLabel(step.status, t);
   return (
     <li className='grid grid-cols-[1.75rem_minmax(0,1fr)_auto] gap-3 px-4 py-3'>
@@ -655,6 +661,7 @@ function ActivityTaskLogPreview({
 }) {
   const tActivity = useTranslations('analyticsFeature.activity');
   const tCampaign = useTranslations('campaignsFeature.list');
+  const tGate = useTranslations('executionMessages');
   const taskLog = useExecutionTaskLog(executionId, expanded, false);
   const summary = taskLog.data?.summary;
   const counters = summary?.counters ?? {};
@@ -780,7 +787,7 @@ function ActivityTaskLogPreview({
               <div className='min-w-0'>
                 <p className='font-medium'>{tActivity('taskLogFailure')}</p>
                 <p className='mt-0.5 break-words text-destructive/80'>
-                  {taskStepMessage(failedStep, tActivity) ||
+                  {taskStepMessage(failedStep, tActivity, tGate) ||
                     taskStepTypeLabel(failedStep.step_type, tActivity)}
                 </p>
               </div>

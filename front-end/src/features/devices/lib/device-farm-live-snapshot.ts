@@ -24,11 +24,20 @@ function isExplicitlyOffline(device: Device): boolean {
   return OFFLINE_DEVICE_STATES.has(normalizeState(device.state));
 }
 
+function positiveDimension(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 function mergeLiveDevice(previous: Device | undefined, live: Device): Device {
   if (!previous) return live;
   return {
     ...previous,
     ...live,
+    screen_width: positiveDimension(live.screen_width) ?? previous.screen_width,
+    screen_height:
+      positiveDimension(live.screen_height) ?? previous.screen_height,
     manual_takeover_active:
       live.manual_takeover_active ?? previous.manual_takeover_active,
     scenario_active: live.scenario_active ?? previous.scenario_active

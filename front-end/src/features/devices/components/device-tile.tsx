@@ -159,20 +159,50 @@ export function DeviceTile({
     () => mockupScreenWidthProp ?? (compact ? 232 : 288),
     [compact, mockupScreenWidthProp]
   );
+  const frameDeviceSize = useMemo(() => {
+    const deviceWidth = Number(device.screen_width);
+    const deviceHeight = Number(device.screen_height);
+    const hasDeviceSize =
+      Number.isFinite(deviceWidth) &&
+      Number.isFinite(deviceHeight) &&
+      deviceWidth > 0 &&
+      deviceHeight > 0;
+    const streamWidth = Number(streamRenderSize?.width);
+    const streamHeight = Number(streamRenderSize?.height);
+    const hasStreamSize =
+      Number.isFinite(streamWidth) &&
+      Number.isFinite(streamHeight) &&
+      streamWidth > 0 &&
+      streamHeight > 0;
+
+    if (hasDeviceSize) {
+      const deviceLandscape = deviceWidth > deviceHeight;
+      const streamLandscape = streamWidth > streamHeight;
+      if (hasStreamSize && deviceLandscape !== streamLandscape) {
+        return { width: deviceHeight, height: deviceWidth };
+      }
+      return { width: deviceWidth, height: deviceHeight };
+    }
+
+    if (hasStreamSize) {
+      return { width: streamWidth, height: streamHeight };
+    }
+
+    return { width: device.screen_width, height: device.screen_height };
+  }, [
+    device.screen_height,
+    device.screen_width,
+    streamRenderSize?.height,
+    streamRenderSize?.width
+  ]);
   const mirrorRowHeightPx = useMemo(
     () =>
       mockupOuterHeightPx(
         mockupScreenWidth,
-        streamRenderSize?.width ?? device.screen_width,
-        streamRenderSize?.height ?? device.screen_height
+        frameDeviceSize.width,
+        frameDeviceSize.height
       ),
-    [
-      device.screen_height,
-      device.screen_width,
-      mockupScreenWidth,
-      streamRenderSize?.height,
-      streamRenderSize?.width
-    ]
+    [frameDeviceSize.height, frameDeviceSize.width, mockupScreenWidth]
   );
   const studioMirror =
     mockupScreenWidthProp != null && mockupScreenWidthProp <= 260;
@@ -308,10 +338,8 @@ export function DeviceTile({
               >
                 <DeviceAndroidFrame
                   screenWidth={mockupScreenWidth}
-                  deviceWidth={streamRenderSize?.width ?? device.screen_width}
-                  deviceHeight={
-                    streamRenderSize?.height ?? device.screen_height
-                  }
+                  deviceWidth={frameDeviceSize.width}
+                  deviceHeight={frameDeviceSize.height}
                   className='shrink-0'
                 >
                   <div className='relative flex h-full min-h-0 w-full flex-col'>

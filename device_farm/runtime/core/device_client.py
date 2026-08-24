@@ -3796,6 +3796,19 @@ class DeviceClient:
                     self.screen_width    = self.screen_width or int(caps.get("screen_width") or 0)
                     self.screen_height   = self.screen_height or int(caps.get("screen_height") or 0)
                     self.name = self.name or f"{caps.get('brand','')} {caps.get('model','')}".strip()
+                if (
+                    (not self.screen_width or not self.screen_height)
+                    and self._loop
+                    and hasattr(relay, "adb_shell")
+                ):
+                    size_future = asyncio.run_coroutine_threadsafe(
+                        self._fetch_screen_size_via_relay(relay, actual_serial),
+                        self._loop,
+                    )
+                    try:
+                        size_future.result(timeout=2.0)
+                    except Exception:
+                        size_future.cancel()
 
                 receiver = RelayScrcpyReceiver(
                     serial=actual_serial,
@@ -4101,6 +4114,7 @@ class DeviceClient:
                     if recv is not None and recv.control is not None:
                         recv.control.screen_width = self.screen_width
                         recv.control.screen_height = self.screen_height
+                    self._publish_status()
                     break
         except Exception as exc:
             self._log(f"relay wm size failed: {exc}", level=logging.DEBUG)

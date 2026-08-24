@@ -983,8 +983,9 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
         "username_field": {
             "candidates": [
                 {"by": "description", "value": "Số di động hoặc email,"},
+                {"by": "description", "value": "Mobile number or email,"},
                 {
-                    "text_near": ["Số di động hoặc email"],
+                    "text_near": ["Số di động hoặc email", "Mobile number or email", "Email or phone"],
                     "target_class": "android.widget.EditText",
                     "allow_coordinate_fallback": True,
                 },
@@ -993,8 +994,9 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
         "password_field": {
             "candidates": [
                 {"by": "description", "value": "Mật khẩu,"},
+                {"by": "description", "value": "Password,"},
                 {
-                    "text_near": ["Mật khẩu"],
+                    "text_near": ["Mật khẩu", "Password"],
                     "target_class": "android.widget.EditText",
                     "allow_coordinate_fallback": True,
                 },
@@ -1004,12 +1006,14 @@ _FB_LOGIN_PROFILE_NATIVE: Dict[str, Any] = {
             "candidates": [
                 {"by": "text", "value": "Đăng nhập"},
                 {"description_contains": "Đăng nhập", "class_name": "android.widget.Button"},
+                {"description_contains": "Log in", "class_name": "android.widget.Button"},
             ]
         },
         "auth_code_field": {
             "candidates": [
                 {"by": "description", "value": "Mã,"},
                 {"by": "description", "value": "Code,"},
+                {"by": "description", "value": "Authentication code,"},
                 {
                     "text_near": ["Mã", "Authentication code", "Code"],
                     "target_class": "android.widget.EditText",

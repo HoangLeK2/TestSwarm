@@ -331,3 +331,39 @@ async def test_update_permission_is_required(session_factory):
         )
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "FORBIDDEN_ROLE"
+
+
+@pytest.mark.asyncio
+async def test_account_search_filters_server_side(session_factory):
+    """The step-editor account picker shows a handful of rows and cannot filter
+    client-side: an account outside the fetched page would be unreachable."""
+    await _seed(session_factory)
+    async with session_factory() as session:
+        session.add(
+            Account(
+                id="account-3",
+                platform="facebook",
+                username="hidden",
+                display_name="Nguyen Van Two",
+                org_id="org-1",
+            )
+        )
+        await session.commit()
+
+    app = _build_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        by_username = await client.get("/api/accounts", params={"search": "two"})
+        assert by_username.status_code == 200, by_username.text
+        assert {row["id"] for row in by_username.json()} == {"account-2", "account-3"}
+
+        by_display_name = await client.get("/api/accounts", params={"search": "nguyen"})
+        assert [row["id"] for row in by_display_name.json()] == ["account-3"]
+
+        limited = await client.get("/api/accounts", params={"limit": 1})
+        assert len(limited.json()) == 1
+
+        no_match = await client.get("/api/accounts", params={"search": "zzz"})
+        assert no_match.json() == []
+
+        unfiltered = await client.get("/api/accounts")
+        assert len(unfiltered.json()) >= 3

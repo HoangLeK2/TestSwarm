@@ -41,6 +41,7 @@ import {
 } from '../../lib/campaign-monitor-live-mirror';
 import { resolveExecutionIdForWorkflow } from '../../lib/execution-event-utils';
 import { detectActiveRecoveryFromEvents } from '../../lib/workflow-incident-display';
+import { humanizeSessionGateMessage } from '../../lib/session-gate-message';
 import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { WorkflowScenarioModeBadge } from '../workflow-scenario-mode-badge';
 import type { ExecutionOut, WorkflowInfo } from '../../types';
@@ -167,6 +168,7 @@ interface Props {
 export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const tCommon = useTranslations('common');
+  const tGate = useTranslations('executionMessages');
   const confirm = useConfirm();
   const { canExecute } = useResourcePermissions('campaigns');
   const { getStepTypeName } = useCampaignFlowI18n();
@@ -284,7 +286,8 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
         ? 100
         : 0;
   const stepType = prog?.current_step_type ?? '';
-  const message = prog?.message ?? '';
+  const rawMessage = prog?.message ?? '';
+  const message = humanizeSessionGateMessage(rawMessage, tGate) ?? rawMessage;
   const runningElapsedMs =
     prog?.running_step === true ? (prog.current_step_elapsed_ms ?? 0) : 0;
   const runningElapsedLabel =
@@ -440,7 +443,7 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
               </span>
             )}
             {message && (
-              <span className='flex-1 truncate italic' title={message}>
+              <span className='flex-1 truncate italic' title={rawMessage}>
                 {message}
               </span>
             )}
@@ -468,7 +471,7 @@ export function WorkflowProgressCard({ wf, campaignId, execution }: Props) {
         {wf.status === 'FAILED' && message && (
           <p
             className='mt-1 truncate pl-[26px] text-[10px] text-destructive'
-            title={message}
+            title={rawMessage}
           >
             {message}
           </p>

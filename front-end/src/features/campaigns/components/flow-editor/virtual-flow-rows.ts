@@ -16,7 +16,15 @@ export type VirtualFlowRow =
   | {
       kind: 'branch';
       key: string;
-      label: string;
+      /** Key in `campaignsFeature.stepEditor.stepFields` — the row renders it. */
+      labelKey: string;
+      labelValues?: Record<string, number>;
+      /**
+       * What the branch means, independent of its wording. The marker used to
+       * be picked by substring-matching the Vietnamese label, which silently
+       * mislabels every branch as soon as the label is translated.
+       */
+      branch: 'then' | 'else' | 'loop' | 'pick';
       count: number;
       depth: number;
       scopes: VirtualFlowScope[];
@@ -24,7 +32,8 @@ export type VirtualFlowRow =
   | {
       kind: 'end';
       key: string;
-      label: string;
+      labelKey: string;
+      labelValues?: Record<string, number>;
       depth: number;
       scopes: VirtualFlowScope[];
     };
@@ -81,7 +90,8 @@ function projectList(
       rows.push({
         kind: 'branch',
         key: `branch:${ownerKey}:steps`,
-        label: 'NỘI DUNG LẶP',
+        labelKey: 'branchLoopBody',
+        branch: 'loop',
         count: body.length,
         depth: depth + 1,
         scopes: nestedScopes
@@ -90,7 +100,7 @@ function projectList(
       rows.push({
         kind: 'end',
         key: `end:${ownerKey}`,
-        label: 'KẾT THÚC VÒNG LẶP',
+        labelKey: 'branchLoopEnd',
         depth,
         scopes: nestedScopes
       });
@@ -106,7 +116,8 @@ function projectList(
       rows.push({
         kind: 'branch',
         key: `branch:${ownerKey}:then`,
-        label: isFbTap ? 'KHI TÌM THẤY' : 'NẾU ĐÚNG',
+        labelKey: isFbTap ? 'branchWhenFound' : 'branchIfTrue',
+        branch: 'then',
         count: thenSteps.length,
         depth: depth + 1,
         scopes: nestedScopes
@@ -115,7 +126,8 @@ function projectList(
       rows.push({
         kind: 'branch',
         key: `branch:${ownerKey}:else`,
-        label: isFbTap ? 'KHI KHÔNG TÌM THẤY' : 'NẾU SAI',
+        labelKey: isFbTap ? 'branchWhenNotFound' : 'branchIfFalse',
+        branch: 'else',
         count: elseSteps.length,
         depth: depth + 1,
         scopes: nestedScopes
@@ -124,7 +136,7 @@ function projectList(
       rows.push({
         kind: 'end',
         key: `end:${ownerKey}`,
-        label: 'KẾT THÚC IF',
+        labelKey: 'branchIfEnd',
         depth,
         scopes: nestedScopes
       });
@@ -141,7 +153,9 @@ function projectList(
         rows.push({
           kind: 'branch',
           key: `branch:${ownerKey}:${branchKey}`,
-          label: `NHÁNH ${branchIndex + 1}`,
+          labelKey: 'branchNumbered',
+          labelValues: { number: branchIndex + 1 },
+          branch: 'pick',
           count: branchSteps.length,
           depth: depth + 1,
           scopes: nestedScopes
@@ -158,7 +172,7 @@ function projectList(
       rows.push({
         kind: 'end',
         key: `end:${ownerKey}`,
-        label: 'KẾT THÚC CHỌN NHÁNH',
+        labelKey: 'branchPickEnd',
         depth,
         scopes: nestedScopes
       });

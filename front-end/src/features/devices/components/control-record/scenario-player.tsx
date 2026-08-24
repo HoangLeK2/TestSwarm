@@ -59,6 +59,7 @@ import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon'
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
+import { humanizeSessionGateMessage } from '@/features/campaigns/lib/session-gate-message';
 
 type ScenarioPlayerT = ReturnType<typeof useTranslations>;
 
@@ -215,6 +216,7 @@ export function ScenarioPlayer({
 }: ScenarioPlayerProps) {
   const t = useTranslations('devicesControlRecord.scenarioPlayer');
   const tView = useTranslations('devicesControlRecord.view');
+  const tGate = useTranslations('executionMessages');
   const { getStepTypeName, getStepDisplay, getStepSummary } =
     useCampaignFlowI18n();
   const { data: campaigns = [] } = useCampaigns();
@@ -999,8 +1001,12 @@ export function ScenarioPlayer({
                                 ? 'text-muted-foreground'
                                 : 'text-red-600'
                             )}
+                            title={result.message}
                           >
-                            {result.message}
+                            {humanizeSessionGateMessage(
+                              result.message,
+                              tGate
+                            ) ?? result.message}
                           </p>
                           {(() => {
                             const debugParts: string[] = [];

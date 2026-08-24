@@ -16,6 +16,9 @@ function isOfflineStatus(message: StatusMessage): boolean {
 }
 
 function deviceFromStatus(message: StatusMessage): Device {
+  const screenWidth = message.device_width ?? message.screen_width;
+  const screenHeight = message.device_height ?? message.screen_height;
+
   return {
     serial: message.serial,
     brand: message.brand ?? '',
@@ -23,8 +26,8 @@ function deviceFromStatus(message: StatusMessage): Device {
     state: message.state ?? 'CONNECTING',
     battery: message.battery ?? -1,
     current_app: message.current_app ?? '',
-    screen_width: message.device_width ?? message.screen_width ?? 1080,
-    screen_height: message.device_height ?? message.screen_height ?? 1920,
+    screen_width: screenWidth,
+    screen_height: screenHeight,
     touch_method: message.touch_method,
     minitouch_ready: message.minitouch_ready,
     u2_ready: message.u2_ready,

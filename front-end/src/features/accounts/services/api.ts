@@ -147,6 +147,7 @@ export const accountsApi = {
     status?: string;
     state?: string;
     tags?: string;
+    search?: string;
     limit?: number;
     offset?: number;
   }) =>

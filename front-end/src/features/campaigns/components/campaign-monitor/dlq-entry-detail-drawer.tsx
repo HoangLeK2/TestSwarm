@@ -179,6 +179,7 @@ export function DlqEntryDetailDrawer({
   campaignId
 }: Props) {
   const t = useTranslations('campaignsFeature.list');
+  const tGate = useTranslations('executionMessages');
   const { data: executions = [] } = useCampaignExecutions(
     campaignId ?? '',
     open && Boolean(campaignId)
@@ -207,7 +208,11 @@ export function DlqEntryDetailDrawer({
 
   const fallback = t('monitorDlqNoErrorMessage');
   const rawMessage = dlqDisplayMessage(entry, fallback);
-  const { summary: userMessage, technical } = humanizeDlqMessage(rawMessage, t);
+  const { summary: userMessage, technical } = humanizeDlqMessage(
+    rawMessage,
+    t,
+    tGate
+  );
   const hasMessage =
     dlqHasExplicitMessage(entry) || Boolean(technical) || Boolean(userMessage);
   const device = resolveDlqDeviceLabel(entry.device_serial, campaignDevices, t);

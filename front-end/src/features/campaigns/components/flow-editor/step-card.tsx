@@ -104,6 +104,7 @@ export function StepCard({
   reorderControls
 }: Props) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
@@ -148,7 +149,7 @@ export function StepCard({
         <div className='flex items-center gap-1.5 border-b border-amber-400/30 bg-amber-50/80 px-2.5 py-1 dark:bg-amber-950/20'>
           <Crosshair size={10} className='shrink-0 text-amber-600' />
           <span className='text-[10px] text-amber-800 dark:text-amber-300'>
-            Chạm mirror hoặc chọn dòng trong cây UI phía trên để gán
+            {tField('selectorPickHint')}
           </span>
         </div>
       )}
@@ -159,7 +160,7 @@ export function StepCard({
             className='shrink-0 text-sky-700 dark:text-sky-400'
           />
           <span className='text-[10px] text-sky-900 dark:text-sky-200'>
-            Chạm một điểm trên mirror để lấy tọa độ (0–1)
+            {tField('tapCoordsHint')}
           </span>
         </div>
       )}
@@ -167,7 +168,7 @@ export function StepCard({
         <div className='flex items-center gap-1.5 border-b border-sky-400/40 bg-sky-50/90 px-2.5 py-1 dark:bg-sky-950/25'>
           <Move size={10} className='shrink-0 text-sky-700 dark:text-sky-400' />
           <span className='text-[10px] text-sky-900 dark:text-sky-200'>
-            Vuốt trên mirror để lấy đoạn (điểm đầu → cuối)
+            {tField('swipeCoordsHint')}
           </span>
         </div>
       )}
@@ -264,8 +265,8 @@ export function StepCard({
                   e.stopPropagation();
                   reorderControls.onMoveUp();
                 }}
-                aria-label='Đưa bước lên'
-                title='Đưa bước lên'
+                aria-label={tField('moveStepUp')}
+                title={tField('moveStepUp')}
               >
                 <ChevronUp size={13} />
               </button>
@@ -278,8 +279,8 @@ export function StepCard({
                   e.stopPropagation();
                   reorderControls.onMoveDown();
                 }}
-                aria-label='Đưa bước xuống'
-                title='Đưa bước xuống'
+                aria-label={tField('moveStepDown')}
+                title={tField('moveStepDown')}
               >
                 <ChevronDown size={13} />
               </button>
@@ -298,8 +299,8 @@ export function StepCard({
                 e.stopPropagation();
                 onTogglePickTapCoords();
               }}
-              aria-label='Lấy tọa độ chạm trên mirror'
-              title='Chạm trên mirror để điền tọa độ'
+              aria-label={tField('pickTapCoords')}
+              title={tField('tapMirrorForCoords')}
             >
               <MousePointerClick size={12} />
             </button>
@@ -317,8 +318,8 @@ export function StepCard({
                 e.stopPropagation();
                 onTogglePickSwipeCoords();
               }}
-              aria-label='Lấy tọa độ vuốt trên mirror'
-              title='Vuốt trên mirror để điền đoạn vuốt'
+              aria-label={tField('pickSwipeCoords')}
+              title={tField('swipeMirrorForSegment')}
             >
               <Move size={12} />
             </button>
@@ -336,8 +337,8 @@ export function StepCard({
                 e.stopPropagation();
                 onTogglePickSelector();
               }}
-              aria-label='Chọn selector từ màn hình'
-              title='Chọn selector từ mirror / cây UI'
+              aria-label={tField('pickSelectorFromScreen')}
+              title={tField('pickSelectorFromMirror')}
             >
               <Crosshair size={12} />
             </button>
@@ -353,8 +354,8 @@ export function StepCard({
                 e.stopPropagation();
                 onRun();
               }}
-              aria-label='Chạy bước này'
-              title='Chạy bước này trên thiết bị'
+              aria-label={tField('runStep')}
+              title={tField('runStepOnDevice')}
             >
               <Play size={12} />
             </button>
@@ -367,8 +368,8 @@ export function StepCard({
                 e.stopPropagation();
                 onStopInlineRun();
               }}
-              aria-label='Dừng chạy thử'
-              title='Dừng chạy thử'
+              aria-label={tField('stopTestRun')}
+              title={tField('stopTestRun')}
             >
               <Square size={12} fill='currentColor' />
             </button>
@@ -380,7 +381,7 @@ export function StepCard({
               e.stopPropagation();
               onRemove();
             }}
-            aria-label='Xóa bước'
+            aria-label={tField('deleteStep')}
           >
             <Trash2 size={12} />
           </button>

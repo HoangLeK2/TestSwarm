@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from api.routes.device_control import scenarios as preview_scenarios
-from api.routes.device_control.scenarios import merge_preview_variable_layers
+from api.routes.device_control.scenarios import merge_preview_variable_layers, _preview_account_vars
 from api.schemas.device_control import ScenarioPreviewRequest
 
 
@@ -31,6 +33,26 @@ def test_device_and_account_vars_win_over_scenario():
     )
     assert merged["GROUP_NAME"] == "device-a"
     assert merged["__ACCOUNT_USERNAME__"] == "user1"
+
+
+def test_preview_account_vars_include_totp_metadata_without_logging_secret():
+    account = SimpleNamespace(
+        id="account-1",
+        username="user1",
+        display_name="User One",
+        platform="facebook",
+        password_encrypted="encrypted",
+        account_metadata={
+            "email": "user@example.test",
+            "totp_secret": "JBSWY3DPEHPK3PXP",
+        },
+    )
+
+    vars_ = _preview_account_vars(account, lambda encrypted: f"pw:{encrypted}")
+
+    assert vars_["__ACCOUNT_PASSWORD__"] == "pw:encrypted"
+    assert vars_["__ACCOUNT_EMAIL__"] == "user@example.test"
+    assert vars_["__ACCOUNT_TOTP_SECRET__"] == "JBSWY3DPEHPK3PXP"
 
 
 @pytest.mark.asyncio

@@ -2334,6 +2334,7 @@ export function ScenarioDialog({
                       deviceLabel: runtimeDevice
                         ? `${runtimeDevice.name || runtimeDevice.serial} · ${runtimeDevice.serial}`
                         : '',
+                      deviceId: runtimeDevice?.id ?? null,
                       platform: primaryAccount?.platform ?? null,
                       accountLabel: primaryAccount
                         ? primaryAccount.display_name || primaryAccount.username

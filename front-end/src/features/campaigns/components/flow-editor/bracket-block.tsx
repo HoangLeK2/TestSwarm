@@ -138,6 +138,7 @@ function SectionLabel({
   color: string;
   variant?: 'then' | 'else';
 }) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   return (
     <div
       className={cn(
@@ -156,7 +157,7 @@ function SectionLabel({
       {label}
       {count != null && (
         <span className='border-current/15 ml-auto rounded-full border bg-background/70 px-1.5 py-0.5 text-[9px] font-medium tabular-nums opacity-75'>
-          {count} bước
+          {tField('stepCount', { count })}
         </span>
       )}
     </div>
@@ -255,14 +256,15 @@ function ChildStepList({
   enableDragDrop = true
 }: ChildStepListProps) {
   const tBracket = useTranslations('campaignsFeature.flowBracket');
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const insertionLabel =
     listKey === 'then'
-      ? 'Thêm vào nhánh Nếu đúng'
+      ? tField('addToThenBranch')
       : listKey === 'else'
-        ? 'Thêm vào nhánh Nếu sai'
+        ? tField('addToElseBranch')
         : listKey === 'steps'
-          ? 'Thêm vào vòng lặp'
-          : 'Thêm vào nhánh này';
+          ? tField('addToLoop')
+          : tField('addToThisBranch');
   const pathKey = JSON.stringify(pathFromRoot ?? []);
   const sortableContainerId = useMemo(() => {
     const path = (JSON.parse(pathKey) || []) as Array<{
@@ -541,6 +543,7 @@ export function BracketBlock({
   enableDragDrop = true
 }: BracketBlockProps) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const { getStepTypeName, getVariableDisplayName, getStepSummary } =
     useCampaignFlowI18n();
   const [collapsed, setCollapsed] = useState(false);
@@ -801,7 +804,7 @@ export function BracketBlock({
         >
           <DialogContent className='max-w-sm gap-0 p-0'>
             <DialogHeader className='sr-only'>
-              <DialogTitle>Chỉnh sửa bước</DialogTitle>
+              <DialogTitle>{tField('editStepTitle')}</DialogTitle>
             </DialogHeader>
             {editingChild && editingChildPath && (
               <StepDetailPanel
@@ -977,8 +980,8 @@ export function BracketBlock({
                 pickingCondition &&
                   'bg-amber-500/25 text-amber-800 dark:text-amber-200'
               )}
-              title='Chọn phần tử điều kiện trên màn hình'
-              aria-label='Chọn selector điều kiện if_element trên màn hình'
+              title={tField('pickConditionElement')}
+              aria-label={tField('pickIfElementSelector')}
               onClick={(e) => {
                 e.stopPropagation();
                 onTogglePickSelector(selfPickPath);
@@ -1003,7 +1006,10 @@ export function BracketBlock({
             </span>
           )}
           {selfRunState === 'error' && (
-            <span className='text-[10px] font-bold text-red-600' title='Lỗi'>
+            <span
+              className='text-[10px] font-bold text-red-600'
+              title={tField('error')}
+            >
               ✕
             </span>
           )}
@@ -1011,7 +1017,7 @@ export function BracketBlock({
             <button
               type='button'
               className='shrink-0 rounded p-0.5 hover:bg-green-500/15 hover:text-green-600'
-              title='Chạy khối này trên thiết bị'
+              title={tField('runBlockOnDevice')}
               onClick={(e) => {
                 e.stopPropagation();
                 onRunSelf();
@@ -1024,7 +1030,7 @@ export function BracketBlock({
             <button
               type='button'
               className='shrink-0 rounded p-0.5 hover:bg-destructive/15 hover:text-destructive'
-              title='Dừng chạy thử'
+              title={tField('stopTestRun')}
               onClick={(e) => {
                 e.stopPropagation();
                 onStopInlineRun();
@@ -1091,7 +1097,7 @@ export function BracketBlock({
                 variant='body'
                 label={tFlow('loopBody')}
                 count={(step.steps ?? []).length}
-                description='Các bước trong vùng này sẽ được chạy lại ở mỗi vòng.'
+                description={tField('loopBranchHint')}
               >
                 <ChildStepList
                   steps={step.steps ?? []}
@@ -1125,8 +1131,7 @@ export function BracketBlock({
                         IF
                       </span>
                       <span className='text-[11px] font-semibold text-amber-900 dark:text-amber-200'>
-                        Nếu điều kiện đúng, chạy nhánh đầu tiên; nếu không, chạy
-                        nhánh còn lại
+                        {tField('ifBlockHint')}
                       </span>
                     </div>
                     <div className='space-y-0 p-2 pb-0'>
@@ -1134,7 +1139,7 @@ export function BracketBlock({
                         variant={thenVariant}
                         label={thenLabel}
                         count={thenSteps.length}
-                        description='Chỉ chạy các bước trong vùng này khi điều kiện đúng.'
+                        description={tField('thenBranchHint')}
                       >
                         <ChildStepList
                           steps={thenSteps}
@@ -1155,7 +1160,7 @@ export function BracketBlock({
                         variant='else'
                         label={elseLabel}
                         count={elseSteps.length}
-                        description='Chạy vùng này khi điều kiện không đúng; để trống nếu muốn bỏ qua.'
+                        description={tField('elseBranchHint')}
                       >
                         <ChildStepList
                           steps={elseSteps}
@@ -1168,7 +1173,7 @@ export function BracketBlock({
                       <span className='font-mono' aria-hidden>
                         └
                       </span>
-                      Kết thúc IF / ELSE
+                      {tField('endIfElse')}
                     </div>
                   </div>
                 );
@@ -1234,7 +1239,7 @@ export function BracketBlock({
               <span>{tFlow('endBlock', { title: blockTitle })}</span>
             </div>
             <p className='ml-3.5 mt-0.5 leading-relaxed'>
-              Kịch bản tiếp tục với bước kế tiếp sau khối này.
+              {tField('continueAfterBlock')}
             </p>
           </div>
         )}

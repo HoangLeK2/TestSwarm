@@ -123,6 +123,11 @@ def _cap_int(value: object, default: int) -> int:
         return default
 
 
+def _cap_positive_int(value: object, default: int = 0) -> int:
+    parsed = _cap_int(value, 0)
+    return parsed if parsed > 0 else default
+
+
 def _live_device_aliases(serial: str, info: dict[str, object]) -> list[str]:
     aliases = info.get("relay_aliases")
     if isinstance(aliases, (list, tuple, set)):
@@ -404,6 +409,15 @@ def _relay_candidate_serials_for_registered(
     return candidates
 
 
+def _apply_live_screen_size_from_info(device: dict, info: dict[str, object]) -> None:
+    db_width = _cap_positive_int(info.get("screen_width"))
+    db_height = _cap_positive_int(info.get("screen_height"))
+    if db_width > 0 and _cap_positive_int(device.get("screen_width")) <= 0:
+        device["screen_width"] = db_width
+    if db_height > 0 and _cap_positive_int(device.get("screen_height")) <= 0:
+        device["screen_height"] = db_height
+
+
 def _synthesize_live_device_from_relay(
     registered_serial: str,
     info: dict[str, object],
@@ -458,6 +472,8 @@ def _synthesize_live_device_from_relay(
     model = str(caps.get("model") or "").strip()
     touch_method = "u2" if has_u2 else "none"
     control_ready = agent_connected or has_u2 or minitouch_ready
+    db_width = _cap_positive_int(info.get("screen_width"))
+    db_height = _cap_positive_int(info.get("screen_height"))
     return {
         "type": "status",
         "serial": runtime_serial,
@@ -469,8 +485,8 @@ def _synthesize_live_device_from_relay(
         "state": "READY" if control_ready else "CONNECTING",
         "battery": -1,
         "current_app": "",
-        "screen_width": _cap_int(caps.get("screen_width"), 1080),
-        "screen_height": _cap_int(caps.get("screen_height"), 1920),
+        "screen_width": _cap_positive_int(caps.get("screen_width"), db_width),
+        "screen_height": _cap_positive_int(caps.get("screen_height"), db_height),
         "agent_connected": agent_connected,
         "u2_ready": has_u2,
         "minitouch_ready": minitouch_ready,
@@ -500,8 +516,10 @@ def _synthesize_live_device_from_media_adapter(
         return None
 
     runtime_serial = str((stream or {}).get("serial") or registered_serial).strip()
-    width = _cap_int((stream or {}).get("width"), 1080)
-    height = _cap_int((stream or {}).get("height"), 1920)
+    db_width = _cap_positive_int(info.get("screen_width"))
+    db_height = _cap_positive_int(info.get("screen_height"))
+    width = _cap_positive_int((stream or {}).get("width"), db_width)
+    height = _cap_positive_int((stream or {}).get("height"), db_height)
     return {
         "type": "status",
         "serial": runtime_serial,
@@ -678,6 +696,8 @@ async def _get_live_device_map(
                 "brand": brand,
                 "model": model,
                 "display_name": display_name,
+                "screen_width": int(getattr(device, "screen_width", 0) or 0),
+                "screen_height": int(getattr(device, "screen_height", 0) or 0),
                 "requires_relay": bool(adb_serial or adb_ip),
                 "relay_aliases": sorted(aliases),
                 "relay_scrcpy_enabled": bool(
@@ -816,6 +836,7 @@ def build_public_router(
                 d[_LIVE_DEVICE_INFO_KEY] = info
                 d["name"] = info.get("name", "")
                 d["display_name"] = info.get("display_name", d.get("serial", ""))
+                _apply_live_screen_size_from_info(d, info)
                 visible_devices.append(d)
                 seen_registered_serials.add(registered_serial)
             for registered_serial, info in allowed_devices.items():

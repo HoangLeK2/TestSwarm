@@ -23,6 +23,7 @@ export function accountsListQueryKey(
     status?: string;
     state?: string;
     tags?: string;
+    search?: string;
     limit?: number;
     offset?: number;
   }
@@ -52,6 +53,7 @@ export function useAccounts(query?: {
   status?: string;
   state?: string;
   tags?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 }) {

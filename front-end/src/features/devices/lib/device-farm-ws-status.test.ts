@@ -73,3 +73,33 @@ test('dashboard mode still accepts live websocket status', () => {
   assert.equal(result[0]?.serial, '10AE7S00HD002JK');
   assert.equal(result[0]?.model, 'V2352A');
 });
+
+test('websocket status without dimensions does not invent fallback screen size', () => {
+  const result = mergeDeviceFarmWsStatus(
+    [],
+    status('emulator-5560', {
+      agent_connected: true,
+      model: 'galaxy_note10_plus'
+    })
+  );
+
+  assert.equal(result[0]?.screen_width, undefined);
+  assert.equal(result[0]?.screen_height, undefined);
+});
+
+test('websocket status without dimensions preserves API screen size', () => {
+  const result = mergeDeviceFarmWsStatus(
+    [
+      device('emulator-5560', {
+        screen_width: 1440,
+        screen_height: 3040
+      })
+    ],
+    status('emulator-5560', {
+      agent_connected: true
+    })
+  );
+
+  assert.equal(result[0]?.screen_width, 1440);
+  assert.equal(result[0]?.screen_height, 3040);
+});

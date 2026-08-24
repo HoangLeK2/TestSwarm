@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { XIcon } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
 import { cn } from '@/lib/utils';
 import { Z_FLOATING } from '@/lib/z-index';
@@ -24,6 +25,7 @@ export function StepEditOverlay({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const anchorRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -64,12 +66,12 @@ export function StepEditOverlay({
               style={{ zIndex: STEP_EDIT_OVERLAY_Z_INDEX }}
               role='dialog'
               aria-modal='true'
-              aria-label='Chỉnh sửa bước'
+              aria-label={tField('editStep')}
             >
               <button
                 type='button'
                 className='absolute inset-0 bg-background/60 backdrop-blur-sm'
-                aria-label='Đóng'
+                aria-label={tField('close')}
                 onClick={() => onCloseRef.current()}
               />
               <div
@@ -81,7 +83,7 @@ export function StepEditOverlay({
                 <button
                   type='button'
                   className='rounded-xs focus:outline-hidden absolute right-4 top-4 z-20 cursor-pointer opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2'
-                  aria-label='Đóng'
+                  aria-label={tField('close')}
                   onClick={() => onCloseRef.current()}
                 >
                   <XIcon className='size-4' />

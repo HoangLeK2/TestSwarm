@@ -128,6 +128,28 @@ def test_ambiguous_duplicate_exact_match_fails_closed():
     assert result.candidate_count == 2
 
 
+def test_class_name_filters_combined_direct_candidate():
+    xml = """
+    <hierarchy>
+      <node content-desc="Log in" class="android.widget.Button" bounds="[24,517][516,583]" />
+      <node text="Log in" content-desc="Log in" class="android.view.View" bounds="[239,534][302,567]" />
+    </hierarchy>
+    """
+    profile = _profile({
+        "login_button": {
+            "candidates": [
+                {"description_contains": "Log in", "class_name": "android.widget.Button"},
+            ],
+        }
+    })
+
+    result = resolve_semantic_locator(profile, "login_button", xml, screen=(540, 1200))
+
+    assert result.matched is True
+    assert result.bounds == {"left": 24, "top": 517, "right": 516, "bottom": 583}
+    assert result.candidate_count == 1
+
+
 def test_allow_ambiguous_permits_first_duplicate_match():
     xml = """
     <hierarchy>

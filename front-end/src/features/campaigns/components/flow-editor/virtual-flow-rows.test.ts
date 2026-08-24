@@ -17,14 +17,14 @@ test('projects explicit branches and end marker for an if block', () => {
   assert.deepEqual(
     rows.map((row) => [
       row.kind,
-      row.kind === 'step' ? row.step.type : row.label
+      row.kind === 'step' ? row.step.type : row.labelKey
     ]),
     [
       ['step', 'if_variable'],
-      ['branch', 'NẾU ĐÚNG'],
+      ['branch', 'branchIfTrue'],
       ['step', 'wait'],
-      ['branch', 'NẾU SAI'],
-      ['end', 'KẾT THÚC IF']
+      ['branch', 'branchIfFalse'],
+      ['end', 'branchIfEnd']
     ]
   );
   assert.equal(rows[3]?.kind === 'branch' && rows[3].count, 0);
@@ -56,7 +56,23 @@ test('keeps nested scope ancestry on virtual rows', () => {
   );
   assert.equal(rows.at(-1)?.kind, 'end');
   assert.equal(
-    rows.at(-1)?.kind === 'end' && rows.at(-1).label,
-    'KẾT THÚC VÒNG LẶP'
+    rows.at(-1)?.kind === 'end' && rows.at(-1).labelKey,
+    'branchLoopEnd'
   );
+});
+
+test('branch rows carry their meaning, not their wording', () => {
+  // The flow marker used to be chosen by substring-matching the Vietnamese
+  // label, so translating the label silently turned every "then" branch into
+  // a loop marker. Meaning lives in `branch` now; wording lives in `labelKey`.
+  const rows = projectVirtualFlowRows([
+    { type: 'if_variable', then: [{ type: 'wait', seconds: 1 }], else: [] },
+    { type: 'loop', steps: [{ type: 'wait', seconds: 1 }] }
+  ] as FlowStep[]);
+
+  const branches = rows
+    .filter((row) => row.kind === 'branch')
+    .map((row) => (row.kind === 'branch' ? row.branch : null));
+
+  assert.deepEqual(branches, ['then', 'else', 'loop']);
 });

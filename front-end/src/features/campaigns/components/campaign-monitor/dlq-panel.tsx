@@ -107,6 +107,7 @@ export function DlqPanel({
   pollAggressive?: boolean;
 }) {
   const t = useTranslations('campaignsFeature.list');
+  const tGate = useTranslations('executionMessages');
   const { canExecute } = useResourcePermissions('executions');
   const { data = [], isLoading } = useDlqEntries(
     true,
@@ -161,14 +162,14 @@ export function DlqPanel({
     const options: string[] = [];
     for (const entry of data) {
       const raw = dlqDisplayMessage(entry, '');
-      const { summary } = humanizeDlqMessage(raw, t);
+      const { summary } = humanizeDlqMessage(raw, t, tGate);
       const key = summary.trim();
       if (!key || seen.has(key)) continue;
       seen.add(key);
       options.push(key);
     }
     return options.sort((a, b) => a.localeCompare(b));
-  }, [data, t]);
+  }, [data, t, tGate]);
 
   const filteredData = useMemo(() => {
     return data.filter((entry) => {
@@ -186,12 +187,12 @@ export function DlqPanel({
       }
       if (errorFilter !== DLQ_FILTER_ALL) {
         const raw = dlqDisplayMessage(entry, '');
-        const { summary } = humanizeDlqMessage(raw, t);
+        const { summary } = humanizeDlqMessage(raw, t, tGate);
         if (summary.trim() !== errorFilter) return false;
       }
       return true;
     });
-  }, [data, deviceFilter, errorFilter, executionFilter, t]);
+  }, [data, deviceFilter, errorFilter, executionFilter, t, tGate]);
 
   const replayableEntries = useMemo(
     () => filteredData.filter(isDlqEntryReplayable),
@@ -401,7 +402,8 @@ export function DlqPanel({
             );
             const { summary: reason, technical } = humanizeDlqMessage(
               rawMessage,
-              t
+              t,
+              tGate
             );
             const hasExplicitMessage =
               dlqHasExplicitMessage(entry) || Boolean(technical);

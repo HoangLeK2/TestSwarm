@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ChevronDown, Copy, Check } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import { humanizeSessionGateMessage } from '../../lib/session-gate-message';
 
 /** What a step wrote, as reported by the preview stream's `step_done` event. */
 export type StepRunResult = {
@@ -34,6 +35,7 @@ const COLLAPSED_CHARS = 120;
  */
 export function StepRunResultStrip({ result, action }: Props) {
   const t = useTranslations('campaignsFeature.stepEditor.runResult');
+  const tGate = useTranslations('executionMessages');
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -100,7 +102,10 @@ export function StepRunResultStrip({ result, action }: Props) {
               )}
             </>
           ) : (
-            <p className='text-muted-foreground'>{result.message}</p>
+            <p className='text-muted-foreground' title={result.message}>
+              {humanizeSessionGateMessage(result.message, tGate) ??
+                result.message}
+            </p>
           )}
         </div>
 

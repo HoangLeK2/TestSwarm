@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 from api.schemas.scenario import ScenarioModel
 from common.scenario_schema import validate_scenario
 from common.variable_resolver import VariableContext
+from db.seeds.scenario_templates import _FB_LOGIN_PROFILE_NATIVE
 import tasks.scenario.steps.app_automation as app_automation_steps
 from tasks.scenario.steps.app_automation import (
     handle_assert_app_state,
@@ -57,6 +59,39 @@ _XML_WITH_FACEBOOK_AUTH_CODE = """
   <node text="Đi đến ứng dụng xác thực" class="android.widget.TextView" bounds="[56,405][1204,527]" />
   <node text="" content-desc="Mã," class="android.widget.EditText" bounds="[112,1560][1022,1632]" />
   <node text="Tiếp tục" class="android.widget.Button" bounds="[531,1933][730,2007]" />
+</hierarchy>
+"""
+
+_XML_FACEBOOK_LOGIN_EN = """
+<hierarchy>
+  <node content-desc="Mobile number or email," class="android.widget.EditText" bounds="[48,343][438,373]" />
+  <node content-desc="Password," class="android.widget.EditText" bounds="[48,451][438,481]" />
+  <node content-desc="Log in" class="android.widget.Button" bounds="[24,517][516,583]" />
+  <node text="Log in" content-desc="Log in" class="android.view.View" bounds="[239,534][302,567]" />
+</hierarchy>
+"""
+
+_XML_WAITING_FOR_APPROVAL_EN = """
+<hierarchy>
+  <node text="Check your notifications on another device" class="android.view.View" bounds="[24,245][516,351]" />
+  <node text="Waiting for approval" class="android.view.View" bounds="[90,795][297,828]" />
+  <node text="Try another way" content-desc="Try another way" class="android.view.View" bounds="[188,959][352,992]" />
+</hierarchy>
+"""
+
+_XML_CONFIRM_METHODS_EN = """
+<hierarchy>
+  <node text="Choose a way to confirm it’s you" class="android.view.View" bounds="[24,206][516,306]" />
+  <node text="Authentication app" content-desc="Authentication app" class="android.view.View" bounds="[102,560][300,593]" />
+  <node text="Continue" content-desc="Continue" class="android.view.View" bounds="[223,1091][317,1124]" />
+</hierarchy>
+"""
+
+_XML_WITH_FACEBOOK_AUTH_CODE_EN = """
+<hierarchy>
+  <node text="Enter code" class="android.view.View" bounds="[24,206][516,306]" />
+  <node content-desc="Code," class="android.widget.EditText" bounds="[48,451][438,481]" />
+  <node text="Continue" content-desc="Continue" class="android.view.View" bounds="[223,1091][317,1124]" />
 </hierarchy>
 """
 
@@ -155,6 +190,13 @@ class FakeU2:
 
     def find_element_with_bounds_spec(self, spec, timeout=0.5):
         by, value = spec.primary_by_value()
+        xml = self.device.hierarchy_xml() if self.device is not None else ""
+        if by == "text" and f'text="{value}"' not in xml:
+            return None
+        if by in {"description", "content-desc"} and f'content-desc="{value}"' not in xml:
+            return None
+        if by == "resource-id" and f'resource-id="{value}"' not in xml:
+            return None
         return {"eid": f"{by}:{value}", "bounds": {"left": 1, "top": 2, "right": 3, "bottom": 4}}
 
     def element_click(self, eid: str) -> None:
@@ -187,7 +229,16 @@ class FakeDevice:
         return self._xmls[self._xml_idx]
 
     def advance_on_click(self, eid: str) -> None:
-        transition_labels = ("Login", "Thử cách khác", "Ứng dụng xác thực", "Tiếp tục", "Continue")
+        transition_labels = (
+            "Login",
+            "Log in",
+            "Thử cách khác",
+            "Try another way",
+            "Ứng dụng xác thực",
+            "Authentication app",
+            "Tiếp tục",
+            "Continue",
+        )
         if any(label in eid for label in transition_labels) and self._xml_idx < len(self._xmls) - 1:
             self._xml_idx += 1
 
@@ -349,6 +400,33 @@ def test_login_if_needed_navigates_facebook_approval_before_totp():
     assert [trace["executed"] for trace in result["post_submit_action_trace"]] == [True, True, True]
     assert any("Thử cách khác" in clicked for clicked in sc.device.u2.clicked)
     assert any("Ứng dụng xác thực" in clicked for clicked in sc.device.u2.clicked)
+    assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
+
+
+def test_builtin_facebook_login_supports_english_form_and_totp_path():
+    sc = _sc([
+        _XML_FACEBOOK_LOGIN_EN,
+        _XML_WAITING_FOR_APPROVAL_EN,
+        _XML_CONFIRM_METHODS_EN,
+        _XML_CONFIRM_METHODS_EN,
+        _XML_WITH_FACEBOOK_AUTH_CODE_EN,
+    ])
+    sc.scenario = {"app_automation_profile": deepcopy(_FB_LOGIN_PROFILE_NATIVE)}
+    result = {"index": 0, "type": "login_if_needed", "ok": True}
+
+    handle_login_if_needed(
+        sc,
+        {"type": "login_if_needed", "implicit_wait": {"timeout": 0.1, "poll": 0.01}},
+        0,
+        result,
+    )
+
+    assert result["ok"] is True
+    assert sc.device.u2.sent == ["account-user", "account-pw", "123456"]
+    assert [trace["executed"] for trace in result["post_submit_action_trace"]] == [True, True, True]
+    assert any("Log in" in clicked for clicked in sc.device.u2.clicked)
+    assert any("Try another way" in clicked for clicked in sc.device.u2.clicked)
+    assert any("Authentication app" in clicked for clicked in sc.device.u2.clicked)
     assert result["post_submit_locator_trace"]["auth_code"]["matched"] is True
 
 

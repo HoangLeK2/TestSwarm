@@ -95,14 +95,43 @@ function commit(update: Props['update'], next: FlowStep) {
   update(next as Partial<FlowStep>);
 }
 
+/** Chip wording for the refs the picker offers, keyed by the ref itself. */
+const QUICK_PICK_LABEL_KEYS: Record<string, string> = {
+  'account.username': 'loginUi.quickPicks.accountUsername',
+  'account.email': 'loginUi.quickPicks.accountEmail',
+  'account.display_name': 'loginUi.quickPicks.accountDisplayName',
+  'scenario.username': 'loginUi.quickPicks.scenarioUsername',
+  'account.password': 'loginUi.quickPicks.accountPassword',
+  'secret.login_password': 'loginUi.quickPicks.securePassword',
+  'account.totp_code': 'loginUi.quickPicks.accountTotpCode',
+  'variables.auth_code': 'loginUi.quickPicks.authCodeVariable',
+  'scenario.auth_code': 'loginUi.quickPicks.authCodeScenario'
+};
+
+/**
+ * What a quick-pick chip reads as.
+ *
+ * The chips used to print the raw ref (`account.username`), which says nothing
+ * to an operator picking where a login field gets its value. The ref stays on
+ * the tooltip for anyone wiring a scenario by hand.
+ */
+function quickPickLabel(ref: string, t: AppAutomationT): string {
+  const key = QUICK_PICK_LABEL_KEYS[ref];
+  if (key) return t(key);
+  const variable = ref.startsWith('variables.') ? ref.slice(10) : '';
+  return variable ? t('loginUi.quickPicks.variable', { name: variable }) : ref;
+}
+
 function ValueRefQuickPicks({
   refs,
   selected,
-  onPick
+  onPick,
+  t
 }: {
   refs: readonly string[];
   selected: string;
   onPick: (ref: string) => void;
+  t: AppAutomationT;
 }) {
   const uniqueRefs = Array.from(new Set(refs.filter(Boolean)));
   if (uniqueRefs.length === 0) return null;
@@ -116,10 +145,11 @@ function ValueRefQuickPicks({
             type='button'
             size='sm'
             variant={active ? 'default' : 'outline'}
-            className='h-7 max-w-full px-2 font-mono text-[11px]'
+            className='h-7 max-w-full px-2 text-[11px]'
             onClick={() => onPick(ref)}
+            title={ref}
           >
-            <span className='truncate'>{ref}</span>
+            <span className='truncate'>{quickPickLabel(ref, t)}</span>
           </Button>
         );
       })}
@@ -633,6 +663,7 @@ function LoginEditor({
                 <ValueRefQuickPicks
                   refs={quickPickRefs}
                   selected={selectedValueFrom}
+                  t={t}
                   onPick={(ref) =>
                     commit(
                       update,
@@ -810,6 +841,7 @@ function LoginEditor({
               <ValueRefQuickPicks
                 refs={quickPickRefs}
                 selected={selectedValueFrom}
+                t={t}
                 onPick={(ref) =>
                   commit(
                     update,

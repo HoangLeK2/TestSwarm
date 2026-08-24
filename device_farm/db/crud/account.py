@@ -4,7 +4,7 @@ import inspect
 from datetime import date, datetime, timezone
 from typing import Any, List, Optional, Tuple
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -150,6 +150,7 @@ async def list_accounts(
     state: Optional[str] = None,
     include_states: Optional[List[str]] = None,
     tags: Optional[str] = None,
+    search: Optional[str] = None,
     user_id: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -168,6 +169,17 @@ async def list_accounts(
         stmt = stmt.where(Account.tags.contains(tags))
     if user_id:
         stmt = stmt.where(Account.user_id == user_id)
+    if search and search.strip():
+        # A picker can only show a handful of rows, so the match has to happen
+        # here — filtering one page client-side would hide every account that
+        # did not make it into that page.
+        needle = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Account.username.ilike(needle),
+                Account.display_name.ilike(needle),
+            )
+        )
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     return list(result.scalars().all())

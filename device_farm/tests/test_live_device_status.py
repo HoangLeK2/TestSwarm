@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from api.routes.public import (
+    _apply_live_screen_size_from_info,
     _apply_media_adapter_status,
     _apply_realtime_connectivity,
     _build_live_device_alias_index,
@@ -526,6 +527,25 @@ def test_live_device_status_synthesizes_relay_device_when_manager_registry_lags(
     assert device["state"] == "READY"
     assert device["u2_ready"] is True
     assert device["touch_method"] == "u2"
+
+
+def test_live_device_status_uses_registered_screen_size_when_runtime_reports_zero():
+    device = {
+        "serial": "emulator-5560",
+        "screen_width": 0,
+        "screen_height": 0,
+    }
+
+    _apply_live_screen_size_from_info(
+        device,
+        {
+            "screen_width": 1440,
+            "screen_height": 3040,
+        },
+    )
+
+    assert device["screen_width"] == 1440
+    assert device["screen_height"] == 3040
 
 
 def test_live_device_status_synthesizes_relay_device_after_runtime_serial_changes():

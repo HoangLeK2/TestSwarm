@@ -234,7 +234,7 @@ export function useControlRecord(
     error,
     devicesReady
   } = useDeviceFarm({
-    liveRefreshMs: 30_000,
+    liveRefreshMs: 5_000,
     loadTasks: false,
     refreshRegisteredOnFocus: false
   });

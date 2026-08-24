@@ -27,6 +27,7 @@ import {
 } from '../hooks/use-campaigns';
 import type { CampaignOut, ExecutionOut, ExecutionTaskLogStep } from '../types';
 import { executionStepDetail } from '../lib/execution-step-detail';
+import { humanizeSessionGateMessage } from '../lib/session-gate-message';
 import { useTranslations } from 'next-intl';
 
 type Props = {
@@ -101,8 +102,12 @@ function StepRow({
   step: ExecutionTaskLogStep;
   fallbackLabel: string;
 }) {
+  const tGate = useTranslations('executionMessages');
   const detail = executionStepDetail(step);
   const stepType = detail.label || fallbackLabel;
+  const stepMessage = step.message
+    ? (humanizeSessionGateMessage(step.message, tGate) ?? step.message)
+    : null;
   return (
     <div className='grid grid-cols-[3.25rem_minmax(0,1fr)_auto] gap-2 border-b px-3 py-3 last:border-b-0'>
       <span className='font-mono text-[11px] text-muted-foreground'>
@@ -117,9 +122,12 @@ function StepRow({
             </span>
           ) : null}
         </div>
-        {step.message ? (
-          <p className='mt-1 whitespace-pre-wrap break-words text-[11px] text-muted-foreground'>
-            {step.message}
+        {stepMessage ? (
+          <p
+            className='mt-1 whitespace-pre-wrap break-words text-[11px] text-muted-foreground'
+            title={step.message ?? undefined}
+          >
+            {stepMessage}
           </p>
         ) : null}
         <div className='mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground/80'>
@@ -138,8 +146,12 @@ function StepRow({
                     {index + 1}. {nested.label}
                   </p>
                   {nested.message ? (
-                    <p className='break-words text-[10px] text-muted-foreground'>
-                      {nested.message}
+                    <p
+                      className='break-words text-[10px] text-muted-foreground'
+                      title={nested.message}
+                    >
+                      {humanizeSessionGateMessage(nested.message, tGate) ??
+                        nested.message}
                     </p>
                   ) : null}
                 </div>

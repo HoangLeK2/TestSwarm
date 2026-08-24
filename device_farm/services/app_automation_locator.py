@@ -182,9 +182,20 @@ def _score_direct_candidate(
     screen: tuple[int, int] | None,
 ) -> list[_ScoredNode]:
     scored: list[_ScoredNode] = []
+    class_name_is_filter = bool(
+        candidate.class_name
+        and (
+            candidate.by
+            or candidate.value
+            or candidate.resource_id_contains
+            or candidate.description_contains
+        )
+    )
     for node in nodes:
         bounds = node.bounds
         if not _region_matches(bounds, candidate.region, screen):
+            continue
+        if class_name_is_filter and _node_class(node) != candidate.class_name:
             continue
 
         if candidate.by and candidate.value and _matches_by_value(node, candidate.by, candidate.value):

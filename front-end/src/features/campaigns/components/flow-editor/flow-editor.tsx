@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -126,6 +127,7 @@ export function FlowEditor({
   stepRunResults,
   virtualReorderMode = false
 }: Props) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const pendingDetailRef = useRef<FlowStep | null>(null);
   const stepsRef = useRef(steps);
@@ -427,7 +429,7 @@ export function FlowEditor({
       >
         <DialogContent className='max-w-sm gap-0 p-0'>
           <DialogHeader className='sr-only'>
-            <DialogTitle>Chỉnh sửa bước</DialogTitle>
+            <DialogTitle>{tField('editStepTitle')}</DialogTitle>
           </DialogHeader>
           {selectedStep && selectedIndex != null && (
             <StepDetailPanel
@@ -555,8 +557,7 @@ export function FlowEditor({
 
           {steps.length === 0 && (
             <p className='py-6 text-center text-xs text-muted-foreground'>
-              Nhấn <strong>+</strong> để thêm bước, hoặc ghi thao tác từ thiết
-              bị.
+              {tField('emptyFlowHint')}
             </p>
           )}
         </div>
@@ -748,6 +749,7 @@ function VirtualizedFlowEditor({
   reorderMode: boolean;
   stepRunResults?: Record<string, StepRunResult>;
 }) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const parentRef = useRef<HTMLDivElement | null>(null);
   const stepsRef = useRef(steps);
   stepsRef.current = steps;
@@ -850,7 +852,7 @@ function VirtualizedFlowEditor({
       >
         <DialogContent className='max-w-sm gap-0 p-0'>
           <DialogHeader className='sr-only'>
-            <DialogTitle>Chỉnh sửa bước</DialogTitle>
+            <DialogTitle>{tField('editStepTitle')}</DialogTitle>
           </DialogHeader>
           {selectedStep && selectedPath && (
             <StepDetailPanel
@@ -998,9 +1000,11 @@ function VirtualizedFlowEditor({
                               <button
                                 type='button'
                                 className='flex h-5 items-center rounded-full border border-border/0 px-2 text-[10px] font-medium text-muted-foreground/0 transition-all hover:border-border hover:bg-background hover:text-primary focus-visible:border-border focus-visible:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/flowlist:border-border/40 group-hover/insert:border-border/70 group-hover/insert:bg-background group-hover/flowlist:text-muted-foreground/60 group-hover/insert:text-muted-foreground'
-                                aria-label={`Thêm thao tác trước bước ${outlineNumber(row.path)}`}
+                                aria-label={tField('addStepBefore', {
+                                  number: outlineNumber(row.path)
+                                })}
                               >
-                                + Thêm tại đây
+                                {tField('addHere')}
                               </button>
                             }
                           />
@@ -1100,13 +1104,12 @@ function VirtualizedFlowEditor({
 
           {rows.length === 0 && (
             <p className='py-6 text-center text-xs text-muted-foreground'>
-              Nhấn <strong>+</strong> để thêm bước, hoặc ghi thao tác từ thiết
-              bị.
+              {tField('emptyFlowHint')}
             </p>
           )}
         </div>
 
-        {/* Always-visible append action. The per-row "+ Thêm tại đây" controls are
+        {/* Always-visible append action. The per-row "add here" controls are
           hover-only and there was nothing at all after the last step, so the
           panel read as having no way to add anything. This sits outside the
           scroll area so it stays reachable however long the list gets. */}
@@ -1124,7 +1127,7 @@ function VirtualizedFlowEditor({
                   className='h-8 w-full justify-center gap-1.5 rounded-md border-dashed border-muted-foreground/40 text-xs font-medium text-muted-foreground hover:border-primary/60 hover:bg-primary/5 hover:text-primary'
                 >
                   <Plus className='size-3.5' strokeWidth={2} />
-                  Thêm bước
+                  {tField('addStep')}
                 </Button>
               }
             />
@@ -1146,13 +1149,14 @@ function VirtualFlowStepRail({
   showLine: boolean;
   root: boolean;
 }) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   return (
     <div className='flex w-9 shrink-0 flex-col items-center pt-1.5'>
       {root ? (
         <span
           className='flex size-6 items-center justify-center rounded-full border border-border/70 bg-background text-[10px] font-bold tabular-nums text-foreground/65 shadow-sm'
-          title={`Bước ${fullLabel}`}
-          aria-label={`Bước ${fullLabel}`}
+          title={tField('stepNumber', { number: fullLabel })}
+          aria-label={tField('stepNumber', { number: fullLabel })}
         >
           {label}
         </span>
@@ -1204,12 +1208,10 @@ function VirtualScopeMarker({
     { kind: 'step' }
   >;
 }) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const conditional = row.scopes.at(-1)?.type;
-  const isElse = row.kind === 'branch' && row.label.includes('SAI');
-  const isThen =
-    row.kind === 'branch' &&
-    (row.label.includes('ĐÚNG') || row.label.includes('TÌM THẤY')) &&
-    !row.label.includes('KHÔNG');
+  const isElse = row.kind === 'branch' && row.branch === 'else';
+  const isThen = row.kind === 'branch' && row.branch === 'then';
   const marker = row.kind === 'end' ? '└' : isThen ? '✓' : isElse ? '×' : '↻';
 
   return (
@@ -1280,7 +1282,7 @@ function VirtualScopeMarker({
                 'text-teal-800 dark:text-teal-300'
             )}
           >
-            {row.label}
+            {tField(row.labelKey, row.labelValues)}
           </span>
           <span
             className={cn(
@@ -1296,12 +1298,12 @@ function VirtualScopeMarker({
           />
           {row.kind === 'branch' && (
             <span className='shrink-0 rounded-full border border-border/70 bg-background px-2 py-0.5 text-[9px] font-semibold tabular-nums text-muted-foreground shadow-sm'>
-              {row.count} bước
+              {tField('stepCount', { count: row.count })}
             </span>
           )}
           {row.kind === 'end' && conditional && (
             <span className='shrink-0 rounded-full bg-muted/70 px-2 py-0.5 text-[9px] font-medium text-muted-foreground'>
-              Tiếp tục
+              {tField('continueLabel')}
             </span>
           )}
         </div>

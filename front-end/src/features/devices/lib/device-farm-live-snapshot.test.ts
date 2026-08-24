@@ -54,3 +54,25 @@ test('mergeLiveDeviceSnapshot drops stale devices missing from a non-empty live 
     ['phone-1']
   );
 });
+
+test('mergeLiveDeviceSnapshot preserves previous positive dimensions when live reports zero', () => {
+  const result = mergeLiveDeviceSnapshot(
+    [
+      {
+        ...device('emulator-5560'),
+        screen_width: 1440,
+        screen_height: 3040
+      }
+    ],
+    [
+      {
+        ...device('emulator-5560'),
+        screen_width: 0,
+        screen_height: 0
+      }
+    ]
+  );
+
+  assert.equal(result[0]?.screen_width, 1440);
+  assert.equal(result[0]?.screen_height, 3040);
+});

@@ -1205,7 +1205,7 @@ class WebSocketManager:
                     count = 1
                 log.info(
                     f"[INPUT] KEY {serial} key={key} count={count} "
-                    f"route_hint={device.input_route_hint()}"
+                    f"route_hint={device.key_route_hint()}"
                 )
 
                 def _press(dev=device, k=key, n=count) -> None:
@@ -1277,7 +1277,9 @@ class WebSocketManager:
                 # so DEL runs and the append that follows stay in frame order.
                 typing_ex = self._typing_executor(serial)
                 if mode in ("live_clear",) or (mode == "u2_sync" and not text):
-                    log.info(f"[INPUT] INPUT_CLEAR {serial} route_hint={device.input_route_hint()}")
+                    # clear_live_input ends in key("delete") when u2 is absent,
+                    # so its route is the key route, not the tap one.
+                    log.info(f"[INPUT] INPUT_CLEAR {serial} route_hint={device.key_route_hint()}")
                     loop.run_in_executor(typing_ex, device.clear_live_input)
                 elif mode in ("live_replace", "u2_sync") or bool(data.get("sync", False)):
                     log.info(

@@ -1069,6 +1069,20 @@ class DeviceClient:
 
     def _try_relay_u2_batch_touch(self, actions: list[dict], timeout: float = 1.5) -> bool:
         """Run coordinate touch through agent-boot u2_batch without inline reconnect."""
+        return self._try_relay_u2_batch(actions, timeout=timeout, label="touch")
+
+    def _try_relay_u2_batch(
+        self,
+        actions: list[dict],
+        timeout: float = 1.5,
+        label: str = "batch",
+    ) -> bool:
+        """Run primitive ops on agent-boot's batch executor via the relay.
+
+        Note this reaches the executor through the relay manager, not through
+        `self._u2_batch` — that client is None on a relay-served device, which
+        is precisely where this route is the only one left.
+        """
         if self._loop is None or not actions:
             return False
         try:
@@ -1264,9 +1278,42 @@ class DeviceClient:
             self._a11y_fail_hard(str(exc))
             return {"ok": False, "error": str(exc)}
 
+    def key_route_hint(self) -> str:
+        """Route `key()` would take, for logging.
+
+        Not the same order as tap/swipe: `key()` prefers a u2 session, then the
+        batch route, then the WS APK. Logging the tap hint next to a key press
+        reported `agent_boot_u2_batch` for presses that never went near the
+        batch route, which is how the dropped home key stayed hidden.
+        """
+        if self._u2 is not None:
+            return self.input_route_hint()
+        if self._relay_batch_available():
+            return "agent_boot_u2_batch"
+        if self._agent_send is not None:
+            return "device_agent_ws"
+        return self.input_route_hint()
+
+    def _relay_batch_available(self) -> bool:
+        """Whether the relay can carry a batch for this device right now.
+
+        This is the predicate `_try_relay_u2_batch` itself uses. `_batch_enabled()`
+        asks a different question — whether the `self._u2_batch` client exists —
+        and answers False on relay-served devices.
+        """
+        if self._loop is None:
+            return False
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            return relay is not None and bool(self._relay_u2_control_serial(relay))
+        except Exception:
+            return False
+
     def input_route_hint(self) -> str:
         """
-        Best-effort route hint for tap/swipe/key style inputs.
+        Best-effort route hint for tap/swipe style inputs.
         This mirrors the runtime priority order and is used for logging only.
         """
         if self._u2 is not None:
@@ -1817,6 +1864,30 @@ class DeviceClient:
             return f"input keyevent {keyevent}"
         return None
 
+    def _key_via_u2_batch(self, key_name: str, timeout: float = 5.0) -> bool:
+        """Press a key through agent-boot's u2_batch, the way tap() already does.
+
+        agent-boot has carried a `press_key` op since the batch executor was
+        written, and it retries over adb on the device host when u2 refuses.
+        The farm never sent it: `key()` knew only a local/proxy u2 session, the
+        WS APK, and its own adb relay. On a device served by the batch route
+        `self._u2` is None, so every home/back press fell through to the WS APK
+        and was dropped without a word.
+
+        Routed through the relay manager, the same way `tap()` reaches the
+        batch executor. `self._u2_batch` is a different client and is None on a
+        relay-served device, so gating on it skipped the branch on exactly the
+        devices that need it.
+        """
+        key = (key_name or "").strip().lower()
+        if not key:
+            return False
+        return self._try_relay_u2_batch(
+            [{"op": "press_key", "key": key}],
+            timeout=timeout,
+            label=f"key {key}",
+        )
+
     def _key_via_adb_relay(self, key_name: str, timeout: float = 5.0) -> bool:
         cmd = self._adb_key_command(key_name)
         if not cmd or not self._loop:
@@ -1871,6 +1942,11 @@ class DeviceClient:
                     return
                 except Exception as exc:
                     self._log(f"key via U2 failed ({key_l}): {exc}", level=logging.WARNING)
+            # Same u2 press, run on the agent next to the device. Must come
+            # before the WS APK: that send is fire-and-forget, so once it runs
+            # nothing else is tried and a dead APK looks like a working press.
+            if self._key_via_u2_batch(key_l):
+                return
             if self._agent_send is not None:
                 self._send_to_agent({"type": "key", "key": key_l})
                 return
@@ -1893,6 +1969,9 @@ class DeviceClient:
                 self._log(f"key via U2 failed ({key_l}): {exc}", level=logging.WARNING)
 
         if self._a11y_mutate("key", {"key": key_l}, timeout=4.0):
+            return
+
+        if self._key_via_u2_batch(key_l):
             return
 
         if self._agent_send is not None:
@@ -3796,6 +3875,19 @@ class DeviceClient:
                     self.screen_width    = self.screen_width or int(caps.get("screen_width") or 0)
                     self.screen_height   = self.screen_height or int(caps.get("screen_height") or 0)
                     self.name = self.name or f"{caps.get('brand','')} {caps.get('model','')}".strip()
+                if (
+                    (not self.screen_width or not self.screen_height)
+                    and self._loop
+                    and hasattr(relay, "adb_shell")
+                ):
+                    size_future = asyncio.run_coroutine_threadsafe(
+                        self._fetch_screen_size_via_relay(relay, actual_serial),
+                        self._loop,
+                    )
+                    try:
+                        size_future.result(timeout=2.0)
+                    except Exception:
+                        size_future.cancel()
 
                 receiver = RelayScrcpyReceiver(
                     serial=actual_serial,
@@ -4101,6 +4193,7 @@ class DeviceClient:
                     if recv is not None and recv.control is not None:
                         recv.control.screen_width = self.screen_width
                         recv.control.screen_height = self.screen_height
+                    self._publish_status()
                     break
         except Exception as exc:
             self._log(f"relay wm size failed: {exc}", level=logging.DEBUG)

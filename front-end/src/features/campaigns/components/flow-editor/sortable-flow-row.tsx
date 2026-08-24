@@ -4,6 +4,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { FLOW_ROW_DRAG_GUTTER_CLASS } from './flow-row-gutter';
 
 export function SortableFlowRow({
@@ -16,6 +17,7 @@ export function SortableFlowRow({
     isDragging: boolean
   ) => React.ReactNode;
 }) {
+  const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const {
     attributes,
     listeners,
@@ -38,7 +40,7 @@ export function SortableFlowRow({
       {...attributes}
       type='button'
       tabIndex={-1}
-      title='Kéo để thay đổi thứ tự hoặc thả vào khối repeat/if'
+      title={tField('dragToReorder')}
       className={[
         'flex shrink-0 cursor-grab items-center justify-center self-stretch text-muted-foreground/30',
         FLOW_ROW_DRAG_GUTTER_CLASS,

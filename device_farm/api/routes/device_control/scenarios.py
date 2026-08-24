@@ -83,6 +83,7 @@ from api.auth.context import AuthContext
 from api.deps import caller_auth_from_request
 from api.schemas.device_control import ScenarioPreviewRequest
 from common.session_lock import SessionLockStore
+from common.totp import account_metadata_value
 from core.config import Config
 from db import crud as repo
 from db.database import AsyncSessionLocal
@@ -182,6 +183,29 @@ def _preview_account_vars(account: Any, decrypt_password: Callable[[Any], str]) 
         except Exception:
             # Keep the preview running; the executor will report an unresolved secret.
             out["__ACCOUNT_PASSWORD__"] = ""
+    metadata = getattr(account, "account_metadata", None) or {}
+    email = account_metadata_value(metadata, "email", "login_email", "account_email")
+    if email:
+        out["__ACCOUNT_EMAIL__"] = email
+    totp_secret = account_metadata_value(
+        metadata,
+        "totp_secret",
+        "two_factor_secret",
+        "authenticator_secret",
+        "otp_secret",
+        "2fa_secret",
+    )
+    if totp_secret:
+        out["__ACCOUNT_TOTP_SECRET__"] = totp_secret
+    totp_code = account_metadata_value(
+        metadata,
+        "totp_code",
+        "auth_code",
+        "authentication_code",
+        "two_factor_code",
+    )
+    if totp_code:
+        out["__ACCOUNT_TOTP_CODE__"] = totp_code
     return out
 
 

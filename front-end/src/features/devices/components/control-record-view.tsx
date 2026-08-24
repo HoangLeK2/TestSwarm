@@ -134,6 +134,7 @@ import {
 } from '@/features/campaigns/components/flow-editor/coordinate-pick';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import type { StepRunResult } from '@/features/campaigns/components/flow-editor/step-run-result';
+import { humanizeSessionGateMessage } from '@/features/campaigns/lib/session-gate-message';
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { deriveNestedInlineRunStates } from '@/features/campaigns/components/flow-editor/inline-run-key';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
@@ -233,6 +234,7 @@ export function ControlRecordView({
   const tModal = useTranslations('components.modal');
   const tVar = useTranslations('components.variableEditor');
   const tRecovery = useTranslations('campaignsFeature.recoveryPolicy');
+  const tGate = useTranslations('executionMessages');
   const router = useRouter();
   useControlRecordChunkReloadGuard();
 
@@ -406,19 +408,27 @@ export function ControlRecordView({
         : device.selectedDevice,
     [device.selectedDevice, optimisticTakeoverSerials]
   );
-  const selectedDeviceForControl = useMemo(
-    () =>
-      rawSelectedDeviceForControl ??
-      resolveControlRecordSelectedDevice(
-        connectedDevicesForControl,
-        device.selectedSerial
-      ),
-    [
+  const selectedDeviceForControl = useMemo(() => {
+    const selectedSerial =
+      rawSelectedDeviceForControl?.serial ?? device.selectedSerial;
+    const liveSelected = resolveControlRecordSelectedDevice(
       connectedDevicesForControl,
-      device.selectedSerial,
-      rawSelectedDeviceForControl
-    ]
-  );
+      selectedSerial
+    );
+    if (!rawSelectedDeviceForControl) return liveSelected;
+    if (!liveSelected) return rawSelectedDeviceForControl;
+    return {
+      ...rawSelectedDeviceForControl,
+      ...liveSelected,
+      manual_takeover_active:
+        rawSelectedDeviceForControl.manual_takeover_active ??
+        liveSelected.manual_takeover_active
+    };
+  }, [
+    connectedDevicesForControl,
+    device.selectedSerial,
+    rawSelectedDeviceForControl
+  ]);
   const selectedPrimarySerial = selectedDeviceForControl?.serial ?? null;
   const {
     leftCollapsed,
@@ -1213,6 +1223,7 @@ export function ControlRecordView({
   );
   const sessionGateRuntimeContext = {
     deviceLabel: selectedDeviceLabel || selectedDeviceForControl?.serial || '',
+    deviceId: selectedDeviceId ?? null,
     platform: selectedPrimaryAccount?.platform ?? null,
     accountLabel: selectedPrimaryAccount
       ? selectedPrimaryAccount.display_name || selectedPrimaryAccount.username
@@ -1919,13 +1930,19 @@ export function ControlRecordView({
                 [runKey]: event.ok ? 'ok' : 'error',
                 ...deriveNestedInlineRunStates(runKey, event)
               }));
+              // The engine writes machine reasons (`platform_session_gate
+              // preflight blocked: …`) into step messages; the author reading
+              // this toast cannot act on those.
+              const rawMessage = event.message as string | undefined;
+              const stepMessage =
+                humanizeSessionGateMessage(rawMessage, tGate) ?? rawMessage;
               // Keep what the step produced so the card can show it — a green
               // tick alone never told the author what was actually read.
               setStepRunResults((s) => ({
                 ...s,
                 [runKey]: {
                   ok: !!event.ok,
-                  message: event.message as string | undefined,
+                  message: stepMessage,
                   savedAs: event.saved_as as string | undefined,
                   textPreview: event.text_preview as string | undefined,
                   textLength: event.text_length as number | undefined,
@@ -1933,7 +1950,7 @@ export function ControlRecordView({
                   boxCount: event.box_count as number | undefined
                 }
               }));
-              if (!event.ok) toast.error(`${label}: ${event.message ?? 'Lỗi'}`);
+              if (!event.ok) toast.error(`${label}: ${stepMessage ?? 'Lỗi'}`);
             }
           }),
           ctrl.signal,
@@ -1981,7 +1998,8 @@ export function ControlRecordView({
       stepRunStates,
       scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
-      previewSession
+      previewSession,
+      tGate
     ]
   );
 

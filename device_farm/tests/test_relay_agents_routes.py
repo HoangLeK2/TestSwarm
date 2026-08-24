@@ -754,3 +754,49 @@ async def test_register_relay_devices_bulk_rejects_offline_agent():
                 user=MagicMock(id="user-a", org_id="org-a"),
             )
     assert ei.value.status_code == 404
+
+
+# ── Route wiring ─────────────────────────────────────────────────────────────
+#
+# Every other test in this file calls the handler function directly, which is
+# how a broken route survived: `_claim_relay_serial` was extracted as a shared
+# helper and landed *between* the decorator and `register_relay_device`, so the
+# decorator bound the route to the helper. FastAPI then read the helper's
+# signature — `db`, `row` and `user` are untyped, so it demanded them as query
+# parameters and answered every agent-boot registration with 422 before any
+# handler code ran. These tests assert the wiring itself.
+
+def _route_for(path_suffix: str):
+    from api.routes.relay_agents import router
+
+    matches = [r for r in router.routes if getattr(r, "path", "") == path_suffix]
+    assert len(matches) == 1, f"expected exactly one route for {path_suffix}"
+    return matches[0]
+
+
+def test_single_register_route_is_bound_to_its_handler():
+    from api.routes.relay_agents import register_relay_device
+
+    route = _route_for("/relay-agents/{relay_id}/devices/{serial}/register")
+    assert route.endpoint is register_relay_device
+
+
+def test_register_routes_take_no_query_parameters():
+    """A DB session or ORM row leaking into the signature becomes a required
+    query parameter, which no client can ever satisfy."""
+    for path in (
+        "/relay-agents/{relay_id}/devices/{serial}/register",
+        "/relay-agents/{relay_id}/devices/register",
+    ):
+        route = _route_for(path)
+        leaked = [param.name for param in route.dependant.query_params]
+        assert leaked == [], f"{path} exposes query params: {leaked}"
+
+
+def test_single_register_route_reads_its_body_and_path():
+    route = _route_for("/relay-agents/{relay_id}/devices/{serial}/register")
+    assert {param.name for param in route.dependant.path_params} == {
+        "relay_id",
+        "serial",
+    }
+    assert route.body_field is not None

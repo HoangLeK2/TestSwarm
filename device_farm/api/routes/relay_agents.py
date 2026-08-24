@@ -731,12 +731,6 @@ async def get_relay_agent(relay_id: str, db: DB, user: CurrentUser):
     return _relay_to_out_same_wifi(row, {}, user.id, {})
 
 
-@router.post(
-    "/{relay_id}/devices/{serial}/register",
-    response_model=DeviceOut,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("relay-agents", "create"))],
-)
 async def _claim_relay_serial(db, row, serial: str, user) -> str:
     """Claim/update one reported serial. No commit, no bootstrap — the caller
     owns the transaction so a single register and a bulk register share exactly
@@ -796,6 +790,12 @@ async def _claim_relay_serial(db, row, serial: str, user) -> str:
     return canonical
 
 
+@router.post(
+    "/{relay_id}/devices/{serial}/register",
+    response_model=DeviceOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("relay-agents", "create"))],
+)
 async def register_relay_device(
     relay_id: str,
     serial: str,

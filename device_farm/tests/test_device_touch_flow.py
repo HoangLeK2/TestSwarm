@@ -370,6 +370,67 @@ class TestKeyFallbackFlow:
         )
         assert DeviceClient._adb_key_command("back") == "input keyevent KEYCODE_BACK"
 
+    def test_nav_key_prefers_u2_batch_over_ws_agent(self):
+        """agent-boot has had a `press_key` op all along; the farm never sent it.
+
+        On a device served by the batch route `_u2` is None, so home/back went
+        to the WS APK — a fire-and-forget send that returns whether or not the
+        APK acts, so a dropped key looked like a successful one.
+        """
+        d = _make_device()
+        d._scrcpy_receiver = None
+        d._u2 = None
+        mock_send = MagicMock()
+        d._agent_send = mock_send
+        d._try_relay_u2_batch = MagicMock(return_value=True)
+
+        d.key("home")
+
+        d._try_relay_u2_batch.assert_called_once()
+        actions = d._try_relay_u2_batch.call_args[0][0]
+        assert actions == [{"op": "press_key", "key": "home"}]
+        mock_send.assert_not_called()
+
+    def test_nav_key_falls_through_to_ws_when_batch_reports_failure(self):
+        d = _make_device()
+        d._scrcpy_receiver = None
+        d._u2 = None
+        mock_send = MagicMock()
+        d._agent_send = mock_send
+        d._try_relay_u2_batch = MagicMock(return_value=False)
+
+        d.key("home")
+
+        d._try_relay_u2_batch.assert_called_once()
+        mock_send.assert_called_once()
+
+    def test_non_nav_key_uses_u2_batch_before_ws_agent(self):
+        d = _make_device()
+        d._scrcpy_receiver = None
+        d._u2 = None
+        mock_send = MagicMock()
+        d._agent_send = mock_send
+        d._a11y_mutate = MagicMock(return_value=False)
+        d._try_relay_u2_batch = MagicMock(return_value=True)
+
+        d.key("volume_up")
+
+        assert d._try_relay_u2_batch.call_args[0][0] == [
+            {"op": "press_key", "key": "volume_up"}
+        ]
+        mock_send.assert_not_called()
+
+    def test_key_route_hint_does_not_borrow_the_tap_route(self):
+        d = _make_device()
+        d._u2 = None
+        d._agent_send = MagicMock()
+        d._relay_batch_available = MagicMock(return_value=False)
+
+        assert d.key_route_hint() == "device_agent_ws"
+
+        d._relay_batch_available = MagicMock(return_value=True)
+        assert d.key_route_hint() == "agent_boot_u2_batch"
+
     def test_key_falls_back_to_agent_shell(self):
         d = _make_device()
         d._scrcpy_receiver = None

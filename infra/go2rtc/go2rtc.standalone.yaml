@@ -1,0 +1,49 @@
+# Template cho container `go2rtc` STANDALONE trên server (host networking).
+#
+# Dùng file này khi bạn GIỮ container go2rtc sẵn có thay vì để compose quản lý.
+# Với đường compose (`--profile go2rtc`, chế độ bridge) thì dùng go2rtc.yaml —
+# ở đó credentials được truyền qua `-config '{...}'` nên không nằm trong file.
+#
+# Container standalone không nhận được thủ thuật đó nếu không tạo lại, và go2rtc
+# 1.9.14 KHÔNG expand ${VAR} trong YAML, nên mật khẩu phải nằm thẳng trong file.
+# Vì vậy:
+#   - Thay PASTE_RTSP_PASS_HERE bằng RTSP_PASS trong deploy.env
+#   - KHÔNG commit file đã điền mật khẩu
+#   - chmod 444 sau khi chép lên server (xem lý do bên dưới)
+#
+# QUAN TRỌNG — vì sao phải chmod 444:
+# go2rtc ghi ngược `PUT /api/streams` vào chính file config này. Backend khai báo
+# một stream mỗi phiên, nên nếu file ghi được thì nó sẽ bị viết lại liên tục,
+# comment bị cắt cụt, và mỗi thiết bị từng stream đọng lại vĩnh viễn một entry
+# placeholder chết. Đây không phải giả thuyết: file trên server hiện đã hỏng
+# theo đúng kiểu đó (`- webrtc-...:8555streams:` dính vào nhau).
+# Để read-only thì PUT trả 400 nhưng stream vẫn được tạo trong bộ nhớ — đúng
+# thứ ta cần, và backend đã xử lý mã 400 đó.
+
+api:
+  # Host networking nghĩa là ":1984" nghe trên MỌI interface, kể cả IP public.
+  # Đổi sang 127.0.0.1 sẽ chặn luôn farm (farm chạy bridge), nên cách đúng là
+  # CHẶN 1984 Ở FIREWALL và để nguyên dòng này.
+  listen: ":1984"
+
+rtsp:
+  # Cổng ingest, mở ra internet. Không có mật khẩu thì bất kỳ ai cũng ANNOUNCE
+  # đè lên tên stream của một máy và người xem sẽ nhận video của họ.
+  listen: ":8554"
+  username: farm
+  password: PASTE_RTSP_PASS_HERE
+
+webrtc:
+  listen: ":8555"
+  candidates:
+    # webrtc-device-farm.tommadethis.app trỏ thẳng origin 194.127.193.184.
+    # KHÔNG dùng device-farm.tommadethis.app: tên đó bật proxy Cloudflare, phân
+    # giải về 104.21.x.x, và Cloudflare không forward 8555.
+    - webrtc-device-farm.tommadethis.app:8555
+    - stun:8555
+  ice_servers:
+    - urls: [stun:stun.l.google.com:19302]
+
+# Không có block `streams:`. go2rtc từ chối ANNOUNCE cho tên nó chưa biết, nên
+# backend khai báo từng stream trước khi bảo adapter publish. Một pull source
+# tĩnh ở đây sẽ trỏ vào chính host này chứ không phải máy khách.

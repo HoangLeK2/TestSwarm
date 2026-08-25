@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from api.routes.media_webrtc import (
+    _go2rtc_signaling_timeout,
     _go2rtc_stream_name,
     _redact_stream_source,
     build_media_webrtc_router,
@@ -287,6 +288,26 @@ def test_go2rtc_stream_name_matches_the_go_adapter_rules():
     assert _go2rtc_stream_name("a/b:c") == "device-a_b_c"
     assert _go2rtc_stream_name("") == "device-unknown"
     assert _go2rtc_stream_name("!!!") == "device-_"
+
+
+def test_go2rtc_signaling_timeout_defaults_to_whep_answer_budget(monkeypatch):
+    monkeypatch.delenv("DEVICE_FARM_GO2RTC_SIGNALING_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DEVICE_FARM_GO2RTC_CONNECT_TIMEOUT_SECONDS", raising=False)
+
+    timeout = _go2rtc_signaling_timeout()
+
+    assert timeout.read == 8.0
+    assert timeout.connect == 1.0
+
+
+def test_go2rtc_signaling_timeout_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("DEVICE_FARM_GO2RTC_SIGNALING_TIMEOUT_SECONDS", "6.5")
+    monkeypatch.setenv("DEVICE_FARM_GO2RTC_CONNECT_TIMEOUT_SECONDS", "0.75")
+
+    timeout = _go2rtc_signaling_timeout()
+
+    assert timeout.read == 6.5
+    assert timeout.connect == 0.75
 
 
 @pytest.mark.anyio

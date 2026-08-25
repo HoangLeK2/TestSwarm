@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -20,7 +21,8 @@ MEDIA_ADAPTER_CLIENT_LIMITS = httpx.Limits(
     max_keepalive_connections=128,
     keepalive_expiry=30.0,
 )
-GO2RTC_SIGNALING_TIMEOUT = httpx.Timeout(1.2, connect=0.25)
+GO2RTC_SIGNALING_TIMEOUT_SECONDS = 8.0
+GO2RTC_CONNECT_TIMEOUT_SECONDS = 1.0
 
 
 class WebRTCSessionCreate(BaseModel):
@@ -82,7 +84,7 @@ def build_media_webrtc_router(
         nonlocal go2rtc_client
         if go2rtc_client is None:
             go2rtc_client = httpx.AsyncClient(
-                timeout=GO2RTC_SIGNALING_TIMEOUT,
+                timeout=_go2rtc_signaling_timeout(),
                 limits=MEDIA_ADAPTER_CLIENT_LIMITS,
             )
         return go2rtc_client
@@ -382,6 +384,29 @@ def _adapter_error_detail(response: httpx.Response, fallback: str) -> str:
         if isinstance(detail, str) and detail.strip():
             return detail.strip()
     return fallback
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def _go2rtc_signaling_timeout() -> httpx.Timeout:
+    total = _positive_float_env(
+        "DEVICE_FARM_GO2RTC_SIGNALING_TIMEOUT_SECONDS",
+        GO2RTC_SIGNALING_TIMEOUT_SECONDS,
+    )
+    connect = _positive_float_env(
+        "DEVICE_FARM_GO2RTC_CONNECT_TIMEOUT_SECONDS",
+        GO2RTC_CONNECT_TIMEOUT_SECONDS,
+    )
+    return httpx.Timeout(total, connect=min(connect, total))
 
 
 _UNSAFE_STREAM_NAME = re.compile(r"[^A-Za-z0-9_.-]+")

@@ -45,7 +45,7 @@ ENV NEXT_PUBLIC_PRODUCT_API_URL=$NEXT_PUBLIC_PRODUCT_API_URL \
 RUN \
   if [ -f yarn.lock ]; then yarn exec next build --no-lint; \
   elif [ -f package-lock.json ]; then npx next build --no-lint; \
-  elif [ -f pnpm-lock.yaml ]; then npm i -g pnpm && pnpm install --no-frozen-lockfile && pnpm exec next build --no-lint; \
+  elif [ -f pnpm-lock.yaml ]; then npm i -g pnpm@8.6.10 && pnpm exec next build --no-lint; \
   else echo "Lockfile not found." && exit 1; \
   fi
 

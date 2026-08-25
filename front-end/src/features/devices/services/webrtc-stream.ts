@@ -12,7 +12,9 @@ const WEBRTC_ICE_GATHER_TIMEOUT_MS = Number.isFinite(configuredIceGatherTimeout)
 const WEBRTC_JITTER_BUFFER_TARGET_MS = Number(
   process.env.NEXT_PUBLIC_WEBRTC_JITTER_BUFFER_MS ?? 40
 );
+const WEBRTC_SESSION_RETRY_DELAYS_MS = [120, 240, 400, 700, 1000, 1500];
 const WEBRTC_ANSWER_RETRY_DELAYS_MS = [80, 160, 240, 360, 520];
+const WEBRTC_TRANSIENT_SESSION_STATUSES = new Set([409, 425, 502, 503, 504]);
 const WEBRTC_TRANSIENT_ANSWER_STATUSES = new Set([409, 425, 502, 503, 504]);
 const configuredSessionTtlSeconds = Number(
   process.env.NEXT_PUBLIC_WEBRTC_SESSION_TTL_SECONDS ?? 300
@@ -193,6 +195,35 @@ async function postWebRtcAnswerWithRetry(
   throw lastError;
 }
 
+async function postWebRtcSessionWithRetry(
+  payload: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<MediaSession> {
+  let lastError: unknown;
+  for (
+    let attempt = 0;
+    attempt <= WEBRTC_SESSION_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    try {
+      return await postJson<MediaSession>('/media/webrtc/sessions', payload);
+    } catch (error) {
+      lastError = error;
+      const status = httpStatus(error);
+      if (
+        attempt >= WEBRTC_SESSION_RETRY_DELAYS_MS.length ||
+        status === null ||
+        !WEBRTC_TRANSIENT_SESSION_STATUSES.has(status)
+      ) {
+        throw error;
+      }
+      await sleep(WEBRTC_SESSION_RETRY_DELAYS_MS[attempt], signal);
+    }
+  }
+  throw lastError;
+}
+
 async function waitForIceGatheringComplete(
   pc: RTCPeerConnection,
   timeoutMs = WEBRTC_ICE_GATHER_TIMEOUT_MS
@@ -237,10 +268,7 @@ export async function startWebRtcStream({
   if (maxFps !== undefined) payload.max_fps = maxFps;
   if (maxWidth !== undefined) payload.max_width = maxWidth;
   if (bitrate !== undefined) payload.bitrate = bitrate;
-  const session = await postJson<MediaSession>(
-    '/media/webrtc/sessions',
-    payload
-  );
+  const session = await postWebRtcSessionWithRetry(payload, signal);
   let sessionOpen = true;
   let heartbeatTimer: number | null = window.setInterval(() => {
     keepWebRtcSessionAlive(session.id, signal).catch(() => {});

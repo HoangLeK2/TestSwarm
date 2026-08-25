@@ -6,6 +6,12 @@ const configuredIceGatherTimeout = Number(
 const WEBRTC_ICE_GATHER_TIMEOUT_MS = Number.isFinite(configuredIceGatherTimeout)
   ? Math.max(0, configuredIceGatherTimeout)
   : 180;
+// Milliseconds of receiver-side smoothing. Interactive control is the priority
+// here, so this favours latency over hiding jitter; raise it if a lossy link
+// makes playback choppy.
+const WEBRTC_JITTER_BUFFER_TARGET_MS = Number(
+  process.env.NEXT_PUBLIC_WEBRTC_JITTER_BUFFER_MS ?? 40
+);
 const WEBRTC_ANSWER_RETRY_DELAYS_MS = [80, 160, 240, 360, 520];
 const WEBRTC_TRANSIENT_ANSWER_STATUSES = new Set([409, 425, 502, 503, 504]);
 const configuredSessionTtlSeconds = Number(
@@ -99,6 +105,33 @@ async function keepWebRtcSessionAlive(
   await postJson(`/media/webrtc/sessions/${sessionId}/heartbeat`, {
     ttl_seconds: WEBRTC_SESSION_TTL_SECONDS
   });
+}
+
+/**
+ * Shrink the receiver's jitter buffer.
+ *
+ * The default buffer is tuned for passive video, where a few hundred ms of
+ * smoothing costs nothing. Here the same buffer sits between a tap and the
+ * screen reacting to it, so it is felt directly. Both properties are recent
+ * and vendor-specific, hence the guarded assignment: where they are missing
+ * the browser keeps its adaptive default rather than breaking playback.
+ */
+function minimiseReceiverBuffering(receiver: RTCRtpReceiver | undefined): void {
+  if (!receiver) return;
+  const target = receiver as RTCRtpReceiver & {
+    jitterBufferTarget?: number | null;
+    playoutDelayHint?: number | null;
+  };
+  try {
+    if ('jitterBufferTarget' in target) {
+      target.jitterBufferTarget = WEBRTC_JITTER_BUFFER_TARGET_MS;
+    }
+    if ('playoutDelayHint' in target) {
+      target.playoutDelayHint = WEBRTC_JITTER_BUFFER_TARGET_MS / 1000;
+    }
+  } catch {
+    // Read-only in some engines; the adaptive default still works.
+  }
 }
 
 function httpStatus(error: unknown): number | null {
@@ -269,6 +302,7 @@ export async function startWebRtcStream({
     if (video.srcObject !== stream) {
       video.srcObject = stream;
     }
+    minimiseReceiverBuffering(event.receiver);
     video.play().catch(() => {});
     requestFirstVideoFrame();
   };

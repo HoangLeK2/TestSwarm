@@ -234,3 +234,50 @@ func TestWriteRemoteUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
 	}
 	state.closeRemote()
 }
+
+func TestNextTimestampUsesMicrosecondsOn90kHzClock(t *testing.T) {
+	// scrcpy PTS is in microseconds. Ticks are us*90/1000; the code once used
+	// us*90, stamping frames 1000x further apart than reality (100 seconds
+	// between frames at 10 fps, measured on a real device). Receivers pace
+	// playback from these values, so the stream could never be smooth.
+	lane := &serialLane{tick: 90000 / 15}
+
+	const frameUs = 66_667 // 15 fps
+	base := lane.nextTimestamp(1_000_000)
+	second := lane.nextTimestamp(1_000_000 + frameUs)
+	third := lane.nextTimestamp(1_000_000 + 2*frameUs)
+
+	if got := second - base; got != 6000 {
+		t.Fatalf("one frame at 15fps = %d ticks, want 6000 (%.3fs vs 0.067s)",
+			got, float64(got)/90000)
+	}
+	if got := third - base; got != 12000 {
+		t.Fatalf("two frames = %d ticks, want 12000", got)
+	}
+
+	// A second of wall clock must advance the clock by one second, with no
+	// drift from per-frame rounding.
+	lane2 := &serialLane{tick: 90000 / 15}
+	start := lane2.nextTimestamp(500_000)
+	var pts uint64 = 500_000
+	for i := 0; i < 15; i++ {
+		pts += frameUs
+		lane2.nextTimestamp(pts)
+	}
+	elapsed := lane2.nextTimestamp(pts) - start
+	if elapsed < 89_900 || elapsed > 90_100 {
+		t.Fatalf("15 frames advanced %d ticks, want ~90000 (one second)", elapsed)
+	}
+}
+
+func TestNextTimestampRebasesWhenDeviceClockRestarts(t *testing.T) {
+	// A restarted scrcpy session reuses the lane and its PTS starts over. The
+	// clock must keep moving forward instead of jumping backwards.
+	lane := &serialLane{tick: 90000 / 15}
+	lane.nextTimestamp(10_000_000)
+	before := lane.nextTimestamp(10_066_667)
+	after := lane.nextTimestamp(1_000) // device restarted
+	if after <= before {
+		t.Fatalf("timestamp went backwards after restart: %d -> %d", before, after)
+	}
+}

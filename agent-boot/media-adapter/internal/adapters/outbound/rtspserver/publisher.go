@@ -484,6 +484,8 @@ type serialLane struct {
 	pps        []byte
 	rtpTime    uint32
 	tick       uint32
+	basePTSUs  uint64
+	baseRTP    uint32
 	lastPTSUs  uint64
 	haveLastTS bool
 }
@@ -636,17 +638,30 @@ func (l *serialLane) setParams(sps []byte, pps []byte) error {
 	return nil
 }
 
+// nextTimestamp maps a scrcpy presentation timestamp onto the RTP 90 kHz clock.
+//
+// scrcpy reports PTS in MICROseconds, so a tick is µs * 90 / 1000 — not µs * 90.
+// The missing divisor stamped every frame 1000x further apart than it really
+// was: at 10 fps, consecutive frames were 100 seconds apart on the wire instead
+// of 0.1s. Receivers pace playback from these timestamps, so the stream could
+// not be smooth no matter how clean the network was, and the 32-bit clock
+// wrapped roughly every 48 seconds of real time.
+//
+// Derived from an absolute base rather than accumulated per frame: rounding
+// each delta independently loses up to one tick every frame, which drifts.
 func (l *serialLane) nextTimestamp(ptsUs uint64) uint32 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if ptsUs > 0 {
-		if l.haveLastTS && ptsUs > l.lastPTSUs {
-			l.rtpTime += uint32((ptsUs - l.lastPTSUs) * 90)
-		} else if !l.haveLastTS {
-			l.rtpTime += l.tick
+		// Rebase on the first frame, and again if the device clock goes
+		// backwards (a restarted scrcpy session reuses the lane).
+		if !l.haveLastTS || ptsUs < l.basePTSUs {
+			l.basePTSUs = ptsUs
+			l.baseRTP = l.rtpTime + l.tick
+			l.haveLastTS = true
 		}
+		l.rtpTime = l.baseRTP + uint32((ptsUs-l.basePTSUs)*90/1000)
 		l.lastPTSUs = ptsUs
-		l.haveLastTS = true
 		return l.rtpTime
 	}
 	l.rtpTime += l.tick

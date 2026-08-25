@@ -82,6 +82,13 @@ services:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
   go2rtc:
+    # Opt-in. The Singapore host already runs a standalone `go2rtc` container on
+    # host networking, and starting this one alongside it would collide on 8554
+    # and 8555. Left out of the default set so `up -d` deploys farm without
+    # touching that container; bring it up deliberately with:
+    #   docker compose --profile go2rtc up -d
+    # See docs/deploy-media-cloud.md for which of the two paths you are on.
+    profiles: ["go2rtc"]
     image: ${GO2RTC_IMAGE:-ghcr.io/alexxit/go2rtc:1.9.14}
     restart: unless-stopped
     ulimits:
@@ -124,8 +131,9 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
-      go2rtc:
-        condition: service_started
+    # No dependency on go2rtc: it may be the standalone container rather than a
+    # compose service, and farm does not need it at boot anyway — it is called
+    # per session and the failure is reported to that one viewer.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Bridge network (default): works on Docker Desktop Mac/Windows. Agent-boot on the

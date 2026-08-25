@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -155,8 +156,15 @@ def build_media_webrtc_router(
         except httpx.RequestError as exc:
             raise HTTPException(status_code=502, detail=f"go2rtc unavailable: {exc}") from exc
         if response.status_code >= 400:
+            # 500 is retryable here, not a hard failure. The stream is declared
+            # before the adapter is told to start publishing, so between those
+            # two moments it holds only the inert placeholder source; go2rtc
+            # tries to dial that, gets connection refused, and answers 500. A
+            # viewer whose offer lands in that window must retry, not give up —
+            # mapping it to 502 turned a normal startup race into a dead player.
+            retryable = response.status_code in {404, 408, 425, 500, 502, 503}
             raise HTTPException(
-                status_code=425 if response.status_code in {404, 408, 425} else 502,
+                status_code=425 if retryable else 502,
                 detail=f"go2rtc rejected WebRTC request: {response.status_code} {response.text.strip()}".strip(),
                 headers={"Retry-After": "0.20"},
             )
@@ -198,10 +206,50 @@ def build_media_webrtc_router(
             headers={"Retry-After": f"{max(1, retry_after_ms) / 1000:.2f}"},
         )
 
+    async def _go2rtc_ensure_stream(stream_name: str) -> None:
+        """Create the stream in go2rtc before the adapter publishes into it.
+
+        go2rtc will not accept an RTSP ANNOUNCE for a name it does not already
+        know: the publish is refused and the stream never appears, with nothing
+        in the log to say why. Something must declare the name first.
+
+        That job belongs here rather than in the adapter. The adapter sits on the
+        customer's machine, so letting it register would mean exposing go2rtc's
+        API to the internet; the backend reaches it over the compose network, so
+        :1984 stays private.
+        """
+        base = _go2rtc_base()
+        if not base:
+            return
+        client = _go2rtc_http()
+        try:
+            existing = await client.get(f"{base}/api/streams")
+            if existing.status_code < 400 and stream_name in (existing.json() or {}):
+                return
+        except (httpx.RequestError, ValueError):
+            pass  # fall through to the PUT; a duplicate declaration is harmless
+        try:
+            # go2rtc has no "declare an empty stream" call — every source it
+            # accepts is one it will dial. Point it at the discard port so the
+            # dial fails instantly and leaves an inert placeholder; the real
+            # video arrives as a second producer when the adapter publishes.
+            # go2rtc answers 400 because that probe failed, but the stream is
+            # created, which is the part we need.
+            await client.put(
+                f"{base}/api/streams",
+                params={"name": stream_name, "src": "rtsp://127.0.0.1:9/placeholder"},
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail=f"go2rtc unavailable: {exc}") from exc
+
     async def _create_session_grpc(payload: dict[str, Any]) -> dict[str, Any]:
         servicer = _media_adapter_servicer()
-        if servicer is None or not servicer.has_serial(str(payload.get("serial") or "")):
+        serial = str(payload.get("serial") or "")
+        if servicer is None or not servicer.has_serial(serial):
             raise HTTPException(status_code=503, detail="no media adapter control channel for serial")
+        # Must happen before the adapter is told to start: create_session is what
+        # makes it publish, and a publish into an unknown name is dropped.
+        await _go2rtc_ensure_stream(_go2rtc_stream_name(serial))
         data = _grpc_result_or_error(await servicer.create_session(payload))
         return _session_payload_from_grpc(data)
 
@@ -336,6 +384,38 @@ def _adapter_error_detail(response: httpx.Response, fallback: str) -> str:
     return fallback
 
 
+_UNSAFE_STREAM_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _go2rtc_stream_name(serial: str) -> str:
+    """Mirror of media-adapter's stream.StreamName (Go).
+
+    The backend has to declare the stream in go2rtc before the adapter publishes
+    into it, so both sides must derive the same name from a serial. Keep this in
+    lockstep with agent-boot/media-adapter/internal/domain/stream/packet.go: a
+    divergence means the backend declares one name, the adapter publishes to
+    another, and the publish is silently dropped.
+    """
+    safe = _UNSAFE_STREAM_NAME.sub("_", serial.strip())
+    return f"device-{safe or 'unknown'}"
+
+
+def _redact_stream_source(value: str) -> str:
+    """Strip userinfo from an RTSP URL before it reaches a browser.
+
+    Since media-adapter publishes into go2rtc instead of being pulled from, the
+    stream_source it reports is the ingest URL, and that URL carries the RTSP
+    credentials for the internet-facing :8554 port. This payload is returned by
+    the session API, so the raw value would hand every viewer the keys to
+    ANNOUNCE over any device's stream.
+    """
+    scheme, sep, rest = value.partition("://")
+    if not sep or "@" not in rest:
+        return value
+    _userinfo, _, host = rest.rpartition("@")
+    return f"{scheme}://{host}"
+
+
 def _session_payload_from_grpc(data: dict[str, Any], *, ok: bool = False) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if ok:
@@ -346,6 +426,8 @@ def _session_payload_from_grpc(data: dict[str, Any], *, ok: bool = False) -> dic
     for key in ("serial", "viewer_id", "stream_name", "stream_source"):
         value = data.get(key)
         if value is not None:
+            if key == "stream_source":
+                value = _redact_stream_source(str(value))
             payload[key] = value
     expires = int(data.get("expires_at_unix_ms") or 0)
     if expires > 0:

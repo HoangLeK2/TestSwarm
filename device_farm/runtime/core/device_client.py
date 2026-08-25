@@ -4182,19 +4182,34 @@ class DeviceClient:
             output = await relay.adb_shell(serial, "wm size", timeout=10.0)
             if not output:
                 return
+            # Prefer the override resolution. `wm size` prints both when the
+            # display size was changed from the panel default:
+            #
+            #   Physical size: 1440x2960
+            #   Override size: 1080x2220
+            #
+            # Touch injection and scrcpy capture both live in the override
+            # space, so taking the physical numbers scales every tap by
+            # 1440/1080 and pushes the right edge off-screen. Samsung ships
+            # Note 10+ on FHD+, so the two differ on normal hardware.
+            sizes: dict[str, str] = {}
             for line in output.strip().splitlines():
-                if line.strip().startswith("Physical size") and "x" in line:
-                    parts = line.split(":")[-1].strip().split("x")
-                    self.screen_width = int(parts[0])
-                    self.screen_height = int(parts[1])
-                    self._log(f"Screen resolution via relay: {self.screen_width}x{self.screen_height}")
-                    # Propagate to relay control if already created
-                    recv = self._scrcpy_receiver
-                    if recv is not None and recv.control is not None:
-                        recv.control.screen_width = self.screen_width
-                        recv.control.screen_height = self.screen_height
-                    self._publish_status()
-                    break
+                label, _, value = line.partition(":")
+                label = label.strip().lower()
+                if "x" in value and label in ("physical size", "override size"):
+                    sizes[label] = value.strip()
+            chosen = sizes.get("override size") or sizes.get("physical size")
+            if chosen:
+                parts = chosen.split("x")
+                self.screen_width = int(parts[0])
+                self.screen_height = int(parts[1])
+                self._log(f"Screen resolution via relay: {self.screen_width}x{self.screen_height}")
+                # Propagate to relay control if already created
+                recv = self._scrcpy_receiver
+                if recv is not None and recv.control is not None:
+                    recv.control.screen_width = self.screen_width
+                    recv.control.screen_height = self.screen_height
+                self._publish_status()
         except Exception as exc:
             self._log(f"relay wm size failed: {exc}", level=logging.DEBUG)
 

@@ -85,6 +85,7 @@ class MediaAdapterScrcpySession:
             max_width=self._max_width,
             bitrate=self._bitrate,
             video_codec=per_serial_env("SCRCPY_VIDEO_CODEC", self.serial, "h264"),
+            video_encoder=per_serial_env("SCRCPY_VIDEO_ENCODER", self.serial, ""),
             low_latency=self._low_latency,
         )
         self._running = True

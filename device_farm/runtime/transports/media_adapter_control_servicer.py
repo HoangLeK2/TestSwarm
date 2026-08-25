@@ -211,7 +211,7 @@ class MediaAdapterControlServicer:
         session = self._sessions.get(session_id)
         return dict(session) if session else None
 
-    async def create_session(self, payload: dict, timeout: float = 3.0) -> dict:
+    async def create_session(self, payload: dict, timeout: float = 8.0) -> dict:
         from .grpc_gen import relay_pb2
 
         serial = str(payload.get("serial") or "")

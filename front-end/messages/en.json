@@ -3036,9 +3036,9 @@
           "title": "Flow",
           "description": "Conditions, loops, waits — control execution flow"
         },
-        "facebook": {
-          "title": "Facebook",
-          "description": "Prebuilt steps for Facebook workflows"
+        "social": {
+          "title": "Social",
+          "description": "Prebuilt steps for social workflows"
         }
       },
       "items": {

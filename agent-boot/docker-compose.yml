@@ -10,7 +10,7 @@ x-agent-boot-image: &agent-boot-image
   build:
     context: .
     dockerfile: Dockerfile
-  image: agent-boot:0.1.4
+  image: agent-boot:0.2.4
 
 x-adb-host-env: &adb-host-env
   ADB_HOST: host.docker.internal
@@ -57,6 +57,11 @@ services:
     command: ["/app/bin/media-adapter"]
     environment:
       <<: [*adb-host-env, *media-env]
+      # scrcpy-server's own output is logged at Debug (launcher.go logAndWait),
+      # so at the default Info level the device's actual error is discarded and
+      # a failed start only shows as "handshake not ready ... EOF". Set this to
+      # `debug` when diagnosing a device that refuses to stream.
+      MEDIA_ADAPTER_LOG_LEVEL: "${MEDIA_ADAPTER_LOG_LEVEL:-info}"
       MEDIA_ADAPTER_HTTP_BIND: "${MEDIA_ADAPTER_HTTP_BIND:-0.0.0.0}"
       MEDIA_ADAPTER_HTTP_PORT: "${MEDIA_ADAPTER_HTTP_PORT:-8878}"
       MEDIA_ADAPTER_RTSP_ADDRESS: "${MEDIA_ADAPTER_RTSP_ADDRESS:-:8556}"
@@ -87,6 +92,19 @@ services:
       MEDIA_ADAPTER_OWNS_SCRCPY: "${MEDIA_ADAPTER_OWNS_SCRCPY:-1}"
       MEDIA_ADAPTER_SCRCPY_SERVER_PATH: "${MEDIA_ADAPTER_SCRCPY_SERVER_PATH:-/app/media-adapter/assets/scrcpy-server}"
       MEDIA_ADAPTER_SCRCPY_SERVER_VERSION: "${MEDIA_ADAPTER_SCRCPY_SERVER_VERSION:-4.1}"
+      # Bypass scrcpy 4.x's clamp of resolution/fps against the encoder's
+      # declared capabilities. Note 10+ enables it by model detection; this is
+      # the fleet-wide switch for another model showing the same failure.
+      MEDIA_ADAPTER_SCRCPY_IGNORE_ENCODER_CONSTRAINTS: "${MEDIA_ADAPTER_SCRCPY_IGNORE_ENCODER_CONSTRAINTS:-0}"
+      # Kill switch for the per-model reduced profile (Note 10+ etc). Set 0 to
+      # launch a listed device exactly like any other — the way to tell whether
+      # the special-casing is the cause rather than the cure.
+      MEDIA_ADAPTER_SCRCPY_DEVICE_SAFE_PROFILE: "${MEDIA_ADAPTER_SCRCPY_DEVICE_SAFE_PROFILE:-1}"
+      # Leave empty unless an encoder name was confirmed via list_encoders=true.
+      MEDIA_ADAPTER_SCRCPY_SAFE_VIDEO_ENCODER: "${MEDIA_ADAPTER_SCRCPY_SAFE_VIDEO_ENCODER:-}"
+      # 0 = không thu nhỏ (độ phân giải gốc). Xem safeProfileMaxSize.
+      MEDIA_ADAPTER_SCRCPY_SAFE_MAX_SIZE: "${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_SIZE:-0}"
+      MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS: "${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS:-0}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

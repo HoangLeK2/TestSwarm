@@ -75,11 +75,11 @@ for (const [type, action] of [
   });
 }
 
-test('exposes all actions in the Facebook insert group', () => {
-  const facebook = getInsertMenuForUi(translate).find(
-    (group) => group.groupKey === 'facebook'
+test('exposes all actions in the social insert group', () => {
+  const social = getInsertMenuForUi(translate).find(
+    (group) => group.groupKey === 'social'
   );
-  const types = new Set(facebook?.items.map((item) => item.type) ?? []);
+  const types = new Set(social?.items.map((item) => item.type) ?? []);
 
   assert.equal(types.has('content_interaction'), true);
   assert.equal(types.has('connection_request'), true);

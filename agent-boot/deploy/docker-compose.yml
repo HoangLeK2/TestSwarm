@@ -5,7 +5,7 @@ name: agent-boot
 
 services:
   agent-boot:
-    image: agent-boot:0.1.4
+    image: agent-boot:0.2.4
     container_name: agent-boot
     restart: unless-stopped
     env_file:
@@ -40,11 +40,17 @@ services:
     #   - ./assets:/app/assets:ro
 
   media-adapter:
-    image: agent-boot:0.1.4
+    image: agent-boot:0.2.4
     container_name: media-adapter
     restart: unless-stopped
     command: ["/app/bin/media-adapter"]
     environment:
+      # scrcpy-server's own output is logged at Debug, so at the default Info
+      # level a device that refuses to encode shows up only as "handshake not
+      # ready ... EOF" with no reason. Set MEDIA_ADAPTER_LOG_LEVEL=debug in
+      # .env, restart, and send the media-adapter logs when a phone will not
+      # stream. This service has no env_file, so the knob must be listed here.
+      MEDIA_ADAPTER_LOG_LEVEL: ${MEDIA_ADAPTER_LOG_LEVEL:-info}
       ADB_HOST: ${ADB_HOST:-host.docker.internal}
       ADB_PORT: ${ADB_PORT:-5037}
       ADB_SERVER_SOCKET: "tcp:${ADB_HOST:-host.docker.internal}:${ADB_PORT:-5037}"
@@ -87,6 +93,28 @@ services:
       MEDIA_ADAPTER_OWNS_SCRCPY: ${MEDIA_ADAPTER_OWNS_SCRCPY:-1}
       MEDIA_ADAPTER_SCRCPY_SERVER_PATH: ${MEDIA_ADAPTER_SCRCPY_SERVER_PATH:-/app/media-adapter/assets/scrcpy-server}
       MEDIA_ADAPTER_SCRCPY_SERVER_VERSION: ${MEDIA_ADAPTER_SCRCPY_SERVER_VERSION:-4.1}
+      # scrcpy 4.x clamps resolution/fps against what the encoder declares it
+      # supports. Samsung Exynos declares capabilities it will not honour, so
+      # that step is what kills the launch. Note 10+ already bypasses it by
+      # model detection; set this to 1 if another model shows the same silent
+      # failure to stream.
+      MEDIA_ADAPTER_SCRCPY_IGNORE_ENCODER_CONSTRAINTS: ${MEDIA_ADAPTER_SCRCPY_IGNORE_ENCODER_CONSTRAINTS:-0}
+      # Kill switch for the per-model reduced profile (Note 10+ etc). Set 0 to
+      # launch a listed device exactly like any other — the way to tell whether
+      # the special-casing is the cause rather than the cure.
+      MEDIA_ADAPTER_SCRCPY_DEVICE_SAFE_PROFILE: ${MEDIA_ADAPTER_SCRCPY_DEVICE_SAFE_PROFILE:-1}
+      # Leave empty. Only set this to an encoder name confirmed present on the
+      # device via `list_encoders=true` — pinning an unverified name is what
+      # hung Note 10+ (MediaCodec.createByCodecName never returned).
+      MEDIA_ADAPTER_SCRCPY_SAFE_VIDEO_ENCODER: ${MEDIA_ADAPTER_SCRCPY_SAFE_VIDEO_ENCODER:-}
+      # Máy trong danh sách safe profile encode ở độ phân giải gốc vì mọi max_size
+      # đều làm Exynos abort ("stack corruption detected") trong MediaCodec.
+      # Chỉ điền số ở đây khi đã xác nhận một cỡ chạy được trên máy thật.
+      MEDIA_ADAPTER_SCRCPY_SAFE_MAX_SIZE: ${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_SIZE:-0}
+      # 0 = không gửi max_fps cho máy trong danh sách. Cùng lý do với SAFE_MAX_SIZE:
+      # scrcpy dịch max_fps thành key vendor max-fps-to-encoder, và riêng nó cũng
+      # đủ làm encoder Exynos abort.
+      MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS: ${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS:-0}
     ports:
       - "127.0.0.1:${MEDIA_ADAPTER_HTTP_PORT:-8878}:8878/tcp"
       - "${MEDIA_ADAPTER_RTSP_PORT:-8556}:8556/tcp"

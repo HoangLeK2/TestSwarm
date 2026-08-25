@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +46,35 @@ func TestHandleStreamDecodesSerialPath(t *testing.T) {
 		t.Fatal("expected decoded serial to be stored in manager")
 	}
 	manager.Close()
+}
+
+func TestHandleStartPassesVideoEncoder(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	launcher := recordingLauncher{started: make(chan scrcpy.StartRequest, 1)}
+	manager := scrcpy.NewManagerWithLauncher(fakePublisher{}, launcher, logger)
+	server := NewServer("127.0.0.1:0", manager, logger)
+	defer manager.Close()
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/scrcpy/streams/SERIAL-1/start",
+		strings.NewReader(`{"host":"127.0.0.1","port":27183,"control":true,"owns_scrcpy":true,"video_codec":"h264","video_encoder":"c2.android.avc.encoder"}`),
+	)
+	res := httptest.NewRecorder()
+
+	server.routes().ServeHTTP(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	select {
+	case got := <-launcher.started:
+		if got.VideoEncoder != "c2.android.avc.encoder" {
+			t.Fatalf("video encoder=%q", got.VideoEncoder)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for launcher start")
+	}
 }
 
 func TestWebRTCSessionStartsOwnedScrcpyAndProxiesGo2RTC(t *testing.T) {
@@ -243,6 +275,75 @@ func createWebRTCSessionForTest(t *testing.T, server *Server, serial string, vie
 
 type fakeLauncher struct{}
 
-func (fakeLauncher) Start(context.Context, scrcpy.StartRequest) (*scrcpy.LaunchedServer, error) {
-	return &scrcpy.LaunchedServer{Serial: "SERIAL-1", Host: "127.0.0.1", Port: 27183}, nil
+func (fakeLauncher) Start(ctx context.Context, req scrcpy.StartRequest) (*scrcpy.LaunchedServer, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+	go serveFakeScrcpy(ctx, ln, req.Control)
+	_, portText, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
+	return &scrcpy.LaunchedServer{Serial: req.Serial, Host: "127.0.0.1", Port: port}, nil
+}
+
+type recordingLauncher struct {
+	started chan scrcpy.StartRequest
+}
+
+func (l recordingLauncher) Start(ctx context.Context, req scrcpy.StartRequest) (*scrcpy.LaunchedServer, error) {
+	l.started <- req
+	return fakeLauncher{}.Start(ctx, req)
+}
+
+func serveFakeScrcpy(ctx context.Context, ln net.Listener, control bool) {
+	connCount := 1
+	if control {
+		connCount = 2
+	}
+	for i := 0; i < connCount; i++ {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		if i == 0 {
+			go serveFakeScrcpyVideo(conn)
+			continue
+		}
+		go func() {
+			defer conn.Close()
+			_, _ = io.Copy(io.Discard, conn)
+		}()
+	}
+	<-ctx.Done()
+	_ = ln.Close()
+}
+
+func serveFakeScrcpyVideo(conn net.Conn) {
+	defer conn.Close()
+	handshake := make([]byte, 1+64+4+12)
+	copy(handshake[1+64:], []byte("h264"))
+	binary.BigEndian.PutUint32(handshake[1+64+4:1+64+8], 0x80000000)
+	binary.BigEndian.PutUint32(handshake[1+64+8:1+64+12], 320)
+	binary.BigEndian.PutUint32(handshake[1+64+12:1+64+16], 640)
+	if _, err := conn.Write(handshake); err != nil {
+		return
+	}
+	payload := []byte{0x00, 0x00, 0x00, 0x01, 0x65}
+	header := make([]byte, 12)
+	binary.BigEndian.PutUint64(header[0:8], 0x2000000000000000)
+	binary.BigEndian.PutUint32(header[8:12], uint32(len(payload)))
+	_, _ = conn.Write(append(header, payload...))
+	time.Sleep(25 * time.Millisecond)
 }

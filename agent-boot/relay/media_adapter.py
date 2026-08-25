@@ -62,6 +62,7 @@ def start_direct_scrcpy_stream(
     max_width: int | None = None,
     bitrate: int | None = None,
     video_codec: str | None = None,
+    video_encoder: str | None = None,
     low_latency: bool = False,
 ) -> dict:
     if owns_scrcpy is None:
@@ -81,6 +82,8 @@ def start_direct_scrcpy_stream(
         payload["bitrate"] = bitrate
     if video_codec:
         payload["video_codec"] = video_codec
+    if video_encoder:
+        payload["video_encoder"] = video_encoder
     return _json_request(
         "POST",
         f"/v1/scrcpy/streams/{urllib.parse.quote(serial, safe='')}/start",

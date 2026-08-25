@@ -1207,7 +1207,9 @@ emit hardware_serial "$(gp ro.boot.serialno)"
 emit ro_serialno "$(gp ro.serialno)"
 emit build_fingerprint "$(gp ro.build.fingerprint)"
 emit boot_id "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
-wm_size="$(wm size 2>/dev/null | sed -n 's/.*Physical size: //p' | head -n1)"
+wm_out="$(wm size 2>/dev/null)"
+wm_size="$(echo "$wm_out" | sed -n 's/.*Override size: //p' | head -n1)"
+if [ -z "$wm_size" ]; then wm_size="$(echo "$wm_out" | sed -n 's/.*Physical size: //p' | head -n1)"; fi
 emit wm_size "$wm_size"
 mem_kb="$(awk '/MemTotal/ {print $2; exit}' /proc/meminfo 2>/dev/null)"
 emit mem_kb "$mem_kb"
@@ -1224,6 +1226,17 @@ if pm path jp.co.cyberagent.stf >/dev/null 2>&1; then emit stf 1; else emit stf 
     out, _ = _adb_shell(serial, script, timeout=10)
     values = _parse_probe_kv(out)
 
+    # wm_size is the *override* resolution when the user changed display size,
+    # not the panel's physical one. `wm size` prints both:
+    #
+    #   Physical size: 1440x2960
+    #   Override size: 1080x2220
+    #
+    # Touch injection and scrcpy capture both work in the override space, so
+    # reporting the physical numbers scales every tap by 1440/1080 and puts the
+    # right-hand side of the screen out of bounds. Samsung ships Note 10+ on
+    # FHD+ by default, so this is the normal case on those devices, not an edge
+    # one — and the offset is invisible until someone taps near an edge.
     screen_width = 0
     screen_height = 0
     wm_size = values.get("wm_size", "")

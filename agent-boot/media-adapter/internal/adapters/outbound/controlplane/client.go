@@ -56,6 +56,15 @@ type mediaSession struct {
 	Expires  time.Time
 }
 
+const webRTCFirstFrameWait = 4 * time.Second
+
+var viewerAttachKeyframeDelays = []time.Duration{
+	300 * time.Millisecond,
+	800 * time.Millisecond,
+	1600 * time.Millisecond,
+	3000 * time.Millisecond,
+}
+
 func ConfigFromEnv() Config {
 	server := envDefault("MEDIA_ADAPTER_CONTROL_GRPC_SERVER", envDefault("RELAY_SERVER", "host.docker.internal:50051"))
 	return Config{
@@ -289,11 +298,48 @@ func (c *Client) startSession(ctx context.Context, cmd *relaypb.MediaAdapterStar
 		MaxWidth:   int(cmd.GetMaxWidth()),
 		Bitrate:    int(cmd.GetBitrate()),
 		VideoCodec: "h264",
-		LowLatency: true,
+		LowLatency: scrcpy.LowLatencyEnabled(),
 	})
 	if err != nil {
 		return c.result(cmd.GetRequestId(), false, err.Error(), 250, mediaSession{}, "", "")
 	}
+	status, ready := c.manager.WaitForFirstFrame(ctx, cmd.GetSerial(), webRTCFirstFrameWait)
+	if !ready {
+		if c.logger != nil {
+			c.logger.Warn("media adapter stream has no first frame",
+				"serial", cmd.GetSerial(),
+				"connected", status.Connected,
+				"frames", status.Frames,
+				"publish_errors", status.PublishErrs,
+				"error", status.LastError)
+		}
+		// Keep the scrcpy session alive. Returning 425 tells the backend/browser
+		// to retry, while the manager continues its encoder fallback loop. If we
+		// stop here, every retry restarts the fragile device from zero and the
+		// fallback ladder never has time to produce a first frame.
+		return c.result(cmd.GetRequestId(), false, "media adapter stream has no frames", 1000, mediaSession{Serial: cmd.GetSerial(), ViewerID: cmd.GetViewerId()}, "", "")
+	}
+	// A viewer is opening this device, so force fresh IDRs around attachment.
+	//
+	// scrcpy only encodes when the screen changes, so an idle phone simply
+	// stops producing frames — a 2.83s stretch with no frames at all was
+	// measured on a live stream. When Manager.Start reuses an already-running
+	// session (the common case: the device was already publishing at the 1fps
+	// visible profile) nothing else emits a keyframe, and the viewer stares at
+	// an empty player until something happens to move on the phone.
+	//
+	// Nothing else covers this. The OnPlay hook that used to request keyframes
+	// only fires when a client PLAYs from the adapter's own RTSP server, and in
+	// the push topology go2rtc is pushed to rather than played from. The
+	// backend does not reach the device either: with
+	// MEDIA_WEBRTC_SIGNALING_PLANE=backend it talks straight to go2rtc, so the
+	// adapter's answerSession never runs and this start command is the only
+	// point where a viewer's arrival is visible on this side of the NAT. A
+	// single request here is still too early: the browser only attaches after
+	// this command returns and the backend finishes the go2rtc answer. Keep the
+	// burst short and session-scoped so it fixes first paint without becoming a
+	// steady-state IDR loop.
+
 	if err := c.webrtc.RegisterStream(ctx, cmd.GetSerial()); err != nil {
 		c.logger.Warn("go2rtc stream register failed", "serial", cmd.GetSerial(), "error", err)
 	}
@@ -308,8 +354,45 @@ func (c *Client) startSession(ctx context.Context, cmd *relaypb.MediaAdapterStar
 	c.sessions[session.ID] = session
 	c.streamRefs[session.Serial]++
 	c.mu.Unlock()
-	_ = status
+	c.requestKeyframe(session.Serial)
+	c.requestKeyframeBurst(session)
 	return c.result(cmd.GetRequestId(), true, "", 0, session, "", "")
+}
+
+// requestKeyframe asks the device for an immediate IDR so a newly attached
+// viewer has something to decode without waiting for the screen to change.
+//
+// Best effort: it fails when scrcpy has not finished connecting, which is fine
+// — the first frames of a fresh session are a keyframe anyway. The value is on
+// re-attach to a device that has been sitting idle.
+func (c *Client) requestKeyframe(serial string) {
+	if c.manager == nil || serial == "" {
+		return
+	}
+	if !c.manager.RequestKeyframe(serial) && c.logger != nil {
+		c.logger.Debug("keyframe request skipped", "serial", serial)
+	}
+}
+
+func (c *Client) requestKeyframeBurst(session mediaSession) {
+	if session.ID == "" || session.Serial == "" {
+		return
+	}
+	for _, delay := range viewerAttachKeyframeDelays {
+		delay := delay
+		time.AfterFunc(delay, func() {
+			if c.sessionActive(session.ID, session.Serial) {
+				c.requestKeyframe(session.Serial)
+			}
+		})
+	}
+}
+
+func (c *Client) sessionActive(sessionID string, serial string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	session, ok := c.sessions[sessionID]
+	return ok && session.Serial == serial
 }
 
 func (c *Client) answerSession(ctx context.Context, cmd *relaypb.MediaAdapterAnswerSessionCmd) *relaypb.MediaAdapterMsg {
@@ -319,6 +402,18 @@ func (c *Client) answerSession(ctx context.Context, cmd *relaypb.MediaAdapterAns
 	if !ok {
 		return c.result(cmd.GetRequestId(), false, "WebRTC session not found", 250, mediaSession{}, "", "")
 	}
+	// A viewer is attaching right now, so force a fresh IDR.
+	//
+	// scrcpy only encodes when the screen changes. On an idle device the stream
+	// simply stops — gaps of several seconds are normal — so a new viewer sees
+	// nothing until something moves on the phone, however healthy the pipeline
+	// is. Measured on a live stream: a 2.83s stretch with no frames at all.
+	//
+	// The RTSP-push topology removes the usual trigger: go2rtc is pushed to, it
+	// never PLAYs from the adapter, so the OnPlay hook that used to request a
+	// keyframe never fires for real viewers. This is now the only thing asking.
+	c.requestKeyframe(session.Serial)
+
 	answer, err := c.webrtc.Answer(ctx, session.Serial, go2rtc.SessionDescription{
 		Type: cmd.GetSdpType(),
 		SDP:  cmd.GetSdp(),

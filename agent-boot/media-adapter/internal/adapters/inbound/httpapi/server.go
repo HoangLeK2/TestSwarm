@@ -32,6 +32,8 @@ type Server struct {
 	stopGrace  time.Duration
 }
 
+const webRTCFirstFrameWait = 4 * time.Second
+
 type webrtcSession struct {
 	ID       string
 	Serial   string
@@ -160,15 +162,16 @@ func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, serial string) {
 	var body struct {
-		Host       string `json:"host"`
-		Port       int    `json:"port"`
-		Control    *bool  `json:"control"`
-		OwnsScrcpy bool   `json:"owns_scrcpy"`
-		MaxFPS     int    `json:"max_fps"`
-		MaxWidth   int    `json:"max_width"`
-		Bitrate    int    `json:"bitrate"`
-		VideoCodec string `json:"video_codec"`
-		LowLatency bool   `json:"low_latency"`
+		Host         string `json:"host"`
+		Port         int    `json:"port"`
+		Control      *bool  `json:"control"`
+		OwnsScrcpy   bool   `json:"owns_scrcpy"`
+		MaxFPS       int    `json:"max_fps"`
+		MaxWidth     int    `json:"max_width"`
+		Bitrate      int    `json:"bitrate"`
+		VideoCodec   string `json:"video_codec"`
+		VideoEncoder string `json:"video_encoder"`
+		LowLatency   bool   `json:"low_latency"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
@@ -179,16 +182,17 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, serial stri
 		control = *body.Control
 	}
 	status, err := s.manager.Start(scrcpy.StartRequest{
-		Serial:     serial,
-		Host:       body.Host,
-		Port:       body.Port,
-		Control:    control,
-		OwnsScrcpy: body.OwnsScrcpy,
-		MaxFPS:     body.MaxFPS,
-		MaxWidth:   body.MaxWidth,
-		Bitrate:    body.Bitrate,
-		VideoCodec: body.VideoCodec,
-		LowLatency: body.LowLatency,
+		Serial:       serial,
+		Host:         body.Host,
+		Port:         body.Port,
+		Control:      control,
+		OwnsScrcpy:   body.OwnsScrcpy,
+		MaxFPS:       body.MaxFPS,
+		MaxWidth:     body.MaxWidth,
+		Bitrate:      body.Bitrate,
+		VideoCodec:   body.VideoCodec,
+		VideoEncoder: body.VideoEncoder,
+		LowLatency:   body.LowLatency,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -243,10 +247,28 @@ func (s *Server) handleWebRTCSessions(w http.ResponseWriter, r *http.Request) {
 		MaxWidth:   maxWidth,
 		Bitrate:    bitrate,
 		VideoCodec: "h264",
-		LowLatency: true,
+		LowLatency: scrcpy.LowLatencyEnabled(),
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	status, ready := s.manager.WaitForFirstFrame(r.Context(), serial, webRTCFirstFrameWait)
+	if !ready {
+		if s.logger != nil {
+			s.logger.Warn("media adapter stream has no first frame",
+				"serial", serial,
+				"connected", status.Connected,
+				"frames", status.Frames,
+				"publish_errors", status.PublishErrs,
+				"error", status.LastError)
+		}
+		// Do not stop here. On slower or fragile encoders (notably Note 10+
+		// Exynos), the internal session may still be climbing the codec/retry
+		// ladder. Stopping on every viewer retry cold-starts scrcpy again and
+		// keeps the device permanently at frames=0.
+		w.Header().Set("Retry-After", "1.00")
+		writeError(w, http.StatusTooEarly, "media adapter stream has no frames")
 		return
 	}
 	expires := now.Add(time.Duration(body.TTLSeconds) * time.Second)

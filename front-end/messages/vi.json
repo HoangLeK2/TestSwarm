@@ -3038,9 +3038,9 @@
           "title": "Luồng",
           "description": "Điều kiện, lặp, chờ — kiểm soát luồng chạy"
         },
-        "facebook": {
-          "title": "Facebook chuyên biệt",
-          "description": "Các bước được làm sẵn cho thao tác trên Facebook"
+        "social": {
+          "title": "Mạng xã hội",
+          "description": "Các bước được làm sẵn cho thao tác mạng xã hội"
         }
       },
       "items": {

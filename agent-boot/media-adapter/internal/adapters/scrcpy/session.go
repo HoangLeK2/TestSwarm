@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,7 +38,24 @@ type StartRequest struct {
 	MaxWidth   int
 	Bitrate    int
 	VideoCodec string
-	LowLatency bool
+	// Optional MediaCodec encoder name passed to scrcpy-server as
+	// video_encoder=<name>. Empty lets scrcpy choose the device default.
+	VideoEncoder string
+	// Skip scrcpy 4.x's own size/fps clamping against the encoder's declared
+	// MediaCodecInfo.VideoCapabilities. See ignoreEncoderConstraints.
+	IgnoreEncoderConstraints bool
+	// Omit max_size entirely so the device encodes at its native resolution.
+	// Distinct from MaxWidth == 0, which normalize() fills with a default.
+	// See safeProfileMaxSize.
+	SkipMaxSize bool
+	// Omit max_fps too. scrcpy turns it into the vendor MediaFormat key
+	// max-fps-to-encoder, which aborts the same encoders that max_size does.
+	SkipMaxFPS bool
+	LowLatency  bool
+	// Rung of the codec-option fallback ladder to launch with. Callers leave
+	// this at 0; the session raises it when a device keeps refusing to start,
+	// and the manager remembers what finally worked. See codecOptionsForLevel.
+	CodecLevel int
 }
 
 type Status struct {
@@ -67,6 +85,15 @@ type Manager struct {
 	logger    *slog.Logger
 	mu        sync.Mutex
 	sessions  map[string]*Session
+	// Cold scrcpy starts are ADB-heavy: push/check jar, kill old app_process,
+	// create adb forward, then wait for the localabstract socket. A broken
+	// device can retry this loop forever, so gate only the launch+handshake
+	// phase and let established streams run outside the limiter.
+	launchLimiter chan struct{}
+	// Codec-option rung that last produced a stream, per serial. Climbing the
+	// ladder costs one scrcpy cold start per rung (~4s each), so a device that
+	// needs level 2 would pay that on every session without this.
+	codecLevels map[string]int
 }
 
 func NewManager(publisher Publisher, logger *slog.Logger) *Manager {
@@ -78,10 +105,32 @@ func NewManagerWithLauncher(publisher Publisher, launcher Launcher, logger *slog
 		adbLauncher.logger = logger
 	}
 	return &Manager{
-		publisher: publisher,
-		launcher:  launcher,
-		logger:    logger,
-		sessions:  make(map[string]*Session),
+		publisher:     publisher,
+		launcher:      launcher,
+		logger:        logger,
+		sessions:      make(map[string]*Session),
+		launchLimiter: newLaunchLimiterFromEnv(),
+		codecLevels:   make(map[string]int),
+	}
+}
+
+func (m *Manager) knownCodecLevel(serial string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.codecLevels[serial]
+}
+
+func (m *Manager) recordCodecLevel(serial string, level int) {
+	m.mu.Lock()
+	if m.codecLevels == nil {
+		m.codecLevels = make(map[string]int)
+	}
+	previous, seen := m.codecLevels[serial]
+	m.codecLevels[serial] = level
+	m.mu.Unlock()
+	if m.logger != nil && (!seen || previous != level) && level > 0 {
+		m.logger.Info("scrcpy codec level remembered for device",
+			"serial", serial, "codec_level", level)
 	}
 }
 
@@ -102,10 +151,38 @@ func (m *Manager) Start(req StartRequest) (Status, error) {
 	if current != nil && current.matches(req) {
 		return current.Status(), nil
 	}
+	// A live stream outranks a parameter change.
+	//
+	// Two callers ask for the same device with different numbers: the relay
+	// picks fps/size/bitrate from the device's idle/visible/focused state, and
+	// each WebRTC viewer asks for its own profile. Treating any difference as
+	// "restart" meant every disagreement tore down a working stream and paid a
+	// scrcpy cold start — longer than the 4s a viewer waits for its first
+	// frame, so the viewer got 425, retried, and flipped the parameters back.
+	// Measured on a live farm: 339 session requests in three minutes produced
+	// 10 answers and zero attached viewers, while the streams themselves were
+	// publishing fine the whole time.
+	//
+	// So only cosmetic differences are absorbed. Anything that changes what the
+	// session *is* — a different endpoint, control socket, or codec — still
+	// rebuilds it, because those cannot be papered over.
+	if current != nil && current.isHealthy() && onlyEncodingProfileDiffers(current.request(), req) {
+		if m.logger != nil {
+			m.logger.Debug("scrcpy keeping live stream despite profile change",
+				"serial", req.Serial)
+		}
+		return current.Status(), nil
+	}
 	if current != nil {
 		current.Stop()
 	}
+	// Start straight at the rung this device is known to accept. Read the map
+	// inline rather than via knownCodecLevel: m.mu is already held here and it
+	// is not reentrant.
+	req.CodecLevel = m.codecLevels[req.Serial]
 	session := NewSession(req, m.publisher, m.launcher, m.logger)
+	session.onCodecLevel = m.recordCodecLevel
+	session.launchLimiter = m.launchLimiter
 	m.sessions[req.Serial] = session
 	session.Start()
 	return session.Status(), nil
@@ -131,6 +208,41 @@ func (m *Manager) Status(serial string) (Status, bool) {
 		return Status{}, false
 	}
 	return session.Status(), true
+}
+
+// WaitForFirstFrame waits until the stream has delivered at least one packet
+// through the publisher. Connected alone only proves the local scrcpy socket
+// handshook; WebRTC viewers need actual H264/config data to exist downstream.
+func (m *Manager) WaitForFirstFrame(ctx context.Context, serial string, timeout time.Duration) (Status, bool) {
+	if timeout <= 0 {
+		status, ok := m.Status(serial)
+		return status, ok && streamHasPublishedFrame(status)
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var status Status
+	for {
+		current, ok := m.Status(serial)
+		if ok {
+			status = current
+			if streamHasPublishedFrame(current) {
+				return current, true
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return status, false
+		case <-deadline.C:
+			return status, false
+		case <-ticker.C:
+		}
+	}
+}
+
+func streamHasPublishedFrame(status Status) bool {
+	return status.Connected && status.Frames > 0
 }
 
 func (m *Manager) Statuses() []Status {
@@ -183,7 +295,31 @@ type Session struct {
 	status    Status
 	ctrlConn  net.Conn
 	launched  *LaunchedServer
+	// Log tail of the last launch, kept so a failure can still report why.
+	lastOutput []string
+
+	// Fallback-ladder state. Without this, run() retried the identical launch
+	// forever: a device whose encoder rejects a codec option never started and
+	// never stopped trying, burning ADB and CPU indefinitely.
+	codecLevel    int
+	levelFailures int
+	onCodecLevel  func(serial string, level int)
+	launchLimiter chan struct{}
 }
+
+// codecFailuresPerLevel is how many consecutive failures at one rung before
+// dropping to the next. Two rather than one so a transient hiccup — device
+// busy, ADB blip — does not immediately give up encoder settings that the
+// device actually supports.
+const codecFailuresPerLevel = 2
+
+const (
+	normalReconnectBackoffMax       = 2 * time.Second
+	safeProfileHandshakeBackoffMin  = 10 * time.Second
+	safeProfileHandshakeBackoffMax  = 30 * time.Second
+	scrcpyHandshakeNotReadyFragment = "scrcpy handshake not ready"
+	defaultScrcpyLaunchConcurrency  = 2
+)
 
 func (r *StartRequest) normalize() {
 	if r.VideoCodec == "" {
@@ -204,13 +340,14 @@ func NewSession(req StartRequest, publisher Publisher, launcher Launcher, logger
 	ctx, cancel := context.WithCancel(context.Background())
 	req.normalize()
 	return &Session{
-		req:       req,
-		publisher: publisher,
-		launcher:  launcher,
-		logger:    logger,
-		ctx:       ctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
+		req:        req,
+		publisher:  publisher,
+		launcher:   launcher,
+		logger:     logger,
+		ctx:        ctx,
+		cancel:     cancel,
+		codecLevel: req.CodecLevel,
+		done:       make(chan struct{}),
 		status: Status{
 			Serial:     req.Serial,
 			Host:       req.Host,
@@ -234,6 +371,33 @@ func (s *Session) Stop() {
 	})
 }
 
+// isHealthy reports whether the session is connected and has actually
+// delivered a frame — the same bar WaitForFirstFrame holds a viewer to.
+func (s *Session) isHealthy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return streamHasPublishedFrame(s.status)
+}
+
+// request returns a copy of the request this session was built from.
+func (s *Session) request() StartRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.req
+}
+
+// onlyEncodingProfileDiffers reports whether two requests differ solely in
+// picture quality knobs — the ones scrcpy fixes at launch and that cost a cold
+// start to change. Identity of the session (endpoint, sockets, codec, encoder)
+// must be identical; those genuinely need a rebuild.
+func onlyEncodingProfileDiffers(before StartRequest, after StartRequest) bool {
+	before.MaxFPS, after.MaxFPS = 0, 0
+	before.MaxWidth, after.MaxWidth = 0, 0
+	before.Bitrate, after.Bitrate = 0, 0
+	before.CodecLevel, after.CodecLevel = 0, 0
+	return before == after
+}
+
 func (s *Session) matches(req StartRequest) bool {
 	return s.req.Serial == req.Serial &&
 		s.req.Host == req.Host &&
@@ -244,6 +408,8 @@ func (s *Session) matches(req StartRequest) bool {
 		s.req.MaxWidth == req.MaxWidth &&
 		s.req.Bitrate == req.Bitrate &&
 		s.req.VideoCodec == req.VideoCodec &&
+		s.req.VideoEncoder == req.VideoEncoder &&
+		s.req.IgnoreEncoderConstraints == req.IgnoreEncoderConstraints &&
 		s.req.LowLatency == req.LowLatency
 }
 
@@ -257,38 +423,203 @@ func (s *Session) run() {
 	defer close(s.done)
 	backoff := 150 * time.Millisecond
 	for s.ctx.Err() == nil {
-		if err := s.connectAndRead(); err != nil && s.ctx.Err() == nil {
+		err := s.connectAndRead()
+		if err != nil && s.ctx.Err() == nil {
 			s.setError(err)
+			output := s.recentLaunchOutput()
 			if s.logger != nil {
-				s.logger.Warn("scrcpy direct session failed", "serial", s.req.Serial, "error", err)
+				// The device's own explanation lives in the scrcpy-server log,
+				// which is otherwise Debug-only and therefore invisible at the
+				// default level. Surface it here, where it is actually needed.
+				s.logger.Warn("scrcpy direct session failed",
+					"serial", s.req.Serial,
+					"codec_level", s.codecLevel,
+					"error", err,
+					"scrcpy_output", strings.Join(output, " | "))
 			}
+			s.invalidateServerCache()
+			if encoderAbortedNatively(output) {
+				s.skipToLastCodecLevel()
+			} else {
+				s.degradeCodecLevel()
+			}
+		} else if err == nil {
+			s.rememberCodecLevel()
 		}
 		s.markDisconnected()
 		if s.ctx.Err() != nil {
 			break
 		}
-		time.Sleep(backoff)
+		sleepCtx(s.ctx, s.reconnectSleep(backoff, err))
 		backoff *= 2
-		if backoff > 2*time.Second {
-			backoff = 2 * time.Second
+		if cap := s.reconnectBackoffCap(err); backoff > cap {
+			backoff = cap
 		}
 		s.bumpReconnect()
 	}
 	s.setRunning(false)
 }
 
+// serverInvalidator is implemented by launchers that cache "this device already
+// has the scrcpy jar". Optional so test doubles need not care.
+type serverInvalidator interface {
+	InvalidateServer(serial string)
+}
+
+// invalidateServerCache makes the next attempt re-check the jar on the device.
+// A missing jar fails exactly like an unsupported codec option — silently — so
+// the retry has to rule it out rather than assume the cache is still true.
+func (s *Session) invalidateServerCache() {
+	if inv, ok := s.launcher.(serverInvalidator); ok && inv != nil {
+		inv.InvalidateServer(s.req.Serial)
+	}
+}
+
+func (s *Session) currentCodecLevel() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.codecLevel
+}
+
+// recentLaunchOutput returns what scrcpy-server last printed on the device,
+// falling back to the tail kept by clearLaunched once the launch is gone.
+func (s *Session) recentLaunchOutput() []string {
+	s.mu.Lock()
+	launched := s.launched
+	last := s.lastOutput
+	s.mu.Unlock()
+	if live := launched.RecentOutput(); len(live) > 0 {
+		return live
+	}
+	return last
+}
+
+// encoderAbortedNatively reports whether scrcpy-server died inside the vendor
+// encoder rather than returning an error.
+//
+// libc's stack protector prints this and aborts the process, so there is no
+// Java exception, nothing in logcat, and no chance the next rung down helps:
+// the crash happens for every codec option combination. Walking the ladder one
+// step at a time costs two failed launches per rung — around 80 seconds of a
+// device visibly not working — to reach a conclusion this line already gives.
+func encoderAbortedNatively(output []string) bool {
+	for _, line := range output {
+		if strings.Contains(line, "stack corruption detected") {
+			return true
+		}
+	}
+	return false
+}
+
+// skipToLastCodecLevel jumps straight to the final rung, which is also the one
+// that stops asking the device to scale. See nativeResolutionLevel.
+func (s *Session) skipToLastCodecLevel() {
+	s.mu.Lock()
+	if s.codecLevel >= MaxCodecLevel {
+		s.mu.Unlock()
+		return
+	}
+	s.codecLevel = MaxCodecLevel
+	s.levelFailures = 0
+	serial := s.req.Serial
+	s.mu.Unlock()
+	if s.logger != nil {
+		s.logger.Warn("scrcpy encoder aborted natively, skipping to native resolution",
+			"serial", serial, "codec_level", MaxCodecLevel)
+	}
+}
+
+// degradeCodecLevel drops to the next rung once a level has failed enough times
+// in a row, so a device that rejects an encoder option eventually starts with
+// fewer options instead of retrying the same doomed launch forever.
+func (s *Session) degradeCodecLevel() {
+	s.mu.Lock()
+	s.levelFailures++
+	if s.levelFailures < codecFailuresPerLevel || s.codecLevel >= MaxCodecLevel {
+		s.mu.Unlock()
+		return
+	}
+	s.codecLevel++
+	s.levelFailures = 0
+	level := s.codecLevel
+	serial := s.req.Serial
+	s.mu.Unlock()
+	if s.logger != nil {
+		s.logger.Warn("scrcpy dropping codec options after repeated failures",
+			"serial", serial, "codec_level", level)
+	}
+}
+
+// rememberCodecLevel records a level that actually produced a stream, so the
+// next session for this device skips straight to it instead of re-climbing the
+// ladder — each rung costs a full scrcpy cold start.
+func (s *Session) rememberCodecLevel() {
+	s.mu.Lock()
+	s.levelFailures = 0
+	level := s.codecLevel
+	serial := s.req.Serial
+	notify := s.onCodecLevel
+	s.mu.Unlock()
+	if notify != nil {
+		notify(serial, level)
+	}
+}
+
+func (s *Session) reconnectSleep(backoff time.Duration, err error) time.Duration {
+	if s.shouldCoolDownAfterFailure(err) && backoff < safeProfileHandshakeBackoffMin {
+		return safeProfileHandshakeBackoffMin
+	}
+	return backoff
+}
+
+func (s *Session) reconnectBackoffCap(err error) time.Duration {
+	if s.shouldCoolDownAfterFailure(err) {
+		return safeProfileHandshakeBackoffMax
+	}
+	return normalReconnectBackoffMax
+}
+
+func (s *Session) shouldCoolDownAfterFailure(err error) bool {
+	if err == nil || s.currentCodecLevel() < MaxCodecLevel {
+		return false
+	}
+	return strings.Contains(err.Error(), scrcpyHandshakeNotReadyFragment)
+}
+
+func (s *Session) adoptLaunchProfile(launched *LaunchedServer) {
+	if launched == nil || !launched.SafeProfile {
+		return
+	}
+	s.mu.Lock()
+	if launched.CodecLevel > s.codecLevel {
+		s.codecLevel = launched.CodecLevel
+		s.levelFailures = 0
+	}
+	s.mu.Unlock()
+}
+
 func (s *Session) connectAndRead() error {
 	host := s.req.Host
 	port := s.req.Port
+	var releaseLaunch func()
 	if s.req.OwnsScrcpy {
 		if s.launcher == nil {
 			return errors.New("scrcpy launcher is unavailable")
 		}
-		launched, err := s.launcher.Start(s.ctx, s.req)
+		release, err := s.acquireLaunchSlot()
 		if err != nil {
 			return err
 		}
+		releaseLaunch = release
+		req := s.req
+		req.CodecLevel = s.currentCodecLevel()
+		launched, err := s.launcher.Start(s.ctx, req)
+		if err != nil {
+			releaseLaunch()
+			return err
+		}
 		s.setLaunched(launched)
+		s.adoptLaunchProfile(launched)
 		defer func() {
 			launched.Stop(context.Background())
 			s.clearLaunched(launched)
@@ -299,6 +630,10 @@ func (s *Session) connectAndRead() error {
 	}
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	videoConn, ctrlConn, width, height, err := s.openReadySockets(addr, 10*time.Second)
+	if releaseLaunch != nil {
+		releaseLaunch()
+		releaseLaunch = nil
+	}
 	if err != nil {
 		return err
 	}
@@ -363,6 +698,28 @@ func (s *Session) connectAndRead() error {
 		s.recordFrame(len(payload), isConfig, isKey)
 	}
 	return nil
+}
+
+func (s *Session) acquireLaunchSlot() (func(), error) {
+	if s.launchLimiter == nil {
+		return func() {}, nil
+	}
+	select {
+	case s.launchLimiter <- struct{}{}:
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				<-s.launchLimiter
+			})
+		}, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func newLaunchLimiterFromEnv() chan struct{} {
+	concurrency := envInt("MEDIA_ADAPTER_SCRCPY_LAUNCH_CONCURRENCY", defaultScrcpyLaunchConcurrency)
+	return make(chan struct{}, concurrency)
 }
 
 func (s *Session) openReadySockets(addr string, timeout time.Duration) (net.Conn, net.Conn, uint16, uint16, error) {
@@ -522,9 +879,20 @@ func (s *Session) setLaunched(launched *LaunchedServer) {
 }
 
 func (s *Session) clearLaunched(launched *LaunchedServer) {
+	// Snapshot the server's log tail before dropping the pointer.
+	//
+	// connectAndRead clears the launch in a defer, so it runs before run() logs
+	// the failure. Reading the tail from the cleared pointer made scrcpy_output
+	// empty on every single failure — the one field meant to carry the device's
+	// own explanation never carried anything, and every diagnosis built on its
+	// emptiness was built on nothing.
+	tail := launched.RecentOutput()
 	s.mu.Lock()
 	if s.launched == launched {
 		s.launched = nil
+		if len(tail) > 0 {
+			s.lastOutput = tail
+		}
 	}
 	s.mu.Unlock()
 }

@@ -1,6 +1,6 @@
 import json
 
-from relay import media_adapter
+from relay import media_adapter, media_adapter_session
 
 
 def test_media_adapter_disabled_by_default(monkeypatch):
@@ -48,6 +48,7 @@ def test_start_direct_scrcpy_stream_posts_to_http_api(monkeypatch):
         max_width=600,
         bitrate=900_000,
         video_codec="h264",
+        video_encoder="c2.android.avc.encoder",
         low_latency=True,
     )
 
@@ -63,9 +64,41 @@ def test_start_direct_scrcpy_stream_posts_to_http_api(monkeypatch):
         "max_width": 600,
         "bitrate": 900_000,
         "video_codec": "h264",
+        "video_encoder": "c2.android.avc.encoder",
         "low_latency": True,
     }
     assert result["running"] is True
+
+
+def test_media_adapter_session_uses_per_serial_video_encoder(monkeypatch):
+    calls = []
+
+    def fake_start_direct_scrcpy_stream(**kwargs):
+        calls.append(kwargs)
+        return {"running": True}
+
+    monkeypatch.setenv("SCRCPY_VIDEO_ENCODER", "OMX.default.avc.encoder")
+    monkeypatch.setenv("SCRCPY_VIDEO_ENCODER__SERIAL_1", "c2.android.avc.encoder")
+    monkeypatch.setattr(
+        media_adapter_session,
+        "start_direct_scrcpy_stream",
+        fake_start_direct_scrcpy_stream,
+    )
+
+    session = media_adapter_session.MediaAdapterScrcpySession(
+        serial="SERIAL-1",
+        max_fps=15,
+        max_width=480,
+        enable_control=True,
+        port=0,
+        send_queue=None,
+        loop=None,
+        bitrate=900_000,
+    )
+    session.start()
+
+    assert calls[0]["video_codec"] == "h264"
+    assert calls[0]["video_encoder"] == "c2.android.avc.encoder"
 
 
 def test_media_adapter_owns_scrcpy_defaults_to_enabled_with_direct(monkeypatch):

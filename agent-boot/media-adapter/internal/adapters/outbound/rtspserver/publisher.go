@@ -302,6 +302,11 @@ type streamState struct {
 	stream         *gortsplib.ServerStream
 	remoteURL      string
 	remoteClient   *gortsplib.Client
+	// Media announced to the remote server. A gortsplib client only accepts
+	// writes for a media pointer it was given in StartRecording; passing the
+	// local server's `media` instead makes it look up a nil entry and panic
+	// inside WritePacketRTPWithNTP, taking the whole adapter down.
+	remoteMedia    *description.Media
 	remoteMu       sync.Mutex
 	remoteQueue    chan *rtp.Packet
 	remoteDone     chan struct{}
@@ -378,12 +383,11 @@ func (s *streamState) ensureRemote(logger *slog.Logger) bool {
 	if now.Before(s.remoteNextDial) {
 		return false
 	}
-	desc := &description.Session{
-		Medias: []*description.Media{{
-			Type:    description.MediaTypeVideo,
-			Formats: []format.Format{s.format},
-		}},
+	remoteMedia := &description.Media{
+		Type:    description.MediaTypeVideo,
+		Formats: []format.Format{s.format},
 	}
+	desc := &description.Session{Medias: []*description.Media{remoteMedia}}
 	client := &gortsplib.Client{
 		ReadTimeout:  s.remoteTimeout,
 		WriteTimeout: s.remoteTimeout,
@@ -395,6 +399,9 @@ func (s *streamState) ensureRemote(logger *slog.Logger) bool {
 		return false
 	}
 	s.remoteClient = client
+	// Keep the announced media: writes must reference this pointer, not the
+	// local server's, or gortsplib dereferences nil and panics.
+	s.remoteMedia = remoteMedia
 	logger.Info("media adapter remote RTSP publishing", "serial", s.serial, "url", s.remoteURL)
 	return true
 }
@@ -408,16 +415,18 @@ func (s *streamState) writeRemote(logger *slog.Logger, packet *rtp.Packet) error
 	}
 	s.remoteMu.Lock()
 	client := s.remoteClient
+	media := s.remoteMedia
 	s.remoteMu.Unlock()
-	if client == nil {
+	if client == nil || media == nil {
 		return nil
 	}
-	if err := client.WritePacketRTP(s.media, packet); err != nil {
+	if err := client.WritePacketRTP(media, packet); err != nil {
 		s.remoteMu.Lock()
 		if s.remoteClient != nil {
 			s.remoteClient.Close()
 			s.remoteClient = nil
 		}
+		s.remoteMedia = nil
 		s.remoteMu.Unlock()
 		return err
 	}
@@ -457,6 +466,7 @@ func (s *streamState) closeRemote() {
 			s.remoteClient.Close()
 			s.remoteClient = nil
 		}
+		s.remoteMedia = nil
 	})
 }
 

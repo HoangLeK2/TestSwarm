@@ -5,7 +5,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from api.routes.media_webrtc import build_media_webrtc_router
+from api.routes.media_webrtc import (
+    _go2rtc_stream_name,
+    _redact_stream_source,
+    build_media_webrtc_router,
+)
 from core.config import Config
 
 
@@ -270,6 +274,237 @@ async def test_create_session_uses_grpc_media_adapter_control_plane(monkeypatch)
             "ttl_seconds": 120,
         }
     ]
+
+
+def test_go2rtc_stream_name_matches_the_go_adapter_rules():
+    # Must stay identical to stream.StreamName in
+    # agent-boot/media-adapter/internal/domain/stream/packet.go. If the two
+    # drift, the backend declares one name and the adapter publishes to another
+    # — go2rtc drops the publish without logging a reason.
+    assert _go2rtc_stream_name("10AE7S00HD002JK") == "device-10AE7S00HD002JK"
+    assert _go2rtc_stream_name("emulator-5554") == "device-emulator-5554"
+    assert _go2rtc_stream_name(" 1.2_3 ") == "device-1.2_3"
+    assert _go2rtc_stream_name("a/b:c") == "device-a_b_c"
+    assert _go2rtc_stream_name("") == "device-unknown"
+    assert _go2rtc_stream_name("!!!") == "device-_"
+
+
+@pytest.mark.anyio
+async def test_create_session_declares_go2rtc_stream_before_starting_adapter(monkeypatch):
+    # go2rtc refuses an ANNOUNCE for a name it does not know, so the stream has
+    # to exist before the adapter is told to start publishing.
+    events: list[str] = []
+
+    class _Servicer:
+        def has_serial(self, serial: str) -> bool:
+            return serial == "SERIAL-1"
+
+        async def create_session(self, payload: dict):
+            events.append("start_session")
+            return {"ok": True, "session_id": "session-1", "stream_name": "device-SERIAL-1"}
+
+    class _Response:
+        def __init__(self, status_code: int, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers: dict[str, str] = {}
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def get(self, url, **kwargs):
+            events.append(f"GET {url}")
+            return _Response(200, {})
+
+        async def put(self, url, **kwargs):
+            events.append(f"PUT {url} {kwargs.get('params')}")
+            # go2rtc answers 400 because it probes the placeholder source and
+            # fails; the stream is still created, so this must not raise.
+            return _Response(400, {})
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
+    monkeypatch.setenv("DEVICE_FARM_GO2RTC_URL", "http://go2rtc:1984")
+    monkeypatch.setattr(
+        "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
+        lambda: _Servicer(),
+    )
+    monkeypatch.setattr("api.routes.media_webrtc.httpx.AsyncClient", _Client)
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/media/webrtc/sessions",
+            json={"serial": "SERIAL-1", "viewer_id": "viewer-1", "ttl_seconds": 120},
+        )
+
+    assert response.status_code == 200
+    assert events == [
+        "GET http://go2rtc:1984/api/streams",
+        "PUT http://go2rtc:1984/api/streams "
+        "{'name': 'device-SERIAL-1', 'src': 'rtsp://127.0.0.1:9/placeholder'}",
+        "start_session",
+    ]
+
+
+@pytest.mark.anyio
+async def test_create_session_skips_declaration_when_stream_already_exists(monkeypatch):
+    events: list[str] = []
+
+    class _Servicer:
+        def has_serial(self, serial: str) -> bool:
+            return True
+
+        async def create_session(self, payload: dict):
+            events.append("start_session")
+            return {"ok": True, "session_id": "session-1"}
+
+    class _Response:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+            self.headers: dict[str, str] = {}
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def get(self, url, **kwargs):
+            events.append("GET")
+            return _Response({"device-SERIAL-1": {"producers": []}})
+
+        async def put(self, url, **kwargs):
+            raise AssertionError("must not re-declare an existing stream")
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
+    monkeypatch.setenv("DEVICE_FARM_GO2RTC_URL", "http://go2rtc:1984")
+    monkeypatch.setattr(
+        "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
+        lambda: _Servicer(),
+    )
+    monkeypatch.setattr("api.routes.media_webrtc.httpx.AsyncClient", _Client)
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/media/webrtc/sessions",
+            json={"serial": "SERIAL-1", "viewer_id": "viewer-1", "ttl_seconds": 120},
+        )
+
+    assert response.status_code == 200
+    assert events == ["GET", "start_session"]
+
+
+@pytest.mark.anyio
+async def test_answer_treats_go2rtc_500_as_retryable(monkeypatch):
+    # Verified against go2rtc 1.9.14: a stream holding only the placeholder
+    # source answers 500 "dial tcp 127.0.0.1:9: connection refused". That is the
+    # window between declaring the stream and the adapter attaching its
+    # publisher, so the viewer must retry rather than see a hard 502.
+    class _Servicer:
+        def session_info(self, session_id: str):
+            return {"stream_name": "device-SERIAL-1"}
+
+        async def answer_session(self, session_id: str, offer: dict):
+            raise AssertionError("backend signaling must not fall back here")
+
+    class _Response:
+        status_code = 500
+        headers: dict[str, str] = {}
+        text = "streams: dial tcp 127.0.0.1:9: connect: connection refused"
+
+        def json(self):
+            return {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def post(self, url, **kwargs):
+            return _Response()
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
+    monkeypatch.setenv("MEDIA_WEBRTC_SIGNALING_PLANE", "backend")
+    monkeypatch.setenv("DEVICE_FARM_GO2RTC_URL", "http://go2rtc:1984")
+    monkeypatch.setattr(
+        "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
+        lambda: _Servicer(),
+    )
+    monkeypatch.setattr("api.routes.media_webrtc.httpx.AsyncClient", _Client)
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/media/webrtc/sessions/session-1/answer",
+            json={"type": "offer", "sdp": "v=0 offer"},
+        )
+
+    assert response.status_code == 425
+    assert response.headers["retry-after"] == "0.20"
+
+
+def test_redact_stream_source_strips_rtsp_credentials():
+    # The adapter publishes into go2rtc, so the source it reports is the ingest
+    # URL and carries the credentials for the internet-facing :8554 port. This
+    # payload is served to viewers; leaking it would let any of them ANNOUNCE
+    # over another device's stream.
+    assert (
+        _redact_stream_source("rtsp://farm:s3cret@go2rtc.example.com:8554/device-SERIAL-1")
+        == "rtsp://go2rtc.example.com:8554/device-SERIAL-1"
+    )
+    assert (
+        _redact_stream_source("rtsp://go2rtc.example.com:8554/device-SERIAL-1")
+        == "rtsp://go2rtc.example.com:8554/device-SERIAL-1"
+    )
+    assert _redact_stream_source("device-SERIAL-1") == "device-SERIAL-1"
+
+
+@pytest.mark.anyio
+async def test_create_session_redacts_credentials_from_stream_source(monkeypatch):
+    class _Servicer:
+        def has_serial(self, serial: str) -> bool:
+            return serial == "SERIAL-1"
+
+        async def create_session(self, payload: dict):
+            return {
+                "ok": True,
+                "session_id": "session-1",
+                "serial": payload["serial"],
+                "stream_name": "device-SERIAL-1",
+                "stream_source": "rtsp://farm:s3cret@go2rtc.example.com:8554/device-SERIAL-1",
+            }
+
+    monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
+    monkeypatch.setattr(
+        "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
+        lambda: _Servicer(),
+    )
+    app = FastAPI()
+    app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/media/webrtc/sessions",
+            json={"serial": "SERIAL-1", "viewer_id": "viewer-1", "ttl_seconds": 120},
+        )
+
+    assert response.status_code == 200
+    assert "s3cret" not in response.text
+    assert (
+        response.json()["stream_source"]
+        == "rtsp://go2rtc.example.com:8554/device-SERIAL-1"
+    )
 
 
 @pytest.mark.anyio

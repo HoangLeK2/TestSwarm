@@ -91,9 +91,18 @@ services:
       nproc: 65535
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    # go2rtc does not expand ${VAR} inside go2rtc.yaml, so deployment values are
+    # passed as a second -config that overrides the file.
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - '{"rtsp":{"username":"${RTSP_USER:?configure RTSP_USER — 8554 is internet-facing}","password":"${RTSP_PASS:?configure RTSP_PASS — 8554 is internet-facing}"},"webrtc":{"candidates":[${GO2RTC_WEBRTC_CANDIDATES:-"stun:8555"}]}}'
     ports:
-      # Keep go2rtc API local to the host. Browser signaling goes through farm.
-      - "127.0.0.1:${GO2RTC_API_PORT:-1984}:1984/tcp"
+      # No 1984 here: farm reaches the API over the compose network as
+      # http://go2rtc:1984, and media-adapter no longer calls it at all.
+      # 8554 = RTSP ingest (media-adapter pushes in), 8555 = WebRTC media.
       - "${GO2RTC_RTSP_PORT:-8554}:8554/tcp"
       - "${GO2RTC_WEBRTC_PORT:-8555}:8555/tcp"
       - "${GO2RTC_WEBRTC_PORT:-8555}:8555/udp"

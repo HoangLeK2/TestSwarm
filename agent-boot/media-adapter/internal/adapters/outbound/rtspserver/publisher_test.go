@@ -3,13 +3,18 @@ package rtspserver
 import (
 	"context"
 	"log/slog"
+	"net"
 	"os"
 	"testing"
 	"time"
 
+	"sync"
+
 	"devicefarm/media-adapter/internal/domain/stream"
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
+	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/pion/rtp"
 )
 
@@ -139,4 +144,93 @@ func TestRemoteRTSPQueueDropsInsteadOfBlockingLane(t *testing.T) {
 	if publisher.Stats().QueueEvictions == 0 {
 		t.Fatal("expected remote queue eviction instead of blocking")
 	}
+}
+
+// recordingServer accepts an ANNOUNCE/RECORD session so writeRemote can be
+// driven against a real peer. A fake client cannot catch the bug this guards:
+// the panic came from gortsplib's own bookkeeping of setupped medias.
+type recordingServer struct {
+	stream *gortsplib.ServerStream
+	server *gortsplib.Server
+	got    chan struct{}
+	once   sync.Once
+}
+
+func (s *recordingServer) OnConnOpen(*gortsplib.ServerHandlerOnConnOpenCtx)         {}
+func (s *recordingServer) OnConnClose(*gortsplib.ServerHandlerOnConnCloseCtx)       {}
+func (s *recordingServer) OnSessionOpen(*gortsplib.ServerHandlerOnSessionOpenCtx)   {}
+func (s *recordingServer) OnSessionClose(*gortsplib.ServerHandlerOnSessionCloseCtx) {}
+
+func (s *recordingServer) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
+	s.stream = &gortsplib.ServerStream{Server: s.server, Desc: ctx.Description}
+	return &base.Response{StatusCode: base.StatusOK}, nil
+}
+
+func (s *recordingServer) OnSetup(*gortsplib.ServerHandlerOnSetupCtx) (*base.Response, *gortsplib.ServerStream, error) {
+	return &base.Response{StatusCode: base.StatusOK}, nil, nil
+}
+
+func (s *recordingServer) OnRecord(*gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
+	return &base.Response{StatusCode: base.StatusOK}, nil
+}
+
+func (s *recordingServer) OnPacketsLost(*gortsplib.ServerHandlerOnPacketsLostCtx) {}
+
+func TestWriteRemoteUsesTheAnnouncedMediaNotTheLocalOne(t *testing.T) {
+	// Regression: ensureRemote announces a freshly built description.Media,
+	// but writeRemote used to hand gortsplib the local server's media instead.
+	// The client has no entry for that pointer, so WritePacketRTPWithNTP
+	// dereferenced nil and panicked — killing the whole adapter process on the
+	// first published packet. Publishing had never actually run before, so no
+	// existing test covered it.
+	// Grab a free port rather than pinning one: a pinned port leaves the test
+	// unrunnable until whatever still holds it exits.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+
+	handler := &recordingServer{got: make(chan struct{})}
+	server := &gortsplib.Server{
+		Handler:     handler,
+		RTSPAddress: addr,
+	}
+	handler.server = server
+	if err := server.Start(); err != nil {
+		t.Fatalf("start rtsp server: %v", err)
+	}
+	defer server.Close()
+
+	forma := &format.H264{
+		PayloadTyp:        96,
+		SPS:               []byte{0x67, 0x42, 0x00, 0x0a, 0xf8, 0x41, 0xa2},
+		PPS:               []byte{0x68, 0xce, 0x38, 0x80},
+		PacketizationMode: 1,
+	}
+	state := &streamState{
+		serial: "SERIAL-1",
+		// Deliberately a different pointer than the one ensureRemote announces:
+		// this is exactly the mismatch that used to panic.
+		media:         &description.Media{Type: description.MediaTypeVideo, Formats: []format.Format{forma}},
+		format:        forma,
+		remoteURL:     "rtsp://" + addr + "/device-SERIAL-1",
+		remoteTimeout: 2 * time.Second,
+	}
+
+	packet := &rtp.Packet{
+		Header:  rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: 1, Marker: true},
+		Payload: []byte{0x65, 0x88, 0x84, 0x00},
+	}
+	if err := state.writeRemote(slog.New(slog.NewTextHandler(os.Stderr, nil)), packet); err != nil {
+		t.Fatalf("writeRemote returned error: %v", err)
+	}
+	if state.remoteMedia == nil {
+		t.Fatal("remoteMedia not retained; writes cannot reference the announced media")
+	}
+	if state.remoteMedia == state.media {
+		t.Fatal("remoteMedia must be the announced media, not the local server's")
+	}
+	state.closeRemote()
 }

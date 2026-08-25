@@ -122,14 +122,30 @@ services:
       nproc: 65535
     environment:
       TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    # go2rtc does not expand ${VAR} inside go2rtc.yaml, so deployment values are
+    # passed as a second -config that overrides the file.
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - '{"rtsp":{"username":"${RTSP_USER:-farm}","password":"${RTSP_PASS:-change-me}"},"webrtc":{"candidates":[${GO2RTC_WEBRTC_CANDIDATES:-"127.0.0.1:8555","stun:8555"}]}}'
     ports:
-      # Keep go2rtc API local to the host. Browser signaling goes through farm.
-      - "127.0.0.1:${GO2RTC_API_PORT:-1984}:1984/tcp"
+      # No 1984 here: farm reaches the API over the compose network as
+      # http://go2rtc:1984, and media-adapter no longer calls it at all.
+      # 8554 = RTSP ingest (media-adapter pushes in), 8555 = WebRTC media.
       - "${GO2RTC_RTSP_PORT:-8554}:8554/tcp"
       - "${GO2RTC_WEBRTC_PORT:-8555}:8555/tcp"
       - "${GO2RTC_WEBRTC_PORT:-8555}:8555/udp"
     volumes:
-      - ./infra/go2rtc/go2rtc.yaml:/config/go2rtc.yaml
+      # Read-only on purpose. go2rtc persists PUT /api/streams back into this
+      # file, and the backend declares a stream on every session — mounted
+      # read-write it rewrites a tracked repo file, drops the comments while
+      # doing so, and accumulates one dead placeholder entry per device that
+      # has ever streamed. Read-only keeps declarations in memory, where the
+      # backend re-creates them anyway. The PUT then answers 400 because the
+      # persist failed; the stream is still created, which is all we need.
+      - ./infra/go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
 
   farm:
     build:

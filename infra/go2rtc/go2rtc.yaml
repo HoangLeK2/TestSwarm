@@ -1,31 +1,44 @@
-# go2rtc local media gateway configuration.
+# go2rtc media gateway configuration (runs on the SERVER).
+#
+# Topology: agent-boot + media-adapter run on the customer's local machine,
+# behind NAT. go2rtc runs here on the public server. Only the local -> server
+# direction traverses NAT, so media-adapter PUSHES H264 over RTSP into :8554
+# (ANNOUNCE/RECORD); go2rtc never dials back out to the local machine.
+#
+# There is deliberately no `streams:` block. go2rtc refuses an ANNOUNCE for a
+# name it does not already know, so the backend declares each stream over the
+# compose network before telling the adapter to publish (_go2rtc_ensure_stream
+# in device_farm/api/routes/media_webrtc.py). A static pull source here would
+# point at this server's own host rather than at the customer's machine, and
+# would only add a failing dial on every consumer attach.
+#
+# This file holds static structure only. go2rtc 1.9.14 does NOT expand ${VAR}
+# in YAML — "${RTSP_PASS}" here is stored as that literal string, which reads as
+# configured while accepting nothing. Deployment values (RTSP credentials, the
+# public WebRTC candidate) come from the compose `command:` as a second
+# `-config '{...}'` argument, which overrides this file.
 #
 # STUN-only policy: do not add TURN servers here. Browser signaling stays behind
 # the Device Farm backend; RTP media is negotiated by WebRTC/ICE against go2rtc.
 
 api:
+  # Not published on the host. farm reaches this over the compose network as
+  # http://go2rtc:1984 (DEVICE_FARM_GO2RTC_URL).
   listen: ":1984"
 
 rtsp:
+  # Ingest port for remote publishers. Internet-facing, so username/password are
+  # mandatory — without them anyone can ANNOUNCE over a device's stream name and
+  # viewers get served their video. Both come from the compose command.
+  # go2rtc exempts localhost, so in-container callers are unaffected.
   listen: ":8554"
 
 webrtc:
   listen: ":8555"
   candidates:
-    # Keep a loopback candidate for browsers running on this Docker host, and
-    # derive a server-reflexive candidate for viewers outside the local machine.
+    # Overridden by the compose command (GO2RTC_WEBRTC_CANDIDATES). The default
+    # there is stun:8555, which discovers the server's public address at answer
+    # time; this loopback entry only serves a browser on the Docker host itself.
     - 127.0.0.1:8555
-    - stun:8555
   ice_servers:
     - urls: [stun:stun.l.google.com:19302]
-streams:
-  device-10AE7S00HD002JK:
-    - rtsp://host.docker.internal:8556/device-10AE7S00HD002JK
-  device-emulator-5556:
-    - rtsp://host.docker.internal:8556/device-emulator-5556
-  device-emulator-5554:
-    - rtsp://host.docker.internal:8556/device-emulator-5554
-  device-emulator-5558:
-    - rtsp://host.docker.internal:8556/device-emulator-5558
-  device-emulator-5560:
-    - rtsp://host.docker.internal:8556/device-emulator-5560

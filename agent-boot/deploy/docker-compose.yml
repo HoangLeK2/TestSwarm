@@ -57,10 +57,14 @@ services:
       MEDIA_ADAPTER_HTTP_BIND: ${MEDIA_ADAPTER_HTTP_BIND:-0.0.0.0}
       MEDIA_ADAPTER_HTTP_PORT: ${MEDIA_ADAPTER_HTTP_PORT:-8878}
       MEDIA_ADAPTER_RTSP_ADDRESS: ":8556"
-      MEDIA_ADAPTER_GO2RTC_URL: ${MEDIA_ADAPTER_GO2RTC_URL:-http://host.docker.internal:1984}
+      # This machine is behind NAT; the server cannot dial in. Push H264 into
+      # the server's go2rtc over RTSP instead — outbound, so NAT is a non-issue.
+      MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE: ${MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE:?e.g. rtsp://USER:PASS@farm.example.com:8554/{stream_raw}}
+      # Must stay 0 while publishing: RegisterStream would PUT a *pull* src into
+      # go2rtc, pointing at this machine's :8556 — unreachable from the server,
+      # and fighting the publisher for the same stream name.
+      MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED: ${MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED:-0}
       MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE: ${MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE:-rtsp://host.docker.internal:8556/{stream_raw}}
-      MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE: ${MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE:-}
-      MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED: ${MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED:-1}
       MEDIA_ADAPTER_CONTROL_GRPC_ENABLED: ${MEDIA_ADAPTER_CONTROL_GRPC_ENABLED:-1}
       MEDIA_ADAPTER_CONTROL_GRPC_SERVER: ${MEDIA_ADAPTER_CONTROL_GRPC_SERVER:-host.docker.internal:50051}
       MEDIA_ADAPTER_CONTROL_GRPC_TLS: ${MEDIA_ADAPTER_CONTROL_GRPC_TLS:-false}

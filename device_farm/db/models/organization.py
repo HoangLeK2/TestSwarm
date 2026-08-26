@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -29,7 +29,11 @@ class Organization(Base):
         DateTime(timezone=True),
         default=_now,
         onupdate=_now,
-        server_default="CURRENT_TIMESTAMP",
+        # text(), not a bare string: a plain str is emitted as the quoted
+        # literal 'CURRENT_TIMESTAMP', which Postgres then tries to parse as a
+        # timestamp. create_all() failed on every fresh database with
+        # InvalidDatetimeFormatError, so a new environment could not bootstrap.
+        server_default=text("CURRENT_TIMESTAMP"),
     )
 
     # Webhook config: POST to webhook_url on task complete/failed events.

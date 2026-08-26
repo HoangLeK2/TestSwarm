@@ -62,3 +62,69 @@ test('inserts into the same random branch as the target row', () => {
     [2, 3]
   );
 });
+
+test('appends into an empty then branch from a branch row path', () => {
+  const result = insertStepAtPath(
+    [{ type: 'if_variable', then: [], else: [] }],
+    [
+      { listKey: 'steps', ci: 0 },
+      { listKey: 'then', ci: 0 }
+    ],
+    wait(2)
+  );
+
+  assert.deepEqual(
+    result[0]?.then?.map((step: FlowStep) => step.seconds),
+    [2]
+  );
+  assert.deepEqual(result[0]?.else, []);
+});
+
+test('appends into an empty else branch from a branch row path', () => {
+  const result = insertStepAtPath(
+    [{ type: 'if_variable', then: [], else: [] }],
+    [
+      { listKey: 'steps', ci: 0 },
+      { listKey: 'else', ci: 0 }
+    ],
+    wait(2)
+  );
+
+  assert.deepEqual(result[0]?.then, []);
+  assert.deepEqual(
+    result[0]?.else?.map((step: FlowStep) => step.seconds),
+    [2]
+  );
+});
+
+test('appends into an empty loop body from a branch row path', () => {
+  const result = insertStepAtPath(
+    [{ type: 'loop', count: 3, steps: [] }],
+    [
+      { listKey: 'steps', ci: 0 },
+      { listKey: 'steps', ci: 0 }
+    ],
+    wait(2)
+  );
+
+  assert.deepEqual(
+    result[0]?.steps?.map((step: FlowStep) => step.seconds),
+    [2]
+  );
+});
+
+test('appends into an empty random branch from a branch row path', () => {
+  const result = insertStepAtPath(
+    [{ type: 'random_pick', branches: [{ weight: 1, steps: [] }] }],
+    [
+      { listKey: 'steps', ci: 0 },
+      { listKey: 'branches.0', ci: 0 }
+    ],
+    wait(2)
+  );
+
+  assert.deepEqual(
+    result[0]?.branches?.[0]?.steps.map((step: FlowStep) => step.seconds),
+    [2]
+  );
+});

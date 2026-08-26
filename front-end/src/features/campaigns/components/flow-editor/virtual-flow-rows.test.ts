@@ -76,3 +76,60 @@ test('branch rows carry their meaning, not their wording', () => {
 
   assert.deepEqual(branches, ['then', 'else', 'loop']);
 });
+
+test('branch rows expose append paths for empty control-flow lanes', () => {
+  const rows = projectVirtualFlowRows([
+    { type: 'if_variable', then: [], else: [] },
+    { type: 'loop', steps: [] }
+  ] as FlowStep[]);
+
+  const branches = rows
+    .filter((row) => row.kind === 'branch')
+    .map((row) => ({
+      branch: row.kind === 'branch' ? row.branch : null,
+      insertPath: row.kind === 'branch' ? row.insertPath : null
+    }));
+
+  assert.deepEqual(branches, [
+    {
+      branch: 'then',
+      insertPath: [
+        { listKey: 'steps', ci: 0 },
+        { listKey: 'then', ci: 0 }
+      ]
+    },
+    {
+      branch: 'else',
+      insertPath: [
+        { listKey: 'steps', ci: 0 },
+        { listKey: 'else', ci: 0 }
+      ]
+    },
+    {
+      branch: 'loop',
+      insertPath: [
+        { listKey: 'steps', ci: 1 },
+        { listKey: 'steps', ci: 0 }
+      ]
+    }
+  ]);
+});
+
+test('nested branch rows append inside their own scoped lane', () => {
+  const rows = projectVirtualFlowRows([
+    {
+      type: 'loop',
+      steps: [{ type: 'if_variable', then: [], else: [] }]
+    }
+  ] as FlowStep[]);
+
+  const thenRow = rows.find(
+    (row) => row.kind === 'branch' && row.branch === 'then'
+  );
+
+  assert.deepEqual(thenRow?.kind === 'branch' && thenRow.insertPath, [
+    { listKey: 'steps', ci: 0 },
+    { listKey: 'steps', ci: 0 },
+    { listKey: 'then', ci: 0 }
+  ]);
+});

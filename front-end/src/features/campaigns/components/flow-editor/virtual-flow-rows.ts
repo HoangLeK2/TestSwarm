@@ -26,6 +26,7 @@ export type VirtualFlowRow =
        */
       branch: 'then' | 'else' | 'loop' | 'pick';
       count: number;
+      insertPath: BracketChildRef[];
       depth: number;
       scopes: VirtualFlowScope[];
     }
@@ -93,6 +94,7 @@ function projectList(
         labelKey: 'branchLoopBody',
         branch: 'loop',
         count: body.length,
+        insertPath: [...path, { listKey: 'steps', ci: body.length }],
         depth: depth + 1,
         scopes: nestedScopes
       });
@@ -119,6 +121,7 @@ function projectList(
         labelKey: isFbTap ? 'branchWhenFound' : 'branchIfTrue',
         branch: 'then',
         count: thenSteps.length,
+        insertPath: [...path, { listKey: 'then', ci: thenSteps.length }],
         depth: depth + 1,
         scopes: nestedScopes
       });
@@ -129,6 +132,7 @@ function projectList(
         labelKey: isFbTap ? 'branchWhenNotFound' : 'branchIfFalse',
         branch: 'else',
         count: elseSteps.length,
+        insertPath: [...path, { listKey: 'else', ci: elseSteps.length }],
         depth: depth + 1,
         scopes: nestedScopes
       });
@@ -157,6 +161,7 @@ function projectList(
           labelValues: { number: branchIndex + 1 },
           branch: 'pick',
           count: branchSteps.length,
+          insertPath: [...path, { listKey: branchKey, ci: branchSteps.length }],
           depth: depth + 1,
           scopes: nestedScopes
         });

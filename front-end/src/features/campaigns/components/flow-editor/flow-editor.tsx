@@ -930,7 +930,14 @@ function VirtualizedFlowEditor({
                     className='absolute left-0 top-0 w-full px-1.5 py-1'
                     style={{ transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    <VirtualScopeMarker row={row} />
+                    <VirtualScopeMarker
+                      row={row}
+                      onInsert={
+                        !reorderMode && row.kind === 'branch'
+                          ? (step) => insertBeforePath(row.insertPath, step)
+                          : undefined
+                      }
+                    />
                   </div>
                 );
               }
@@ -1201,18 +1208,21 @@ function VirtualBranchRail({
 }
 
 function VirtualScopeMarker({
-  row
+  row,
+  onInsert
 }: {
   row: Exclude<
     ReturnType<typeof projectVirtualFlowRows>[number],
     { kind: 'step' }
   >;
+  onInsert?: (step: FlowStep) => void;
 }) {
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const conditional = row.scopes.at(-1)?.type;
   const isElse = row.kind === 'branch' && row.branch === 'else';
   const isThen = row.kind === 'branch' && row.branch === 'then';
   const marker = row.kind === 'end' ? '└' : isThen ? '✓' : isElse ? '×' : '↻';
+  const addHereLabel = tField('addHere').replace(/^\+\s*/, '');
 
   return (
     <div className='flex min-h-8 min-w-0 items-stretch gap-2'>
@@ -1300,6 +1310,28 @@ function VirtualScopeMarker({
             <span className='shrink-0 rounded-full border border-border/70 bg-background px-2 py-0.5 text-[9px] font-semibold tabular-nums text-muted-foreground shadow-sm'>
               {tField('stepCount', { count: row.count })}
             </span>
+          )}
+          {row.kind === 'branch' && onInsert && (
+            <InsertStepPicker
+              contentSide='bottom'
+              contentAlign='end'
+              sideOffset={4}
+              onInsert={onInsert}
+              trigger={
+                <button
+                  type='button'
+                  className={cn(
+                    'flex h-6 shrink-0 items-center gap-1 rounded-full border border-dashed border-muted-foreground/35 bg-background px-2 text-[10px] font-medium text-muted-foreground shadow-sm',
+                    'transition-colors hover:border-primary/60 hover:bg-primary/5 hover:text-primary',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  )}
+                  aria-label={tField('addToThisBranch')}
+                >
+                  <Plus className='size-3' strokeWidth={2} />
+                  <span className='max-sm:sr-only'>{addHereLabel}</span>
+                </button>
+              }
+            />
           )}
           {row.kind === 'end' && conditional && (
             <span className='shrink-0 rounded-full bg-muted/70 px-2 py-0.5 text-[9px] font-medium text-muted-foreground'>

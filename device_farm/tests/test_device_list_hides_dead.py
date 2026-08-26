@@ -1,12 +1,7 @@
-"""A dead (unplugged/removed) device must not clutter the fleet list.
-
-The device is still `paired` in the DB, but once the agent stops reporting it
-the authoritative state becomes DEAD, and the general list should drop it.
-Explicit `state=` / id / serial queries still return dead devices so revive and
-removal tooling keeps working.
-"""
+"""Registered devices remain manageable after they become dead."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -65,8 +60,42 @@ async def _call(*, state=None, device_id=None, rows):
         )
 
 
+async def _call_unfiltered(*, devices, state_by_id):
+    from api.routes import devices as mod
+
+    req = MagicMock()
+    req.app.state.manager = None
+    user = SimpleNamespace(org_id="org-a", id="user-a", role="member")
+    states = {
+        device.id: SimpleNamespace(state=state_by_id[device.id])
+        for device in devices
+    }
+
+    with patch.object(mod.repo, "list_devices", AsyncMock(return_value=devices)), \
+         patch.object(mod, "get_device_states_map", AsyncMock(return_value=states)), \
+         patch.object(mod, "_get_ctrl_servicer_optional", return_value=None):
+        return await mod.list_devices(
+            request=req,
+            db=AsyncMock(),
+            user=user,
+            cursor=None,
+            limit=None,
+            state=None,
+            group_id=None,
+            owner_type=None,
+            relay_host=None,
+            tag=None,
+            q=None,
+            sort=None,
+            device_id=None,
+            device_serial=None,
+            adb_serial=None,
+            relay_serial=None,
+        )
+
+
 @pytest.mark.asyncio
-async def test_dead_device_dropped_from_default_list():
+async def test_dead_device_kept_in_default_list():
     rows = [
         _row("emulator-5554", DeviceFsmState.ONLINE.value),
         _row("10AE7S00HD002JK", DeviceFsmState.DEAD.value),
@@ -75,9 +104,38 @@ async def test_dead_device_dropped_from_default_list():
 
     serials = [i.device_serial for i in out.items]
     assert "emulator-5554" in serials
-    assert "10AE7S00HD002JK" not in serials
-    # total kept honest with what was returned
-    assert out.total == 1
+    assert "10AE7S00HD002JK" in serials
+    assert out.total == 2
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_manage_list_keeps_dead_registered_devices():
+    registered = SimpleNamespace(
+        id="id-dead-1",
+        serial="dead-1",
+        name="Dead phone",
+        device_key="key",
+        user_id="user-a",
+        brand="Samsung",
+        model="S22",
+        android_version="13",
+        sdk_version=33,
+        screen_width=1080,
+        screen_height=1920,
+        last_seen=None,
+        created_at=datetime.now(UTC),
+        adb_serial=None,
+        adb_ip=None,
+        adb_port=5555,
+    )
+
+    out = await _call_unfiltered(
+        devices=[registered],
+        state_by_id={registered.id: DeviceFsmState.DEAD.value},
+    )
+
+    assert [item.serial for item in out] == ["dead-1"]
+    assert out[0].state == DeviceFsmState.DEAD.value
 
 
 @pytest.mark.asyncio

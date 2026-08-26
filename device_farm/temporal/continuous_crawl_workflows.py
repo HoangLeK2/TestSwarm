@@ -151,6 +151,9 @@ class CleanupCrawlTargetInput:
     org_id: str
     external_entity_id: str
     device_serial: str
+    # Terminal state to settle the execution at when the scenario left it open.
+    # Defaulted so histories written before this field existed still decode.
+    status: str = "failed"
 
 
 def circuit_breaker_reason(
@@ -391,11 +394,21 @@ class ContinuousCrawlWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=inp.maximum_attempts),
                 )
                 if outcome.success:
+                    # A succeeded target still gets settled. Releasing the phone
+                    # is the scenario's job (ScenarioWorkflow._finalize), but
+                    # that runs on the control queue and can be dropped without
+                    # the target hearing about it — and then the claim sits on
+                    # the device for the full 1800s campaign TTL with nothing
+                    # running. This is a no-op whenever the execution is already
+                    # terminal, which is the normal case.
+                    cleanup_error = await self._cleanup_target(
+                        inp, device_serial, target, status="completed"
+                    )
                     self._replace_progress(
                         succeeded=self._progress.succeeded + 1,
                         consecutive_failures=0,
                     )
-                    message = outcome.message
+                    message = self._failure_message(outcome.message, cleanup_error)
                 else:
                     cleanup_error = await self._cleanup_failed_target(
                         inp, device_serial, target
@@ -435,6 +448,18 @@ class ContinuousCrawlWorkflow:
         device_serial: str,
         target: CrawlTarget,
     ) -> str:
+        return await self._cleanup_target(
+            inp, device_serial, target, status="failed"
+        )
+
+    async def _cleanup_target(
+        self,
+        inp: ContinuousCrawlInput,
+        device_serial: str,
+        target: CrawlTarget,
+        *,
+        status: str,
+    ) -> str:
         try:
             await workflow.execute_activity(
                 CLEANUP_ACTIVITY,
@@ -444,6 +469,7 @@ class ContinuousCrawlWorkflow:
                     inp.org_id,
                     target.external_entity_id,
                     device_serial,
+                    status,
                 ),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=_IO_RETRY,
@@ -615,6 +641,12 @@ class ContinuousCrawlWorkflow:
 
     @workflow.signal
     async def pause(self) -> None:
+        # Deliberately does NOT forward to children, unlike resume: pause drains.
+        # The lane stops accepting new targets and the target already on a phone
+        # is allowed to finish, which is what the confirm dialog promises and
+        # what the pausing → paused status transition in _run_lane reports.
+        # Interrupting a scenario mid-run is `cancel`.
+        # Guarded by test_pause_drains_active_targets_without_forwarding_pause.
         self._paused = True
         self._replace_progress(status="pausing" if self._active_child_ids else "paused")
 

@@ -446,10 +446,18 @@ class U2SessionPool:
     async def _connect(self, serial: str, *, keep_warm: bool = False) -> _Entry:
         fn = self._get_connect_fn()
         host = serial.rsplit(":", 1)[0] if ":" in serial else serial
-        dev = await asyncio.wait_for(
-            self._loop.run_in_executor(self._resolve_executor(), fn, host),
-            timeout=CONNECT_TIMEOUT_SECONDS,
-        )
+        try:
+            dev = await asyncio.wait_for(
+                self._loop.run_in_executor(self._resolve_executor(), fn, host),
+                timeout=CONNECT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            # wait_for raises a bare TimeoutError. Callers up the stack report
+            # str(exc), so an unlabelled one reaches the operator as an empty
+            # error — see _handle_extra_data. Keep the type, add the story.
+            raise TimeoutError(
+                f"u2 connect timed out after {CONNECT_TIMEOUT_SECONDS}s serial={serial}"
+            ) from exc
         entry = _Entry(
             device=dev,
             last_used=time.monotonic(),
@@ -504,10 +512,15 @@ class U2SessionPool:
         self._close_blocking(entry)
         fn = self._get_connect_fn()
         host = entry.serial.rsplit(":", 1)[0] if ":" in entry.serial else entry.serial
-        entry.device = await asyncio.wait_for(
-            self._loop.run_in_executor(ex, fn, host),
-            timeout=CONNECT_TIMEOUT_SECONDS,
-        )
+        try:
+            entry.device = await asyncio.wait_for(
+                self._loop.run_in_executor(ex, fn, host),
+                timeout=CONNECT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"u2 reconnect timed out after {CONNECT_TIMEOUT_SECONDS}s serial={entry.serial}"
+            ) from exc
         entry.generation = self._next_generation()
         self._bump("reconnects")
         logger.info("u2-pool: reconnected serial=%s", entry.serial)

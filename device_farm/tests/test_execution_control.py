@@ -270,7 +270,18 @@ async def test_campaign_workflow_resolution_ignores_other_campaign_meta():
             temporal_client=None,
         )
 
-    assert ids == ["campaign:camp-2:device:SN001:scenario:__sequence__"]
+    # The guard: meta names another execution's workflow and another campaign's
+    # workflow. Neither may be signalled — pausing camp-2 must never touch a run
+    # belonging to camp-1.
+    assert "exec_other" not in ids
+    assert "campaign:camp-1:device:SN001:scenario:shared" not in ids
+    # What may be signalled: the campaign's own device workflow, and this
+    # execution's own workflow (fan-out names it after the execution and does
+    # not record that in meta, so it has to be reconstructed).
+    assert set(ids) == {
+        "campaign:camp-2:device:SN001:scenario:__sequence__",
+        "exec_exec-1",
+    }
 
 
 @pytest.mark.asyncio
@@ -296,4 +307,10 @@ async def test_execution_workflow_resolution_ignores_other_campaign_meta():
             temporal_client=None,
         )
 
-    assert ids == ["campaign:camp-2:device:SN001:scenario:__sequence__"]
+    # Same guard as above, one execution at a time.
+    assert "exec_other" not in ids
+    assert "campaign:camp-1:device:SN001:scenario:shared" not in ids
+    assert set(ids) == {
+        "campaign:camp-2:device:SN001:scenario:__sequence__",
+        "exec_exec-1",
+    }

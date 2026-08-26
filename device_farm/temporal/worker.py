@@ -236,6 +236,31 @@ async def _run_worker(
         raise
 
 
+def _ensure_manager_event_loop(manager, loop) -> None:
+    """Give the device registry a loop when nothing else has.
+
+    ``temporal.worker_main`` builds a bare DeviceManager and never runs the web
+    lifespan, so ``register_event_loop`` is never called and every DeviceClient
+    is left with ``_loop = None``. Anything that hands work to the loop then
+    no-ops silently — including the Redis publish of ``scenario_active``, which
+    is the only way the web process learns the phone is busy. Without it,
+    /api/devices/live reports an idle device for the whole run.
+
+    In-process mode (web lifespan → start_temporal_worker) already registered
+    the app loop; leave that one alone.
+    """
+    if getattr(manager, "_event_loop", None) is not None:
+        return
+    register = getattr(manager, "register_event_loop", None)
+    if register is None:
+        return
+    try:
+        register(loop)
+        log.info("Registered worker event loop on the device registry")
+    except Exception as exc:
+        log.warning("Could not register worker event loop: %s", exc)
+
+
 def start_temporal_worker(
     manager,
     cfg: TemporalConfig,
@@ -285,6 +310,7 @@ def start_temporal_worker(
                             thread_name_prefix=f"{role}-activity-{idx}",
                         )
                     )
+                    _ensure_manager_event_loop(manager, loop_ref)
                     client = await _create_client(cfg)
                     worker = await create_temporal_worker(
                         manager, cfg, client, queue=queue, worker_index=idx, role=role,

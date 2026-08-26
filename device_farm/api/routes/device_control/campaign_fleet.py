@@ -37,6 +37,21 @@ log = logging.getLogger(__name__)
 # Device serial may contain colons (WiFi ADB: 192.168.1.1:5555) so we cannot
 # count colons; instead we use a greedy .+ for the serial segment.
 _TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
+# Continuous crawl runs do not use the shape above. Their root orchestrator is
+#   campaign:<id>:crawl:<dispatch_id>
+# and it fans out one child per target:
+#   campaign:<id>:crawl:<dispatch_id>:device:<serial>:target:<entity_id>
+# which in turn owns a `…:target:<entity_id>:scenario` grandchild. Matching the
+# scenario-shaped regex against these fails at the second segment (`crawl`, not
+# `device`), so every crawl workflow used to be dropped from the listing and the
+# UI concluded the campaign had nothing running — no pause, no stop, no drain.
+# The trailing `[^:]+$` on the target pattern is what keeps the `:scenario`
+# grandchild out: it is an implementation detail, same as `:steps`.
+_CRAWL_ROOT_WF_RE = re.compile(r"^campaign:(?P<campaign_id>[^:]+):crawl:[^:]+$")
+_CRAWL_TARGET_WF_RE = re.compile(
+    r"^campaign:(?P<campaign_id>[^:]+):crawl:[^:]+"
+    r":device:(?P<device_serial>.+):target:(?P<external_entity_id>[^:]+)$"
+)
 _WORKFLOW_CAMPAIGN_RE = re.compile(r"^campaign:([^:]+):")
 _WORKFLOW_CONTEXT_RE = re.compile(
     r"^campaign:(?P<campaign_id>[^:]+):device:(?P<device_serial>.+):scenario:(?P<scenario_id>[^:]+)$"
@@ -104,10 +119,35 @@ def _interrupt_execution_ids(executions) -> list[str]:
     return ids
 
 
+def is_campaign_top_level_workflow(workflow_id: str) -> bool:
+    """True for workflows the campaign view should list as one running unit.
+
+    Covers the per-device scenario workflows of a normal dispatch and both
+    layers a continuous crawl runs with: the root orchestrator and its
+    per-target children. Grandchildren (`:steps`, `:scenario`) stay out.
+    """
+    wf_id = workflow_id or ""
+    return bool(
+        _TOP_LEVEL_WF_RE.match(wf_id)
+        or _CRAWL_ROOT_WF_RE.match(wf_id)
+        or _CRAWL_TARGET_WF_RE.match(wf_id)
+    )
+
+
+def is_device_top_level_workflow(workflow_id: str) -> bool:
+    """True for workflows that occupy one device.
+
+    The crawl root drives the whole fleet and owns no single device, so it is
+    excluded here even though the campaign view lists it.
+    """
+    wf_id = workflow_id or ""
+    return bool(_TOP_LEVEL_WF_RE.match(wf_id) or _CRAWL_TARGET_WF_RE.match(wf_id))
+
+
 def _workflow_context_from_workflow_id(workflow_id: str) -> dict:
     match = _WORKFLOW_CONTEXT_RE.match(workflow_id or "")
     if not match:
-        return {}
+        return _crawl_context_from_workflow_id(workflow_id)
     scenario_id = match.group("scenario_id")
     return {
         "campaign_id": match.group("campaign_id"),
@@ -119,6 +159,27 @@ def _workflow_context_from_workflow_id(workflow_id: str) -> dict:
         "workflow_kind": "main",
         "execution_id": None,
         "dispatch_source": None,
+    }
+
+
+def _crawl_context_from_workflow_id(workflow_id: str) -> dict:
+    """Context for a continuous crawl workflow ID (root or per-target child)."""
+    wf_id = workflow_id or ""
+    target = _CRAWL_TARGET_WF_RE.match(wf_id)
+    root = None if target else _CRAWL_ROOT_WF_RE.match(wf_id)
+    if not target and not root:
+        return {}
+    match = target or root
+    return {
+        "campaign_id": match.group("campaign_id"),
+        "campaign_name": None,
+        "scenario_id": None,
+        "scenario_name": None,
+        "scenario_count": None,
+        "device_serial": target.group("device_serial") if target else None,
+        "workflow_kind": "crawl_target" if target else "crawl_root",
+        "execution_id": None,
+        "dispatch_source": "continuous_crawl",
     }
 
 
@@ -535,9 +596,10 @@ def build_campaign_fleet_router(
         try:
             client = await get_temporal_client(config.temporal)
             raw_rows: list[tuple[str, str, str, datetime | None]] = []
-            # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{id-or-sequence}
-            # Child IDs have extra suffixes like :steps, :repeat:…, :if_element:…
-            # We match exactly 5 colon-separated segments to exclude children.
+            # Top-level IDs are either the per-device scenario workflow of a
+            # normal dispatch or one of the two continuous-crawl layers; see
+            # is_campaign_top_level_workflow. Child IDs carry extra suffixes
+            # like :steps, :scenario, :repeat:…, :if_element:… and stay out.
             # Sanitize campaign_id before embedding in Temporal query string to
             # prevent injection through double-quote characters.
             safe_campaign_id = campaign_id.replace('"', "").replace("\\", "")
@@ -545,7 +607,7 @@ def build_campaign_fleet_router(
             async for wf in client.list_workflows(
                 f'WorkflowId STARTS_WITH "{prefix}"'
             ):
-                if not _TOP_LEVEL_WF_RE.match(wf.id):
+                if not is_campaign_top_level_workflow(wf.id):
                     continue
                 temporal_st = wf.status.name if wf.status else "UNKNOWN"
                 raw_rows.append(
@@ -574,31 +636,48 @@ def build_campaign_fleet_router(
             execution_context_by_wf: dict[str, dict] = {}
             execution_status_by_wf: dict[str, str] = {}
             campaign_name_cache: dict[str, str | None] = {}
+            from services.campaign.execution_runtime import workflow_id_for_execution
+
             for ex in await list_running_executions_for_campaign(db, campaign_id):
-                wf_id = (ex.meta or {}).get("workflow_id")
-                if wf_id:
-                    execution_status_by_wf[str(wf_id)] = str(getattr(ex, "status", "") or "")
-                    execution_context_by_wf[str(wf_id)] = (
-                        await _workflow_context_from_execution(
-                            db,
-                            ex,
-                            campaign_name_cache=campaign_name_cache,
-                        )
+                # Fan-out dispatch runs a campaign as one workflow per execution,
+                # named exec_<execution_id> — a shape the `campaign:` prefix scan
+                # above cannot see. Reconstructing the ID when meta does not
+                # carry it is what /devices/{serial}/running-workflows has always
+                # done; the campaign view requiring meta.workflow_id meant a
+                # dispatched campaign listed zero workflows and the UI hid pause
+                # and stop on a run that was live.
+                wf_id = str(
+                    (ex.meta or {}).get("workflow_id")
+                    or workflow_id_for_execution(str(ex.id))
+                )
+                execution_status_by_wf[wf_id] = str(getattr(ex, "status", "") or "")
+                execution_context_by_wf[wf_id] = (
+                    await _workflow_context_from_execution(
+                        db,
+                        ex,
+                        campaign_name_cache=campaign_name_cache,
                     )
-                if not wf_id or wf_id in latest_by_workflow_id:
+                )
+                if wf_id in latest_by_workflow_id:
                     continue
                 try:
-                    handle = client.get_workflow_handle(str(wf_id))
+                    handle = client.get_workflow_handle(wf_id)
                     desc = await handle.describe()
-                    temporal_st = desc.status.name if desc.status else "UNKNOWN"
-                    latest_by_workflow_id[str(wf_id)] = (
-                        str(wf_id),
-                        desc.run_id,
-                        temporal_st,
-                        desc.start_time,
-                    )
                 except Exception:
+                    # Includes NOT_FOUND: the row is a DB assertion about a
+                    # workflow that may never have existed. Reporting it as
+                    # running would put a pause button on nothing.
                     log.debug("epic04 workflow describe failed: %s", wf_id, exc_info=True)
+                    continue
+                temporal_st = desc.status.name if desc.status else "UNKNOWN"
+                if temporal_st not in ("RUNNING", "PAUSED"):
+                    continue
+                latest_by_workflow_id[wf_id] = (
+                    wf_id,
+                    desc.run_id,
+                    temporal_st,
+                    desc.start_time,
+                )
 
             async def _one(row: tuple[str, str, str, datetime | None]) -> dict:
                 wf_id, run_id, temporal_st, start_time = row
@@ -667,6 +746,10 @@ def build_campaign_fleet_router(
             }
 
         # Epic 04: workflow_id=exec_{execution_id} (no :device: segment in Temporal ID).
+        # These rows are asserted by the database, not observed in Temporal, so
+        # they outlive the workflow they describe. Remember which ones came from
+        # here and check each against Temporal below.
+        db_sourced_ids: set[str] = set()
         for ex in await list_running_executions_for_device(db, device.id):
             try:
                 await get_execution_for_user(db, ex.id, user)
@@ -674,6 +757,7 @@ def build_campaign_fleet_router(
                 continue
             meta = ex.meta or {}
             wf_id = str(meta.get("workflow_id") or workflow_id_for_execution(ex.id))
+            db_sourced_ids.add(wf_id)
             ui_status = "PAUSED" if ex.status == "paused" else "RUNNING"
             _append_workflow(
                 wf_id,
@@ -694,14 +778,17 @@ def build_campaign_fleet_router(
                 "temporal_available": False,
             }
         try:
+            from temporalio.service import RPCError, RPCStatusCode
+
             client = await get_temporal_client(config.temporal)
-            # Legacy campaign dispatch IDs: campaign:{id}:device:{serial}:scenario:…
+            # Campaign dispatch IDs: campaign:{id}:device:{serial}:scenario:…
+            # Continuous crawl target IDs: campaign:{id}:crawl:{d}:device:{serial}:target:…
             safe_serial = serial.replace('"', "").replace("\\", "")
             needle = f":device:{safe_serial}:"
             async for wf in client.list_workflows('ExecutionStatus = "Running"'):
                 if needle not in wf.id:
                     continue
-                if not _TOP_LEVEL_WF_RE.match(wf.id):
+                if not is_device_top_level_workflow(wf.id):
                     continue
                 _append_workflow(
                     wf.id,
@@ -711,29 +798,51 @@ def build_campaign_fleet_router(
                     context=_workflow_context_from_workflow_id(wf.id),
                 )
 
-            # Enrich exec_* rows with live Temporal status when possible.
-            for wf_id in list(workflows_by_id):
-                if not wf_id.startswith("exec_"):
+            # Reconcile every DB-asserted row against Temporal. An execution row
+            # stuck at running (worker died mid-target, finalize never landed)
+            # would otherwise be reported as a live workflow forever, and the
+            # device reads as busy with nothing to point at. A workflow Temporal
+            # has never heard of is gone; anything else — a transport blip, a
+            # namespace timeout — leaves the row alone rather than inventing an
+            # idle device that is in fact mid-run.
+            for wf_id in sorted(db_sourced_ids):
+                if wf_id not in workflows_by_id:
                     continue
                 try:
                     handle = client.get_workflow_handle(wf_id)
                     desc = await handle.describe()
-                    temporal_st = desc.status.name if desc.status else "UNKNOWN"
-                    if temporal_st not in ("RUNNING", "PAUSED"):
+                except RPCError as exc:
+                    if exc.status == RPCStatusCode.NOT_FOUND:
                         workflows_by_id.pop(wf_id, None)
-                        continue
-                    ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
-                    row = workflows_by_id[wf_id]
-                    row["run_id"] = desc.run_id
-                    row["status"] = ui_st
-                    if desc.start_time:
-                        row["start_time"] = desc.start_time.isoformat()
+                        log.info(
+                            "dropping orphaned execution workflow row id=%s serial=%s",
+                            wf_id,
+                            serial,
+                        )
+                    else:
+                        log.debug(
+                            "device running workflow describe failed id=%s",
+                            wf_id,
+                            exc_info=True,
+                        )
+                    continue
                 except Exception:
                     log.debug(
                         "device running workflow describe failed id=%s",
                         wf_id,
                         exc_info=True,
                     )
+                    continue
+                temporal_st = desc.status.name if desc.status else "UNKNOWN"
+                if temporal_st not in ("RUNNING", "PAUSED"):
+                    workflows_by_id.pop(wf_id, None)
+                    continue
+                ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
+                row = workflows_by_id[wf_id]
+                row["run_id"] = desc.run_id
+                row["status"] = ui_st
+                if desc.start_time:
+                    row["start_time"] = desc.start_time.isoformat()
 
             return {
                 "serial": serial,

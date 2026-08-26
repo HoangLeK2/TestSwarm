@@ -3451,8 +3451,14 @@ class RelayAgent:
                 reply["error"] = str(ingest.get("error") or "ingest_failed")
                 reply["ingest"] = ingest
         except Exception as exc:
-            logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, exc)
-            reply["error"] = str(exc)
+            # Several exceptions on this path carry no message at all — a bare
+            # asyncio.TimeoutError being the common one. Falling back to str(exc)
+            # alone sends ok=false with an empty error, which the farm renders as
+            # the useless "extra_data_failed". Name the type when there is
+            # nothing else to say.
+            detail = str(exc) or type(exc).__name__
+            logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, detail)
+            reply["error"] = detail
         await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
 
     async def _handle_ocr(

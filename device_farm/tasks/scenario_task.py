@@ -996,6 +996,15 @@ def force_clear_scenario_busy(device: "DeviceClient") -> None:
     _try_publish_scenario_active_redis(device)
 
 
+# TTL on the Redis busy flag: it exists so a worker that dies mid-run cannot
+# leave the device wedged as busy forever. That means any scenario outliving the
+# TTL has to refresh it — see _start_scenario_active_keepalive.
+_SCENARIO_ACTIVE_TTL_S = 300
+_SCENARIO_ACTIVE_REFRESH_S = 60
+
+_scenario_active_loop_warned = False
+
+
 def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
     """Best-effort: publish scenario_active to Redis for cross-process WS/API gates.
 
@@ -1003,6 +1012,7 @@ def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
     in-memory ``device._scenario_active`` is process-local, so the web process
     must consult Redis to know the device is still under automation.
     """
+    global _scenario_active_loop_warned
     try:
         from services import redis_store
 
@@ -1018,12 +1028,21 @@ def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
         key = redis_store.key(f"device:{serial}:scenario_active")
         loop = getattr(device, "_loop", None)
         if loop is None:
+            # Without a loop the flag is never written and the web process reads
+            # the phone as idle for the whole run — which is how a running device
+            # falls out of the fleet grid. Say so once instead of failing mute.
+            if not _scenario_active_loop_warned:
+                _scenario_active_loop_warned = True
+                log.warning(
+                    "[%s] scenario_active not published: device has no event loop "
+                    "(DeviceManager.register_event_loop was never called in this process)",
+                    serial,
+                )
             return
 
         async def _set() -> None:
             if n > 0:
-                # TTL prevents stale locks if the worker crashes mid-run.
-                await r.setex(key, 300, str(n))
+                await r.setex(key, _SCENARIO_ACTIVE_TTL_S, str(n))
             else:
                 await r.delete(key)
 
@@ -1032,6 +1051,34 @@ def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
         _aio.run_coroutine_threadsafe(_set(), loop)
     except Exception:
         pass
+
+
+def _start_scenario_active_keepalive(device: "DeviceClient") -> threading.Event:
+    """Re-publish the busy flag so its TTL outlives a long scenario.
+
+    The flag is written once when the scenario starts. A crawl that runs longer
+    than ``_SCENARIO_ACTIVE_TTL_S`` would let the key expire mid-run, and
+    ``/api/devices/live`` would then report an idle phone while it is still
+    being driven — dropping it out of the fleet grid.
+
+    Returns the stop event; set it to end the refresh loop.
+    """
+    stop = threading.Event()
+
+    def _refresh() -> None:
+        while not stop.wait(_SCENARIO_ACTIVE_REFRESH_S):
+            # force_clear_scenario_busy() can zero the counter under us
+            # (preview cancel / interrupt); stop rather than resurrect the flag.
+            if int(getattr(device, "_scenario_active", 0) or 0) <= 0:
+                return
+            _try_publish_scenario_active_redis(device)
+
+    threading.Thread(
+        target=_refresh,
+        name=f"scenario-active-keepalive-{getattr(device, 'serial', '') or 'unknown'}",
+        daemon=True,
+    ).start()
+    return stop
 
 
 def run_scenario_task(
@@ -1078,6 +1125,7 @@ def run_scenario_task(
     # atomic in CPython (LOAD/ADD/STORE happens across bytecodes) so we
     # serialize via a per-device threading.Lock created on first use.
     _mark = _depth == 0
+    keepalive: Optional[threading.Event] = None
     if _mark:
         lock = getattr(device, "_scenario_active_lock", None)
         if lock is None:
@@ -1091,10 +1139,13 @@ def run_scenario_task(
             device._scenario_active = int(getattr(device, "_scenario_active", 0)) + 1
         _try_publish_status(device)
         _try_publish_scenario_active_redis(device)
+        keepalive = _start_scenario_active_keepalive(device)
     try:
         return ScenarioExecutor(sc).run()
     finally:
         if _mark:
+            if keepalive is not None:
+                keepalive.set()
             lock = getattr(device, "_scenario_active_lock", None)
             if lock is not None:
                 with lock:

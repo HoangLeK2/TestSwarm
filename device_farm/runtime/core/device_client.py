@@ -2568,11 +2568,28 @@ class DeviceClient:
             cancel_event=cancel_event,
         )
         if not result.get("ok"):
-            return {
+            # An empty error means the agent failed without saying why. Newer
+            # agents always name the cause, but agents deploy on their own
+            # schedule, so keep a fallback that at least points at the strategy
+            # instead of the opaque bare "extra_data_failed".
+            failure = {
                 "ok": False,
-                "error": str(result.get("error") or "extra_data_failed"),
+                "error": str(
+                    result.get("error")
+                    or f"extra_data_failed (agent gave no reason; strategy={strategy or 'unknown'})"
+                ),
                 "route": result.get("route", "relay_u2"),
             }
+            # Carry the cancellation marker through, not just its error text.
+            # A pause stops the in-flight relay request cooperatively, and the
+            # extract activity decides between "wait for resume and retry this
+            # step" and "the step failed" by reading this flag — the message is
+            # only ever logged. Dropping it here turned every pause into a
+            # failed step, which failed the scenario and sent the run to the
+            # DLQ: pressing pause ended the run instead of suspending it.
+            if result.get("cancelled"):
+                failure["cancelled"] = True
+            return failure
         ingest = result.get("ingest") if isinstance(result.get("ingest"), dict) else result
         return {
             "ok": True,

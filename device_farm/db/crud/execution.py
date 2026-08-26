@@ -8,10 +8,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.campaign import Campaign
+from db.models.enums import ExecutionResultStatus, ExecutionStatus
 from db.models.execution import Execution, ExecutionDevice, ExecutionResult
 from db.models.device import Device
 from db.models.utils import _now, _uuid
@@ -193,6 +194,51 @@ async def finish_execution(
     execution.finished_at = datetime.now(timezone.utc)
     await db.flush()
     return execution
+
+
+async def close_open_execution_results(
+    db: AsyncSession,
+    execution_id: str,
+    *,
+    status: str,
+    device_id: Optional[str] = None,
+) -> int:
+    """Settle per-device result rows still sitting at pending/running.
+
+    An execution can reach a terminal state without its ExecutionResult rows
+    ever being written: the row is created when a device starts a target, but
+    only `finalize_campaign` writes the outcome, and the paths that finish an
+    execution around it (cleanup after a failed crawl target, the orphan reaper)
+    left the row at 'running' forever. Cumulative run stats read those rows, so
+    the campaign kept a device in its in-flight count long after the phone was
+    released — a run that reads busy with nothing running.
+
+    Only non-terminal rows are touched, so a real outcome already recorded by
+    `finalize_campaign` is never overwritten. Returns the number of rows closed.
+    """
+    er_status = (
+        ExecutionResultStatus.PASSED.value
+        if status == ExecutionStatus.COMPLETED.value
+        else ExecutionResultStatus.FAILED.value
+    )
+    conditions = [
+        ExecutionResult.execution_id == execution_id,
+        ExecutionResult.status.in_(
+            (
+                ExecutionResultStatus.PENDING.value,
+                ExecutionResultStatus.RUNNING.value,
+            )
+        ),
+    ]
+    if device_id:
+        conditions.append(ExecutionResult.device_id == device_id)
+    result = await db.execute(
+        update(ExecutionResult)
+        .where(*conditions)
+        .values(status=er_status, finished_at=datetime.now(timezone.utc))
+    )
+    await db.flush()
+    return int(result.rowcount or 0)
 
 
 async def list_running_executions_for_campaign(

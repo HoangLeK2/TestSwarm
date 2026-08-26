@@ -210,15 +210,6 @@ export function CampaignRowActions({
     isCampaignActiveExecution(campaign.status) || isStopping
   );
   const workflows = wfData?.workflows ?? [];
-  const hasActiveWorkflows = workflows.some(
-    (w) =>
-      w.status === 'RUNNING' ||
-      w.status === 'PAUSED' ||
-      w.status === 'paused_on_error'
-  );
-  const runningWorkflowIds = workflows
-    .filter((w) => w.status === 'RUNNING')
-    .map((w) => w.workflow_id);
   const pausedWorkflowIds = workflows
     .filter((w) => w.status === 'PAUSED' || w.status === 'paused_on_error')
     .map((w) => w.workflow_id);
@@ -373,9 +364,14 @@ export function CampaignRowActions({
   };
 
   const running = isCampaignActiveExecution(campaign.status) || isStopping;
-  const showPause =
-    campaign.status === 'running' &&
-    (hasActiveWorkflows || runningWorkflowIds.length > 0);
+  // Pause reads the campaign's own status, the same source Stop already trusts.
+  // It used to require the workflow listing to name a running row, which asks
+  // the wrong question in three ways: the listing lags its 12s poll, it is
+  // keyed on ID shapes that a continuous crawl and a fan-out dispatch do not
+  // use, and it is empty for a beat after a run starts. Every one of those made
+  // pause vanish from a campaign that was plainly running — while the badge
+  // beside it read "running" off the very status checked here.
+  const showPause = campaign.status === 'running';
   const showResume =
     campaign.status === 'paused' || pausedWorkflowIds.length > 0;
 

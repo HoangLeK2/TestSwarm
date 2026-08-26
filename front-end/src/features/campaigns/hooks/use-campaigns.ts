@@ -994,6 +994,7 @@ export function useRunCampaign(
       clearPollTimer();
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows', id] });
 
       const engine =
         data.execution_engine ??
@@ -1101,6 +1102,10 @@ export function useDispatchCampaign(
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
       qc.invalidateQueries({ queryKey: ['executions'] });
       qc.invalidateQueries({ queryKey: KEYS.executionRuntime });
+      // The run controls read this list. Without an explicit invalidation the
+      // first fetch races the workflow actually starting, and a miss costs a
+      // full 12s poll before pause/stop appear on a run already in progress.
+      qc.invalidateQueries({ queryKey: ['campaign-workflows', id] });
 
       const summary = summarizeDispatchResult(data);
       if (summary.allTerminal) {

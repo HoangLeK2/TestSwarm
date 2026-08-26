@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.crud import campaign_entity as campaign_repo
 from db.crud import campaign_target as target_repo
 from db.crud.execution import (
+    close_open_execution_results,
     finish_execution,
     get_execution,
     upsert_execution_result,
@@ -1943,6 +1944,16 @@ async def finish_fan_out_execution(
     """Mark execution terminal and release any campaign dispatch claim."""
     if not execution_already_finished:
         await finish_execution(db, execution.id, status=status)
+    # Terminal execution, terminal per-device rows. `finalize_campaign` upserts
+    # the real outcome before it calls us, and this only touches rows still at
+    # pending/running, so a recorded pass/fail is never overwritten — this is
+    # for the paths that finish an execution with no scenario outcome to record.
+    await close_open_execution_results(
+        db,
+        execution.id,
+        status=status,
+        device_id=device_id,
+    )
     await db.execute(
         update(ExecutionEntityAssignment)
         .where(

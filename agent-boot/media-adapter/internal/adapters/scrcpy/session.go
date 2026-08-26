@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devicefarm/media-adapter/internal/domain/stream"
@@ -329,6 +330,7 @@ type Session struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
+	started   atomic.Bool
 	once      sync.Once
 	mu        sync.Mutex
 	status    Status
@@ -399,6 +401,10 @@ func NewSession(req StartRequest, publisher Publisher, launcher Launcher, logger
 }
 
 func (s *Session) Start() {
+	// Mark before spawning: a Stop racing this must either see the flag and
+	// wait, or miss it and return — in which case run() finds the context
+	// already cancelled and exits without doing any work.
+	s.started.Store(true)
 	go s.run()
 }
 
@@ -406,7 +412,18 @@ func (s *Session) Stop() {
 	s.once.Do(func() {
 		s.cancel()
 		s.closeControl()
-		<-s.done
+		// Only wait for run() if run() exists.
+		//
+		// Manager.Start publishes a session into the map and releases the lock
+		// before launching it, so a concurrent caller can reach Stop on a
+		// session whose goroutine has not started. s.done is closed by that
+		// goroutine and by nothing else, so waiting here would block until the
+		// process died — and with ten dashboard tiles calling Start at once,
+		// that window is hit often enough to look like "the stream takes
+		// forever to appear".
+		if s.started.Load() {
+			<-s.done
+		}
 	})
 }
 

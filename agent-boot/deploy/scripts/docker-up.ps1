@@ -37,7 +37,7 @@ if ($Volumes) {
 $RequiresRuntimeConfig = $ComposeArgs[0] -in @('up', 'run', 'restart')
 
 $EnvFile = Join-Path $Root '.env'
-$AgentBootVersion = if ($env:AGENT_BOOT_VERSION) { $env:AGENT_BOOT_VERSION } else { '0.2.8' }
+$AgentBootVersion = if ($env:AGENT_BOOT_VERSION) { $env:AGENT_BOOT_VERSION } else { '0.3.0' }
 $Image = "agent-boot:$AgentBootVersion"
 
 function Test-Command($Name) {

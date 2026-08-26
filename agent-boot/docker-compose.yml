@@ -10,7 +10,7 @@ x-agent-boot-image: &agent-boot-image
   build:
     context: .
     dockerfile: Dockerfile
-  image: agent-boot:0.2.8
+  image: agent-boot:0.3.0
 
 x-adb-host-env: &adb-host-env
   ADB_HOST: host.docker.internal

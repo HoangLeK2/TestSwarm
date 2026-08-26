@@ -771,23 +771,27 @@ func applyDeviceSafeProfile(req StartRequest, deviceSignature string) StartReque
 	// anyone who finds a device that needs it.
 	req.IgnoreEncoderConstraints = false
 	req.LowLatency = false
-	// Keep i-frame-interval; shed only the riskier keys.
+	// No codec options at all. Not one.
 	//
-	// This used to jump straight to the last rung, which sends no codec options
-	// at all — including the 1s IDR cadence. A push pipeline cannot ask for a
-	// keyframe while frames are still arriving (requestIDR only fires on a 5s
-	// read timeout), so a listed device produced one keyframe at startup and
-	// then none: any lost packet, or any viewer joining later, waited forever
-	// for an IDR that was never scheduled. That is the "frozen until you
-	// refresh" report, and refreshing worked only because it cold-started the
-	// stream.
+	// This was briefly lowered to keep `i-frame-interval:int=1`, on the theory
+	// that the option had never actually been proven guilty — both earlier
+	// crashes still carried max_size, so the options were never tried alone.
+	// The device settled it:
 	//
-	// The jump was never justified by evidence either. Both crashes that
-	// motivated it still carried max_size, and the configuration proven on
-	// hardware carried neither max_size nor codec options — so the options
-	// themselves were never on trial. If they do turn out to be fatal here, the
-	// ladder walks down from this rung on its own.
-	req.CodecLevel = 2
+	//	[server] DEBUG: Video codec option set: i-frame-interval (Integer) = 1
+	//	[server] DEBUG: Video codec size alignment requirement: 2px
+	//	stack corruption detected (-fstack-protector)
+	//
+	// A single MediaFormat key is enough to abort this encoder. The absence of
+	// evidence against it was not evidence for it, and ten devices went dark
+	// while that distinction was tested in production.
+	//
+	// Losing the 1s IDR cadence is a real cost — nothing schedules a keyframe
+	// after startup — but it is paid back through RESET_VIDEO instead: the RTSP
+	// handler asks for one when a viewer attaches (publisher.go
+	// requestKeyframe), which is exactly when a missing IDR would show as a
+	// frozen picture.
+	req.CodecLevel = MaxCodecLevel
 	// Bitrate is deliberately left alone.
 	//
 	// It used to be pinned at 900000 here, which quietly deleted the caller's

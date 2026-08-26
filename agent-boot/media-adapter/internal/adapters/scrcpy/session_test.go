@@ -299,20 +299,20 @@ func TestDeviceSafeProfileStartsNote10WithSafeEncoderAndReadableFocusedProfile(t
 	if got.LowLatency {
 		t.Fatal("Note 10+ must not start with low-latency encoder option")
 	}
-	// The rung itself is not the contract; keeping the IDR cadence is.
-	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) == "" {
-		t.Fatalf("profile left the device with no IDR cadence: %+v", got)
+	// Not one codec option may reach this device: a lone i-frame-interval was
+	// enough to abort the encoder and blank ten phones in production.
+	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) != "" {
+		t.Fatalf("profile sent a codec option to a device that aborts on them: %+v", got)
 	}
 	if got.Bitrate != 900000 || !got.SkipMaxSize || !got.SkipMaxFPS {
 		t.Fatalf("profile=%dbps skip_size=%v skip_fps=%v, want 900000bps and no encoder hints",
 			got.Bitrate, got.SkipMaxSize, got.SkipMaxFPS)
 	}
-	// One codec option survives on purpose. Sending none at all is what left the
-	// device with a single keyframe at startup and nothing after it, so a lost
-	// packet or a late viewer froze the picture until the stream was rebuilt.
+	// Measured on SM-N975F: i-frame-interval alone aborts the encoder, so this
+	// device gets no codec options whatsoever. Keyframes come from RESET_VIDEO.
 	args := shellJoin(scrcpyServerArgs(LauncherConfig{ServerVersion: "4.1"}, got))
-	if !contains(args, "'video_codec_options=i-frame-interval:int=1'") {
-		t.Fatalf("Note 10+ profile must keep exactly the IDR cadence: %s", args)
+	if contains(args, "video_codec_options") {
+		t.Fatalf("Note 10+ profile must send no codec options: %s", args)
 	}
 }
 
@@ -340,8 +340,8 @@ func TestDeviceSafeProfileKeepsCallerBitrateForNote10(t *testing.T) {
 	if got.LowLatency {
 		t.Fatalf("safe encoder settings not applied: %+v", got)
 	}
-	if contains(codecOptionsForLevel(got.CodecLevel, got.LowLatency), "latency") {
-		t.Fatalf("profile kept the riskiest codec option: %+v", got)
+	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) != "" {
+		t.Fatalf("profile kept a codec option: %+v", got)
 	}
 }
 
@@ -357,14 +357,14 @@ func TestDeviceSafeProfileMatchesNote10EmulatorName(t *testing.T) {
 
 	got := applyDeviceSafeProfile(req, "sdk_gphone64_arm64 galaxy_note10_plus Google")
 
-	// What identifies the profile is the two encoder hints being dropped, not a
-	// particular rung. Pinning the rung is what let the IDR cadence disappear
-	// unnoticed, so assert the behaviour instead of the number.
+	// The profile is defined by what it refuses to send: both encoder hints and
+	// every codec option. Each of those, on its own, aborts the encoder on real
+	// SM-N975F hardware.
 	if !got.SkipMaxSize || !got.SkipMaxFPS {
 		t.Fatalf("emulator Note 10+ profile not applied: %+v", got)
 	}
-	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) == "" {
-		t.Fatalf("profile left the device with no IDR cadence: %+v", got)
+	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) != "" {
+		t.Fatalf("profile sent a codec option to a device that aborts on them: %+v", got)
 	}
 }
 

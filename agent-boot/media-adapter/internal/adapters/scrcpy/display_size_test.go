@@ -58,20 +58,18 @@ func TestSafeDisplaySizeIsOptOut(t *testing.T) {
 	}
 }
 
-func TestNote10SafeProfileKeepsPeriodicKeyframes(t *testing.T) {
-	// Without i-frame-interval the device emits one keyframe at startup and
-	// then none, so any lost packet or late viewer freezes until the stream is
-	// rebuilt. That is the "frozen until refresh" report.
+func TestNote10SafeProfileSendsNoCodecOptions(t *testing.T) {
+	// SM-N975F aborts on a single MediaFormat key. Keyframes are recovered via
+	// RESET_VIDEO when a viewer attaches, not by asking the encoder for a
+	// cadence it cannot survive being told about.
 	got := applyDeviceSafeProfile(StartRequest{
 		Serial: "SERIAL", MaxFPS: 15, MaxWidth: 600, Bitrate: 900000, VideoCodec: "h264",
 	}, "SM-N976B Galaxy Note 10+ samsung universal9810")
 
 	args := shellJoin(scrcpyServerArgs(LauncherConfig{ServerVersion: "4.1"}, got))
-	if !contains(args, "i-frame-interval:int=1") {
-		t.Fatalf("safe profile dropped the IDR cadence: %s", args)
-	}
-	// The riskier keys still go; only the valuable one stays.
-	if contains(args, "max-bframes") || contains(args, "latency:int=0") {
-		t.Fatalf("safe profile kept a risky codec option: %s", args)
+	for _, forbidden := range []string{"video_codec_options", "i-frame-interval", "max-bframes", "latency:int"} {
+		if contains(args, forbidden) {
+			t.Fatalf("safe profile sent %q to a device that aborts on it: %s", forbidden, args)
+		}
 	}
 }

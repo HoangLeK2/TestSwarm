@@ -5,7 +5,7 @@ name: agent-boot
 
 services:
   agent-boot:
-    image: agent-boot:0.2.8
+    image: agent-boot:0.3.0
     container_name: agent-boot
     restart: unless-stopped
     env_file:
@@ -40,7 +40,7 @@ services:
     #   - ./assets:/app/assets:ro
 
   media-adapter:
-    image: agent-boot:0.2.8
+    image: agent-boot:0.3.0
     container_name: media-adapter
     restart: unless-stopped
     command: ["/app/bin/media-adapter"]

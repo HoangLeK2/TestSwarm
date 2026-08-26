@@ -54,7 +54,10 @@ class DeviceManager:
         self._index_map: Dict[str, int] = {}
         self._index_save_lock: threading.Lock = threading.Lock()
         self._index_save_pending: bool = False
-        self._index_save_snapshot: Optional[Dict[str, int]] = None
+        self._index_save_dirty: bool = False
+        # Running set + rising hint keep slot assignment O(1) per new device.
+        self._used_indices: set[int] = set()
+        self._next_index_hint: int = 0
         self._load_index_map()
         # Keep index history for stable slot assignment, but do not pre-register
         # devices from disk. Registry should reflect only currently live devices.
@@ -231,13 +234,24 @@ class DeviceManager:
     # ── Serial → Index Persistence ────────────────────────────────────────────
 
     def _get_or_assign_index(self, serial: str) -> int:
-        if serial in self._index_map:
-            return self._index_map[serial]
-        used = set(self._index_map.values())
-        idx = 0
-        while idx in used:
+        """Assign the lowest free slot in O(1) amortised.
+
+        This runs once per newly reported phone, inside the relay online
+        callback, on the API event loop. Rebuilding ``set(index_map.values())``
+        on every call made a fleet registration O(N^2): at 2000 phones that
+        alone was hundreds of milliseconds of stalled loop. Slots are never
+        released (the map is history), so a running set plus a rising hint
+        gives the same answer without the rescan.
+        """
+        existing = self._index_map.get(serial)
+        if existing is not None:
+            return existing
+        idx = self._next_index_hint
+        while idx in self._used_indices:
             idx += 1
         self._index_map[serial] = idx
+        self._used_indices.add(idx)
+        self._next_index_hint = idx + 1
         self._schedule_save_index_map()
         return idx
 
@@ -253,6 +267,8 @@ class DeviceManager:
                 )
             except Exception as exc:
                 log.warning(f"Could not load index map {path}: {exc}")
+        self._used_indices = {int(v) for v in self._index_map.values()}
+        self._next_index_hint = 0
 
     def _schedule_save_index_map(self) -> None:
         """Persist the slot map off the caller's thread, coalescing bursts.
@@ -263,11 +279,13 @@ class DeviceManager:
         bind mount that is not free. Slot assignment is already in memory and
         authoritative; the file is only history, so it can lag by a second.
 
-        Callers hold ``self._lock`` (non-reentrant), so the snapshot is taken
-        here and the writer thread never reaches back for it.
+        Only a flag is set here — O(1). Copying the map on the caller's side
+        would put the O(N) back on the event loop and make a fleet registration
+        quadratic again. The writer thread snapshots under ``self._lock``
+        instead; it is a different thread, so taking that lock is safe.
         """
         with self._index_save_lock:
-            self._index_save_snapshot = dict(self._index_map)
+            self._index_save_dirty = True
             if self._index_save_pending:
                 return
             self._index_save_pending = True
@@ -275,30 +293,40 @@ class DeviceManager:
             _INDEX_SAVE_POOL.submit(self._drain_index_map_saves)
         except RuntimeError:
             # Interpreter shutting down — write inline so the slot is not lost.
+            # The caller holds self._lock, so snapshot directly rather than
+            # re-acquiring it.
             with self._index_save_lock:
                 self._index_save_pending = False
-                snapshot = self._index_save_snapshot
-                self._index_save_snapshot = None
-            if snapshot is not None:
-                self._save_index_map(snapshot)
+                self._index_save_dirty = False
+            self._save_index_map(dict(self._index_map))
+
+    def _snapshot_index_map(self) -> Optional[Dict[str, int]]:
+        """Take a consistent copy if there is anything new to write."""
+        with self._index_save_lock:
+            if not self._index_save_dirty:
+                return None
+            self._index_save_dirty = False
+        with self._lock:
+            return dict(self._index_map)
 
     def _drain_index_map_saves(self) -> None:
         while True:
-            with self._index_save_lock:
-                snapshot = self._index_save_snapshot
-                self._index_save_snapshot = None
-                if snapshot is None:
+            snapshot = self._snapshot_index_map()
+            if snapshot is None:
+                with self._index_save_lock:
+                    # Re-check: an assignment may have landed since the snapshot.
+                    if self._index_save_dirty:
+                        continue
                     self._index_save_pending = False
                     return
-            self._save_index_map(snapshot)
+            else:
+                self._save_index_map(snapshot)
             # Coalesce the rest of the burst into the next write.
             time.sleep(_INDEX_SAVE_DEBOUNCE_S)
 
     def flush_index_map(self) -> None:
         """Write any pending slot assignment now (shutdown path)."""
-        with self._index_save_lock:
-            snapshot = self._index_save_snapshot
-            self._index_save_snapshot = None
+        snapshot = self._snapshot_index_map()
         if snapshot is not None:
             self._save_index_map(snapshot)
 

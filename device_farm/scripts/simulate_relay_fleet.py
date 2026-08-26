@@ -41,14 +41,14 @@ from runtime.transports.grpc_gen import relay_pb2, relay_pb2_grpc
 FAKE_RELAY_PREFIX = "simfleet"
 
 
-def _fleet(count: int, *, style: str) -> tuple[list[str], list[dict]]:
+def _fleet(count: int, *, style: str, prefix: str = FAKE_RELAY_PREFIX) -> tuple[list[str], list[dict]]:
     serials: list[str] = []
     caps: list[dict] = []
     for i in range(count):
         if style == "usb":
             # No IP in the serial — wlan_ip must come from capabilities. This is
             # the shape that triggered the original 2s-per-phone stall.
-            serial = f"{FAKE_RELAY_PREFIX.upper()}{i:05d}USB"
+            serial = f"{prefix.upper()}{i:05d}USB"
         else:
             serial = f"10.243.{i // 254}.{(i % 254) + 1}:5555"
         serials.append(serial)
@@ -123,13 +123,23 @@ async def _run_agent(
                 yield relay_pb2.AgentMsg(meta=json.dumps(item).encode())
 
         call = stub.Stream(_requests(), metadata=metadata)
+        acked = asyncio.Event()
+        stream_error: list[BaseException] = []
 
         async def _drain_responses() -> None:
+            # Never swallow this. An earlier version caught and dropped every
+            # exception here, so a backend rejecting the stream outright
+            # (UNAUTHENTICATED — missing --api-key) still produced a confident
+            # "OK: longest silence 206ms" while the backend received nothing.
             try:
-                async for _ in call:
-                    pass
-            except Exception:
-                pass
+                async for msg in call:
+                    if getattr(msg, "is_json", False):
+                        acked.set()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — reported, not hidden
+                stream_error.append(exc)
+                acked.set()
 
         drain = asyncio.create_task(_drain_responses())
 
@@ -143,7 +153,17 @@ async def _run_agent(
                 "version": "sim-1.0",
             }
         )
-        await asyncio.sleep(0.5)
+        # Refuse to report a fleet into a stream the backend never accepted —
+        # otherwise the run reports latency for an idle backend.
+        try:
+            await asyncio.wait_for(acked.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                "backend never acknowledged the relay register — no measurement is possible"
+            ) from None
+        if stream_error:
+            raise RuntimeError(f"relay stream rejected: {stream_error[0]}") from stream_error[0]
+
         print(f"  → reporting {len(serials)} phones …", flush=True)
         heartbeat = {"type": "heartbeat", "serials": serials, "capabilities": caps}
         await outbox.put(heartbeat)
@@ -159,10 +179,12 @@ async def _run_agent(
             await drain
         except asyncio.CancelledError:
             pass
+        if stream_error:
+            raise RuntimeError(f"relay stream failed mid-run: {stream_error[0]}")
 
 
 async def _main(args: argparse.Namespace) -> int:
-    serials, caps = _fleet(args.phones, style=args.serial_style)
+    serials, caps = _fleet(args.phones, style=args.serial_style, prefix=args.serial_prefix)
     stop = asyncio.Event()
 
     print(f"polling {args.http}/api/health every {args.poll_interval}s …", flush=True)
@@ -224,6 +246,11 @@ def main() -> int:
     parser.add_argument("--http", default="http://localhost:8000", help="backend HTTP base URL")
     parser.add_argument("--api-key", default="", help="x-relay-api-key, if the backend requires one")
     parser.add_argument("--phones", type=int, default=100, help="fleet size to report")
+    parser.add_argument(
+        "--serial-prefix", default=FAKE_RELAY_PREFIX,
+        help="vary this between runs — a serial the backend already registered "
+             "is not new work, and reusing one silently measures an idle path",
+    )
     parser.add_argument(
         "--serial-style",
         choices=["usb", "tcp"],

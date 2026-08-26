@@ -3994,19 +3994,6 @@
     "refreshErrorTitle": "Không thể cập nhật dữ liệu mới",
     "refreshErrorHint": "Dữ liệu gần nhất vẫn được giữ lại.",
     "retry": "Thử lại",
-    "filters": {
-      "searchLabel": "Tìm thiết bị",
-      "searchPlaceholder": "Tìm theo tên, serial, hãng hoặc model...",
-      "clearSearch": "Xóa tìm kiếm",
-      "statusLabel": "Trạng thái",
-      "statusAll": "Tất cả trạng thái",
-      "statusOnline": "Trực tuyến",
-      "statusOffline": "Ngoại tuyến / đã chết",
-      "showing": "Hiển thị {count}/{total} thiết bị",
-      "noResults": "Không tìm thấy thiết bị",
-      "noResultsHint": "Thử từ khóa khác hoặc đặt lại bộ lọc.",
-      "reset": "Đặt lại bộ lọc"
-    },
     "health": {
       "agentLabel": "Agent",
       "streamLabel": "Video",

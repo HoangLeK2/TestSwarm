@@ -3990,19 +3990,6 @@
     "refreshErrorTitle": "Could not refresh data",
     "refreshErrorHint": "The last successful data is still shown.",
     "retry": "Retry",
-    "filters": {
-      "searchLabel": "Search devices",
-      "searchPlaceholder": "Search by name, serial, brand, or model...",
-      "clearSearch": "Clear search",
-      "statusLabel": "Status",
-      "statusAll": "All statuses",
-      "statusOnline": "Online",
-      "statusOffline": "Offline / dead",
-      "showing": "Showing {count}/{total} devices",
-      "noResults": "No devices found",
-      "noResultsHint": "Try another keyword or reset the filters.",
-      "reset": "Reset filters"
-    },
     "health": {
       "agentLabel": "Agent",
       "streamLabel": "Video",

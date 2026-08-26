@@ -33,7 +33,6 @@ export function MonitorControlBar({ campaign }: Props) {
   const { data: wfData } = useCampaignWorkflows(campaign.id, running);
   const workflows = wfData?.workflows ?? [];
 
-  const runningCount = workflows.filter((w) => w.status === 'RUNNING').length;
   const pausedCount = workflows.filter(
     (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
   ).length;
@@ -47,8 +46,9 @@ export function MonitorControlBar({ campaign }: Props) {
     return null;
   }
 
-  const showPause =
-    !isStopping && campaign.status === 'running' && runningCount > 0;
+  // Same source of truth as the campaign row and as Stop below: the campaign's
+  // own status, not the workflow listing that lags it.
+  const showPause = !isStopping && campaign.status === 'running';
   const showResume =
     !isStopping && (campaign.status === 'paused' || pausedCount > 0);
 

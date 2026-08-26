@@ -18,9 +18,17 @@ import { fetchConfig } from '../services/api';
 import type { DeviceScreenTransport } from './device-screen';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
 import { CoreEmptyState } from '@/components/core-empty-state';
-import { RefreshCw, Smartphone } from 'lucide-react';
+import { RefreshCw, Search, Smartphone, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { isVisibleDeviceFarmActiveDevice } from '../lib/device-farm-visible-devices';
 import {
@@ -28,10 +36,15 @@ import {
   isGridWebRtcPreviewEnabled
 } from '../lib/device-tile-preview-policy';
 import {
+  filterDeviceFarmDevices,
+  type DeviceFarmStatusFilter
+} from '../lib/device-farm-filter';
+import {
   DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX,
   DEVICE_GRID_GAP_PX,
   DEVICE_GRID_TILE_WIDTH_PX,
   getDeviceGridColumnCount,
+  getDeviceGridRenderMode,
   getDeviceGridRowBounds,
   getDeviceGridRowCount
 } from '../lib/device-farm-virtual-grid';
@@ -60,6 +73,9 @@ export function DeviceFarm() {
   const tEmpty = useTranslations('coreEmptyState');
   const tHeader = useTranslations('devicesFarm.header');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] =
+    useState<DeviceFarmStatusFilter>('all');
   const { data: appConfig } = useQuery({
     queryKey: ['device-farm', 'config'],
     queryFn: fetchConfig,
@@ -86,13 +102,17 @@ export function DeviceFarm() {
     liveSnapshotAuthoritative: true
   });
 
-  const activeDevices = useMemo(
+  const filteredDevices = useMemo(
+    () => filterDeviceFarmDevices(devices, search, statusFilter),
+    [devices, search, statusFilter]
+  );
+  const activeDeviceCount = useMemo(
     () =>
       devices.filter(
         (device) =>
           isVisibleDeviceFarmActiveDevice(device) ||
           hasMediaPlanePreview(device)
-      ),
+      ).length,
     [devices]
   );
   const readyDeviceCount = useMemo(
@@ -106,9 +126,20 @@ export function DeviceFarm() {
     [devices]
   );
 
+  const isInitialLoading =
+    requestStatus === 'idle' ||
+    (requestStatus === 'loading' && lastUpdatedAt === null);
+  const isInitialError = requestStatus === 'error' && lastUpdatedAt === null;
+  const renderMode = getDeviceGridRenderMode({
+    isInitialError,
+    isInitialLoading,
+    deviceCount: devices.length,
+    filteredCount: filteredDevices.length
+  });
+
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_GRID_PAGE_SIZE);
-  const pageCount = Math.max(1, Math.ceil(activeDevices.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
 
   useEffect(() => {
     setPageIndex((prev) => Math.min(prev, pageCount - 1));
@@ -116,23 +147,40 @@ export function DeviceFarm() {
 
   const pageDevices = useMemo(() => {
     const start = pageIndex * pageSize;
-    return activeDevices.slice(start, start + pageSize);
-  }, [activeDevices, pageIndex, pageSize]);
+    return filteredDevices.slice(start, start + pageSize);
+  }, [filteredDevices, pageIndex, pageSize]);
 
-  const virtualGridRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    setPageIndex(0);
+  }, [search, statusFilter]);
+
+  // Callback ref, not useRef: measurement has to be wired the moment the grid
+  // node attaches. Keying it off device counts instead looked equivalent and
+  // was not — a WebSocket status frame can raise the count to 1 while the page
+  // is still on the loading branch, so by the time the grid actually mounted
+  // the deps had not changed, the effect never re-ran, scrollElement stayed
+  // null, and the virtualizer sat disabled behind a header reading "1/1".
+  const [gridElement, setGridElement] = useState<HTMLElement | null>(null);
+  const virtualGridRef = useCallback(
+    (node: HTMLElement | null) => setGridElement(node),
+    []
+  );
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const [gridWidth, setGridWidth] = useState(0);
   const [scrollMargin, setScrollMargin] = useState(0);
+  const syncGeometryRef = useRef<() => void>(() => {});
 
   useLayoutEffect(() => {
-    const grid = virtualGridRef.current;
-    if (!grid) return;
+    if (!gridElement) {
+      setScrollElement(null);
+      return;
+    }
 
-    const scroller = findScrollableParent(grid);
+    const scroller = findScrollableParent(gridElement);
     setScrollElement(scroller);
 
     const syncGeometry = () => {
-      const gridRect = grid.getBoundingClientRect();
+      const gridRect = gridElement.getBoundingClientRect();
       const scrollerRect = scroller.getBoundingClientRect();
       const nextWidth = Math.max(0, gridRect.width);
       const nextScrollMargin = Math.max(
@@ -147,16 +195,24 @@ export function DeviceFarm() {
       );
     };
 
+    syncGeometryRef.current = syncGeometry;
     syncGeometry();
     const resizeObserver = new ResizeObserver(syncGeometry);
-    resizeObserver.observe(grid);
+    resizeObserver.observe(gridElement);
     resizeObserver.observe(scroller);
     window.addEventListener('resize', syncGeometry);
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener('resize', syncGeometry);
+      syncGeometryRef.current = () => {};
     };
-  }, [error, pageDevices.length]);
+  }, [gridElement]);
+
+  // Siblings appearing above the grid (refresh-error banner, filter bar) move
+  // it without resizing its box, and ResizeObserver does not fire on a move.
+  useLayoutEffect(() => {
+    syncGeometryRef.current();
+  }, [error, isInitialLoading, filteredDevices.length, pageIndex, pageSize]);
 
   const columnCount = useMemo(
     () => getDeviceGridColumnCount(gridWidth, pageDevices.length),
@@ -182,10 +238,6 @@ export function DeviceFarm() {
     enabled: scrollElement !== null && rowCount > 0,
     useFlushSync: false
   });
-  const isInitialLoading =
-    requestStatus === 'idle' ||
-    (requestStatus === 'loading' && lastUpdatedAt === null);
-  const isInitialError = requestStatus === 'error' && lastUpdatedAt === null;
 
   const lastUpdatedLabel = lastUpdatedAt
     ? new Intl.DateTimeFormat(undefined, {
@@ -225,7 +277,7 @@ export function DeviceFarm() {
                   ? tHeader('devicesReadyUnavailable')
                   : tHeader('devicesReadyLoading')}
             </Badge>
-            {devices.length > activeDevices.length ? (
+            {devices.length > activeDeviceCount ? (
               <Badge variant='secondary' className='text-[10px]'>
                 {tHeader('devicesRegistered', { count: devices.length })}
               </Badge>
@@ -233,6 +285,60 @@ export function DeviceFarm() {
           </div>
         </div>
       </div>
+
+      {renderMode === 'grid' || renderMode === 'empty-filter' ? (
+        <div className='flex flex-col gap-2 rounded-lg border bg-card/50 p-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex flex-1 flex-col gap-2 sm:flex-row'>
+            <div className='relative w-full sm:max-w-sm'>
+              <Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder={t('filters.searchPlaceholder')}
+                className='pl-9 pr-9'
+                aria-label={t('filters.searchLabel')}
+              />
+              {search ? (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  className='absolute right-1 top-1/2 size-8 -translate-y-1/2'
+                  onClick={() => setSearch('')}
+                  aria-label={t('filters.clearSearch')}
+                >
+                  <X className='size-4' />
+                </Button>
+              ) : null}
+            </div>
+            <Select
+              value={statusFilter}
+              onValueChange={(value) =>
+                setStatusFilter(value as DeviceFarmStatusFilter)
+              }
+            >
+              <SelectTrigger className='w-full sm:w-[180px]'>
+                <SelectValue placeholder={t('filters.statusLabel')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='all'>{t('filters.statusAll')}</SelectItem>
+                <SelectItem value='online'>
+                  {t('filters.statusOnline')}
+                </SelectItem>
+                <SelectItem value='offline'>
+                  {t('filters.statusOffline')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className='shrink-0 text-xs text-muted-foreground'>
+            {t('filters.showing', {
+              count: filteredDevices.length,
+              total: devices.length
+            })}
+          </p>
+        </div>
+      ) : null}
 
       {error && lastUpdatedAt && (
         <div className='flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm text-amber-800 dark:text-amber-200'>
@@ -254,7 +360,7 @@ export function DeviceFarm() {
         </div>
       )}
 
-      {isInitialError ? (
+      {renderMode === 'error' ? (
         <div className='rounded-md border border-destructive/40 bg-destructive/5 px-4 py-8 text-center text-sm text-destructive'>
           <div className='font-medium'>{t('backendErrorTitle')}</div>
           <div className='mt-1 text-xs opacity-80'>{t('loadErrorHint')}</div>
@@ -269,7 +375,7 @@ export function DeviceFarm() {
             {t('retry')}
           </Button>
         </div>
-      ) : isInitialLoading ? (
+      ) : renderMode === 'loading' ? (
         <div
           className='grid grid-cols-[repeat(auto-fit,minmax(240px,320px))] gap-4'
           aria-label={t('loadingDevices')}
@@ -281,34 +387,34 @@ export function DeviceFarm() {
             />
           ))}
         </div>
-      ) : activeDevices.length === 0 ? (
+      ) : renderMode === 'empty-fleet' ? (
         <CoreEmptyState
           icon={Smartphone}
-          title={
-            devices.length > 0 ? t('allDevicesOffline') : tEmpty('fleet.title')
-          }
-          description={
-            devices.length > 0
-              ? t('allDevicesOfflineHint', { count: devices.length })
-              : tEmpty('fleet.description')
-          }
+          title={tEmpty('fleet.title')}
+          description={tEmpty('fleet.description')}
           trackingKey='fleet-empty'
-          cta={
-            devices.length === 0
-              ? {
-                  label: tEmpty('fleet.ctaPair'),
-                  href: ROUTES.DEVICES.MANAGE
-                }
-              : undefined
-          }
-          secondaryCta={
-            devices.length === 0
-              ? {
-                  label: tEmpty('fleet.ctaRelay'),
-                  href: ROUTES.RELAY_AGENTS.ROOT
-                }
-              : undefined
-          }
+          cta={{
+            label: tEmpty('fleet.ctaPair'),
+            href: ROUTES.DEVICES.MANAGE
+          }}
+          secondaryCta={{
+            label: tEmpty('fleet.ctaRelay'),
+            href: ROUTES.RELAY_AGENTS.ROOT
+          }}
+        />
+      ) : renderMode === 'empty-filter' ? (
+        <CoreEmptyState
+          icon={Search}
+          title={t('filters.noResults')}
+          description={t('filters.noResultsHint')}
+          trackingKey='fleet-filter-empty'
+          cta={{
+            label: t('filters.reset'),
+            onClick: () => {
+              setSearch('');
+              setStatusFilter('all');
+            }
+          }}
         />
       ) : (
         <>
@@ -349,7 +455,7 @@ export function DeviceFarm() {
           </section>
           <footer className='border-t border-border/40 pt-4'>
             <TablePaginationControls
-              total={activeDevices.length}
+              total={filteredDevices.length}
               pageIndex={pageIndex}
               pageCount={pageCount}
               pageSize={pageSize}

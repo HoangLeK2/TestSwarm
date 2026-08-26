@@ -751,6 +751,20 @@ def create_app(
                 ).auto_release_loop(),
             )
 
+            # The claim TTL above frees a phone eventually; this frees it as
+            # soon as Temporal confirms the run behind the claim is gone, and
+            # closes the execution rows the fleet view reads as "still busy".
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "execution-orphan-reaper",
+                lambda: __import__(
+                    "services.campaign.orphan_execution_reaper",
+                    fromlist=["reap_orphans_loop"],
+                ).reap_orphans_loop(
+                    config.temporal if config.temporal.enabled else None
+                ),
+            )
+
         # ── Redis shared state ──
         from services import redis_store
         await redis_store.init(config.redis)

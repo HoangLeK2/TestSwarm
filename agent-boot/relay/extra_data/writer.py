@@ -1,6 +1,7 @@
 """Direct content_items writer for agent-side extra-data ingestion."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -10,8 +11,25 @@ import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
+
+
+class ContentDatabaseUnreachable(RuntimeError):
+    """The content database could not be reached — extraction has nowhere to go."""
+
+
+def _dsn_target(dsn: str) -> str:
+    """host:port/database of a DSN, with credentials left out of the message."""
+    try:
+        parts = urlsplit(dsn)
+    except ValueError:
+        return "the configured database"
+    host = parts.hostname or "?"
+    port = parts.port or 5432
+    database = (parts.path or "").lstrip("/") or "?"
+    return f"{host}:{port}/{database}"
 
 # Optional FK columns on content_items that agent-boot may receive from device_farm
 # workflow context. When stale/missing, drop the reference and still persist content.
@@ -296,12 +314,34 @@ class ContentItemWriter:
             raise RuntimeError("AGENT_BOOT_CONTENT_DATABASE_URL is not configured")
         if self._pool is None:
             import asyncpg  # type: ignore
-            self._pool = await asyncpg.create_pool(
-                self._database_url,
-                min_size=1,
-                max_size=self._pool_size,
-                command_timeout=float(os.getenv("AGENT_BOOT_CONTENT_DB_COMMAND_TIMEOUT", "10")),
+
+            # asyncpg.connect defaults to a 60s connect timeout and raises a
+            # *message-less* asyncio.TimeoutError. The relay reports that as the
+            # bare string "TimeoutError", so an unreachable content database
+            # looked exactly like a phone problem: extraction collected the
+            # hierarchy fine in 0.2s, then stalled a silent minute and failed
+            # with a word that names no host, no stage and no cause. And because
+            # self._pool is only assigned on success, every later extraction
+            # paid the same full minute again.
+            connect_timeout = float(
+                os.getenv("AGENT_BOOT_CONTENT_DB_CONNECT_TIMEOUT", "10")
             )
+            try:
+                self._pool = await asyncpg.create_pool(
+                    self._database_url,
+                    min_size=1,
+                    max_size=self._pool_size,
+                    command_timeout=float(
+                        os.getenv("AGENT_BOOT_CONTENT_DB_COMMAND_TIMEOUT", "10")
+                    ),
+                    timeout=connect_timeout,
+                )
+            except (asyncio.TimeoutError, OSError) as exc:
+                raise ContentDatabaseUnreachable(
+                    f"content database unreachable at {_dsn_target(self._database_url)} "
+                    f"within {connect_timeout:g}s — extraction collected fine but "
+                    f"cannot be stored (check AGENT_BOOT_CONTENT_DATABASE_URL)"
+                ) from exc
         return self._pool
 
     async def close(self) -> None:

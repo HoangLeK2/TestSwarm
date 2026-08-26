@@ -619,6 +619,7 @@ async def _heartbeat_campaign_device_claim(
     from db.crud import device_reserve_session as reserve_repo
     from db.crud.tenant_settings import get_session_idle_threshold_sec
     from db.database import activity_session
+    from db.models.enums import ExecutionStatus
     from tenancy.context import tenant_context
 
     error_prefix = (
@@ -629,6 +630,21 @@ async def _heartbeat_campaign_device_claim(
         execution = await get_execution(db, execution_id)
         if execution is None:
             raise CampaignDeviceClaimLostError(f"{error_prefix}: execution mismatch")
+        # The run is already over — cancelled by an operator, or finished. Its
+        # claim is *meant* to be gone by now, so the ownership check below would
+        # read the normal end of a run as a stolen device and raise. Cancelling
+        # then produced a DLQ entry every time, one heartbeat after the button
+        # was pressed, for a run that had stopped exactly as asked. The guard
+        # exists to catch a claim lost out from under a *live* activity; there
+        # is no live activity to protect here.
+        if execution.finished_at is not None or str(execution.status or "") in (
+            ExecutionStatus.CANCELLED.value,
+            ExecutionStatus.COMPLETED.value,
+            ExecutionStatus.FAILED.value,
+            ExecutionStatus.DLQ_OPEN.value,
+            ExecutionStatus.DLQ_CLOSED.value,
+        ):
+            return
         persisted_campaign_id = str(execution.campaign_id or "").strip()
         if not persisted_campaign_id:
             if normalized_campaign_id is not None:
@@ -1380,6 +1396,29 @@ class DeviceActivities:
                         u2_batch_duration_ms / max(1, len(touch_actions)),
                         1,
                     )
+
+                    # A pause tripped cancel_event mid-flight, so every action
+                    # in this batch came back as a "cancelled" error. Recognise
+                    # the suspend *before* those errors are mapped into step
+                    # outcomes: the first one sets first_failure_index and
+                    # breaks out of the batch loop below, so the existing
+                    # paused_mid_batch check further down is unreachable in the
+                    # one case it exists for. That is what turned a pause
+                    # landing inside a touch batch into a failed scenario —
+                    # and then Resume had nothing left to resume.
+                    # Cancel is checked first: a real cancel must not be
+                    # mistaken for a pause and silently retried.
+                    if (
+                        cancel_event.is_set()
+                        and not await flag_probe.cancelled(force=True)
+                        and await flag_probe.paused(force=True)
+                    ):
+                        return await _finish(
+                            results=results,
+                            first_failure_index=-1,
+                            paused_mid_batch=True,
+                            context=batch_context,
+                        )
 
                     consumed = 0
                     for rel, (touch_step, touch_idx) in enumerate(zip(touch_steps, touch_indices)):

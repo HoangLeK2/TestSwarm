@@ -28,6 +28,19 @@ function status(
   };
 }
 
+test('a live status frame seeds the list before the first snapshot lands', () => {
+  // This is what makes the device count reach its final value while the page is
+  // still on its loading branch: the socket can deliver a device the HTTP
+  // snapshot has not returned yet. Grid measurement must not be keyed off that
+  // count — see getDeviceGridRenderMode.
+  const result = mergeDeviceFarmWsStatus([], status('10AE7S00HD002JK'), {
+    liveSnapshotAuthoritative: true
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].serial, '10AE7S00HD002JK');
+});
+
 test('dashboard mode ignores stale offline websocket status', () => {
   const previous = [device('10AE7S00HD002JK')];
 

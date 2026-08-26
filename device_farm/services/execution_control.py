@@ -94,6 +94,13 @@ def _workflow_ids_for_execution(
     ]
 
 
+def _exec_workflow_id(execution: Execution) -> str:
+    """Deterministic Temporal ID of a fan-out execution's own workflow."""
+    from services.campaign.execution_runtime import workflow_id_for_execution
+
+    return workflow_id_for_execution(str(getattr(execution, "id", "") or ""))
+
+
 def _expected_workflow_ids(campaign_id: str, device_serials: list[str]) -> list[str]:
     """Deterministic Temporal workflow IDs (no server scan)."""
     return [
@@ -147,19 +154,31 @@ async def _resolve_workflow_ids_for_execution(
         execution,
         _workflow_ids_from_meta(execution.meta),
     )
+    # A fan-out dispatch names its workflow after the execution, and the
+    # dispatcher does not record that name in meta. Every ID this resolver
+    # produced therefore belonged to a workflow that does not exist, and
+    # _signal_one swallows a signal to a missing workflow — so pause, resume and
+    # cancel all reported success while reaching nothing. Resume was the visible
+    # casualty: the workflow parks on wait_condition for a resume signal that
+    # never arrived, so the scenario never continued.
+    #
+    # Added as an extra candidate rather than a replacement: legacy campaign runs
+    # really are campaign:<id>:device:<serial>:scenario:… and must still be
+    # signalled. Signalling an ID that does not exist costs one swallowed RPC.
+    fallback_ids = _union_workflow_ids(ids, [_exec_workflow_id(execution)])
     if ids:
-        return ids
+        return fallback_ids
 
     if not execution.campaign_id:
-        return []
+        return fallback_ids
 
     devices = await list_execution_devices(db, execution.id)
     serials = [d.serial for d in devices if d.serial]
-    ids = _expected_workflow_ids(execution.campaign_id, serials)
-    if ids:
-        return ids
+    expected = _expected_workflow_ids(execution.campaign_id, serials)
+    if expected:
+        return _union_workflow_ids(fallback_ids, expected)
 
-    return list(campaign_scan_ids or [])
+    return _union_workflow_ids(fallback_ids, list(campaign_scan_ids or []))
 
 
 async def _resolve_workflow_ids_for_campaign(
@@ -174,6 +193,13 @@ async def _resolve_workflow_ids_for_campaign(
         chunks.append(
             _workflow_ids_for_execution(ex, _workflow_ids_from_meta(ex.meta))
         )
+
+    # See _resolve_workflow_ids_for_execution: the fan-out workflow is named
+    # after the execution and that name is not in meta, so without these the
+    # campaign-level signals reach nothing. Kept out of `chunks` on purpose —
+    # `any(chunks)` below decides whether the device-derived legacy IDs are still
+    # needed, and it has to keep reading only what meta actually knows.
+    exec_ids = [_exec_workflow_id(ex) for ex in executions]
 
     scan_ids: list[str] = []
     if temporal_client is not None:
@@ -191,7 +217,7 @@ async def _resolve_workflow_ids_for_campaign(
             all_serials.extend(d.serial for d in devices if d.serial)
         chunks.append(_expected_workflow_ids(campaign_id, all_serials))
 
-    return _union_workflow_ids(*chunks, scan_ids)
+    return _union_workflow_ids(*chunks, scan_ids, exec_ids)
 
 
 _SIGNAL_CONCURRENCY = 32
@@ -343,6 +369,30 @@ async def _release_execution_devices(
             except Exception as exc:
                 log.debug("release_device %s: %s", serial, exc)
         released_serials.append(serial)
+
+    # Hand the phone back to the fleet, not just the in-process session lock.
+    # BUSY comes from the device_reserve_session claim, and only releasing it
+    # clears the FSM. Ending account usage and dropping the session_store entry
+    # above leaves that claim open, so cancelling a run left the device reading
+    # busy — with nothing running on it — until the 1800s campaign TTL swept it.
+    org_id = await _resolve_org_id(db, execution)
+    if org_id:
+        from services.campaign.dispatcher import release_execution_device_claim
+
+        try:
+            await release_execution_device_claim(
+                db,
+                execution,
+                org_id=org_id,
+                actor_user_id=str(execution.user_id or "system"),
+                device_id=devices[0].id if devices else None,
+            )
+        except Exception:
+            log.warning(
+                "cancel: releasing device claim failed execution=%s",
+                execution.id,
+                exc_info=True,
+            )
 
     return released_serials
 

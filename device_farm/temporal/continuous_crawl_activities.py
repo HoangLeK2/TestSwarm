@@ -31,6 +31,18 @@ from temporal.continuous_crawl_workflows import (
 from tenancy.context import use_tenant_scope
 
 
+def _current_workflow_id() -> str:
+    """ID of the workflow this activity runs for, or "" outside an activity.
+
+    Unit tests call the activity bodies directly, where `activity.info()` has no
+    context to read; treat that as "unknown" rather than letting it raise.
+    """
+    try:
+        return str(activity.info().workflow_id or "")
+    except Exception:
+        return ""
+
+
 def _source_pool_spec(raw: dict[str, Any]) -> SourcePoolSpec:
     statuses = raw.get("statuses")
     return SourcePoolSpec(
@@ -210,6 +222,21 @@ async def prepare_continuous_crawl_target(
         )
         if execution is None:
             now = datetime.now(UTC)
+            # The workflow that owns this target — read off the activity rather
+            # than rebuilt from parts, so it cannot drift from the ID the lane
+            # actually started. Without it, every consumer that resolves an
+            # execution back to its workflow (campaign pause, the device's
+            # running-workflow list, the orphan reaper) has nothing to look up
+            # and silently falls back to a synthetic exec_<id> that Temporal has
+            # never heard of.
+            meta: dict[str, Any] = {
+                "dispatch_id": inp.dispatch_id,
+                "external_entity_id": inp.target.external_entity_id,
+                "dispatch_source": "continuous_crawl",
+            }
+            target_workflow_id = _current_workflow_id()
+            if target_workflow_id:
+                meta["workflow_id"] = target_workflow_id
             execution = Execution(
                 run_type="campaign_run",
                 kind="campaign",
@@ -219,11 +246,7 @@ async def prepare_continuous_crawl_target(
                 user_id=campaign.user_id,
                 idempotency_key=key,
                 started_at=now,
-                meta={
-                    "dispatch_id": inp.dispatch_id,
-                    "external_entity_id": inp.target.external_entity_id,
-                    "dispatch_source": "continuous_crawl",
-                },
+                meta=meta,
             )
             db.add(execution)
             await db.flush()
@@ -337,6 +360,12 @@ async def prepare_continuous_crawl_target(
 
 @activity.defn
 async def cleanup_continuous_crawl_target(inp: CleanupCrawlTargetInput) -> None:
+    """Settle one target's execution and hand the device back.
+
+    Called for every finished target, success or failure. When the scenario
+    already finalized itself the execution is terminal and this returns without
+    touching anything; it only does work when the outcome never landed.
+    """
     from services.campaign.dispatcher import finish_fan_out_execution
 
     key = crawl_execution_idempotency_key(
@@ -365,7 +394,7 @@ async def cleanup_continuous_crawl_target(inp: CleanupCrawlTargetInput) -> None:
             execution,
             org_id=inp.org_id,
             actor_user_id=str(execution.user_id or "system"),
-            status="failed",
+            status=inp.status or "failed",
             device_id=device.id if device else None,
         )
 

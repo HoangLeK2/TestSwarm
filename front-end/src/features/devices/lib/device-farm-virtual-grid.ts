@@ -5,6 +5,41 @@ export const DEVICE_GRID_GAP_PX = 16;
 // previews that should remain deferred until the user scrolls.
 export const DEVICE_GRID_ESTIMATED_ROW_HEIGHT_PX = 640;
 
+export type DeviceGridRenderMode =
+  | 'error'
+  | 'loading'
+  | 'empty-fleet'
+  | 'empty-filter'
+  | 'grid';
+
+/**
+ * Which branch the fleet page renders.
+ *
+ * Kept as one tested function because the grid's mount is what wires up
+ * measurement for the virtualizer, and device counts are NOT a proxy for it: a
+ * WebSocket status frame can populate the device list while the page is still
+ * on the loading branch (see mergeDeviceFarmWsStatus). Keying measurement off a
+ * count instead of the mounted node left the virtualizer disabled and painted
+ * an empty grid under a header that read "1/1".
+ */
+export function getDeviceGridRenderMode({
+  isInitialError,
+  isInitialLoading,
+  deviceCount,
+  filteredCount
+}: {
+  isInitialError: boolean;
+  isInitialLoading: boolean;
+  deviceCount: number;
+  filteredCount: number;
+}): DeviceGridRenderMode {
+  if (isInitialError) return 'error';
+  if (isInitialLoading) return 'loading';
+  if (deviceCount <= 0) return 'empty-fleet';
+  if (filteredCount <= 0) return 'empty-filter';
+  return 'grid';
+}
+
 export function getDeviceGridColumnCount(
   containerWidth: number,
   itemCount: number

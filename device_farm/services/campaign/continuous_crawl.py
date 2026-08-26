@@ -104,9 +104,21 @@ def crawl_workflow_id(campaign_id: str, dispatch_id: str) -> str:
 
 
 def crawl_target_workflow_id(
-    campaign_id: str, dispatch_id: str, external_entity_id: str
+    campaign_id: str,
+    dispatch_id: str,
+    device_serial: str,
+    external_entity_id: str,
 ) -> str:
-    return f"campaign:{campaign_id}:crawl:{dispatch_id}:target:{external_entity_id}"
+    """ID of one target's child workflow.
+
+    Must stay byte-identical to the ID ContinuousCrawlWorkflow._run_lane builds,
+    including the device segment: the campaign and device workflow listings
+    parse this shape to tell a running crawl target from its `:scenario` child.
+    """
+    return (
+        f"campaign:{campaign_id}:crawl:{dispatch_id}"
+        f":device:{device_serial}:target:{external_entity_id}"
+    )
 
 
 def crawl_execution_idempotency_key(

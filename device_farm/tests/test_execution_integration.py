@@ -430,8 +430,19 @@ async def test_finish_fan_out_reuses_finished_execution_and_device_id():
         )
 
     finish.assert_not_awaited()
-    db.execute.assert_awaited_once()
-    assignment_update = db.execute.await_args.args[0]
+    # Two writes, in this order: settle the per-device result rows, then close
+    # the entity assignments. The result rows were added because an execution
+    # could go terminal with its ExecutionResult left at 'running' forever,
+    # which kept the campaign counting a device as in-flight after the phone
+    # had been released.
+    assert db.execute.await_count == 2
+    statements = [call.args[0] for call in db.execute.await_args_list]
+    assert [stmt.table.name for stmt in statements] == [
+        "execution_results",
+        "execution_entity_assignments",
+    ]
+    results_update, assignment_update = statements
+    assert results_update.compile().params["status"] == "passed"
     assert assignment_update.compile().params["status"] == "completed"
     release.assert_awaited_once_with(
         db,

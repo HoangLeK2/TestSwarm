@@ -66,6 +66,12 @@ SCRCPY_DEFAULT_MAX_FPS = max(1, _env_int("SCRCPY_DEFAULT_MAX_FPS", 15))
 SCRCPY_DEFAULT_MAX_WIDTH = max(160, _env_int("SCRCPY_DEFAULT_MAX_WIDTH", 540))
 SCRCPY_DEFAULT_BITRATE = max(80_000, _env_int("SCRCPY_DEFAULT_BITRATE", 800_000))
 
+# Device online/offline/capability callbacks run synchronously on the event loop
+# that also serves the HTTP API. Anything slow in there stalls the whole backend,
+# and it used to do so silently: a 2s sleep inside the u2 bind froze the farm for
+# minutes on agent-boot startup with no log line pointing at it. Warn loudly.
+RELAY_CALLBACK_WARN_MS = max(1, _env_int("DEVICE_FARM_RELAY_CALLBACK_WARN_MS", 50))
+
 
 def _match_tags(caps: dict, filters: list) -> bool:
     """
@@ -306,14 +312,34 @@ class AdbRelayManager:
         # own serial atomically after one relay registration/heartbeat update.
         self._relay_state_changed = asyncio.Condition()
 
+    def _dispatch_callback(self, name: str, callback: Any, *args: Any) -> None:
+        """Run one relay callback on the event loop, timed and never raising.
+
+        Every device online/offline/capability callback goes through here so a
+        slow one is attributed to a serial in the logs instead of showing up as
+        an unexplained backend freeze.
+        """
+        if callback is None:
+            return
+        started = time.perf_counter()
+        try:
+            callback(*args)
+        except Exception as exc:
+            logger.debug("%s error args=%s: %s", name, args, exc)
+        finally:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if elapsed_ms >= RELAY_CALLBACK_WARN_MS:
+                logger.warning(
+                    "relay callback slow: %s args=%s took %.1fms (warn>=%dms) — "
+                    "this blocks the API event loop",
+                    name, args, elapsed_ms, RELAY_CALLBACK_WARN_MS,
+                )
+
     def set_on_device_online(self, callback: Any) -> None:
         """Register a callback fired with (serial) when a new relay device appears."""
         self._on_device_online = callback
         for serial in list(self._serial_index.keys()):
-            try:
-                callback(serial)
-            except Exception as exc:
-                logger.debug("on_device_online (retroactive) error serial=%s: %s", serial, exc)
+            self._dispatch_callback("on_device_online (retroactive)", callback, serial)
 
     def set_on_device_offline(self, callback: Any) -> None:
         """Register a callback fired with (serial) when a relay device goes away."""
@@ -344,10 +370,12 @@ class AdbRelayManager:
         self._on_capabilities_update = callback
         # Fire for already-online devices
         for serial in list(self._serial_index.keys()):
-            try:
-                callback(serial, self._capabilities.get(serial, {}))
-            except Exception as exc:
-                logger.debug("on_capabilities_update (retroactive) error serial=%s: %s", serial, exc)
+            self._dispatch_callback(
+                "on_capabilities_update (retroactive)",
+                callback,
+                serial,
+                self._capabilities.get(serial, {}),
+            )
 
     async def register(self, conn: RelayConnection) -> None:
         callbacks_to_fire: list = []
@@ -363,21 +391,20 @@ class AdbRelayManager:
             conn.relay_id, sorted(conn.serials),
         )
         for ip, serial, cb in callbacks_to_fire:
-            try:
-                cb(serial)
-            except Exception as exc:
-                logger.debug("pending scrcpy callback error ip=%s: %s", ip, exc)
+            self._dispatch_callback(f"pending scrcpy callback (ip={ip})", cb, serial)
         async with self._relay_state_changed:
             self._relay_state_changed.notify_all()
         await self._sync_relay_to_redis(conn)
-        if self._on_device_online:
-            for s in conn.serials:
-                try:
-                    self._on_device_online(s)
-                except Exception as exc:
-                    logger.debug("on_device_online error serial=%s: %s", s, exc)
+        for s in conn.serials:
+            self._dispatch_callback("on_device_online", self._on_device_online, s)
 
     async def update_serials(self, relay_id: str, serials: Set[str]) -> None:
+        # Mutate the index under the lock; fire callbacks after releasing it.
+        # register() and unregister() already work this way. update_serials did
+        # not, so an agent reporting N phones held the manager lock across N
+        # user callbacks — every relay command (scrcpy attach, shell, admission)
+        # queued behind the whole batch.
+        pending_scrcpy: list[tuple[str, str, Any]] = []
         async with self._lock:
             conn = self._relays.get(relay_id)
             if not conn:
@@ -390,23 +417,17 @@ class AdbRelayManager:
             conn.serials = serials
             removed = old - serials
             new_serials = serials - old
-            for s in removed:
-                if self._on_device_offline:
-                    try:
-                        self._on_device_offline(s)
-                    except Exception as exc:
-                        logger.debug("on_device_offline error serial=%s: %s", s, exc)
             for s in new_serials:
                 for key, cb in self._pop_pending_scrcpy_callbacks(s):
-                    try:
-                        cb(s)
-                    except Exception as exc:
-                        logger.debug("pending scrcpy callback error key=%s: %s", key, exc)
-                if self._on_device_online:
-                    try:
-                        self._on_device_online(s)
-                    except Exception as exc:
-                        logger.debug("on_device_online error serial=%s: %s", s, exc)
+                    pending_scrcpy.append((key, s, cb))
+
+        for s in removed:
+            self._dispatch_callback("on_device_offline", self._on_device_offline, s)
+        for key, s, cb in pending_scrcpy:
+            self._dispatch_callback(f"pending scrcpy callback (key={key})", cb, s)
+        for s in new_serials:
+            self._dispatch_callback("on_device_online", self._on_device_online, s)
+
         if new_serials:
             async with self._relay_state_changed:
                 self._relay_state_changed.notify_all()
@@ -468,12 +489,8 @@ class AdbRelayManager:
         if conn:
             conn.fail_all(error)
             await self._remove_relay_from_redis(relay_id, offline_serials)
-            if self._on_device_offline:
-                for s in offline_serials:
-                    try:
-                        self._on_device_offline(s)
-                    except Exception as exc:
-                        logger.debug("on_device_offline error serial=%s: %s", s, exc)
+            for s in offline_serials:
+                self._dispatch_callback("on_device_offline", self._on_device_offline, s)
         logger.info("relay unregistered: id=%s", relay_id)
 
     def update_capabilities(self, caps_list: list) -> None:
@@ -544,11 +561,9 @@ class AdbRelayManager:
                 continue
             self._capabilities[serial] = next_caps
             asyncio.ensure_future(self._sync_caps_to_redis(serial, next_caps))
-            if self._on_capabilities_update:
-                try:
-                    self._on_capabilities_update(serial, next_caps)
-                except Exception as exc:
-                    logger.debug("on_capabilities_update error serial=%s: %s", serial, exc)
+            self._dispatch_callback(
+                "on_capabilities_update", self._on_capabilities_update, serial, next_caps
+            )
 
  
     async def _sync_relay_to_redis(self, conn: RelayConnection) -> None:
@@ -1803,10 +1818,13 @@ class WsRelayAgentSession:
                     if conn is None:
                         continue
                     new_serials = set(msg.get("serials") or [])
-                    await self._manager.update_serials(relay_id, new_serials)
+                    # Capabilities FIRST — see the same ordering note in
+                    # grpc_relay_server._handle_json. The device-online callback
+                    # fired by update_serials needs wlan_ip to already be there.
                     caps = msg.get("capabilities")
                     if caps:
                         self._manager.update_capabilities(caps)
+                    await self._manager.update_serials(relay_id, new_serials)
                     logger.debug("heartbeat relay=%s serials=%s", relay_id, new_serials)
 
         except Exception as exc:

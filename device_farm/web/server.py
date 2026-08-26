@@ -130,6 +130,17 @@ STREAM_GUARDRAIL_WS_DROPS_WARN = max(
     1,
     int(os.getenv("DEVICE_FARM_STREAM_GUARDRAIL_WS_DROPS_WARN", "1")),
 )
+# Relay → device-FSM pump. Set BATCH_MAX=1 and COALESCE_MS=0 to fall back to
+# one transaction per event (the pre-pump shape) without redeploying.
+RELAY_FSM_QUEUE_MAX = max(
+    1, int(os.getenv("DEVICE_FARM_RELAY_FSM_QUEUE_MAX", "4096"))
+)
+RELAY_FSM_BATCH_MAX = max(
+    1, int(os.getenv("DEVICE_FARM_RELAY_FSM_BATCH_MAX", "64"))
+)
+RELAY_FSM_COALESCE_MS = max(
+    0, int(os.getenv("DEVICE_FARM_RELAY_FSM_COALESCE_MS", "20"))
+)
 _last_stream_guardrail_warning_at = 0.0
 
 
@@ -953,6 +964,36 @@ def create_app(
                     max(1, min(16, _relay_bootstrap_limit))
                 )
 
+                # ── Relay → device FSM pump ────────────────────────────────────
+                # One worker, one pooled connection. Before this, every serial a
+                # relay reported opened its own DB session; 40-100 phones at once
+                # drained the pool (12+3) and every API request timed out waiting
+                # for a connection while agent-boot registered.
+                _relay_fsm_pump = None
+                if config.database.enabled:
+                    from db.database import AsyncSessionLocal as _AslPump
+                    from runtime.transports.relay_event_pump import RelayEventPump
+                    from services.device_state.relay_bridge import (
+                        apply_relay_offline as _apply_relay_offline,
+                        apply_relay_online as _apply_relay_online,
+                    )
+
+                    _relay_fsm_pump = RelayEventPump(
+                        session_factory=_AslPump,
+                        apply_online=_apply_relay_online,
+                        apply_offline=_apply_relay_offline,
+                        queue_max=RELAY_FSM_QUEUE_MAX,
+                        batch_max=RELAY_FSM_BATCH_MAX,
+                        coalesce_ms=RELAY_FSM_COALESCE_MS,
+                    )
+                    await _relay_fsm_pump.start()
+                    _app.state.relay_fsm_pump = _relay_fsm_pump
+                    lifecycle.register_resource(
+                        LifecyclePhase.TRANSPORT,
+                        "relay_fsm_pump",
+                        _relay_fsm_pump.stop,
+                    )
+
                 async def _relay_db_allows_scrcpy(serial_check: str) -> bool:
                     return await _relay_scrcpy_auto_attach_allowed_for_serial(
                         serial_check,
@@ -1020,47 +1061,28 @@ def create_app(
                         "auto_attach" if auto_attach else "active_viewer",
                     )
 
-                async def _run_relay_fsm_online(
+                def _emit_relay_fsm(
+                    kind: str,
                     relay_serial: str,
                     *,
                     logical_serial: str | None = None,
                     hardware_serial: str | None = None,
                 ) -> None:
-                    from services.device_state.relay_bridge import apply_relay_online
+                    """Hand one FSM transition to the pump — never touches the DB here.
 
-                    try:
-                        await apply_relay_online(
-                            relay_serial,
-                            logical_serial=logical_serial,
-                            hardware_serial=hardware_serial,
-                        )
-                    except Exception as exc:
-                        log.warning(
-                            "relay FSM online failed serial=%s: %s",
-                            relay_serial,
-                            exc,
-                        )
-
-                async def _run_relay_fsm_offline(
-                    relay_serial: str,
-                    *,
-                    logical_serial: str | None = None,
-                    hardware_serial: str | None = None,
-                ) -> None:
-                    from services.device_state.relay_bridge import apply_relay_offline
-
-                    try:
-                        await apply_relay_offline(
-                            relay_serial,
-                            logical_serial=logical_serial,
-                            hardware_serial=hardware_serial,
-                        )
-                    except Exception as exc:
-                        log.warning(
-                            "relay FSM offline failed serial=%s: %s",
-                            relay_serial,
-                            exc,
-                        )
+                    Called from the relay online/offline/caps callbacks, which run
+                    synchronously on the API event loop. Scheduling a task per
+                    serial (the old shape) opened one DB session per phone and
+                    drained the pool the moment a relay reported its fleet.
+                    """
+                    if _relay_fsm_pump is None:
+                        return
+                    _relay_fsm_pump.submit(
+                        kind,
+                        relay_serial,
+                        logical_serial=logical_serial,
+                        hardware_serial=hardware_serial,
+                    )
 
                 def _emit_relay_fsm_online(
                     relay_serial: str,
@@ -1068,12 +1090,11 @@ def create_app(
                     logical_serial: str | None = None,
                     hardware_serial: str | None = None,
                 ) -> None:
-                    _schedule_relay_fsm(
-                        _run_relay_fsm_online(
-                            relay_serial,
-                            logical_serial=logical_serial,
-                            hardware_serial=hardware_serial,
-                        )
+                    _emit_relay_fsm(
+                        "online",
+                        relay_serial,
+                        logical_serial=logical_serial,
+                        hardware_serial=hardware_serial,
                     )
 
                 def _emit_relay_fsm_offline(
@@ -1082,12 +1103,11 @@ def create_app(
                     logical_serial: str | None = None,
                     hardware_serial: str | None = None,
                 ) -> None:
-                    _schedule_relay_fsm(
-                        _run_relay_fsm_offline(
-                            relay_serial,
-                            logical_serial=logical_serial,
-                            hardware_serial=hardware_serial,
-                        )
+                    _emit_relay_fsm(
+                        "offline",
+                        relay_serial,
+                        logical_serial=logical_serial,
+                        hardware_serial=hardware_serial,
                     )
 
                 def _relay_host_hint(serial: str, caps: dict | None = None) -> str | None:
@@ -1582,10 +1602,15 @@ def create_app(
                 websocket_streams=websocket_streams,
             )
             _warn_stream_guardrail_if_needed(stream_guardrail=stream_guardrail)
+            # First place to look when the backend feels stalled during relay
+            # registration: a rising depth or a non-zero dropped count means the
+            # FSM pump is behind, not that the API is deadlocked.
+            pump = getattr(app.state, "relay_fsm_pump", None)
             return {
                 "relay_enabled": True,
                 "agents": mgr.registered_relays(),
                 "devices": mgr.list_devices(),
+                "relay_fsm_pump": pump.stats() if pump is not None else None,
                 "stream_telemetry": stream_stats,
                 "websocket_streams": websocket_streams,
                 "stream_guardrail": stream_guardrail,

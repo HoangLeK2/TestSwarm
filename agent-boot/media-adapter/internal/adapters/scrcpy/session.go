@@ -1,6 +1,7 @@
 package scrcpy
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devicefarm/media-adapter/internal/domain/stream"
@@ -51,7 +53,7 @@ type StartRequest struct {
 	// Omit max_fps too. scrcpy turns it into the vendor MediaFormat key
 	// max-fps-to-encoder, which aborts the same encoders that max_size does.
 	SkipMaxFPS bool
-	LowLatency  bool
+	LowLatency bool
 	// Rung of the codec-option fallback ladder to launch with. Callers leave
 	// this at 0; the session raises it when a device keeps refusing to start,
 	// and the manager remembers what finally worked. See codecOptionsForLevel.
@@ -145,36 +147,61 @@ func (m *Manager) Start(req StartRequest) (Status, error) {
 		return Status{}, errors.New("port is required")
 	}
 	req.normalize()
+	// No defer for the unlock here, and the ordering below is load-bearing.
+	//
+	// Session.Stop waits for run() to exit, and run() may be inside
+	// recordCodecLevel waiting for m.mu, so stopping under the lock wedges the
+	// manager permanently. But the old session cannot simply be retired later
+	// either: its cleanup runs `pkill -f app_process...scrcpy.Server`, which
+	// kills *every* scrcpy on that device — including one a newer session just
+	// launched. So: mutate the map under the lock, release it, stop the old
+	// session, and only then launch the replacement.
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	current := m.sessions[req.Serial]
 	if current != nil && current.matches(req) {
-		return current.Status(), nil
+		status := current.Status()
+		m.mu.Unlock()
+		return status, nil
 	}
-	// A live stream outranks a parameter change.
+	// A live stream survives a request for *less* than it already gives.
 	//
 	// Two callers ask for the same device with different numbers: the relay
 	// picks fps/size/bitrate from the device's idle/visible/focused state, and
-	// each WebRTC viewer asks for its own profile. Treating any difference as
-	// "restart" meant every disagreement tore down a working stream and paid a
-	// scrcpy cold start — longer than the 4s a viewer waits for its first
-	// frame, so the viewer got 425, retried, and flipped the parameters back.
-	// Measured on a live farm: 339 session requests in three minutes produced
-	// 10 answers and zero attached viewers, while the streams themselves were
-	// publishing fine the whole time.
+	// each WebRTC viewer asks for its own profile. Treating every difference as
+	// "restart" tore down a working stream and paid a scrcpy cold start —
+	// longer than the 4s a viewer waits for its first frame, so the viewer got
+	// 425, retried, and flipped the parameters back. Measured on a live farm:
+	// 339 session requests in three minutes produced 10 answers and zero
+	// attached viewers while the streams published fine throughout.
 	//
-	// So only cosmetic differences are absorbed. Anything that changes what the
-	// session *is* — a different endpoint, control socket, or codec — still
-	// rebuilds it, because those cannot be papered over.
-	if current != nil && current.isHealthy() && onlyEncodingProfileDiffers(current.request(), req) {
+	// Refusing *all* profile changes fixed the thrash and broke the product
+	// instead: a viewer opening the control screen inherited whatever the relay
+	// had last set, so 15fps requests silently rendered at 1fps.
+	//
+	// Asymmetry is what actually holds. An upgrade is a viewer asking for
+	// something it cannot get otherwise, so it is worth one cold start. A
+	// downgrade only ever arrives from the idle throttle racing a viewer, and
+	// ignoring it costs nothing: when the last viewer leaves, the HTTP layer
+	// stops the stream outright (stopStreamIfIdle) and the next relay request
+	// rebuilds it at the idle profile. Bandwidth comes back without a fight.
+	//
+	// Health deliberately plays no part. Gating this on "already delivering
+	// frames" left the cold start unprotected — exactly the four seconds when a
+	// downgrade racing in does the most damage, since it kills a launch that
+	// was about to succeed and hands back a session that is also frameless. A
+	// device that genuinely cannot start is not rescued by a smaller picture
+	// either: the codec ladder walks down to no options and no geometry hints
+	// on its own, and that path does not need a stranger's parameters.
+	if current != nil &&
+		onlyEncodingProfileDiffers(current.request(), req) &&
+		!isProfileUpgrade(current.request(), req) {
 		if m.logger != nil {
-			m.logger.Debug("scrcpy keeping live stream despite profile change",
+			m.logger.Debug("scrcpy keeping live stream, request asks for no more",
 				"serial", req.Serial)
 		}
-		return current.Status(), nil
-	}
-	if current != nil {
-		current.Stop()
+		status := current.Status()
+		m.mu.Unlock()
+		return status, nil
 	}
 	// Start straight at the rung this device is known to accept. Read the map
 	// inline rather than via knownCodecLevel: m.mu is already held here and it
@@ -184,19 +211,32 @@ func (m *Manager) Start(req StartRequest) (Status, error) {
 	session.onCodecLevel = m.recordCodecLevel
 	session.launchLimiter = m.launchLimiter
 	m.sessions[req.Serial] = session
+	m.mu.Unlock()
+
+	if current != nil {
+		current.Stop()
+	}
 	session.Start()
 	return session.Status(), nil
 }
 
 func (m *Manager) Stop(serial string) bool {
+	// Session.Stop blocks on <-s.done, and the goroutine it waits for calls
+	// rememberCodecLevel -> m.recordCodecLevel, which needs m.mu. Holding m.mu
+	// across the stop closes that cycle and wedges the whole manager: every
+	// later Start, Stop and Status blocks forever on a mutex nobody will
+	// release. Drop the session from the map under the lock, then stop it
+	// outside.
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	session := m.sessions[serial]
+	if session != nil {
+		delete(m.sessions, serial)
+	}
+	m.mu.Unlock()
 	if session == nil {
 		return false
 	}
 	session.Stop()
-	delete(m.sessions, serial)
 	return true
 }
 
@@ -290,6 +330,7 @@ type Session struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
+	started   atomic.Bool
 	once      sync.Once
 	mu        sync.Mutex
 	status    Status
@@ -360,6 +401,10 @@ func NewSession(req StartRequest, publisher Publisher, launcher Launcher, logger
 }
 
 func (s *Session) Start() {
+	// Mark before spawning: a Stop racing this must either see the flag and
+	// wait, or miss it and return — in which case run() finds the context
+	// already cancelled and exits without doing any work.
+	s.started.Store(true)
 	go s.run()
 }
 
@@ -367,16 +412,19 @@ func (s *Session) Stop() {
 	s.once.Do(func() {
 		s.cancel()
 		s.closeControl()
-		<-s.done
+		// Only wait for run() if run() exists.
+		//
+		// Manager.Start publishes a session into the map and releases the lock
+		// before launching it, so a concurrent caller can reach Stop on a
+		// session whose goroutine has not started. s.done is closed by that
+		// goroutine and by nothing else, so waiting here would block until the
+		// process died — and with ten dashboard tiles calling Start at once,
+		// that window is hit often enough to look like "the stream takes
+		// forever to appear".
+		if s.started.Load() {
+			<-s.done
+		}
 	})
-}
-
-// isHealthy reports whether the session is connected and has actually
-// delivered a frame — the same bar WaitForFirstFrame holds a viewer to.
-func (s *Session) isHealthy() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return streamHasPublishedFrame(s.status)
 }
 
 // request returns a copy of the request this session was built from.
@@ -390,6 +438,15 @@ func (s *Session) request() StartRequest {
 // picture quality knobs — the ones scrcpy fixes at launch and that cost a cold
 // start to change. Identity of the session (endpoint, sockets, codec, encoder)
 // must be identical; those genuinely need a rebuild.
+// isProfileUpgrade reports whether the new request asks for more picture than
+// the running one gives on any axis. scrcpy fixes all three at launch, so the
+// only way to deliver more is a fresh session.
+func isProfileUpgrade(before StartRequest, after StartRequest) bool {
+	return after.MaxFPS > before.MaxFPS ||
+		after.MaxWidth > before.MaxWidth ||
+		after.Bitrate > before.Bitrate
+}
+
 func onlyEncodingProfileDiffers(before StartRequest, after StartRequest) bool {
 	before.MaxFPS, after.MaxFPS = 0, 0
 	before.MaxWidth, after.MaxWidth = 0, 0
@@ -1001,14 +1058,29 @@ func (s *Session) setRunning(running bool) {
 	s.status.Connected = false
 }
 
+// annexBContainsIDR reports whether an access unit carries an IDR slice.
+//
+// This runs on every frame the device sends, and on P-frames — the great
+// majority, at one IDR per second — it has to walk the entire payload before
+// answering no. A hand-rolled byte loop does that at about 1.4 GB/s; handing
+// the search to bytes.Index, which compiles to the platform's vector string
+// scan, does it at 16.8 GB/s. Measured on a 48 KB P-frame: 34.7µs -> 2.9µs.
+//
+// A four-byte start code is a three-byte one preceded by a zero, so scanning
+// for {0,0,1} alone finds both forms; the NAL header is always the byte that
+// follows it either way.
 func annexBContainsIDR(data []byte) bool {
-	for i := 0; i+3 < len(data); i++ {
-		if data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 && data[i+3]&0x1F == 5 {
+	const nalTypeIDR = 5
+	for i := 0; i+3 < len(data); {
+		found := bytes.Index(data[i:], []byte{0, 0, 1})
+		if found < 0 {
+			return false
+		}
+		start := i + found
+		if start+3 < len(data) && data[start+3]&0x1F == nalTypeIDR {
 			return true
 		}
-		if i+4 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 && data[i+4]&0x1F == 5 {
-			return true
-		}
+		i = start + 3
 	}
 	return false
 }

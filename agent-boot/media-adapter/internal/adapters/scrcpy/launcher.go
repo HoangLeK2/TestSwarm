@@ -57,6 +57,8 @@ type ADBLauncher struct {
 	scripts map[string]time.Time
 	// Last known `getprop` signature per serial. See deviceSignature.
 	signatures map[string]deviceProbe
+	// Serials whose display has already been resized this process.
+	displaySized map[string]bool
 }
 
 // deviceProbe is one cached getprop result. probedAt drives refresh; value is
@@ -131,10 +133,11 @@ func NewADBLauncher(cfg LauncherConfig) *ADBLauncher {
 		cfg.VerifyTTL = defaultLaunchVerifyTTLS * time.Second
 	}
 	return &ADBLauncher{
-		cfg:        cfg,
-		ready:      make(map[string]time.Time),
-		scripts:    make(map[string]time.Time),
-		signatures: make(map[string]deviceProbe),
+		cfg:          cfg,
+		ready:        make(map[string]time.Time),
+		scripts:      make(map[string]time.Time),
+		signatures:   make(map[string]deviceProbe),
+		displaySized: make(map[string]bool),
 	}
 }
 
@@ -158,6 +161,9 @@ func (l *ADBLauncher) Start(ctx context.Context, req StartRequest) (*LaunchedSer
 	deviceSignature := l.deviceSignature(ctx, req.Serial)
 	original := req
 	safeProfile := needsDeviceSafeProfile(deviceSignature)
+	if safeProfile {
+		l.applySafeDisplaySize(ctx, req.Serial)
+	}
 	req = applyDeviceSafeProfile(req, deviceSignature)
 	if launchProfileChanged(original, req) {
 		l.logLine(slog.LevelInfo, "scrcpy device safe profile applied",
@@ -266,6 +272,120 @@ func (l *ADBLauncher) ensureServer(ctx context.Context, serial string) error {
 	}
 	l.markReady(key)
 	return nil
+}
+
+// applySafeDisplaySize shrinks the device's own display so scrcpy has less to
+// capture, instead of asking the encoder to scale.
+//
+// Scaling is the path that aborts Exynos, and the reason is still unknown — the
+// 16-alignment guess died when 1080x2220 turned out to work and 2220 is not a
+// multiple of 16. What is known is that a listed device streams fine at its
+// native size. Making that native size smaller therefore buys back everything
+// dropping max_size cost — 1080x2220 is 2.4 Mpx per device, and a dashboard
+// decodes ten of them at once — without going near the code that crashes.
+//
+// It only runs when MEDIA_ADAPTER_SCRCPY_SAFE_DISPLAY_SIZE names a size,
+// because this is a real, persistent change to the phone: apps lay out
+// differently and any automation keyed to absolute coordinates moves with it.
+// Density is scaled by the same ratio, or text and touch targets end up sized
+// for a screen that no longer exists. `adb shell wm size reset` undoes both.
+func (l *ADBLauncher) applySafeDisplaySize(ctx context.Context, serial string) {
+	want := strings.TrimSpace(os.Getenv("MEDIA_ADAPTER_SCRCPY_SAFE_DISPLAY_SIZE"))
+	if want == "" {
+		return
+	}
+	l.mu.Lock()
+	done := l.displaySized[serial]
+	l.mu.Unlock()
+	if done {
+		return
+	}
+	wantW, _, ok := parseDisplaySize(want)
+	if !ok {
+		l.logLine(slog.LevelWarn, "scrcpy safe display size is not WxH, ignoring",
+			"serial", serial, "value", want)
+		return
+	}
+	out, err := l.run(ctx, serial, 5*time.Second, "shell", "wm size; wm density")
+	if err != nil {
+		l.logLine(slog.LevelWarn, "scrcpy could not read display size", "serial", serial, "error", err)
+		return
+	}
+	currentW, _, haveSize := parseDisplaySize(effectiveWMValue(out, "size"))
+	if !haveSize || currentW <= 0 {
+		return
+	}
+	if effectiveWMValue(out, "size") == want {
+		l.mu.Lock()
+		l.displaySized[serial] = true
+		l.mu.Unlock()
+		return
+	}
+	// Density must follow the width, not the diagonal: scrcpy captures pixels,
+	// and Android lays out in dp = px / (density/160).
+	density, haveDensity := parseFirstInt(effectiveWMValue(out, "density"))
+	if _, err := l.run(ctx, serial, 8*time.Second, "shell", "wm size "+want); err != nil {
+		l.logLine(slog.LevelWarn, "scrcpy could not set display size", "serial", serial, "error", err)
+		return
+	}
+	if haveDensity && density > 0 {
+		scaled := density * wantW / currentW
+		if _, err := l.run(ctx, serial, 8*time.Second, "shell", "wm density "+strconv.Itoa(scaled)); err != nil {
+			l.logLine(slog.LevelWarn, "scrcpy set size but not density; text will look oversized",
+				"serial", serial, "error", err)
+		}
+	}
+	l.mu.Lock()
+	l.displaySized[serial] = true
+	l.mu.Unlock()
+	l.logLine(slog.LevelInfo, "scrcpy shrank device display for capture",
+		"serial", serial, "from", effectiveWMValue(out, "size"), "to", want,
+		"density", density, "undo", "adb shell wm size reset")
+}
+
+// effectiveWMValue picks the override line when `wm size`/`wm density` reports
+// one, since that is what the display actually runs at.
+func effectiveWMValue(out string, kind string) string {
+	var physical string
+	for _, line := range strings.Split(out, "\n") {
+		label, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		label = strings.ToLower(strings.TrimSpace(label))
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		switch label {
+		case "override " + kind:
+			return value
+		case "physical " + kind:
+			physical = value
+		}
+	}
+	return physical
+}
+
+func parseDisplaySize(value string) (int, int, bool) {
+	w, h, ok := strings.Cut(strings.TrimSpace(value), "x")
+	if !ok {
+		return 0, 0, false
+	}
+	width, errW := strconv.Atoi(strings.TrimSpace(w))
+	height, errH := strconv.Atoi(strings.TrimSpace(h))
+	if errW != nil || errH != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func parseFirstInt(value string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func (l *ADBLauncher) markReady(key string) {
@@ -651,6 +771,26 @@ func applyDeviceSafeProfile(req StartRequest, deviceSignature string) StartReque
 	// anyone who finds a device that needs it.
 	req.IgnoreEncoderConstraints = false
 	req.LowLatency = false
+	// No codec options at all. Not one.
+	//
+	// This was briefly lowered to keep `i-frame-interval:int=1`, on the theory
+	// that the option had never actually been proven guilty — both earlier
+	// crashes still carried max_size, so the options were never tried alone.
+	// The device settled it:
+	//
+	//	[server] DEBUG: Video codec option set: i-frame-interval (Integer) = 1
+	//	[server] DEBUG: Video codec size alignment requirement: 2px
+	//	stack corruption detected (-fstack-protector)
+	//
+	// A single MediaFormat key is enough to abort this encoder. The absence of
+	// evidence against it was not evidence for it, and ten devices went dark
+	// while that distinction was tested in production.
+	//
+	// Losing the 1s IDR cadence is a real cost — nothing schedules a keyframe
+	// after startup — but it is paid back through RESET_VIDEO instead: the RTSP
+	// handler asks for one when a viewer attaches (publisher.go
+	// requestKeyframe), which is exactly when a missing IDR would show as a
+	// frozen picture.
 	req.CodecLevel = MaxCodecLevel
 	// Bitrate is deliberately left alone.
 	//

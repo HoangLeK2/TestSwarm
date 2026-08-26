@@ -307,6 +307,8 @@ class DeviceClient:
         self._u2_restart_triggered_at: float = float("-inf")  # dedup guard for relay restart_u2
         self._u2_keepalive_gen: int = 0  # bumped on WS reconnect so stale keepalive threads exit
         self._relay_u2_bind_at: float = 0.0  # monotonic; hierarchy recovery grace after relay bind
+        # At most one relay u2 bind waiter alive per device (see bind_relay_u2).
+        self._relay_u2_bind_inflight = threading.BoundedSemaphore(1)
         self._atx_grace_given_at: float = float("-inf")      # time first timeout was seen; -inf = no grace in progress
         self._hierarchy_relay_u2_fail_count: int = 0
         self._hierarchy_relay_u2_last_fail_at: float = 0.0
@@ -1405,13 +1407,14 @@ class DeviceClient:
         host_hint = str(host or "").strip()
         if not host_hint:
             host_hint = str(self._resolve_relay_u2_host(actual) or "").strip()
-        if not host_hint:
-            # Caps may arrive shortly after relay online — brief poll avoids u2_host=unset.
-            for _ in range(8):
-                host_hint = str(self._resolve_relay_u2_host(actual) or "").strip()
-                if host_hint:
-                    break
-                time.sleep(0.25)
+        # NEVER poll for wlan_ip here. This runs synchronously inside the relay
+        # online callback, which the gRPC/WS handler awaits on the same event
+        # loop as the whole HTTP API. The old `for _ in range(8): time.sleep(.25)`
+        # blocked that loop for a guaranteed 2s per device — guaranteed because
+        # the caps it waited for are written by update_capabilities(), which runs
+        # after update_serials() returns, on the loop this sleep was holding.
+        # 100 phones registering = 200s of a fully frozen backend.
+        # _relay_u2_bind_wait_connect below already waits for caps off-loop.
         if not host_hint and ":" in relay_serial:
             host_hint = relay_serial.rsplit(":", 1)[0].strip()
         if host_hint and not host_hint.startswith("127."):
@@ -1424,28 +1427,42 @@ class DeviceClient:
             f"relay u2 bind: adb_serial={actual} u2_host={self._u2_host or 'unset'}",
             level=logging.INFO,
         )
-        threading.Thread(
-            target=lambda: self._relay_u2_bind_wait_connect(actual),
-            daemon=True,
-            name=f"u2-relay-bind-{self.serial}",
-        ).start()
+        # One waiter per device, ever. bind_relay_u2 is re-entered on every
+        # capabilities change while u2 is still None (server._on_relay_capabilities_update),
+        # so without this guard a phone whose atx-agent is down accumulates a new
+        # 15-second waiter thread on every heartbeat that changes caps.
+        if not self._relay_u2_bind_inflight.acquire(blocking=False):
+            return True
+        try:
+            threading.Thread(
+                target=lambda: self._relay_u2_bind_wait_connect(actual),
+                daemon=True,
+                name=f"u2-relay-bind-{self.serial}",
+            ).start()
+        except RuntimeError:
+            # Interpreter shutting down — release so a later bind can retry.
+            self._relay_u2_bind_inflight.release()
+            return False
         return True
 
     def _relay_u2_bind_wait_connect(self, relay_serial: str) -> None:
         """Wait for relay caps wlan_ip then connect u2 (non-blocking bootstrap)."""
-        if self._reconnect_u2():
-            return
-        for _ in range(60):
-            host = self._resolve_relay_u2_host(relay_serial)
-            if host:
-                self._u2_host = host
-                if self._reconnect_u2():
-                    return
-            time.sleep(0.25)
-        self._log(
-            f"relay u2 bind: gave up waiting for wlan_ip ({relay_serial})",
-            level=logging.WARNING,
-        )
+        try:
+            if self._reconnect_u2():
+                return
+            for _ in range(60):
+                host = self._resolve_relay_u2_host(relay_serial)
+                if host:
+                    self._u2_host = host
+                    if self._reconnect_u2():
+                        return
+                time.sleep(0.25)
+            self._log(
+                f"relay u2 bind: gave up waiting for wlan_ip ({relay_serial})",
+                level=logging.WARNING,
+            )
+        finally:
+            self._relay_u2_bind_inflight.release()
 
     def _has_active_relay(self) -> bool:
         """True when agent-boot relay currently manages this device."""

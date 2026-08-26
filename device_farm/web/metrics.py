@@ -23,6 +23,24 @@ relay_devices_total = Gauge(
     "device_farm_relay_devices_total",
     "Total devices registered via relay",
 )
+relay_fsm_queue_depth = Gauge(
+    "device_farm_relay_fsm_queue_depth",
+    "Pending relay→device-FSM events waiting in the pump",
+)
+relay_fsm_events_total = Counter(
+    "device_farm_relay_fsm_events_total",
+    "Relay FSM events written by the pump",
+    ["kind"],  # online | offline
+)
+relay_fsm_dropped_total = Counter(
+    "device_farm_relay_fsm_dropped_total",
+    "Relay FSM events dropped because the pump queue was full",
+)
+relay_fsm_batch_seconds = Histogram(
+    "device_farm_relay_fsm_batch_seconds",
+    "Relay FSM pump batch duration in seconds",
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+)
 
 # ── Task / Dispatch metrics ──
 task_queue_depth = Gauge(

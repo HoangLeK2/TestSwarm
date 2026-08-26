@@ -324,8 +324,19 @@ def test_grpc_relay_supports_tls_and_prod_insecure_block():
 
 
 def test_relay_capabilities_retroactive_callback_signature_fixed():
-    from pathlib import Path
+    """The retroactive caps callback must be handed (serial, caps), not just serial.
 
-    target = Path(__file__).resolve().parents[1] / "runtime" / "transports" / "adb_relay_server.py"
-    content = target.read_text(encoding="utf-8")
-    assert "callback(serial, self._capabilities.get(serial, {}))" in content
+    Asserted behaviourally rather than by grepping the source: the call now goes
+    through AdbRelayManager._dispatch_callback, and a source-text check would
+    keep passing (or keep failing) for reasons unrelated to the actual arity.
+    """
+    from runtime.transports.adb_relay_server import AdbRelayManager
+
+    manager = AdbRelayManager()
+    manager._serial_index["dev-1"] = "relay-1"
+    manager._capabilities["dev-1"] = {"wlan_ip": "192.168.1.9"}
+
+    received: list[tuple] = []
+    manager.set_on_capabilities_update(lambda *args: received.append(args))
+
+    assert received == [("dev-1", {"wlan_ip": "192.168.1.9"})]

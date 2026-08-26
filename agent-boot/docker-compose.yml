@@ -10,7 +10,7 @@ x-agent-boot-image: &agent-boot-image
   build:
     context: .
     dockerfile: Dockerfile
-  image: agent-boot:0.2.4
+  image: agent-boot:0.2.8
 
 x-adb-host-env: &adb-host-env
   ADB_HOST: host.docker.internal
@@ -105,6 +105,8 @@ services:
       # 0 = không thu nhỏ (độ phân giải gốc). Xem safeProfileMaxSize.
       MEDIA_ADAPTER_SCRCPY_SAFE_MAX_SIZE: "${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_SIZE:-0}"
       MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS: "${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS:-0}"
+      # Vi du 720x1480. De trong = khong doi kich thuoc man hinh may.
+      MEDIA_ADAPTER_SCRCPY_SAFE_DISPLAY_SIZE: "${MEDIA_ADAPTER_SCRCPY_SAFE_DISPLAY_SIZE:-}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

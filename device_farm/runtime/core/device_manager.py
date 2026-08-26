@@ -13,10 +13,13 @@ Mode B — Relay (agent-boot):
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from core.config import Config
@@ -25,6 +28,13 @@ from runtime.core.event_recorder import EventRecorder
 
 
 log = logging.getLogger(__name__)
+
+# Slot-map persistence runs off the event loop — see _schedule_save_index_map.
+_INDEX_SAVE_POOL = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="device-index-save"
+)
+atexit.register(lambda: _INDEX_SAVE_POOL.shutdown(wait=False))
+_INDEX_SAVE_DEBOUNCE_S = 1.0
 
 
 class DeviceManager:
@@ -42,6 +52,9 @@ class DeviceManager:
 
         # Serial → slot index (persisted so the same device gets the same slot)
         self._index_map: Dict[str, int] = {}
+        self._index_save_lock: threading.Lock = threading.Lock()
+        self._index_save_pending: bool = False
+        self._index_save_snapshot: Optional[Dict[str, int]] = None
         self._load_index_map()
         # Keep index history for stable slot assignment, but do not pre-register
         # devices from disk. Registry should reflect only currently live devices.
@@ -211,6 +224,9 @@ class DeviceManager:
                 device.teardown()
             except Exception as exc:
                 log.error(f"[{device.serial}] teardown error: {exc}")
+        # Slot assignments are written on a debounce; make sure the last one
+        # reaches disk so a restart reuses the same slots.
+        self.flush_index_map()
 
     # ── Serial → Index Persistence ────────────────────────────────────────────
 
@@ -222,7 +238,7 @@ class DeviceManager:
         while idx in used:
             idx += 1
         self._index_map[serial] = idx
-        self._save_index_map()
+        self._schedule_save_index_map()
         return idx
 
     def _load_index_map(self) -> None:
@@ -238,13 +254,62 @@ class DeviceManager:
             except Exception as exc:
                 log.warning(f"Could not load index map {path}: {exc}")
 
-    def _save_index_map(self) -> None:
+    def _schedule_save_index_map(self) -> None:
+        """Persist the slot map off the caller's thread, coalescing bursts.
+
+        register_relay_device runs inside the relay online callback, which the
+        gRPC handler awaits on the API event loop. A relay reporting 100 new
+        phones used to mean 100 synchronous json.dump calls there — on a docker
+        bind mount that is not free. Slot assignment is already in memory and
+        authoritative; the file is only history, so it can lag by a second.
+
+        Callers hold ``self._lock`` (non-reentrant), so the snapshot is taken
+        here and the writer thread never reaches back for it.
+        """
+        with self._index_save_lock:
+            self._index_save_snapshot = dict(self._index_map)
+            if self._index_save_pending:
+                return
+            self._index_save_pending = True
+        try:
+            _INDEX_SAVE_POOL.submit(self._drain_index_map_saves)
+        except RuntimeError:
+            # Interpreter shutting down — write inline so the slot is not lost.
+            with self._index_save_lock:
+                self._index_save_pending = False
+                snapshot = self._index_save_snapshot
+                self._index_save_snapshot = None
+            if snapshot is not None:
+                self._save_index_map(snapshot)
+
+    def _drain_index_map_saves(self) -> None:
+        while True:
+            with self._index_save_lock:
+                snapshot = self._index_save_snapshot
+                self._index_save_snapshot = None
+                if snapshot is None:
+                    self._index_save_pending = False
+                    return
+            self._save_index_map(snapshot)
+            # Coalesce the rest of the burst into the next write.
+            time.sleep(_INDEX_SAVE_DEBOUNCE_S)
+
+    def flush_index_map(self) -> None:
+        """Write any pending slot assignment now (shutdown path)."""
+        with self._index_save_lock:
+            snapshot = self._index_save_snapshot
+            self._index_save_snapshot = None
+        if snapshot is not None:
+            self._save_index_map(snapshot)
+
+    def _save_index_map(self, index_map: Optional[Dict[str, int]] = None) -> None:
         path = self.config.device.index_file
+        snapshot = self._index_map if index_map is None else index_map
         try:
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
             with open(path, "w") as f:
-                json.dump(self._index_map, f, indent=2)
+                json.dump(snapshot, f, indent=2)
         except Exception as exc:
             log.warning(f"Could not save index map {path}: {exc}")

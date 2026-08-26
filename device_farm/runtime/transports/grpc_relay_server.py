@@ -169,10 +169,14 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
 
         elif mtype == "heartbeat" and conn is not None:
             new_serials = set(msg.get("serials") or [])
-            await self._rm.update_serials(relay_id, new_serials)
+            # Capabilities FIRST. update_serials fires the device-online callback,
+            # which binds u2 using wlan_ip from capabilities. With serials first the
+            # callback always saw empty caps and had to wait for data that could
+            # only arrive after it returned — see bind_relay_u2.
             caps = msg.get("capabilities")
             if caps:
                 self._rm.update_capabilities(caps)
+            await self._rm.update_serials(relay_id, new_serials)
 
         elif mtype == "result" and conn is not None:
             conn.resolve(

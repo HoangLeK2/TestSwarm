@@ -5,7 +5,7 @@ name: agent-boot
 
 services:
   agent-boot:
-    image: agent-boot:0.2.4
+    image: agent-boot:0.2.8
     container_name: agent-boot
     restart: unless-stopped
     env_file:
@@ -40,7 +40,7 @@ services:
     #   - ./assets:/app/assets:ro
 
   media-adapter:
-    image: agent-boot:0.2.4
+    image: agent-boot:0.2.8
     container_name: media-adapter
     restart: unless-stopped
     command: ["/app/bin/media-adapter"]
@@ -115,6 +115,11 @@ services:
       # scrcpy dịch max_fps thành key vendor max-fps-to-encoder, và riêng nó cũng
       # đủ làm encoder Exynos abort.
       MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS: ${MEDIA_ADAPTER_SCRCPY_SAFE_MAX_FPS:-0}
+      # Thu nho CHINH MAN HINH may thay vi bat encoder scale (scale la thu lam
+      # Exynos abort). Vi du: 720x1480. De trong = khong dung toi may.
+      # Day la thay doi THAT va co tinh luu lai tren may: app hien thi khac, va
+      # automation dua tren toa do tuyet doi se lech. Hoan tac: wm size reset.
+      MEDIA_ADAPTER_SCRCPY_SAFE_DISPLAY_SIZE: ${MEDIA_ADAPTER_SCRCPY_SAFE_DISPLAY_SIZE:-}
     ports:
       - "127.0.0.1:${MEDIA_ADAPTER_HTTP_PORT:-8878}:8878/tcp"
       - "${MEDIA_ADAPTER_RTSP_PORT:-8556}:8556/tcp"

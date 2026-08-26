@@ -299,15 +299,20 @@ func TestDeviceSafeProfileStartsNote10WithSafeEncoderAndReadableFocusedProfile(t
 	if got.LowLatency {
 		t.Fatal("Note 10+ must not start with low-latency encoder option")
 	}
-	if got.CodecLevel != MaxCodecLevel {
-		t.Fatalf("codec level=%d, want safest %d", got.CodecLevel, MaxCodecLevel)
+	// The rung itself is not the contract; keeping the IDR cadence is.
+	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) == "" {
+		t.Fatalf("profile left the device with no IDR cadence: %+v", got)
 	}
 	if got.Bitrate != 900000 || !got.SkipMaxSize || !got.SkipMaxFPS {
 		t.Fatalf("profile=%dbps skip_size=%v skip_fps=%v, want 900000bps and no encoder hints",
 			got.Bitrate, got.SkipMaxSize, got.SkipMaxFPS)
 	}
-	if contains(shellJoin(scrcpyServerArgs(LauncherConfig{ServerVersion: "4.1"}, got)), "video_codec_options") {
-		t.Fatalf("Note 10+ safest profile must omit codec options")
+	// One codec option survives on purpose. Sending none at all is what left the
+	// device with a single keyframe at startup and nothing after it, so a lost
+	// packet or a late viewer froze the picture until the stream was rebuilt.
+	args := shellJoin(scrcpyServerArgs(LauncherConfig{ServerVersion: "4.1"}, got))
+	if !contains(args, "'video_codec_options=i-frame-interval:int=1'") {
+		t.Fatalf("Note 10+ profile must keep exactly the IDR cadence: %s", args)
 	}
 }
 
@@ -332,8 +337,11 @@ func TestDeviceSafeProfileKeepsCallerBitrateForNote10(t *testing.T) {
 	if !got.SkipMaxSize || !got.SkipMaxFPS {
 		t.Fatalf("both encoder hints must stay off for this device: %+v", got)
 	}
-	if got.LowLatency || got.CodecLevel != MaxCodecLevel {
+	if got.LowLatency {
 		t.Fatalf("safe encoder settings not applied: %+v", got)
+	}
+	if contains(codecOptionsForLevel(got.CodecLevel, got.LowLatency), "latency") {
+		t.Fatalf("profile kept the riskiest codec option: %+v", got)
 	}
 }
 
@@ -349,8 +357,14 @@ func TestDeviceSafeProfileMatchesNote10EmulatorName(t *testing.T) {
 
 	got := applyDeviceSafeProfile(req, "sdk_gphone64_arm64 galaxy_note10_plus Google")
 
-	if got.CodecLevel != MaxCodecLevel || !got.SkipMaxSize || !got.SkipMaxFPS {
+	// What identifies the profile is the two encoder hints being dropped, not a
+	// particular rung. Pinning the rung is what let the IDR cadence disappear
+	// unnoticed, so assert the behaviour instead of the number.
+	if !got.SkipMaxSize || !got.SkipMaxFPS {
 		t.Fatalf("emulator Note 10+ profile not applied: %+v", got)
+	}
+	if codecOptionsForLevel(got.CodecLevel, got.LowLatency) == "" {
+		t.Fatalf("profile left the device with no IDR cadence: %+v", got)
 	}
 }
 
@@ -709,14 +723,46 @@ func TestManagerKeepsLiveStreamWhenOnlyProfileDiffers(t *testing.T) {
 	live.markConnected(1080, 2220)
 	live.recordFrame(4096, true, true)
 
-	viewer := base
-	viewer.MaxFPS, viewer.MaxWidth, viewer.Bitrate = 30, 480, 2000000
-	if _, err := manager.Start(viewer); err != nil {
+	// The idle throttle asking for less must not disturb a viewer.
+	idle := base
+	idle.MaxFPS, idle.MaxWidth, idle.Bitrate = 1, 320, 150000
+	if _, err := manager.Start(idle); err != nil {
 		t.Fatal(err)
 	}
 
 	if manager.sessions["SERIAL"] != live {
-		t.Fatal("a healthy stream was torn down for a picture-quality change")
+		t.Fatal("a healthy stream was torn down to give the viewer less")
+	}
+}
+
+func TestManagerRestartsToDeliverAnUpgrade(t *testing.T) {
+	// Refusing every profile change made a viewer that asked for 15fps render
+	// at whatever the idle throttle had last set — 1fps. scrcpy fixes the rate
+	// at launch, so more picture costs exactly one cold start.
+	manager := NewManagerWithLauncher(nil, fakeLauncher{}, nil)
+	defer manager.Close()
+
+	idle := StartRequest{Serial: "SERIAL", OwnsScrcpy: true, Control: true,
+		MaxFPS: 1, MaxWidth: 320, Bitrate: 150000, VideoCodec: "h264"}
+	if _, err := manager.Start(idle); err != nil {
+		t.Fatal(err)
+	}
+	live := manager.sessions["SERIAL"]
+	live.markConnected(320, 640)
+	live.recordFrame(1024, true, true)
+
+	viewer := idle
+	viewer.MaxFPS, viewer.MaxWidth, viewer.Bitrate = 15, 600, 900000
+	if _, err := manager.Start(viewer); err != nil {
+		t.Fatal(err)
+	}
+
+	rebuilt := manager.sessions["SERIAL"]
+	if rebuilt == live {
+		t.Fatal("viewer asking for 15fps was left on the 1fps stream")
+	}
+	if got := rebuilt.request().MaxFPS; got != 15 {
+		t.Fatalf("new session max fps=%d, want 15", got)
 	}
 }
 
@@ -745,25 +791,27 @@ func TestManagerStillRebuildsWhenSessionIdentityChanges(t *testing.T) {
 	}
 }
 
-func TestManagerRestartsUnhealthyStreamOnProfileChange(t *testing.T) {
-	// Nothing to protect when no frame ever arrived; the new parameters may be
-	// exactly what unblocks the device.
+func TestManagerKeepsStartingStreamAgainstADowngrade(t *testing.T) {
+	// The cold-start window is where a racing downgrade does the most damage:
+	// it kills a launch that was about to succeed and leaves another frameless
+	// session in its place. Protection must not depend on frames having
+	// arrived yet.
 	manager := NewManagerWithLauncher(nil, fakeLauncher{}, nil)
 	defer manager.Close()
 
-	base := StartRequest{Serial: "SERIAL", OwnsScrcpy: true,
-		MaxFPS: 15, MaxWidth: 600, Bitrate: 900000, VideoCodec: "h264"}
-	if _, err := manager.Start(base); err != nil {
-		t.Fatal(err)
-	}
-	stalled := manager.sessions["SERIAL"]
-
-	viewer := base
-	viewer.Bitrate = 2000000
+	viewer := StartRequest{Serial: "SERIAL", OwnsScrcpy: true, VideoCodec: "h264",
+		MaxFPS: 15, MaxWidth: 600, Bitrate: 900000}
 	if _, err := manager.Start(viewer); err != nil {
 		t.Fatal(err)
 	}
-	if manager.sessions["SERIAL"] == stalled {
-		t.Fatal("a stream with no frames must be rebuilt")
+	starting := manager.sessions["SERIAL"] // no frames yet, on purpose
+
+	idle := viewer
+	idle.MaxFPS, idle.MaxWidth, idle.Bitrate = 1, 320, 150000
+	if _, err := manager.Start(idle); err != nil {
+		t.Fatal(err)
+	}
+	if manager.sessions["SERIAL"] != starting {
+		t.Fatal("a launch in progress was killed by the idle throttle")
 	}
 }

@@ -296,12 +296,12 @@ func normalizePath(path string) string {
 }
 
 type streamState struct {
-	serial         string
-	media          *description.Media
-	format         *format.H264
-	stream         *gortsplib.ServerStream
-	remoteURL      string
-	remoteClient   *gortsplib.Client
+	serial       string
+	media        *description.Media
+	format       *format.H264
+	stream       *gortsplib.ServerStream
+	remoteURL    string
+	remoteClient *gortsplib.Client
 	// Media announced to the remote server. A gortsplib client only accepts
 	// writes for a media pointer it was given in StartRecording; passing the
 	// local server's `media` instead makes it look up a nil entry and panic
@@ -588,8 +588,15 @@ func (l *serialLane) write(item queuedPacket) error {
 	l.mu.Lock()
 	state := l.state
 	encoder := l.encoder
-	spsCopy := append([]byte(nil), l.sps...)
-	ppsCopy := append([]byte(nil), l.pps...)
+	// Copy the parameter sets only when they are about to be used. They are
+	// prepended to keyframes and nothing else, so on a 1s IDR cadence at 15fps
+	// this used to allocate twice for fourteen frames out of every fifteen —
+	// inside the critical section, for values immediately discarded.
+	var spsCopy, ppsCopy []byte
+	if item.isKey {
+		spsCopy = append([]byte(nil), l.sps...)
+		ppsCopy = append([]byte(nil), l.pps...)
+	}
 	l.mu.Unlock()
 	if state == nil || encoder == nil {
 		return nil

@@ -120,7 +120,10 @@ import {
   type ScenarioDeviceVariablesOut
 } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
-import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
+import {
+  scenarioTemplatesApi,
+  type ScenarioTemplateOut
+} from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { EmptyNodePicker } from './control-record/empty-node-picker';
 import {
@@ -1115,6 +1118,90 @@ export function ControlRecordView({
     if (next !== scenarioVariables) setScenarioVariables(next);
     return next;
   }, [scenarioVariables, declaredDeviceVarKeys]);
+  const canPersistScenarioVariables = Boolean(
+    save.templateContext || save.editingContext || save.orgScenarioContext
+  );
+  const saveScenarioVariablesMutation = useMutation({
+    mutationFn: async (draft: Record<string, any>) => {
+      const next = mergeDeclaredDeviceVarKeys(draft, declaredDeviceVarKeys);
+
+      if (save.templateContext) {
+        await scenarioTemplatesApi.update(save.templateContext.templateId, {
+          variables: next
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ['scenario-templates']
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ['scenario-templates', save.templateContext.templateId]
+        });
+        return next;
+      }
+
+      if (savingOrgScenario && save.orgScenarioContext) {
+        if (activeCampaignId) {
+          const detail = await campaignsApi.patchEntity(activeCampaignId, {
+            vars: next
+          });
+          syncCampaignDetailCaches(queryClient, activeCampaignId, detail);
+          return next;
+        }
+
+        const scenarioId = (initialOrgScenarioId ?? '').trim();
+        if (!scenarioId) {
+          throw new Error(tVar('saveUnavailable'));
+        }
+        const body = await orgScenariosApi.getBody(scenarioId);
+        const bodyJson = (body.body_json ?? {}) as Record<string, any>;
+        const saved = await orgScenariosApi.saveBody(scenarioId, {
+          ...(Array.isArray(bodyJson.steps)
+            ? { steps: bodyJson.steps as Record<string, any>[] }
+            : {}),
+          ...(Array.isArray(bodyJson.nodes)
+            ? { nodes: bodyJson.nodes as Record<string, any>[] }
+            : {}),
+          ...(Array.isArray(bodyJson.edges)
+            ? { edges: bodyJson.edges as Record<string, any>[] }
+            : {}),
+          variables: next
+        });
+        queryClient.setQueryData(['org-scenarios', scenarioId, 'body'], saved);
+        void queryClient.invalidateQueries({
+          queryKey: ['org-scenarios', scenarioId]
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ['org-scenarios', scenarioId, 'body']
+        });
+        void queryClient.invalidateQueries({ queryKey: ['org-scenarios'] });
+        return next;
+      }
+
+      if (save.editingContext) {
+        const updated = await scenariosApi.update(
+          save.editingContext.campaignId,
+          save.editingContext.scenarioId,
+          {
+            variables: next
+          }
+        );
+        syncSavedScenarioCaches(
+          queryClient,
+          save.editingContext.campaignId,
+          updated
+        );
+        return next;
+      }
+
+      throw new Error(tVar('saveUnavailable'));
+    },
+    onSuccess: (next) => {
+      handleScenarioVariablesChange(next);
+      toast.success(tVar('saveSuccess'));
+    },
+    onError: (err) => {
+      toast.error(formatFarmApiError(err, tVar('saveFailed')));
+    }
+  });
   const inlineScenarioDeviceVars = useMemo(() => {
     if (!selectedDeviceId) return null;
     if (deviceVarEnabledByDevice[selectedDeviceId] !== true) return null;
@@ -3433,7 +3520,11 @@ export function ControlRecordView({
         open={varDialogOpen}
         onOpenChange={setVarDialogOpen}
         variables={scenarioVariablesWithDeviceKeys}
-        onVariablesChange={handleScenarioVariablesChange}
+        onVariablesChange={(next) =>
+          saveScenarioVariablesMutation.mutateAsync(next)
+        }
+        savePending={saveScenarioVariablesMutation.isPending}
+        saveDisabled={!canSaveWork || !canPersistScenarioVariables}
         labels={{
           title: tVar('title'),
           variableCount:
@@ -3447,7 +3538,8 @@ export function ControlRecordView({
           pageSummary: pageSummary?.contextLabel,
           pageSummaryWarning: pageSummary?.warning,
           cancel: tVar('cancel'),
-          save: tVar('save')
+          save: tVar('save'),
+          saving: tVar('saving')
         }}
       />
 

@@ -59,12 +59,18 @@ export function ControlRecordVariablesDialog({
   onOpenChange,
   variables,
   onVariablesChange,
+  savePending,
+  saveDisabled,
   labels
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   variables: Record<string, any>;
-  onVariablesChange: (variables: Record<string, any>) => void;
+  onVariablesChange: (
+    variables: Record<string, any>
+  ) => void | Promise<unknown>;
+  savePending?: boolean;
+  saveDisabled?: boolean;
   labels: {
     title: string;
     variableCount: string | null;
@@ -74,9 +80,11 @@ export function ControlRecordVariablesDialog({
     pageSummaryWarning?: string;
     cancel: string;
     save: string;
+    saving: string;
   };
 }) {
   const variableCount = Object.keys(variables).length;
+  const [submitting, setSubmitting] = useState(false);
   const [draftVariables, setDraftVariables] =
     useState<Record<string, any>>(variables);
   const committedSignature = useMemo(
@@ -88,6 +96,7 @@ export function ControlRecordVariablesDialog({
     [draftVariables]
   );
   const hasDraftChanges = draftSignature !== committedSignature;
+  const isSaving = submitting || savePending === true;
 
   useEffect(() => {
     if (open) setDraftVariables(variables);
@@ -100,24 +109,42 @@ export function ControlRecordVariablesDialog({
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
+      if (isSaving) return;
       if (!nextOpen) {
         closeAndDiscard();
         return;
       }
       onOpenChange(true);
     },
-    [closeAndDiscard, onOpenChange]
+    [closeAndDiscard, isSaving, onOpenChange]
   );
 
   const handleSubmit = useCallback(
-    (event: FormEvent<HTMLFormElement>) => {
+    async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (hasDraftChanges) {
-        onVariablesChange(draftVariables);
+      if (isSaving || saveDisabled) return;
+      if (!hasDraftChanges) {
+        onOpenChange(false);
+        return;
       }
-      onOpenChange(false);
+      setSubmitting(true);
+      try {
+        await onVariablesChange(draftVariables);
+        onOpenChange(false);
+      } catch {
+        // Caller owns the toast; keep the dialog open so the draft is not lost.
+      } finally {
+        setSubmitting(false);
+      }
     },
-    [draftVariables, hasDraftChanges, onOpenChange, onVariablesChange]
+    [
+      draftVariables,
+      hasDraftChanges,
+      isSaving,
+      onOpenChange,
+      onVariablesChange,
+      saveDisabled
+    ]
   );
 
   const preventInputEnterSubmit = useCallback(
@@ -174,6 +201,7 @@ export function ControlRecordVariablesDialog({
             <VariableEditor
               variables={draftVariables}
               onChange={setDraftVariables}
+              disabled={isSaving || saveDisabled}
             />
           </div>
           <div className='flex justify-end gap-2 border-t pt-3'>
@@ -181,12 +209,17 @@ export function ControlRecordVariablesDialog({
               type='button'
               variant='outline'
               size='sm'
+              disabled={isSaving}
               onClick={closeAndDiscard}
             >
               {labels.cancel}
             </Button>
-            <Button type='submit' size='sm' disabled={!hasDraftChanges}>
-              {labels.save}
+            <Button
+              type='submit'
+              size='sm'
+              disabled={!hasDraftChanges || isSaving || saveDisabled}
+            >
+              {isSaving ? labels.saving : labels.save}
             </Button>
           </div>
         </form>

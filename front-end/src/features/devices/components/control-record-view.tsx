@@ -99,6 +99,7 @@ import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-s
 import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import { stepsToGraph } from '@/features/campaigns/utils/steps-to-graph';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import {
   detectSingleVariableRename,
@@ -198,6 +199,7 @@ import {
   preparePreviewStepPayload
 } from '../lib/control-record-preview-steps';
 import { syncCampaignDetailCaches } from '../lib/control-record-cache';
+import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-api';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -304,6 +306,15 @@ export function ControlRecordView({
       : savingOrgScenario
         ? orgScenarioPerms.canUpdate
         : campaignPerms.canUpdate);
+  const canSaveScenarioVariables =
+    !safeReadOnly &&
+    (save.templateContext
+      ? templatePerms.canUpdate
+      : savingOrgScenario && initialCampaignId
+        ? campaignPerms.canUpdate
+        : savingOrgScenario
+          ? orgScenarioPerms.canUpdate
+          : campaignPerms.canUpdate);
   const { setSkipTapRecordingWhilePick } = record;
 
   const saveOrgBodyMutation = useSaveOrgScenarioBody();
@@ -1124,11 +1135,37 @@ export function ControlRecordView({
   const saveScenarioVariablesMutation = useMutation({
     mutationFn: async (draft: Record<string, any>) => {
       const next = mergeDeclaredDeviceVarKeys(draft, declaredDeviceVarKeys);
+      const rename = detectSingleVariableRename(
+        scenarioVariablesRef.current,
+        next
+      );
+      const renamedSteps = rename
+        ? (replaceScenarioVariableReferences(
+            flushPendingFlowDetailStep(),
+            rename
+          ) as typeof steps.items)
+        : null;
+      const payloadSteps =
+        renamedSteps && renamedSteps.length > 0
+          ? sanitizeScenarioStepsForApi(renamedSteps)
+          : null;
+
+      if (payloadSteps) {
+        const check = validateScenarioStepsForApi(payloadSteps);
+        if (!check.ok) {
+          throw new Error(check.message);
+        }
+      }
 
       if (save.templateContext) {
-        await scenarioTemplatesApi.update(save.templateContext.templateId, {
-          variables: next
-        });
+        const payload: Parameters<typeof scenarioTemplatesApi.update>[1] = {
+          variables: next,
+          ...(payloadSteps ? { steps: payloadSteps } : {})
+        };
+        await scenarioTemplatesApi.update(
+          save.templateContext.templateId,
+          payload
+        );
         void queryClient.invalidateQueries({
           queryKey: ['scenario-templates']
         });
@@ -1151,20 +1188,24 @@ export function ControlRecordView({
         if (!scenarioId) {
           throw new Error(tVar('saveUnavailable'));
         }
-        const body = await orgScenariosApi.getBody(scenarioId);
-        const bodyJson = (body.body_json ?? {}) as Record<string, any>;
-        const saved = await orgScenariosApi.saveBody(scenarioId, {
-          ...(Array.isArray(bodyJson.steps)
-            ? { steps: bodyJson.steps as Record<string, any>[] }
-            : {}),
-          ...(Array.isArray(bodyJson.nodes)
-            ? { nodes: bodyJson.nodes as Record<string, any>[] }
-            : {}),
-          ...(Array.isArray(bodyJson.edges)
-            ? { edges: bodyJson.edges as Record<string, any>[] }
-            : {}),
-          variables: next
-        });
+        const bodyPayload = payloadSteps
+          ? buildOrgScenarioBodyPayload(payloadSteps, next)
+          : await orgScenariosApi.getBody(scenarioId).then((body) => {
+              const bodyJson = (body.body_json ?? {}) as Record<string, any>;
+              return {
+                ...(Array.isArray(bodyJson.steps)
+                  ? { steps: bodyJson.steps as Record<string, any>[] }
+                  : {}),
+                ...(Array.isArray(bodyJson.nodes)
+                  ? { nodes: bodyJson.nodes as Record<string, any>[] }
+                  : {}),
+                ...(Array.isArray(bodyJson.edges)
+                  ? { edges: bodyJson.edges as Record<string, any>[] }
+                  : {}),
+                variables: next
+              };
+            });
+        const saved = await orgScenariosApi.saveBody(scenarioId, bodyPayload);
         queryClient.setQueryData(['org-scenarios', scenarioId, 'body'], saved);
         void queryClient.invalidateQueries({
           queryKey: ['org-scenarios', scenarioId]
@@ -1177,12 +1218,19 @@ export function ControlRecordView({
       }
 
       if (save.editingContext) {
+        const payload: Parameters<typeof scenariosApi.update>[2] = {
+          variables: next
+        };
+        if (payloadSteps) {
+          const payloadGraph = stepsToGraph(payloadSteps);
+          payload.steps = payloadSteps;
+          payload.nodes = payloadGraph.nodes;
+          payload.edges = payloadGraph.edges;
+        }
         const updated = await scenariosApi.update(
           save.editingContext.campaignId,
           save.editingContext.scenarioId,
-          {
-            variables: next
-          }
+          payload
         );
         syncSavedScenarioCaches(
           queryClient,
@@ -3524,7 +3572,7 @@ export function ControlRecordView({
           saveScenarioVariablesMutation.mutateAsync(next)
         }
         savePending={saveScenarioVariablesMutation.isPending}
-        saveDisabled={!canSaveWork || !canPersistScenarioVariables}
+        saveDisabled={!canSaveScenarioVariables || !canPersistScenarioVariables}
         labels={{
           title: tVar('title'),
           variableCount:

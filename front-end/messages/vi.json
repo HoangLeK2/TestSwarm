@@ -200,6 +200,8 @@
       "removeVariable": "Xóa biến",
       "copy": "Sao chép",
       "copied": "Đã sao chép",
+      "cancel": "Hủy",
+      "save": "Lưu",
       "useInSteps": "dùng trong bước",
       "footerTipLead": "Gợi ý: gõ",
       "footerTipTrail": "trong ô bước để gợi ý biến · Tab để chèn",

@@ -3438,7 +3438,9 @@ export function ControlRecordView({
           headerSubtitleLead: tVar('headerSubtitleLead'),
           headerSubtitleTrail: tVar('headerSubtitleTrail'),
           pageSummary: pageSummary?.contextLabel,
-          pageSummaryWarning: pageSummary?.warning
+          pageSummaryWarning: pageSummary?.warning,
+          cancel: tVar('cancel'),
+          save: tVar('save')
         }}
       />
 

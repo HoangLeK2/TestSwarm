@@ -198,6 +198,8 @@
       "removeVariable": "Remove variable",
       "copy": "Copy",
       "copied": "Copied",
+      "cancel": "Cancel",
+      "save": "Save",
       "useInSteps": "use in steps",
       "footerTipLead": "Tip: type",
       "footerTipTrail": "in a step field for suggestions · Tab to insert",

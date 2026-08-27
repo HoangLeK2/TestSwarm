@@ -1,6 +1,8 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 import { AlertCircle, Code2, List, SlidersHorizontal } from 'lucide-react';
 
 import {
@@ -48,6 +50,10 @@ type DeviceVarsPanelState = {
   globalVariablesPreview?: Record<string, unknown>;
 };
 
+function serializeVariables(variables: Record<string, any>) {
+  return JSON.stringify(variables);
+}
+
 export function ControlRecordVariablesDialog({
   open,
   onOpenChange,
@@ -66,47 +72,124 @@ export function ControlRecordVariablesDialog({
     headerSubtitleTrail: string;
     pageSummary?: string;
     pageSummaryWarning?: string;
+    cancel: string;
+    save: string;
   };
 }) {
   const variableCount = Object.keys(variables).length;
+  const [draftVariables, setDraftVariables] =
+    useState<Record<string, any>>(variables);
+  const committedSignature = useMemo(
+    () => serializeVariables(variables),
+    [variables]
+  );
+  const draftSignature = useMemo(
+    () => serializeVariables(draftVariables),
+    [draftVariables]
+  );
+  const hasDraftChanges = draftSignature !== committedSignature;
+
+  useEffect(() => {
+    if (open) setDraftVariables(variables);
+  }, [open, variables]);
+
+  const closeAndDiscard = useCallback(() => {
+    setDraftVariables(variables);
+    onOpenChange(false);
+  }, [onOpenChange, variables]);
+
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        closeAndDiscard();
+        return;
+      }
+      onOpenChange(true);
+    },
+    [closeAndDiscard, onOpenChange]
+  );
+
+  const handleSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (hasDraftChanges) {
+        onVariablesChange(draftVariables);
+      }
+      onOpenChange(false);
+    },
+    [draftVariables, hasDraftChanges, onOpenChange, onVariablesChange]
+  );
+
+  const preventInputEnterSubmit = useCallback(
+    (event: KeyboardEvent<HTMLFormElement>) => {
+      if (event.defaultPrevented || event.key !== 'Enter') return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement) {
+        event.preventDefault();
+      }
+    },
+    []
+  );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden'>
-        <DialogHeader className='shrink-0 space-y-1.5'>
-          <DialogTitle className='flex flex-wrap items-center gap-2 text-base'>
-            <SlidersHorizontal className='size-4 shrink-0' />
-            {labels.title}
-            {variableCount > 0 && labels.variableCount ? (
-              <Badge
-                variant='secondary'
-                className='h-6 text-[11px] font-normal'
-              >
-                {labels.variableCount}
-              </Badge>
-            ) : null}
-          </DialogTitle>
-          <DialogDescription className='text-xs'>
-            {labels.headerSubtitleLead}{' '}
-            <code className='rounded bg-muted/80 px-1 py-0.5 font-mono text-[11px] text-foreground'>
-              {'${VAR}'}
-            </code>{' '}
-            {labels.headerSubtitleTrail}
-          </DialogDescription>
-          {labels.pageSummary ? (
-            <p className='rounded-md border border-border/70 bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground'>
-              {labels.pageSummary}
-              {labels.pageSummaryWarning ? (
-                <span className='ml-2 font-medium text-amber-700 dark:text-amber-300'>
-                  {labels.pageSummaryWarning}
-                </span>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3 overflow-hidden'>
+        <form
+          className='contents'
+          onSubmit={handleSubmit}
+          onKeyDown={preventInputEnterSubmit}
+        >
+          <DialogHeader className='shrink-0 space-y-1.5'>
+            <DialogTitle className='flex flex-wrap items-center gap-2 text-base'>
+              <SlidersHorizontal className='size-4 shrink-0' />
+              {labels.title}
+              {variableCount > 0 && labels.variableCount ? (
+                <Badge
+                  variant='secondary'
+                  className='h-6 text-[11px] font-normal'
+                >
+                  {labels.variableCount}
+                </Badge>
               ) : null}
-            </p>
-          ) : null}
-        </DialogHeader>
-        <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
-          <VariableEditor variables={variables} onChange={onVariablesChange} />
-        </div>
+            </DialogTitle>
+            <DialogDescription className='text-xs'>
+              {labels.headerSubtitleLead}{' '}
+              <code className='rounded bg-muted/80 px-1 py-0.5 font-mono text-[11px] text-foreground'>
+                {'${VAR}'}
+              </code>{' '}
+              {labels.headerSubtitleTrail}
+            </DialogDescription>
+            {labels.pageSummary ? (
+              <p className='rounded-md border border-border/70 bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground'>
+                {labels.pageSummary}
+                {labels.pageSummaryWarning ? (
+                  <span className='ml-2 font-medium text-amber-700 dark:text-amber-300'>
+                    {labels.pageSummaryWarning}
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+          </DialogHeader>
+          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
+            <VariableEditor
+              variables={draftVariables}
+              onChange={setDraftVariables}
+            />
+          </div>
+          <div className='flex justify-end gap-2 border-t pt-3'>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={closeAndDiscard}
+            >
+              {labels.cancel}
+            </Button>
+            <Button type='submit' size='sm' disabled={!hasDraftChanges}>
+              {labels.save}
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
   );

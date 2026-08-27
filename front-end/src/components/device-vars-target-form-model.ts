@@ -37,6 +37,9 @@ const CONTROLLED_TARGET_KEYS = new Set([
   'TARGET_LOCATOR',
   'GROUP_NAME',
   'TARGET_GROUP_NAME',
+  'GROUP_COUNT',
+  'GROUP_SEARCHES',
+  'GROUP_ROW_TEXTS',
   'GROUP_TARGET_IDS',
   'GROUP_TARGETS',
   'PAGE_TARGET_IDS',
@@ -209,6 +212,9 @@ export function applyDeviceTargetFormState(
   next.TARGET_ENTITY_TYPES = allTargets.map((target) => target.entity_type);
   next.GROUP_TARGET_IDS = selected.group.map((target) => target.id);
   next.GROUP_TARGETS = selected.group.map((target) => target.display_name);
+  next.GROUP_COUNT = selected.group.length;
+  next.GROUP_SEARCHES = selected.group.map((target) => target.display_name);
+  next.GROUP_ROW_TEXTS = selected.group.map((target) => target.display_name);
   next.PAGE_TARGET_IDS = selected.page.map((target) => target.id);
   next.PAGE_TARGETS = selected.page.map((target) => target.display_name);
   next.PROFILE_TARGET_IDS = selected.profile.map((target) => target.id);

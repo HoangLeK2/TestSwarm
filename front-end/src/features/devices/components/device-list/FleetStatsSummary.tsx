@@ -3,7 +3,6 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type {
@@ -59,18 +58,18 @@ export function FleetStatsSummary({
   if (total === 0) return null;
 
   return (
-    <div className='space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2'>
-      <div className='flex flex-wrap items-center gap-2'>
-        <span className='text-xs font-medium text-muted-foreground'>
+    <div className='space-y-3 rounded-lg bg-muted/35 px-4 py-3'>
+      <div className='flex flex-wrap items-center gap-2.5'>
+        <span className='mr-1 text-sm font-semibold'>
           {t('fleetStats.title', { total })}
         </span>
         {transport.online > 0 ? (
-          <Badge variant='default' className='text-[10px] font-normal'>
+          <Badge variant='default' className='font-normal'>
             {t('filters.statusOnline')}: {transport.online}
           </Badge>
         ) : null}
         {transport.offline > 0 ? (
-          <Badge variant='outline' className='text-[10px] font-normal'>
+          <Badge variant='outline' className='font-normal'>
             {t('filters.statusOffline')}: {transport.offline}
           </Badge>
         ) : null}
@@ -82,7 +81,7 @@ export function FleetStatsSummary({
                 <Badge
                   key={state}
                   variant={state === 'dead' ? 'destructive' : 'secondary'}
-                  className='text-[10px] font-normal'
+                  className='font-normal'
                 >
                   {t(`fsm.${state}`)}: {n}
                 </Badge>
@@ -91,7 +90,7 @@ export function FleetStatsSummary({
           : null}
       </div>
       {sessions && sessions.total > 0 ? (
-        <div className='flex flex-wrap items-center gap-2 border-t border-border/60 pt-2'>
+        <div className='flex flex-wrap items-center gap-2 border-t border-border/60 pt-3'>
           <span className='text-xs text-muted-foreground'>
             {t('fleetStats.activeSessions', { total: sessions.total })}
           </span>
@@ -118,16 +117,13 @@ export function FleetStatsSummary({
             type='button'
             variant='ghost'
             size='sm'
-            className='ml-auto h-7 text-xs'
+            className='ml-auto h-8 px-3 text-xs'
             onClick={() => setShowSessions((value) => !value)}
             aria-expanded={showSessions}
           >
-            {showSessions ? (
-              <ChevronUp className='mr-1 size-3.5' />
-            ) : (
-              <ChevronDown className='mr-1 size-3.5' />
-            )}
-            {t('fleetStats.viewSessions')}
+            {showSessions
+              ? t('fleetStats.hideSessions')
+              : t('fleetStats.viewSessions')}
           </Button>
         </div>
       ) : null}

@@ -5,11 +5,25 @@ process.env.NEXT_PUBLIC_DEVICE_FARM_DEDICATED_MEDIA_WS = '1';
 process.env.NEXT_PUBLIC_DEVICE_FARM_MEDIA_WS_IDLE_CLOSE_MS = '0';
 
 const sessionValues = new Map<string, string>();
+const localValues = new Map<string, string>([
+  ['device-farm:current-organization-id', 'org-a']
+]);
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: {
     addEventListener() {},
     removeEventListener() {},
+    localStorage: {
+      getItem(key: string): string | null {
+        return localValues.get(key) ?? null;
+      },
+      setItem(key: string, value: string): void {
+        localValues.set(key, value);
+      },
+      removeItem(key: string): void {
+        localValues.delete(key);
+      }
+    },
     sessionStorage: {
       getItem(key: string): string | null {
         return sessionValues.get(key) ?? null;
@@ -116,6 +130,8 @@ test('dedicated media websocket isolates H264 subscriptions per serial', async (
 
   assert.equal(urlA.searchParams.get('session_id'), 'probe-session:media:A');
   assert.equal(urlB.searchParams.get('session_id'), 'probe-session:media:B');
+  assert.equal(urlA.searchParams.get('org_id'), 'org-a');
+  assert.equal(urlB.searchParams.get('org_id'), 'org-a');
   assert.notEqual(
     urlA.searchParams.get('session_id'),
     urlB.searchParams.get('session_id')

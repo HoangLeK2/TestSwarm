@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { HeartPulse } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -75,7 +74,6 @@ export function ReviveDeviceButton({ device }: { device: DeviceOut }) {
               disabled={running}
               aria-label={t('label')}
             >
-              <HeartPulse size={12} className='mr-1' />
               {t('label')}
             </Button>
           </AlertDialogTrigger>
@@ -90,10 +88,7 @@ export function ReviveDeviceButton({ device }: { device: DeviceOut }) {
       </Tooltip>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className='flex items-center gap-2'>
-            <HeartPulse size={16} />
-            {t('confirmTitle', { label })}
-          </AlertDialogTitle>
+          <AlertDialogTitle>{t('confirmTitle', { label })}</AlertDialogTitle>
           <AlertDialogDescription>
             {t('confirmDescription')}
           </AlertDialogDescription>

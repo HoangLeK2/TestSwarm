@@ -24,8 +24,14 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+import { DeviceVarsFacebookTargetForm } from '@/components/device-vars-facebook-target-form';
 import { DeviceVarsJsonPanel } from '@/components/device-vars-json-panel';
+import { TargetBindingOverview } from '@/components/target-binding-overview';
+import type { TargetBindingOverviewLabels } from '@/components/target-binding-overview';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
+import { isDeviceTargetFormControlledKey } from '@/components/device-vars-target-form-model';
+import type { ControlRecordPageSummary } from '@/features/devices/lib/control-record-page-summary';
 import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
 import { RecoveryPolicyEditor } from '@/features/campaigns/components/recovery-policy-editor';
 import type {
@@ -54,11 +60,36 @@ function serializeVariables(variables: Record<string, any>) {
   return JSON.stringify(variables);
 }
 
+function manualScenarioVariables(variables: Record<string, any>) {
+  return Object.fromEntries(
+    Object.entries(variables).filter(
+      ([key]) => !isDeviceTargetFormControlledKey(key)
+    )
+  );
+}
+
+function mergeManualScenarioVariables(
+  current: Record<string, any>,
+  manual: Record<string, any>
+) {
+  const controlled = Object.fromEntries(
+    Object.entries(current).filter(([key]) =>
+      isDeviceTargetFormControlledKey(key)
+    )
+  );
+  return {
+    ...controlled,
+    ...manualScenarioVariables(manual)
+  };
+}
+
 export function ControlRecordVariablesDialog({
   open,
   onOpenChange,
   variables,
   onVariablesChange,
+  buildPageSummary,
+  getPageSummarySourceDescription,
   savePending,
   saveDisabled,
   labels
@@ -69,6 +100,12 @@ export function ControlRecordVariablesDialog({
   onVariablesChange: (
     variables: Record<string, any>
   ) => void | Promise<unknown>;
+  buildPageSummary?: (
+    variables: Record<string, any>
+  ) => ControlRecordPageSummary | null;
+  getPageSummarySourceDescription?: (
+    summary: ControlRecordPageSummary
+  ) => string;
   savePending?: boolean;
   saveDisabled?: boolean;
   labels: {
@@ -76,8 +113,15 @@ export function ControlRecordVariablesDialog({
     variableCount: string | null;
     headerSubtitleLead: string;
     headerSubtitleTrail: string;
-    pageSummary?: string;
-    pageSummaryWarning?: string;
+    pageSummaryOverview?: ControlRecordPageSummary;
+    pageSummaryOverviewLabels: TargetBindingOverviewLabels;
+    pageSummaryOverviewSourceDescription?: string;
+    targetTab: string;
+    manualTab: string;
+    targetTabTitle: string;
+    targetTabDescription: string;
+    manualTabTitle: string;
+    manualTabDescription: string;
     cancel: string;
     save: string;
     saving: string;
@@ -85,8 +129,17 @@ export function ControlRecordVariablesDialog({
 }) {
   const variableCount = Object.keys(variables).length;
   const [submitting, setSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState<'manual' | 'targets'>('manual');
   const [draftVariables, setDraftVariables] =
     useState<Record<string, any>>(variables);
+  const manualVariables = useMemo(
+    () => manualScenarioVariables(draftVariables),
+    [draftVariables]
+  );
+  const draftPageSummary = useMemo(
+    () => buildPageSummary?.(draftVariables) ?? labels.pageSummaryOverview,
+    [buildPageSummary, draftVariables, labels.pageSummaryOverview]
+  );
   const committedSignature = useMemo(
     () => serializeVariables(variables),
     [variables]
@@ -99,7 +152,10 @@ export function ControlRecordVariablesDialog({
   const isSaving = submitting || savePending === true;
 
   useEffect(() => {
-    if (open) setDraftVariables(variables);
+    if (open) {
+      setDraftVariables(variables);
+      setActiveTab('manual');
+    }
   }, [open, variables]);
 
   const closeAndDiscard = useCallback(() => {
@@ -158,9 +214,18 @@ export function ControlRecordVariablesDialog({
     []
   );
 
+  const handleManualVariablesChange = useCallback(
+    (nextManualVariables: Record<string, any>) => {
+      setDraftVariables((current) =>
+        mergeManualScenarioVariables(current, nextManualVariables)
+      );
+    },
+    []
+  );
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3 overflow-hidden'>
+      <DialogContent className='!grid max-h-[min(90dvh,820px)] !w-[min(97vw,1040px)] !max-w-[1040px] grid-rows-[auto_minmax(0,1fr)_auto] gap-3 overflow-hidden'>
         <form
           className='contents'
           onSubmit={handleSubmit}
@@ -186,23 +251,81 @@ export function ControlRecordVariablesDialog({
               </code>{' '}
               {labels.headerSubtitleTrail}
             </DialogDescription>
-            {labels.pageSummary ? (
-              <p className='rounded-md border border-border/70 bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground'>
-                {labels.pageSummary}
-                {labels.pageSummaryWarning ? (
-                  <span className='ml-2 font-medium text-amber-700 dark:text-amber-300'>
-                    {labels.pageSummaryWarning}
-                  </span>
-                ) : null}
-              </p>
-            ) : null}
           </DialogHeader>
-          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
-            <VariableEditor
-              variables={draftVariables}
-              onChange={setDraftVariables}
-              disabled={isSaving || saveDisabled}
-            />
+          <div className='min-h-0 overflow-hidden'>
+            <Tabs
+              value={activeTab}
+              onValueChange={(value) =>
+                setActiveTab(value as 'manual' | 'targets')
+              }
+              className='flex h-full min-h-0 flex-col gap-3'
+            >
+              <TabsList className='grid h-9 w-full grid-cols-2 sm:w-[28rem]'>
+                <TabsTrigger value='manual' className='text-xs'>
+                  {labels.manualTab}
+                </TabsTrigger>
+                <TabsTrigger value='targets' className='text-xs'>
+                  {labels.targetTab}
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent
+                value='manual'
+                className='mt-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'
+              >
+                <div className='mb-3 rounded-lg border bg-muted/20 p-3'>
+                  <p className='text-sm font-medium text-foreground'>
+                    {labels.manualTabTitle}
+                  </p>
+                  <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                    {labels.manualTabDescription}
+                  </p>
+                </div>
+                <VariableEditor
+                  variables={manualVariables}
+                  onChange={handleManualVariablesChange}
+                  disabled={isSaving}
+                />
+              </TabsContent>
+
+              <TabsContent
+                value='targets'
+                className='mt-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'
+              >
+                <div className='grid min-w-0 gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]'>
+                  <div className='min-w-0 space-y-3'>
+                    <div className='rounded-lg border bg-muted/20 p-3'>
+                      <p className='text-sm font-medium text-foreground'>
+                        {labels.targetTabTitle}
+                      </p>
+                      <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                        {labels.targetTabDescription}
+                      </p>
+                    </div>
+                    {draftPageSummary ? (
+                      <TargetBindingOverview
+                        summary={draftPageSummary}
+                        labels={labels.pageSummaryOverviewLabels}
+                        sourceDescription={
+                          getPageSummarySourceDescription?.(draftPageSummary) ??
+                          labels.pageSummaryOverviewSourceDescription
+                        }
+                        compact
+                      />
+                    ) : null}
+                  </div>
+
+                  <section className='min-w-0 rounded-lg border bg-background p-3'>
+                    <DeviceVarsFacebookTargetForm
+                      vars={draftVariables}
+                      disabled={isSaving}
+                      size='default'
+                      onChange={setDraftVariables}
+                    />
+                  </section>
+                </div>
+              </TabsContent>
+            </Tabs>
           </div>
           <div className='flex justify-end gap-2 border-t pt-3'>
             <Button
@@ -265,71 +388,73 @@ export function ControlRecordDeviceVarsDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='!grid max-h-[min(88dvh,760px)] !w-[min(94vw,980px)] !max-w-[980px] grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-4 overflow-hidden'>
-        <DialogHeader className='shrink-0'>
+      <DialogContent className='!grid h-[min(92dvh,860px)] !w-[min(97vw,1160px)] !max-w-[1160px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0'>
+        <DialogHeader className='border-b px-6 py-5'>
           <DialogTitle className='flex items-center gap-2 text-base'>
             <SlidersHorizontal className='size-4' />
             {labels.title}
           </DialogTitle>
+          <DialogDescription className='text-xs'>
+            {labels.scopeHint}
+          </DialogDescription>
         </DialogHeader>
-        <p className='-mt-1 shrink-0 text-[12px] text-muted-foreground'>
-          {labels.scopeHint}
-        </p>
-        <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
-          {labels.instructions}
-        </div>
-        <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
+        <div className='min-h-0 overflow-hidden'>
           {campaignDevices.length === 0 ? (
-            <p className='text-xs text-muted-foreground'>
+            <p className='p-6 text-sm text-muted-foreground'>
               {labels.noDevicesInCampaign}
             </p>
           ) : (
-            <div className='grid min-h-[430px] grid-cols-[260px_1fr] divide-x rounded-md border'>
-              <div className='min-h-0 overflow-y-auto p-2'>
-                {campaignDevices.map((d) => {
-                  const active = selectedScenarioDeviceId === d.id;
-                  const enabled = deviceVarEnabledByDevice[d.id] === true;
-                  return (
-                    <button
-                      key={d.id}
-                      type='button'
-                      className={cn(
-                        'mb-1 flex w-full items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
-                        active && 'border-primary/30 bg-primary/[0.06]'
-                      )}
-                      onClick={() =>
-                        selectScenarioDeviceForVars(d.id, d.serial)
-                      }
-                    >
-                      <span className='min-w-0 flex-1'>
-                        <span className='block truncate font-medium'>
-                          {d.name || d.serial}
-                        </span>
-                        <span className='block truncate font-mono text-[10px] text-muted-foreground'>
-                          {d.serial}
-                        </span>
-                      </span>
-                      <Badge
-                        variant={enabled ? 'default' : 'secondary'}
-                        className='shrink-0 text-[10px]'
+            <div className='grid h-full min-h-0 grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)]'>
+              <aside className='flex min-h-0 flex-col border-b bg-muted/30 md:border-b-0 md:border-r'>
+                <div className='max-h-36 min-h-0 overflow-y-auto p-2 md:max-h-none md:flex-1'>
+                  {campaignDevices.map((d) => {
+                    const active = selectedScenarioDeviceId === d.id;
+                    const enabled = deviceVarEnabledByDevice[d.id] === true;
+                    return (
+                      <button
+                        key={d.id}
+                        type='button'
+                        className={cn(
+                          'mb-1 flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2.5 text-left text-xs transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          active &&
+                            'border-primary/30 bg-background shadow-sm ring-1 ring-primary/15'
+                        )}
+                        onClick={() =>
+                          selectScenarioDeviceForVars(d.id, d.serial)
+                        }
                       >
-                        {enabled ? labels.badgePerDevice : labels.badgeGlobal}
-                      </Badge>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className='min-h-0 p-4'>
+                        <span className='min-w-0 flex-1'>
+                          <span className='block truncate font-medium'>
+                            {d.name || d.serial}
+                          </span>
+                          <span className='block truncate font-mono text-[10px] text-muted-foreground'>
+                            {d.serial}
+                          </span>
+                        </span>
+                        <Badge
+                          variant={enabled ? 'default' : 'secondary'}
+                          className='shrink-0 rounded text-[10px]'
+                        >
+                          {enabled ? labels.badgePerDevice : labels.badgeGlobal}
+                        </Badge>
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+              <div className='min-h-0 overflow-hidden p-5'>
                 <DeviceVarsJsonPanel
                   {...panel}
-                  editorClassName='min-h-[330px]'
-                  emptyClassName='min-h-[330px]'
+                  variant='assignment'
+                  className='h-full'
+                  editorClassName='min-h-[260px]'
+                  emptyClassName='min-h-[260px]'
                 />
               </div>
             </div>
           )}
         </div>
-        <div className='flex justify-end gap-2'>
+        <div className='flex justify-end gap-2 border-t bg-background px-6 py-4'>
           <Button variant='outline' size='sm' onClick={onCancel}>
             {labels.cancel}
           </Button>

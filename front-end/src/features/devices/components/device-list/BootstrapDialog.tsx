@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { RefreshCw, Video, Zap } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import {
   AlertDialog,
@@ -40,12 +40,6 @@ const CMD_TIMEOUT: Record<Cmd, number> = {
   restart_scrcpy: 20
 };
 
-const CMD_ICON: Record<Cmd, ReactNode> = {
-  bootstrap: <Zap size={12} />,
-  restart_u2: <RefreshCw size={12} />,
-  restart_scrcpy: <Video size={12} />
-};
-
 function RunningState({
   label,
   timeout,
@@ -71,18 +65,18 @@ function RunningState({
 
 export function DeviceCmdButton({
   device,
-  cmd
+  cmd,
+  trigger
 }: {
   device: DeviceOut;
   cmd: Cmd;
+  trigger?: ReactNode;
 }) {
   const t = useTranslations('devicesList.commands');
   const i18nKey = CMD_I18N_KEY[cmd];
   const label = t(`${i18nKey}.label`);
   const description = t(`${i18nKey}.description`);
   const timeout = CMD_TIMEOUT[cmd];
-  const icon = CMD_ICON[cmd];
-
   const [open, setOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -129,34 +123,39 @@ export function DeviceCmdButton({
     }
   };
 
+  const defaultTrigger = (
+    <Button
+      size='sm'
+      variant='outline'
+      className='h-8 px-2.5 text-[11px]'
+      disabled={running}
+      aria-label={label}
+    >
+      {label}
+    </Button>
+  );
+
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
-      <Tooltip delayDuration={400}>
-        <TooltipTrigger asChild>
-          <AlertDialogTrigger asChild>
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-7 px-2 text-[11px]'
-              disabled={running}
-              aria-label={label}
-            >
-              {icon}
-            </Button>
-          </AlertDialogTrigger>
-        </TooltipTrigger>
-        <TooltipContent
-          side='bottom'
-          className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'
-        >
-          <div className='font-medium'>{label}</div>
-          <div className='mt-0.5 text-muted-foreground'>{description}</div>
-        </TooltipContent>
-      </Tooltip>
+      {trigger ? (
+        <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+      ) : (
+        <Tooltip delayDuration={400}>
+          <TooltipTrigger asChild>
+            <AlertDialogTrigger asChild>{defaultTrigger}</AlertDialogTrigger>
+          </TooltipTrigger>
+          <TooltipContent
+            side='bottom'
+            className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'
+          >
+            <div className='font-medium'>{label}</div>
+            <div className='mt-0.5 text-muted-foreground'>{description}</div>
+          </TooltipContent>
+        </Tooltip>
+      )}
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className='flex items-center gap-2'>
-            {icon}
+          <AlertDialogTitle>
             {label} — {device.name || device.serial}
           </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>

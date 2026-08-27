@@ -21,7 +21,7 @@ import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
 import { AuthInviteEmailBanner } from '@/features/auth/components/auth-invite-email-banner';
 import { useAuthEmailFromQuery } from '@/features/auth/lib/auth-query-defaults';
-import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { formatPublicAuthError } from '@/features/auth/lib/public-auth-error';
 import { cn } from '@/lib/utils';
 
 type FormData = {
@@ -187,7 +187,11 @@ export default function SignInPage() {
                 aria-hidden='true'
               />
               <span className='leading-relaxed'>
-                {formatFarmApiError(error, tAuth('errors.signInFailed'))}
+                {formatPublicAuthError(
+                  error,
+                  tAuth('errors.signInFailed'),
+                  tAuth('errors.serverUnavailable')
+                )}
               </span>
             </div>
           )}

@@ -102,6 +102,7 @@ import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate
 import { stepsToGraph } from '@/features/campaigns/utils/steps-to-graph';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import {
+  collectScenarioVariableReferences,
   detectSingleVariableRename,
   replaceScenarioVariableReferences
 } from '@/lib/scenario-variable-references';
@@ -305,7 +306,7 @@ export function ControlRecordView({
       ? templatePerms.canUpdate
       : savingOrgScenario
         ? orgScenarioPerms.canUpdate
-        : campaignPerms.canUpdate);
+        : orgScenarioPerms.canCreate);
   const canSaveScenarioVariables =
     !safeReadOnly &&
     (save.templateContext
@@ -314,7 +315,7 @@ export function ControlRecordView({
         ? campaignPerms.canUpdate
         : savingOrgScenario
           ? orgScenarioPerms.canUpdate
-          : campaignPerms.canUpdate);
+          : orgScenarioPerms.canCreate);
   const { setSkipTapRecordingWhilePick } = record;
 
   const saveOrgBodyMutation = useSaveOrgScenarioBody();
@@ -1026,6 +1027,7 @@ export function ControlRecordView({
   const recoveryPolicyEnabled = Boolean(
     (campaignRecoveryQuery.data?.recovery_policy ?? recoveryPolicy)?.enabled
   );
+  const activeCampaignName = campaignRecoveryQuery.data?.name ?? null;
   const editingRecoveryScenario =
     save.orgScenarioContext?.isRecoveryScenario === true;
   const recoveryReturnTo = normalizeInternalAppPath(returnTo, '');
@@ -1094,13 +1096,31 @@ export function ControlRecordView({
         .sort((a, b) => a.localeCompare(b)),
     [scenarioVariablesWithDeviceKeys]
   );
+  const scenarioVariableReferences = useMemo(
+    () => collectScenarioVariableReferences(steps.items),
+    [steps.items]
+  );
   const pageSummary = useMemo(
     () =>
       buildControlRecordPageSummary(
         scenarioVariablesWithDeviceKeys,
-        Boolean(activeCampaignId)
+        Boolean(activeCampaignId),
+        activeCampaignName,
+        scenarioVariableReferences
       ),
-    [scenarioVariablesWithDeviceKeys, activeCampaignId]
+    [
+      scenarioVariablesWithDeviceKeys,
+      activeCampaignId,
+      activeCampaignName,
+      scenarioVariableReferences
+    ]
+  );
+  const pageSummaryWarningText = useMemo(
+    () =>
+      [pageSummary?.warning, pageSummary?.usageWarning]
+        .filter((message): message is string => Boolean(message))
+        .join(' · '),
+    [pageSummary]
   );
   useEffect(() => {
     scenarioVariablesRef.current = scenarioVariables;
@@ -1247,11 +1267,13 @@ export function ControlRecordView({
         return next;
       }
 
-      throw new Error(tVar('saveUnavailable'));
+      return next;
     },
     onSuccess: (next) => {
       handleScenarioVariablesChange(next);
-      toast.success(tVar('saveSuccess'));
+      toast.success(
+        canPersistScenarioVariables ? tVar('saveSuccess') : tVar('applySuccess')
+      );
     },
     onError: (err) => {
       toast.error(formatFarmApiError(err, tVar('saveFailed')));
@@ -1410,6 +1432,13 @@ export function ControlRecordView({
         scenarioVariablesWithDeviceKeys
       ),
     [campaignForGlobalVarsQuery.data, scenarioVariablesWithDeviceKeys]
+  );
+  const flowVariablePreviewValues = useMemo(
+    () => ({
+      ...deviceVarGlobalPreview,
+      ...(inlineScenarioDeviceVars ?? {})
+    }),
+    [deviceVarGlobalPreview, inlineScenarioDeviceVars]
   );
   const setCurrentDeviceVarsEnabled = useCallback(
     (enabled: boolean) => {
@@ -3268,11 +3297,21 @@ export function ControlRecordView({
                             void handleSaveOrgScenario();
                             return;
                           }
-                          steps.openSave();
+                          void save
+                            .saveAsNewOrgScenario(
+                              syncDeviceVarKeysIntoScenarioVariables()
+                            )
+                            .then((created) => {
+                              if (!created?.id) return;
+                              router.push(
+                                ROUTES.ORG_SCENARIOS.DETAIL(created.id)
+                              );
+                            });
                         }}
                         saveDisabled={
                           steps.items.length === 0 ||
                           !canSaveWork ||
+                          save.saving !== null ||
                           save.savingTemplate ||
                           saveOrgBodyMutation.isPending
                         }
@@ -3285,14 +3324,16 @@ export function ControlRecordView({
                               ? saveOrgBodyMutation.isPending
                                 ? 'Đang lưu…'
                                 : 'Lưu'
-                              : 'Lưu'
+                              : save.saving === 'org-new'
+                                ? 'Đang lưu…'
+                                : 'Lưu'
                         }
                         onOpenVariables={() => setVarDialogOpen(true)}
                         variableCount={
                           Object.keys(scenarioVariablesWithDeviceKeys).length
                         }
                         pageSummary={pageSummary?.contextLabel}
-                        pageSummaryWarning={pageSummary?.warning}
+                        pageSummaryWarning={pageSummaryWarningText || undefined}
                         showRecovery={!editingRecoveryScenario}
                         recoveryEnabled={recoveryPolicyEnabled}
                         onOpenRecovery={() => setRecoveryDialogOpen(true)}
@@ -3550,6 +3591,9 @@ export function ControlRecordView({
                                   stepRunStates={stepRunStates}
                                   stepRunResults={stepRunResults}
                                   availableVariables={scenarioVariableNames}
+                                  variablePreviewValues={
+                                    flowVariablePreviewValues
+                                  }
                                   sessionGateRuntimeContext={
                                     sessionGateRuntimeContext
                                   }
@@ -3580,8 +3624,29 @@ export function ControlRecordView({
         onVariablesChange={(next) =>
           saveScenarioVariablesMutation.mutateAsync(next)
         }
+        buildPageSummary={(next) =>
+          buildControlRecordPageSummary(
+            next,
+            Boolean(activeCampaignId),
+            activeCampaignName,
+            scenarioVariableReferences
+          )
+        }
+        getPageSummarySourceDescription={(summary) =>
+          tVar(
+            summary.sourceKind === 'campaign'
+              ? 'targetOverviewCampaignSourceDescription'
+              : 'targetOverviewScenarioSourceDescription',
+            {
+              target:
+                summary.targetType === 'group'
+                  ? tVar('targetOverviewGroupTarget')
+                  : tVar('targetOverviewPageTarget')
+            }
+          )
+        }
         savePending={saveScenarioVariablesMutation.isPending}
-        saveDisabled={!canSaveScenarioVariables || !canPersistScenarioVariables}
+        saveDisabled={!canSaveScenarioVariables}
         labels={{
           title: tVar('title'),
           variableCount:
@@ -3592,10 +3657,45 @@ export function ControlRecordView({
               : null,
           headerSubtitleLead: tVar('headerSubtitleLead'),
           headerSubtitleTrail: tVar('headerSubtitleTrail'),
-          pageSummary: pageSummary?.contextLabel,
-          pageSummaryWarning: pageSummary?.warning,
+          pageSummaryOverview: pageSummary ?? undefined,
+          pageSummaryOverviewLabels: {
+            title: tVar('targetOverviewTitle'),
+            source: tVar('targetOverviewSource'),
+            targets: tVar('targetOverviewTargets'),
+            flow: tVar('targetOverviewFlow'),
+            flowUsesTarget: tVar('targetOverviewFlowUsesTarget'),
+            flowDoesNotUseTarget: tVar('targetOverviewFlowDoesNotUseTarget'),
+            bindingVariables: tVar('targetOverviewBindingVariables'),
+            unusedVariables: tVar('targetOverviewUnusedVariables'),
+            targetValuePreview: tVar('targetOverviewValuePreview'),
+            catalogTargetSource: tVar('targetOverviewCatalogSource'),
+            manualTargetSource: tVar('targetOverviewManualSource'),
+            catalogTargetHint: tVar('targetOverviewCatalogHint'),
+            manualTargetHint: tVar('targetOverviewManualHint'),
+            pageTarget: tVar('targetOverviewPageTarget'),
+            groupTarget: tVar('targetOverviewGroupTarget')
+          },
+          pageSummaryOverviewSourceDescription: pageSummary
+            ? tVar(
+                pageSummary.sourceKind === 'campaign'
+                  ? 'targetOverviewCampaignSourceDescription'
+                  : 'targetOverviewScenarioSourceDescription',
+                {
+                  target:
+                    pageSummary.targetType === 'group'
+                      ? tVar('targetOverviewGroupTarget')
+                      : tVar('targetOverviewPageTarget')
+                }
+              )
+            : undefined,
+          targetTab: tVar('targetTab'),
+          manualTab: tVar('manualTab'),
+          targetTabTitle: tVar('targetTabTitle'),
+          targetTabDescription: tVar('targetTabDescription'),
+          manualTabTitle: tVar('manualTabTitle'),
+          manualTabDescription: tVar('manualTabDescription'),
           cancel: tVar('cancel'),
-          save: tVar('save'),
+          save: canPersistScenarioVariables ? tVar('save') : tVar('apply'),
           saving: tVar('saving')
         }}
       />

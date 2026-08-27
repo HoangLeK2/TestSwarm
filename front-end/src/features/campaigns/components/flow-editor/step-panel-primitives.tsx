@@ -22,6 +22,10 @@ import { formatStepLabelForCard } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import {
+  resolveVariablePreviewText,
+  type VariablePreviewValues
+} from './variable-preview';
+import {
   coerceStepRetryPolicy,
   formatRetryReasons,
   parseRetryReasons,
@@ -242,11 +246,20 @@ export function StepPanelToggle({
   );
 }
 
-export function StepPanelHeader({ step }: { step: FlowStep }) {
+export function StepPanelHeader({
+  step,
+  variablePreviewValues
+}: {
+  step: FlowStep;
+  variablePreviewValues?: VariablePreviewValues;
+}) {
   const { getStepTypeName, getStepSummary } = useCampaignFlowI18n();
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
   const userTitle = String((step as { title?: string }).title ?? '').trim();
-  const summary = getStepSummary(step).trim();
+  const summary = resolveVariablePreviewText(
+    getStepSummary(step),
+    variablePreviewValues
+  ).trim();
 
   const subtitle = userTitle
     ? summary

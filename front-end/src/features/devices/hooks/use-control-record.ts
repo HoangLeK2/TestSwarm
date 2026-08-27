@@ -48,6 +48,7 @@ import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useTranslations } from 'next-intl';
 import { orgScenariosApi } from '@/features/org-scenarios/services/api';
+import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
 import { extractPreviewSteps } from '@/features/org-scenarios/lib/parse-scenario-body';
 import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 import { canApplyDeviceScopedResult } from '../lib/control-record-multi';
@@ -1304,6 +1305,60 @@ export function useControlRecord(
     ]
   );
 
+  const saveAsNewOrgScenario = useCallback(
+    async (variables?: Record<string, any>) => {
+      if (pendingScreenshotCount > 0) {
+        toast.info(
+          t('toast.waitingScreenshotBeforeSave', {
+            count: pendingScreenshotCount
+          })
+        );
+      }
+      const ready = await waitForPendingScreenshots();
+      if (!ready) {
+        toast.warning(t('toast.waitingScreenshotTimeout'));
+        return null;
+      }
+      const payloadSteps = sanitizeScenarioStepsForApi(cleanSteps());
+      const check = validateScenarioStepsForApi(payloadSteps);
+      if (!check.ok) {
+        toast.error(check.message);
+        return null;
+      }
+
+      const body = buildOrgScenarioBodyPayload(payloadSteps, variables ?? {});
+      setSavingCampaignId('org-new');
+      try {
+        const created = await orgScenariosApi.create({
+          name: t('newScenarioName', {
+            time: new Date().toLocaleTimeString('vi-VN')
+          }),
+          kind: 'sequence',
+          body_json: body,
+          tags: []
+        });
+        queryClient.setQueryData(['org-scenarios', created.id], created);
+        void queryClient.invalidateQueries({ queryKey: ['org-scenarios'] });
+        toast.success(t('toast.createOrgScenarioSuccess'));
+        return created;
+      } catch (err) {
+        toast.error(
+          formatFarmApiError(err, t('toast.createOrgScenarioFailed'))
+        );
+        return null;
+      } finally {
+        setSavingCampaignId(null);
+      }
+    },
+    [
+      cleanSteps,
+      pendingScreenshotCount,
+      queryClient,
+      t,
+      waitForPendingScreenshots
+    ]
+  );
+
   // ── Hierarchy / Inspector ────────────────────────────────────────────────
   const [autoRefreshHierarchy, setAutoRefreshHierarchy] = useState(false);
   const autoRefreshHierarchyUserChangedRef = useRef(false);
@@ -1664,6 +1719,7 @@ export function useControlRecord(
       pickCampaign: handlePickCampaign,
       saveTo: saveToScenario,
       saveAsNew: saveAsNewScenario,
+      saveAsNewOrgScenario,
       editingContext,
       templateContext,
       orgScenarioContext,

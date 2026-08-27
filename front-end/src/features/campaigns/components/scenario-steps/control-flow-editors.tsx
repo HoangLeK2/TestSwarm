@@ -1,10 +1,12 @@
 'use client';
 
+import { VariableInsertMenu } from '@/components/variable-insert-menu';
 import type { FlowStep } from './types';
 
 type FieldProps = {
   step: FlowStep;
   onChange: (field: string, value: any) => void;
+  availableVariables?: string[];
 };
 
 const inputCls = 'border rounded px-1.5 py-0.5 bg-background text-[11px]';
@@ -43,6 +45,42 @@ function SelectorSelect({
   );
 }
 
+function insertToken(raw: string, token: string): string {
+  const current = raw ?? '';
+  if (!current.trim()) return token;
+  const matches = current.match(/\$\{[^}]+\}/g);
+  if (matches?.includes(token)) return current;
+  return `${current} ${token}`.trim();
+}
+
+function VariableInsertSelect({
+  availableVariables = [],
+  onInsert,
+  mode = 'token'
+}: {
+  availableVariables?: string[];
+  onInsert: (value: string) => void;
+  mode?: 'name' | 'token';
+}) {
+  if (availableVariables.length === 0) return null;
+  return (
+    <VariableInsertMenu
+      groups={[
+        {
+          label: 'Biến có thể dùng',
+          items: availableVariables.map((name) => ({
+            value: mode === 'name' ? name : `\${${name}}`
+          }))
+        }
+      ]}
+      label='Chèn biến...'
+      onInsert={onInsert}
+      align='end'
+      triggerClassName='h-7 w-32 min-w-0 px-1.5 text-[11px]'
+    />
+  );
+}
+
 /** repeat — count, delay_between */
 export function RepeatFields({ step, onChange }: FieldProps) {
   return (
@@ -70,7 +108,11 @@ export function RepeatFields({ step, onChange }: FieldProps) {
 }
 
 /** repeat_until — condition, max_iterations */
-export function RepeatUntilFields({ step, onChange }: FieldProps) {
+export function RepeatUntilFields({
+  step,
+  onChange,
+  availableVariables = []
+}: FieldProps) {
   const condition = step.condition ?? {};
   const condType = condition.element_exists
     ? 'element_exists'
@@ -130,6 +172,15 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
               updateCondition(condType, { ...condData, value: e.target.value })
             }
           />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            onInsert={(token) =>
+              updateCondition(condType, {
+                ...condData,
+                value: insertToken(condData.value ?? '', token)
+              })
+            }
+          />
         </div>
       ) : (
         <div className='flex items-center gap-2'>
@@ -141,6 +192,16 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
               updateCondition('variable_equals', {
                 ...condData,
                 name: e.target.value
+              })
+            }
+          />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            mode='name'
+            onInsert={(name) =>
+              updateCondition('variable_equals', {
+                ...condData,
+                name
               })
             }
           />
@@ -156,6 +217,15 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
               })
             }
           />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            onInsert={(token) =>
+              updateCondition('variable_equals', {
+                ...condData,
+                value: insertToken(condData.value ?? '', token)
+              })
+            }
+          />
         </div>
       )}
     </div>
@@ -163,7 +233,11 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
 }
 
 /** if_element — by, value, timeout */
-export function IfElementFields({ step, onChange }: FieldProps) {
+export function IfElementFields({
+  step,
+  onChange,
+  availableVariables = []
+}: FieldProps) {
   return (
     <div className='flex flex-wrap items-center gap-2'>
       <span className={labelCls}>if</span>
@@ -176,6 +250,12 @@ export function IfElementFields({ step, onChange }: FieldProps) {
         placeholder='element value'
         value={step.value ?? ''}
         onChange={(e) => onChange('value', e.target.value)}
+      />
+      <VariableInsertSelect
+        availableVariables={availableVariables}
+        onInsert={(token) =>
+          onChange('value', insertToken(step.value ?? '', token))
+        }
       />
       <span className={labelCls}>timeout:</span>
       <input
@@ -191,7 +271,11 @@ export function IfElementFields({ step, onChange }: FieldProps) {
 }
 
 /** if_variable — name, condition operator, value */
-export function IfVariableFields({ step, onChange }: FieldProps) {
+export function IfVariableFields({
+  step,
+  onChange,
+  availableVariables = []
+}: FieldProps) {
   const op =
     step.equals != null
       ? 'equals'
@@ -236,6 +320,11 @@ export function IfVariableFields({ step, onChange }: FieldProps) {
         value={step.name ?? ''}
         onChange={(e) => onChange('name', e.target.value)}
       />
+      <VariableInsertSelect
+        availableVariables={availableVariables}
+        mode='name'
+        onInsert={(name) => onChange('name', name)}
+      />
       <select
         className={`${inputCls} w-28`}
         value={op}
@@ -251,6 +340,10 @@ export function IfVariableFields({ step, onChange }: FieldProps) {
         placeholder='value'
         value={opValue}
         onChange={(e) => onChange(op, e.target.value)}
+      />
+      <VariableInsertSelect
+        availableVariables={availableVariables}
+        onInsert={(token) => onChange(op, insertToken(opValue, token))}
       />
     </div>
   );
@@ -268,11 +361,13 @@ function detectLoopMode(step: FlowStep): 'count' | 'while' {
 function ConditionBuilder({
   condition,
   onChange,
-  condTypeLabels
+  condTypeLabels,
+  availableVariables = []
 }: {
   condition: Record<string, any>;
   onChange: (next: Record<string, any>) => void;
   condTypeLabels?: Record<string, string>;
+  availableVariables?: string[];
 }) {
   const condType = condition.element_exists
     ? 'element_exists'
@@ -328,6 +423,15 @@ function ConditionBuilder({
               updateCondition(condType, { ...condData, value: e.target.value })
             }
           />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            onInsert={(token) =>
+              updateCondition(condType, {
+                ...condData,
+                value: insertToken(condData.value ?? '', token)
+              })
+            }
+          />
         </div>
       ) : (
         <div className='flex items-center gap-2'>
@@ -339,6 +443,16 @@ function ConditionBuilder({
               updateCondition('variable_equals', {
                 ...condData,
                 name: e.target.value
+              })
+            }
+          />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            mode='name'
+            onInsert={(name) =>
+              updateCondition('variable_equals', {
+                ...condData,
+                name
               })
             }
           />
@@ -354,6 +468,15 @@ function ConditionBuilder({
               })
             }
           />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            onInsert={(token) =>
+              updateCondition('variable_equals', {
+                ...condData,
+                value: insertToken(condData.value ?? '', token)
+              })
+            }
+          />
         </div>
       )}
     </div>
@@ -363,10 +486,15 @@ function ConditionBuilder({
 type LoopConfigProps = {
   step: FlowStep;
   onUpdate: (patch: Partial<FlowStep>) => void;
+  availableVariables?: string[];
 };
 
 /** Full loop config — count vs while mode (detail panel). */
-export function LoopConfigFields({ step, onUpdate }: LoopConfigProps) {
+export function LoopConfigFields({
+  step,
+  onUpdate,
+  availableVariables = []
+}: LoopConfigProps) {
   const mode = detectLoopMode(step);
 
   return (
@@ -421,6 +549,10 @@ export function LoopConfigFields({ step, onUpdate }: LoopConfigProps) {
             value={step.count ?? '10'}
             onChange={(e) => onUpdate({ count: e.target.value })}
           />
+          <VariableInsertSelect
+            availableVariables={availableVariables}
+            onInsert={(token) => onUpdate({ count: token })}
+          />
           <p className='text-[10px] text-muted-foreground'>
             Chạy đúng N lần. Có thể dừng sớm bằng break_if hoặc extract
             stop_if_no_new.
@@ -438,6 +570,7 @@ export function LoopConfigFields({ step, onUpdate }: LoopConfigProps) {
                 element_not_exists: 'Phần tử không còn trên màn hình',
                 variable_equals: 'Biến bằng giá trị'
               }}
+              availableVariables={availableVariables}
             />
           </div>
           <div className='flex items-center gap-2'>
@@ -462,7 +595,11 @@ export function LoopConfigFields({ step, onUpdate }: LoopConfigProps) {
 /**
  * loop — count supports variable references like ${MAX_SCROLLS}
  */
-export function LoopFields({ step, onChange }: FieldProps) {
+export function LoopFields({
+  step,
+  onChange,
+  availableVariables = []
+}: FieldProps) {
   const mode = detectLoopMode(step);
   if (mode === 'while') {
     return (
@@ -477,6 +614,10 @@ export function LoopFields({ step, onChange }: FieldProps) {
         placeholder='10 hoặc ${MAX_SCROLLS}'
         value={step.count ?? '10'}
         onChange={(e) => onChange('count', e.target.value)}
+      />
+      <VariableInsertSelect
+        availableVariables={availableVariables}
+        onInsert={(token) => onChange('count', token)}
       />
       <span className={`${labelCls} text-[9px]`}>(hỗ trợ biến)</span>
     </div>

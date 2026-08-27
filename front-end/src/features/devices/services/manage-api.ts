@@ -25,6 +25,22 @@ export type DeviceOut = {
   state: string;
 };
 
+export type DeviceListParams = {
+  page: number;
+  pageSize: number;
+  q?: string;
+  state?: string;
+  sort?: 'last_seen_at' | '-last_seen_at';
+};
+
+export type DeviceListOut = {
+  items: DeviceOut[];
+  total: number;
+  page: number;
+  page_size: number;
+  page_count: number;
+};
+
 export type DeviceStateCountsOut = {
   unknown: number;
   connecting: number;
@@ -99,49 +115,43 @@ export type PairPollOut = {
   device?: Record<string, unknown>;
 };
 
-const DEVICE_LIST_CACHE_TTL_MS = 2_000;
-let deviceListCache: { expiresAt: number; data: DeviceOut[] } | null = null;
+const listDevices = createSingleFlight(() =>
+  farmApi
+    .get<DeviceOut[]>('/devices', { timeout: DEVICE_POLL_TIMEOUT_MS })
+    .then((r) => r.data)
+);
 
 function clearDeviceListCache() {
-  deviceListCache = null;
+  return undefined;
 }
-
-const listDevices = createSingleFlight(() => {
-  if (deviceListCache && Date.now() < deviceListCache.expiresAt) {
-    return Promise.resolve(deviceListCache.data);
-  }
-  return farmApi
-    .get<DeviceOut[]>('/devices', { timeout: DEVICE_POLL_TIMEOUT_MS })
-    .then((r) => {
-      deviceListCache = {
-        data: r.data,
-        expiresAt: Date.now() + DEVICE_LIST_CACHE_TTL_MS
-      };
-      return r.data;
-    });
-});
 
 export const devicesApi = {
   list: listDevices,
+  listPage: ({ page, pageSize, q, state, sort }: DeviceListParams) =>
+    farmApi
+      .get<DeviceListOut>('/devices', {
+        params: {
+          page,
+          page_size: pageSize,
+          q: q || undefined,
+          state: state || undefined,
+          sort
+        },
+        timeout: DEVICE_POLL_TIMEOUT_MS
+      })
+      .then((r) => r.data),
   create: (data: DeviceCreate) =>
-    farmApi.post<DeviceOut>('/devices', data).then((r) => {
-      clearDeviceListCache();
-      return r.data;
-    }),
+    farmApi.post<DeviceOut>('/devices', data).then((r) => r.data),
   register: (body?: { name?: string; description?: string }) =>
-    farmApi.post<DeviceOut>('/devices/register', body ?? {}).then((r) => {
-      clearDeviceListCache();
-      return r.data;
-    }),
+    farmApi
+      .post<DeviceOut>('/devices/register', body ?? {})
+      .then((r) => r.data),
   sessions: (deviceId: string) =>
     farmApi
       .get<SessionOut[]>(`/devices/${deviceId}/sessions`)
       .then((r) => r.data),
   delete: (deviceId: string) =>
-    farmApi.delete(`/devices/${deviceId}`).then((r) => {
-      clearDeviceListCache();
-      return r.data;
-    }),
+    farmApi.delete(`/devices/${deviceId}`).then((r) => r.data),
   pair: () =>
     farmApi
       .post<{ pairing_id: string; qr_url: string }>('/devices/pair')
@@ -194,11 +204,18 @@ export type RelayAgentOut = {
   version: string;
   serials: string[];
   device_names?: Record<string, string>;
+  device_connections?: Record<string, RelayDeviceConnectionOut>;
   status: 'online' | 'offline';
   live_connected?: boolean;
   connected_at: string;
   last_heartbeat_at: string | null;
   disconnected_at: string | null;
+};
+
+export type RelayDeviceConnectionOut = {
+  registered: boolean;
+  device_id?: string | null;
+  device_agent_connected: boolean;
 };
 
 export type RelayCommandOut = {
@@ -303,7 +320,9 @@ export const relayAgentsApi = {
     farmApi
       .post<{
         results: RelayDeviceRegisterResult[];
-      }>(`/relay-agents/${encodeURIComponent(relayId)}/devices/register`, { serials: serials ?? [] })
+      }>(`/relay-agents/${encodeURIComponent(relayId)}/devices/register`, {
+        serials: serials ?? []
+      })
       .then((r) => r.data.results),
   pushConnectUrl: (
     relayId: string,
@@ -318,6 +337,39 @@ export const relayAgentsApi = {
           params: {
             ...(opts?.deviceId ? { device_id: opts.deviceId } : {}),
             ...(opts?.wsBaseUrl ? { ws_base_url: opts.wsBaseUrl } : {})
+          }
+        }
+      )
+      .then((r) => r.data),
+  connectDevice: (
+    relayId: string,
+    serial: string,
+    opts?: { deviceId?: string; wsBaseUrl?: string }
+  ) =>
+    farmApi
+      .post<RelayCommandOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/connect`,
+        undefined,
+        {
+          params: {
+            ...(opts?.deviceId ? { device_id: opts.deviceId } : {}),
+            ...(opts?.wsBaseUrl ? { ws_base_url: opts.wsBaseUrl } : {})
+          }
+        }
+      )
+      .then((r) => r.data),
+  disconnectDevice: (
+    relayId: string,
+    serial: string,
+    opts?: { deviceId?: string }
+  ) =>
+    farmApi
+      .post<RelayCommandOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/disconnect`,
+        undefined,
+        {
+          params: {
+            ...(opts?.deviceId ? { device_id: opts.deviceId } : {})
           }
         }
       )

@@ -51,6 +51,72 @@ export interface AIExtractBody {
   region?: Record<string, number> | null;
 }
 
+/** AccountActionListOut */
+export interface AccountActionListOut {
+  /** Items */
+  items: AccountActionOut[];
+  /** Next Cursor */
+  next_cursor?: string | null;
+  /** Has More */
+  has_more: boolean;
+}
+
+/** AccountActionOut */
+export interface AccountActionOut {
+  /** Id */
+  id: string;
+  /** Account Id */
+  account_id: string;
+  /** Status */
+  status: string;
+  /** Action */
+  action: string;
+  /** Target Type */
+  target_type?: string | null;
+  /** Target Id */
+  target_id?: string | null;
+  /** Target Label */
+  target_label?: string | null;
+  /** Current Activity */
+  current_activity?: string | null;
+  /** Error Code */
+  error_code?: string | null;
+  /** Error Message */
+  error_message?: string | null;
+  /** Details */
+  details: Record<string, any>;
+  /** Started At */
+  started_at?: string | null;
+  /** Completed At */
+  completed_at?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** AccountActionSummaryOut */
+export interface AccountActionSummaryOut {
+  /** Total */
+  total: number;
+  /** Pending */
+  pending: number;
+  /** Running */
+  running: number;
+  /** Succeeded */
+  succeeded: number;
+  /** Failed */
+  failed: number;
+  /** Current Activity */
+  current_activity?: string | null;
+}
+
 /** AccountCreate */
 export interface AccountCreate {
   /** Platform */
@@ -81,6 +147,69 @@ export interface AccountCreate {
    * @default {}
    */
   account_metadata?: Record<string, any>;
+}
+
+/** AccountDiscoveryCompleteIn */
+export interface AccountDiscoveryCompleteIn {
+  /**
+   * Candidate Count
+   * @min 0
+   */
+  candidate_count: number;
+}
+
+/** AccountDiscoveryFailedIn */
+export interface AccountDiscoveryFailedIn {
+  /**
+   * Error
+   * @minLength 1
+   * @maxLength 1000
+   */
+  error: string;
+}
+
+/** AccountDiscoveryStateOut */
+export interface AccountDiscoveryStateOut {
+  /** Id */
+  id: string;
+  /** Org Id */
+  org_id: string;
+  /** Account Id */
+  account_id: string;
+  /** Platform */
+  platform: string;
+  /** Status */
+  status:
+    | "uninitialized"
+    | "discovery_requested"
+    | "discovering"
+    | "ready"
+    | "active"
+    | "error";
+  /** Initialized At */
+  initialized_at?: string | null;
+  /** Discovery Requested At */
+  discovery_requested_at?: string | null;
+  /** Discovery Started At */
+  discovery_started_at?: string | null;
+  /** Last Discovery At */
+  last_discovery_at?: string | null;
+  /** Next Discovery At */
+  next_discovery_at?: string | null;
+  /** Last Error */
+  last_error?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /** Request Created */
+  request_created?: boolean | null;
 }
 
 /** AccountEventListOut */
@@ -431,6 +560,44 @@ export interface AccountWithLinksOut {
   device_links?: DeviceAccountOut[];
 }
 
+/** ActiveFleetSessionListOut */
+export interface ActiveFleetSessionListOut {
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+  /** Sessions */
+  sessions: ActiveFleetSessionOut[];
+}
+
+/** ActiveFleetSessionOut */
+export interface ActiveFleetSessionOut {
+  /** Session Id */
+  session_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Device Serial */
+  device_serial: string;
+  /** Device Name */
+  device_name: string;
+  /** Owner classification for active control-plane sessions (DF-T-02-013). */
+  owner_type: SessionOwnerType;
+  /** Source */
+  source: "active_session" | "busy_claim";
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Duplicate For Device
+   * @default false
+   */
+  duplicate_for_device?: boolean;
+}
+
 /** ActivityLogListOut */
 export interface ActivityLogListOut {
   /** Total */
@@ -677,6 +844,12 @@ export interface BodyImportScenarioBodyIntoExistingRouteApiScenariosScenarioIdIm
 
 /** Body_import_scenario_route_api_scenarios_import_post */
 export interface BodyImportScenarioRouteApiScenariosImportPost {
+  /** File */
+  file: string;
+}
+
+/** Body_upload_step_template_route_api_scenarios__scenario_id__image_templates_post */
+export interface BodyUploadStepTemplateRouteApiScenariosScenarioIdImageTemplatesPost {
   /** File */
   file: string;
 }
@@ -1090,6 +1263,43 @@ export interface CampaignForceTransitionOut {
   reason?: string | null;
 }
 
+/** CampaignMonitorExecutionOut */
+export interface CampaignMonitorExecutionOut {
+  /** Execution Id */
+  execution_id: string;
+  /** Status */
+  status: string;
+  context: ExecutionTraceContextOut;
+  summary: ExecutionTaskLogSummaryOut;
+  /** Current Step Type */
+  current_step_type?: string | null;
+  /** Message */
+  message?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Started At */
+  started_at?: string | null;
+  /** Finished At */
+  finished_at?: string | null;
+  /** Last Event At */
+  last_event_at?: string | null;
+}
+
+/** CampaignMonitorOut */
+export interface CampaignMonitorOut {
+  /** Campaign Id */
+  campaign_id: string;
+  /** Total */
+  total: number;
+  /** Limit */
+  limit: number;
+  /** Executions */
+  executions?: CampaignMonitorExecutionOut[];
+}
+
 /** CampaignOut */
 export interface CampaignOut {
   /** Id */
@@ -1121,6 +1331,14 @@ export interface CampaignOut {
   created_at: string;
   /** Target Group Id */
   target_group_id?: string | null;
+}
+
+/** CampaignPageOut */
+export interface CampaignPageOut {
+  /** Total */
+  total: number;
+  /** Items */
+  items: (CampaignEntityOut | CampaignOut)[];
 }
 
 /** CampaignRunBody */
@@ -1551,6 +1769,18 @@ export interface ContinuousCrawlDeviceLaneOut {
   message?: string | null;
 }
 
+/** ContinuousCrawlDeviceTargetsOut */
+export interface ContinuousCrawlDeviceTargetsOut {
+  /** Device Id */
+  device_id: string;
+  /** Device Serial */
+  device_serial: string;
+  /** Device Name */
+  device_name: string;
+  /** Target Count */
+  target_count: number;
+}
+
 /** ContinuousCrawlPreflightOut */
 export interface ContinuousCrawlPreflightOut {
   /** Ready */
@@ -1561,6 +1791,8 @@ export interface ContinuousCrawlPreflightOut {
   device_count: number;
   /** Max Concurrency */
   max_concurrency: number;
+  /** Device Targets */
+  device_targets?: ContinuousCrawlDeviceTargetsOut[];
   /** Warnings */
   warnings?: string[];
   /** Errors */
@@ -2207,6 +2439,10 @@ export interface DeviceStateCountsOut {
 export interface DeviceTargetGroupOut {
   /** Id */
   id: string;
+  /** Platform */
+  platform: string;
+  /** Entity Type */
+  entity_type: string;
   /** External Id */
   external_id?: string | null;
   /** Canonical Url */
@@ -2538,6 +2774,230 @@ export interface ExecutionStepOut {
   updated_at: string;
 }
 
+/** ExecutionTaskLogDlqOut */
+export interface ExecutionTaskLogDlqOut {
+  /** Id */
+  id: string;
+  /** Status */
+  status: string;
+  /** Device Serial */
+  device_serial: string;
+  /** Error */
+  error?: string | null;
+  /** Failed Step Id */
+  failed_step_id?: string | null;
+  /** Failure Reason */
+  failure_reason?: string | null;
+  /** Failed At */
+  failed_at?: string | null;
+  /** Artifact Refs */
+  artifact_refs?: Record<string, any>;
+  /**
+   * Retry Count
+   * @default 0
+   */
+  retry_count?: number;
+}
+
+/** ExecutionTaskLogOut */
+export interface ExecutionTaskLogOut {
+  /** Execution Id */
+  execution_id: string;
+  /** Status */
+  status: string;
+  context: ExecutionTraceContextOut;
+  summary: ExecutionTaskLogSummaryOut;
+  /** Steps */
+  steps?: ExecutionTaskLogStepOut[];
+  /** Account Actions */
+  account_actions?: Record<string, any>[];
+  /** Events */
+  events?: Record<string, any>[];
+  /**
+   * Has More Steps
+   * @default false
+   */
+  has_more_steps?: boolean;
+  /**
+   * Has More Events
+   * @default false
+   */
+  has_more_events?: boolean;
+  /** Last Event Id */
+  last_event_id?: string | null;
+  dlq?: ExecutionTaskLogDlqOut | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Started At */
+  started_at?: string | null;
+  /** Finished At */
+  finished_at?: string | null;
+}
+
+/** ExecutionTaskLogStepOut */
+export interface ExecutionTaskLogStepOut {
+  /** Id */
+  id: string;
+  /** Execution Id */
+  execution_id: string;
+  /** Device Id */
+  device_id?: string | null;
+  /** Step Index */
+  step_index: number;
+  /** Step Id */
+  step_id?: string | null;
+  /** Step Type */
+  step_type?: string | null;
+  /** Status */
+  status: string;
+  /** Started At */
+  started_at?: string | null;
+  /** Ended At */
+  ended_at?: string | null;
+  /** Duration Ms */
+  duration_ms?: number | null;
+  /** Error Json */
+  error_json?: Record<string, any>;
+  /** Effective Config Json */
+  effective_config_json?: Record<string, any>;
+  /** Trace */
+  trace?: Record<string, any>;
+  /** Account Actions */
+  account_actions?: Record<string, any>[];
+  /** Artifacts Json */
+  artifacts_json?: any[];
+  /** Attempts Json */
+  attempts_json?: any[];
+  /**
+   * Marked Ignored
+   * @default false
+   */
+  marked_ignored?: boolean;
+  /** Message */
+  message?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** ExecutionTaskLogSummaryOut */
+export interface ExecutionTaskLogSummaryOut {
+  /**
+   * Total Steps
+   * @default 0
+   */
+  total_steps?: number;
+  /**
+   * Completed Steps
+   * @default 0
+   */
+  completed_steps?: number;
+  /**
+   * Failed Steps
+   * @default 0
+   */
+  failed_steps?: number;
+  /**
+   * Running Steps
+   * @default 0
+   */
+  running_steps?: number;
+  /** Current Step Index */
+  current_step_index?: number | null;
+  /** Counters */
+  counters?: Record<string, number>;
+}
+
+/** ExecutionTraceContextOut */
+export interface ExecutionTraceContextOut {
+  /** Org Id */
+  org_id?: string | null;
+  /** Dispatch Id */
+  dispatch_id?: string | null;
+  /** Campaign Id */
+  campaign_id?: string | null;
+  /** Execution Id */
+  execution_id: string;
+  /** Workflow Id */
+  workflow_id?: string | null;
+  /** Scenario Id */
+  scenario_id?: string | null;
+  /** Scenario Version Id */
+  scenario_version_id?: string | null;
+  /** Scenario Plan */
+  scenario_plan?: any[];
+  /** Device Id */
+  device_id?: string | null;
+  /** Device Serial */
+  device_serial?: string | null;
+  /** Device Name */
+  device_name?: string | null;
+  /** Account Id */
+  account_id?: string | null;
+  /** Account Label */
+  account_label?: string | null;
+  /** Account Platform */
+  account_platform?: string | null;
+}
+
+/** ExternalEntityAuthorSyncIn */
+export interface ExternalEntityAuthorSyncIn {
+  /** Collection */
+  collection?: string | null;
+  /** Campaign Id */
+  campaign_id?: string | null;
+  /** Execution Id */
+  execution_id?: string | null;
+  /**
+   * Content Types
+   * @maxItems 10
+   * @minItems 1
+   */
+  content_types?: string[];
+  /**
+   * Dry Run
+   * @default false
+   */
+  dry_run?: boolean;
+  /**
+   * Limit
+   * @min 1
+   * @max 5000
+   * @default 2000
+   */
+  limit?: number;
+}
+
+/** ExternalEntityAuthorSyncOut */
+export interface ExternalEntityAuthorSyncOut {
+  /** Scanned Count */
+  scanned_count: number;
+  /** Valid Count */
+  valid_count: number;
+  /** Created Count */
+  created_count: number;
+  /** Existing Count */
+  existing_count: number;
+  /** Skipped Existing Count */
+  skipped_existing_count: number;
+  /** Skipped Count */
+  skipped_count: number;
+  /** Skipped Anonymous Count */
+  skipped_anonymous_count: number;
+  /** Skipped Invalid Count */
+  skipped_invalid_count: number;
+}
+
 /** ExternalEntityBulkObserveIn */
 export interface ExternalEntityBulkObserveIn {
   /**
@@ -2673,6 +3133,549 @@ export interface ExternalEntityOut {
    * @format date-time
    */
   updated_at: string;
+}
+
+/** FacebookCandidateDetailOut */
+export interface FacebookCandidateDetailOut {
+  /** Id */
+  id: string;
+  /** Org Id */
+  org_id: string;
+  /** Account Id */
+  account_id: string;
+  /** External Entity Id */
+  external_entity_id: string;
+  /** External Entity Display Name */
+  external_entity_display_name: string;
+  /** External Entity Status */
+  external_entity_status: string;
+  /** Status */
+  status:
+    | "discovered"
+    | "review_required"
+    | "approved"
+    | "rejected"
+    | "deferred"
+    | "warming_up"
+    | "ready_to_connect"
+    | "request_pending"
+    | "connected"
+    | "blocked";
+  /** Relationship Score */
+  relationship_score: number;
+  /** Keyword Score */
+  keyword_score: number;
+  /** Semantic Score */
+  semantic_score: number;
+  /** Final Score */
+  final_score: number;
+  /** Reasons */
+  reasons?: Record<string, any>[];
+  /** Matched Keywords */
+  matched_keywords?: string[];
+  /** Negative Keywords */
+  negative_keywords?: string[];
+  /** Evidence Count */
+  evidence_count: number;
+  /** Next Eligible At */
+  next_eligible_at?: string | null;
+  /** Reviewed By */
+  reviewed_by?: string | null;
+  /** Reviewed At */
+  reviewed_at?: string | null;
+  /** Review Note */
+  review_note?: string | null;
+  /**
+   * First Observed At
+   * @format date-time
+   */
+  first_observed_at: string;
+  /**
+   * Last Observed At
+   * @format date-time
+   */
+  last_observed_at: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /** Evidence */
+  evidence: FacebookCandidateEvidenceOut[];
+  /** Keyword Matches */
+  keyword_matches: FacebookCandidateKeywordOut[];
+  /** Embeddings */
+  embeddings: FacebookCandidateEmbeddingOut[];
+  /** Reviews */
+  reviews: FacebookCandidateReviewOut[];
+}
+
+/** FacebookCandidateEmbeddingIn */
+export interface FacebookCandidateEmbeddingIn {
+  /**
+   * Values
+   * @maxItems 4096
+   * @minItems 1
+   */
+  values: number[];
+  /** Model */
+  model?: string | null;
+  /** Dimensions */
+  dimensions?: number | null;
+  /**
+   * Source Hash
+   * @pattern ^[a-fA-F0-9]{64}$
+   */
+  source_hash: string;
+}
+
+/** FacebookCandidateEmbeddingOut */
+export interface FacebookCandidateEmbeddingOut {
+  /** Id */
+  id: string;
+  /** Embedding */
+  embedding: number[];
+  /** Model */
+  model: string;
+  /** Dimensions */
+  dimensions: number;
+  /** Source Hash */
+  source_hash: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
+/** FacebookCandidateEvidenceIn */
+export interface FacebookCandidateEvidenceIn {
+  /**
+   * Evidence Type
+   * @minLength 1
+   * @maxLength 64
+   */
+  evidence_type: string;
+  /**
+   * Source
+   * @minLength 1
+   * @maxLength 128
+   */
+  source: string;
+  /**
+   * Text
+   * @maxLength 100000
+   * @default ""
+   */
+  text?: string;
+  /** Payload */
+  payload?: Record<string, any>;
+  /** Observed At */
+  observed_at?: string | null;
+  /** Source Hash */
+  source_hash?: string | null;
+}
+
+/** FacebookCandidateEvidenceOut */
+export interface FacebookCandidateEvidenceOut {
+  /** Id */
+  id: string;
+  /** Evidence Type */
+  evidence_type: string;
+  /** Source */
+  source: string;
+  /** Source Hash */
+  source_hash: string;
+  /** Text */
+  text: string;
+  /** Payload */
+  payload: Record<string, any>;
+  /**
+   * Observed At
+   * @format date-time
+   */
+  observed_at: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
+/** FacebookCandidateKeywordOut */
+export interface FacebookCandidateKeywordOut {
+  /** Keyword */
+  keyword: string;
+  /** Normalized Keyword */
+  normalized_keyword: string;
+  /** Keyword Type */
+  keyword_type: "positive" | "negative";
+  /** Match Count */
+  match_count: number;
+  /**
+   * First Matched At
+   * @format date-time
+   */
+  first_matched_at: string;
+  /**
+   * Last Matched At
+   * @format date-time
+   */
+  last_matched_at: string;
+}
+
+/** FacebookCandidateListOut */
+export interface FacebookCandidateListOut {
+  /** Items */
+  items: FacebookCandidateOut[];
+  /** Total */
+  total: number;
+  /** Limit */
+  limit: number;
+  /** Offset */
+  offset: number;
+}
+
+/** FacebookCandidateObserveIn */
+export interface FacebookCandidateObserveIn {
+  /**
+   * Account Id
+   * @minLength 1
+   * @maxLength 36
+   */
+  account_id: string;
+  /**
+   * External Entity Id
+   * @minLength 1
+   * @maxLength 36
+   */
+  external_entity_id: string;
+  /** Relationship Score */
+  relationship_score?: number | null;
+  /** Semantic Score */
+  semantic_score?: number | null;
+  /**
+   * Evidence
+   * @maxItems 100
+   */
+  evidence?: FacebookCandidateEvidenceIn[];
+  embedding?: FacebookCandidateEmbeddingIn | null;
+}
+
+/** FacebookCandidateObserveOut */
+export interface FacebookCandidateObserveOut {
+  candidate: FacebookCandidateOut;
+  /** Created */
+  created: boolean;
+}
+
+/** FacebookCandidateOut */
+export interface FacebookCandidateOut {
+  /** Id */
+  id: string;
+  /** Org Id */
+  org_id: string;
+  /** Account Id */
+  account_id: string;
+  /** External Entity Id */
+  external_entity_id: string;
+  /** External Entity Display Name */
+  external_entity_display_name: string;
+  /** External Entity Status */
+  external_entity_status: string;
+  /** Status */
+  status:
+    | "discovered"
+    | "review_required"
+    | "approved"
+    | "rejected"
+    | "deferred"
+    | "warming_up"
+    | "ready_to_connect"
+    | "request_pending"
+    | "connected"
+    | "blocked";
+  /** Relationship Score */
+  relationship_score: number;
+  /** Keyword Score */
+  keyword_score: number;
+  /** Semantic Score */
+  semantic_score: number;
+  /** Final Score */
+  final_score: number;
+  /** Reasons */
+  reasons?: Record<string, any>[];
+  /** Matched Keywords */
+  matched_keywords?: string[];
+  /** Negative Keywords */
+  negative_keywords?: string[];
+  /** Evidence Count */
+  evidence_count: number;
+  /** Next Eligible At */
+  next_eligible_at?: string | null;
+  /** Reviewed By */
+  reviewed_by?: string | null;
+  /** Reviewed At */
+  reviewed_at?: string | null;
+  /** Review Note */
+  review_note?: string | null;
+  /**
+   * First Observed At
+   * @format date-time
+   */
+  first_observed_at: string;
+  /**
+   * Last Observed At
+   * @format date-time
+   */
+  last_observed_at: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** FacebookCandidateRecomputeIn */
+export interface FacebookCandidateRecomputeIn {
+  /** Candidate Ids */
+  candidate_ids?: string[] | null;
+  /** Account Id */
+  account_id?: string | null;
+  /**
+   * Limit
+   * @min 1
+   * @max 500
+   * @default 500
+   */
+  limit?: number;
+  /** After Id */
+  after_id?: string | null;
+}
+
+/** FacebookCandidateRecomputeOut */
+export interface FacebookCandidateRecomputeOut {
+  /** Items */
+  items: FacebookCandidateOut[];
+  /** Recomputed Count */
+  recomputed_count: number;
+  /** Next Cursor */
+  next_cursor?: string | null;
+}
+
+/** FacebookCandidateReviewIn */
+export interface FacebookCandidateReviewIn {
+  /** Status */
+  status: "approved" | "ready_to_connect" | "rejected" | "deferred";
+  /** Note */
+  note?: string | null;
+  /** Next Eligible At */
+  next_eligible_at?: string | null;
+}
+
+/** FacebookCandidateReviewOut */
+export interface FacebookCandidateReviewOut {
+  /** Id */
+  id: string;
+  /** From Status */
+  from_status:
+    | "discovered"
+    | "review_required"
+    | "approved"
+    | "rejected"
+    | "deferred"
+    | "warming_up"
+    | "ready_to_connect"
+    | "request_pending"
+    | "connected"
+    | "blocked";
+  /** To Status */
+  to_status:
+    | "discovered"
+    | "review_required"
+    | "approved"
+    | "rejected"
+    | "deferred"
+    | "warming_up"
+    | "ready_to_connect"
+    | "request_pending"
+    | "connected"
+    | "blocked";
+  /** Reviewer Id */
+  reviewer_id?: string | null;
+  /** Note */
+  note?: string | null;
+  /** Score Snapshot */
+  score_snapshot: Record<string, any>;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
+/** FacebookCandidateSettingsIn */
+export interface FacebookCandidateSettingsIn {
+  /**
+   * Relationship Weight
+   * @min 0
+   * @max 1
+   * @default 0.4
+   */
+  relationship_weight?: number;
+  /**
+   * Keyword Weight
+   * @min 0
+   * @max 1
+   * @default 0.35
+   */
+  keyword_weight?: number;
+  /**
+   * Semantic Weight
+   * @min 0
+   * @max 1
+   * @default 0.25
+   */
+  semantic_weight?: number;
+  /**
+   * Review Threshold
+   * @min 0
+   * @max 1
+   * @default 0.55
+   */
+  review_threshold?: number;
+  /**
+   * Auto Ready Enabled
+   * @default true
+   */
+  auto_ready_enabled?: boolean;
+  /**
+   * Auto Ready Threshold
+   * @min 0
+   * @max 1
+   * @default 0.75
+   */
+  auto_ready_threshold?: number;
+  /**
+   * Auto Ready Min Evidence
+   * @min 1
+   * @max 100
+   * @default 2
+   */
+  auto_ready_min_evidence?: number;
+  /**
+   * Positive Keywords
+   * @maxItems 500
+   */
+  positive_keywords?: string[];
+  /**
+   * Negative Keywords
+   * @maxItems 500
+   */
+  negative_keywords?: string[];
+  /**
+   * Embedding Model
+   * @minLength 1
+   * @maxLength 128
+   * @default "multilingual-e5-small"
+   */
+  embedding_model?: string;
+  /**
+   * Embedding Dimensions
+   * @min 1
+   * @max 4096
+   * @default 384
+   */
+  embedding_dimensions?: number;
+}
+
+/** FacebookCandidateSettingsOut */
+export interface FacebookCandidateSettingsOut {
+  /**
+   * Relationship Weight
+   * @min 0
+   * @max 1
+   * @default 0.4
+   */
+  relationship_weight?: number;
+  /**
+   * Keyword Weight
+   * @min 0
+   * @max 1
+   * @default 0.35
+   */
+  keyword_weight?: number;
+  /**
+   * Semantic Weight
+   * @min 0
+   * @max 1
+   * @default 0.25
+   */
+  semantic_weight?: number;
+  /**
+   * Review Threshold
+   * @min 0
+   * @max 1
+   * @default 0.55
+   */
+  review_threshold?: number;
+  /**
+   * Auto Ready Enabled
+   * @default true
+   */
+  auto_ready_enabled?: boolean;
+  /**
+   * Auto Ready Threshold
+   * @min 0
+   * @max 1
+   * @default 0.75
+   */
+  auto_ready_threshold?: number;
+  /**
+   * Auto Ready Min Evidence
+   * @min 1
+   * @max 100
+   * @default 2
+   */
+  auto_ready_min_evidence?: number;
+  /**
+   * Positive Keywords
+   * @maxItems 500
+   */
+  positive_keywords?: string[];
+  /**
+   * Negative Keywords
+   * @maxItems 500
+   */
+  negative_keywords?: string[];
+  /**
+   * Embedding Model
+   * @minLength 1
+   * @maxLength 128
+   * @default "multilingual-e5-small"
+   */
+  embedding_model?: string;
+  /**
+   * Embedding Dimensions
+   * @min 1
+   * @max 4096
+   * @default 384
+   */
+  embedding_dimensions?: number;
+  /** Org Id */
+  org_id: string;
+  /** Updated At */
+  updated_at?: string | null;
 }
 
 /** FinishBody */
@@ -3036,16 +4039,6 @@ export interface OCRExtractBody {
   languages?: string[];
   /** Region */
   region?: Record<string, number> | null;
-  /**
-   * Psm
-   * @default 11
-   */
-  psm?: number;
-  /**
-   * Scale Factor
-   * @default 2
-   */
-  scale_factor?: number;
   /**
    * Confidence Threshold
    * @default 0.5
@@ -3662,6 +4655,32 @@ export interface RegisterRelayDeviceBody {
   name?: string;
 }
 
+/** RegisterRelayDeviceItemOut */
+export interface RegisterRelayDeviceItemOut {
+  /** Serial */
+  serial: string;
+  /** Status */
+  status: string;
+  /** Device Id */
+  device_id?: string | null;
+  /** Name */
+  name?: string | null;
+  /** Message */
+  message?: string | null;
+}
+
+/** RegisterRelayDevicesBody */
+export interface RegisterRelayDevicesBody {
+  /** Serials */
+  serials?: string[];
+}
+
+/** RegisterRelayDevicesOut */
+export interface RegisterRelayDevicesOut {
+  /** Results */
+  results: RegisterRelayDeviceItemOut[];
+}
+
 /** RegisterRequest */
 export interface RegisterRequest {
   /** Email */
@@ -3704,6 +4723,8 @@ export interface RelayAgentOut {
    * @default false
    */
   live_connected?: boolean;
+  /** Device Connections */
+  device_connections?: Record<string, RelayDeviceConnectionOut>;
   /**
    * Connected At
    * @format date-time
@@ -3868,6 +4889,22 @@ export interface RelayCommandOut {
    * @default ""
    */
   error?: string;
+}
+
+/** RelayDeviceConnectionOut */
+export interface RelayDeviceConnectionOut {
+  /**
+   * Registered
+   * @default false
+   */
+  registered?: boolean;
+  /** Device Id */
+  device_id?: string | null;
+  /**
+   * Device Agent Connected
+   * @default false
+   */
+  device_agent_connected?: boolean;
 }
 
 /** ReorderScenariosBody */
@@ -5990,6 +7027,10 @@ export class DeviceFarmHttpClient<
         adb_serial?: string | null;
         /** Relay Serial */
         relay_serial?: string | null;
+        /** Page */
+        page?: number | null;
+        /** Page Size */
+        page_size?: number | null;
       },
       params: RequestParams = {},
     ) =>
@@ -6076,6 +7117,42 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<FleetStatsOut, HTTPValidationError>({
         path: `/api/devices/fleet/stats`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List active logical sessions so fleet totals are operator-auditable.
+     *
+     * @tags devices
+     * @name ListActiveFleetSessionsApiDevicesFleetSessionsGet
+     * @summary List Active Fleet Sessions
+     * @request GET:/api/devices/fleet/sessions
+     * @secure
+     */
+    listActiveFleetSessionsApiDevicesFleetSessionsGet: (
+      query?: {
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ActiveFleetSessionListOut, HTTPValidationError>({
+        path: `/api/devices/fleet/sessions`,
         method: "GET",
         query: query,
         secure: true,
@@ -6334,6 +7411,44 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags campaigns
+     * @name ListCampaignsPageApiCampaignsPageGet
+     * @summary List Campaigns Page
+     * @request GET:/api/campaigns/page
+     * @secure
+     */
+    listCampaignsPageApiCampaignsPageGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 10
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignPageOut, HTTPValidationError>({
+        path: `/api/campaigns/page`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
      * @name ListCampaignsApiCampaignsGet
      * @summary List Campaigns
      * @request GET:/api/campaigns
@@ -6346,6 +7461,8 @@ export class DeviceFarmHttpClient<
          * @default false
          */
         include_archived?: boolean;
+        /** Search */
+        search?: string | null;
       },
       params: RequestParams = {},
     ) =>
@@ -6377,6 +7494,37 @@ export class DeviceFarmHttpClient<
         body: data,
         secure: true,
         type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Unified campaign monitoring snapshot with phone/account/step context.
+     *
+     * @tags campaigns
+     * @name GetCampaignMonitorApiCampaignsCampaignIdMonitorGet
+     * @summary Get Campaign Monitor
+     * @request GET:/api/campaigns/{campaign_id}/monitor
+     * @secure
+     */
+    getCampaignMonitorApiCampaignsCampaignIdMonitorGet: (
+      campaignId: string,
+      query?: {
+        /**
+         * Limit
+         * @min 1
+         * @max 500
+         * @default 200
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignMonitorOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/monitor`,
+        method: "GET",
+        query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -8114,6 +9262,71 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description Store a cropped template and report whether it is safe to match on. The ambiguity check is the point of doing this server-side: a crop of blank background scores 1.000 everywhere, so it would tap the wrong place while looking perfectly confident. Better to say so while the user is still looking at the crop than to debug it later in a run.
+     *
+     * @tags scenarios
+     * @name UploadStepTemplateRouteApiScenariosScenarioIdImageTemplatesPost
+     * @summary Upload Step Template Route
+     * @request POST:/api/scenarios/{scenario_id}/image-templates
+     * @secure
+     */
+    uploadStepTemplateRouteApiScenariosScenarioIdImageTemplatesPost: (
+      scenarioId: string,
+      data: BodyUploadStepTemplateRouteApiScenariosScenarioIdImageTemplatesPost,
+      query?: {
+        /**
+         * Screen W
+         * @min 0
+         * @default 0
+         */
+        screen_w?: number;
+        /**
+         * Screen H
+         * @min 0
+         * @default 0
+         */
+        screen_h?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/image-templates`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.FormData,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Presigned URL so the editor can show the template already attached.
+     *
+     * @tags scenarios
+     * @name GetStepTemplateUrlRouteApiScenariosScenarioIdImageTemplatesUrlGet
+     * @summary Get Step Template Url Route
+     * @request GET:/api/scenarios/{scenario_id}/image-templates/url
+     * @secure
+     */
+    getStepTemplateUrlRouteApiScenariosScenarioIdImageTemplatesUrlGet: (
+      scenarioId: string,
+      query: {
+        /** Key */
+        key: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/image-templates/url`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description List all device groups for the authenticated user (includes device count).
      *
      * @tags device-groups
@@ -8289,6 +9502,11 @@ export class DeviceFarmHttpClient<
         include_states?: string[] | null;
         /** Tags */
         tags?: string | null;
+        /**
+         * Search
+         * Substring match on username or display name
+         */
+        search?: string | null;
         /**
          * Limit
          * @min 1
@@ -8932,6 +10150,216 @@ export class DeviceFarmHttpClient<
           format: "json",
           ...params,
         }),
+
+    /**
+     * No description
+     *
+     * @tags account-actions
+     * @name ListAccountActionsApiAccountsAccountIdActionsGet
+     * @summary List Account Actions
+     * @request GET:/api/accounts/{account_id}/actions
+     * @secure
+     */
+    listAccountActionsApiAccountsAccountIdActionsGet: (
+      accountId: string,
+      query?: {
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 100
+         */
+        limit?: number;
+        /** Cursor */
+        cursor?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountActionListOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/actions`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags account-actions
+     * @name GetAccountActionSummaryApiAccountsAccountIdActionSummaryGet
+     * @summary Get Account Action Summary
+     * @request GET:/api/accounts/{account_id}/action-summary
+     * @secure
+     */
+    getAccountActionSummaryApiAccountsAccountIdActionSummaryGet: (
+      accountId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountActionSummaryOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/action-summary`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags account-discovery
+     * @name GetAccountDiscoveryRouteApiAccountsAccountIdDiscoveryGet
+     * @summary Get Account Discovery Route
+     * @request GET:/api/accounts/{account_id}/discovery
+     * @secure
+     */
+    getAccountDiscoveryRouteApiAccountsAccountIdDiscoveryGet: (
+      accountId: string,
+      query: {
+        /**
+         * Platform
+         * @minLength 1
+         * @maxLength 32
+         */
+        platform: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountDiscoveryStateOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/discovery`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags account-discovery
+     * @name RequestAccountDiscoveryRouteApiAccountsAccountIdDiscoveryRequestPost
+     * @summary Request Account Discovery Route
+     * @request POST:/api/accounts/{account_id}/discovery/request
+     * @secure
+     */
+    requestAccountDiscoveryRouteApiAccountsAccountIdDiscoveryRequestPost: (
+      accountId: string,
+      query: {
+        /**
+         * Platform
+         * @minLength 1
+         * @maxLength 32
+         */
+        platform: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountDiscoveryStateOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/discovery/request`,
+        method: "POST",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags account-discovery
+     * @name StartAccountDiscoveryRouteApiAccountsAccountIdDiscoveryStartPost
+     * @summary Start Account Discovery Route
+     * @request POST:/api/accounts/{account_id}/discovery/start
+     * @secure
+     */
+    startAccountDiscoveryRouteApiAccountsAccountIdDiscoveryStartPost: (
+      accountId: string,
+      query: {
+        /**
+         * Platform
+         * @minLength 1
+         * @maxLength 32
+         */
+        platform: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountDiscoveryStateOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/discovery/start`,
+        method: "POST",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags account-discovery
+     * @name CompleteAccountDiscoveryRouteApiAccountsAccountIdDiscoveryCompletePost
+     * @summary Complete Account Discovery Route
+     * @request POST:/api/accounts/{account_id}/discovery/complete
+     * @secure
+     */
+    completeAccountDiscoveryRouteApiAccountsAccountIdDiscoveryCompletePost: (
+      accountId: string,
+      query: {
+        /**
+         * Platform
+         * @minLength 1
+         * @maxLength 32
+         */
+        platform: string;
+      },
+      data: AccountDiscoveryCompleteIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountDiscoveryStateOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/discovery/complete`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags account-discovery
+     * @name FailAccountDiscoveryRouteApiAccountsAccountIdDiscoveryFailPost
+     * @summary Fail Account Discovery Route
+     * @request POST:/api/accounts/{account_id}/discovery/fail
+     * @secure
+     */
+    failAccountDiscoveryRouteApiAccountsAccountIdDiscoveryFailPost: (
+      accountId: string,
+      query: {
+        /**
+         * Platform
+         * @minLength 1
+         * @maxLength 32
+         */
+        platform: string;
+      },
+      data: AccountDiscoveryFailedIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountDiscoveryStateOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/discovery/fail`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
 
     /**
      * No description
@@ -10183,6 +11611,78 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description Unified trace for one execution: phone, account, steps, events, DLQ.
+     *
+     * @tags executions
+     * @name GetExecutionTaskLogApiExecutionsExecutionIdTaskLogGet
+     * @summary Get Execution Task Log
+     * @request GET:/api/executions/{execution_id}/task-log
+     * @secure
+     */
+    getExecutionTaskLogApiExecutionsExecutionIdTaskLogGet: (
+      executionId: string,
+      query?: {
+        /** Since */
+        since?: string | null;
+        /**
+         * Event Limit
+         * @default 200
+         */
+        event_limit?: number;
+        /**
+         * Step Limit
+         * @default 500
+         */
+        step_limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ExecutionTaskLogOut, HTTPValidationError>({
+        path: `/api/executions/${executionId}/task-log`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Alias for task-log while the frontend migrates naming.
+     *
+     * @tags executions
+     * @name GetExecutionRunTraceApiExecutionsExecutionIdRunTraceGet
+     * @summary Get Execution Run Trace
+     * @request GET:/api/executions/{execution_id}/run-trace
+     * @secure
+     */
+    getExecutionRunTraceApiExecutionsExecutionIdRunTraceGet: (
+      executionId: string,
+      query?: {
+        /** Since */
+        since?: string | null;
+        /**
+         * Event Limit
+         * @default 200
+         */
+        event_limit?: number;
+        /**
+         * Step Limit
+         * @default 500
+         */
+        step_limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ExecutionTaskLogOut, HTTPValidationError>({
+        path: `/api/executions/${executionId}/run-trace`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * No description
      *
      * @tags executions
@@ -10917,7 +12417,31 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
-     * @description Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required.
+     * @description Register several reported serials in one call. Partial success by design (same shape as DLQ bulk retry): one bad serial must not sink the rest, so each is committed on its own and reported individually. An empty `serials` list means "everything this agent reports".
+     *
+     * @tags relay-agents
+     * @name RegisterRelayDevicesBulkApiRelayAgentsRelayIdDevicesRegisterPost
+     * @summary Register Relay Devices Bulk
+     * @request POST:/api/relay-agents/{relay_id}/devices/register
+     * @secure
+     */
+    registerRelayDevicesBulkApiRelayAgentsRelayIdDevicesRegisterPost: (
+      relayId: string,
+      data: RegisterRelayDevicesBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<RegisterRelayDevicesOut, HTTPValidationError>({
+        path: `/api/relay-agents/${relayId}/devices/register`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
      *
      * @tags relay-agents
      * @name PushConnectUrlToDeviceApiRelayAgentsRelayIdDevicesSerialPushConnectUrlPost
@@ -10951,6 +12475,71 @@ export class DeviceFarmHttpClient<
           format: "json",
           ...params,
         }),
+
+    /**
+     * No description
+     *
+     * @tags relay-agents
+     * @name ConnectRelayDeviceApiRelayAgentsRelayIdDevicesSerialConnectPost
+     * @summary Connect Relay Device
+     * @request POST:/api/relay-agents/{relay_id}/devices/{serial}/connect
+     * @secure
+     */
+    connectRelayDeviceApiRelayAgentsRelayIdDevicesSerialConnectPost: (
+      relayId: string,
+      serial: string,
+      query?: {
+        /**
+         * Device Id
+         * Logical device id when DB serial is pending-* but ADB path serial is physical
+         */
+        device_id?: string | null;
+        /**
+         * Ws Base Url
+         * Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.
+         */
+        ws_base_url?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<RelayCommandOut, HTTPValidationError>({
+        path: `/api/relay-agents/${relayId}/devices/${serial}/connect`,
+        method: "POST",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags relay-agents
+     * @name DisconnectRelayDeviceApiRelayAgentsRelayIdDevicesSerialDisconnectPost
+     * @summary Disconnect Relay Device
+     * @request POST:/api/relay-agents/{relay_id}/devices/{serial}/disconnect
+     * @secure
+     */
+    disconnectRelayDeviceApiRelayAgentsRelayIdDevicesSerialDisconnectPost: (
+      relayId: string,
+      serial: string,
+      query?: {
+        /**
+         * Device Id
+         * Logical device id when DB serial is pending-* but ADB path serial is physical
+         */
+        device_id?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<RelayCommandOut, HTTPValidationError>({
+        path: `/api/relay-agents/${relayId}/devices/${serial}/disconnect`,
+        method: "POST",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
 
     /**
      * No description
@@ -11365,6 +12954,8 @@ export class DeviceFarmHttpClient<
         action?: string | null;
         /** Device Serial */
         device_serial?: string | null;
+        /** Account Id */
+        account_id?: string | null;
         /**
          * Offset
          * @default 0
@@ -11980,6 +13571,29 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags external-entities
+     * @name SyncAuthorsFromContentRouteApiExternalEntitiesSyncAuthorsFromContentPost
+     * @summary Sync Authors From Content Route
+     * @request POST:/api/external-entities/sync-authors-from-content
+     * @secure
+     */
+    syncAuthorsFromContentRouteApiExternalEntitiesSyncAuthorsFromContentPost: (
+      data: ExternalEntityAuthorSyncIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<ExternalEntityAuthorSyncOut, HTTPValidationError>({
+        path: `/api/external-entities/sync-authors-from-content`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags external-entities
      * @name GetExternalEntityRouteApiExternalEntitiesEntityIdGet
      * @summary Get External Entity Route
      * @request GET:/api/external-entities/{entity_id}
@@ -12034,6 +13648,182 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<DeviceTargetGroupsOut, HTTPValidationError>({
         path: `/api/devices/${deviceId}/target-groups`,
+        method: "PUT",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name ListFacebookCandidatesRouteApiFacebookCandidatesGet
+     * @summary List Facebook Candidates Route
+     * @request GET:/api/facebook-candidates
+     * @secure
+     */
+    listFacebookCandidatesRouteApiFacebookCandidatesGet: (
+      query?: {
+        /** Account Id */
+        account_id?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Search */
+        search?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 500
+         * @default 100
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateListOut, HTTPValidationError>({
+        path: `/api/facebook-candidates`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name ObserveFacebookCandidateRouteApiFacebookCandidatesPost
+     * @summary Observe Facebook Candidate Route
+     * @request POST:/api/facebook-candidates
+     * @secure
+     */
+    observeFacebookCandidateRouteApiFacebookCandidatesPost: (
+      data: FacebookCandidateObserveIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateObserveOut, HTTPValidationError>({
+        path: `/api/facebook-candidates`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name RecomputeFacebookCandidatesRouteApiFacebookCandidatesRecomputePost
+     * @summary Recompute Facebook Candidates Route
+     * @request POST:/api/facebook-candidates/recompute
+     * @secure
+     */
+    recomputeFacebookCandidatesRouteApiFacebookCandidatesRecomputePost: (
+      data: FacebookCandidateRecomputeIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateRecomputeOut, HTTPValidationError>({
+        path: `/api/facebook-candidates/recompute`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name GetFacebookCandidateRouteApiFacebookCandidatesCandidateIdGet
+     * @summary Get Facebook Candidate Route
+     * @request GET:/api/facebook-candidates/{candidate_id}
+     * @secure
+     */
+    getFacebookCandidateRouteApiFacebookCandidatesCandidateIdGet: (
+      candidateId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateDetailOut, HTTPValidationError>({
+        path: `/api/facebook-candidates/${candidateId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name ReviewFacebookCandidateRouteApiFacebookCandidatesCandidateIdReviewPatch
+     * @summary Review Facebook Candidate Route
+     * @request PATCH:/api/facebook-candidates/{candidate_id}/review
+     * @secure
+     */
+    reviewFacebookCandidateRouteApiFacebookCandidatesCandidateIdReviewPatch: (
+      candidateId: string,
+      data: FacebookCandidateReviewIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateDetailOut, HTTPValidationError>({
+        path: `/api/facebook-candidates/${candidateId}/review`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name GetFacebookCandidateSettingsRouteApiFacebookCandidateSettingsGet
+     * @summary Get Facebook Candidate Settings Route
+     * @request GET:/api/facebook-candidate-settings
+     * @secure
+     */
+    getFacebookCandidateSettingsRouteApiFacebookCandidateSettingsGet: (
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateSettingsOut, any>({
+        path: `/api/facebook-candidate-settings`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags facebook-candidates
+     * @name UpdateFacebookCandidateSettingsRouteApiFacebookCandidateSettingsPut
+     * @summary Update Facebook Candidate Settings Route
+     * @request PUT:/api/facebook-candidate-settings
+     * @secure
+     */
+    updateFacebookCandidateSettingsRouteApiFacebookCandidateSettingsPut: (
+      data: FacebookCandidateSettingsIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<FacebookCandidateSettingsOut, HTTPValidationError>({
+        path: `/api/facebook-candidate-settings`,
         method: "PUT",
         body: data,
         secure: true,

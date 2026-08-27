@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { FileText, Plus } from 'lucide-react';
+import { FileText, Loader2, Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useCampaigns } from '../../hooks/use-campaigns';
+import { Input } from '@/components/ui/input';
+import { useCampaignPage } from '../../hooks/use-campaigns';
 import { useCampaignListFocus } from '../../hooks/use-campaign-list-focus';
 import type { CampaignOut } from '../../types';
 import { DataTable } from '@/components/ui/table/data-table';
@@ -22,6 +23,8 @@ import {
   campaignRowHighlightClass
 } from '../../lib/campaign-row-anchor';
 import { cn } from '@/lib/utils';
+import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
+import { parseAsInteger, useQueryStates } from 'nuqs';
 
 function useIsLgUp() {
   const [isLgUp, setIsLgUp] = useState<boolean | null>(null);
@@ -50,7 +53,25 @@ export function CampaignList({
     preselectedScenarioIds: attachScenarioId ? [attachScenarioId] : []
   };
   const tEmpty = useTranslations('coreEmptyState');
-  const { data: campaigns, isLoading, error } = useCampaigns();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [{ page, perPage }, setPagination] = useQueryStates({
+    page: parseAsInteger.withDefault(1),
+    perPage: parseAsInteger.withDefault(10)
+  });
+  const updateSearch = useDebouncedCallback((value: string) => {
+    setDebouncedSearchQuery(value);
+    void setPagination({ page: 1 });
+  }, 300);
+  const {
+    data: campaignPage,
+    isLoading,
+    isFetching,
+    error,
+    refetch
+  } = useCampaignPage(debouncedSearchQuery, page, perPage);
+  const campaigns = campaignPage?.items;
+  const total = campaignPage?.total ?? 0;
   const { focusCampaignId, onFocusCampaignHandled } =
     useCampaignFocusFromDeepLink();
   const isLgUp = useIsLgUp();
@@ -84,36 +105,68 @@ export function CampaignList({
   const { table } = useDataTable<CampaignOut>({
     data,
     columns,
-    pageCount: 1
+    pageCount: Math.max(1, Math.ceil(total / perPage)),
+    initialState: { pagination: { pageIndex: 0, pageSize: 10 } }
   });
 
   return (
     <div className='space-y-3'>
       <CampaignExecutionRuntimeBanner />
       {isLoading || error ? (
-        <div>
-          {isLoading && (
-            <p className='text-sm text-muted-foreground'>{t('loading')}</p>
-          )}
-          {error && (
-            <p className='text-sm text-destructive'>{t('loadError')}</p>
-          )}
+        <div className='flex min-h-[22rem] items-center justify-center'>
+          <div className='flex flex-col items-center text-center'>
+            <Loader2 className='size-7 animate-spin text-muted-foreground' />
+            <p className='mt-3 text-sm text-muted-foreground'>
+              {isLoading ? t('loading') : t('loadError')}
+            </p>
+            {error ? (
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                className='mt-2'
+                onClick={() => void refetch()}
+              >
+                {t('retry')}
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : (
         <>
-          <div className='flex flex-wrap items-center justify-between gap-2'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
             <p className='text-sm text-muted-foreground'>
-              <span className='font-medium text-foreground'>
-                {campaigns?.length ?? 0}
-              </span>{' '}
+              <span className='font-medium text-foreground'>{total}</span>{' '}
               {t('campaignCountLabel')}
             </p>
-            <Can object='campaigns' action='create'>
-              <CreateCampaignDialog {...createDialogProps} />
-            </Can>
+            <div className='flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center'>
+              {total || searchQuery ? (
+                <div className='relative w-full sm:w-72'>
+                  <Search className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
+                  <Input
+                    type='search'
+                    value={searchQuery}
+                    onChange={(event) => {
+                      setSearchQuery(event.target.value);
+                      updateSearch(event.target.value);
+                    }}
+                    placeholder={t('searchPlaceholder')}
+                    aria-label={t('searchLabel')}
+                    aria-busy={isFetching}
+                    className='pl-9 pr-9'
+                  />
+                  {isFetching ? (
+                    <Loader2 className='pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground' />
+                  ) : null}
+                </div>
+              ) : null}
+              <Can object='campaigns' action='create'>
+                <CreateCampaignDialog {...createDialogProps} />
+              </Can>
+            </div>
           </div>
 
-          {!campaigns?.length && (
+          {!campaigns?.length && !debouncedSearchQuery && (
             <Can
               object='campaigns'
               action='create'
@@ -147,11 +200,11 @@ export function CampaignList({
             </Can>
           )}
 
-          {campaigns?.length ? (
+          {campaigns?.length && data.length ? (
             <>
               {isLgUp === false ? (
                 <CampaignMobileList
-                  campaigns={campaigns}
+                  campaigns={data}
                   statusLabel={statusLabel}
                   highlightCampaignId={highlightCampaignId}
                   withRowAnchor
@@ -160,11 +213,20 @@ export function CampaignList({
               {isLgUp === true ? (
                 <DataTable
                   table={table}
-                  total={campaigns.length}
+                  total={total}
                   getRowProps={getRowProps}
                 />
               ) : null}
             </>
+          ) : null}
+
+          {debouncedSearchQuery && !data.length ? (
+            <div className='rounded-md border border-dashed px-4 py-10 text-center'>
+              <p className='text-sm font-medium'>{t('searchEmptyTitle')}</p>
+              <p className='mt-1 text-sm text-muted-foreground'>
+                {t('searchEmptyDescription')}
+              </p>
+            </div>
           ) : null}
         </>
       )}

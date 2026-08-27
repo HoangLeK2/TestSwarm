@@ -8,6 +8,7 @@ import {
 import {
   devicesApi,
   type DeviceCreate,
+  type DeviceListParams,
   type DeviceOut
 } from '../services/manage-api';
 import {
@@ -53,6 +54,24 @@ export function useDevices() {
     queryKey: devicesListQueryKey(orgId),
     queryFn: devicesApi.list,
     enabled: Boolean(orgId) && tabActive,
+    refetchInterval: tabActive
+      ? wsLive
+        ? LIFECYCLE_WS_LIVE_POLL_MS
+        : LIFECYCLE_WS_OFFLINE_POLL_MS
+      : false
+  });
+}
+
+export function useDevicePage(params: DeviceListParams) {
+  const wsLive = useLifecycleWsConnected();
+  const tabActive = useTabNetworkActive();
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
+  return useQuery({
+    queryKey: [...devicesListQueryKey(orgId), 'page', params],
+    queryFn: () => devicesApi.listPage(params),
+    enabled: Boolean(orgId) && tabActive,
+    placeholderData: (previous) => previous,
     refetchInterval: tabActive
       ? wsLive
         ? LIFECYCLE_WS_LIVE_POLL_MS

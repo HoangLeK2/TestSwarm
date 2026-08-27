@@ -1,5 +1,6 @@
 'use client';
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -47,9 +48,13 @@ import {
   summarizeDispatchResult,
   type DispatchResultSummary
 } from '../lib/campaign-dispatch-result';
+import { syncCreatedCampaignCaches } from '../lib/campaign-create-cache';
 
 const KEYS = {
   list: ['campaigns'] as const,
+  search: (query: string) => ['campaigns', 'search', query] as const,
+  page: (query: string, page: number, pageSize: number) =>
+    ['campaigns', 'page', query, page, pageSize] as const,
   detail: (id: string) => ['campaigns', id] as const,
   devices: (id: string) => ['campaigns', id, 'devices'] as const,
   scenarios: (campaignId: string) =>
@@ -120,12 +125,18 @@ export function useExecutionRuntime() {
   });
 }
 
-export function useCampaigns() {
+export function useCampaigns(search = '') {
   const qc = useQueryClient();
+  const normalizedSearch = search.trim();
+  const queryKey = normalizedSearch
+    ? KEYS.search(normalizedSearch.toLocaleLowerCase())
+    : KEYS.list;
   return useQuery({
-    queryKey: KEYS.list,
+    queryKey,
+    placeholderData: keepPreviousData,
     queryFn: async () => {
-      const fetched = await campaignsApi.list();
+      const fetched = await campaignsApi.list(normalizedSearch);
+      if (normalizedSearch) return fetched;
       const cached = qc.getQueryData<CampaignOut[]>(KEYS.list) ?? [];
       if (!cached.length) return fetched;
       const byId = new Map(fetched.map((c) => [c.id, c]));
@@ -145,6 +156,24 @@ export function useCampaigns() {
         ? CAMPAIGN_LIST_ACTIVE_POLL_MS
         : false;
     }
+  });
+}
+
+export function useCampaignPage(
+  search: string,
+  page: number,
+  pageSize: number
+) {
+  const normalizedSearch = search.trim();
+  return useQuery({
+    queryKey: KEYS.page(normalizedSearch.toLocaleLowerCase(), page, pageSize),
+    placeholderData: keepPreviousData,
+    queryFn: () =>
+      campaignsApi.page({
+        search: normalizedSearch,
+        limit: pageSize,
+        offset: (page - 1) * pageSize
+      })
   });
 }
 
@@ -208,14 +237,7 @@ export function useCreateCampaign() {
           ? normalizeCampaignOut(created)
           : null;
       if (!row?.id) return;
-      qc.setQueryData(KEYS.detail(row.id), row);
-      qc.setQueryData<CampaignOut[]>(KEYS.list, (prev) => {
-        const list = prev ?? [];
-        if (list.some((c) => c.id === row.id)) {
-          return list.map((c) => (c.id === row.id ? row : c));
-        }
-        return [row, ...list];
-      });
+      syncCreatedCampaignCaches(qc, row);
     }
   });
 }

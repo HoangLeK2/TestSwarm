@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractPreviewSteps } from './parse-scenario-body.ts';
+import {
+  countPreviewSteps,
+  extractPreviewSteps
+} from './parse-scenario-body.ts';
 
 test('extractPreviewSteps keeps flat fields when config is empty (post-save API shape)', () => {
   const steps = extractPreviewSteps({
@@ -49,4 +52,39 @@ test('extractPreviewSteps unwraps non-empty type+config DSL steps', () => {
   assert.equal((steps[0] as { by?: string }).by, 'text');
   assert.equal((steps[0] as { value?: string }).value, 'OK');
   assert.equal((steps[0] as { timeout?: number }).timeout, 5);
+});
+
+test('countPreviewSteps includes nested branch, loop, and branch-list steps', () => {
+  const steps = extractPreviewSteps({
+    steps: [
+      {
+        type: 'if_variable',
+        name: 'READY',
+        then: [
+          {
+            type: 'loop',
+            count: 2,
+            steps: [
+              { type: 'tap_selector', by: 'text', value: 'OK' },
+              {
+                type: 'random_branch',
+                branches: [
+                  {
+                    id: 'a',
+                    steps: [{ type: 'wait', seconds: 1 }]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        else: [{ type: 'wait', seconds: 0.1 }]
+      }
+    ]
+  });
+
+  assert.deepEqual(countPreviewSteps(steps), {
+    topLevel: 1,
+    total: 6
+  });
 });

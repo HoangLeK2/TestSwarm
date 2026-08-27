@@ -37,6 +37,9 @@ test('target form materializes first facebook group into runtime-compatible vari
   assert.equal(result.TARGET_NAME, 'OpenClaw VN');
   assert.equal(result.GROUP_NAME, 'OpenClaw VN');
   assert.equal(result.TARGET_GROUP_NAME, 'OpenClaw VN');
+  assert.equal(result.GROUP_COUNT, 1);
+  assert.deepEqual(result.GROUP_SEARCHES, ['OpenClaw VN']);
+  assert.deepEqual(result.GROUP_ROW_TEXTS, ['OpenClaw VN']);
   assert.deepEqual(result.GROUP_TARGET_IDS, ['group-1']);
   assert.deepEqual(result.GROUP_TARGETS, ['OpenClaw VN']);
   assert.equal(result.TARGET_SELECTOR_BY, 'descriptionStartsWith');
@@ -84,6 +87,9 @@ test('target form keeps all selected targets grouped by platform type', () => {
   ]);
   assert.deepEqual(result.PAGE_TARGETS, ['Page One']);
   assert.deepEqual(result.PROFILE_TARGET_IDS, ['profile-1']);
+  assert.equal(result.GROUP_COUNT, 1);
+  assert.deepEqual(result.GROUP_SEARCHES, ['Group One']);
+  assert.deepEqual(result.GROUP_ROW_TEXTS, ['Group One']);
 });
 
 test('target form read normalizes invalid metadata without losing valid selections', () => {
@@ -113,6 +119,9 @@ test('target form exposes controlled keys so generic form can hide generated run
   assert.equal(isDeviceTargetFormControlledKey(DEVICE_TARGET_FORM_KEY), true);
   assert.equal(isDeviceTargetFormControlledKey('TARGET_ENTITY_ID'), true);
   assert.equal(isDeviceTargetFormControlledKey('GROUP_TARGETS'), true);
+  assert.equal(isDeviceTargetFormControlledKey('GROUP_SEARCHES'), true);
+  assert.equal(isDeviceTargetFormControlledKey('GROUP_ROW_TEXTS'), true);
+  assert.equal(isDeviceTargetFormControlledKey('GROUP_COUNT'), true);
   assert.equal(isDeviceTargetFormControlledKey('PAGE_TARGETS'), true);
   assert.equal(isDeviceTargetFormControlledKey('custom_note'), false);
   assert.equal(isDeviceTargetFormControlledKey('PAGE_KEYWORDS'), false);
@@ -124,7 +133,10 @@ test('target form removal keeps custom variables and strips generated target fie
     PAGE_KEYWORDS: ['hotel'],
     [DEVICE_TARGET_FORM_KEY]: { platform: 'facebook', selected: {} },
     TARGET_ENTITY_ID: 'target-1',
-    GROUP_TARGETS: ['Group One']
+    GROUP_TARGETS: ['Group One'],
+    GROUP_SEARCHES: ['Group One'],
+    GROUP_ROW_TEXTS: ['Group One'],
+    GROUP_COUNT: 1
   });
 
   assert.deepEqual(result, {

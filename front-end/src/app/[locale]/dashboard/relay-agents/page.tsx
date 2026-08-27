@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CheckSquare,
@@ -8,10 +8,12 @@ import {
   Copy,
   KeyRound,
   Loader2,
+  Plug,
   Plus,
   RefreshCw,
   Server,
   Trash2,
+  Unplug,
   Wifi
 } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
@@ -70,6 +72,10 @@ import {
   type RelayAgentTokenOut
 } from '@/features/devices/services/manage-api';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+
+// Temporarily hidden: device-level connect/disconnect is not working end to end
+// yet. Keep the wiring in place so the UI can be re-enabled after verification.
+const SHOW_RELAY_DEVICE_CONNECTION_ACTIONS = false;
 
 function RelayTokenTableSkeleton() {
   return (
@@ -467,6 +473,11 @@ function RelayAgentCard({
   const perms = useResourcePermissions('relay-agents');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [deviceAction, setDeviceAction] = useState<{
+    serial: string;
+    action: 'connect' | 'disconnect';
+  } | null>(null);
+  const checkboxBaseId = useId();
 
   const { data: activeJob } = useQuery<RelayBatchJobOut>({
     queryKey: ['relay-agent-job', agent.relay_id, activeJobId],
@@ -516,6 +527,42 @@ function RelayAgentCard({
     onError: (err) => {
       console.error('[relay-agents] claim-connect job failed', err);
     }
+  });
+
+  const { mutate: connectDevice } = useMutation({
+    mutationFn: (payload: { serial: string; deviceId?: string }) =>
+      relayAgentsApi.connectDevice(agent.relay_id, payload.serial, {
+        deviceId: payload.deviceId
+      }),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(t('connectDeviceSuccess'));
+      else toast.error(result.error || t('connectDeviceFailed'));
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['relay-agents'] });
+    },
+    onError: (err) => {
+      console.error('[relay-agents] connect device failed', err);
+      toast.error(t('connectDeviceFailed'));
+    },
+    onSettled: () => setDeviceAction(null)
+  });
+
+  const { mutate: disconnectDevice } = useMutation({
+    mutationFn: (payload: { serial: string; deviceId?: string }) =>
+      relayAgentsApi.disconnectDevice(agent.relay_id, payload.serial, {
+        deviceId: payload.deviceId
+      }),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(t('disconnectDeviceSuccess'));
+      else toast.error(result.error || t('disconnectDeviceFailed'));
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['relay-agents'] });
+    },
+    onError: (err) => {
+      console.error('[relay-agents] disconnect device failed', err);
+      toast.error(t('disconnectDeviceFailed'));
+    },
+    onSettled: () => setDeviceAction(null)
   });
 
   const busy = isProvisioning || isClaiming;
@@ -647,33 +694,83 @@ function RelayAgentCard({
           </div>
         ) : (
           realSerials.map((s) => {
-            const registered = registeredSerials.has(s);
+            const connection = agent.device_connections?.[s];
+            const registered =
+              connection?.registered === true || registeredSerials.has(s);
+            const deviceId = connection?.device_id || undefined;
+            const appConnected = connection?.device_agent_connected === true;
+            const rowBusy = deviceAction?.serial === s;
+            const actionDisabled = busy || !online || !!deviceAction;
+            const checkboxId = `${checkboxBaseId}-${s.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+            const runDeviceAction = () => {
+              const action = appConnected ? 'disconnect' : 'connect';
+              setDeviceAction({ serial: s, action });
+              if (action === 'connect') {
+                connectDevice({ serial: s, deviceId });
+              } else {
+                disconnectDevice({ serial: s, deviceId });
+              }
+            };
             return (
-              <label
+              <div
                 key={s}
-                className='flex min-h-10 cursor-pointer items-center gap-2 px-2 py-1.5'
+                className='flex min-h-10 items-center gap-2 px-2 py-1.5'
               >
-                <input
-                  type='checkbox'
-                  className='size-3.5 shrink-0'
-                  checked={selected.has(s)}
-                  onChange={() => toggleSerial(s)}
-                />
-                <span className='min-w-0 flex-1'>
-                  <span className='block truncate text-xs'>
-                    {agent.device_names?.[s] || s}
+                <label
+                  htmlFor={checkboxId}
+                  className='flex min-w-0 flex-1 cursor-pointer items-center gap-2'
+                >
+                  <input
+                    id={checkboxId}
+                    type='checkbox'
+                    className='size-3.5 shrink-0'
+                    checked={selected.has(s)}
+                    onChange={() => toggleSerial(s)}
+                  />
+                  <span className='min-w-0 flex-1'>
+                    <span className='block truncate text-xs'>
+                      {agent.device_names?.[s] || s}
+                    </span>
+                    <span className='block truncate font-mono text-[10px] text-muted-foreground'>
+                      {s}
+                    </span>
                   </span>
-                  <span className='block truncate font-mono text-[10px] text-muted-foreground'>
-                    {s}
-                  </span>
-                </span>
+                </label>
                 <Badge
                   variant={registered ? 'secondary' : 'outline'}
                   className='shrink-0 text-[10px]'
                 >
                   {registered ? t('registered') : t('ready')}
                 </Badge>
-              </label>
+                {SHOW_RELAY_DEVICE_CONNECTION_ACTIONS &&
+                  perms.canExecute &&
+                  registered && (
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={appConnected ? 'outline' : 'secondary'}
+                      className='h-7 shrink-0 px-2 text-xs'
+                      disabled={actionDisabled}
+                      title={
+                        appConnected
+                          ? t('disconnectDevice')
+                          : t('connectDevice')
+                      }
+                      onClick={runDeviceAction}
+                    >
+                      {rowBusy ? (
+                        <Loader2 className='mr-1 size-3 animate-spin' />
+                      ) : appConnected ? (
+                        <Unplug className='mr-1 size-3' />
+                      ) : (
+                        <Plug className='mr-1 size-3' />
+                      )}
+                      {appConnected
+                        ? t('disconnectDevice')
+                        : t('connectDevice')}
+                    </Button>
+                  )}
+              </div>
             );
           })
         )}

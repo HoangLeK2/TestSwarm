@@ -34,6 +34,7 @@ import type { ExternalEntityCatalogItem } from '@/features/external-entities/ser
 type DeviceVarsFacebookTargetFormProps = {
   vars: Record<string, unknown>;
   disabled?: boolean;
+  size?: 'default' | 'large';
   onChange: (vars: Record<string, unknown>) => void;
 };
 
@@ -59,6 +60,7 @@ function locatorLabel(target: DeviceVarsTargetSnapshot, fallback: string) {
 export function DeviceVarsFacebookTargetForm({
   vars,
   disabled = false,
+  size = 'default',
   onChange
 }: DeviceVarsFacebookTargetFormProps) {
   const t = useTranslations('components.deviceVarsJson.targetForm');
@@ -123,6 +125,7 @@ export function DeviceVarsFacebookTargetForm({
     (total, type) => total + formState.selected[type].length,
     0
   );
+  const listHeightClass = size === 'large' ? 'h-[360px] xl:h-[420px]' : 'h-80';
 
   function updateSelection(
     type: DeviceVarsTargetType,
@@ -173,36 +176,42 @@ export function DeviceVarsFacebookTargetForm({
         </TabsList>
       </Tabs>
 
-      <div className='relative'>
-        <Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder={t('searchPlaceholder')}
-          aria-label={t('searchPlaceholder')}
-          className='h-8 pl-9 text-sm'
-          disabled={disabled}
-        />
-      </div>
-
-      <div className='flex min-w-0 flex-wrap items-center gap-1.5 overflow-hidden'>
-        <Badge variant='secondary' className='max-w-full rounded'>
-          {t('selectedTotal', { count: allSelectedCount })}
-        </Badge>
-        {TARGET_TYPES.map((type) => (
-          <Badge
-            key={type}
-            variant='outline'
-            className='min-w-0 rounded font-normal'
-          >
-            <span className='truncate'>
-              {t(`types.${type}`)} {formState.selected[type].length}
-            </span>
+      <div className='grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center'>
+        <div className='relative min-w-0'>
+          <Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t('searchPlaceholder')}
+            aria-label={t('searchPlaceholder')}
+            className='h-9 pl-9 text-sm'
+            disabled={disabled}
+          />
+        </div>
+        <div className='flex min-w-0 flex-wrap items-center gap-1.5 overflow-hidden'>
+          <Badge variant='secondary' className='max-w-full rounded'>
+            {t('selectedTotal', { count: allSelectedCount })}
           </Badge>
-        ))}
+          {TARGET_TYPES.map((type) => (
+            <Badge
+              key={type}
+              variant='outline'
+              className='min-w-0 rounded font-normal'
+            >
+              <span className='truncate'>
+                {t(`types.${type}`)} {formState.selected[type].length}
+              </span>
+            </Badge>
+          ))}
+        </div>
       </div>
 
-      <ScrollArea className='h-48 min-w-0 max-w-full overflow-hidden rounded-md border bg-background md:h-56'>
+      <ScrollArea
+        className={cn(
+          'min-w-0 max-w-full overflow-hidden rounded-md border bg-background',
+          listHeightClass
+        )}
+      >
         <div className='min-w-0 max-w-full' aria-busy={catalogQuery.isLoading}>
           {catalogQuery.isLoading ? (
             Array.from({ length: 5 }).map((_, index) => (
@@ -222,7 +231,12 @@ export function DeviceVarsFacebookTargetForm({
               {t('loadError')}
             </div>
           ) : rows.length === 0 ? (
-            <div className='grid h-48 place-items-center px-4 text-center md:h-56'>
+            <div
+              className={cn(
+                'grid place-items-center px-4 text-center',
+                listHeightClass
+              )}
+            >
               <div>
                 <Inbox className='mx-auto mb-2 size-7 text-muted-foreground' />
                 <p className='text-sm font-medium'>{t('emptyTitle')}</p>
@@ -238,7 +252,7 @@ export function DeviceVarsFacebookTargetForm({
                 <label
                   key={`${target.entity_type}:${target.id}`}
                   className={cn(
-                    'flex min-h-14 min-w-0 cursor-pointer items-center gap-3 border-b px-3 py-2.5 last:border-b-0 hover:bg-muted/50',
+                    'flex min-h-14 min-w-0 cursor-pointer items-center gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0 focus-within:bg-muted/50 hover:bg-muted/50',
                     selected && 'bg-primary/[0.04]',
                     disabled && 'cursor-not-allowed opacity-70'
                   )}
@@ -246,6 +260,7 @@ export function DeviceVarsFacebookTargetForm({
                   <Checkbox
                     checked={selected}
                     disabled={disabled}
+                    className='shrink-0'
                     onCheckedChange={(checked) =>
                       toggleTarget(target, checked === true)
                     }

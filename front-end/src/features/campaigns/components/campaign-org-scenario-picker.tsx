@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Plus } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Plus, Search, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -54,6 +54,7 @@ export function CampaignOrgScenarioPicker({
 }) {
   const t = useTranslations(`campaignsFeature.${messagesNs}`);
   const { data: orgScenarios } = useOrgScenarios();
+  const [searchQuery, setSearchQuery] = useState('');
   const effectiveRefs = useMemo(
     () =>
       normalizeCampaignScenarioRefs(
@@ -81,6 +82,28 @@ export function CampaignOrgScenarioPicker({
         }),
     [orgScenarios, scenarioFilter]
   );
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const visibleScenarios = useMemo(() => {
+    if (!normalizedSearchQuery) return selectableScenarios;
+
+    return selectableScenarios.filter((scenario) => {
+      const scenarioType = isRecoveryScenario(scenario)
+        ? t('recoveryScenarioBadgeShort')
+        : t('runScenarioBadgeShort');
+      const haystack = [
+        scenario.name,
+        scenario.description,
+        scenario.kind,
+        String(scenario.scenario_version),
+        scenarioType,
+        ...(scenario.tags ?? [])
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(normalizedSearchQuery);
+    });
+  }, [normalizedSearchQuery, selectableScenarios, t]);
 
   const emitSelection = (refs: CampaignScenarioRefIn[]) => {
     const normalized = normalizeCampaignScenarioRefs(refs);
@@ -122,7 +145,31 @@ export function CampaignOrgScenarioPicker({
 
   return (
     <div className='space-y-2'>
-      <div className='flex min-w-0 items-center justify-end'>
+      <div className='flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='relative min-w-0 flex-1'>
+          <Search className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
+          <Input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={t('scenarioSearchPlaceholder')}
+            aria-label={t('scenarioSearchAria')}
+            className='h-8 pl-8 pr-8 text-xs'
+            disabled={disabled}
+          />
+          {searchQuery ? (
+            <Button
+              type='button'
+              variant='ghost'
+              size='icon'
+              className='absolute right-1 top-1/2 size-6 -translate-y-1/2 text-muted-foreground'
+              onClick={() => setSearchQuery('')}
+              aria-label={t('scenarioSearchClear')}
+              disabled={disabled}
+            >
+              <X className='size-3.5' />
+            </Button>
+          ) : null}
+        </div>
         <CreateOrgScenarioDialog
           onCreated={onScenarioCreated}
           trigger={
@@ -152,7 +199,12 @@ export function CampaignOrgScenarioPicker({
               : t('libraryScenariosEmpty')}
           </p>
         )}
-        {selectableScenarios.map((scenario) => {
+        {selectableScenarios.length > 0 && !visibleScenarios.length ? (
+          <p className='text-xs text-muted-foreground'>
+            {t('scenarioSearchNoResults')}
+          </p>
+        ) : null}
+        {visibleScenarios.map((scenario) => {
           const selectable = canSelectOrgScenarioForCampaign(scenario);
           const recovery = isRecoveryScenario(scenario);
           const selectedRef = selectedRefById.get(scenario.id);

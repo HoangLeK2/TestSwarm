@@ -68,7 +68,7 @@ export function useDeviceFarm(options: UseDeviceFarmOptions = {}) {
       current === 'success' ? current : 'loading'
     );
     try {
-      const live = await fetchLiveDevices(undefined);
+      const live = await fetchLiveDevices({ orgId: currentOrgId });
       setDevices((previous) => mergeLiveDeviceSnapshot(previous, live));
       setDevicesReady(true);
       setRequestStatus('success');

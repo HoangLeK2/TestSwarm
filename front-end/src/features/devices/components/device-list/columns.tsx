@@ -4,7 +4,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
 import Link from 'next/link';
-import { QrCode, Trash2, Wifi, WifiOff } from 'lucide-react';
+import { MoreHorizontal } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '../../../../components/ui/badge';
@@ -40,6 +40,18 @@ import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { normalizeNavUserRole } from '@/lib/nav-access';
 import { useAuthContext } from '@/features/auth/providers/auth-provider';
 import { ROUTES } from '@/config/routes';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
+
+const DEVICE_COMMAND_LABEL_KEY = {
+  bootstrap: 'setup',
+  restart_u2: 'restartControl'
+} as const;
 
 function DeviceActionsCell({
   device,
@@ -94,44 +106,73 @@ function DeviceActionsCell({
   const fsm = deviceFsmStateOf(device);
 
   return (
-    <div className='flex items-center justify-end gap-1'>
+    <div className='flex min-w-max items-center justify-end gap-1.5'>
       {canReviveDead && fsm === 'dead' && (
         <ReviveDeviceButton device={device} />
       )}
       {perms.canExecute && hasRelay && fsm !== 'dead' && (
-        <>
-          <DeviceCmdButton device={device} cmd='bootstrap' />
-          <DeviceCmdButton device={device} cmd='restart_u2' />
-          <DeviceCmdButton device={device} cmd='restart_scrcpy' />
-        </>
+        <span className='sr-only'>{t('commandsAvailable')}</span>
       )}
       {perms.canExecute ? (
         <Button
           size='sm'
           variant='outline'
           onClick={() => setConnectDevice(device)}
+          className='h-8'
         >
-          <QrCode size={14} className='mr-1.5' />
           {t('connect')}
         </Button>
       ) : null}
-      {perms.canDelete ? (
-        <Tooltip delayDuration={400}>
-          <TooltipTrigger asChild>
+      {(perms.canDelete ||
+        (perms.canExecute && hasRelay && fsm !== 'dead')) && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
-              size='icon'
               variant='ghost'
-              className='size-7 text-destructive hover:text-destructive'
-              disabled={deletingId === device.id}
-              onClick={handleDelete}
-              aria-label={t('deleteDevice')}
+              size='icon'
+              className='size-8'
+              aria-label={t('actions')}
             >
-              <Trash2 size={14} />
+              <MoreHorizontal size={16} />
             </Button>
-          </TooltipTrigger>
-          <TooltipContent side='bottom'>{t('deleteDevice')}</TooltipContent>
-        </Tooltip>
-      ) : null}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='w-56'>
+            {perms.canExecute && hasRelay && fsm !== 'dead' ? (
+              <>
+                {(['bootstrap', 'restart_u2'] as const).map((cmd) => (
+                  <DeviceCmdButton
+                    key={cmd}
+                    device={device}
+                    cmd={cmd}
+                    trigger={
+                      <DropdownMenuItem
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        {t(`commands.${DEVICE_COMMAND_LABEL_KEY[cmd]}.label`)}
+                      </DropdownMenuItem>
+                    }
+                  />
+                ))}
+              </>
+            ) : null}
+            {perms.canDelete &&
+            perms.canExecute &&
+            hasRelay &&
+            fsm !== 'dead' ? (
+              <DropdownMenuSeparator />
+            ) : null}
+            {perms.canDelete ? (
+              <DropdownMenuItem
+                variant='destructive'
+                disabled={deletingId === device.id}
+                onSelect={() => void handleDelete()}
+              >
+                {deletingId === device.id ? t('deleting') : t('deleteDevice')}
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }
@@ -211,18 +252,11 @@ export function getDeviceColumns({
             >
               {t(`fsm.${fsm}` as `fsm.${DeviceFsmStateKey}`)}
             </Badge>
-            <span className='inline-flex items-center gap-1 text-[10px] text-muted-foreground'>
-              {transportOnline ? (
-                <>
-                  <Wifi size={10} className='text-green-600' />
-                  {t('transportOnline')}
-                </>
-              ) : (
-                <>
-                  <WifiOff size={10} />
-                  {t('transportOffline')}
-                </>
-              )}
+            <span className='inline-flex items-center gap-1.5 text-[10px] text-muted-foreground'>
+              <span
+                className={`size-1.5 rounded-full ${transportOnline ? 'bg-emerald-500' : 'bg-muted-foreground/50'}`}
+              />
+              {transportOnline ? t('transportOnline') : t('transportOffline')}
             </span>
           </div>
         );

@@ -521,6 +521,10 @@ export function ScenarioDialog({
   const tScenarioValidation = useTranslations(
     'campaignsFeature.scenarioValidation'
   );
+  const variablePreviewValues = useMemo(
+    () => flattenVarDefs(variables),
+    [variables]
+  );
   const confirm = useConfirm();
   const { data: accountGroups = [] } = useAccountGroups();
   const [deviceModel, setDeviceModel] = useState('');
@@ -2335,6 +2339,7 @@ export function ScenarioDialog({
                     onChildStepEditorOpenChange={setChildStepEditorOpen}
                     campaignScenarios={runScenarioCampaignOptions}
                     availableVariables={availableScenarioVariables}
+                    variablePreviewValues={variablePreviewValues}
                     onRunStep={handleInlineRunStep}
                     stepRunStates={stepRunStates}
                     onStopInlineRun={hardStopPreview}

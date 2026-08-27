@@ -81,7 +81,24 @@ function buildDeviceFarmWsUrl(
   if (authToken && typeof window !== 'undefined') {
     url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(authToken)}`;
   }
+  const orgId = getCurrentOrganizationId();
+  if (orgId && typeof window !== 'undefined') {
+    url += `${url.includes('?') ? '&' : '?'}org_id=${encodeURIComponent(orgId)}`;
+  }
   return url;
+}
+
+function getCurrentOrganizationId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return (
+      window.localStorage
+        .getItem('device-farm:current-organization-id')
+        ?.trim() || null
+    );
+  } catch {
+    return null;
+  }
 }
 
 const listeners = new Set<(msg: WsMessage) => void>();
@@ -111,6 +128,7 @@ const waitForKeyBySerial = new Set<string>();
 // decoder into a black state. Skip replay when stale � server-side forced IDR
 // fills the gap within ~100ms.
 let sharedSocket: WebSocket | null = null;
+let sharedSocketOrgId: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let clientHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -672,11 +690,19 @@ export function ensureWatchSerial(serial: string) {
 
 function connectShared() {
   if (!isCurrentTabNetworkActive()) return;
+  const orgId = getCurrentOrganizationId();
   if (
     sharedSocket?.readyState === WebSocket.CONNECTING ||
     sharedSocket?.readyState === WebSocket.OPEN
   ) {
-    return;
+    if (sharedSocketOrgId === orgId) return;
+    try {
+      sharedSocket.close();
+    } catch {
+      // replace below
+    }
+    sharedSocket = null;
+    sharedSocketOrgId = null;
   }
 
   if (idleCloseTimer !== undefined) {
@@ -687,6 +713,7 @@ function connectShared() {
   const url = buildDeviceFarmWsUrl();
   const ws = new WebSocket(url);
   sharedSocket = ws;
+  sharedSocketOrgId = orgId;
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
@@ -719,6 +746,7 @@ function connectShared() {
     if (!isCurrentDeviceFarmWsEvent(sharedSocket, ws)) return;
     stopClientHeartbeat();
     sharedSocket = null;
+    sharedSocketOrgId = null;
     watchedSerialsOnSocket.clear();
     lastConfigBySerial.clear();
     lastKeyBySerial.clear(); // stale after disconnect � server will re-send bootstrap on reconnect
@@ -986,9 +1014,12 @@ export function subscribeDeviceFarm(
   onMessage: (msg: WsMessage) => void
 ): () => void {
   listeners.add(onMessage);
-  if (listeners.size === 1) {
-    connectShared();
-  } else if (sharedSocket?.readyState === WebSocket.OPEN) {
+  connectShared();
+  if (
+    listeners.size > 1 &&
+    sharedSocket?.readyState === WebSocket.OPEN &&
+    sharedSocketOrgId === getCurrentOrganizationId()
+  ) {
     queueMicrotask(() => onMessage({ type: 'ws_status', connected: true }));
   }
   return () => {

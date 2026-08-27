@@ -55,3 +55,19 @@ export function pickDefaultOrganization(
   );
   return shared[0] ?? organizations[0];
 }
+
+export function reconcileCurrentOrganization(
+  organizations: ProtoOrganization[],
+  current: ProtoOrganization | null,
+  storedId: string | null,
+  options?: {
+    preferredOrgId?: string | null;
+    userEmail?: string | null;
+  }
+): ProtoOrganization {
+  if (current) {
+    const refreshed = organizations.find((org) => org.id === current.id);
+    if (refreshed) return refreshed;
+  }
+  return pickDefaultOrganization(organizations, storedId, options);
+}

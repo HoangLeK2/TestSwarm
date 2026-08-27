@@ -28,17 +28,12 @@ function status(
   };
 }
 
-test('a live status frame seeds the list before the first snapshot lands', () => {
-  // This is what makes the device count reach its final value while the page is
-  // still on its loading branch: the socket can deliver a device the HTTP
-  // snapshot has not returned yet. Grid measurement must not be keyed off that
-  // count — see getDeviceGridRenderMode.
+test('dashboard mode does not seed devices from websocket status before snapshot lands', () => {
   const result = mergeDeviceFarmWsStatus([], status('10AE7S00HD002JK'), {
     liveSnapshotAuthoritative: true
   });
 
-  assert.equal(result.length, 1);
-  assert.equal(result[0].serial, '10AE7S00HD002JK');
+  assert.deepEqual(result, []);
 });
 
 test('dashboard mode ignores stale offline websocket status', () => {
@@ -71,20 +66,20 @@ test('default mode still applies websocket offline status', () => {
   assert.equal(result[0]?.agent_connected, false);
 });
 
-test('dashboard mode still accepts live websocket status', () => {
+test('dashboard mode updates live websocket status for devices in snapshot', () => {
   const result = mergeDeviceFarmWsStatus(
-    [],
+    [device('10AE7S00HD002JK')],
     status('10AE7S00HD002JK', {
       state: 'READY',
       agent_connected: true,
-      model: 'V2352A'
+      battery: 88
     }),
     { liveSnapshotAuthoritative: true }
   );
 
   assert.equal(result.length, 1);
   assert.equal(result[0]?.serial, '10AE7S00HD002JK');
-  assert.equal(result[0]?.model, 'V2352A');
+  assert.equal(result[0]?.battery, 88);
 });
 
 test('websocket status without dimensions does not invent fallback screen size', () => {

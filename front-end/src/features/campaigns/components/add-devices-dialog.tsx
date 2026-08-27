@@ -33,11 +33,110 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-import { Smartphone, Plus, CheckCheck, X, Layers } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import {
+  Smartphone,
+  Plus,
+  CheckCheck,
+  X,
+  Layers,
+  Hash,
+  Cpu,
+  Wifi
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
+
+type DeviceIdentity = {
+  id: string;
+  serial: string;
+  name?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  android_version?: string | null;
+  state?: string | null;
+  adb_serial?: string | null;
+};
 
 function deviceLabel(d: { serial: string; name?: string | null }) {
   return d.name?.trim() || d.serial || '—';
+}
+
+function shortId(id: string) {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+function modelLabel(d: DeviceIdentity) {
+  const parts = [d.brand, d.model].map((part) => part?.trim()).filter(Boolean);
+  return Array.from(new Set(parts)).join(' ');
+}
+
+function stateTone(state?: string | null) {
+  const normalized = state?.trim().toLowerCase();
+  if (!normalized) return 'outline';
+  if (normalized === 'online' || normalized === 'paired') return 'default';
+  if (normalized === 'busy' || normalized === 'running') return 'secondary';
+  return 'outline';
+}
+
+function DeviceIdentityBlock({
+  device,
+  compact = false
+}: {
+  device: DeviceIdentity;
+  compact?: boolean;
+}) {
+  const label = deviceLabel(device);
+  const model = modelLabel(device);
+  const showSerial = device.serial && device.serial !== label;
+
+  return (
+    <div className='min-w-0 flex-1'>
+      <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+        <span className='min-w-0 truncate text-sm font-medium text-foreground'>
+          {label}
+        </span>
+        {device.state && (
+          <Badge
+            variant={stateTone(device.state)}
+            className='h-5 rounded-sm px-1.5 text-[10px] uppercase tracking-normal'
+          >
+            {device.state}
+          </Badge>
+        )}
+      </div>
+      <div className='mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground'>
+        {showSerial && (
+          <span className='inline-flex min-w-0 items-center gap-1 font-mono'>
+            <Hash className='size-3 shrink-0' />
+            <span className='truncate'>{device.serial}</span>
+          </span>
+        )}
+        {model && (
+          <span className='inline-flex min-w-0 items-center gap-1'>
+            <Smartphone className='size-3 shrink-0' />
+            <span className='truncate'>{model}</span>
+          </span>
+        )}
+        {!compact && device.android_version && (
+          <span className='inline-flex items-center gap-1'>
+            <Cpu className='size-3 shrink-0' />
+            Android {device.android_version}
+          </span>
+        )}
+        {!compact &&
+          device.adb_serial &&
+          device.adb_serial !== device.serial && (
+            <span className='inline-flex min-w-0 items-center gap-1 font-mono'>
+              <Wifi className='size-3 shrink-0' />
+              <span className='truncate'>{device.adb_serial}</span>
+            </span>
+          )}
+        <span className='font-mono text-muted-foreground/80'>
+          ID {shortId(device.id)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export function AddDevicesToCampaignDialog({
@@ -81,6 +180,7 @@ export function AddDevicesToCampaignDialog({
     useRemoveDeviceFromCampaign();
 
   const addedIds = new Set(campaignDevices.map((d) => d.id));
+  const allDevicesById = new Map(allDevices.map((d) => [d.id, d]));
   const available: DeviceOut[] = allDevices.filter((d) => !addedIds.has(d.id));
 
   const toggleOne = useCallback((id: string) => {
@@ -169,51 +269,50 @@ export function AddDevicesToCampaignDialog({
           )}
         </DialogTrigger>
       )}
-      <DialogContent className='z-[1000] max-w-lg'>
+      <DialogContent className='z-[1000] max-h-[calc(100vh-2rem)] max-w-2xl overflow-hidden p-0'>
         <DialogHeader>
-          <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription>{campaignName}</DialogDescription>
+          <div className='px-6 pt-6'>
+            <DialogTitle>{t('title')}</DialogTitle>
+            <DialogDescription className='mt-1'>
+              {campaignName}
+            </DialogDescription>
+          </div>
         </DialogHeader>
-        <div className='space-y-4 pt-2'>
+        <div className='space-y-4 overflow-y-auto px-6 pb-6'>
           {/* Đã có trong campaign — biết rõ kết nối với thiết bị nào */}
           {campaignDevices.length > 0 && (
-            <div className='rounded-lg border border-border/60 bg-muted/20 p-3'>
-              <p className='mb-2 text-xs font-medium text-foreground'>
+            <div className='rounded-md border bg-muted/20'>
+              <p className='px-3 pb-2 pt-3 text-xs font-medium text-foreground'>
                 {t('existingDevices', { count: campaignDevices.length })}
               </p>
-              <ul className='max-h-28 space-y-1 overflow-y-auto text-xs text-muted-foreground'>
-                {campaignDevices.map((d) => (
-                  <li
-                    key={d.id}
-                    className='flex items-center gap-2 rounded py-0.5 font-mono'
-                  >
-                    <Smartphone className='size-3 shrink-0' />
-                    <span className='min-w-0 flex-1 truncate'>
-                      {deviceLabel(d)}
-                      {d.name?.trim() &&
-                        d.serial &&
-                        d.serial !== d.name.trim() && (
-                          <span className='text-muted-foreground/70'>
-                            {' '}
-                            · {d.serial}
-                          </span>
-                        )}
-                    </span>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='ghost'
-                      className='size-6 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive'
-                      disabled={removing}
-                      onClick={() =>
-                        removeDevice({ campaignId, deviceId: d.id })
-                      }
-                      title={t('removeTitle')}
+              <ul className='max-h-48 divide-y overflow-y-auto'>
+                {campaignDevices.map((d) => {
+                  const device = { ...allDevicesById.get(d.id), ...d };
+                  return (
+                    <li
+                      key={d.id}
+                      className='flex items-center gap-3 px-3 py-2.5'
                     >
-                      <X size={12} />
-                    </Button>
-                  </li>
-                ))}
+                      <DeviceIdentityBlock device={device} compact />
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='ghost'
+                        className='size-6 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive'
+                        disabled={removing}
+                        onClick={() =>
+                          removeDevice({ campaignId, deviceId: d.id })
+                        }
+                        title={t('removeTitle')}
+                        aria-label={t('removeDeviceAria', {
+                          name: deviceLabel(d)
+                        })}
+                      >
+                        <X size={12} />
+                      </Button>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -349,11 +448,11 @@ export function AddDevicesToCampaignDialog({
                     </>
                   )}
                 </div>
-                <ul className='max-h-56 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 p-2'>
+                <ul className='max-h-72 divide-y overflow-y-auto rounded-md border bg-background'>
                   {available.map((d) => (
                     <li
                       key={d.id}
-                      className='flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50'
+                      className='flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50'
                     >
                       <Checkbox
                         checked={selectedIds.has(d.id)}
@@ -362,12 +461,7 @@ export function AddDevicesToCampaignDialog({
                           name: deviceLabel(d)
                         })}
                       />
-                      <span
-                        className='min-w-0 flex-1 truncate text-sm'
-                        title={d.serial}
-                      >
-                        {deviceLabel(d)}
-                      </span>
+                      <DeviceIdentityBlock device={d} />
                       <Button
                         size='sm'
                         variant='ghost'
@@ -375,6 +469,9 @@ export function AddDevicesToCampaignDialog({
                         disabled={adding}
                         onClick={() => addOne(d.id)}
                         title={t('addOneTitle')}
+                        aria-label={t('addOneAria', {
+                          name: deviceLabel(d)
+                        })}
                       >
                         <Plus size={14} />
                       </Button>

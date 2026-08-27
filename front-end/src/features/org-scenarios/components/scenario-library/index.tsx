@@ -10,6 +10,13 @@ import { ROUTES } from '@/config/routes';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
@@ -36,15 +43,27 @@ import { ImportOrgScenarioDialog } from '../import-scenario-dialog';
 import { ScenarioDetailSheet } from '../scenario-detail-sheet';
 import { getOrgScenarioColumns } from './columns';
 import { isOrgScenarioVisibleInLibrary } from '../../lib/campaign-scenario-eligibility';
+import {
+  filterScenarioLibraryItems,
+  isRecoveryScenario,
+  type ScenarioRoleFilter
+} from '../../lib/filter-scenario-library-items';
 
 type LibraryTab = 'org' | 'system';
-type ScenarioRoleFilter = 'all' | 'regular' | 'recovery';
-
-function isRecoveryScenario(item: ScenarioLibraryItem): boolean {
-  return (
-    item.is_recovery_scenario === true || (item.recovery_usage_count ?? 0) > 0
-  );
-}
+const TEMPLATE_CATEGORIES = [
+  'all',
+  'general',
+  'facebook',
+  'tiktok',
+  'utility'
+] as const;
+const TEMPLATE_CATEGORY_LABEL_KEYS = {
+  all: 'templateCategory_all',
+  general: 'templateCategory_general',
+  facebook: 'templateCategory_facebook',
+  tiktok: 'templateCategory_tiktok',
+  utility: 'templateCategory_utility'
+} as const;
 
 export function ScenarioLibrary() {
   const t = useTranslations('orgScenariosFeature.list');
@@ -57,6 +76,7 @@ export function ScenarioLibrary() {
   const [search, setSearch] = useState('');
   const [showHidden, setShowHidden] = useState(false);
   const [roleFilter, setRoleFilter] = useState<ScenarioRoleFilter>('all');
+  const [templateCategory, setTemplateCategory] = useState('all');
   const [activeTab, setActiveTab] = useState<LibraryTab>('org');
   const [selected, setSelected] = useState<ScenarioLibraryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -104,32 +124,53 @@ export function ScenarioLibrary() {
     return { org: visibleOrg, hidden: hiddenOrg, system, recovery, regular };
   }, [orgLibraryItems, templates]);
 
+  const templateCategoryCounts = useMemo(() => {
+    const categoryCounts: Record<string, number> = {
+      all: templates?.length ?? 0
+    };
+    for (const template of templates ?? []) {
+      categoryCounts[template.category] =
+        (categoryCounts[template.category] ?? 0) + 1;
+    }
+    return categoryCounts;
+  }, [templates]);
+
+  const templateCategories = useMemo(() => {
+    const known = TEMPLATE_CATEGORIES.filter(
+      (category) => category === 'all' || templateCategoryCounts[category]
+    );
+    const custom = Object.keys(templateCategoryCounts)
+      .filter(
+        (category) =>
+          category !== 'all' &&
+          !TEMPLATE_CATEGORIES.includes(
+            category as (typeof TEMPLATE_CATEGORIES)[number]
+          )
+      )
+      .sort();
+    return [...known, ...custom];
+  }, [templateCategoryCounts]);
+
   const filtered = useMemo(() => {
-    let items: ScenarioLibraryItem[] =
+    const items: ScenarioLibraryItem[] =
       activeTab === 'system'
         ? (templates ?? []).map(templateToLibraryItem)
         : orgLibraryItems;
-
-    if (activeTab === 'org' && !showHidden) {
-      items = items.filter((item) => item.status !== 'archived');
-    }
-
-    if (activeTab === 'org' && roleFilter !== 'all') {
-      items = items.filter((item) => {
-        const isRecovery = isRecoveryScenario(item);
-        return roleFilter === 'recovery' ? isRecovery : !isRecovery;
-      });
-    }
-
-    if (!search.trim()) return items;
-    const q = search.toLowerCase();
-    return items.filter(
-      (item) =>
-        item.name.toLowerCase().includes(q) ||
-        item.description?.toLowerCase().includes(q) ||
-        (item.tags ?? []).some((tag: string) => tag.toLowerCase().includes(q))
-    );
-  }, [orgLibraryItems, templates, search, activeTab, showHidden, roleFilter]);
+    return filterScenarioLibraryItems(items, {
+      search,
+      showHidden: activeTab === 'system' || showHidden,
+      roleFilter: activeTab === 'system' ? 'all' : roleFilter,
+      category: activeTab === 'system' ? templateCategory : 'all'
+    });
+  }, [
+    orgLibraryItems,
+    templates,
+    search,
+    activeTab,
+    showHidden,
+    roleFilter,
+    templateCategory
+  ]);
 
   // Deep-link: when returning from control-record page, reopen the scenario sheet.
   // URL: /dashboard/org-scenarios?scenario_id=...
@@ -233,6 +274,10 @@ export function ScenarioLibrary() {
     pageCount: 1
   });
 
+  useEffect(() => {
+    table.setPageIndex(0);
+  }, [activeTab, roleFilter, search, showHidden, table, templateCategory]);
+
   const searchPlaceholder =
     activeTab === 'system'
       ? t('searchTemplatesPlaceholder')
@@ -246,6 +291,7 @@ export function ScenarioLibrary() {
           setActiveTab(value as LibraryTab);
           setSearch('');
           setRoleFilter('all');
+          setTemplateCategory('all');
         }}
         className='space-y-0'
       >
@@ -281,8 +327,8 @@ export function ScenarioLibrary() {
               </div>
             </div>
 
-            <div className='flex w-full flex-col gap-3 sm:flex-row sm:items-center'>
-              <div className='relative mb-5 w-full min-w-0 flex-1'>
+            <div className='flex w-full flex-col gap-3 pb-3 sm:flex-row sm:items-center'>
+              <div className='relative w-full min-w-0 flex-1'>
                 <Search
                   size={16}
                   className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground'
@@ -314,7 +360,35 @@ export function ScenarioLibrary() {
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
-              ) : null}
+              ) : (
+                <Select
+                  value={templateCategory}
+                  onValueChange={setTemplateCategory}
+                >
+                  <SelectTrigger
+                    className='h-10 w-full shrink-0 sm:w-[220px]'
+                    aria-label={t('templateCategoryFilter')}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align='end'>
+                    {templateCategories.map((category) => (
+                      <SelectItem key={category} value={category}>
+                        {TEMPLATE_CATEGORIES.includes(
+                          category as (typeof TEMPLATE_CATEGORIES)[number]
+                        )
+                          ? t(
+                              TEMPLATE_CATEGORY_LABEL_KEYS[
+                                category as keyof typeof TEMPLATE_CATEGORY_LABEL_KEYS
+                              ]
+                            )
+                          : category}{' '}
+                        ({templateCategoryCounts[category] ?? 0})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               {activeTab === 'org' && counts.hidden > 0 ? (
                 <label
                   className={cn(

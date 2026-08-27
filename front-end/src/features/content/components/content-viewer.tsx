@@ -8,8 +8,6 @@ import { ROUTES } from '@/config/routes';
 import {
   Search,
   RefreshCw,
-  ChevronLeft,
-  ChevronRight,
   Database,
   TrendingUp,
   Smartphone,
@@ -19,8 +17,7 @@ import {
   Download,
   ChevronDown,
   X,
-  Filter,
-  Hash
+  Filter
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,6 +47,8 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
+import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
+import { Combobox } from '@/components/ui/combobox';
 
 // ── Stats bar ────────────────────────────────────────────────────────────────
 
@@ -255,10 +254,13 @@ function Filters({
     (a, b) => a.localeCompare(b, 'vi')
   );
 
-  const selectedCampaign =
-    campaignId && campaigns.length
-      ? campaigns.find((c) => c.id === campaignId)
-      : undefined;
+  const campaignOptions = [
+    { value: '_all', label: t('filterAllCampaigns') },
+    ...campaigns.map((campaign) => ({
+      value: campaign.id,
+      label: campaign.name
+    }))
+  ];
 
   return (
     <div className='space-y-3'>
@@ -331,37 +333,19 @@ function Filters({
           />
         </div>
         <div className='relative min-w-[240px] max-w-full flex-[0_0_280px]'>
-          <Hash className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
-          <Select
+          <Combobox
+            options={campaignOptions}
             value={campaignId || '_all'}
-            onValueChange={(v) => onCampaignIdChange(v === '_all' ? '' : v)}
+            onValueChange={(value) =>
+              onCampaignIdChange(value === '_all' ? '' : value)
+            }
             disabled={loadingCampaigns}
-          >
-            <SelectTrigger
-              className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
-              aria-label={t('filterCampaignAria')}
-            >
-              <SelectValue placeholder={t('filterCampaign')}>
-                <span className='block w-full truncate'>
-                  {campaignId
-                    ? (selectedCampaign?.name ?? campaignId)
-                    : t('filterCampaign')}
-                </span>
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent className='z-[10002]'>
-              <SelectItem value='_all'>
-                <span className='text-muted-foreground'>
-                  {t('filterAllCampaigns')}
-                </span>
-              </SelectItem>
-              {campaigns.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  <span className='block max-w-[460px] truncate'>{c.name}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder={t('filterCampaign')}
+            searchPlaceholder={t('searchCampaigns')}
+            emptyText={t('noCampaignsFound')}
+            buttonClassName='h-10 w-full min-w-0 justify-between overflow-hidden text-sm font-normal [&>svg]:shrink-0'
+            className='w-[min(460px,calc(100vw-2rem))]'
+          />
         </div>
         <div className='relative min-w-[200px] max-w-full flex-[0_0_220px]'>
           <FileText className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
@@ -499,80 +483,6 @@ function TableSkeleton() {
             </div>
           </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Pagination ────────────────────────────────────────────────────────────────
-
-function Pagination({
-  page,
-  totalPages,
-  total,
-  pageSize,
-  onPageChange,
-  onPageSizeChange
-}: {
-  page: number;
-  totalPages: number;
-  total: number;
-  pageSize: number;
-  onPageChange: (p: number) => void;
-  onPageSizeChange: (n: number) => void;
-}) {
-  const t = useTranslations('contentFeature.list');
-  const locale = useLocale();
-  const from = page * pageSize + 1;
-  const to = Math.min((page + 1) * pageSize, total);
-  return (
-    <div className='flex flex-wrap items-center justify-between gap-3'>
-      <p className='text-xs text-muted-foreground'>
-        {t('paginationShowing', {
-          from: from.toLocaleString(locale),
-          to: to.toLocaleString(locale),
-          total: total.toLocaleString(locale)
-        })}
-      </p>
-      <div className='flex items-center gap-1.5'>
-        <Select
-          value={String(pageSize)}
-          onValueChange={(v) => onPageSizeChange(Number(v))}
-        >
-          <SelectTrigger className='h-8 w-[88px] text-xs'>
-            <SelectValue placeholder='50' />
-          </SelectTrigger>
-          <SelectContent align='end'>
-            {[10, 25, 50, 100].map((n) => (
-              <SelectItem key={n} value={String(n)}>
-                {t('paginationPerPage', { size: n })}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          size='sm'
-          variant='outline'
-          className='h-8 gap-1 px-2 text-xs'
-          onClick={() => onPageChange(page - 1)}
-          disabled={page === 0}
-        >
-          <ChevronLeft size={14} />
-          {t('paginationPrev')}
-        </Button>
-        <span className='rounded-md border border-border/60 bg-muted/50 px-3 py-1 text-xs font-medium tabular-nums'>
-          {page + 1} / {totalPages}
-        </span>
-        <Button
-          size='sm'
-          variant='outline'
-          className='h-8 gap-1 px-2 text-xs'
-          onClick={() => onPageChange(page + 1)}
-          disabled={page >= totalPages - 1}
-        >
-          {t('paginationNext')}
-          <ChevronRight size={14} />
-        </Button>
       </div>
     </div>
   );
@@ -893,12 +803,13 @@ export function ContentViewer({
         {/* Pagination */}
         {!loading && total > 0 && (
           <div className='border-t border-border/60 bg-muted/10 px-5 py-3'>
-            <Pagination
-              page={page}
-              totalPages={totalPages}
+            <TablePaginationControls
+              pageIndex={page}
+              pageCount={totalPages}
               total={total}
               pageSize={pageSize}
-              onPageChange={setPage}
+              pageSizeOptions={[10, 25, 50, 100]}
+              onPageIndexChange={setPage}
               onPageSizeChange={(n) => {
                 setPage(0);
                 setPageSize(n);

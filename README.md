@@ -106,7 +106,7 @@ Then open:
 
 For real devices, configure and run `agent-boot` on the machine with ADB access.
 Before starting it, set `RELAY_API_KEY`, `RELAY_ENROLLMENT_TOKEN`, and the
-`AGENT_BOOT_CONTENT_DATABASE_URL` note from [Agent boot](#agent-boot) in
+content uplink setting from [Agent boot](#agent-boot) in
 `agent-boot/.env`:
 
 ```bash
@@ -216,16 +216,9 @@ RELAY_API_KEY=<same value as backend>
 RELAY_ENROLLMENT_TOKEN=<token from the Relay Agents page>
 ```
 
-If `AGENT_BOOT_CONTENT_DB_ENABLED=1` remains enabled, also point
-`AGENT_BOOT_CONTENT_DATABASE_URL` at a reachable Postgres instance. With the root
-Compose stack on the same machine, use:
-
-```dotenv
-AGENT_BOOT_CONTENT_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/device_farm
-```
-
-Set `AGENT_BOOT_CONTENT_DB_ENABLED=0` when you only need relay/device control and
-do not want `agent-boot` to write content extraction rows directly.
+Set `AGENT_BOOT_CONTENT_UPLINK=relay`. Parsed content returns over the existing
+relay request/reply stream and is persisted by the farm, so customer agents do
+not receive a PostgreSQL DSN.
 
 ## Run Project
 

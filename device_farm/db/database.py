@@ -104,6 +104,30 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+# Edge ingestion runs on the farm's main event loop but uses an isolated pool so
+# a burst of relay batches cannot consume the web/API pool.
+edge_ingest_engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_size=max(1, _env_int("EDGE_INGEST_POOL_SIZE", 4)),
+    max_overflow=0,
+    pool_timeout=max(1, _env_int("EDGE_INGEST_POOL_TIMEOUT", 10)),
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={
+        "server_settings": {
+            "idle_in_transaction_session_timeout": str(
+                _env_int("DB_IDLE_TRANSACTION_TIMEOUT_MS", 30_000)
+            ),
+        },
+    },
+)
+EdgeIngestSessionLocal = async_sessionmaker(
+    edge_ingest_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
 # Install tenant scoping rules once at import time.
 init_tenant_scoping()
 
@@ -209,6 +233,22 @@ async def activity_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+@asynccontextmanager
+async def edge_ingest_session() -> AsyncGenerator[AsyncSession, None]:
+    """Transaction-scoped session backed by the isolated edge-ingest pool."""
+    async with EdgeIngestSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def dispose_edge_ingest_engine() -> None:
+    await edge_ingest_engine.dispose()
 
 
 class Base(DeclarativeBase):

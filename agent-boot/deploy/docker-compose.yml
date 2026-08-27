@@ -14,7 +14,6 @@ services:
     environment:
       RELAY_API_KEY: ${RELAY_API_KEY:?configure RELAY_API_KEY in .env}
       RELAY_ENROLLMENT_TOKEN: ${RELAY_ENROLLMENT_TOKEN:?configure RELAY_ENROLLMENT_TOKEN in .env}
-      AGENT_BOOT_CONTENT_DATABASE_URL: ${AGENT_BOOT_CONTENT_DATABASE_URL:?configure AGENT_BOOT_CONTENT_DATABASE_URL in .env}
       ADB_HOST: ${ADB_HOST:-host.docker.internal}
       ADB_PORT: ${ADB_PORT:-5037}
       ADB_SERVER_SOCKET: "tcp:${ADB_HOST:-host.docker.internal}:${ADB_PORT:-5037}"

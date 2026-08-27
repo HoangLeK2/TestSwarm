@@ -9,7 +9,7 @@ tar -xzf agent-boot-docker-0.3.0.tar.gz
 cd agent-boot-docker-0.3.0
 
 ./scripts/docker-load.sh
-cp .env.example .env          # điền RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN, AGENT_BOOT_CONTENT_DATABASE_URL
+cp .env.example .env          # điền RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN
 ./scripts/docker-up.sh up -d    # bật ADB host + docker compose up -d
 ./scripts/docker-up.sh logs -f  # xem log relay
 docker compose logs -f media-adapter # xem log stream/WebRTC
@@ -42,9 +42,10 @@ notepad .env
 powershell -ExecutionPolicy Bypass -File .\scripts\docker-up.ps1 up -d
 ```
 
-Trong `.env`, bắt buộc điền `RELAY_API_KEY`, `RELAY_ENROLLMENT_TOKEN` và
-`AGENT_BOOT_CONTENT_DATABASE_URL`. Script khởi động sẽ từ chối chạy nếu một
-trong ba giá trị này còn trống. TLS cert đã có sẵn trong image.
+Trong `.env`, bắt buộc điền `RELAY_API_KEY` và `RELAY_ENROLLMENT_TOKEN`.
+Content được gửi về farm qua relay; máy khách hàng không cần PostgreSQL DSN.
+Script khởi động sẽ từ chối chạy nếu một trong hai giá trị này còn trống.
+TLS cert đã có sẵn trong image.
 
 WebRTC video đi qua media adapter. Mặc định adapter publish H264 tại
 `rtsp://host.docker.internal:8556/device-{serial}` và tự gọi go2rtc API

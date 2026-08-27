@@ -25,12 +25,13 @@ class ConnectionBudget:
     limit: int | None
     reserve: int
     web_max: int
+    edge_ingest_max: int
     activity_max: int
     temporal_max: int
 
     @property
     def configured_demand(self) -> int:
-        return self.web_max + self.activity_max + self.temporal_max
+        return self.web_max + self.edge_ingest_max + self.activity_max + self.temporal_max
 
     @property
     def total_with_reserve(self) -> int:
@@ -70,6 +71,7 @@ def validate_connection_budget(env: Mapping[str, str]) -> ConnectionBudget:
         limit=limit,
         reserve=reserve,
         web_max=web_max,
+        edge_ingest_max=_int_value(env, "EDGE_INGEST_POOL_SIZE", 4),
         activity_max=worker_count * activity_pool_max,
         temporal_max=_int_value(env, "TEMPORAL_DB_MAX_CONNECTIONS", 0),
     )

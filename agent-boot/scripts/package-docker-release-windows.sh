@@ -65,7 +65,6 @@ cp "$CUSTOMER_ENV" "$DEST/.env.example"
 SECRET_CUSTOMER_ENV_KEYS=(
   RELAY_API_KEY
   RELAY_ENROLLMENT_TOKEN
-  AGENT_BOOT_CONTENT_DATABASE_URL
 )
 for key in "${SECRET_CUSTOMER_ENV_KEYS[@]}"; do
   assignment_count="$(
@@ -81,20 +80,15 @@ for key in "${SECRET_CUSTOMER_ENV_KEYS[@]}"; do
     exit 1
   fi
 done
-CONTENT_DB_ENABLED_LINES="$(
-  grep -Ec '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=' "$DEST/.env.example" \
-    || true
-)"
-if [[ "$CONTENT_DB_ENABLED_LINES" -ne 1 ]] || ! grep -Eq \
-  '^[[:space:]]*AGENT_BOOT_CONTENT_DB_ENABLED[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$' \
-  "$DEST/.env.example"; then
-  echo "error: customer env template must enable direct database writes" >&2
+# A customer package must never carry a database credential: agent-boot runs on
+# machines we do not control, so anything reachable from there is disclosed.
+if grep -Eqi '(DATABASE_URL|postgres(ql)?://)' "$DEST/.env.example"; then
+  echo "error: customer env template must not contain a database credential" >&2
   exit 1
 fi
 REQUIRED_CUSTOMER_ENV_KEYS=(
   RELAY_API_KEY
   RELAY_ENROLLMENT_TOKEN
-  AGENT_BOOT_CONTENT_DATABASE_URL
   RELAY_MODE
   RELAY_SERVER
   RELAY_GRPC_TLS
@@ -103,10 +97,7 @@ REQUIRED_CUSTOMER_ENV_KEYS=(
   ADB_WAIT_SECONDS
   AGENT_BOOT_STARTUP_MODE
   AGENT_BOOT_AUTO_BOOTSTRAP
-  AGENT_BOOT_CONTENT_DB_ENABLED
-  AGENT_BOOT_CONTENT_DB_POOL_SIZE
-  AGENT_BOOT_CONTENT_DB_COMMAND_TIMEOUT
-  AGENT_BOOT_CONTENT_DB_RETRIES
+  AGENT_BOOT_CONTENT_UPLINK_CHUNK_BYTES
   AGENT_BOOT_CAPTURE_SCREENSHOT
   RELAY_BOOTSTRAP_CONCURRENCY
   RELAY_AUTO_BOOTSTRAP_DELAY_SECONDS
@@ -192,5 +183,5 @@ echo "  1) Giải nén $(basename "$ZIP")"
 echo "  2) cd $NAME"
 echo "  3) scripts\\docker-load.cmd"
 echo "  4) copy .env.example .env"
-echo "     edit RELAY_API_KEY + RELAY_ENROLLMENT_TOKEN + AGENT_BOOT_CONTENT_DATABASE_URL"
+echo "     edit RELAY_API_KEY + RELAY_ENROLLMENT_TOKEN"
 echo "  5) scripts\\docker-up.cmd up -d"

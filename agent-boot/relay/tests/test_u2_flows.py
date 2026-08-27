@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+from relay import u2_executor
 from relay.u2_executor import U2Executor
 
 
@@ -482,6 +483,80 @@ async def test_swipe_until_found_http_flow_exhausts(event_loop):
     assert stats["http_flow_misses"] == 1
     assert stats["http_flow_swipes"] == 3
     assert stats["http_exists_misses"] == 4
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_settles_between_swipes(executor_with_device, monkeypatch):
+    """A fling keeps moving after swipe() returns — probing before it stops
+    misses the target and burns every swipe as one uninterrupted burst."""
+    exc, dev = executor_with_device
+    events: list[str] = []
+    sel = MagicMock()
+    sel.exists = MagicMock(side_effect=lambda **_kw: events.append("exists") or False)
+    dev.return_value = sel
+    dev.window_size.return_value = (1080, 1920)
+    dev.swipe.side_effect = lambda *_a, **_k: events.append("swipe")
+    monkeypatch.setattr(
+        u2_executor.time, "sleep", lambda s: events.append(f"sleep:{s}")
+    )
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"text": "Missing"},
+        "max_swipes": 2,
+        "settle_s": 0.4,
+    })
+
+    assert result["value"]["found"] is False
+    assert events == [
+        "exists", "swipe", "sleep:0.4",
+        "exists", "swipe", "sleep:0.4",
+        "exists",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_settles_between_swipes(event_loop, monkeypatch):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    events: list[str] = []
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        events.append(payload["method"])
+        return True, "", False
+
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds, *args, **kwargs):
+        events.append(f"sleep:{seconds}")
+        return await real_sleep(0, *args, **kwargs)
+
+    monkeypatch.setattr(u2_executor.asyncio, "sleep", fake_sleep)
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("exists RPC should avoid XML dump"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {"text": "Missing"},
+            "max_swipes": 2,
+            "settle_s": 0.4,
+            "window_size": [1080, 1920],
+        },
+    )
+
+    assert result["value"] == {"found": False, "swipes": 2}
+    assert events == [
+        "exist", "swipe", "sleep:0.4",
+        "exist", "swipe", "sleep:0.4",
+        "exist",
+    ]
 
 
 @pytest.mark.asyncio

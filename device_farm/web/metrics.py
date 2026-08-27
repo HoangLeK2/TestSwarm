@@ -42,6 +42,29 @@ relay_fsm_batch_seconds = Histogram(
     buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
 )
 
+# ── Edge content ingestion ──
+edge_ingest_rows_total = Counter(
+    "device_farm_edge_ingest_rows_total",
+    "Rows submitted by relay agents for farm-side persistence",
+    ["kind", "status"],
+)
+edge_ingest_duration_seconds = Histogram(
+    "device_farm_edge_ingest_duration_seconds",
+    "Farm-side edge ingest transaction duration in seconds",
+    ["kind"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+)
+edge_ingest_batch_bytes = Histogram(
+    "device_farm_edge_ingest_batch_bytes",
+    "Serialized edge ingest batch size in bytes",
+    buckets=[1024, 4096, 16384, 65536, 262144, 524288, 1048576, 4194304, 16777216],
+)
+edge_ingest_rejected_total = Counter(
+    "device_farm_edge_ingest_rejected_total",
+    "Edge ingest batches rejected before persistence",
+    ["reason"],
+)
+
 # ── Task / Dispatch metrics ──
 task_queue_depth = Gauge(
     "device_farm_task_queue_depth",

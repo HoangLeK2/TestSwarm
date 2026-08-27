@@ -16,6 +16,7 @@ env/
 
 # Environment variables
 .env
+deploy.env
 tmp/
 logs
 

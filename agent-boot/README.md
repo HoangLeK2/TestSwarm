@@ -69,12 +69,12 @@ uv run main.py --ws-url ws://host:8081/device-agent  # auto-connect STFService
 | `AGENT_BOOT_EXTRA_PORT` | `8765` | Port bind của extra-data ingest |
 | `AGENT_BOOT_XML_MAX_BYTES` | `8388608` | Giới hạn kích thước XML payload; cần dư cho nhiều snapshot comment trong cùng request |
 | `AGENT_BOOT_XML_PARSE_WORKERS` | `1` | Số parse worker chạy song song; vẫn khóa tuần tự theo từng device serial |
-| `AGENT_BOOT_CONTENT_DB_ENABLED` | `0` | Bật writer trực tiếp vào `content_items` khi relay chạy |
-| `AGENT_BOOT_CONTENT_DATABASE_URL` | *(bắt buộc khi bật writer)* | PostgreSQL URL cho agent DB role insert-only vào `content_items` |
-| `AGENT_BOOT_CONTENT_DB_POOL_SIZE` | `1` | Pool size DB writer để tránh agent làm quá tải Postgres |
-| `AGENT_BOOT_CONTENT_DB_COMMAND_TIMEOUT` | `10` | Timeout mỗi DB command, giây |
-| `AGENT_BOOT_CONTENT_DB_RETRIES` | `3` | Số lần retry insert batch trước khi trả lỗi về APK/device_farm |
-| `AGENT_BOOT_CONTENT_DB_RETRY_BASE_DELAY` | `0.2` | Base delay retry insert batch, giây |
+| `AGENT_BOOT_CONTENT_UPLINK_CHUNK_BYTES` | `524288` | Kích thước mục tiêu mỗi chunk JSON trên relay stream |
+
+Content extract **không** ghi thẳng PostgreSQL. Agent parse XML rồi trả rows
+trong chính reply mà farm đang đợi; `device_farm` phân giải tenant từ danh tính
+relay đã enroll và ghi DB. Máy chạy agent-boot không giữ credential DB nào, và
+không có biến môi trường nào bật lại đường đó.
 
 ## Network Ports
 

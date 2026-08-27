@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from relay.agent import RelayAgent
+from relay.agent import RelayAgent, _extra_data_reply_messages
 
 
 class _FakeIngest:
@@ -48,6 +48,34 @@ class _FakeExecutor:
 
     async def with_session(self, serial: str, coro):
         return await coro()
+
+
+def test_extra_data_persist_batch_is_chunked_and_manifested(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_BOOT_CONTENT_UPLINK_CHUNK_BYTES", "16384")
+    items = [{"body": "x" * 10_000}, {"body": "y" * 10_000}]
+    reply = {
+        "type": "extra_data_result",
+        "id": "req-1",
+        "ok": True,
+        "ingest": {
+            "persist_batch": {
+                "schema_version": 1,
+                "kind": "content",
+                "items": items,
+                "content_hashes": ["h1", "h2"],
+            }
+        },
+    }
+
+    messages = _extra_data_reply_messages(reply)
+
+    assert [message["type"] for message in messages] == [
+        "extra_data_result_chunk",
+        "extra_data_result_chunk",
+        "extra_data_result",
+    ]
+    assert messages[-1]["ingest"]["persist_batch_manifest"]["chunk_count"] >= 2
+    assert "persist_batch" not in messages[-1]["ingest"]
 
 
 @pytest.mark.asyncio

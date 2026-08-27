@@ -200,8 +200,14 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
                 },
             )
 
+        elif mtype == "extra_data_result_chunk" and conn is not None:
+            conn.add_extra_data_chunk(msg.get("id", ""), msg)
+
         elif mtype in _REQUEST_REPLY_TYPES and conn is not None:
-            conn.resolve(msg.get("id", ""), msg)
+            if mtype == "extra_data_result":
+                conn.resolve_extra_data(msg.get("id", ""), msg)
+            else:
+                conn.resolve(msg.get("id", ""), msg)
 
         elif mtype in ("a11y_ack", "a11y_result") and conn is not None:
             conn.resolve(msg.get("id", ""), msg)
@@ -267,6 +273,7 @@ async def start_grpc_server(
     """Start gRPC relay server. Returns the server object (call stop() on shutdown)."""
     grpc_max_message_bytes = _grpc_max_message_bytes()
     server = aio.server(
+        compression=grpc.Compression.Gzip,
         options=[
             ("grpc.max_send_message_length",    grpc_max_message_bytes),
             ("grpc.max_receive_message_length", grpc_max_message_bytes),

@@ -46,6 +46,21 @@ DEFAULT_FLOW_WAIT_TIMEOUT = 3.0
 DEFAULT_FLOW_GONE_TIMEOUT = 1.0
 DEFAULT_SWIPE_DURATION = 0.12
 DEFAULT_SCROLL_MAX_SWIPES = 5
+# A swipe is a fling: the list keeps moving after the gesture returns. Probing
+# the selector before it stops reads the mid-flight tree, misses the target, and
+# fires the next swipe immediately — max_swipes burns as one burst.
+DEFAULT_SWIPE_SETTLE_S = 0.35
+MAX_SWIPE_SETTLE_S = 2.0
+
+
+def _swipe_settle_s(p: dict) -> float:
+    """Seconds to let a fling stop before re-probing the selector."""
+    raw = p.get("settle_s", DEFAULT_SWIPE_SETTLE_S)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = DEFAULT_SWIPE_SETTLE_S
+    return max(0.0, min(MAX_SWIPE_SETTLE_S, value))
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1071,10 +1086,13 @@ def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
     }
     fx, fy, tx, ty = vectors.get(direction, vectors["up"])
     sel = _resolve(dev, p["selector"])
+    settle_s = _swipe_settle_s(p)
     for i in range(max_swipes):
         if _selector_exists_now(sel):
             return {"found": True, "swipes": i}
         dev.swipe(fx, fy, tx, ty, duration=float(p.get("duration", DEFAULT_SWIPE_DURATION)))
+        if settle_s:
+            time.sleep(settle_s)
     return {"found": _selector_exists_now(sel), "swipes": max_swipes}
 
 
@@ -6395,6 +6413,7 @@ class U2Executor:
             except (TypeError, ValueError):
                 self._bump("http_flow_fallbacks")
                 return None
+            settle_s = _swipe_settle_s(params)
             for swipes in range(max_swipes + 1):
                 try:
                     found = await self._run_sync(
@@ -6449,6 +6468,8 @@ class U2Executor:
                     return {"ok": False, "value": None, "error": str(exc)}
                 finally:
                     self.end_ui_mutation(serial)
+                if settle_s:
+                    await asyncio.sleep(settle_s)
 
             self._bump("http_flow_fastpaths")
             self._bump("http_flow_misses")

@@ -6,13 +6,11 @@ import hashlib
 import json
 import logging
 import os
-import random
 import time
 from typing import Any
 
-from relay.extra_data.writer import ContentItemWriter, build_content_item_row
+from relay.extra_data.writer import build_content_item_row
 from relay.extra_data.writer import compute_content_hash, scope_content_hash
-from relay.extra_data.entity_writer import ExternalEntityWriter
 
 logger = logging.getLogger("relay.extra_data")
 
@@ -24,6 +22,7 @@ _SUPPORTED_CONTENT_STRATEGIES = (
     | _MULTI_PLATFORM_COMMENT_STRATEGIES
 )
 _SUPPORTED_ENTITY_STRATEGIES = {"fb_groups", "fb_pages"}
+
 
 # device_farm speaks platform-neutral (entity, platform); the parser dispatch
 # below is keyed by an internal token. This is the single translation point —
@@ -1031,8 +1030,6 @@ class ExtraDataIngestServer:
         self._max_bytes = max(1024, int(os.getenv("AGENT_BOOT_XML_MAX_BYTES", str(8 * 1024 * 1024))))
         self._token = os.getenv("AGENT_BOOT_EXTRA_TOKEN", "").strip()
         self._allow_unauth = os.getenv("AGENT_BOOT_EXTRA_ALLOW_UNAUTH", "").strip().lower() in {"1", "true", "yes", "on"}
-        self._writer = ContentItemWriter()
-        self._entity_writer = ExternalEntityWriter(self._writer._ensure_pool)
         default_workers = max(2, min(4, os.cpu_count() or 2))
         workers = max(1, int(os.getenv("AGENT_BOOT_XML_PARSE_WORKERS", str(default_workers))))
         self._parse_sem = asyncio.Semaphore(workers)
@@ -1051,7 +1048,6 @@ class ExtraDataIngestServer:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
-        await self._writer.close()
 
     def _lock_for_serial(self, serial: str) -> asyncio.Lock:
         lock = self._serial_locks.get(serial)
@@ -1203,32 +1199,20 @@ class ExtraDataIngestServer:
                 return {"ok": False, "error": "unsupported_strategy", "strategy": strategy}
 
             if strategy in _SUPPORTED_ENTITY_STRATEGIES:
-                if bool(context.get("persist", True)):
-                    context = await self._writer.prepare_context_for_persist(context)
-                    entity_write = await self._entity_writer.persist_items(
-                        items,
-                        context=context,
-                        captured_at=payload.get("captured_at"),
-                    )
-                else:
-                    entity_write = {
-                        "attempted": 0,
-                        "upserted": 0,
-                        "observed": 0,
-                        "discovered": 0,
-                        "entity_ids": [],
-                    }
-                return {
+                entity_should_persist = bool(context.get("persist", True))
+                # Counts stay zero here: device_farm owns persistence and merges
+                # the real numbers into this reply. See services/content/edge_ingest.py.
+                result = {
                     "ok": True,
                     "serial": serial,
                     "strategy": strategy,
                     "parsed_count": len(items),
-                    "inserted_attempted": entity_write["attempted"],
-                    "inserted_count": entity_write["upserted"],
+                    "inserted_attempted": 0,
+                    "inserted_count": 0,
                     "duplicate_count": 0,
-                    "entity_ids": entity_write.get("entity_ids") or [],
-                    "observation_count": entity_write["observed"],
-                    "discovery_count": entity_write["discovered"],
+                    "entity_ids": [],
+                    "observation_count": 0,
+                    "discovery_count": 0,
                     "diagnostic": diagnostic,
                     "xml_sha256": actual_sha,
                     "parse_ms": parse_ms,
@@ -1236,19 +1220,16 @@ class ExtraDataIngestServer:
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                     **({"items": items} if bool(context.get("return_items", True)) else {}),
                 }
+                if entity_should_persist:
+                    result["persist_batch"] = {
+                        "schema_version": 1,
+                        "kind": "entities",
+                        "items": items,
+                        "captured_at": payload.get("captured_at") or payload.get("captured_at_ms"),
+                    }
+                return result
 
             should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
-            if should_persist:
-                try:
-                    context = await self._writer.prepare_context_for_persist(context)
-                except Exception as exc:
-                    logger.warning(
-                        "extra-data FK preflight failed; continuing without optional FK refs: %s",
-                        exc,
-                    )
-                    for field in ("campaign_id", "execution_id", "user_id", "org_id"):
-                        context.pop(field, None)
-
             content_type = str(context.get("content_type") or ("comment" if strategy.endswith("_comments") or strategy == "fb_comments" else "post"))
             item_level = int(context.get("item_level") if context.get("item_level") is not None else (1 if strategy.endswith("_comments") or strategy == "fb_comments" else 0))
             is_comment_strategy = strategy.endswith("_comments") or strategy == "fb_comments"
@@ -1260,74 +1241,12 @@ class ExtraDataIngestServer:
                 from relay.extra_data.parent_resolve import resolve_fb_comment_parent_id
 
                 parent_id, parent_id_scoped = resolve_fb_comment_parent_id(context, items)
-            if is_comment_strategy and not parent_id and hasattr(
-                self._writer, "lookup_parent_hash_for_post_pid"
-            ):
-                parent_id = await self._writer.lookup_parent_hash_for_post_pid(
-                    collection=str(context.get("collection") or ""),
-                    execution_id=context.get("execution_id") or context.get("hash_scope"),
-                    parent_post_id=str(context.get("parent_post_id") or ""),
-                    items=items,
-                )
-                parent_id_scoped = bool(parent_id)
+            # Parent lookups that need the database (by parent_post_id, and the
+            # latest-post-in-execution fallback) run on device_farm — see
+            # _resolve_parent_id in services/content/edge_ingest.py. Everything
+            # it needs travels in parent_hint below.
             require_verified_parent = _requires_verified_comment_parent(context)
             has_verified_parent_context = _has_verified_comment_parent_context(context)
-            if (
-                is_comment_strategy
-                and require_verified_parent
-                and has_verified_parent_context
-                and hasattr(self._writer, "lookup_parent_hash_for_post_pid")
-            ):
-                canonical_parent_id = await self._writer.lookup_parent_hash_for_post_pid(
-                    collection=str(context.get("collection") or ""),
-                    execution_id=context.get("execution_id") or context.get("hash_scope"),
-                    parent_post_id=str(context.get("parent_post_id") or ""),
-                    items=items,
-                )
-                if canonical_parent_id:
-                    if parent_id and str(parent_id) != str(canonical_parent_id):
-                        diagnostic["parent_context_relinked"] = True
-                        diagnostic["context_parent_hash"] = str(parent_id)
-                        diagnostic["canonical_parent_hash"] = str(canonical_parent_id)
-                    parent_id = canonical_parent_id
-                    parent_id_scoped = True
-                    context["parent_id"] = canonical_parent_id
-                    context["_active_comment_parent_hash"] = canonical_parent_id
-                    context["parent_id_already_scoped"] = True
-                else:
-                    # PID relink missed (vivo often lands on comment sheet). Keep scoped
-                    # parent hash from the fb_posts step in the same loop when verified.
-                    if parent_id and parent_id_scoped:
-                        diagnostic["parent_lookup_fallback"] = True
-                    else:
-                        diagnostic["parent_context_required"] = True
-                        diagnostic["parent_post_row_missing"] = True
-                        should_persist = False
-                        parent_id = None
-                        parent_id_scoped = False
-            if (
-                is_comment_strategy
-                and require_verified_parent
-                and not has_verified_parent_context
-                and bool(context.get("allow_latest_post_parent_fallback"))
-                and not parent_id
-                and hasattr(self._writer, "lookup_latest_parent_hash_for_context")
-            ):
-                latest_parent_id = await self._writer.lookup_latest_parent_hash_for_context(
-                    collection=str(context.get("collection") or ""),
-                    execution_id=context.get("execution_id") or context.get("hash_scope"),
-                    device_serial=context.get("device_serial") or serial,
-                )
-                if latest_parent_id:
-                    parent_id = latest_parent_id
-                    parent_id_scoped = True
-                    context["parent_id"] = latest_parent_id
-                    context["_active_comment_parent_hash"] = latest_parent_id
-                    context["parent_id_already_scoped"] = True
-                    context["parent_context_source"] = "latest_post_in_execution"
-                    has_verified_parent_context = True
-                    diagnostic["parent_context_latest_post_fallback"] = True
-                    diagnostic["latest_parent_hash"] = str(latest_parent_id)
             if (
                 is_comment_strategy
                 and require_verified_parent
@@ -1335,9 +1254,12 @@ class ExtraDataIngestServer:
             ):
                 diagnostic["parent_context_required"] = True
                 diagnostic["parent_context_missing"] = True
-                should_persist = False
-                parent_id = None
-                parent_id_scoped = False
+                # Do not drop the batch here. The agent cannot see content_items,
+                # so "no verified parent on this host" is not the same as "no
+                # verified parent exists". device_farm re-resolves against the
+                # database and refuses the batch itself when it truly cannot
+                # identify the parent.
+                diagnostic["parent_resolution_pending"] = True
             if is_comment_strategy:
                 items = _with_comment_parent_context(items, context, parent_id=parent_id)
             post_stats = _latest_post_stats(items) if is_comment_strategy else None
@@ -1400,49 +1322,23 @@ class ExtraDataIngestServer:
                     ]
                     row_items = [synthetic_parent]
                     diagnostic["opened_post_synthetic_parent"] = True
-            db_started = time.perf_counter()
-            write = await self._insert_rows_with_retry(rows) if should_persist else {
+            # Counts stay zero here: device_farm writes the rows and merges the
+            # real numbers into this reply. See services/content/edge_ingest.py.
+            write = {
                 "attempted": 0,
                 "inserted": 0,
                 "duplicates": 0,
                 "inserted_content_hashes": [],
             }
-            parent_stats_updated = False
             if is_comment_strategy and post_stats:
-                if not should_persist:
-                    diagnostic["parent_stats_update_skipped_reason"] = "persist_disabled"
-                elif not parent_id:
-                    diagnostic["parent_stats_update_skipped_reason"] = "parent_missing"
-                elif not hasattr(self._writer, "update_content_stats"):
-                    diagnostic["parent_stats_update_skipped_reason"] = "writer_unsupported"
+                if should_persist:
+                    # Applied by device_farm once it has resolved the parent row.
+                    diagnostic["parent_stats_update_pending"] = True
                 else:
-                    parent_stats_hash = (
-                        str(parent_id)
-                        if parent_id_scoped
-                        else scope_content_hash(
-                            str(parent_id),
-                            context.get("hash_scope") or context.get("execution_id"),
-                        )
-                    )
-                    try:
-                        parent_stats_updated = bool(
-                            await self._writer.update_content_stats(
-                                content_hash=parent_stats_hash,
-                                likes_count=post_stats.get("reactions"),
-                                comments_count=post_stats.get("comments"),
-                                shares_count=post_stats.get("shares"),
-                            )
-                        )
-                        if parent_stats_updated:
-                            diagnostic["post_stats_persisted"] = True
-                        else:
-                            diagnostic["parent_stats_update_skipped_reason"] = "parent_not_found"
-                    except Exception as exc:
-                        diagnostic["parent_stats_update_skipped_reason"] = "update_failed"
-                        logger.warning("extra-data parent stats update failed: %s", exc)
+                    diagnostic["parent_stats_update_skipped_reason"] = "persist_disabled"
             elif is_comment_strategy and should_persist:
                 diagnostic["parent_stats_update_skipped_reason"] = "post_stats_missing"
-            db_ms = int((time.perf_counter() - db_started) * 1000)
+            db_ms = 0
 
         payload_xml_bytes = sum(len(snapshot.encode("utf-8")) for snapshot in snapshots)
         try:
@@ -1472,6 +1368,30 @@ class ExtraDataIngestServer:
             "db_ms": db_ms,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
         }
+        if should_persist:
+            result["persist_batch"] = {
+                "schema_version": 1,
+                "kind": "content",
+                "item_level": item_level,
+                "items": [dict(row.get("raw_data") or {}) for row in rows],
+                "content_hashes": [
+                    str(row["content_hash"]) for row in rows if row.get("content_hash")
+                ],
+                "captured_at": payload.get("captured_at") or payload.get("captured_at_ms"),
+                "parent_hint": {
+                    "parent_id": parent_id,
+                    "parent_id_already_scoped": parent_id_scoped,
+                    "parent_post_id": context.get("parent_post_id"),
+                    "require_verified_parent": require_verified_parent,
+                    "has_verified_parent_context": has_verified_parent_context,
+                    "allow_latest_post_parent_fallback": bool(
+                        context.get("allow_latest_post_parent_fallback")
+                    ),
+                }
+                if is_comment_strategy
+                else None,
+                "post_stats": post_stats,
+            }
         if payload_xml_bytes != xml_bytes:
             result["payload_xml_bytes"] = payload_xml_bytes
         if len(snapshots) != snapshot_count:
@@ -1502,33 +1422,3 @@ class ExtraDataIngestServer:
                     active_parent.setdefault("source", "post_detail")
                 result["active_parent_post"] = active_parent
         return result
-
-    async def _insert_rows_with_retry(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        attempts = max(1, int(os.getenv("AGENT_BOOT_CONTENT_DB_RETRIES", "3")))
-        base_delay = max(0.01, float(os.getenv("AGENT_BOOT_CONTENT_DB_RETRY_BASE_DELAY", "0.2")))
-        last_exc: Exception | None = None
-        for attempt in range(attempts):
-            try:
-                return await self._writer.insert_rows(rows)
-            except Exception as exc:
-                last_exc = exc
-                if ContentItemWriter._is_content_items_fk_violation(exc):
-                    stripped = ContentItemWriter._strip_optional_fk_fields(rows)
-                    logger.warning(
-                        "content_items optional FK failed at ingest layer (%s); retrying without %s",
-                        exc,
-                        ", ".join(stripped) or "optional FK refs",
-                    )
-                    try:
-                        return await self._writer.insert_rows(rows)
-                    except Exception as retry_exc:
-                        last_exc = retry_exc
-                        if not ContentItemWriter._is_content_items_fk_violation(retry_exc):
-                            raise
-                if attempt >= attempts - 1:
-                    break
-                delay = base_delay * (2 ** attempt) + random.uniform(0, base_delay)
-                logger.warning("content_items insert failed, retrying in %.2fs: %s", delay, exc)
-                await asyncio.sleep(delay)
-        assert last_exc is not None
-        raise last_exc

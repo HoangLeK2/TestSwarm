@@ -24,27 +24,9 @@ def test_parse_page_search_results_extracts_page_cards() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_payload_routes_fb_pages_to_entity_catalog(monkeypatch) -> None:
+async def test_process_payload_routes_fb_pages_to_entity_catalog() -> None:
     server = ExtraDataIngestServer()
 
-    async def prepare_context(context):
-        return {**context, "org_id": "org-a"}
-
-    async def persist_items(items, *, context, captured_at=None):
-        assert context["search_query"] == "go2joy"
-        assert [(item["entity_type"], item["display_name"]) for item in items] == [
-            ("page", "Go2Joy Vietnam")
-        ]
-        return {
-            "attempted": 1,
-            "upserted": 1,
-            "observed": 1,
-            "discovered": 1,
-            "entity_ids": ["page-1"],
-        }
-
-    monkeypatch.setattr(server._writer, "prepare_context_for_persist", prepare_context)
-    monkeypatch.setattr(server._entity_writer, "persist_items", persist_items)
     result = await server.process_payload(
         {
             "serial": "device-1",
@@ -63,7 +45,14 @@ async def test_process_payload_routes_fb_pages_to_entity_catalog(monkeypatch) ->
     )
 
     assert result["ok"] is True
-    assert result["entity_ids"] == ["page-1"]
-    assert result["observation_count"] == 1
-    assert result["discovery_count"] == 1
     assert result["items"][0]["display_name"] == "Go2Joy Vietnam"
+    # The agent has no database; what it parsed is observable only through the
+    # batch it ships to device_farm for persistence.
+    batch = result["persist_batch"]
+    assert batch["kind"] == "entities"
+    assert [(item["entity_type"], item["display_name"]) for item in batch["items"]] == [
+        ("page", "Go2Joy Vietnam")
+    ]
+    # device_farm owns the write, so the agent reports no counts of its own.
+    assert result["inserted_count"] == 0
+    assert result["entity_ids"] == []

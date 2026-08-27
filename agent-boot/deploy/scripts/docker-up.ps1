@@ -109,8 +109,7 @@ try {
     $ResolvedEnvironment = $ResolvedCompose.services.'agent-boot'.environment
     foreach ($name in @(
         'RELAY_API_KEY',
-        'RELAY_ENROLLMENT_TOKEN',
-        'AGENT_BOOT_CONTENT_DATABASE_URL'
+        'RELAY_ENROLLMENT_TOKEN'
     )) {
         $property = $ResolvedEnvironment.PSObject.Properties[$name]
         if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {

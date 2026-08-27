@@ -557,10 +557,17 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         }.get(direction, "up")
         swipe_duration_s = float(step.get("scroll_duration_s", 0.12) or 0.12)
         settle_s = max(0.0, float(step.get("scroll_settle_s", 0.35) or 0.35))
+        # The step's configured wait belongs to the first probe: the target is
+        # usually already on screen and the screen is usually still rendering.
+        # Answering "no" at timeout=0 scrolls a present target out of view.
+        first_wait_s = max(0.0, min(30.0, float(step.get("timeout", 0.0) or 0.0)))
         # Each iteration costs a swipe, the settle that lets the fling stop, and
         # one presence probe. Budget for all of them or the flow times out
         # mid-scroll and the step reports "not found" while still moving.
-        flow_budget_s = max(5.0, max_swipes * (swipe_duration_s + settle_s + 0.7) + 2.0)
+        flow_budget_s = max(
+            5.0,
+            first_wait_s + max_swipes * (swipe_duration_s + settle_s + 0.7) + 2.0,
+        )
         try:
             flow_started = time.monotonic()
             flow_result = flow(
@@ -572,6 +579,7 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
                     "step_ratio": float(step.get("scroll_step_ratio", 0.4) or 0.4),
                     "duration": swipe_duration_s,
                     "settle_s": settle_s,
+                    "first_wait_s": first_wait_s,
                     "width": sc.w,
                     "height": sc.h,
                 },
@@ -609,19 +617,22 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         sy1, sy2 = int(sc.h * 0.7), int(sc.h * 0.3)
     found = False
     swipes_done = 0
+    # Same rule as the flow path: the configured wait belongs to the first probe.
+    fallback_first_wait_s = max(0.0, min(30.0, float(step.get("timeout", 0.0) or 0.0)))
     for i in range(max_swipes):
         if sc.cancel_event is not None and sc.cancel_event.is_set():
             result["ok"] = False
             result["message"] = "scroll_to: cancelled by user"
             result["cancelled"] = True
             break
+        probe_timeout = fallback_first_wait_s if i == 0 else 0
         try:
             u2 = sc.device.u2
             if u2 is not None:
                 if hasattr(u2, "find_element_spec"):
-                    hit = u2.find_element_spec(spec, timeout=0) is not None
+                    hit = u2.find_element_spec(spec, timeout=probe_timeout) is not None
                 else:
-                    hit = u2.find_element(by, value, timeout=0) is not None
+                    hit = u2.find_element(by, value, timeout=probe_timeout) is not None
                 if hit:
                     found = True
                     swipes_done = i

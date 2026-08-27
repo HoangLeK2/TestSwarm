@@ -63,6 +63,16 @@ def _swipe_settle_s(p: dict) -> float:
     return max(0.0, min(MAX_SWIPE_SETTLE_S, value))
 
 
+def _first_wait_s(p: dict) -> float:
+    """Seconds the first probe may wait for a still-rendering screen."""
+    raw = p.get("first_wait_s", 0.0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(MAX_FLOW_TIMEOUT, value))
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -837,6 +847,18 @@ def _selector_exists_now(sel: Any) -> bool:
     return bool(exists)
 
 
+def _selector_wait(sel: Any, timeout_s: float) -> bool:
+    """Wait up to timeout_s for the selector. Both UiObject and XPathSelector
+    expose wait(); XPathSelector returns an element rather than a bool."""
+    wait = getattr(sel, "wait", None)
+    if callable(wait):
+        try:
+            return bool(wait(timeout=timeout_s))
+        except TypeError:
+            return bool(wait(timeout_s))
+    return _selector_exists_now(sel)
+
+
 def _op_click_selector(dev: Any, act: dict) -> bool:
     """Tap when selector exists; returns False if not found (no exception)."""
     sel = _resolve(dev, act.get("selector", {}))
@@ -1087,6 +1109,12 @@ def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
     fx, fy, tx, ty = vectors.get(direction, vectors["up"])
     sel = _resolve(dev, p["selector"])
     settle_s = _swipe_settle_s(p)
+    # The target is often already on screen and the screen is often still
+    # rendering. Probing at timeout=0 answers "no" before the frame exists and
+    # scrolls the target away, so give the first probe the caller's budget.
+    first_wait_s = _first_wait_s(p)
+    if first_wait_s and _selector_wait(sel, first_wait_s):
+        return {"found": True, "swipes": 0}
     for i in range(max_swipes):
         if _selector_exists_now(sel):
             return {"found": True, "swipes": i}
@@ -6414,30 +6442,41 @@ class U2Executor:
                 self._bump("http_flow_fallbacks")
                 return None
             settle_s = _swipe_settle_s(params)
+            # Budget only the first probe: the screen may still be rendering,
+            # and scrolling a target that is already there away is worse than
+            # waiting for it. Later probes stay instant — the settle covers them.
+            first_wait_s = _first_wait_s(params)
             for swipes in range(max_swipes + 1):
-                try:
-                    found = await self._run_sync(
-                        lambda: self._run_http_exists_rpc(serial, selector)
-                    )
-                    self._bump("http_flow_polls")
-                except Exception:
-                    self._bump("http_exists_fallbacks")
-                    if self._http_dump is None:
-                        self._bump("http_flow_fallbacks")
-                        return None
-                    xml_found = await self._poll_xml_selector_node(
-                        serial=serial,
-                        selector=selector,
-                        timeout_s=0.0,
-                        compressed=compressed,
-                        want_present=True,
-                        priority=priority,
-                        deadline_ms=deadline_ms,
-                        batch_started=batch_started,
-                        poll_stat="http_flow_polls",
-                        bypass_first_cache=swipes > 0,
-                    )
-                    found = bool(xml_found["satisfied"])
+                probe_budget = first_wait_s if swipes == 0 else 0.0
+                probe_deadline = time.monotonic() + probe_budget
+                while True:
+                    try:
+                        found = await self._run_sync(
+                            lambda: self._run_http_exists_rpc(serial, selector)
+                        )
+                        self._bump("http_flow_polls")
+                    except Exception:
+                        self._bump("http_exists_fallbacks")
+                        if self._http_dump is None:
+                            self._bump("http_flow_fallbacks")
+                            return None
+                        xml_found = await self._poll_xml_selector_node(
+                            serial=serial,
+                            selector=selector,
+                            timeout_s=probe_budget,
+                            compressed=compressed,
+                            want_present=True,
+                            priority=priority,
+                            deadline_ms=deadline_ms,
+                            batch_started=batch_started,
+                            poll_stat="http_flow_polls",
+                            bypass_first_cache=swipes > 0,
+                        )
+                        found = bool(xml_found["satisfied"])
+                        break
+                    if found or time.monotonic() >= probe_deadline:
+                        break
+                    await asyncio.sleep(0.2)
                 if found:
                     self._bump("http_flow_fastpaths")
                     self._bump("http_flow_hits")

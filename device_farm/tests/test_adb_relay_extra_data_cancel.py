@@ -57,3 +57,54 @@ async def test_extra_data_sends_agent_cancel_when_cancel_event_is_set(monkeypatc
     assert cancel_msg["id"].startswith("extra-")
     assert cancel_msg["serial"] == "10AE7S00HD002JK"
     assert cancel_msg["strategy"] == "fb_comments"
+
+
+class _ReplyingConn:
+    relay_id = "relay-abc"
+
+    def __init__(self, reply: dict[str, Any]) -> None:
+        self._reply = reply
+
+    async def send_json_request(self, **_kwargs: Any) -> dict[str, Any]:
+        return self._reply
+
+    async def send_json_message(self, _msg: dict[str, Any]) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_extra_data_stamps_trusted_relay_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Persistence authorizes the batch by this relay_id. Without the stamp
+    every uplink is rejected as content_uplink_unauthorized."""
+    manager = AdbRelayManager()
+    # The agent controls the body, so it may claim any identity it likes.
+    conn = _ReplyingConn({
+        "type": "extra_data_result",
+        "ok": True,
+        "_trusted_relay_id": "spoofed",
+        "_trusted_serial": "spoofed",
+    })
+    monkeypatch.setattr(manager, "relay_for_serial", lambda _serial: conn)
+    monkeypatch.setattr(manager, "resolve_serial", lambda _serial: "RESOLVED")
+
+    result = await manager.extra_data(
+        serial="alias",
+        strategy="fb_comments",
+        context={},
+        timeout=5,
+    )
+
+    assert result["_trusted_relay_id"] == "relay-abc"
+    assert result["_trusted_serial"] == "RESOLVED"
+
+
+def test_list_devices_returns_plain_list() -> None:
+    manager = AdbRelayManager()
+    manager._capabilities = {"serial-1": {"model": "Pixel"}}
+    monkeypatch_conn = object()
+    manager.relay_for_serial = lambda _serial: monkeypatch_conn  # type: ignore[method-assign]
+
+    devices = manager.list_devices()
+
+    assert isinstance(devices, list)
+    assert devices[0]["serial"] == "serial-1"

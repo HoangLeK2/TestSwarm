@@ -2189,8 +2189,11 @@ async def test_swipe_until_found_default_budget_is_bounded(executor):
 
     assert result["ok"] is True
     assert result["value"]["swipes"] == 5
-    assert dev.swipe.call_count == 5
-    assert dev.swipe.call_args.kwargs == {"duration": 0.12}
+    # Budget is still 5, but it is spent on UiScrollable page-scrolls inside the
+    # real container rather than blind screen-centre swipes.
+    assert result["value"]["driver"] == "uiscrollable"
+    assert ui_obj.scroll.vert.forward.call_count == 5
+    dev.swipe.assert_not_called()
 
 
 # ── Selector resolution ──────────────────────────────────────────────────────

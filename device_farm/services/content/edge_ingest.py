@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from common.variable_resolver import unresolved_var_names
 from db.database import edge_ingest_session
 from services.content.registry import require_valid_content_type
 from services.content.secret_scrub import scrub_secrets
@@ -730,6 +731,16 @@ async def _persist_edge_batch_once(
     hashes = batch.get("content_hashes") or []
     if hashes and (not isinstance(hashes, list) or len(hashes) != len(items)):
         raise ContentUplinkError("content_hashes must align with items")
+
+    # Last gate before the row lands. The step guard catches the common path,
+    # but every writer reaches the table through here, so an unresolved
+    # placeholder is rejected once rather than trusted N times.
+    unresolved = unresolved_var_names(trusted_context.get("collection"))
+    if unresolved:
+        edge_ingest_rejected_total.labels(reason="unresolved_variable").inc()
+        raise ContentUplinkError(
+            f"collection has unresolved variable ${{{unresolved[0]}}}"
+        )
 
     started = time.perf_counter()
     async with edge_ingest_session() as db:

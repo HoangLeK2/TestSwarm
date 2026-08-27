@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
+from common.variable_resolver import unresolved_var_names
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 
@@ -764,6 +765,19 @@ def _edge_extra_explicit_enabled(step: Dict[str, Any], entity: str) -> bool:
     return _coerce_bool(raw, default=False)
 
 
+def _edge_extra_strategy_for_entity(entity: str, platform: str) -> str:
+    if platform == "facebook":
+        if entity == "posts":
+            return "fb_posts"
+        if entity == "comments":
+            return "fb_comments"
+        if entity == "groups":
+            return "fb_groups"
+        if entity == "pages":
+            return "fb_pages"
+    return ""
+
+
 def request_edge_extra_data(
     *,
     device: Any,
@@ -809,6 +823,19 @@ def request_edge_extra_data(
         result["cancelled"] = True
         return True
     collection = step.get("collection")
+    # An undeclared variable resolves to its own literal text, so a missing
+    # SAVE_COLLECTION silently became a collection named "${SAVE_COLLECTION}"
+    # in content_items. Rows filed under a placeholder are invisible to every
+    # query that looks for the real collection — fail the step instead.
+    unresolved = unresolved_var_names(collection)
+    if unresolved:
+        result["ok"] = False
+        result["message"] = (
+            f"edge extra_data {entity}: collection has unresolved variable "
+            f"${{{unresolved[0]}}} — set it in scenario/campaign variables"
+        )
+        log.warning("[%s] %s", serial, result["message"])
+        return True
     if not _relay_extra_data_available(device):
         result["ok"] = False
         result["message"] = (
@@ -1038,6 +1065,7 @@ def request_edge_extra_data(
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
+            strategy=_edge_extra_strategy_for_entity(entity, platform),
             entity=entity,
             platform=platform,
             context=context,
@@ -1277,8 +1305,35 @@ def request_edge_extra_data(
         f"edge extra_data {entity}: parsed={parsed_count} "
         f"inserted={inserted_count} duplicate={duplicate_count}"
     )
+    # Coverage was only ever reported when the step opted into
+    # comment_require_complete, so a run that wanted 100 comments and stopped
+    # at 20 looked identical to one that wanted 20. The collector already
+    # records why it stopped; surface it unconditionally.
+    if entity == "comments":
+        target = _safe_int_or_none(diagnostic.get("comment_target"))
+        if target:
+            collected = (
+                _safe_int_or_none(diagnostic.get("comments_returned")) or parsed_count
+            )
+            coverage = f"coverage={collected}/{target}"
+            stopped_reason = str(diagnostic.get("comment_scroll_stopped_reason") or "")
+            if collected < target:
+                coverage += f" stopped={stopped_reason or 'unknown'}"
+            result["comment_coverage_collected"] = collected
+            result["comment_coverage_target"] = target
+            if stopped_reason:
+                result["comment_scroll_stopped_reason"] = stopped_reason
+            result["message"] = f"{result['message']} {coverage}"
     log.info("[%s] %s", serial, result["message"])
     return True
+
+
+def _safe_int_or_none(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 _COMMENT_FILTER_MODES = frozenset({"most_relevant", "newest", "all_comments"})

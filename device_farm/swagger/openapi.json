@@ -1417,6 +1417,41 @@
               ],
               "title": "Relay Serial"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Size"
+            }
           }
         ],
         "responses": {
@@ -1642,6 +1677,68 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FleetStatsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/fleet/sessions": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "List Active Fleet Sessions",
+        "description": "List active logical sessions so fleet totals are operator-auditable.",
+        "operationId": "list_active_fleet_sessions_api_devices_fleet_sessions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveFleetSessionListOut"
                 }
               }
             }
@@ -2210,6 +2307,84 @@
         }
       }
     },
+    "/api/campaigns/page": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "List Campaigns Page",
+        "operationId": "list_campaigns_page_api_campaigns_page_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 10,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/campaigns": {
       "get": {
         "tags": [
@@ -2231,6 +2406,23 @@
               "type": "boolean",
               "default": false,
               "title": "Include Archived"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
             }
           }
         ],
@@ -2304,6 +2496,66 @@
                     }
                   ],
                   "title": "Response Create Campaign Api Campaigns Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/monitor": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Get Campaign Monitor",
+        "description": "Unified campaign monitoring snapshot with phone/account/step context.",
+        "operationId": "get_campaign_monitor_api_campaigns__campaign_id__monitor_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignMonitorOut"
                 }
               }
             }
@@ -6276,6 +6528,139 @@
         }
       }
     },
+    "/api/scenarios/{scenario_id}/image-templates": {
+      "post": {
+        "tags": [
+          "scenarios"
+        ],
+        "summary": "Upload Step Template Route",
+        "description": "Store a cropped template and report whether it is safe to match on.\n\nThe ambiguity check is the point of doing this server-side: a crop of blank\nbackground scores 1.000 everywhere, so it would tap the wrong place while\nlooking perfectly confident. Better to say so while the user is still\nlooking at the crop than to debug it later in a run.",
+        "operationId": "upload_step_template_route_api_scenarios__scenario_id__image_templates_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "screen_w",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Screen W"
+            }
+          },
+          {
+            "name": "screen_h",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Screen H"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_step_template_route_api_scenarios__scenario_id__image_templates_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenarios/{scenario_id}/image-templates/url": {
+      "get": {
+        "tags": [
+          "scenarios"
+        ],
+        "summary": "Get Step Template Url Route",
+        "description": "Presigned URL so the editor can show the template already attached.",
+        "operationId": "get_step_template_url_route_api_scenarios__scenario_id__image_templates_url_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/device-groups": {
       "get": {
         "tags": [
@@ -6702,6 +7087,25 @@
               ],
               "title": "Tags"
             }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Substring match on username or display name",
+              "title": "Search"
+            },
+            "description": "Substring match on username or display name"
           },
           {
             "name": "limit",
@@ -8185,6 +8589,438 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DevicePlatformLoginAttemptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/actions": {
+      "get": {
+        "tags": [
+          "account-actions"
+        ],
+        "summary": "List Account Actions",
+        "operationId": "list_account_actions_api_accounts__account_id__actions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountActionListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/action-summary": {
+      "get": {
+        "tags": [
+          "account-actions"
+        ],
+        "summary": "Get Account Action Summary",
+        "operationId": "get_account_action_summary_api_accounts__account_id__action_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountActionSummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/discovery": {
+      "get": {
+        "tags": [
+          "account-discovery"
+        ],
+        "summary": "Get Account Discovery Route",
+        "operationId": "get_account_discovery_route_api_accounts__account_id__discovery_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Platform"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDiscoveryStateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/discovery/request": {
+      "post": {
+        "tags": [
+          "account-discovery"
+        ],
+        "summary": "Request Account Discovery Route",
+        "operationId": "request_account_discovery_route_api_accounts__account_id__discovery_request_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Platform"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDiscoveryStateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/discovery/start": {
+      "post": {
+        "tags": [
+          "account-discovery"
+        ],
+        "summary": "Start Account Discovery Route",
+        "operationId": "start_account_discovery_route_api_accounts__account_id__discovery_start_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Platform"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDiscoveryStateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/discovery/complete": {
+      "post": {
+        "tags": [
+          "account-discovery"
+        ],
+        "summary": "Complete Account Discovery Route",
+        "operationId": "complete_account_discovery_route_api_accounts__account_id__discovery_complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Platform"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDiscoveryCompleteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDiscoveryStateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/discovery/fail": {
+      "post": {
+        "tags": [
+          "account-discovery"
+        ],
+        "summary": "Fail Account Discovery Route",
+        "operationId": "fail_account_discovery_route_api_accounts__account_id__discovery_fail_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Platform"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDiscoveryFailedIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDiscoveryStateOut"
                 }
               }
             }
@@ -10999,6 +11835,174 @@
         }
       }
     },
+    "/api/executions/{execution_id}/task-log": {
+      "get": {
+        "tags": [
+          "executions"
+        ],
+        "summary": "Get Execution Task Log",
+        "description": "Unified trace for one execution: phone, account, steps, events, DLQ.",
+        "operationId": "get_execution_task_log_api_executions__execution_id__task_log_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Execution Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "event_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Event Limit"
+            }
+          },
+          {
+            "name": "step_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "title": "Step Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTaskLogOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/executions/{execution_id}/run-trace": {
+      "get": {
+        "tags": [
+          "executions"
+        ],
+        "summary": "Get Execution Run Trace",
+        "description": "Alias for task-log while the frontend migrates naming.",
+        "operationId": "get_execution_run_trace_api_executions__execution_id__run_trace_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Execution Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "event_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Event Limit"
+            }
+          },
+          {
+            "name": "step_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "title": "Step Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTaskLogOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/executions/{execution_id}": {
       "get": {
         "tags": [
@@ -12667,13 +13671,70 @@
         }
       }
     },
+    "/api/relay-agents/{relay_id}/devices/register": {
+      "post": {
+        "tags": [
+          "relay-agents"
+        ],
+        "summary": "Register Relay Devices Bulk",
+        "description": "Register several reported serials in one call.\n\nPartial success by design (same shape as DLQ bulk retry): one bad serial\nmust not sink the rest, so each is committed on its own and reported\nindividually. An empty `serials` list means \"everything this agent reports\".",
+        "operationId": "register_relay_devices_bulk_api_relay_agents__relay_id__devices_register_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "relay_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Relay Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRelayDevicesBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterRelayDevicesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/relay-agents/{relay_id}/devices/{serial}/push-connect-url": {
       "post": {
         "tags": [
           "relay-agents"
         ],
         "summary": "Push Connect Url To Device",
-        "description": "Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required.",
         "operationId": "push_connect_url_to_device_api_relay_agents__relay_id__devices__serial__push_connect_url_post",
         "security": [
           {
@@ -12734,6 +13795,172 @@
               "title": "Ws Base Url"
             },
             "description": "Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelayCommandOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/relay-agents/{relay_id}/devices/{serial}/connect": {
+      "post": {
+        "tags": [
+          "relay-agents"
+        ],
+        "summary": "Connect Relay Device",
+        "operationId": "connect_relay_device_api_relay_agents__relay_id__devices__serial__connect_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "relay_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Relay Id"
+            }
+          },
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Logical device id when DB serial is pending-* but ADB path serial is physical",
+              "title": "Device Id"
+            },
+            "description": "Logical device id when DB serial is pending-* but ADB path serial is physical"
+          },
+          {
+            "name": "ws_base_url",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.",
+              "title": "Ws Base Url"
+            },
+            "description": "Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelayCommandOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/relay-agents/{relay_id}/devices/{serial}/disconnect": {
+      "post": {
+        "tags": [
+          "relay-agents"
+        ],
+        "summary": "Disconnect Relay Device",
+        "operationId": "disconnect_relay_device_api_relay_agents__relay_id__devices__serial__disconnect_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "relay_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Relay Id"
+            }
+          },
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Logical device id when DB serial is pending-* but ADB path serial is physical",
+              "title": "Device Id"
+            },
+            "description": "Logical device id when DB serial is pending-* but ADB path serial is physical"
           }
         ],
         "responses": {
@@ -13638,6 +14865,22 @@
                 }
               ],
               "title": "Device Serial"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
             }
           },
           {
@@ -15042,6 +16285,52 @@
         ]
       }
     },
+    "/api/external-entities/sync-authors-from-content": {
+      "post": {
+        "tags": [
+          "external-entities"
+        ],
+        "summary": "Sync Authors From Content Route",
+        "operationId": "sync_authors_from_content_route_api_external_entities_sync_authors_from_content_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalEntityAuthorSyncIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalEntityAuthorSyncOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/external-entities/{entity_id}": {
       "get": {
         "tags": [
@@ -15189,6 +16478,379 @@
             }
           }
         }
+      }
+    },
+    "/api/facebook-candidates": {
+      "get": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "List Facebook Candidates Route",
+        "operationId": "list_facebook_candidates_route_api_facebook_candidates_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "Observe Facebook Candidate Route",
+        "operationId": "observe_facebook_candidate_route_api_facebook_candidates_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacebookCandidateObserveIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateObserveOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/facebook-candidates/recompute": {
+      "post": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "Recompute Facebook Candidates Route",
+        "operationId": "recompute_facebook_candidates_route_api_facebook_candidates_recompute_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacebookCandidateRecomputeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateRecomputeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/facebook-candidates/{candidate_id}": {
+      "get": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "Get Facebook Candidate Route",
+        "operationId": "get_facebook_candidate_route_api_facebook_candidates__candidate_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/facebook-candidates/{candidate_id}/review": {
+      "patch": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "Review Facebook Candidate Route",
+        "operationId": "review_facebook_candidate_route_api_facebook_candidates__candidate_id__review_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacebookCandidateReviewIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/facebook-candidate-settings": {
+      "get": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "Get Facebook Candidate Settings Route",
+        "operationId": "get_facebook_candidate_settings_route_api_facebook_candidate_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateSettingsOut"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "facebook-candidates"
+        ],
+        "summary": "Update Facebook Candidate Settings Route",
+        "operationId": "update_facebook_candidate_settings_route_api_facebook_candidate_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacebookCandidateSettingsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacebookCandidateSettingsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/": {
@@ -18756,6 +20418,218 @@
         ],
         "title": "AIExtractBody"
       },
+      "AccountActionListOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountActionOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "title": "AccountActionListOut"
+      },
+      "AccountActionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "target_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          },
+          "current_activity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Activity"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "status",
+          "action",
+          "details",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AccountActionOut"
+      },
+      "AccountActionSummaryOut": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running"
+          },
+          "succeeded": {
+            "type": "integer",
+            "title": "Succeeded"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "current_activity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Activity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "pending",
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "title": "AccountActionSummaryOut"
+      },
       "AccountCreate": {
         "properties": {
           "platform": {
@@ -18816,6 +20690,170 @@
           "username"
         ],
         "title": "AccountCreate"
+      },
+      "AccountDiscoveryCompleteIn": {
+        "properties": {
+          "candidate_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate_count"
+        ],
+        "title": "AccountDiscoveryCompleteIn"
+      },
+      "AccountDiscoveryFailedIn": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "AccountDiscoveryFailedIn"
+      },
+      "AccountDiscoveryStateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "uninitialized",
+              "discovery_requested",
+              "discovering",
+              "ready",
+              "active",
+              "error"
+            ],
+            "title": "Status"
+          },
+          "initialized_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initialized At"
+          },
+          "discovery_requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Requested At"
+          },
+          "discovery_started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Started At"
+          },
+          "last_discovery_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Discovery At"
+          },
+          "next_discovery_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Discovery At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "request_created": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "account_id",
+          "platform",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AccountDiscoveryStateOut"
       },
       "AccountEventListOut": {
         "properties": {
@@ -19753,6 +21791,89 @@
         "title": "AccountWithLinksOut",
         "description": "Detailed account response that includes the list of device links."
       },
+      "ActiveFleetSessionListOut": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/ActiveFleetSessionOut"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "offset",
+          "limit",
+          "sessions"
+        ],
+        "title": "ActiveFleetSessionListOut"
+      },
+      "ActiveFleetSessionOut": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "device_serial": {
+            "type": "string",
+            "title": "Device Serial"
+          },
+          "device_name": {
+            "type": "string",
+            "title": "Device Name"
+          },
+          "owner_type": {
+            "$ref": "#/components/schemas/SessionOwnerType"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "active_session",
+              "busy_claim"
+            ],
+            "title": "Source"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "duplicate_for_device": {
+            "type": "boolean",
+            "title": "Duplicate For Device",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "device_id",
+          "device_serial",
+          "device_name",
+          "owner_type",
+          "source",
+          "created_at"
+        ],
+        "title": "ActiveFleetSessionOut"
+      },
       "ActivityLogListOut": {
         "properties": {
           "total": {
@@ -20441,6 +22562,20 @@
           "file"
         ],
         "title": "Body_import_scenario_route_api_scenarios_import_post"
+      },
+      "Body_upload_step_template_route_api_scenarios__scenario_id__image_templates_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_step_template_route_api_scenarios__scenario_id__image_templates_post"
       },
       "BootstrapAllResult": {
         "properties": {
@@ -21569,6 +23704,126 @@
         ],
         "title": "CampaignForceTransitionOut"
       },
+      "CampaignMonitorExecutionOut": {
+        "properties": {
+          "execution_id": {
+            "type": "string",
+            "title": "Execution Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ExecutionTraceContextOut"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ExecutionTaskLogSummaryOut"
+          },
+          "current_step_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step Type"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "execution_id",
+          "status",
+          "context",
+          "summary",
+          "created_at"
+        ],
+        "title": "CampaignMonitorExecutionOut"
+      },
+      "CampaignMonitorOut": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "executions": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignMonitorExecutionOut"
+            },
+            "type": "array",
+            "title": "Executions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "total",
+          "limit"
+        ],
+        "title": "CampaignMonitorOut"
+      },
       "CampaignOut": {
         "properties": {
           "id": {
@@ -21651,6 +23906,34 @@
           "created_at"
         ],
         "title": "CampaignOut"
+      },
+      "CampaignPageOut": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CampaignEntityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/CampaignOut"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "CampaignPageOut"
       },
       "CampaignRunBody": {
         "properties": {
@@ -22779,6 +25062,34 @@
         ],
         "title": "ContinuousCrawlDeviceLaneOut"
       },
+      "ContinuousCrawlDeviceTargetsOut": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "device_serial": {
+            "type": "string",
+            "title": "Device Serial"
+          },
+          "device_name": {
+            "type": "string",
+            "title": "Device Name"
+          },
+          "target_count": {
+            "type": "integer",
+            "title": "Target Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "device_serial",
+          "device_name",
+          "target_count"
+        ],
+        "title": "ContinuousCrawlDeviceTargetsOut"
+      },
       "ContinuousCrawlPreflightOut": {
         "properties": {
           "ready": {
@@ -22803,6 +25114,13 @@
           "max_concurrency": {
             "type": "integer",
             "title": "Max Concurrency"
+          },
+          "device_targets": {
+            "items": {
+              "$ref": "#/components/schemas/ContinuousCrawlDeviceTargetsOut"
+            },
+            "type": "array",
+            "title": "Device Targets"
           },
           "warnings": {
             "items": {
@@ -24440,6 +26758,14 @@
             "type": "string",
             "title": "Id"
           },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
           "external_id": {
             "anyOf": [
               {
@@ -24474,6 +26800,8 @@
         "type": "object",
         "required": [
           "id",
+          "platform",
+          "entity_type",
           "display_name",
           "status"
         ],
@@ -25421,6 +27749,656 @@
         ],
         "title": "ExecutionStepOut"
       },
+      "ExecutionTaskLogDlqOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "device_serial": {
+            "type": "string",
+            "title": "Device Serial"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failed_step_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Step Id"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At"
+          },
+          "artifact_refs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Artifact Refs"
+          },
+          "retry_count": {
+            "type": "integer",
+            "title": "Retry Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "device_serial"
+        ],
+        "title": "ExecutionTaskLogDlqOut"
+      },
+      "ExecutionTaskLogOut": {
+        "properties": {
+          "execution_id": {
+            "type": "string",
+            "title": "Execution Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ExecutionTraceContextOut"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ExecutionTaskLogSummaryOut"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionTaskLogStepOut"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "account_actions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Account Actions"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "has_more_steps": {
+            "type": "boolean",
+            "title": "Has More Steps",
+            "default": false
+          },
+          "has_more_events": {
+            "type": "boolean",
+            "title": "Has More Events",
+            "default": false
+          },
+          "last_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event Id"
+          },
+          "dlq": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionTaskLogDlqOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "execution_id",
+          "status",
+          "context",
+          "summary",
+          "created_at"
+        ],
+        "title": "ExecutionTaskLogOut"
+      },
+      "ExecutionTaskLogStepOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "execution_id": {
+            "type": "string",
+            "title": "Execution Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "step_index": {
+            "type": "integer",
+            "title": "Step Index"
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Id"
+          },
+          "step_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Error Json"
+          },
+          "effective_config_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Effective Config Json"
+          },
+          "trace": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trace"
+          },
+          "account_actions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Account Actions"
+          },
+          "artifacts_json": {
+            "items": {},
+            "type": "array",
+            "title": "Artifacts Json"
+          },
+          "attempts_json": {
+            "items": {},
+            "type": "array",
+            "title": "Attempts Json"
+          },
+          "marked_ignored": {
+            "type": "boolean",
+            "title": "Marked Ignored",
+            "default": false
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "execution_id",
+          "step_index",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ExecutionTaskLogStepOut"
+      },
+      "ExecutionTaskLogSummaryOut": {
+        "properties": {
+          "total_steps": {
+            "type": "integer",
+            "title": "Total Steps",
+            "default": 0
+          },
+          "completed_steps": {
+            "type": "integer",
+            "title": "Completed Steps",
+            "default": 0
+          },
+          "failed_steps": {
+            "type": "integer",
+            "title": "Failed Steps",
+            "default": 0
+          },
+          "running_steps": {
+            "type": "integer",
+            "title": "Running Steps",
+            "default": 0
+          },
+          "current_step_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step Index"
+          },
+          "counters": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counters"
+          }
+        },
+        "type": "object",
+        "title": "ExecutionTaskLogSummaryOut"
+      },
+      "ExecutionTraceContextOut": {
+        "properties": {
+          "org_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Org Id"
+          },
+          "dispatch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatch Id"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "execution_id": {
+            "type": "string",
+            "title": "Execution Id"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          },
+          "scenario_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Id"
+          },
+          "scenario_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Version Id"
+          },
+          "scenario_plan": {
+            "items": {},
+            "type": "array",
+            "title": "Scenario Plan"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_serial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Serial"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Label"
+          },
+          "account_platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Platform"
+          }
+        },
+        "type": "object",
+        "required": [
+          "execution_id"
+        ],
+        "title": "ExecutionTraceContextOut"
+      },
+      "ExternalEntityAuthorSyncIn": {
+        "properties": {
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 36
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "execution_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 36
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Id"
+          },
+          "content_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Content Types"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 2000
+          }
+        },
+        "type": "object",
+        "title": "ExternalEntityAuthorSyncIn"
+      },
+      "ExternalEntityAuthorSyncOut": {
+        "properties": {
+          "scanned_count": {
+            "type": "integer",
+            "title": "Scanned Count"
+          },
+          "valid_count": {
+            "type": "integer",
+            "title": "Valid Count"
+          },
+          "created_count": {
+            "type": "integer",
+            "title": "Created Count"
+          },
+          "existing_count": {
+            "type": "integer",
+            "title": "Existing Count"
+          },
+          "skipped_existing_count": {
+            "type": "integer",
+            "title": "Skipped Existing Count"
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count"
+          },
+          "skipped_anonymous_count": {
+            "type": "integer",
+            "title": "Skipped Anonymous Count"
+          },
+          "skipped_invalid_count": {
+            "type": "integer",
+            "title": "Skipped Invalid Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scanned_count",
+          "valid_count",
+          "created_count",
+          "existing_count",
+          "skipped_existing_count",
+          "skipped_count",
+          "skipped_anonymous_count",
+          "skipped_invalid_count"
+        ],
+        "title": "ExternalEntityAuthorSyncOut"
+      },
       "ExternalEntityBulkObserveIn": {
         "properties": {
           "items": {
@@ -25753,6 +28731,1132 @@
           "updated_at"
         ],
         "title": "ExternalEntityOut"
+      },
+      "FacebookCandidateDetailOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "external_entity_id": {
+            "type": "string",
+            "title": "External Entity Id"
+          },
+          "external_entity_display_name": {
+            "type": "string",
+            "title": "External Entity Display Name"
+          },
+          "external_entity_status": {
+            "type": "string",
+            "title": "External Entity Status"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "discovered",
+              "review_required",
+              "approved",
+              "rejected",
+              "deferred",
+              "warming_up",
+              "ready_to_connect",
+              "request_pending",
+              "connected",
+              "blocked"
+            ],
+            "title": "Status"
+          },
+          "relationship_score": {
+            "type": "number",
+            "title": "Relationship Score"
+          },
+          "keyword_score": {
+            "type": "number",
+            "title": "Keyword Score"
+          },
+          "semantic_score": {
+            "type": "number",
+            "title": "Semantic Score"
+          },
+          "final_score": {
+            "type": "number",
+            "title": "Final Score"
+          },
+          "reasons": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "matched_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matched Keywords"
+          },
+          "negative_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Negative Keywords"
+          },
+          "evidence_count": {
+            "type": "integer",
+            "title": "Evidence Count"
+          },
+          "next_eligible_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Eligible At"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "first_observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Observed At"
+          },
+          "last_observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Observed At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateEvidenceOut"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "keyword_matches": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateKeywordOut"
+            },
+            "type": "array",
+            "title": "Keyword Matches"
+          },
+          "embeddings": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateEmbeddingOut"
+            },
+            "type": "array",
+            "title": "Embeddings"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateReviewOut"
+            },
+            "type": "array",
+            "title": "Reviews"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "account_id",
+          "external_entity_id",
+          "external_entity_display_name",
+          "external_entity_status",
+          "status",
+          "relationship_score",
+          "keyword_score",
+          "semantic_score",
+          "final_score",
+          "evidence_count",
+          "first_observed_at",
+          "last_observed_at",
+          "created_at",
+          "updated_at",
+          "evidence",
+          "keyword_matches",
+          "embeddings",
+          "reviews"
+        ],
+        "title": "FacebookCandidateDetailOut"
+      },
+      "FacebookCandidateEmbeddingIn": {
+        "properties": {
+          "values": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 4096,
+            "minItems": 1,
+            "title": "Values"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4096.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
+          "source_hash": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$",
+            "title": "Source Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "values",
+          "source_hash"
+        ],
+        "title": "FacebookCandidateEmbeddingIn"
+      },
+      "FacebookCandidateEmbeddingOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "embedding": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Embedding"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "dimensions": {
+            "type": "integer",
+            "title": "Dimensions"
+          },
+          "source_hash": {
+            "type": "string",
+            "title": "Source Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "embedding",
+          "model",
+          "dimensions",
+          "source_hash",
+          "created_at"
+        ],
+        "title": "FacebookCandidateEmbeddingOut"
+      },
+      "FacebookCandidateEvidenceIn": {
+        "properties": {
+          "evidence_type": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Evidence Type"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Text",
+            "default": ""
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evidence_type",
+          "source"
+        ],
+        "title": "FacebookCandidateEvidenceIn"
+      },
+      "FacebookCandidateEvidenceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "evidence_type": {
+            "type": "string",
+            "title": "Evidence Type"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "source_hash": {
+            "type": "string",
+            "title": "Source Hash"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Observed At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "evidence_type",
+          "source",
+          "source_hash",
+          "text",
+          "payload",
+          "observed_at",
+          "created_at"
+        ],
+        "title": "FacebookCandidateEvidenceOut"
+      },
+      "FacebookCandidateKeywordOut": {
+        "properties": {
+          "keyword": {
+            "type": "string",
+            "title": "Keyword"
+          },
+          "normalized_keyword": {
+            "type": "string",
+            "title": "Normalized Keyword"
+          },
+          "keyword_type": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative"
+            ],
+            "title": "Keyword Type"
+          },
+          "match_count": {
+            "type": "integer",
+            "title": "Match Count"
+          },
+          "first_matched_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Matched At"
+          },
+          "last_matched_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Matched At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keyword",
+          "normalized_keyword",
+          "keyword_type",
+          "match_count",
+          "first_matched_at",
+          "last_matched_at"
+        ],
+        "title": "FacebookCandidateKeywordOut"
+      },
+      "FacebookCandidateListOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "FacebookCandidateListOut"
+      },
+      "FacebookCandidateObserveIn": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Account Id"
+          },
+          "external_entity_id": {
+            "type": "string",
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "External Entity Id"
+          },
+          "relationship_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship Score"
+          },
+          "semantic_score": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Score"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateEvidenceIn"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Evidence"
+          },
+          "embedding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FacebookCandidateEmbeddingIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_id",
+          "external_entity_id"
+        ],
+        "title": "FacebookCandidateObserveIn"
+      },
+      "FacebookCandidateObserveOut": {
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/FacebookCandidateOut"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate",
+          "created"
+        ],
+        "title": "FacebookCandidateObserveOut"
+      },
+      "FacebookCandidateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "external_entity_id": {
+            "type": "string",
+            "title": "External Entity Id"
+          },
+          "external_entity_display_name": {
+            "type": "string",
+            "title": "External Entity Display Name"
+          },
+          "external_entity_status": {
+            "type": "string",
+            "title": "External Entity Status"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "discovered",
+              "review_required",
+              "approved",
+              "rejected",
+              "deferred",
+              "warming_up",
+              "ready_to_connect",
+              "request_pending",
+              "connected",
+              "blocked"
+            ],
+            "title": "Status"
+          },
+          "relationship_score": {
+            "type": "number",
+            "title": "Relationship Score"
+          },
+          "keyword_score": {
+            "type": "number",
+            "title": "Keyword Score"
+          },
+          "semantic_score": {
+            "type": "number",
+            "title": "Semantic Score"
+          },
+          "final_score": {
+            "type": "number",
+            "title": "Final Score"
+          },
+          "reasons": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "matched_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matched Keywords"
+          },
+          "negative_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Negative Keywords"
+          },
+          "evidence_count": {
+            "type": "integer",
+            "title": "Evidence Count"
+          },
+          "next_eligible_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Eligible At"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "first_observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Observed At"
+          },
+          "last_observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Observed At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "account_id",
+          "external_entity_id",
+          "external_entity_display_name",
+          "external_entity_status",
+          "status",
+          "relationship_score",
+          "keyword_score",
+          "semantic_score",
+          "final_score",
+          "evidence_count",
+          "first_observed_at",
+          "last_observed_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FacebookCandidateOut"
+      },
+      "FacebookCandidateRecomputeIn": {
+        "properties": {
+          "candidate_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Ids"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 36
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 500
+          },
+          "after_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 36
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Id"
+          }
+        },
+        "type": "object",
+        "title": "FacebookCandidateRecomputeIn"
+      },
+      "FacebookCandidateRecomputeOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FacebookCandidateOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "recomputed_count": {
+            "type": "integer",
+            "title": "Recomputed Count"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "recomputed_count"
+        ],
+        "title": "FacebookCandidateRecomputeOut"
+      },
+      "FacebookCandidateReviewIn": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "ready_to_connect",
+              "rejected",
+              "deferred"
+            ],
+            "title": "Status"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "next_eligible_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Eligible At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "FacebookCandidateReviewIn"
+      },
+      "FacebookCandidateReviewOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "from_status": {
+            "type": "string",
+            "enum": [
+              "discovered",
+              "review_required",
+              "approved",
+              "rejected",
+              "deferred",
+              "warming_up",
+              "ready_to_connect",
+              "request_pending",
+              "connected",
+              "blocked"
+            ],
+            "title": "From Status"
+          },
+          "to_status": {
+            "type": "string",
+            "enum": [
+              "discovered",
+              "review_required",
+              "approved",
+              "rejected",
+              "deferred",
+              "warming_up",
+              "ready_to_connect",
+              "request_pending",
+              "connected",
+              "blocked"
+            ],
+            "title": "To Status"
+          },
+          "reviewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "score_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Score Snapshot"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "from_status",
+          "to_status",
+          "score_snapshot",
+          "created_at"
+        ],
+        "title": "FacebookCandidateReviewOut"
+      },
+      "FacebookCandidateSettingsIn": {
+        "properties": {
+          "relationship_weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Relationship Weight",
+            "default": 0.4
+          },
+          "keyword_weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Keyword Weight",
+            "default": 0.35
+          },
+          "semantic_weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Semantic Weight",
+            "default": 0.25
+          },
+          "review_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Review Threshold",
+            "default": 0.55
+          },
+          "auto_ready_enabled": {
+            "type": "boolean",
+            "title": "Auto Ready Enabled",
+            "default": true
+          },
+          "auto_ready_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Auto Ready Threshold",
+            "default": 0.75
+          },
+          "auto_ready_min_evidence": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Auto Ready Min Evidence",
+            "default": 2
+          },
+          "positive_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Positive Keywords"
+          },
+          "negative_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Negative Keywords"
+          },
+          "embedding_model": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Embedding Model",
+            "default": "multilingual-e5-small"
+          },
+          "embedding_dimensions": {
+            "type": "integer",
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Embedding Dimensions",
+            "default": 384
+          }
+        },
+        "type": "object",
+        "title": "FacebookCandidateSettingsIn"
+      },
+      "FacebookCandidateSettingsOut": {
+        "properties": {
+          "relationship_weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Relationship Weight",
+            "default": 0.4
+          },
+          "keyword_weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Keyword Weight",
+            "default": 0.35
+          },
+          "semantic_weight": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Semantic Weight",
+            "default": 0.25
+          },
+          "review_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Review Threshold",
+            "default": 0.55
+          },
+          "auto_ready_enabled": {
+            "type": "boolean",
+            "title": "Auto Ready Enabled",
+            "default": true
+          },
+          "auto_ready_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Auto Ready Threshold",
+            "default": 0.75
+          },
+          "auto_ready_min_evidence": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Auto Ready Min Evidence",
+            "default": 2
+          },
+          "positive_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Positive Keywords"
+          },
+          "negative_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Negative Keywords"
+          },
+          "embedding_model": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Embedding Model",
+            "default": "multilingual-e5-small"
+          },
+          "embedding_dimensions": {
+            "type": "integer",
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Embedding Dimensions",
+            "default": 384
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "org_id"
+        ],
+        "title": "FacebookCandidateSettingsOut"
       },
       "FinishBody": {
         "properties": {
@@ -26589,16 +30693,6 @@
               }
             ],
             "title": "Region"
-          },
-          "psm": {
-            "type": "integer",
-            "title": "Psm",
-            "default": 11
-          },
-          "scale_factor": {
-            "type": "number",
-            "title": "Scale Factor",
-            "default": 2.0
           },
           "confidence_threshold": {
             "type": "number",
@@ -28143,6 +32237,86 @@
         "type": "object",
         "title": "RegisterRelayDeviceBody"
       },
+      "RegisterRelayDeviceItemOut": {
+        "properties": {
+          "serial": {
+            "type": "string",
+            "title": "Serial"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "serial",
+          "status"
+        ],
+        "title": "RegisterRelayDeviceItemOut"
+      },
+      "RegisterRelayDevicesBody": {
+        "properties": {
+          "serials": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Serials"
+          }
+        },
+        "type": "object",
+        "title": "RegisterRelayDevicesBody"
+      },
+      "RegisterRelayDevicesOut": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/RegisterRelayDeviceItemOut"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "RegisterRelayDevicesOut"
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -28244,6 +32418,13 @@
             "type": "boolean",
             "title": "Live Connected",
             "default": false
+          },
+          "device_connections": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RelayDeviceConnectionOut"
+            },
+            "type": "object",
+            "title": "Device Connections"
           },
           "connected_at": {
             "type": "string",
@@ -28618,6 +32799,33 @@
           "ok"
         ],
         "title": "RelayCommandOut"
+      },
+      "RelayDeviceConnectionOut": {
+        "properties": {
+          "registered": {
+            "type": "boolean",
+            "title": "Registered",
+            "default": false
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_agent_connected": {
+            "type": "boolean",
+            "title": "Device Agent Connected",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "RelayDeviceConnectionOut"
       },
       "ReorderScenariosBody": {
         "properties": {

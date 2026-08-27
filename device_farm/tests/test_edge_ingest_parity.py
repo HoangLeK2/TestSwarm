@@ -350,3 +350,35 @@ async def test_persist_edge_batch_bulk_upserts_entities_under_relay_org(monkeypa
     assert result["observation_count"] == 1
     assert result["discovery_count"] == 1
     assert result["entity_ids"] == ["entity-1"]
+
+
+@pytest.mark.asyncio
+async def test_persist_edge_batch_rejects_unresolved_collection_variable(monkeypatch):
+    """Backstop for the step guard: every writer reaches the table through
+    here, so a placeholder collection is refused once rather than trusted."""
+    from services.content import edge_ingest
+
+    session = _FakeSession()
+
+    @asynccontextmanager
+    async def fake_session():
+        yield session
+
+    monkeypatch.setattr(edge_ingest, "edge_ingest_session", fake_session)
+
+    with pytest.raises(edge_ingest.ContentUplinkError, match="SAVE_COLLECTION"):
+        await edge_ingest.persist_edge_batch(
+            relay_id="relay-1",
+            batch={
+                "schema_version": 1,
+                "kind": "content",
+                "items": [{"body": "hello"}],
+            },
+            trusted_context={
+                "collection": "${SAVE_COLLECTION}",
+                "platform": "facebook",
+                "content_type": "fb_post",
+            },
+        )
+
+    assert session.insert_payload is None

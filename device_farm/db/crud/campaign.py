@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -76,6 +76,7 @@ async def list_campaigns(
     org_id: Optional[str] = None,
     user_id: Optional[str] = None,
     include_archived: bool = False,
+    search: Optional[str] = None,
 ) -> list[Campaign]:
     from tenancy.context import use_tenant_scope
 
@@ -94,6 +95,15 @@ async def list_campaigns(
             q = q.where(
                 Campaign.deleted_at.is_(None),
                 Campaign.status != CampaignStatus.ARCHIVED.value,
+            )
+        if search and (term := search.strip()):
+            escaped = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            q = q.where(
+                func.lower(Campaign.name).like(pattern, escape="\\")
+                | func.lower(func.coalesce(Campaign.description, "")).like(
+                    pattern, escape="\\"
+                )
             )
         result = await db.execute(q)
         return list(result.scalars().all())

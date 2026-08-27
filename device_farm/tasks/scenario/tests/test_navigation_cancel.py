@@ -86,7 +86,9 @@ def test_scroll_to_uses_u2_flow_fast_path(monkeypatch):
     assert params["max_swipes"] == 8
     assert params["width"] == 1080
     assert params["height"] == 1920
-    assert result["message"] == "scroll_to found description='Bình luận' after 4 swipe(s)"
+    assert result["message"] == (
+        "scroll_to found description='Bình luận' after 4 swipe(s) [u2_flow]"
+    )
     assert result["scroll_to_driver"] == "u2_flow"
     assert sc.device.swipe.call_count == 0
     assert slept == []

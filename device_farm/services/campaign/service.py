@@ -355,10 +355,19 @@ async def list_campaigns_for_org(
     *,
     include_archived: bool = False,
     tag: str | None = None,
+    search: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
 ) -> list[CampaignView]:
     with tenant_context(org_id):
         rows = await repo.list_campaign_entities(
-            db, org_id, include_archived=include_archived, tag=tag
+            db,
+            org_id,
+            include_archived=include_archived,
+            tag=tag,
+            search=search,
+            limit=limit,
+            offset=offset,
         )
         return [_view_from_row(r) for r in rows]
 

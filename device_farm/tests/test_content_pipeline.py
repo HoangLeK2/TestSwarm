@@ -12,6 +12,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from db.database import Base
+from db.models.content import ContentItem
+from db.crud.content import query_content
+from tenancy.context import tenant_context
 from services.content_store import (
     _first_present,
     _normalize_media_urls,
@@ -243,3 +250,64 @@ class TestContentModel:
         assert item.collection == "test"
         assert item.content_type == "video"
         assert item.tags == "tag1"
+
+
+@pytest.mark.asyncio
+async def test_query_content_search_matches_author_for_posts_and_comments():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+    try:
+        async with session_factory() as db:
+            db.add_all(
+                [
+                    ContentItem(
+                        org_id="org-1",
+                        collection="crawl",
+                        platform="facebook",
+                        content_type="fb_post",
+                        body="Question about model choice",
+                        author="Nguoi tham gia an danh",
+                        content_hash="post-hash",
+                    ),
+                    ContentItem(
+                        org_id="org-1",
+                        collection="crawl",
+                        platform="facebook",
+                        content_type="fb_comment",
+                        body="Short answer",
+                        author="Hoang Thanh Tung",
+                        content_hash="comment-hash",
+                        parent_id="post-hash",
+                        item_level=1,
+                    ),
+                ]
+            )
+            await db.commit()
+
+        async with session_factory() as db:
+            with tenant_context("org-1"):
+                posts, post_total = await query_content(
+                    db,
+                    collection="crawl",
+                    content_type="fb_post",
+                    search="tham gia",
+                )
+                comments, comment_total = await query_content(
+                    db,
+                    collection="crawl",
+                    content_type="fb_comment",
+                    search="Hoang",
+                )
+
+        assert post_total == 1
+        assert [item.content_hash for item in posts] == ["post-hash"]
+        assert comment_total == 1
+        assert [item.content_hash for item in comments] == ["comment-hash"]
+    finally:
+        await engine.dispose()

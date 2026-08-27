@@ -486,6 +486,56 @@ async def _scenario_variable_scope_or_404(
 # ── Campaign CRUD ────────────────────────────────────────────────────────────
 
 
+class CampaignPageOut(BaseModel):
+    total: int
+    items: list[Union[CampaignEntityOut, CampaignOut]]
+
+
+@router.get(
+    "/page",
+    response_model=CampaignPageOut,
+    dependencies=[Depends(require_permission("campaigns", "read"))],
+)
+async def list_campaigns_page(
+    db: DB,
+    user: CurrentUser,
+    search: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        campaigns = await repo.list_campaigns(
+            db,
+            org_id=None,
+            user_id=data_owner_user_id(user),
+            search=search,
+        )
+        total = len(campaigns)
+        page = campaigns[offset : offset + limit]
+        items = []
+        for campaign in page:
+            scenarios = await repo.list_scenarios(db, campaign.id)
+            items.append(_to_out(campaign, scenarios))
+        return CampaignPageOut(total=total, items=items)
+
+    from db.crud import campaign_entity as campaign_entity_repo
+
+    views = await list_campaigns_for_org(
+        db,
+        org_id,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    total = await campaign_entity_repo.count_campaign_entities(
+        db,
+        org_id,
+        search=search,
+    )
+    return CampaignPageOut(total=total, items=[_entity_out(view) for view in views])
+
+
 @router.get(
     "",
     response_model=list[Union[CampaignEntityOut, CampaignOut]],
@@ -495,11 +545,15 @@ async def list_campaigns(
     db: DB,
     user: CurrentUser,
     include_archived: bool = Query(default=False),
+    search: str | None = Query(default=None, max_length=200),
 ):
     org_id = getattr(user, "org_id", None)
     if org_id:
         views = await list_campaigns_for_org(
-            db, org_id, include_archived=include_archived
+            db,
+            org_id,
+            include_archived=include_archived,
+            search=search,
         )
         return [_entity_out(view) for view in views]
 
@@ -508,6 +562,7 @@ async def list_campaigns(
         org_id=None,
         user_id=data_owner_user_id(user),
         include_archived=include_archived,
+        search=search,
     )
     result = []
     for c in campaigns:

@@ -304,6 +304,7 @@ async def query_fleet_devices(
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
     sort: str = DEFAULT_SORT,
+    offset: int | None = None,
 ) -> FleetQueryPage:
     if limit < 1 or limit > MAX_LIMIT:
         raise FleetQueryValidationError(
@@ -340,14 +341,21 @@ async def query_fleet_devices(
         .outerjoin(DeviceFsmSnapshot, DeviceFsmSnapshot.device_id == Device.id)
         .where(*scope)
         .order_by(*order_by)
-        .limit(limit + 1)
     )
+    if offset is not None:
+        if offset < 0:
+            raise FleetQueryValidationError("offset must be non-negative")
+        q = q.offset(offset).limit(limit)
+    else:
+        q = q.limit(limit + 1)
+    if cursor and offset is not None:
+        raise FleetQueryValidationError("cursor and offset cannot be combined")
     if cursor:
         payload = _decode_cursor(cursor, org_id=filters.org_id, sort=sort)
         q = q.where(_cursor_clause(sort, payload))
 
     rows = (await db.execute(q)).all()
-    has_more = len(rows) > limit
+    has_more = offset is None and len(rows) > limit
     page_rows = rows[:limit]
     device_ids = [str(device.id) for device, _ in page_rows]
     groups = await _group_ids_map(db, device_ids)

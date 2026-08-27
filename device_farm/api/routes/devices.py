@@ -17,6 +17,7 @@ from api.auth.rbac import build_enforcer_for_user_from_db, permission_domain
 from runtime.core import DeviceManager
 from api.schemas.device import (
     DeviceCreate,
+    DeviceListOut,
     DeviceOut,
     SessionOut,
 )
@@ -284,6 +285,8 @@ async def list_devices(
     device_serial: str | None = Query(default=None),
     adb_serial: str | None = Query(default=None),
     relay_serial: str | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
 ):
     org_id = getattr(user, "org_id", None)
     ctrl = _get_ctrl_servicer_optional()
@@ -326,6 +329,8 @@ async def list_devices(
             device_serial,
             adb_serial,
             relay_serial,
+            page,
+            page_size,
         )
     )
     if fleet_mode:
@@ -347,9 +352,10 @@ async def list_devices(
                     adb_serial=adb_serial,
                     relay_serial=relay_serial,
                 ),
-                limit=limit or 50,
+                limit=page_size or limit or 50,
                 cursor=cursor,
                 sort=sort or "-paired_at",
+                offset=(page - 1) * (page_size or limit or 50) if page is not None else None,
             )
         except FleetQueryValidationError as exc:
             raise HTTPException(
@@ -369,6 +375,52 @@ async def list_devices(
             group_id,
             q,
         )
+        if page is not None:
+            devices_by_id = {
+                str(device.id): device
+                for device in await repo.list_devices(
+                    db, org_id=org_id, user_id=data_owner_user_id(user)
+                )
+            }
+            manager: DeviceManager | None = getattr(request.app.state, "manager", None)
+
+            def resolve_relay_id(device) -> str | None:
+                if ctrl is not None and not str(getattr(device, "serial", "")).startswith("pending-"):
+                    presence = _presence_for(device)
+                    if presence.relay_id:
+                        return presence.relay_id
+                    if device_requires_agent_boot(device):
+                        return None
+                if device_requires_agent_boot(device) or manager is None:
+                    return None
+                runtime_device = manager.get_device(getattr(device, "serial", ""))
+                if runtime_device is None:
+                    return None
+                return None
+
+            result_items: list[DeviceOut] = []
+            for row in page.items:
+                device = devices_by_id.get(row.db_id)
+                if device is None:
+                    continue
+                effective_state = _agent_boot_authoritative_state(row, row.state)
+                result_items.append(
+                    _to_out(
+                        device,
+                        relay_id=resolve_relay_id(device),
+                        adb_serial=row.adb_serial,
+                        state=effective_state,
+                    )
+                )
+            size = page_size or limit or 50
+            return DeviceListOut(
+                items=result_items,
+                total=page.total,
+                page=page,
+                page_size=size,
+                page_count=(page.total + size - 1) // size,
+            )
+
         items: list[FleetDeviceItemOut] = []
         for row in page.items:
             effective_state = row.state if state else _agent_boot_authoritative_state(row, row.state)

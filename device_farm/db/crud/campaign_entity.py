@@ -90,6 +90,7 @@ async def list_campaign_entities(
     *,
     include_archived: bool = False,
     tag: str | None = None,
+    search: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[Campaign]:
@@ -118,8 +119,50 @@ async def list_campaign_entities(
             stmt = stmt.join(CampaignTag).where(
                 func.lower(CampaignTag.tag) == tag.strip().lower()
             )
+        if search and (term := search.strip()):
+            escaped = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            stmt = stmt.where(
+                func.lower(Campaign.name).like(pattern, escape="\\")
+                | func.lower(func.coalesce(Campaign.description, "")).like(
+                    pattern, escape="\\"
+                )
+            )
         result = await db.execute(stmt)
         return list(result.scalars().unique().all())
+
+
+async def count_campaign_entities(
+    db: AsyncSession,
+    org_id: str,
+    *,
+    include_archived: bool = False,
+    search: str | None = None,
+) -> int:
+    from tenancy.context import use_tenant_scope
+
+    with use_tenant_scope(org_id):
+        stmt = select(func.count(Campaign.id)).where(Campaign.org_id == org_id)
+        if include_archived:
+            stmt = stmt.where(
+                (Campaign.deleted_at.is_(None))
+                | (Campaign.status == CampaignStatus.ARCHIVED.value)
+            )
+        else:
+            stmt = stmt.where(
+                Campaign.deleted_at.is_(None),
+                Campaign.status != CampaignStatus.ARCHIVED.value,
+            )
+        if search and (term := search.strip()):
+            escaped = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            stmt = stmt.where(
+                func.lower(Campaign.name).like(pattern, escape="\\")
+                | func.lower(func.coalesce(Campaign.description, "")).like(
+                    pattern, escape="\\"
+                )
+            )
+        return int((await db.execute(stmt)).scalar_one())
 
 
 async def create_campaign_entity(

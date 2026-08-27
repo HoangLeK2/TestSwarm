@@ -6,6 +6,12 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class RelayDeviceConnectionOut(BaseModel):
+    registered: bool = False
+    device_id: Optional[str] = None
+    device_agent_connected: bool = False
+
+
 class RelayAgentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -19,6 +25,9 @@ class RelayAgentOut(BaseModel):
     device_names: dict[str, str] = Field(default_factory=dict)
     status: str
     live_connected: bool = False
+    device_connections: dict[str, RelayDeviceConnectionOut] = Field(
+        default_factory=dict
+    )
     connected_at: datetime
     last_heartbeat_at: Optional[datetime] = None
     disconnected_at: Optional[datetime] = None

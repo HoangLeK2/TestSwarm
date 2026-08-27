@@ -118,7 +118,18 @@ async def query_content(
     if search:
         # Escape LIKE special characters so user input is treated as a literal substring.
         escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        stmt = stmt.where(ContentItem.body.ilike(f"%{escaped}%", escape="\\"))
+        pattern = f"%{escaped}%"
+        stmt = stmt.where(
+            or_(
+                ContentItem.title.ilike(pattern, escape="\\"),
+                ContentItem.body.ilike(pattern, escape="\\"),
+                ContentItem.author.ilike(pattern, escape="\\"),
+                ContentItem.author_id.ilike(pattern, escape="\\"),
+                ContentItem.url.ilike(pattern, escape="\\"),
+                ContentItem.content_hash.ilike(pattern, escape="\\"),
+                ContentItem.tags.ilike(pattern, escape="\\"),
+            )
+        )
 
     # Count
     count_stmt = select(func.count()).select_from(stmt.subquery())

@@ -51,6 +51,10 @@ DEFAULT_SCROLL_MAX_SWIPES = 5
 # fires the next swipe immediately — max_swipes burns as one burst.
 DEFAULT_SWIPE_SETTLE_S = 0.35
 MAX_SWIPE_SETTLE_S = 2.0
+# uiautomator2's own page-scroll granularity. 55 steps is a controlled drag;
+# the 4 steps our old `duration * 40` produced was a fling that overshot.
+U2_SCROLL_STEPS = 55
+U2_SCROLL_FORWARD_TIMEOUT_S = 5.0
 
 
 def _swipe_settle_s(p: dict) -> float:
@@ -666,6 +670,68 @@ def _selector_from_flow_params(params: dict) -> dict:
     return selector
 
 
+def _flow_selector_needs_xml_confirm(params: dict, selector: dict) -> bool:
+    raw = params.get("selector", {}) if isinstance(params, dict) else {}
+    if not isinstance(raw, dict) or not isinstance(raw.get("spec"), dict):
+        return False
+    return _xml_selector_supported(selector)
+
+
+def _scroll_container_needs_xml(params: dict) -> bool:
+    if not isinstance(params, dict):
+        return False
+    selector = params.get("selector")
+    if not isinstance(selector, dict) or not isinstance(selector.get("spec"), dict):
+        return False
+    container = params.get("container_selector")
+    if isinstance(container, dict) and container:
+        return False
+    return _scroll_is_vertical(params)
+
+
+def _xml_scrollable_container_payload(xml: str, *, vertical: bool) -> dict | None:
+    try:
+        root = _xml_parse_root(xml)
+    except Exception:
+        return None
+
+    candidates: list[tuple[int, int, int, int, Any]] = []
+    for node in root.iter("node"):
+        if str(node.attrib.get("scrollable", "")).lower() != "true":
+            continue
+        if str(node.attrib.get("visible-to-user", "true")).lower() == "false":
+            continue
+        bounds = _bounds_tuple_from_string(str(node.attrib.get("bounds", "") or ""))
+        if bounds is None:
+            continue
+        left, top, right, bottom = bounds
+        width = right - left
+        height = bottom - top
+        primary = height if vertical else width
+        area = width * height
+        candidates.append((primary, area, top, left, node))
+    if not candidates:
+        return None
+
+    chosen = max(candidates, key=lambda item: (item[0], item[1], -item[2], -item[3]))[4]
+    selector: dict[str, Any] = {"scrollable": True}
+    package_name = _xml_attr(chosen, "packageName")
+    class_name = _xml_attr(chosen, "className")
+    if package_name:
+        selector["packageName"] = package_name
+    if class_name:
+        selector["className"] = class_name
+
+    matches = [
+        node
+        for *_score, node in candidates
+        if _xml_node_matches(node, selector)
+    ]
+    if len(matches) > 1:
+        selector["instance"] = matches.index(chosen)
+    return _u2_selector_payload(selector)
+
+
 def _force_fresh_xml(act: dict) -> bool:
     if not isinstance(act, dict):
         return False
@@ -1092,9 +1158,114 @@ def _flow_find_get_text(dev: Any, p: dict) -> dict:
 
 
 def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
-    """Swipe in direction until element appears (scroll search)."""
-    direction = p.get("direction", "up")
+    """Scroll until the element appears.
+
+    Prefers UiScrollable (`scroll.forward()`): it finds the scrollable
+    container itself, scrolls inside it on-device with SCROLL_STEPS=55, waits
+    for idle between steps, and reports when the list has no more to give.
+    Blind screen-centre swipes are the fallback for selectors UiSelector
+    cannot express, and for screens with no scrollable container.
+    """
     max_swipes = max(0, int(p.get("max_swipes", DEFAULT_SCROLL_MAX_SWIPES)))
+    sel = _resolve(dev, p["selector"])
+    settle_s = _swipe_settle_s(p)
+    # The target is often already on screen and the screen is often still
+    # rendering. Probing at timeout=0 answers "no" before the frame exists and
+    # scrolls the target away, so give the first probe the caller's budget.
+    first_wait_s = _first_wait_s(p)
+    if first_wait_s and _selector_wait(sel, first_wait_s):
+        return {"found": True, "swipes": 0, "driver": "uiscrollable"}
+
+    scroller = _scroll_forward_fn(dev, p)
+    if scroller is not None:
+        for i in range(max_swipes):
+            if _selector_exists_now(sel):
+                return {"found": True, "swipes": i, "driver": "uiscrollable"}
+            try:
+                more = scroller()
+            except Exception:
+                # No scrollable container on this screen, or the container
+                # went away mid-scroll. Fall through to blind swipes rather
+                # than reporting a miss we never actually searched for.
+                break
+            if settle_s:
+                time.sleep(settle_s)
+            if more is False:
+                # UiScrollable says the list cannot advance — every further
+                # swipe would be wasted wall-clock on an unchanged screen.
+                return {
+                    "found": _selector_exists_now(sel),
+                    "swipes": i + 1,
+                    "driver": "uiscrollable",
+                    "exhausted": True,
+                }
+        else:
+            return {
+                "found": _selector_exists_now(sel),
+                "swipes": max_swipes,
+                "driver": "uiscrollable",
+            }
+
+    return _blind_swipe_until_found(dev, p, sel, max_swipes=max_swipes, settle_s=settle_s)
+
+
+def _scroll_forward_fn(dev: Any, p: dict):
+    """A zero-arg UiScrollable forward-scroll, or None if unavailable here."""
+    selector = p.get("selector")
+    if isinstance(selector, dict) and ("xpath" in selector or _spec_needs_xpath(selector)):
+        # UiScrollable takes a UiSelector; an xpath/chain target cannot be
+        # handed to it, so this screen gets the blind fallback.
+        return None
+    container = p.get("container_selector")
+    if not isinstance(container, dict) or not container:
+        container = {"scrollable": True}
+    vertical = str(p.get("direction", "up")) in {"up", "down", "vert", "vertical"}
+    try:
+        obj = dev(**{_selector_key(k): v for k, v in container.items()})
+        scroll = obj.scroll
+    except Exception:
+        return None
+    axis = getattr(scroll, "vert" if vertical else "horiz", scroll)
+
+    def _forward() -> Any:
+        return axis.forward()
+
+    return _forward
+
+
+def _scroll_is_vertical(p: dict) -> bool:
+    return str(p.get("direction", "up")) in {"up", "down", "vert", "vertical"}
+
+
+def _scroll_container_payload(p: dict) -> dict | None:
+    """UiSelector payload for the scrollable container, or None when this
+    screen/selector cannot be driven by UiScrollable."""
+    selector = p.get("selector")
+    if isinstance(selector, dict) and ("xpath" in selector or _spec_needs_xpath(selector)):
+        return None
+    container = p.get("container_selector")
+    if not isinstance(container, dict) or not container:
+        container = {"scrollable": True}
+    return _u2_selector_payload(container)
+
+
+def _spec_needs_xpath(selector: dict) -> bool:
+    spec = selector.get("spec")
+    if not isinstance(spec, dict):
+        return False
+    return bool(spec.get("xpath") or spec.get("chain"))
+
+
+def _blind_swipe_until_found(
+    dev: Any,
+    p: dict,
+    sel: Any,
+    *,
+    max_swipes: int,
+    settle_s: float,
+) -> dict:
+    """Screen-centre swipe loop — the fallback when UiScrollable cannot run."""
+    direction = p.get("direction", "up")
     step_ratio = float(p.get("step_ratio", 0.6))
     w, h = dev.window_size()
     cx, cy = w // 2, h // 2
@@ -1107,21 +1278,17 @@ def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
         "right": (cx - dx, cy, cx + dx, cy),
     }
     fx, fy, tx, ty = vectors.get(direction, vectors["up"])
-    sel = _resolve(dev, p["selector"])
-    settle_s = _swipe_settle_s(p)
-    # The target is often already on screen and the screen is often still
-    # rendering. Probing at timeout=0 answers "no" before the frame exists and
-    # scrolls the target away, so give the first probe the caller's budget.
-    first_wait_s = _first_wait_s(p)
-    if first_wait_s and _selector_wait(sel, first_wait_s):
-        return {"found": True, "swipes": 0}
     for i in range(max_swipes):
         if _selector_exists_now(sel):
-            return {"found": True, "swipes": i}
+            return {"found": True, "swipes": i, "driver": "blind_swipe"}
         dev.swipe(fx, fy, tx, ty, duration=float(p.get("duration", DEFAULT_SWIPE_DURATION)))
         if settle_s:
             time.sleep(settle_s)
-    return {"found": _selector_exists_now(sel), "swipes": max_swipes}
+    return {
+        "found": _selector_exists_now(sel),
+        "swipes": max_swipes,
+        "driver": "blind_swipe",
+    }
 
 
 def _flow_input_and_confirm(dev: Any, p: dict) -> dict:
@@ -6412,6 +6579,64 @@ class U2Executor:
         if not ok:
             raise RuntimeError(error or "u2 HTTP direct swipe failed")
 
+    def _run_http_scroll_forward(
+        self,
+        serial: str,
+        container: dict,
+        vertical: bool,
+        steps: int,
+    ) -> bool:
+        """One UiScrollable page-scroll inside the real container.
+
+        Returns False when the list cannot advance — the caller uses that to
+        stop instead of swiping an unchanged screen.
+        """
+        if self._http_rpc is None:
+            raise RuntimeError("u2 HTTP RPC not configured")
+        ok, error, result = self._call_http_rpc(
+            serial,
+            {
+                "jsonrpc": "2.0",
+                "method": "scrollForward",
+                "id": 1,
+                "params": [container, vertical, steps],
+            },
+            U2_SCROLL_FORWARD_TIMEOUT_S,
+        )
+        if not ok:
+            raise RuntimeError(error or "u2 HTTP scrollForward failed")
+        return bool(result)
+
+    async def _infer_http_scroll_container_payload(
+        self,
+        *,
+        serial: str,
+        vertical: bool,
+        compressed: bool,
+        priority: str | int | None,
+        deadline_ms: int | float | None,
+        batch_started: float,
+    ) -> dict | None:
+        if self._http_dump is None:
+            return None
+        dump_result = await self._run_single_dump_batch(
+            serial=serial,
+            act={
+                "op": "dump_hierarchy",
+                "timeout": 1.0,
+                "compressed": compressed,
+            },
+            early_exit=True,
+            priority=priority,
+            deadline_ms=deadline_ms,
+            batch_started=batch_started,
+            bypass_cache=False,
+        )
+        entry = dict((dump_result.get("results") or [{}])[0])
+        if not entry.get("ok") or not entry.get("value"):
+            return None
+        return _xml_scrollable_container_payload(str(entry["value"]), vertical=vertical)
+
     async def _run_http_flow(
         self,
         *,
@@ -6446,6 +6671,19 @@ class U2Executor:
             # and scrolling a target that is already there away is worse than
             # waiting for it. Later probes stay instant — the settle covers them.
             first_wait_s = _first_wait_s(params)
+            # Prefer UiScrollable over blind screen-centre swipes: it scrolls
+            # the real container and reports when the list is spent. Degrades
+            # to the swipe vector if the screen has no scrollable container.
+            container_payload = _scroll_container_payload(params)
+            vertical = _scroll_is_vertical(params)
+            driver = "uiscrollable" if container_payload is not None else "blind_swipe"
+            exhausted = False
+            scrolls_done = 0
+            container_inferred = False
+            xml_confirm = (
+                self._http_dump is not None
+                and _flow_selector_needs_xml_confirm(params, selector)
+            )
             for swipes in range(max_swipes + 1):
                 probe_budget = first_wait_s if swipes == 0 else 0.0
                 probe_deadline = time.monotonic() + probe_budget
@@ -6474,6 +6712,21 @@ class U2Executor:
                         )
                         found = bool(xml_found["satisfied"])
                         break
+                    if not found and xml_confirm:
+                        xml_found = await self._poll_xml_selector_node(
+                            serial=serial,
+                            selector=selector,
+                            timeout_s=probe_budget,
+                            compressed=compressed,
+                            want_present=True,
+                            priority=priority,
+                            deadline_ms=deadline_ms,
+                            batch_started=batch_started,
+                            poll_stat="http_flow_polls",
+                            bypass_first_cache=swipes > 0,
+                        )
+                        found = bool(xml_found["satisfied"])
+                        break
                     if found or time.monotonic() >= probe_deadline:
                         break
                     await asyncio.sleep(0.2)
@@ -6483,11 +6736,32 @@ class U2Executor:
                     self._record_outcome(serial, True)
                     return {
                         "ok": True,
-                        "value": {"found": True, "swipes": swipes},
+                        "value": {
+                            "found": True,
+                            "swipes": swipes,
+                            "driver": driver,
+                        },
                         "error": None,
                     }
                 if swipes >= max_swipes:
                     break
+                more: bool | None = None
+                if (
+                    container_payload is not None
+                    and not container_inferred
+                    and _scroll_container_needs_xml(params)
+                ):
+                    inferred_container = await self._infer_http_scroll_container_payload(
+                        serial=serial,
+                        vertical=vertical,
+                        compressed=compressed,
+                        priority=priority,
+                        deadline_ms=deadline_ms,
+                        batch_started=batch_started,
+                    )
+                    if inferred_container is not None:
+                        container_payload = inferred_container
+                    container_inferred = True
                 self.begin_ui_mutation(serial)
                 try:
                     async with self._admit(
@@ -6495,9 +6769,27 @@ class U2Executor:
                         priority=priority,
                         deadline_ms=deadline_ms,
                     ):
-                        await self._run_sync(
-                            lambda: self._run_http_flow_swipe(serial, vector, duration)
-                        )
+                        if container_payload is not None:
+                            try:
+                                more = await self._run_sync(
+                                    lambda: self._run_http_scroll_forward(
+                                        serial,
+                                        container_payload,
+                                        vertical,
+                                        U2_SCROLL_STEPS,
+                                    )
+                                )
+                                self._bump("http_scroll_forwards")
+                            except Exception:
+                                # No scrollable container here. Keep the fast
+                                # path but stop pretending we have one.
+                                self._bump("http_scroll_fallbacks")
+                                container_payload = None
+                                driver = "blind_swipe"
+                        if container_payload is None:
+                            await self._run_sync(
+                                lambda: self._run_http_flow_swipe(serial, vector, duration)
+                            )
                     self._bump("http_direct_actions")
                     self._bump("http_flow_swipes")
                 except Exception as exc:
@@ -6509,13 +6801,26 @@ class U2Executor:
                     self.end_ui_mutation(serial)
                 if settle_s:
                     await asyncio.sleep(settle_s)
+                scrolls_done = swipes + 1
+                if more is False:
+                    # The list cannot advance; further swipes would only poll
+                    # an unchanged screen.
+                    exhausted = True
+                    break
 
             self._bump("http_flow_fastpaths")
             self._bump("http_flow_misses")
             self._record_outcome(serial, True)
+            value = {
+                "found": False,
+                "swipes": scrolls_done if exhausted else max_swipes,
+                "driver": driver,
+            }
+            if exhausted:
+                value["exhausted"] = True
             return {
                 "ok": True,
-                "value": {"found": False, "swipes": max_swipes},
+                "value": value,
                 "error": None,
             }
 

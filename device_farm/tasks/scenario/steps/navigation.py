@@ -587,13 +587,23 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
             )
             found = bool(flow_result.get("found"))
             swipes_done = int(flow_result.get("swipes") or 0)
-            result["scroll_to_driver"] = "u2_flow"
+            # Which mechanism actually scrolled — "uiscrollable" drove the real
+            # container, "blind_swipe" fell back to screen-centre coordinates.
+            # Without this a failure log cannot tell the two apart.
+            scroll_driver = str(flow_result.get("driver") or "u2_flow")
+            exhausted = bool(flow_result.get("exhausted"))
+            result["scroll_to_driver"] = scroll_driver
             result["scroll_to_flow_ms"] = round((time.monotonic() - flow_started) * 1000.0, 1)
             result["scroll_to_swipes"] = swipes_done
+            if exhausted:
+                result["scroll_to_exhausted"] = True
             if found:
                 if is_comment_target:
                     _mark_comment_target_found(sc, result)
-                result["message"] = f"scroll_to found {lbl} after {swipes_done} swipe(s)"
+                result["message"] = (
+                    f"scroll_to found {lbl} after {swipes_done} swipe(s) "
+                    f"[{scroll_driver}]"
+                )
             else:
                 result["ok"] = False
                 if is_comment_target:
@@ -605,7 +615,10 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
                         effective_max_swipes=max_swipes,
                         swipes_done=swipes_done,
                     )
-                result["message"] = f"scroll_to {lbl} not found after {max_swipes} swipes"
+                reason = "list exhausted" if exhausted else f"{max_swipes} swipes"
+                result["message"] = (
+                    f"scroll_to {lbl} not found after {reason} [{scroll_driver}]"
+                )
             return
         except Exception as exc:
             result["scroll_to_flow_error"] = str(exc)[:200]

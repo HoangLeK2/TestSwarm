@@ -2763,3 +2763,97 @@ def test_resolve_campaign_id_for_edge_resolve_failure_returns_none(monkeypatch) 
     )
 
     assert resolved is None
+
+
+def test_unresolved_collection_variable_fails_the_step(monkeypatch) -> None:
+    """An undeclared ${SAVE_COLLECTION} used to reach content_items as a
+    literal collection name, filing rows nobody could ever query."""
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 1}})
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "${SAVE_COLLECTION}",
+            "dedupe_field": "post_key",
+            "edge_extra_data": True,
+        },
+        "posts",
+        "facebook",
+        result,
+    )
+
+    assert handled is True
+    assert result["ok"] is False
+    assert "SAVE_COLLECTION" in result["message"]
+    # Nothing was sent to the device: the row is refused before it is built.
+    assert device.calls == []
+
+
+def test_comment_coverage_is_reported_without_require_complete(monkeypatch) -> None:
+    """Wanting 100 comments and stopping at 20 used to look identical to
+    wanting 20, unless the step opted into comment_require_complete."""
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 20,
+            "inserted_count": 20,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "ok",
+                "comments_returned": 20,
+                "comment_target": 100,
+                "comment_scroll_stopped_reason": "no_growth",
+            },
+        },
+    })
+    result = {}
+
+    extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {"collection": "fb", "edge_extra_data": True},
+        "comments",
+        "facebook",
+        result,
+    )
+
+    assert result["comment_coverage_collected"] == 20
+    assert result["comment_coverage_target"] == 100
+    assert result["comment_scroll_stopped_reason"] == "no_growth"
+    assert "coverage=20/100" in result["message"]
+    assert "stopped=no_growth" in result["message"]
+
+
+def test_full_comment_coverage_reports_no_stop_reason(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 30,
+            "inserted_count": 30,
+            "duplicate_count": 0,
+            "diagnostic": {
+                "reason_code": "ok",
+                "comments_returned": 30,
+                "comment_target": 30,
+                "comment_scroll_stopped_reason": "target_reached",
+            },
+        },
+    })
+    result = {}
+
+    extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {"collection": "fb", "edge_extra_data": True},
+        "comments",
+        "facebook",
+        result,
+    )
+
+    assert "coverage=30/30" in result["message"]
+    assert "stopped=" not in result["message"]

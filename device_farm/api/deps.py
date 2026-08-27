@@ -160,25 +160,34 @@ async def _resolve_effective_org_id(
         return base_org
 
     header_org = (request.headers.get(_ORG_HEADER) or "").strip()
-    if not header_org:
+    requested_org = header_org
+    if not requested_org and getattr(request, "scope", {}).get("type") == "websocket":
+        query_params = getattr(request, "query_params", None)
+        if query_params is not None:
+            requested_org = (
+                query_params.get("org_id")
+                or query_params.get("organization_id")
+                or ""
+            ).strip()
+    if not requested_org:
         return base_org
 
-    if not await _organization_exists(db, header_org):
+    if not await _organization_exists(db, requested_org):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "UNKNOWN_ORGANIZATION", "organization_id": header_org},
+            detail={"code": "UNKNOWN_ORGANIZATION", "organization_id": requested_org},
         )
 
     if is_superadmin(user):
-        return header_org
+        return requested_org
 
-    role = await repo.get_organization_role_for_user(db, user.id, header_org)
+    role = await repo.get_organization_role_for_user(db, user.id, requested_org)
     if role:
-        return header_org
+        return requested_org
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail={"code": "ORG_MEMBERSHIP_REQUIRED", "organization_id": header_org},
+        detail={"code": "ORG_MEMBERSHIP_REQUIRED", "organization_id": requested_org},
     )
 
 

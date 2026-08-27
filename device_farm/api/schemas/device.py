@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DeviceCreate(BaseModel):
@@ -36,6 +36,14 @@ class DeviceOut(BaseModel):
     paired_at: Optional[datetime] = None
     unpaired_at: Optional[datetime] = None
     notes: str = ""
+
+
+class DeviceListOut(BaseModel):
+    items: list[DeviceOut] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int
+    page_count: int
 
 
 class SessionOut(BaseModel):

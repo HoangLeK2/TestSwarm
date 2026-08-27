@@ -194,6 +194,8 @@ async def test_list_relay_agents_dedupes_same_hostname_rows():
         mock_repo.list_relay_agents = AsyncMock(
             return_value=[_row("relay-old", "offline", 0), _row("relay-new", "online", 10)]
         )
+        mock_repo.list_devices_by_serial_aliases = AsyncMock(return_value=[])
+        mock_repo.list_active_session_device_ids = AsyncMock(return_value=set())
 
         result = await list_relay_agents(db=fake_db, user=fake_user)
 
@@ -244,6 +246,8 @@ async def test_list_relay_agents_uses_org_scope_and_cached_caps():
              return_value={"192.168.1.20:5555", "192.168.1.21:5555"},
         ):
         mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
+        mock_repo.list_devices_by_serial_aliases = AsyncMock(return_value=[])
+        mock_repo.list_active_session_device_ids = AsyncMock(return_value=set())
 
         result = await list_relay_agents(db=fake_db, user=fake_user)
 
@@ -251,6 +255,55 @@ async def test_list_relay_agents_uses_org_scope_and_cached_caps():
     assert len(result) == 1
     assert result[0].serials == ["192.168.1.20:5555", "192.168.1.21:5555"]
     assert caps_calls == ["192.168.1.20:5555", "192.168.1.21:5555"]
+
+
+@pytest.mark.asyncio
+async def test_list_relay_agents_includes_registered_device_agent_connection_state():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from datetime import datetime, timezone
+
+    from api.routes.relay_agents import list_relay_agents
+
+    fake_row = MagicMock()
+    fake_row.relay_id = "relay-x"
+    fake_row.hostname = "agent-host"
+    fake_row.ip = "192.168.1.10"
+    fake_row.version = "test"
+    fake_row.serials = ["10AE7S00HD002JK"]
+    fake_row.status = "online"
+    fake_row.connected_at = datetime.now(timezone.utc)
+    fake_row.last_heartbeat_at = fake_row.connected_at
+    fake_row.disconnected_at = None
+    fake_row.user_id = "user-a"
+    fake_row.enrollment_token_id = "tok-a"
+
+    device = MagicMock()
+    device.id = "device-1"
+    device.serial = "logical-device"
+    device.adb_serial = "10AE7S00HD002JK"
+    device.adb_ip = None
+    device.adb_port = 5555
+    device.user_id = "user-a"
+    device.org_id = "org-a"
+
+    fake_db = AsyncMock()
+    fake_user = MagicMock()
+    fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
+
+    with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents._get_live_caps", return_value={}), \
+         patch("api.routes.relay_agents._live_relay_serials", return_value={"10AE7S00HD002JK"}):
+        mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
+        mock_repo.list_devices_by_serial_aliases = AsyncMock(return_value=[device])
+        mock_repo.list_active_session_device_ids = AsyncMock(return_value={"device-1"})
+
+        result = await list_relay_agents(db=fake_db, user=fake_user)
+
+    conn = result[0].device_connections["10AE7S00HD002JK"]
+    assert conn.registered is True
+    assert conn.device_id == "device-1"
+    assert conn.device_agent_connected is True
 
 
 @pytest.mark.asyncio
@@ -281,6 +334,8 @@ async def test_list_relay_agents_hides_serials_when_control_channel_offline():
     with patch("api.routes.relay_agents.repo") as mock_repo, \
          patch("api.routes.relay_agents._live_relay_serials", return_value=None):
         mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
+        mock_repo.list_devices_by_serial_aliases = AsyncMock(return_value=[])
+        mock_repo.list_active_session_device_ids = AsyncMock(return_value=set())
 
         result = await list_relay_agents(db=fake_db, user=fake_user)
 
@@ -509,6 +564,7 @@ async def test_create_relay_claim_connect_job_dispatches_with_ws_base_url():
     fake_job.updated_at = fake_job.created_at
 
     with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents.device_farm_ws_public_base", return_value=""), \
          patch("api.routes.relay_agents.relay_onboarding.create_relay_batch_job", new=AsyncMock(return_value=fake_job)), \
          patch("api.routes.relay_agents.relay_onboarding.dispatch_local_relay_job") as dispatch:
         mock_repo.get_relay_agent = AsyncMock(return_value=fake_row)
@@ -526,6 +582,118 @@ async def test_create_relay_claim_connect_job_dispatches_with_ws_base_url():
     opts = kwargs["claim_connect"]
     assert opts.connect is True
     assert opts.ws_base_url == "wss://farm.local"
+
+
+@pytest.mark.asyncio
+async def test_connect_relay_device_pushes_device_agent_url_without_logging_key(caplog):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from api.routes.relay_agents import connect_relay_device
+
+    row = MagicMock()
+    row.status = "online"
+    row.serials = ["dev-1"]
+
+    device = MagicMock()
+    device.id = "device-1"
+    device.serial = "dev-1"
+    device.adb_serial = "dev-1"
+    device.adb_ip = None
+    device.adb_port = 5555
+    device.device_key = "secret-device-key"
+    device.user_id = "user-a"
+    device.org_id = "org-a"
+
+    fake_ctrl = MagicMock()
+    shell_calls: list[tuple[str, str]] = []
+
+    async def _shell(serial: str, cmd: str, timeout: float = 15.0) -> dict:
+        shell_calls.append((serial, cmd))
+        return {"ok": True, "exit_code": 0, "output": "started", "error": ""}
+
+    fake_ctrl.shell = _shell
+
+    fake_request = MagicMock()
+    fake_request.url.scheme = "https"
+    fake_request.headers = {"host": "farm.local"}
+
+    fake_db = AsyncMock()
+    fake_user = MagicMock()
+    fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
+
+    with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents._get_ctrl", return_value=fake_ctrl):
+        mock_repo.get_relay_agent = AsyncMock(return_value=row)
+        mock_repo.list_devices = AsyncMock(return_value=[device])
+
+        result = await connect_relay_device(
+            "relay-x",
+            "dev-1",
+            request=fake_request,
+            db=fake_db,
+            user=fake_user,
+        )
+
+    assert result.ok is True
+    assert shell_calls[0][0] == "dev-1"
+    assert "ACTION_IDENTIFY" in shell_calls[0][1]
+    assert "secret-device-key" in shell_calls[0][1]
+    assert "secret-device-key" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_disconnect_relay_device_force_stops_stf_and_closes_active_sessions():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from api.routes.relay_agents import disconnect_relay_device
+
+    row = MagicMock()
+    row.status = "online"
+    row.serials = ["dev-1"]
+
+    device = MagicMock()
+    device.id = "device-1"
+    device.serial = "dev-1"
+    device.adb_serial = "dev-1"
+    device.adb_ip = None
+    device.adb_port = 5555
+    device.user_id = "user-a"
+    device.org_id = "org-a"
+
+    fake_ctrl = MagicMock()
+    shell_calls: list[tuple[str, str]] = []
+
+    async def _shell(serial: str, cmd: str, timeout: float = 15.0) -> dict:
+        shell_calls.append((serial, cmd))
+        return {"ok": True, "exit_code": 0, "output": "", "error": ""}
+
+    fake_ctrl.shell = _shell
+
+    fake_db = AsyncMock()
+    fake_user = MagicMock()
+    fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
+
+    with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents._get_ctrl", return_value=fake_ctrl):
+        mock_repo.get_relay_agent = AsyncMock(return_value=row)
+        mock_repo.list_devices = AsyncMock(return_value=[device])
+        mock_repo.close_active_sessions_for_device = AsyncMock(return_value=1)
+
+        result = await disconnect_relay_device(
+            "relay-x",
+            "dev-1",
+            db=fake_db,
+            user=fake_user,
+        )
+
+    assert result.ok is True
+    assert shell_calls == [("dev-1", "am force-stop jp.co.cyberagent.stf")]
+    mock_repo.close_active_sessions_for_device.assert_awaited_once_with(
+        fake_db, "device-1"
+    )
+    fake_db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

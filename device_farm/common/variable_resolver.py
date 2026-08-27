@@ -31,6 +31,21 @@ _BUILTIN_NAMES: frozenset[str] = frozenset({
 })
 
 
+def unresolved_var_names(value: Any) -> list[str]:
+    """``${VAR}`` names that survived resolution, in order of appearance.
+
+    ``VariableContext.resolve`` deliberately leaves an unknown ``${VAR}`` as
+    literal text so a partially-configured step still runs. That is the right
+    call for free text and the wrong one for a field the row is keyed by: a
+    collection named ``${SAVE_COLLECTION}`` reached the database and a selector
+    matching the literal ``${GROUP_TEXT}`` matches nothing on screen. Callers
+    that own such a field use this to fail loudly instead.
+    """
+    if not isinstance(value, str):
+        return []
+    return _VAR_PATTERN.findall(value)
+
+
 def _normalize_vars(raw: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize a variables dict.

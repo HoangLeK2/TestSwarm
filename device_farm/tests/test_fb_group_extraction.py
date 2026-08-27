@@ -99,6 +99,7 @@ def test_fb_groups_persists_without_content_collection_and_keeps_query(
     )
 
     assert handled is True
+    assert device.calls[0]["strategy"] == "fb_groups"
     assert device.calls[0]["entity"] == "groups" and device.calls[0]["platform"] == "facebook"
     assert device.calls[0]["context"]["persist"] is True
     assert device.calls[0]["context"]["return_items"] is True
@@ -241,6 +242,7 @@ def test_fb_pages_persists_without_content_collection_and_keeps_query(
     )
 
     assert handled is True
+    assert device.calls[0]["strategy"] == "fb_pages"
     assert device.calls[0]["entity"] == "pages" and device.calls[0]["platform"] == "facebook"
     assert device.calls[0]["context"]["persist"] is True
     assert device.calls[0]["context"]["return_items"] is True

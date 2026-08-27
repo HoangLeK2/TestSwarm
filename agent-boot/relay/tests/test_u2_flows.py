@@ -257,6 +257,23 @@ async def test_find_get_text_not_found(executor_with_device):
 # ── swipe_until_found ─────────────────────────────────────────────────────────
 
 
+def _wire_scroll_device(dev, target, *, forward_results=None):
+    """Route dev(scrollable=True) to a container mock, everything else to the
+    target — the executor resolves those two separately."""
+    container = MagicMock()
+    if forward_results is None:
+        container.scroll.vert.forward = MagicMock(return_value=True)
+    else:
+        container.scroll.vert.forward = MagicMock(side_effect=forward_results)
+
+    def _dispatch(**kwargs):
+        return container if kwargs.get("scrollable") else target
+
+    dev.side_effect = _dispatch
+    dev.window_size.return_value = (1080, 1920)
+    return container
+
+
 @pytest.mark.asyncio
 async def test_swipe_until_found_on_third(executor_with_device):
     exc, dev = executor_with_device
@@ -264,8 +281,7 @@ async def test_swipe_until_found_on_third(executor_with_device):
 
     exists_sequence = [False, False, True]
     type(sel).exists = property(lambda self, _seq=iter(exists_sequence): next(_seq))
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    container = _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow("serial", "swipe_until_found", {
         "selector": {"text": "Target"},
@@ -274,7 +290,9 @@ async def test_swipe_until_found_on_third(executor_with_device):
 
     assert result["value"]["found"] is True
     assert result["value"]["swipes"] == 2
-    assert dev.swipe.call_count == 2
+    assert result["value"]["driver"] == "uiscrollable"
+    assert container.scroll.vert.forward.call_count == 2
+    dev.swipe.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -282,8 +300,7 @@ async def test_swipe_until_found_uses_non_blocking_exists(executor_with_device):
     exc, dev = executor_with_device
     sel = MagicMock()
     sel.exists = MagicMock(side_effect=[False, True])
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    container = _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow("serial", "swipe_until_found", {
         "selector": {"text": "Target"},
@@ -293,7 +310,7 @@ async def test_swipe_until_found_uses_non_blocking_exists(executor_with_device):
     assert result["value"]["found"] is True
     assert result["value"]["swipes"] == 1
     assert sel.exists.call_args_list == [call(timeout=0), call(timeout=0)]
-    assert dev.swipe.call_count == 1
+    assert container.scroll.vert.forward.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -301,8 +318,7 @@ async def test_swipe_until_found_exhausts(executor_with_device):
     exc, dev = executor_with_device
     sel = MagicMock()
     type(sel).exists = property(lambda self: False)
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow("serial", "swipe_until_found", {
         "selector": {"text": "Nope"},
@@ -314,12 +330,68 @@ async def test_swipe_until_found_exhausts(executor_with_device):
 
 
 @pytest.mark.asyncio
+async def test_swipe_until_found_stops_when_list_cannot_advance(executor_with_device):
+    """UiScrollable reports the list is at its end. Every further swipe would
+    scroll an unchanged screen, so the loop must stop instead of burning
+    max_swipes on wall-clock."""
+    exc, dev = executor_with_device
+    sel = MagicMock()
+    type(sel).exists = property(lambda self: False)
+    container = _wire_scroll_device(dev, sel, forward_results=[True, False])
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"text": "Nope"},
+        "max_swipes": 10,
+    })
+
+    assert result["value"]["found"] is False
+    assert result["value"]["swipes"] == 2
+    assert result["value"]["exhausted"] is True
+    assert container.scroll.vert.forward.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_falls_back_to_blind_swipe_for_xpath(executor_with_device):
+    """UiScrollable takes a UiSelector; an xpath target cannot be handed to it,
+    so that screen keeps the old swipe loop."""
+    exc, dev = executor_with_device
+    sel = MagicMock()
+    type(sel).exists = property(lambda self: False)
+    dev.xpath.return_value = sel
+    dev.window_size.return_value = (1080, 1920)
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"xpath": "//*[@text='Target']"},
+        "max_swipes": 2,
+    })
+
+    assert result["value"]["driver"] == "blind_swipe"
+    assert dev.swipe.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_falls_back_when_no_scrollable_container(executor_with_device):
+    exc, dev = executor_with_device
+    sel = MagicMock()
+    type(sel).exists = property(lambda self: False)
+    container = _wire_scroll_device(dev, sel)
+    container.scroll.vert.forward = MagicMock(side_effect=RuntimeError("no scrollable"))
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"text": "Nope"},
+        "max_swipes": 2,
+    })
+
+    assert result["value"]["driver"] == "blind_swipe"
+    assert dev.swipe.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_swipe_until_found_zero_swipes(executor_with_device):
     exc, dev = executor_with_device
     sel = MagicMock()
     type(sel).exists = property(lambda self: True)
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    container = _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow("serial", "swipe_until_found", {
         "selector": {"text": "Here"},
@@ -329,6 +401,7 @@ async def test_swipe_until_found_zero_swipes(executor_with_device):
     assert result["value"]["found"] is True
     assert result["value"]["swipes"] == 0
     dev.swipe.assert_not_called()
+    container.scroll.vert.forward.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -365,21 +438,21 @@ async def test_swipe_until_found_uses_http_flow_without_u2_lock(event_loop):
     )
 
     assert result["ok"] is True
-    assert result["value"] == {"found": True, "swipes": 2}
+    assert result["value"] == {"found": True, "swipes": 2, "driver": "uiscrollable"}
     assert [call["method"] for call in rpc_calls] == [
         "exist",
-        "swipe",
+        "scrollForward",
         "exist",
-        "swipe",
+        "scrollForward",
         "exist",
     ]
     assert rpc_calls[0]["params"][0]["resourceId"] == "com.app:id/target"
-    assert rpc_calls[1] == {
-        "jsonrpc": "2.0",
-        "method": "swipe",
-        "id": 1,
-        "params": [540, 1536, 540, 384, 4],
-    }
+    # Container is the scrollable node, scrolled vertically at the library's
+    # own 55-step granularity — not a screen-centre fling.
+    assert rpc_calls[1]["method"] == "scrollForward"
+    assert rpc_calls[1]["params"][0]["scrollable"] is True
+    assert rpc_calls[1]["params"][1] is True
+    assert rpc_calls[1]["params"][2] == 55
     pool.run_locked.assert_not_called()
     stats = exc.stats_snapshot(reset=False)
     assert stats["http_flow_fastpaths"] == 1
@@ -429,7 +502,7 @@ async def test_swipe_until_found_http_flow_accepts_simple_spec(event_loop):
     )
 
     assert result["ok"] is True
-    assert result["value"] == {"found": True, "swipes": 0}
+    assert result["value"] == {"found": True, "swipes": 0, "driver": "uiscrollable"}
     assert [call["method"] for call in rpc_calls] == ["exist"]
     assert rpc_calls[0]["params"][0]["description"] == "Bình luận"
     assert rpc_calls[0]["params"][0]["packageName"] == "com.facebook.katana"
@@ -440,7 +513,177 @@ async def test_swipe_until_found_http_flow_accepts_simple_spec(event_loop):
 
 
 @pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_confirms_spec_with_xml_before_scroll(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+    dumps: list[tuple] = []
+    hierarchy = """<hierarchy rotation="0">
+      <node class="android.widget.FrameLayout" package="com.facebook.katana">
+        <node class="androidx.recyclerview.widget.RecyclerView" package="com.facebook.katana"
+              scrollable="true" bounds="[0,308][1260,434]"/>
+        <node text="Cộng Đồng Claude &amp; OpenClaw &amp; AI Agent Việt Nam&#160;· Tham&#160;gia"
+              class="android.view.View" package="com.facebook.katana"
+              content-desc="Cộng Đồng Claude &amp; OpenClaw &amp; AI Agent Việt Nam &#160;·  Tham&#160;gia"
+              visible-to-user="true" bounds="[294,478][1218,610]"/>
+      </node>
+    </hierarchy>"""
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        return True, "", False
+
+    def http_dump(*args):
+        dumps.append(args)
+        return hierarchy
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=http_dump,
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {
+                "spec": {
+                    "by": "description",
+                    "value": "Cộng Đồng Claude & OpenClaw & AI Agent Việt Nam \u00a0·  Tham\u00a0gia",
+                    "conditions": {"packageName": "com.facebook.katana"},
+                }
+            },
+            "max_swipes": 5,
+            "width": 1080,
+            "height": 1920,
+        },
+        priority="visible",
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "swipes": 0, "driver": "uiscrollable"}
+    assert [call["method"] for call in rpc_calls] == ["exist"]
+    assert dumps
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_hits"] == 1
+    assert stats["http_flow_swipes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_uses_vertical_scroll_container(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+    exists_results = [False, False, True]
+    hierarchy = """<hierarchy rotation="0">
+      <node class="android.widget.FrameLayout" package="com.facebook.katana">
+        <node class="androidx.recyclerview.widget.RecyclerView" package="com.facebook.katana"
+              scrollable="true" visible-to-user="true" bounds="[0,308][1260,434]"/>
+        <node class="androidx.recyclerview.widget.StaggeredGridLayoutManager"
+              package="com.facebook.katana" scrollable="true" visible-to-user="true"
+              bounds="[0,469][1260,2800]"/>
+      </node>
+    </hierarchy>"""
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        if payload["method"] == "exist":
+            return True, "", exists_results.pop(0)
+        return True, "", True
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: hierarchy,
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {
+                "spec": {
+                    "by": "description",
+                    "value": "Cộng Đồng OpenClaw \u00a0· Tham\u00a0gia",
+                    "conditions": {"packageName": "com.facebook.katana"},
+                }
+            },
+            "max_swipes": 5,
+            "width": 1080,
+            "height": 1920,
+        },
+        priority="visible",
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": True, "swipes": 2, "driver": "uiscrollable"}
+    scroll_calls = [call for call in rpc_calls if call["method"] == "scrollForward"]
+    assert len(scroll_calls) == 2
+    for call in scroll_calls:
+        container = call["params"][0]
+        assert container["scrollable"] is True
+        assert container["packageName"] == "com.facebook.katana"
+        assert container["className"] == "androidx.recyclerview.widget.StaggeredGridLayoutManager"
+    pool.run_locked.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_swipe_until_found_http_flow_exhausts(event_loop):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        # exist → never found; scrollForward → list still has room.
+        return True, "", payload["method"] == "scrollForward"
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("exists RPC should avoid XML dump"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {"text": "Missing"},
+            "max_swipes": 3,
+            "window_size": [1080, 1920],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"] == {"found": False, "swipes": 3, "driver": "uiscrollable"}
+    assert [call["method"] for call in rpc_calls] == [
+        "exist",
+        "scrollForward",
+        "exist",
+        "scrollForward",
+        "exist",
+        "scrollForward",
+        "exist",
+    ]
+    pool.run_locked.assert_not_called()
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["http_flow_misses"] == 1
+    assert stats["http_flow_swipes"] == 3
+    assert stats["http_exists_misses"] == 4
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_stops_when_list_cannot_advance(event_loop):
+    """scrollForward returning False means the list is spent. Polling an
+    unchanged screen for the remaining budget is wasted wall-clock."""
     pool = AsyncMock()
     pool.run_locked = AsyncMock()
     pool.evict = AsyncMock()
@@ -462,40 +705,69 @@ async def test_swipe_until_found_http_flow_exhausts(event_loop):
         "swipe_until_found",
         {
             "selector": {"text": "Missing"},
-            "max_swipes": 3,
+            "max_swipes": 20,
             "window_size": [1080, 1920],
         },
     )
 
     assert result["ok"] is True
-    assert result["value"] == {"found": False, "swipes": 3}
-    assert [call["method"] for call in rpc_calls] == [
-        "exist",
-        "swipe",
-        "exist",
-        "swipe",
-        "exist",
-        "swipe",
-        "exist",
-    ]
-    pool.run_locked.assert_not_called()
-    stats = exc.stats_snapshot(reset=False)
-    assert stats["http_flow_misses"] == 1
-    assert stats["http_flow_swipes"] == 3
-    assert stats["http_exists_misses"] == 4
+    assert result["value"]["found"] is False
+    assert result["value"]["exhausted"] is True
+    assert result["value"]["swipes"] == 1
+    assert [call["method"] for call in rpc_calls] == ["exist", "scrollForward"]
 
 
 @pytest.mark.asyncio
-async def test_swipe_until_found_settles_between_swipes(executor_with_device, monkeypatch):
-    """A fling keeps moving after swipe() returns — probing before it stops
-    misses the target and burns every swipe as one uninterrupted burst."""
+async def test_swipe_until_found_http_flow_degrades_to_swipe_without_scrollable(event_loop):
+    """No scrollable container on this screen — keep the fast path, but stop
+    pretending UiScrollable can drive it."""
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    rpc_calls: list[dict] = []
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
+        rpc_calls.append(payload)
+        if payload["method"] == "scrollForward":
+            return False, "UiObjectNotFoundError", None
+        return True, "", False
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("exists RPC should avoid XML dump"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {"text": "Missing"},
+            "max_swipes": 2,
+            "window_size": [1080, 1920],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["value"]["driver"] == "blind_swipe"
+    methods = [call["method"] for call in rpc_calls]
+    # Tries UiScrollable once, then falls back to swipes for the rest.
+    assert methods == ["exist", "scrollForward", "swipe", "exist", "swipe", "exist"]
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_settles_between_scrolls(executor_with_device, monkeypatch):
+    """Probing before the list stops moving misses the target and burns every
+    swipe as one uninterrupted burst."""
     exc, dev = executor_with_device
     events: list[str] = []
     sel = MagicMock()
     sel.exists = MagicMock(side_effect=lambda **_kw: events.append("exists") or False)
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
-    dev.swipe.side_effect = lambda *_a, **_k: events.append("swipe")
+    container = _wire_scroll_device(dev, sel)
+    container.scroll.vert.forward = MagicMock(
+        side_effect=lambda: events.append("scroll") or True
+    )
     monkeypatch.setattr(
         u2_executor.time, "sleep", lambda s: events.append(f"sleep:{s}")
     )
@@ -508,8 +780,8 @@ async def test_swipe_until_found_settles_between_swipes(executor_with_device, mo
 
     assert result["value"]["found"] is False
     assert events == [
-        "exists", "swipe", "sleep:0.4",
-        "exists", "swipe", "sleep:0.4",
+        "exists", "scroll", "sleep:0.4",
+        "exists", "scroll", "sleep:0.4",
         "exists",
     ]
 
@@ -522,8 +794,7 @@ async def test_swipe_until_found_waits_for_still_rendering_screen(executor_with_
     sel = MagicMock()
     sel.exists = MagicMock(return_value=False)
     sel.wait = MagicMock(return_value=True)
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    container = _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow("serial", "swipe_until_found", {
         "selector": {"text": "Target"},
@@ -531,9 +802,11 @@ async def test_swipe_until_found_waits_for_still_rendering_screen(executor_with_
         "first_wait_s": 8.0,
     })
 
-    assert result["value"] == {"found": True, "swipes": 0}
+    assert result["value"]["found"] is True
+    assert result["value"]["swipes"] == 0
     sel.wait.assert_called_once_with(timeout=8.0)
     dev.swipe.assert_not_called()
+    container.scroll.vert.forward.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -542,15 +815,15 @@ async def test_swipe_until_found_first_wait_defaults_off(executor_with_device):
     sel = MagicMock()
     sel.exists = MagicMock(return_value=True)
     sel.wait = MagicMock(return_value=True)
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow("serial", "swipe_until_found", {
         "selector": {"text": "Target"},
         "max_swipes": 5,
     })
 
-    assert result["value"] == {"found": True, "swipes": 0}
+    assert result["value"]["found"] is True
+    assert result["value"]["swipes"] == 0
     sel.wait.assert_not_called()
 
 
@@ -594,10 +867,11 @@ async def test_swipe_until_found_http_flow_waits_on_first_probe(event_loop, monk
         },
     )
 
-    # Found on the third poll of the FIRST probe — no swipe was issued.
-    assert result["value"] == {"found": True, "swipes": 0}
+    # Found on the third poll of the FIRST probe — nothing was scrolled.
+    assert result["value"] == {"found": True, "swipes": 0, "driver": "uiscrollable"}
     assert events == ["exist", "sleep:0.2", "exist", "sleep:0.2", "exist"]
     assert "swipe" not in events
+    assert "scrollForward" not in events
 
 
 @pytest.mark.asyncio
@@ -609,7 +883,7 @@ async def test_swipe_until_found_http_flow_settles_between_swipes(event_loop, mo
 
     def http_rpc(_serial: str, payload: dict, _timeout: float) -> tuple[bool, str, bool]:
         events.append(payload["method"])
-        return True, "", False
+        return True, "", payload["method"] == "scrollForward"
 
     real_sleep = asyncio.sleep
 
@@ -637,10 +911,10 @@ async def test_swipe_until_found_http_flow_settles_between_swipes(event_loop, mo
         },
     )
 
-    assert result["value"] == {"found": False, "swipes": 2}
+    assert result["value"] == {"found": False, "swipes": 2, "driver": "uiscrollable"}
     assert events == [
-        "exist", "swipe", "sleep:0.4",
-        "exist", "swipe", "sleep:0.4",
+        "exist", "scrollForward", "sleep:0.4",
+        "exist", "scrollForward", "sleep:0.4",
         "exist",
     ]
 
@@ -654,8 +928,7 @@ async def test_swipe_until_found_http_flow_falls_back_without_window_size(
     exc._http_rpc = lambda _s, _p, _t: (True, "")
     sel = MagicMock()
     type(sel).exists = property(lambda self: True)
-    dev.return_value = sel
-    dev.window_size.return_value = (1080, 1920)
+    _wire_scroll_device(dev, sel)
 
     result = await exc.execute_flow(
         "serial",
@@ -664,8 +937,8 @@ async def test_swipe_until_found_http_flow_falls_back_without_window_size(
     )
 
     assert result["ok"] is True
-    assert result["value"] == {"found": True, "swipes": 0}
-    dev.window_size.assert_called_once()
+    assert result["value"]["found"] is True
+    assert result["value"]["swipes"] == 0
     stats = exc.stats_snapshot(reset=False)
     assert stats["http_flow_fallbacks"] == 1
 

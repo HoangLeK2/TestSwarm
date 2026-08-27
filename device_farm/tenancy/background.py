@@ -113,8 +113,9 @@ async def list_device_serials_for_user(
     if user_row is None:
         return set()
     default_org_id, role = user_row[0], str(user_row[1] or "")
-    effective_org = (org_id or default_org_id or "").strip() or None
-    if role == "superadmin":
+    requested_org = (org_id or "").strip() or None
+    effective_org = (requested_org or default_org_id or "").strip() or None
+    if role == "superadmin" and requested_org is None:
         rows = await db.execute(
             text(
                 """

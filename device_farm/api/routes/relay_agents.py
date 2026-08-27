@@ -18,6 +18,7 @@ from api.org_scope import data_owner_user_id, device_visible_to_user
 from api.schemas.device import DeviceOut
 from api.schemas.relay_agent import (
     BootstrapAllResult,
+    RelayDeviceConnectionOut,
     RelayAgentOut,
     RelayBatchJobCreate,
     RelayBatchJobItemOut,
@@ -167,6 +168,18 @@ def _device_serial_aliases(device) -> set[str]:
     return aliases
 
 
+def _aliases_for_lookup(serials: list[str]) -> list[str]:
+    aliases: set[str] = set()
+    for serial in serials:
+        serial = str(serial or "").strip()
+        if not serial:
+            continue
+        aliases.add(serial)
+        if ":" in serial:
+            aliases.add(serial.rsplit(":", 1)[0])
+    return list(aliases)
+
+
 def _serial_matches_device(serial: str, device) -> bool:
     return serial in _device_serial_aliases(device)
 
@@ -269,6 +282,47 @@ def _relay_to_out_same_wifi(
     out.serials = visible_serials
     out.device_names = {s: names.get(s, s) for s in visible_serials}
     return out
+
+
+async def _attach_device_connection_state(
+    db: DB,
+    user: CurrentUser,
+    agents: list[RelayAgentOut],
+) -> list[RelayAgentOut]:
+    serials = [serial for agent in agents for serial in agent.serials]
+    if not serials:
+        return agents
+
+    devices = await repo.list_devices_by_serial_aliases(
+        db, _aliases_for_lookup(serials)
+    )
+    visible_devices = [
+        device
+        for device in devices
+        if await device_visible_to_user(db, user, device)
+    ]
+    active_device_ids = await repo.list_active_session_device_ids(
+        db,
+        [str(getattr(device, "id", "") or "") for device in visible_devices],
+    )
+
+    for agent in agents:
+        connections: dict[str, RelayDeviceConnectionOut] = {}
+        for serial in agent.serials:
+            device = _find_matching_device(serial, visible_devices)
+            if device is None:
+                connections[serial] = RelayDeviceConnectionOut()
+                continue
+            device_id = str(getattr(device, "id", "") or "")
+            connections[serial] = RelayDeviceConnectionOut(
+                registered=True,
+                device_id=device_id or None,
+                device_agent_connected=bool(
+                    device_id and device_id in active_device_ids
+                ),
+            )
+        agent.device_connections = connections
+    return agents
 
 
 def _get_ctrl_optional():
@@ -529,10 +583,11 @@ async def list_relay_agents(db: DB, user: CurrentUser):
     org_id = getattr(user, "org_id", None)
     rows = _dedupe_relay_rows(await repo.list_relay_agents(db, org_id=org_id))
     caps_by_serial: dict[str, dict] = {}
-    return [
+    agents = [
         _relay_to_out_same_wifi(row, {}, user.id, caps_by_serial)
         for row in rows
     ]
+    return await _attach_device_connection_state(db, user, agents)
 
 
 @router.post(
@@ -728,7 +783,8 @@ async def get_relay_agent(relay_id: str, db: DB, user: CurrentUser):
     )
     if not row:
         raise HTTPException(status_code=404, detail="relay agent not found")
-    return _relay_to_out_same_wifi(row, {}, user.id, {})
+    agents = [_relay_to_out_same_wifi(row, {}, user.id, {})]
+    return (await _attach_device_connection_state(db, user, agents))[0]
 
 
 async def _claim_relay_serial(db, row, serial: str, user) -> str:
@@ -915,6 +971,91 @@ async def register_relay_devices_bulk(
     return RegisterRelayDevicesOut(results=results)
 
 
+async def _resolve_relay_device_for_command(
+    relay_id: str,
+    serial: str,
+    db: DB,
+    user: CurrentUser,
+    *,
+    device_id: str | None = None,
+):
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    if not row or row.status != "online":
+        raise HTTPException(status_code=404, detail="relay agent not online")
+
+    serial = (serial or "").strip()
+    if serial not in set(row.serials or []):
+        raise HTTPException(
+            status_code=409, detail="serial is not reported by this relay agent"
+        )
+
+    all_devices = await repo.list_devices(db)
+    device = None
+    device_id_value = device_id.strip() if isinstance(device_id, str) else ""
+    if device_id_value:
+        device = await repo.get_device(db, device_id_value)
+        if not await device_visible_to_user(db, user, device):
+            raise HTTPException(status_code=404, detail="device not found")
+        matched = _find_matching_device(serial, all_devices)
+        if matched is not None and not await device_visible_to_user(db, user, matched):
+            raise HTTPException(status_code=409, detail="serial already registered by another user")
+    else:
+        device = _find_matching_device(serial, all_devices)
+        if not await device_visible_to_user(db, user, device):
+            raise HTTPException(status_code=404, detail="registered device not found")
+
+    if not str(getattr(device, "serial", "") or "").startswith("pending-") and not _serial_matches_device(serial, device):
+        raise HTTPException(
+            status_code=403,
+            detail="relay serial does not belong to the selected device",
+        )
+    return row, device, serial
+
+
+async def _push_connect_url_to_relay_device(
+    relay_id: str,
+    serial: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+    *,
+    device_id: str | None = None,
+    ws_base_url: str | None = None,
+) -> RelayCommandOut:
+    """Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required."""
+    _row, device, serial = await _resolve_relay_device_for_command(
+        relay_id,
+        serial,
+        db,
+        user,
+        device_id=device_id,
+    )
+
+    ws_url = relay_onboarding.build_device_agent_url(
+        _ws_base_for_push(
+            request, ws_base_url if isinstance(ws_base_url, str) else None
+        ),
+        device,
+    )
+    log.info(
+        "push-connect-url relay=%s serial=%s device_id=%s",
+        relay_id,
+        serial,
+        getattr(device, "id", ""),
+    )
+
+    cmd = (
+        "am start "
+        "-n jp.co.cyberagent.stf/.IdentityActivity "
+        "-a jp.co.cyberagent.stf.ACTION_IDENTIFY "
+        "--activity-single-top "
+        f"--es qr_content {shlex.quote(ws_url)}"
+    )
+    ctrl = _get_ctrl()
+    res = await ctrl.shell(serial, cmd, timeout=15.0)
+    return RelayCommandOut(**res)
+
+
 @router.post(
     "/{relay_id}/devices/{serial}/push-connect-url",
     response_model=RelayCommandOut,
@@ -935,53 +1076,79 @@ async def push_connect_url_to_device(
         description="Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.",
     ),
 ):
-    """Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required."""
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
-    if not row or row.status != "online":
-        raise HTTPException(status_code=404, detail="relay agent not online")
-
-    serial = (serial or "").strip()
-    if serial not in set(row.serials or []):
-        raise HTTPException(status_code=409, detail="serial is not reported by this relay agent")
-    # TEMP: same-WiFi/LAN check disabled (RELAY_SAME_WIFI_FILTER_ENABLED=False).
-    # if not _serial_is_same_wifi(serial, row):
-    #     raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
-    all_devices = await repo.list_devices(db)
-
-    device = None
-    if device_id and device_id.strip():
-        device = await repo.get_device(db, device_id.strip())
-        if not await device_visible_to_user(db, user, device):
-            raise HTTPException(status_code=404, detail="device not found")
-        matched = _find_matching_device(serial, all_devices)
-        if matched is not None and not await device_visible_to_user(db, user, matched):
-            raise HTTPException(status_code=409, detail="serial already registered by another user")
-    else:
-        device = _find_matching_device(serial, all_devices)
-        if not await device_visible_to_user(db, user, device):
-            raise HTTPException(status_code=404, detail="registered device not found")
-
-    if not str(getattr(device, "serial", "") or "").startswith("pending-") and not _serial_matches_device(serial, device):
-        raise HTTPException(
-            status_code=403,
-            detail="relay serial does not belong to the selected device",
-        )
-
-    ws_url = relay_onboarding.build_device_agent_url(
-        _ws_base_for_push(request, ws_base_url),
-        device,
+    return await _push_connect_url_to_relay_device(
+        relay_id,
+        serial,
+        request,
+        db,
+        user,
+        device_id=device_id,
+        ws_base_url=ws_base_url,
     )
-    log.info("push-connect-url relay=%s serial=%s ws_url=%s", relay_id, serial, ws_url)
 
-    cmd = (
-        "am start "
-        "-n jp.co.cyberagent.stf/.IdentityActivity "
-        "-a jp.co.cyberagent.stf.ACTION_IDENTIFY "
-        "--activity-single-top "
-        f"--es qr_content {shlex.quote(ws_url)}"
+
+@router.post(
+    "/{relay_id}/devices/{serial}/connect",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("relay-agents", "execute"))],
+)
+async def connect_relay_device(
+    relay_id: str,
+    serial: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+    device_id: str | None = Query(
+        None,
+        description="Logical device id when DB serial is pending-* but ADB path serial is physical",
+    ),
+    ws_base_url: str | None = Query(
+        None,
+        description="Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.",
+    ),
+):
+    return await _push_connect_url_to_relay_device(
+        relay_id,
+        serial,
+        request,
+        db,
+        user,
+        device_id=device_id,
+        ws_base_url=ws_base_url,
+    )
+
+
+@router.post(
+    "/{relay_id}/devices/{serial}/disconnect",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("relay-agents", "execute"))],
+)
+async def disconnect_relay_device(
+    relay_id: str,
+    serial: str,
+    db: DB,
+    user: CurrentUser,
+    device_id: str | None = Query(
+        None,
+        description="Logical device id when DB serial is pending-* but ADB path serial is physical",
+    ),
+):
+    _row, device, serial = await _resolve_relay_device_for_command(
+        relay_id,
+        serial,
+        db,
+        user,
+        device_id=device_id,
     )
     ctrl = _get_ctrl()
-    res = await ctrl.shell(serial, cmd, timeout=15.0)
+    res = await ctrl.shell(
+        serial, "am force-stop jp.co.cyberagent.stf", timeout=15.0
+    )
+    if res.get("ok"):
+        await repo.close_active_sessions_for_device(
+            db, str(getattr(device, "id", "") or "")
+        )
+        await db.commit()
     return RelayCommandOut(**res)
 
 

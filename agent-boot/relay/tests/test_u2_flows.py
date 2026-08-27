@@ -515,6 +515,92 @@ async def test_swipe_until_found_settles_between_swipes(executor_with_device, mo
 
 
 @pytest.mark.asyncio
+async def test_swipe_until_found_waits_for_still_rendering_screen(executor_with_device):
+    """The target is already on screen but the frame has not landed yet.
+    Probing at timeout=0 would scroll a present target out of view."""
+    exc, dev = executor_with_device
+    sel = MagicMock()
+    sel.exists = MagicMock(return_value=False)
+    sel.wait = MagicMock(return_value=True)
+    dev.return_value = sel
+    dev.window_size.return_value = (1080, 1920)
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"text": "Target"},
+        "max_swipes": 5,
+        "first_wait_s": 8.0,
+    })
+
+    assert result["value"] == {"found": True, "swipes": 0}
+    sel.wait.assert_called_once_with(timeout=8.0)
+    dev.swipe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_first_wait_defaults_off(executor_with_device):
+    exc, dev = executor_with_device
+    sel = MagicMock()
+    sel.exists = MagicMock(return_value=True)
+    sel.wait = MagicMock(return_value=True)
+    dev.return_value = sel
+    dev.window_size.return_value = (1080, 1920)
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {
+        "selector": {"text": "Target"},
+        "max_swipes": 5,
+    })
+
+    assert result["value"] == {"found": True, "swipes": 0}
+    sel.wait.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_http_flow_waits_on_first_probe(event_loop, monkeypatch):
+    pool = AsyncMock()
+    pool.run_locked = AsyncMock()
+    pool.evict = AsyncMock()
+    events: list[str] = []
+    exists_results = iter([False, False, True])
+
+    def http_rpc(_serial: str, payload: dict, _timeout: float):
+        events.append(payload["method"])
+        if payload["method"] == "exist":
+            return True, "", next(exists_results)
+        return True, "", False
+
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds, *args, **kwargs):
+        events.append(f"sleep:{seconds}")
+        return await real_sleep(0, *args, **kwargs)
+
+    monkeypatch.setattr(u2_executor.asyncio, "sleep", fake_sleep)
+
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda *_args: pytest.fail("exists RPC should avoid XML dump"),
+        http_rpc=http_rpc,
+    )
+
+    result = await exc.execute_flow(
+        "serial",
+        "swipe_until_found",
+        {
+            "selector": {"text": "Target"},
+            "max_swipes": 3,
+            "first_wait_s": 8.0,
+            "window_size": [1080, 1920],
+        },
+    )
+
+    # Found on the third poll of the FIRST probe — no swipe was issued.
+    assert result["value"] == {"found": True, "swipes": 0}
+    assert events == ["exist", "sleep:0.2", "exist", "sleep:0.2", "exist"]
+    assert "swipe" not in events
+
+
+@pytest.mark.asyncio
 async def test_swipe_until_found_http_flow_settles_between_swipes(event_loop, monkeypatch):
     pool = AsyncMock()
     pool.run_locked = AsyncMock()

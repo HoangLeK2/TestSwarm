@@ -21,7 +21,7 @@ scripts\docker-up.cmd logs -f
 docker compose logs -f media-adapter
 ```
 
-Trong `.env`, bắt buộc điền ba giá trị đang để trống:
+Trong `.env`, bắt buộc điền hai giá trị credential đang để trống:
 
 - `RELAY_API_KEY`
 - `RELAY_ENROLLMENT_TOKEN`
@@ -31,19 +31,23 @@ hàng không cần — và không nhận — PostgreSQL credential nào. Các en
 lại đã có đầy đủ giá trị mặc định trong `.env.example`. Script khởi động sẽ từ
 chối chạy nếu hai giá trị bắt buộc chưa được điền.
 
-WebRTC video cần go2rtc chạy ở host hoặc media node mà container truy cập được.
-Mặc định media adapter publish H264 tại
-`rtsp://host.docker.internal:8556/device-{serial}` và tự gọi go2rtc API
-`http://host.docker.internal:1984`. Nếu go2rtc không chạy trên cùng máy Windows,
-sửa `MEDIA_ADAPTER_GO2RTC_RTSP_SOURCE_TEMPLATE` và `MEDIA_ADAPTER_GO2RTC_URL`
-trong `.env`.
+WebRTC video dùng đường publish RTSP outbound từ media-adapter trên máy Windows
+lên go2rtc của farm. Trong `.env`, điền
+`MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE` với origin và credential RTSP của
+farm, ví dụ `rtsp://USER:PASS@farm-origin.example.com:8554/{stream_raw}`.
+Không dùng hostname chỉ proxy qua Cloudflare cho port RTSP `8554`.
+
+Media-adapter cũng mở control gRPC outbound tới farm qua
+`MEDIA_ADAPTER_CONTROL_GRPC_SERVER`; mặc định giá trị này đã có trong
+`.env.example`. Không cần mở port inbound trên máy Windows và không cần
+PostgreSQL credential.
 
 Chính sách media hiện tại là **ICE/STUN only**, không dùng TURN. Nếu backend
 `device_farm` chạy trên cloud, cloud backend không gọi trực tiếp được adapter
 trên máy Windows qua `127.0.0.1`, `host.docker.internal` hoặc IP LAN. Browser
 cần tới được WebRTC endpoint của go2rtc qua LAN, port-forward UDP/TCP `8555`,
-hoặc VPN/edge network. RTSP `8556` và go2rtc API `1984` chỉ dùng nội bộ giữa
-adapter và go2rtc, không publish công khai.
+hoặc VPN/edge network. RTSP `8554` chỉ dùng cho đường publish outbound từ
+adapter lên farm, không cần mở inbound trên máy Windows.
 
 (TLS cert đã có trong image.)
 

@@ -1092,7 +1092,14 @@ def request_edge_extra_data(
                 bool(ctx.get("_break")),
             )
             return True
-        log.warning("[%s] edge extra_data failed: %s", serial, summary.get("error") or summary)
+        # device_client puts the actionable cause in "detail" (which of the
+        # uplink checks rejected the batch); the bare code alone is unactionable.
+        log.warning(
+            "[%s] edge extra_data failed: %s%s",
+            serial,
+            summary.get("error") or summary,
+            f" ({summary['detail']})" if summary.get("detail") else "",
+        )
         result["ok"] = False
         from services.campaign.dlq_message import summarize_edge_extra_error
 

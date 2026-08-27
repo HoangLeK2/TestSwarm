@@ -692,10 +692,6 @@ class AdbRelayManager:
                 "state":  self._pool_state.get(serial, "available"),
                 **caps,
             })
-        # The agent controls the JSON body, so overwrite (never trust) relay
-        # identity before handing the reply to persistence code.
-        result["_trusted_relay_id"] = conn.relay_id
-        result["_trusted_serial"] = actual
         return result
 
     def allocate_device(self, tags: Optional[list] = None) -> Optional[str]:
@@ -1445,6 +1441,10 @@ class AdbRelayManager:
                 "ok": False,
                 "error": str(result.get("error") or result.get("body") or "invalid_extra_data_result"),
             }
+        # The agent controls the JSON body, so overwrite (never trust) relay
+        # identity before handing the reply to persistence code.
+        result["_trusted_relay_id"] = conn.relay_id
+        result["_trusted_serial"] = actual
         return result
 
     async def ocr(

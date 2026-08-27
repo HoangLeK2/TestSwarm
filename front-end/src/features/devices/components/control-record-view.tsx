@@ -1087,6 +1087,13 @@ export function ControlRecordView({
     () => mergeDeclaredDeviceVarKeys(scenarioVariables, declaredDeviceVarKeys),
     [scenarioVariables, declaredDeviceVarKeys]
   );
+  const scenarioVariableNames = useMemo(
+    () =>
+      Object.keys(scenarioVariablesWithDeviceKeys)
+        .filter((key) => key.trim())
+        .sort((a, b) => a.localeCompare(b)),
+    [scenarioVariablesWithDeviceKeys]
+  );
   const pageSummary = useMemo(
     () =>
       buildControlRecordPageSummary(
@@ -3459,6 +3466,7 @@ export function ControlRecordView({
                                           }
                                         : undefined
                                     }
+                                    availableVariables={scenarioVariableNames}
                                   />
                                 </div>
                               ) : null}
@@ -3541,6 +3549,7 @@ export function ControlRecordView({
                                   }
                                   stepRunStates={stepRunStates}
                                   stepRunResults={stepRunResults}
+                                  availableVariables={scenarioVariableNames}
                                   sessionGateRuntimeContext={
                                     sessionGateRuntimeContext
                                   }

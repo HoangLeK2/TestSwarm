@@ -1429,6 +1429,13 @@ export function ScenarioDialog({
   const resolveVariablesForSave = (): Record<string, any> => {
     return normalizeScenarioVariables(variables) as Record<string, any>;
   };
+  const availableScenarioVariables = useMemo(
+    () =>
+      Object.keys(normalizeScenarioVariables(variables))
+        .filter((key) => key.trim())
+        .sort((a, b) => a.localeCompare(b)),
+    [variables]
+  );
 
   const handleSave = () => {
     if (!canPersistScenario(childStepEditorOpen)) {
@@ -2327,6 +2334,7 @@ export function ScenarioDialog({
                     nestedInDialog
                     onChildStepEditorOpenChange={setChildStepEditorOpen}
                     campaignScenarios={runScenarioCampaignOptions}
+                    availableVariables={availableScenarioVariables}
                     onRunStep={handleInlineRunStep}
                     stepRunStates={stepRunStates}
                     onStopInlineRun={hardStopPreview}

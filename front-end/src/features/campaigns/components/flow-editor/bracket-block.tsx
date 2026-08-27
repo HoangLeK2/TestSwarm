@@ -121,6 +121,7 @@ interface BracketBlockProps {
    */
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
   campaignScenarios?: RunScenarioCampaignOption[];
+  availableVariables?: string[];
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
   enableDragDrop?: boolean;
 }
@@ -226,6 +227,7 @@ interface ChildStepListProps {
   stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
   onStopInlineRun?: () => void;
   campaignScenarios?: RunScenarioCampaignOption[];
+  availableVariables?: string[];
   enableDragDrop?: boolean;
 }
 
@@ -253,6 +255,7 @@ function ChildStepList({
   stepRunStates = {},
   onStopInlineRun,
   campaignScenarios = [],
+  availableVariables = [],
   enableDragDrop = true
 }: ChildStepListProps) {
   const tBracket = useTranslations('campaignsFeature.flowBracket');
@@ -377,6 +380,7 @@ function ChildStepList({
                               : undefined
                           }
                           campaignScenarios={campaignScenarios}
+                          availableVariables={availableVariables}
                           enableDragDrop={enableDragDrop}
                         />
                       </div>
@@ -539,6 +543,7 @@ export function BracketBlock({
   rootStepIndex,
   pathFromRoot,
   campaignScenarios = [],
+  availableVariables = [],
   sessionGateRuntimeContext,
   enableDragDrop = true
 }: BracketBlockProps) {
@@ -711,6 +716,7 @@ export function BracketBlock({
     stepRunStates,
     onStopInlineRun,
     campaignScenarios,
+    availableVariables,
     enableDragDrop
   };
 
@@ -726,6 +732,7 @@ export function BracketBlock({
               step={editingChild}
               onChange={handleEditingChildChange}
               onClose={closeEditingChild}
+              availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
               onRequestCropImage={mirrorActions.cropImage}
@@ -812,6 +819,7 @@ export function BracketBlock({
                 step={editingChild}
                 onChange={handleEditingChildChange}
                 onClose={closeEditingChild}
+                availableVariables={availableVariables}
                 campaignScenarios={campaignScenarios}
                 runtimeContext={sessionGateRuntimeContext}
                 onRequestCropImage={mirrorActions.cropImage}

@@ -96,6 +96,8 @@ interface Props {
   onChildStepEditorOpenChange?: (open: boolean) => void;
   /** Other scenarios in the same campaign — powers run_scenario picker in the step panel. */
   campaignScenarios?: RunScenarioCampaignOption[];
+  /** Variables declared outside the step tree, e.g. scenario/global variables. */
+  availableVariables?: string[];
   /** Enable drag-and-drop registration. Heavy control surfaces can disable it until the user enters sort mode. */
   enableDragDrop?: boolean;
   /** What each step produced on its last inline run, keyed by runKey. */
@@ -122,6 +124,7 @@ export function FlowEditor({
   nestedInDialog = false,
   onChildStepEditorOpenChange,
   campaignScenarios = [],
+  availableVariables: externalAvailableVariables = [],
   sessionGateRuntimeContext,
   enableDragDrop = true,
   stepRunResults,
@@ -147,8 +150,11 @@ export function FlowEditor({
     if (step) pendingDetailRef.current = step;
   }, [selectedIndex]);
   const availableVariables = useMemo(
-    () => collectVariableNames(steps),
-    [steps]
+    () =>
+      Array.from(
+        new Set([...externalAvailableVariables, ...collectVariableNames(steps)])
+      ).sort((a, b) => a.localeCompare(b)),
+    [externalAvailableVariables, steps]
   );
 
   const stepIds = useMemo(
@@ -526,6 +532,7 @@ export function FlowEditor({
                         insertChild={insertChild}
                         isDragging={isDragging}
                         nestedInDialog={nestedInDialog}
+                        availableVariables={availableVariables}
                         onCoordinatePickTargetChange={
                           onCoordinatePickTargetChange
                         }
@@ -1324,6 +1331,7 @@ function FlowEditorRow({
   insertChild,
   isDragging,
   nestedInDialog,
+  availableVariables,
   onCoordinatePickTargetChange,
   onRunStep,
   onSelectorPickTargetChange,
@@ -1356,6 +1364,7 @@ function FlowEditorRow({
   ) => void;
   isDragging: boolean;
   nestedInDialog: boolean;
+  availableVariables: string[];
   onCoordinatePickTargetChange?: (target: CoordinatePickTarget | null) => void;
   onRunStep?: (step: FlowStep, runKey: string) => void;
   onSelectorPickTargetChange?: (target: SelectorPickTarget | null) => void;
@@ -1413,6 +1422,7 @@ function FlowEditorRow({
             }
             onRunChild={onRunStep ? (s, k) => onRunStep(s, k) : undefined}
             campaignScenarios={campaignScenarios}
+            availableVariables={availableVariables}
             sessionGateRuntimeContext={sessionGateRuntimeContext}
             enableDragDrop={enableDragDrop}
           />

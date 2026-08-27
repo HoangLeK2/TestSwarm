@@ -26,6 +26,8 @@ type Props = {
   onPatch: (patch: RunScenarioFieldPatch) => void;
   /** Scenarios from the same campaign (optional). */
   campaignScenarios?: RunScenarioCampaignOption[];
+  /** Variables available from the parent scenario/campaign for override values. */
+  availableVariables?: string[];
   /** Wider controls + padding for step detail panel vs compact nested list. */
   layout?: 'compact' | 'panel';
 };
@@ -37,6 +39,7 @@ export function RunScenarioFields({
   step,
   onPatch,
   campaignScenarios = [],
+  availableVariables = [],
   layout = 'compact'
 }: Props) {
   const t = useTranslations('campaignsFeature.scenarioStepsInline.runScenario');
@@ -154,6 +157,7 @@ export function RunScenarioFields({
           variables={step.variables ?? {}}
           onChange={(vars) => onPatch({ variables: vars })}
           showBuiltins={false}
+          availableVariables={availableVariables}
         />
       </div>
 

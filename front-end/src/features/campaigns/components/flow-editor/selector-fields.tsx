@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react';
 import { ChevronDown, Crosshair, MousePointerClick } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
+import {
+  VariableInsertMenu,
+  type VariableInsertMenuGroup
+} from '@/components/variable-insert-menu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StepPanelInput } from './step-panel-primitives';
@@ -117,32 +121,24 @@ function VariableInsertSelect({
   onInsert: (token: string) => void;
   t: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor'>>;
 }) {
-  const [selection, setSelection] = useState('');
+  const groups: VariableInsertMenuGroup[] = [
+    {
+      label: t('variableInsert.availableVariables'),
+      items: availableVariables.map((name) => {
+        const token = `\${${name}}`;
+        return { value: token };
+      })
+    }
+  ];
+
   return (
-    <select
-      className='h-9 w-full shrink-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs shadow-sm sm:w-[13rem]'
-      value={selection}
-      onChange={(e) => {
-        const token = e.target.value;
-        if (!token) return;
-        onInsert(token);
-        setSelection('');
-      }}
-    >
-      <option value=''>{t('variableInsert.placeholder')}</option>
-      {availableVariables.length > 0 && (
-        <optgroup label={t('variableInsert.availableVariables')}>
-          {availableVariables.map((name) => {
-            const token = `\${${name}}`;
-            return (
-              <option key={name} value={token}>
-                {token}
-              </option>
-            );
-          })}
-        </optgroup>
-      )}
-    </select>
+    <VariableInsertMenu
+      groups={groups}
+      label={t('variableInsert.placeholder')}
+      onInsert={onInsert}
+      align='end'
+      triggerClassName='w-full shrink-0 sm:w-[13rem]'
+    />
   );
 }
 

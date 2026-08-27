@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor/flow-editor';
 import {
+  countPreviewSteps,
   countScenarioVariables,
   extractPreviewSteps
 } from '../lib/parse-scenario-body';
@@ -29,6 +30,7 @@ export function ScenarioBodyPreview({
   const [showRaw, setShowRaw] = useState(false);
 
   const steps = useMemo(() => extractPreviewSteps(body), [body]);
+  const stepCounts = useMemo(() => countPreviewSteps(steps), [steps]);
   const variableCount = useMemo(
     () =>
       countScenarioVariables(
@@ -48,7 +50,14 @@ export function ScenarioBodyPreview({
           </Badge>
         ) : null}
         {hasFlow ? (
-          <span>{t('stepsPreviewCount', { count: steps.length })}</span>
+          <span>
+            {stepCounts.total === stepCounts.topLevel
+              ? t('stepsPreviewCount', { count: stepCounts.topLevel })
+              : t('stepsPreviewNestedCount', {
+                  topLevel: stepCounts.topLevel,
+                  total: stepCounts.total
+                })}
+          </span>
         ) : (
           <span>{t('noStepsPreview')}</span>
         )}

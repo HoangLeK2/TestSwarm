@@ -8,7 +8,7 @@ import {
   DEVICES_LIST_KEY,
   FLEET_STATS_KEY
 } from '@/features/devices/lib/device-query-keys';
-import { pickDefaultOrganization } from '../lib/pick-default-organization';
+import { reconcileCurrentOrganization } from '../lib/pick-default-organization';
 import { useOrganizationsQuery } from '../hooks/use-organizations';
 
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
@@ -70,22 +70,10 @@ export function OrganizationProvider({
           ? localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim() || null
           : null;
 
-      const picked = pickDefaultOrganization(organizations, storedId, {
+      return reconcileCurrentOrganization(organizations, prev, storedId, {
         preferredOrgId: user?.defaultOrgId,
         userEmail: user?.email
       });
-
-      const preferred = (user?.defaultOrgId ?? '').trim();
-      if (preferred) {
-        const preferredOrg = organizations.find((o) => o.id === preferred);
-        if (preferredOrg && prev?.id !== preferred) return preferredOrg;
-      }
-
-      if (prev && organizations.some((o) => o.id === prev.id)) {
-        return organizations.find((o) => o.id === prev.id) ?? prev;
-      }
-
-      return picked;
     });
   }, [
     authPending,
@@ -101,6 +89,13 @@ export function OrganizationProvider({
   ]);
 
   const setCurrentOrg = React.useCallback((org: ProtoOrganization | null) => {
+    if (typeof window !== 'undefined') {
+      if (org?.id) {
+        localStorage.setItem(CURRENT_ORG_STORAGE_KEY, org.id);
+      } else {
+        localStorage.removeItem(CURRENT_ORG_STORAGE_KEY);
+      }
+    }
     setCurrentOrgState(org);
   }, []);
 

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Braces } from 'lucide-react';
+import { Braces, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
@@ -15,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { mergeCampaignScenarioVariables as mergeCampaignScenarioVariablesModel } from './device-vars-json-model';
 import { DeviceVarsFacebookTargetForm } from './device-vars-facebook-target-form';
@@ -171,18 +172,22 @@ type VariablesFieldGridProps = {
   entries: [string, unknown][];
   readOnly: boolean;
   onApply?: (key: string, value: unknown) => void;
+  onRemove?: (key: string) => void;
   globalBaseline?: Record<string, unknown>;
   disabled?: boolean;
   globalHint?: (value: string) => string;
+  removeLabel?: (key: string) => string;
 };
 
 function VariablesFieldGrid({
   entries,
   readOnly,
   onApply,
+  onRemove,
   globalBaseline,
   disabled = false,
-  globalHint
+  globalHint,
+  removeLabel
 }: VariablesFieldGridProps) {
   if (entries.length === 0) return null;
   return (
@@ -198,7 +203,7 @@ function VariablesFieldGrid({
           return (
             <div
               key={key}
-              className='grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,9.5rem)_1fr] sm:items-center'
+              className='grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,9.5rem)_1fr_auto] sm:items-center'
             >
               <div className='min-w-0'>
                 <Label
@@ -238,6 +243,20 @@ function VariablesFieldGrid({
                   }}
                 />
               )}
+              {!readOnly && onRemove ? (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  className='size-8 justify-self-end text-muted-foreground hover:text-destructive'
+                  disabled={disabled}
+                  title={removeLabel?.(key)}
+                  aria-label={removeLabel?.(key)}
+                  onClick={() => onRemove(key)}
+                >
+                  <Trash2 className='size-4' />
+                </Button>
+              ) : null}
             </div>
           );
         })}
@@ -260,6 +279,7 @@ type DeviceVarsJsonPanelProps = {
   className?: string;
   editorClassName?: string;
   emptyClassName?: string;
+  variant?: 'default' | 'assignment';
 };
 
 export function DeviceVarsJsonPanel({
@@ -274,10 +294,14 @@ export function DeviceVarsJsonPanel({
   globalVariablesPreview,
   className,
   editorClassName,
-  emptyClassName
+  emptyClassName,
+  variant = 'default'
 }: DeviceVarsJsonPanelProps) {
   const t = useTranslations('components.deviceVarsJson');
   const [editorMode, setEditorMode] = useState<'form' | 'json'>('form');
+  const [assignmentTab, setAssignmentTab] = useState<
+    'targets' | 'advanced' | 'json'
+  >('targets');
   const [specialForm, setSpecialForm] = useState<'none' | 'facebookTargets'>(
     'none'
   );
@@ -394,32 +418,231 @@ export function DeviceVarsJsonPanel({
     [enabled, onDraftChange, parsedDraft]
   );
 
+  const handleFormVariableRemove = useCallback(
+    (key: string) => {
+      if (!enabled || parsedDraft === null) return;
+      const { [key]: _removed, ...nextVars } = parsedDraft;
+      onDraftChange(formatDeviceVarsJson(nextVars));
+    },
+    [enabled, onDraftChange, parsedDraft]
+  );
+
   const globalReadOnlyBlock = (
-    <div className='flex min-h-0 flex-1 flex-col space-y-1.5'>
-      <p className='text-[11px] font-medium text-muted-foreground'>
-        {t('globalBlockTitle')}
-      </p>
+    <div className='flex min-h-0 flex-1 flex-col space-y-2'>
+      <p className='text-xs font-medium'>{t('globalBlockTitle')}</p>
       {hasGlobalPreview ? (
         <Textarea
           readOnly
-          className='min-h-[200px] flex-1 resize-none bg-muted/30 font-mono text-xs leading-5 text-muted-foreground'
+          className='min-h-[200px] flex-1 resize-none bg-muted/20 font-mono text-xs leading-5 text-muted-foreground'
           value={globalJson}
           spellCheck={false}
           aria-label={t('globalReadonlyAria')}
         />
       ) : (
-        <p className='rounded-md border border-dashed bg-muted/10 px-3 py-6 text-center text-[11px] text-muted-foreground'>
+        <p className='rounded-md border border-dashed bg-muted/10 px-3 py-8 text-center text-xs text-muted-foreground'>
           {t('globalEmpty')}
         </p>
       )}
     </div>
   );
+  const renderAddGlobalKeyControl = () =>
+    missingTemplateKeys.length > 0 ? (
+      <Select
+        value=''
+        disabled={loading || parsedDraft === null}
+        onValueChange={addTemplateKey}
+      >
+        <SelectTrigger className='h-8 w-full text-xs sm:w-48'>
+          <SelectValue placeholder={t('addGlobalKeySelect')} />
+        </SelectTrigger>
+        <SelectContent>
+          {missingTemplateKeys.map((key) => (
+            <SelectItem key={key} value={key}>
+              {key}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    ) : null;
+
+  if (variant === 'assignment') {
+    return (
+      <div className={cn('flex min-h-0 flex-col', className)}>
+        <div className='mb-3 flex shrink-0 items-center justify-between gap-3 rounded-md border bg-background px-3 py-3'>
+          <div className='min-w-0'>
+            <div className='flex items-center gap-2 text-sm font-medium'>
+              <Braces size={13} />
+              {t('title')}
+            </div>
+            {deviceLabel && (
+              <p className='mt-0.5 truncate text-[11px] text-muted-foreground'>
+                {deviceLabel}
+              </p>
+            )}
+          </div>
+          <div className='flex shrink-0 items-center gap-3 rounded-md border bg-muted/20 px-3 py-2'>
+            <div className='hidden min-w-0 sm:block'>
+              <p className='text-xs font-medium'>{t('toggleLabel')}</p>
+              <p className='mt-0.5 max-w-72 truncate text-[11px] text-muted-foreground'>
+                {enabled ? t('toggleDescriptionOn') : t('toggleDescriptionOff')}
+              </p>
+            </div>
+            <Switch
+              checked={enabled}
+              disabled={loading}
+              onCheckedChange={onEnabledChange}
+              aria-label={enabled ? t('toggleAriaOn') : t('toggleAriaOff')}
+            />
+          </div>
+        </div>
+
+        {enabled ? (
+          parsedDraft === null ? (
+            <div className='flex min-h-0 flex-1 flex-col gap-3'>
+              <div
+                role='alert'
+                className='rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive'
+              >
+                {t('formJsonInvalid')}
+              </div>
+              <Textarea
+                className={cn(
+                  'min-h-[300px] flex-1 resize-none font-mono text-xs leading-5',
+                  editorClassName
+                )}
+                value={overrideEditorValue}
+                disabled={loading}
+                spellCheck={false}
+                onChange={(event) =>
+                  handleOverrideEditorChange(event.target.value)
+                }
+              />
+            </div>
+          ) : (
+            <Tabs
+              value={assignmentTab}
+              onValueChange={(value) =>
+                setAssignmentTab(value as 'targets' | 'advanced' | 'json')
+              }
+              className='min-h-0 flex-1 gap-3 overflow-hidden'
+            >
+              <TabsList className='grid h-9 w-full grid-cols-3 sm:w-[27rem]'>
+                <TabsTrigger value='targets' className='text-xs'>
+                  {t('targetFormTitle')}
+                </TabsTrigger>
+                <TabsTrigger value='advanced' className='text-xs'>
+                  {t('otherVariablesTitle')}
+                </TabsTrigger>
+                <TabsTrigger value='json' className='text-xs'>
+                  {t('jsonMode')}
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent
+                value='targets'
+                className='mt-0 min-h-0 overflow-hidden'
+              >
+                <section className='flex min-h-0 flex-col gap-4 rounded-md border bg-background p-4'>
+                  <div className='min-w-0'>
+                    <p className='text-sm font-medium'>
+                      {t('targetFormTitle')}
+                    </p>
+                    <p className='mt-1 text-xs text-muted-foreground'>
+                      {t('specialFormFacebookHint')}
+                    </p>
+                  </div>
+                  <DeviceVarsFacebookTargetForm
+                    vars={parsedDraft}
+                    disabled={loading}
+                    size='large'
+                    onChange={handleTargetFormChange}
+                  />
+                </section>
+              </TabsContent>
+
+              <TabsContent
+                value='advanced'
+                className='mt-0 min-h-0 overflow-hidden'
+              >
+                <section className='flex min-h-0 flex-col gap-3 rounded-md border bg-background p-4'>
+                  <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                    <p className='text-sm font-medium'>
+                      {t('otherVariablesTitle')}
+                    </p>
+                    {renderAddGlobalKeyControl()}
+                  </div>
+                  {formVariableEntries.length > 0 ? (
+                    <VariablesFieldGrid
+                      entries={formVariableEntries}
+                      readOnly={false}
+                      disabled={loading}
+                      onApply={handleFormVariableChange}
+                      onRemove={handleFormVariableRemove}
+                      globalBaseline={globalPreview}
+                      globalHint={(value) => t('globalValueHint', { value })}
+                      removeLabel={(key) => t('removeVariable', { key })}
+                    />
+                  ) : (
+                    <p className='rounded-md border border-dashed bg-muted/10 px-3 py-8 text-center text-xs text-muted-foreground'>
+                      {t('otherVariablesEmpty')}
+                    </p>
+                  )}
+                </section>
+              </TabsContent>
+
+              <TabsContent value='json' className='mt-0 min-h-0'>
+                <div className='flex min-h-0 flex-1 flex-col gap-3'>
+                  {missingTemplateKeys.length > 0 ? (
+                    <div className='flex justify-end'>
+                      {renderAddGlobalKeyControl()}
+                    </div>
+                  ) : null}
+                  <Textarea
+                    className={cn(
+                      'min-h-[360px] flex-1 resize-none font-mono text-xs leading-5 xl:min-h-[420px]',
+                      editorClassName
+                    )}
+                    value={overrideEditorValue}
+                    disabled={loading}
+                    spellCheck={false}
+                    onChange={(event) =>
+                      handleOverrideEditorChange(event.target.value)
+                    }
+                  />
+                </div>
+              </TabsContent>
+            </Tabs>
+          )
+        ) : (
+          <div
+            className={cn(
+              'flex min-h-0 flex-1 flex-col gap-3 rounded-md border bg-background p-4',
+              emptyClassName
+            )}
+          >
+            {globalReadOnlyBlock}
+          </div>
+        )}
+
+        <div className='mt-2 flex min-h-5 shrink-0 items-center justify-between gap-3 text-[11px]'>
+          <span className='text-muted-foreground'>
+            {loading
+              ? t('footerLoading')
+              : enabled
+                ? t('footerMergedEditor')
+                : t('footerUsingGlobal')}
+          </span>
+          {jsonError && <span className='text-destructive'>{jsonError}</span>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn('flex min-h-0 flex-col', className)}>
-      <div className='mb-3 flex shrink-0 items-center justify-between gap-3'>
+      <div className='mb-3 flex shrink-0 items-center justify-between gap-3 rounded-md border bg-background px-3 py-3'>
         <div className='min-w-0'>
-          <div className='flex items-center gap-2 text-xs font-medium'>
+          <div className='flex items-center gap-2 text-sm font-medium'>
             <Braces size={13} />
             {t('title')}
           </div>
@@ -429,30 +652,29 @@ export function DeviceVarsJsonPanel({
             </p>
           )}
         </div>
-      </div>
-
-      <div className='mb-3 flex shrink-0 items-center justify-between rounded border bg-muted/20 px-3 py-2'>
-        <div className='min-w-0'>
-          <p className='text-xs font-medium'>{t('toggleLabel')}</p>
-          <p className='mt-0.5 text-[11px] text-muted-foreground'>
-            {enabled ? t('toggleDescriptionOn') : t('toggleDescriptionOff')}
-          </p>
+        <div className='flex shrink-0 items-center gap-3 rounded-md border bg-muted/20 px-3 py-2'>
+          <div className='hidden min-w-0 sm:block'>
+            <p className='text-xs font-medium'>{t('toggleLabel')}</p>
+            <p className='mt-0.5 max-w-72 truncate text-[11px] text-muted-foreground'>
+              {enabled ? t('toggleDescriptionOn') : t('toggleDescriptionOff')}
+            </p>
+          </div>
+          <Switch
+            checked={enabled}
+            disabled={loading}
+            onCheckedChange={onEnabledChange}
+            aria-label={enabled ? t('toggleAriaOn') : t('toggleAriaOff')}
+          />
         </div>
-        <Switch
-          checked={enabled}
-          disabled={loading}
-          onCheckedChange={onEnabledChange}
-          aria-label={enabled ? t('toggleAriaOn') : t('toggleAriaOff')}
-        />
       </div>
 
       {enabled ? (
-        <div className='flex min-h-0 flex-1 flex-col space-y-2'>
+        <div className='flex min-h-0 flex-1 flex-col space-y-3'>
           <Tabs
             value={editorMode}
             onValueChange={(value) => setEditorMode(value as 'form' | 'json')}
           >
-            <TabsList className='grid h-8 w-full grid-cols-2 sm:w-64'>
+            <TabsList className='grid h-9 w-full grid-cols-2 sm:w-64'>
               <TabsTrigger value='form' className='text-xs'>
                 {t('formMode')}
               </TabsTrigger>
@@ -472,8 +694,8 @@ export function DeviceVarsJsonPanel({
               </div>
             ) : (
               <ScrollArea className='min-h-0 min-w-0 flex-1 overflow-hidden pr-3'>
-                <div className='min-w-0 max-w-full space-y-4 overflow-hidden pb-1'>
-                  <section className='min-w-0 space-y-2 overflow-hidden'>
+                <div className='min-w-0 max-w-full space-y-3 overflow-hidden pb-1'>
+                  <section className='min-w-0 space-y-3 overflow-hidden rounded-md border bg-background p-3'>
                     <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
                       <p className='text-xs font-medium'>
                         {t('otherVariablesTitle')}
@@ -505,23 +727,25 @@ export function DeviceVarsJsonPanel({
                         readOnly={false}
                         disabled={loading}
                         onApply={handleFormVariableChange}
+                        onRemove={handleFormVariableRemove}
                         globalBaseline={globalPreview}
                         globalHint={(value) => t('globalValueHint', { value })}
+                        removeLabel={(key) => t('removeVariable', { key })}
                       />
                     ) : (
-                      <p className='rounded-md border border-dashed bg-muted/10 px-3 py-4 text-center text-xs text-muted-foreground'>
+                      <p className='rounded-md border border-dashed bg-muted/10 px-3 py-6 text-center text-xs text-muted-foreground'>
                         {t('otherVariablesEmpty')}
                       </p>
                     )}
                   </section>
 
-                  <section className='min-w-0 space-y-3 overflow-hidden rounded-md border bg-muted/10 p-3'>
-                    <div className='grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,12rem)] sm:items-end'>
+                  <section className='min-w-0 space-y-4 overflow-hidden rounded-md border bg-background p-4'>
+                    <div className='grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)] sm:items-end'>
                       <div className='min-w-0'>
-                        <p className='text-xs font-medium'>
+                        <p className='text-sm font-medium'>
                           {t('targetFormTitle')}
                         </p>
-                        <p className='mt-0.5 text-[11px] text-muted-foreground'>
+                        <p className='mt-1 text-xs text-muted-foreground'>
                           {specialForm === 'facebookTargets'
                             ? t('specialFormFacebookHint')
                             : t('specialFormNoneHint')}
@@ -536,7 +760,7 @@ export function DeviceVarsJsonPanel({
                           )
                         }
                       >
-                        <SelectTrigger className='h-8 w-full min-w-0 text-xs [&_[data-slot=select-value]]:truncate'>
+                        <SelectTrigger className='h-9 w-full min-w-0 text-sm [&_[data-slot=select-value]]:truncate'>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -600,13 +824,10 @@ export function DeviceVarsJsonPanel({
       ) : (
         <div
           className={cn(
-            'flex min-h-0 flex-1 flex-col gap-3 rounded-md border border-dashed bg-muted/10 p-4',
+            'flex min-h-0 flex-1 flex-col gap-3 rounded-md border bg-background p-4',
             emptyClassName
           )}
         >
-          {/* <p className='text-center text-xs text-muted-foreground'>
-            {t('modeOffHint')}
-          </p> */}
           {globalReadOnlyBlock}
         </div>
       )}

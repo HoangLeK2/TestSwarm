@@ -55,6 +55,32 @@ export function replaceScenarioVariableReferences<T>(
   return value;
 }
 
+export function collectScenarioVariableReferences(value: unknown): string[] {
+  const references = new Set<string>();
+
+  function walk(current: unknown) {
+    if (typeof current === 'string') {
+      VARIABLE_TOKEN_RE.lastIndex = 0;
+      let match = VARIABLE_TOKEN_RE.exec(current);
+      while (match) {
+        if (match[1]) references.add(match[1]);
+        match = VARIABLE_TOKEN_RE.exec(current);
+      }
+      return;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) walk(item);
+      return;
+    }
+    if (current && typeof current === 'object') {
+      for (const child of Object.values(current)) walk(child);
+    }
+  }
+
+  walk(value);
+  return Array.from(references).sort((a, b) => a.localeCompare(b));
+}
+
 function normalizeTagsValue(tags: string): string {
   return tags
     .split(',')

@@ -137,6 +137,40 @@ export function extractPreviewSteps(
   );
 }
 
+function countNestedFlowSteps(step: FlowStep): number {
+  let count = 1;
+  const record = step as Record<string, unknown>;
+  for (const key of NESTED_STEP_KEYS) {
+    const nested = record[key];
+    if (!Array.isArray(nested)) continue;
+    count += nested
+      .filter((s): s is FlowStep => !!s && typeof s === 'object')
+      .reduce((sum, child) => sum + countNestedFlowSteps(child), 0);
+  }
+  const branches = record.branches;
+  if (Array.isArray(branches)) {
+    for (const branch of branches) {
+      if (!branch || typeof branch !== 'object') continue;
+      const branchSteps = (branch as Record<string, unknown>).steps;
+      if (!Array.isArray(branchSteps)) continue;
+      count += branchSteps
+        .filter((s): s is FlowStep => !!s && typeof s === 'object')
+        .reduce((sum, child) => sum + countNestedFlowSteps(child), 0);
+    }
+  }
+  return count;
+}
+
+export function countPreviewSteps(steps: FlowStep[]): {
+  topLevel: number;
+  total: number;
+} {
+  return {
+    topLevel: steps.length,
+    total: steps.reduce((sum, step) => sum + countNestedFlowSteps(step), 0)
+  };
+}
+
 export function countScenarioVariables(
   variables: Record<string, unknown> | null | undefined
 ): number {

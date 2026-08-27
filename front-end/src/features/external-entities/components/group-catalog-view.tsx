@@ -1,15 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import {
-  ChevronLeft,
-  ChevronRight,
-  RefreshCw,
-  Search,
-  Users,
-  X
-} from 'lucide-react';
+import { Filter, RefreshCw, Search, Users, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -29,6 +22,13 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
+import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
+import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { cn } from '@/lib/utils';
 import { useGroupCatalog } from '../hooks/use-group-catalog';
 import {
@@ -38,7 +38,7 @@ import {
 } from '../lib/group-catalog';
 import type { ExternalEntityCatalogItem } from '../services/api';
 
-const PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 25;
 
 function GroupTable({
   items,
@@ -140,20 +140,24 @@ export function GroupCatalogView() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const updateSearch = useDebouncedCallback((value: string) => {
+    setPage(0);
+    setSearch(value.trim());
+  }, 300);
   const query = useGroupCatalog({
     search: search || undefined,
     status: status === 'all' ? undefined : status,
-    limit: PAGE_SIZE,
-    offset: page * PAGE_SIZE
+    limit: pageSize,
+    offset: page * pageSize
   });
   const total = query.data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const now = new Date();
 
-  const applySearch = () => {
-    setPage(0);
-    setSearch(searchInput.trim());
-  };
+  useEffect(() => {
+    updateSearch(searchInput);
+  }, [searchInput, updateSearch]);
 
   const clearFilters = () => {
     setSearchInput('');
@@ -183,16 +187,13 @@ export function GroupCatalogView() {
           </Badge>
         </div>
 
-        <div className='flex flex-wrap items-center gap-2 border-b border-border/60 bg-muted/10 px-5 py-4'>
-          <div className='relative min-w-[260px] flex-1'>
+        <div className='grid gap-2 border-b border-border/60 bg-muted/10 px-5 py-4 sm:grid-cols-[minmax(260px,1fr)_190px_auto]'>
+          <div className='relative min-w-0'>
             <Search className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
             <Input
               className='h-10 pl-9'
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') applySearch();
-              }}
               placeholder={t('searchPlaceholder')}
               aria-label={t('searchAria')}
             />
@@ -204,7 +205,8 @@ export function GroupCatalogView() {
               setPage(0);
             }}
           >
-            <SelectTrigger className='h-10 w-[170px]'>
+            <SelectTrigger className='h-10 w-full'>
+              <Filter className='size-4' />
               <SelectValue placeholder={t('statusAll')} />
             </SelectTrigger>
             <SelectContent>
@@ -214,28 +216,41 @@ export function GroupCatalogView() {
               <SelectItem value='resolved'>{t('statusResolved')}</SelectItem>
             </SelectContent>
           </Select>
-          <Button className='h-10' onClick={applySearch}>
-            {t('filter')}
-          </Button>
-          {(search || status !== 'all') && (
-            <Button variant='ghost' className='h-10' onClick={clearFilters}>
-              <X className='mr-1.5 size-4' />
-              {t('clear')}
-            </Button>
-          )}
-          <Button
-            variant='outline'
-            size='icon'
-            className='size-10'
-            onClick={() => void query.refetch()}
-            disabled={query.isFetching}
-            title={t('refresh')}
-            aria-label={t('refresh')}
-          >
-            <RefreshCw
-              className={cn('size-4', query.isFetching && 'animate-spin')}
-            />
-          </Button>
+          <div className='flex justify-end gap-2'>
+            {(search || status !== 'all') && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant='outline'
+                    size='icon'
+                    className='size-10'
+                    onClick={clearFilters}
+                    aria-label={t('clear')}
+                  >
+                    <X className='size-4' />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t('clear')}</TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant='outline'
+                  size='icon'
+                  className='size-10'
+                  onClick={() => void query.refetch()}
+                  disabled={query.isFetching}
+                  aria-label={t('refresh')}
+                >
+                  <RefreshCw
+                    className={cn('size-4', query.isFetching && 'animate-spin')}
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('refresh')}</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
 
         <div className='p-5'>
@@ -271,37 +286,19 @@ export function GroupCatalogView() {
         </div>
 
         {!query.isLoading && total > 0 ? (
-          <div className='flex items-center justify-between border-t border-border/60 bg-muted/10 px-5 py-3'>
-            <p className='text-xs text-muted-foreground'>
-              {t('pageCount', {
-                from: page * PAGE_SIZE + 1,
-                to: Math.min((page + 1) * PAGE_SIZE, total),
-                total
-              })}
-            </p>
-            <div className='flex items-center gap-2'>
-              <Button
-                size='sm'
-                variant='outline'
-                disabled={page === 0}
-                onClick={() => setPage((value) => Math.max(0, value - 1))}
-              >
-                <ChevronLeft className='mr-1 size-4' />
-                {t('previous')}
-              </Button>
-              <span className='text-xs font-medium tabular-nums'>
-                {page + 1} / {totalPages}
-              </span>
-              <Button
-                size='sm'
-                variant='outline'
-                disabled={page + 1 >= totalPages}
-                onClick={() => setPage((value) => value + 1)}
-              >
-                {t('next')}
-                <ChevronRight className='ml-1 size-4' />
-              </Button>
-            </div>
+          <div className='border-t border-border/60 bg-muted/10 px-5 py-3'>
+            <TablePaginationControls
+              pageIndex={page}
+              pageCount={totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[10, 25, 50, 100]}
+              total={total}
+              onPageIndexChange={setPage}
+              onPageSizeChange={(value) => {
+                setPage(0);
+                setPageSize(value);
+              }}
+            />
           </div>
         ) : null}
       </div>

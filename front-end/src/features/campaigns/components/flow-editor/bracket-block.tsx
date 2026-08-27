@@ -75,6 +75,9 @@ import {
 import { shouldUseStepEditOverlay } from './nested-step-edit';
 import { useFlowEditorEditSession } from './flow-editor-edit-session';
 import { useMirrorStepActions } from './use-mirror-step-actions';
+import type { VariablePreviewValues } from './variable-preview';
+
+const EMPTY_AVAILABLE_VARIABLES: string[] = [];
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,8 @@ interface BracketBlockProps {
    */
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
   campaignScenarios?: RunScenarioCampaignOption[];
+  availableVariables?: string[];
+  variablePreviewValues?: VariablePreviewValues;
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
   enableDragDrop?: boolean;
 }
@@ -226,6 +231,8 @@ interface ChildStepListProps {
   stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
   onStopInlineRun?: () => void;
   campaignScenarios?: RunScenarioCampaignOption[];
+  availableVariables?: string[];
+  variablePreviewValues?: VariablePreviewValues;
   enableDragDrop?: boolean;
 }
 
@@ -253,6 +260,8 @@ function ChildStepList({
   stepRunStates = {},
   onStopInlineRun,
   campaignScenarios = [],
+  availableVariables = EMPTY_AVAILABLE_VARIABLES,
+  variablePreviewValues,
   enableDragDrop = true
 }: ChildStepListProps) {
   const tBracket = useTranslations('campaignsFeature.flowBracket');
@@ -377,6 +386,8 @@ function ChildStepList({
                               : undefined
                           }
                           campaignScenarios={campaignScenarios}
+                          availableVariables={availableVariables}
+                          variablePreviewValues={variablePreviewValues}
                           enableDragDrop={enableDragDrop}
                         />
                       </div>
@@ -464,6 +475,7 @@ function ChildStepList({
                             : undefined
                         }
                         runState={stepRunStates[leafRunKey] ?? 'idle'}
+                        variablePreviewValues={variablePreviewValues}
                         onStopInlineRun={onStopInlineRun}
                         isPickTarget={isPickTarget}
                         onTogglePickSelector={
@@ -539,6 +551,8 @@ export function BracketBlock({
   rootStepIndex,
   pathFromRoot,
   campaignScenarios = [],
+  availableVariables = EMPTY_AVAILABLE_VARIABLES,
+  variablePreviewValues,
   sessionGateRuntimeContext,
   enableDragDrop = true
 }: BracketBlockProps) {
@@ -711,6 +725,8 @@ export function BracketBlock({
     stepRunStates,
     onStopInlineRun,
     campaignScenarios,
+    availableVariables,
+    variablePreviewValues,
     enableDragDrop
   };
 
@@ -726,6 +742,8 @@ export function BracketBlock({
               step={editingChild}
               onChange={handleEditingChildChange}
               onClose={closeEditingChild}
+              availableVariables={availableVariables}
+              variablePreviewValues={variablePreviewValues}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
               onRequestCropImage={mirrorActions.cropImage}
@@ -812,6 +830,8 @@ export function BracketBlock({
                 step={editingChild}
                 onChange={handleEditingChildChange}
                 onClose={closeEditingChild}
+                availableVariables={availableVariables}
+                variablePreviewValues={variablePreviewValues}
                 campaignScenarios={campaignScenarios}
                 runtimeContext={sessionGateRuntimeContext}
                 onRequestCropImage={mirrorActions.cropImage}
@@ -1058,6 +1078,7 @@ export function BracketBlock({
               <LoopFields
                 step={step}
                 onChange={(f, v) => onUpdate({ ...step, [f]: v })}
+                availableVariables={availableVariables}
               />
             )}
             {step.type === 'repeat' && (
@@ -1070,18 +1091,21 @@ export function BracketBlock({
               <RepeatUntilFields
                 step={step}
                 onChange={(f, v) => onUpdate({ ...step, [f]: v })}
+                availableVariables={availableVariables}
               />
             )}
             {step.type === 'if_element' && (
               <IfElementFields
                 step={step}
                 onChange={(f, v) => onUpdate({ ...step, [f]: v })}
+                availableVariables={availableVariables}
               />
             )}
             {step.type === 'if_variable' && (
               <IfVariableFields
                 step={step}
                 onChange={(f, v) => onUpdate({ ...step, [f]: v })}
+                availableVariables={availableVariables}
               />
             )}
           </div>

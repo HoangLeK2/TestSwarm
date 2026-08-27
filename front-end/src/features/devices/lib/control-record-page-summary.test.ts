@@ -11,15 +11,90 @@ test('summarizes configured multi-page campaign targets', () => {
       PAGE_TARGETS: ['Go2Joy Vietnam', 'Booking.com'],
       PAGE_ROW_TEXTS: ['Go2Joy Vietnam', 'Booking.com']
     },
-    true
+    true,
+    'Nuôi Facebook - Kết bạn từ bài post Home đúng keyword 1 — chiến dịch',
+    ['PAGE_COUNT', 'PAGE_TARGETS', 'PAGE_ROW_TEXTS']
   );
 
   assert.equal(summary?.label, '2 page: Go2Joy Vietnam, Booking.com');
+  assert.equal(summary?.targetType, 'page');
+  assert.equal(summary?.targetInputKind, 'manual');
   assert.equal(
     summary?.contextLabel,
-    'Campaign đang áp dụng: 2 page: Go2Joy Vietnam, Booking.com'
+    'Campaign: Nuôi Facebook - Kết bạn từ bài post Home đúng keyword 1 — chiến dịch: 2 page: Go2Joy Vietnam, Booking.com'
   );
+  assert.deepEqual(summary?.bindingKeys, [
+    'PAGE_COUNT',
+    'PAGE_TARGETS',
+    'PAGE_ROW_TEXTS'
+  ]);
+  assert.deepEqual(summary?.unusedBindingKeys, []);
+  assert.equal(summary?.usageWarning, undefined);
   assert.equal(summary?.warning, undefined);
+});
+
+test('summarizes configured multi-group campaign targets', () => {
+  const summary = buildControlRecordPageSummary(
+    {
+      GROUP_COUNT: 2,
+      GROUP_SEARCHES: ['OpenClaw VN', 'AI Agents VN'],
+      GROUP_ROW_TEXTS: ['OpenClaw VN', 'AI Agents VN']
+    },
+    true,
+    'Group nurture campaign',
+    ['GROUP_COUNT', 'GROUP_SEARCHES', 'GROUP_ROW_TEXTS']
+  );
+
+  assert.equal(summary?.targetType, 'group');
+  assert.equal(summary?.targetInputKind, 'manual');
+  assert.equal(summary?.label, '2 group: OpenClaw VN, AI Agents VN');
+  assert.deepEqual(summary?.unusedBindingKeys, []);
+  assert.equal(summary?.usageWarning, undefined);
+});
+
+test('summarizes target-form group selections for multi-group flows', () => {
+  const summary = buildControlRecordPageSummary(
+    {
+      GROUP_COUNT: 2,
+      GROUP_TARGET_IDS: ['group-1', 'group-2'],
+      GROUP_TARGETS: ['OpenClaw VN', 'AI Agents VN'],
+      GROUP_SEARCHES: ['OpenClaw VN', 'AI Agents VN'],
+      GROUP_ROW_TEXTS: ['OpenClaw VN', 'AI Agents VN'],
+      _target_form: {
+        platform: 'facebook',
+        selected: {
+          group: [
+            {
+              id: 'group-1',
+              display_name: 'OpenClaw VN',
+              entity_type: 'group',
+              platform: 'facebook'
+            },
+            {
+              id: 'group-2',
+              display_name: 'AI Agents VN',
+              entity_type: 'group',
+              platform: 'facebook'
+            }
+          ],
+          page: [],
+          profile: []
+        }
+      }
+    },
+    true,
+    'Group nurture campaign',
+    ['GROUP_COUNT', 'GROUP_SEARCHES', 'GROUP_ROW_TEXTS']
+  );
+
+  assert.equal(summary?.label, '2 group: OpenClaw VN, AI Agents VN');
+  assert.equal(summary?.targetInputKind, 'catalog');
+  assert.deepEqual(summary?.usedBindingKeys, [
+    'GROUP_COUNT',
+    'GROUP_SEARCHES',
+    'GROUP_ROW_TEXTS'
+  ]);
+  assert.deepEqual(summary?.unusedBindingKeys, ['GROUP_TARGETS']);
 });
 
 test('summarizes single-page scenario defaults', () => {
@@ -66,4 +141,23 @@ test('warns when page count exceeds configured targets', () => {
 
   assert.equal(summary?.label, '2 page: Go2Joy Vietnam, Chưa cấu hình page 2');
   assert.equal(summary?.warning, 'Thiếu cấu hình 1 page');
+});
+
+test('warns when configured campaign targets are not referenced by the flow', () => {
+  const summary = buildControlRecordPageSummary(
+    {
+      PAGE_COUNT: 2,
+      PAGE_TARGETS: ['Go2Joy Vietnam', 'Booking.com']
+    },
+    true,
+    'Home keyword campaign',
+    ['POST_KEYWORDS', 'PROFILE_REQUIRED_KEYWORDS']
+  );
+
+  assert.deepEqual(summary?.usedBindingKeys, []);
+  assert.deepEqual(summary?.unusedBindingKeys, ['PAGE_COUNT', 'PAGE_TARGETS']);
+  assert.equal(
+    summary?.usageWarning,
+    'Đã cấu hình target nhưng flow hiện tại chưa dùng các biến này'
+  );
 });

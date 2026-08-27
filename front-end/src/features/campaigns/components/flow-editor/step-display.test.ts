@@ -5,6 +5,7 @@ import {
   getStepTypeName,
   getVariableDisplayName
 } from './constants.ts';
+import { resolveVariablePreviewText } from './variable-preview.ts';
 
 const labels: Record<string, string> = {
   'typeName.platform_session_gate': 'KIỂM TRA PHIÊN NỀN TẢNG',
@@ -33,5 +34,30 @@ test('keeps user-authored variable names unchanged', () => {
   assert.equal(
     getVariableDisplayName('MY_CUSTOM_VARIABLE', t),
     'MY_CUSTOM_VARIABLE'
+  );
+});
+
+test('resolves variable references for node display previews', () => {
+  assert.equal(
+    resolveVariablePreviewText('${SEARCH_QUERY}', {
+      SEARCH_QUERY: 'openclaw'
+    }),
+    'openclaw'
+  );
+  assert.equal(
+    resolveVariablePreviewText('"${SEARCH_QUERY}"', {
+      SEARCH_QUERY: 'openclaw'
+    }),
+    '"openclaw"'
+  );
+  assert.equal(
+    resolveVariablePreviewText('${MAX_PAGES}', {
+      MAX_PAGES: { type: 'number', default: 20 }
+    }),
+    '20'
+  );
+  assert.equal(
+    resolveVariablePreviewText('${MISSING}', { SEARCH_QUERY: 'openclaw' }),
+    '${MISSING}'
   );
 });

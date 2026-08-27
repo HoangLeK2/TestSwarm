@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { VariableInsertMenu } from '@/components/variable-insert-menu';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -35,7 +36,9 @@ type ExtractStep = FlowStep & {
   expand_prefetch_scroll_passes?: number | string;
   expand_prefetch_scroll_pause?: number | string;
   expand_completion_retries?: number | string;
+  max_pages?: number | string;
   max_items?: number | string;
+  entity_scroll_pause_s?: number | string;
   parent_post_id_var?: string;
   comment_scroll_passes?: number | string;
   comment_swipes_per_dump?: number | string;
@@ -50,7 +53,7 @@ type ExtractStep = FlowStep & {
   min_comment_scan_passes?: number | string;
   comment_max_snapshots?: number | string;
   comment_stop_if_no_new?: boolean;
-  no_new_threshold?: number;
+  no_new_threshold?: number | string;
   result_var?: string;
   collection?: string;
   platform?: string;
@@ -103,6 +106,62 @@ function parseNumOrVar(raw: string, fallback: number): number | string {
   if (isVarRef(v)) return v;
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function insertToken(raw: string, token: string): string {
+  const current = raw ?? '';
+  if (!current.trim()) return token;
+  const matches = current.match(/\$\{[^}]+\}/g);
+  if (matches?.includes(token)) return current;
+  return `${current} ${token}`.trim();
+}
+
+function VariableValueInput({
+  availableVariables,
+  value,
+  onValueChange,
+  placeholder,
+  insertMode = 'replace'
+}: {
+  availableVariables: string[];
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  insertMode?: 'append' | 'replace';
+}) {
+  const tStep = useTranslations('campaignsFeature.stepEditor');
+
+  return (
+    <div className='space-y-1.5'>
+      <Input
+        className='h-8 font-mono text-xs'
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onValueChange(event.target.value)}
+      />
+      {availableVariables.length > 0 ? (
+        <VariableInsertMenu
+          groups={[
+            {
+              label: tStep('variableInsert.availableVariables'),
+              items: availableVariables.map((name) => {
+                const token = `\${${name}}`;
+                return { value: token };
+              })
+            }
+          ]}
+          label={tStep('variableInsert.placeholder')}
+          onInsert={(token) =>
+            onValueChange(
+              insertMode === 'replace' ? token : insertToken(value, token)
+            )
+          }
+          fullWidth
+          align='start'
+        />
+      ) : null}
+    </div>
+  );
 }
 
 function StrategyCard({
@@ -230,6 +289,28 @@ function applyExtractEntitySwitch(
     next.open_post_press_back_after_extract =
       step.open_post_press_back_after_extract ?? true;
     delete next.open_post_before_extract;
+  } else if (entity === 'groups') {
+    next.edge_extra_data = step.edge_extra_data ?? true;
+    next.entity_version = 'groups:v1';
+    next.max_pages = step.max_pages ?? '${MAX_PAGES}';
+    next.max_items = step.max_items ?? 500;
+    next.stop_if_no_new = step.stop_if_no_new ?? true;
+    next.no_new_threshold = step.no_new_threshold ?? 2;
+    next.entity_scroll_pause_s = step.entity_scroll_pause_s ?? 0.6;
+    delete next.open_post_before_extract;
+    delete next.open_post_press_back_after_extract;
+    delete next.extract_profile;
+    delete next.parent_post_id_var;
+    delete next.comment_scroll_passes;
+    delete next.comment_swipes_per_dump;
+    delete next.comment_scroll_distance;
+    delete next.comment_scroll_duration_ms;
+    delete next.comment_scroll_pause_s;
+    delete next.comment_scroll_wall_s;
+    delete next.comment_no_growth_break;
+    delete next.min_comment_scan_passes;
+    delete next.comment_max_snapshots;
+    delete next.comment_stop_if_no_new;
   } else if (entity === 'text_nodes') {
     next.edge_extra_data = step.edge_extra_data ?? true;
     next.entity_version = 'text_nodes:v1';
@@ -372,12 +453,14 @@ export function ExtractStepFields({
   step,
   update,
   onChange,
-  view = 'all'
+  view = 'all',
+  availableVariables = []
 }: {
   step: ExtractStep;
   update: (fields: Partial<FlowStep>) => void;
   onChange: (step: FlowStep) => void;
   view?: 'all' | 'screen' | 'data-save';
+  availableVariables?: string[];
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.extract');
   const tPlatform = useTranslations(
@@ -551,6 +634,7 @@ export function ExtractStepFields({
 
           {entity === 'posts' ||
           entity === 'comments' ||
+          entity === 'groups' ||
           entity === 'text_nodes' ? (
             <StepPanelSection
               title={t('facebookExtraTitle')}
@@ -579,12 +663,77 @@ export function ExtractStepFields({
                     step.entity_version ??
                     (entity === 'comments'
                       ? 'comments:v1'
-                      : entity === 'text_nodes'
-                        ? 'text_nodes:v1'
-                        : 'posts:v1')
+                      : entity === 'groups'
+                        ? 'groups:v1'
+                        : entity === 'text_nodes'
+                          ? 'text_nodes:v1'
+                          : 'posts:v1')
                   }
                 />
               </CompactField>
+
+              {entity === 'groups' ? (
+                <div className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3'>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <CompactField
+                      label={t('groupMaxPagesLabel')}
+                      hint={t('groupMaxPagesHint')}
+                    >
+                      <VariableValueInput
+                        availableVariables={availableVariables}
+                        value={String(step.max_pages ?? '${MAX_PAGES}')}
+                        onValueChange={(value) =>
+                          update({
+                            max_pages: parseNumOrVar(value, 20)
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('groupMaxItemsLabel')}
+                      hint={t('groupMaxItemsHint')}
+                    >
+                      <VariableValueInput
+                        availableVariables={availableVariables}
+                        value={String(step.max_items ?? 500)}
+                        onValueChange={(value) =>
+                          update({
+                            max_items: parseNumOrVar(value, 500)
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('groupNoNewThresholdLabel')}
+                      hint={t('groupNoNewThresholdHint')}
+                    >
+                      <VariableValueInput
+                        availableVariables={availableVariables}
+                        value={String(step.no_new_threshold ?? 2)}
+                        onValueChange={(value) =>
+                          update({
+                            no_new_threshold: parseNumOrVar(value, 2)
+                          })
+                        }
+                      />
+                    </CompactField>
+                    <CompactField
+                      label={t('groupScrollPauseLabel')}
+                      hint={t('groupScrollPauseHint')}
+                    >
+                      <VariableValueInput
+                        availableVariables={availableVariables}
+                        value={String(step.entity_scroll_pause_s ?? 0.6)}
+                        onValueChange={(value) =>
+                          update({
+                            entity_scroll_pause_s: parseNumOrVar(value, 0.6)
+                          })
+                        }
+                      />
+                    </CompactField>
+                  </div>
+                </div>
+              ) : null}
 
               {entity === 'comments' ? (
                 <div className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3'>
@@ -593,12 +742,12 @@ export function ExtractStepFields({
                       label={t('maxItemsLabel')}
                       hint={t('maxItemsHint')}
                     >
-                      <Input
-                        className='h-8 w-full font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.max_items ?? 220)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            max_items: parseNumOrVar(e.target.value, 220)
+                            max_items: parseNumOrVar(value, 220)
                           })
                         }
                       />
@@ -641,15 +790,12 @@ export function ExtractStepFields({
                       label={t('commentScrollPassesLabel')}
                       hint={t('commentScrollPassesHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.comment_scroll_passes ?? 16)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            comment_scroll_passes: parseNumOrVar(
-                              e.target.value,
-                              16
-                            )
+                            comment_scroll_passes: parseNumOrVar(value, 16)
                           })
                         }
                       />
@@ -658,15 +804,12 @@ export function ExtractStepFields({
                       label={t('commentSwipesPerDumpLabel')}
                       hint={t('commentSwipesPerDumpHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.comment_swipes_per_dump ?? 4)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            comment_swipes_per_dump: parseNumOrVar(
-                              e.target.value,
-                              4
-                            )
+                            comment_swipes_per_dump: parseNumOrVar(value, 4)
                           })
                         }
                       />
@@ -675,15 +818,12 @@ export function ExtractStepFields({
                       label={t('commentScrollDistanceLabel')}
                       hint={t('commentScrollDistanceHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.comment_scroll_distance ?? 0.52)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            comment_scroll_distance: parseNumOrVar(
-                              e.target.value,
-                              0.52
-                            )
+                            comment_scroll_distance: parseNumOrVar(value, 0.52)
                           })
                         }
                       />
@@ -692,13 +832,13 @@ export function ExtractStepFields({
                       label={t('commentScrollDurationLabel')}
                       hint={t('commentScrollDurationHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.comment_scroll_duration_ms ?? 120)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
                             comment_scroll_duration_ms: parseNumOrVar(
-                              e.target.value,
+                              value,
                               120
                             )
                           })
@@ -709,15 +849,12 @@ export function ExtractStepFields({
                       label={t('commentScrollPauseLabel')}
                       hint={t('commentScrollPauseHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.comment_scroll_pause_s ?? 0.03)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            comment_scroll_pause_s: parseNumOrVar(
-                              e.target.value,
-                              0.03
-                            )
+                            comment_scroll_pause_s: parseNumOrVar(value, 0.03)
                           })
                         }
                       />
@@ -751,15 +888,12 @@ export function ExtractStepFields({
                       label={t('commentNoGrowthBreakLabel')}
                       hint={t('commentNoGrowthBreakHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.comment_no_growth_break ?? 0)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            comment_no_growth_break: parseNumOrVar(
-                              e.target.value,
-                              0
-                            )
+                            comment_no_growth_break: parseNumOrVar(value, 0)
                           })
                         }
                       />
@@ -768,15 +902,12 @@ export function ExtractStepFields({
                       label={t('minCommentScanPassesLabel')}
                       hint={t('minCommentScanPassesHint')}
                     >
-                      <Input
-                        className='h-8 font-mono text-xs'
+                      <VariableValueInput
+                        availableVariables={availableVariables}
                         value={String(step.min_comment_scan_passes ?? 2)}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            min_comment_scan_passes: parseNumOrVar(
-                              e.target.value,
-                              2
-                            )
+                            min_comment_scan_passes: parseNumOrVar(value, 2)
                           })
                         }
                       />
@@ -802,15 +933,12 @@ export function ExtractStepFields({
                   label={t('maxPassesLabel')}
                   hint={t('maxPassesHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_see_more_max_passes ?? 2)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
-                        expand_see_more_max_passes: parseNumOrVar(
-                          e.target.value,
-                          2
-                        )
+                        expand_see_more_max_passes: parseNumOrVar(value, 2)
                       })
                     }
                   />
@@ -836,13 +964,13 @@ export function ExtractStepFields({
                   label={t('scrollDistanceLabel')}
                   hint={t('scrollDistanceHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_see_more_scroll_distance ?? 0.3)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
                         expand_see_more_scroll_distance: parseNumOrVar(
-                          e.target.value,
+                          value,
                           0.3
                         )
                       })
@@ -853,15 +981,12 @@ export function ExtractStepFields({
                   label={t('lazyHydrationRoundsLabel')}
                   hint={t('lazyHydrationRoundsHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_lazy_hydration_rounds ?? 6)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
-                        expand_lazy_hydration_rounds: parseNumOrVar(
-                          e.target.value,
-                          6
-                        )
+                        expand_lazy_hydration_rounds: parseNumOrVar(value, 6)
                       })
                     }
                   />
@@ -870,15 +995,12 @@ export function ExtractStepFields({
                   label={t('lazyHydrationScrollDistanceLabel')}
                   hint={t('lazyHydrationScrollDistanceHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_lazy_scroll_distance ?? 0.3)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
-                        expand_lazy_scroll_distance: parseNumOrVar(
-                          e.target.value,
-                          0.3
-                        )
+                        expand_lazy_scroll_distance: parseNumOrVar(value, 0.3)
                       })
                     }
                   />
@@ -887,15 +1009,12 @@ export function ExtractStepFields({
                   label={t('prefetchScrollPassesLabel')}
                   hint={t('prefetchScrollPassesHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_prefetch_scroll_passes ?? 0)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
-                        expand_prefetch_scroll_passes: parseNumOrVar(
-                          e.target.value,
-                          0
-                        )
+                        expand_prefetch_scroll_passes: parseNumOrVar(value, 0)
                       })
                     }
                   />
@@ -904,15 +1023,12 @@ export function ExtractStepFields({
                   label={t('prefetchScrollPauseLabel')}
                   hint={t('prefetchScrollPauseHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_prefetch_scroll_pause ?? 0.7)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
-                        expand_prefetch_scroll_pause: parseNumOrVar(
-                          e.target.value,
-                          0.7
-                        )
+                        expand_prefetch_scroll_pause: parseNumOrVar(value, 0.7)
                       })
                     }
                   />
@@ -921,15 +1037,12 @@ export function ExtractStepFields({
                   label={t('completionRetriesLabel')}
                   hint={t('completionRetriesHint')}
                 >
-                  <Input
-                    className='h-8 font-mono text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
                     value={String(step.expand_completion_retries ?? 1)}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       update({
-                        expand_completion_retries: parseNumOrVar(
-                          e.target.value,
-                          1
-                        )
+                        expand_completion_retries: parseNumOrVar(value, 1)
                       })
                     }
                   />
@@ -938,16 +1051,16 @@ export function ExtractStepFields({
             </CollapsibleBlock>
           ) : null}
 
-          {step.stop_if_no_new ? (
+          {step.stop_if_no_new && entity !== 'groups' ? (
             <StepPanelField label={t('noNewThresholdLabel')}>
               <div className='flex items-center gap-2'>
-                <Input
-                  type='number'
-                  min={1}
-                  className='h-9 w-24 text-xs'
-                  value={step.no_new_threshold ?? 30}
-                  onChange={(e) =>
-                    update({ no_new_threshold: Number(e.target.value) || 30 })
+                <VariableValueInput
+                  availableVariables={availableVariables}
+                  value={String(step.no_new_threshold ?? 30)}
+                  onValueChange={(value) =>
+                    update({
+                      no_new_threshold: parseNumOrVar(value, 30)
+                    })
                   }
                 />
                 <span className='text-[11px] text-muted-foreground'>
@@ -1023,13 +1136,14 @@ export function ExtractStepFields({
                 />
 
                 <F label={t('saveCollectionLabel')}>
-                  <Input
-                    className='h-9 text-xs'
+                  <VariableValueInput
+                    availableVariables={availableVariables}
+                    value={step.collection ?? ''}
                     placeholder={t('saveCollectionPlaceholder', {
                       varToken: SCENARIO_VAR_TOKENS.SAVE_COLLECTION
                     })}
-                    value={step.collection ?? ''}
-                    onChange={(e) => update({ collection: e.target.value })}
+                    onValueChange={(value) => update({ collection: value })}
+                    insertMode='append'
                   />
                   <p className='mt-1 text-[10px] text-muted-foreground'>
                     {t('saveCollectionHint', {
@@ -1100,13 +1214,14 @@ export function ExtractStepFields({
                     </F>
                   </div>
                   <F label={t('saveTagsLabel')}>
-                    <Input
-                      className='h-9 text-xs'
+                    <VariableValueInput
+                      availableVariables={availableVariables}
                       placeholder={t('saveTagsPlaceholder')}
                       value={step.tags ?? ''}
-                      onChange={(e) =>
-                        update({ tags: e.target.value || undefined })
+                      onValueChange={(value) =>
+                        update({ tags: value || undefined })
                       }
+                      insertMode='append'
                     />
                     <p className='mt-1 text-[10px] text-muted-foreground'>
                       {t('saveTagsHint', {

@@ -6,11 +6,19 @@ import {
   Monitor,
   MousePointerClick,
   Move,
-  ShieldCheck
+  ShieldCheck,
+  Info
 } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
+import {
+  VariableInsertMenu,
+  type VariableInsertMenuGroup,
+  type VariableInsertMenuItem
+} from '@/components/variable-insert-menu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { getVariableDisplayMetadata } from '@/lib/variable-display-metadata';
+import type { VariableDisplayMetadata } from '@/lib/variable-display-metadata';
 import { cn } from '@/lib/utils';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -52,6 +60,7 @@ import {
   getSocialActionOptions
 } from './social-action-options';
 import { TapImageFields } from './tap-image-fields';
+import type { VariablePreviewValues } from './variable-preview';
 
 interface Props {
   step: FlowStep;
@@ -84,6 +93,7 @@ interface Props {
   /** Other scenarios in the campaign — for run_scenario picker (templates always loaded inside RunScenarioFields). */
   campaignScenarios?: RunScenarioCampaignOption[];
   runtimeContext?: SessionGateRuntimeContext;
+  variablePreviewValues?: VariablePreviewValues;
 }
 
 export type SessionGateRuntimeContext = {
@@ -177,9 +187,125 @@ function OcrRegionField({
   );
 }
 
-/** Value field + variable insert: stacks on narrow widths so the select never squeezes the input. */
+function translateVariableInfo(
+  t: (key: string) => string,
+  key: string | undefined,
+  fallback: string
+) {
+  if (!key) return fallback;
+  try {
+    const translated = t(key);
+    return translated && translated !== key ? translated : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function variableCategoryLabel(
+  metadata: VariableDisplayMetadata,
+  t: (key: string) => string
+) {
+  return translateVariableInfo(
+    t,
+    `variableInfo.categories.${metadata.category}`,
+    metadata.category
+  );
+}
+
+function useVariableInfoTranslator() {
+  const tVarInfo = useTranslations('components.variableEditor');
+  return useCallback((key: string) => tVarInfo(key as never), [tVarInfo]);
+}
+
+function variableNameFromToken(token: string): string {
+  const match = token.match(/^\$\{(.+)\}$/);
+  return match ? match[1] : token;
+}
+
+function buildVariableMenuItem({
+  name,
+  value,
+  code,
+  t
+}: {
+  name: string;
+  value: string;
+  code: string;
+  t: (key: string) => string;
+}): VariableInsertMenuItem {
+  const metadata = getVariableDisplayMetadata(name);
+  const label = translateVariableInfo(
+    t,
+    metadata.labelKey,
+    metadata.fallbackLabel
+  );
+  const description = translateVariableInfo(t, metadata.descriptionKey, '');
+  const origin = translateVariableInfo(t, metadata.originKey, '');
+  const originLabel = translateVariableInfo(
+    t,
+    'variableInfo.originLabel',
+    'Nguồn'
+  );
+
+  return {
+    value,
+    label,
+    code,
+    badge: variableCategoryLabel(metadata, t),
+    description,
+    detail: origin ? `${originLabel}: ${origin}` : undefined
+  };
+}
+
+function IfVariableSourceHint({
+  name,
+  t
+}: {
+  name?: string | null;
+  t: (key: string) => string;
+}) {
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) return null;
+  const metadata = getVariableDisplayMetadata(trimmed);
+  const label = translateVariableInfo(
+    t,
+    metadata.labelKey,
+    metadata.fallbackLabel
+  );
+  const description = translateVariableInfo(t, metadata.descriptionKey, '');
+  const origin = translateVariableInfo(t, metadata.originKey, '');
+
+  if (!description && !origin) return null;
+
+  return (
+    <div className='rounded-md border bg-muted/25 px-2.5 py-2 text-[11px] leading-relaxed'>
+      <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+        <Info className='size-3.5 shrink-0 text-muted-foreground' />
+        <span className='min-w-0 truncate font-medium text-foreground'>
+          {label}
+        </span>
+        <span className='rounded border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground'>
+          {variableCategoryLabel(metadata, t)}
+        </span>
+      </div>
+      {origin ? (
+        <p className='mt-1 text-muted-foreground'>
+          <span className='font-medium text-foreground'>
+            {t('variableInfo.originLabel')}:
+          </span>{' '}
+          {origin}
+        </p>
+      ) : null}
+      {description ? (
+        <p className='mt-1 text-muted-foreground'>{description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Value field + variable insert: keep stacked inside narrow editor panels. */
 function valueInsertRowClassName() {
-  return 'flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-2';
+  return 'flex min-w-0 flex-col gap-2';
 }
 
 function keywordInputValue(value: unknown): string {
@@ -281,46 +407,155 @@ function VariableInsertSelect({
   onInsert: (token: string) => void;
   t: ReturnType<typeof useTranslations>;
 }) {
-  const [selection, setSelection] = useState('');
+  const variableInfoT = useVariableInfoTranslator();
+  const groups: VariableInsertMenuGroup[] = [
+    {
+      label: t('variableInsert.availableVariables'),
+      items: availableVariables.map((name) => {
+        const token = `\${${name}}`;
+        return buildVariableMenuItem({
+          name,
+          value: token,
+          code: token,
+          t: variableInfoT
+        });
+      })
+    },
+    {
+      label: t('variableInsert.builtinVariables'),
+      items: BUILTIN_VARIABLE_TOKENS.map((token) =>
+        buildVariableMenuItem({
+          name: variableNameFromToken(token),
+          value: token,
+          code: token,
+          t: variableInfoT
+        })
+      )
+    },
+    {
+      label: t('variableInsert.sourcePoolVariables'),
+      items: SOURCE_POOL_VARIABLE_TOKENS.map((token) =>
+        buildVariableMenuItem({
+          name: variableNameFromToken(token),
+          value: token,
+          code: token,
+          t: variableInfoT
+        })
+      )
+    }
+  ];
+
   return (
-    <select
-      className='h-9 w-full shrink-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs shadow-sm sm:w-[13rem]'
-      value={selection}
-      onChange={(e) => {
-        const token = e.target.value;
-        if (!token) return;
-        onInsert(token);
-        setSelection('');
-      }}
-    >
-      <option value=''>{t('variableInsert.placeholder')}</option>
-      {availableVariables.length > 0 && (
-        <optgroup label={t('variableInsert.availableVariables')}>
-          {availableVariables.map((name) => {
-            const token = `\${${name}}`;
-            return (
-              <option key={name} value={token}>
-                {token}
-              </option>
-            );
-          })}
-        </optgroup>
-      )}
-      <optgroup label={t('variableInsert.builtinVariables')}>
-        {BUILTIN_VARIABLE_TOKENS.map((token) => (
-          <option key={token} value={token}>
-            {token}
-          </option>
-        ))}
-      </optgroup>
-      <optgroup label={t('variableInsert.sourcePoolVariables')}>
-        {SOURCE_POOL_VARIABLE_TOKENS.map((token) => (
-          <option key={token} value={token}>
-            {token}
-          </option>
-        ))}
-      </optgroup>
-    </select>
+    <VariableInsertMenu
+      groups={groups}
+      label={t('variableInsert.placeholder')}
+      onInsert={onInsert}
+      align='end'
+      triggerClassName='w-full shrink-0'
+    />
+  );
+}
+
+function VariableTextInput({
+  availableVariables,
+  value,
+  onValueChange,
+  placeholder,
+  className = 'h-8 text-xs',
+  insertMode = 'append',
+  t
+}: {
+  availableVariables: string[];
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  insertMode?: 'append' | 'replace';
+  t: ReturnType<typeof useTranslations>;
+}) {
+  return (
+    <div className={valueInsertRowClassName()}>
+      <Input
+        className={cn('min-w-0 flex-1', className)}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onValueChange(event.target.value)}
+      />
+      <VariableInsertSelect
+        availableVariables={availableVariables}
+        t={t}
+        onInsert={(token) =>
+          onValueChange(
+            insertMode === 'replace' ? token : insertToken(value, token)
+          )
+        }
+      />
+    </div>
+  );
+}
+
+function VariableNameSelect({
+  availableVariables,
+  onSelect
+}: {
+  availableVariables: string[];
+  onSelect: (name: string) => void;
+}) {
+  const variableInfoT = useVariableInfoTranslator();
+  if (availableVariables.length === 0) return null;
+  return (
+    <VariableInsertMenu
+      groups={[
+        {
+          label: 'Biến có thể dùng',
+          items: availableVariables.map((name) =>
+            buildVariableMenuItem({
+              name,
+              value: name,
+              code: name,
+              t: variableInfoT
+            })
+          )
+        }
+      ]}
+      label='Chọn biến...'
+      onInsert={onSelect}
+      align='end'
+      className='w-[min(34rem,calc(100vw-2rem))]'
+      triggerClassName='w-full shrink-0 sm:w-[13rem]'
+    />
+  );
+}
+
+function VariableTextarea({
+  availableVariables,
+  value,
+  onValueChange,
+  placeholder,
+  className = 'min-h-[92px] w-full rounded border bg-background px-2 py-1.5 text-xs',
+  t
+}: {
+  availableVariables: string[];
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  return (
+    <div className='space-y-2'>
+      <textarea
+        className={className}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onValueChange(event.target.value)}
+      />
+      <VariableInsertSelect
+        availableVariables={availableVariables}
+        t={t}
+        onInsert={(token) => onValueChange(insertToken(value, token))}
+      />
+    </div>
   );
 }
 
@@ -370,8 +605,10 @@ export function StepDetailPanel({
   onRequestCropImage,
   onRequestPickRegion,
   campaignScenarios = [],
-  runtimeContext
+  runtimeContext,
+  variablePreviewValues
 }: Props) {
+  const locale = useLocale();
   const t = useTranslations('campaignsFeature.stepEditor');
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
@@ -380,6 +617,45 @@ export function StepDetailPanel({
   const tIfVar = useTranslations('campaignsFeature.stepEditor.ifVariable');
   const tTarget = useTranslations('campaignsFeature.stepEditor.selectTarget');
   const tOcr = useTranslations('campaignsFeature.stepEditor.ocr');
+  const variableInfoT = useVariableInfoTranslator();
+  const fallbackText = (value: string, key: string, vi: string, en: string) =>
+    value.endsWith(`.${key}`) ? (locale.startsWith('vi') ? vi : en) : value;
+  const matchedProfileSourceTitle = fallbackText(
+    tSec('matchedProfileSource'),
+    'matchedProfileSource',
+    'Nguồn bài viết đã match',
+    'Matched post source'
+  );
+  const matchedProfileVerificationTitle = fallbackText(
+    tSec('matchedProfileVerification'),
+    'matchedProfileVerification',
+    'Điều kiện xác minh profile',
+    'Profile verification rules'
+  );
+  const matchedProfileResultTitle = fallbackText(
+    tSec('matchedProfileResult'),
+    'matchedProfileResult',
+    'Kết quả và giới hạn',
+    'Result and limits'
+  );
+  const actionIndexLabel = fallbackText(
+    tField('actionIndex'),
+    'actionIndex',
+    'Thứ tự action',
+    'Action index'
+  );
+  const matchedProfileVerificationHint = fallbackText(
+    tField('matchedProfileVerificationHint'),
+    'matchedProfileVerificationHint',
+    'Profile phải có keyword bắt buộc. Keyword cộng điểm tăng độ tin cậy, keyword cấm sẽ loại target.',
+    'The profile must contain the required keywords. Bonus keywords improve confidence; blocked keywords reject the target.'
+  );
+  const matchedProfileResultHint = fallbackText(
+    tField('matchedProfileResultHint'),
+    'matchedProfileResultHint',
+    'Nếu profile đủ điều kiện, target proof được lưu vào biến này để bước gửi kết bạn dùng tiếp.',
+    'When the profile passes verification, target proof is saved here for the friend-request step.'
+  );
   const [step, setStep] = useState(() =>
     normalizeSystemVariableCondition(stepProp)
   );
@@ -463,7 +739,10 @@ export function StepDetailPanel({
   const isExtractStep = step.type === 'extract';
   return (
     <div className='flex flex-col bg-card'>
-      <StepPanelHeader step={step} />
+      <StepPanelHeader
+        step={step}
+        variablePreviewValues={variablePreviewValues}
+      />
 
       <div className='max-h-[70vh] space-y-4 overflow-y-auto p-3 sm:p-4'>
         <StepPanelMetaFields step={step} commitStep={commitStep} t={t} />
@@ -571,11 +850,13 @@ export function StepDetailPanel({
                         : tApp('localPathPull')
                     }
                   >
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 font-mono text-xs'
                       value={step.local_path ?? ''}
-                      onChange={(e) => update({ local_path: e.target.value })}
                       placeholder={tApp('placeholderLocal')}
+                      onValueChange={(value) => update({ local_path: value })}
                     />
                   </F>
                   <F
@@ -585,11 +866,13 @@ export function StepDetailPanel({
                         : tApp('remotePathPull')
                     }
                   >
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 font-mono text-xs'
                       value={step.remote_path ?? ''}
-                      onChange={(e) => update({ remote_path: e.target.value })}
                       placeholder={tApp('placeholderRemote')}
+                      onValueChange={(value) => update({ remote_path: value })}
                     />
                   </F>
                   {step.type === 'push_file' && (
@@ -1063,20 +1346,13 @@ export function StepDetailPanel({
               {step.type === 'input_text' && (
                 <>
                   <F label={tField('textToType')}>
-                    <div className='flex items-center gap-2'>
-                      <Input
-                        className='h-8 text-xs'
-                        value={step.text ?? ''}
-                        onChange={(e) => update({ text: e.target.value })}
-                      />
-                      <VariableInsertSelect
-                        availableVariables={availableVariables}
-                        t={t}
-                        onInsert={(token) =>
-                          update({ text: insertToken(step.text ?? '', token) })
-                        }
-                      />
-                    </div>
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      value={step.text ?? ''}
+                      onValueChange={(value) => update({ text: value })}
+                      className='h-8 text-xs'
+                      t={t}
+                    />
                   </F>
                   {/* <F label={tField('inputMethod')}>
                     <select
@@ -1101,20 +1377,13 @@ export function StepDetailPanel({
                     t={t}
                   />
                   <F label={tField('textToType')}>
-                    <div className='flex items-center gap-2'>
-                      <Input
-                        className='h-8 text-xs'
-                        value={step.text ?? ''}
-                        onChange={(e) => update({ text: e.target.value })}
-                      />
-                      <VariableInsertSelect
-                        availableVariables={availableVariables}
-                        t={t}
-                        onInsert={(token) =>
-                          update({ text: insertToken(step.text ?? '', token) })
-                        }
-                      />
-                    </div>
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      value={step.text ?? ''}
+                      onValueChange={(value) => update({ text: value })}
+                      className='h-8 text-xs'
+                      t={t}
+                    />
                   </F>
                   <StepPanelToggle
                     label={tField('clearBeforeTyping')}
@@ -1372,7 +1641,9 @@ export function StepDetailPanel({
                     </select>
                   </F>
                   <F label={tField('searchKeyword')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={step.search ?? ''}
                       placeholder={
@@ -1380,8 +1651,8 @@ export function StepDetailPanel({
                           ? '${POST_SEARCH}'
                           : '${PEOPLE_SEARCH}'
                       }
-                      onChange={(e) =>
-                        update({ search: e.target.value || undefined })
+                      onValueChange={(value) =>
+                        update({ search: value || undefined })
                       }
                     />
                   </F>
@@ -1392,7 +1663,9 @@ export function StepDetailPanel({
                         : tField('matchDisplayName')
                     }
                   >
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={
                         step.target_type === 'post'
@@ -1404,54 +1677,54 @@ export function StepDetailPanel({
                           ? '${POST_ROW_TEXT}'
                           : '${PEOPLE_ROW_TEXT}'
                       }
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         update(
                           step.target_type === 'post'
-                            ? { display_text: e.target.value || undefined }
-                            : { display_name: e.target.value || undefined }
+                            ? { display_text: value || undefined }
+                            : { display_name: value || undefined }
                         )
                       }
                     />
                   </F>
                   <F label={tField('requiredKeywords')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={keywordInputValue(step.required_keywords)}
                       placeholder='Hoang Le, OpenAI'
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         update({
-                          required_keywords: keywordListFromInput(
-                            e.target.value
-                          )
+                          required_keywords: keywordListFromInput(value)
                         })
                       }
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
                     <F label={tField('bonusKeywords')}>
-                      <Input
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
                         className='h-8 text-xs'
                         value={keywordInputValue(step.optional_keywords)}
                         placeholder='company, city'
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            optional_keywords: keywordListFromInput(
-                              e.target.value
-                            )
+                            optional_keywords: keywordListFromInput(value)
                           })
                         }
                       />
                     </F>
                     <F label={tField('blockedKeywords')}>
-                      <Input
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
                         className='h-8 text-xs'
                         value={keywordInputValue(step.forbidden_keywords)}
                         placeholder='fake, page'
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            forbidden_keywords: keywordListFromInput(
-                              e.target.value
-                            )
+                            forbidden_keywords: keywordListFromInput(value)
                           })
                         }
                       />
@@ -1562,27 +1835,29 @@ export function StepDetailPanel({
                     </F>
                   </div>
                   <F label={tField('mutualKeywords')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={keywordInputValue(step.common_keywords)}
                       placeholder={tField('phMutualKeywords')}
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         update({
-                          common_keywords: keywordListFromInput(e.target.value)
+                          common_keywords: keywordListFromInput(value)
                         })
                       }
                     />
                   </F>
                   <F label={tField('blockedKeywords')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={keywordInputValue(step.forbidden_keywords)}
                       placeholder='trang, page, sponsored, anonymous'
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         update({
-                          forbidden_keywords: keywordListFromInput(
-                            e.target.value
-                          )
+                          forbidden_keywords: keywordListFromInput(value)
                         })
                       }
                     />
@@ -1636,24 +1911,28 @@ export function StepDetailPanel({
                 <>
                   <StepPanelHint>{t('scanPostsHint')}</StepPanelHint>
                   <F label={tField('postKeywords')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={keywordInputValue(step.keywords)}
                       placeholder={tField('phPostKeywords')}
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         update({
-                          keywords: keywordListFromInput(e.target.value)
+                          keywords: keywordListFromInput(value)
                         })
                       }
                     />
                   </F>
                   <F label='Comment'>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={step.comment_text ?? ''}
                       placeholder='${COMMENT_TEXT}'
-                      onChange={(e) =>
-                        update({ comment_text: e.target.value || undefined })
+                      onValueChange={(value) =>
+                        update({ comment_text: value || undefined })
                       }
                     />
                   </F>
@@ -1761,128 +2040,140 @@ export function StepDetailPanel({
               {(step.type === 'social_open_author_from_post_match' ||
                 step.type === 'social_open_commenter_from_post_match') && (
                 <>
-                  <StepPanelHint>
-                    {step.type === 'social_open_commenter_from_post_match'
-                      ? tField('adapterHintCommenter')
-                      : tField('adapterHintAuthor')}
-                  </StepPanelHint>
-                  <div className='grid grid-cols-3 gap-2'>
-                    <F label={tField('scanVar')}>
-                      <Input
-                        className='h-8 font-mono text-xs'
-                        value={step.source_var ?? '_post_scan'}
-                        onChange={(e) =>
-                          update({ source_var: e.target.value || '_post_scan' })
-                        }
-                      />
-                    </F>
-                    <F label='Action index'>
-                      <Input
-                        type='number'
-                        min={0}
-                        max={20}
+                  <StepPanelSection title={matchedProfileSourceTitle}>
+                    <StepPanelHint>
+                      {step.type === 'social_open_commenter_from_post_match'
+                        ? tField('adapterHintCommenter')
+                        : tField('adapterHintAuthor')}
+                    </StepPanelHint>
+                    <div className='grid min-w-0 grid-cols-1 gap-2'>
+                      <F label={tField('scanVar')}>
+                        <Input
+                          className='h-8 min-w-0 font-mono text-xs'
+                          value={step.source_var ?? '_post_scan'}
+                          onChange={(e) =>
+                            update({
+                              source_var: e.target.value || '_post_scan'
+                            })
+                          }
+                        />
+                      </F>
+                      <F label={actionIndexLabel}>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={20}
+                          className='h-8 text-xs'
+                          value={step.action_index ?? 0}
+                          onChange={(e) =>
+                            update({
+                              action_index: Math.max(
+                                0,
+                                Math.min(20, Number(e.target.value) || 0)
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                    </div>
+                  </StepPanelSection>
+
+                  <StepPanelSection title={matchedProfileVerificationTitle}>
+                    <StepPanelHint>
+                      {matchedProfileVerificationHint}
+                    </StepPanelHint>
+                    <F label={tField('requiredProfileKeywords')}>
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
                         className='h-8 text-xs'
-                        value={step.action_index ?? 0}
-                        onChange={(e) =>
+                        value={keywordInputValue(step.required_keywords)}
+                        placeholder={tField('phProfileKeywords')}
+                        onValueChange={(value) =>
                           update({
-                            action_index: Math.max(
-                              0,
-                              Math.min(20, Number(e.target.value) || 0)
-                            )
+                            required_keywords: keywordListFromInput(value)
                           })
                         }
                       />
                     </F>
-                  </div>
-                  <F label={tField('requiredProfileKeywords')}>
-                    <Input
-                      className='h-8 text-xs'
-                      value={keywordInputValue(step.required_keywords)}
-                      placeholder={tField('phProfileKeywords')}
-                      onChange={(e) =>
-                        update({
-                          required_keywords: keywordListFromInput(
-                            e.target.value
-                          )
-                        })
-                      }
-                    />
-                  </F>
-                  <div className='grid grid-cols-2 gap-2'>
                     <F label={tField('bonusKeywords')}>
-                      <Input
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
                         className='h-8 text-xs'
                         value={keywordInputValue(step.optional_keywords)}
                         placeholder={tField('phBonusKeywords')}
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            optional_keywords: keywordListFromInput(
-                              e.target.value
-                            )
+                            optional_keywords: keywordListFromInput(value)
                           })
                         }
                       />
                     </F>
                     <F label={tField('blockedKeywords')}>
-                      <Input
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
                         className='h-8 text-xs'
                         value={keywordInputValue(step.forbidden_keywords)}
                         placeholder='page, group, anonymous'
-                        onChange={(e) =>
+                        onValueChange={(value) =>
                           update({
-                            forbidden_keywords: keywordListFromInput(
-                              e.target.value
-                            )
+                            forbidden_keywords: keywordListFromInput(value)
                           })
                         }
                       />
                     </F>
-                  </div>
-                  <div className='grid grid-cols-3 gap-2'>
-                    <F label={tField('minScore')}>
-                      <Input
-                        type='number'
-                        min={0}
-                        max={200}
-                        className='h-8 text-xs'
-                        value={step.min_score ?? 80}
-                        onChange={(e) =>
-                          update({
-                            min_score: Math.max(
-                              0,
-                              Math.min(200, Number(e.target.value) || 80)
-                            )
-                          })
-                        }
-                      />
-                    </F>
-                    <F label='Timeout'>
-                      <Input
-                        type='number'
-                        min={1}
-                        max={60}
-                        step={0.5}
-                        className='h-8 text-xs'
-                        value={step.timeout ?? 12}
-                        onChange={(e) =>
-                          update({
-                            timeout: Math.max(1, Number(e.target.value) || 12)
-                          })
-                        }
-                      />
-                    </F>
-                    <F label={tField('saveTarget')}>
-                      <Input
-                        className='h-8 font-mono text-xs'
-                        value={step.save_as ?? '_people_target'}
-                        onChange={(e) =>
-                          update({
-                            save_as: e.target.value || '_people_target'
-                          })
-                        }
-                      />
-                    </F>
-                  </div>
+                  </StepPanelSection>
+
+                  <StepPanelSection title={matchedProfileResultTitle}>
+                    <StepPanelHint>{matchedProfileResultHint}</StepPanelHint>
+                    <div className='grid min-w-0 grid-cols-1 gap-2'>
+                      <F label={tField('minScore')}>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={200}
+                          className='h-8 text-xs'
+                          value={step.min_score ?? 80}
+                          onChange={(e) =>
+                            update({
+                              min_score: Math.max(
+                                0,
+                                Math.min(200, Number(e.target.value) || 80)
+                              )
+                            })
+                          }
+                        />
+                      </F>
+                      <F label={tField('timeoutSeconds')}>
+                        <Input
+                          type='number'
+                          min={1}
+                          max={60}
+                          step={0.5}
+                          className='h-8 text-xs'
+                          value={step.timeout ?? 12}
+                          onChange={(e) =>
+                            update({
+                              timeout: Math.max(1, Number(e.target.value) || 12)
+                            })
+                          }
+                        />
+                      </F>
+                      <F label={tField('saveTarget')}>
+                        <Input
+                          className='h-8 min-w-0 font-mono text-xs'
+                          value={step.save_as ?? '_people_target'}
+                          onChange={(e) =>
+                            update({
+                              save_as: e.target.value || '_people_target'
+                            })
+                          }
+                        />
+                      </F>
+                    </div>
+                  </StepPanelSection>
                 </>
               )}
 
@@ -2203,7 +2494,11 @@ export function StepDetailPanel({
 
               {step.type === 'loop' && (
                 <F label={tField('loopConfig')}>
-                  <LoopConfigFields step={step} onUpdate={update} />
+                  <LoopConfigFields
+                    step={step}
+                    onUpdate={update}
+                    availableVariables={availableVariables}
+                  />
                 </F>
               )}
 
@@ -2240,6 +2535,7 @@ export function StepDetailPanel({
                   <RepeatUntilFields
                     step={step}
                     onChange={(f, v) => update({ [f]: v } as Partial<FlowStep>)}
+                    availableVariables={availableVariables}
                   />
                 </F>
               )}
@@ -2307,23 +2603,30 @@ export function StepDetailPanel({
               {step.type === 'if_variable' && (
                 <>
                   <F label={tIfVar('nameLabel')}>
-                    <Input
-                      className='h-8 font-mono text-xs'
-                      value={step.name ?? ''}
-                      onChange={(e) => {
-                        const name = e.target.value;
-                        if (name === PLATFORM_SESSION_READY_VARIABLE) {
-                          commitStep(
-                            normalizeSystemVariableCondition({
-                              ...stepRef.current,
-                              name
-                            })
-                          );
-                          return;
-                        }
-                        update({ name });
-                      }}
-                    />
+                    <div className={valueInsertRowClassName()}>
+                      <Input
+                        className='h-9 min-w-0 flex-1 font-mono text-xs'
+                        value={step.name ?? ''}
+                        onChange={(e) => {
+                          const name = e.target.value;
+                          if (name === PLATFORM_SESSION_READY_VARIABLE) {
+                            commitStep(
+                              normalizeSystemVariableCondition({
+                                ...stepRef.current,
+                                name
+                              })
+                            );
+                            return;
+                          }
+                          update({ name });
+                        }}
+                      />
+                      <VariableNameSelect
+                        availableVariables={availableVariables}
+                        onSelect={(name) => update({ name })}
+                      />
+                    </div>
+                    <IfVariableSourceHint name={step.name} t={variableInfoT} />
                   </F>
                   <F label={tIfVar('operatorLabel')}>
                     <select
@@ -2459,15 +2762,17 @@ export function StepDetailPanel({
                     </div>
                   </F>
                   <F label={t('setVariable.randomListLabel')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-9 text-sm'
                       value={keywordInputValue(step.from_list)}
                       placeholder={t('setVariable.randomListPlaceholder')}
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         update({
-                          from_list: isVarRef(e.target.value.trim())
-                            ? e.target.value.trim()
-                            : e.target.value
+                          from_list: isVarRef(value.trim())
+                            ? value.trim()
+                            : value
                                 .split(',')
                                 .map((s: string) => s.trim())
                                 .filter(Boolean)
@@ -2504,15 +2809,16 @@ export function StepDetailPanel({
                     />
                   </F>
                   <F label={tField('valueJsonOrText')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 font-mono text-xs'
                       value={
                         typeof step.value === 'string'
                           ? step.value
                           : JSON.stringify(step.value ?? '')
                       }
-                      onChange={(e) => {
-                        const raw = e.target.value;
+                      onValueChange={(raw) => {
                         try {
                           update({ value: JSON.parse(raw) });
                         } catch {
@@ -2954,6 +3260,7 @@ export function StepDetailPanel({
                   update={update}
                   onChange={commitStep}
                   view='screen'
+                  availableVariables={availableVariables}
                 />
               )}
 
@@ -3060,10 +3367,11 @@ export function StepDetailPanel({
                     />
                   </F>
                   <F label='prompt'>
-                    <textarea
-                      className='min-h-[92px] w-full rounded border bg-background px-2 py-1.5 text-xs'
+                    <VariableTextarea
+                      availableVariables={availableVariables}
+                      t={t}
                       value={step.prompt ?? ''}
-                      onChange={(e) => update({ prompt: e.target.value })}
+                      onValueChange={(value) => update({ prompt: value })}
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
@@ -3149,13 +3457,15 @@ export function StepDetailPanel({
                     </p>
                   </F>
                   <F label={t('saveExtraction.collectionLabel')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 font-mono text-xs'
                       placeholder={tField('phCollection', {
                         token: '${SAVE_COLLECTION}'
                       })}
                       value={step.collection ?? ''}
-                      onChange={(e) => update({ collection: e.target.value })}
+                      onValueChange={(value) => update({ collection: value })}
                     />
                   </F>
                   <div className='grid grid-cols-2 gap-2'>
@@ -3194,12 +3504,14 @@ export function StepDetailPanel({
                     </p>
                   </F>
                   <F label={t('saveExtraction.tagsLabel')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       placeholder='group,crawl,${GROUP_NAME}'
                       value={step.tags ?? ''}
-                      onChange={(e) =>
-                        update({ tags: e.target.value || undefined })
+                      onValueChange={(value) =>
+                        update({ tags: value || undefined })
                       }
                     />
                     <p className='mt-1 text-[10px] text-muted-foreground'>
@@ -3275,11 +3587,13 @@ export function StepDetailPanel({
 
               {step.type === 'take_screenshot' && (
                 <F label={tField('saveToPath')}>
-                  <Input
+                  <VariableTextInput
+                    availableVariables={availableVariables}
+                    t={t}
                     className='h-8 font-mono text-xs'
                     value={step.save_path ?? ''}
-                    onChange={(e) =>
-                      update({ save_path: e.target.value || undefined })
+                    onValueChange={(value) =>
+                      update({ save_path: value || undefined })
                     }
                     placeholder='/sdcard/screen.jpg'
                   />
@@ -3288,10 +3602,12 @@ export function StepDetailPanel({
 
               {step.type === 'set_clipboard' && (
                 <F label={tField('clipboardContent')}>
-                  <Input
+                  <VariableTextInput
+                    availableVariables={availableVariables}
+                    t={t}
                     className='h-8 text-xs'
                     value={step.text ?? ''}
-                    onChange={(e) => update({ text: e.target.value })}
+                    onValueChange={(value) => update({ text: value })}
                     placeholder={tField('phTextToCopy')}
                   />
                 </F>
@@ -3340,11 +3656,13 @@ export function StepDetailPanel({
                     </F>
                   </div>
                   <F label={tField('filterByTargetName')}>
-                    <Input
+                    <VariableTextInput
+                      availableVariables={availableVariables}
+                      t={t}
                       className='h-8 text-xs'
                       value={step.search ?? ''}
-                      onChange={(e) =>
-                        update({ search: e.target.value || undefined })
+                      onValueChange={(value) =>
+                        update({ search: value || undefined })
                       }
                       placeholder={tField('phTargetName')}
                     />
@@ -3421,12 +3739,12 @@ export function StepDetailPanel({
                       </select>
                     </F>
                     <F label={t('leaseTarget.keywords')}>
-                      <Input
+                      <VariableTextInput
+                        availableVariables={availableVariables}
+                        t={t}
                         className='h-8 text-xs'
                         value={keywordInputValue(step.keywords)}
-                        onChange={(event) =>
-                          update({ keywords: event.target.value })
-                        }
+                        onValueChange={(value) => update({ keywords: value })}
                         placeholder={t('leaseTarget.keywordPlaceholder')}
                       />
                     </F>
@@ -3457,6 +3775,7 @@ export function StepDetailPanel({
                     layout='panel'
                     step={step}
                     campaignScenarios={campaignScenarios}
+                    availableVariables={availableVariables}
                     onPatch={(p) => {
                       const merged = { ...step } as Record<string, unknown>;
                       for (const [k, v] of Object.entries(p)) {
@@ -3479,6 +3798,7 @@ export function StepDetailPanel({
                   update={update}
                   onChange={commitStep}
                   view='data-save'
+                  availableVariables={availableVariables}
                 />
               </StepPanelSection>
             </TabsContent>

@@ -74,7 +74,11 @@ export function mergeDeviceFarmWsStatus(
   }
 
   const exists = previous.some((device) => device.serial === message.serial);
-  if (!exists) return [...previous, deviceFromStatus(message)];
+  if (!exists) {
+    return options.liveSnapshotAuthoritative
+      ? previous
+      : [...previous, deviceFromStatus(message)];
+  }
 
   return previous.map((device) =>
     device.serial === message.serial

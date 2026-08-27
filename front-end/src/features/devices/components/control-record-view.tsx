@@ -99,8 +99,10 @@ import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-s
 import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import { stepsToGraph } from '@/features/campaigns/utils/steps-to-graph';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import {
+  collectScenarioVariableReferences,
   detectSingleVariableRename,
   replaceScenarioVariableReferences
 } from '@/lib/scenario-variable-references';
@@ -120,7 +122,10 @@ import {
   type ScenarioDeviceVariablesOut
 } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
-import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
+import {
+  scenarioTemplatesApi,
+  type ScenarioTemplateOut
+} from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { EmptyNodePicker } from './control-record/empty-node-picker';
 import {
@@ -195,6 +200,7 @@ import {
   preparePreviewStepPayload
 } from '../lib/control-record-preview-steps';
 import { syncCampaignDetailCaches } from '../lib/control-record-cache';
+import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-api';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -300,7 +306,16 @@ export function ControlRecordView({
       ? templatePerms.canUpdate
       : savingOrgScenario
         ? orgScenarioPerms.canUpdate
-        : campaignPerms.canUpdate);
+        : orgScenarioPerms.canCreate);
+  const canSaveScenarioVariables =
+    !safeReadOnly &&
+    (save.templateContext
+      ? templatePerms.canUpdate
+      : savingOrgScenario && initialCampaignId
+        ? campaignPerms.canUpdate
+        : savingOrgScenario
+          ? orgScenarioPerms.canUpdate
+          : orgScenarioPerms.canCreate);
   const { setSkipTapRecordingWhilePick } = record;
 
   const saveOrgBodyMutation = useSaveOrgScenarioBody();
@@ -800,6 +815,7 @@ export function ControlRecordView({
     Record<string, any>
   >(() => flattenVarDefs(save.editingContext?.variables ?? {}));
   const scenarioVariablesRef = useRef<Record<string, any>>(scenarioVariables);
+  const scenarioVariableHydrationKeyRef = useRef<string | null>(null);
   const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<
     Record<string, string>
   >({});
@@ -1011,6 +1027,7 @@ export function ControlRecordView({
   const recoveryPolicyEnabled = Boolean(
     (campaignRecoveryQuery.data?.recovery_policy ?? recoveryPolicy)?.enabled
   );
+  const activeCampaignName = campaignRecoveryQuery.data?.name ?? null;
   const editingRecoveryScenario =
     save.orgScenarioContext?.isRecoveryScenario === true;
   const recoveryReturnTo = normalizeInternalAppPath(returnTo, '');
@@ -1072,13 +1089,38 @@ export function ControlRecordView({
     () => mergeDeclaredDeviceVarKeys(scenarioVariables, declaredDeviceVarKeys),
     [scenarioVariables, declaredDeviceVarKeys]
   );
+  const scenarioVariableNames = useMemo(
+    () =>
+      Object.keys(scenarioVariablesWithDeviceKeys)
+        .filter((key) => key.trim())
+        .sort((a, b) => a.localeCompare(b)),
+    [scenarioVariablesWithDeviceKeys]
+  );
+  const scenarioVariableReferences = useMemo(
+    () => collectScenarioVariableReferences(steps.items),
+    [steps.items]
+  );
   const pageSummary = useMemo(
     () =>
       buildControlRecordPageSummary(
         scenarioVariablesWithDeviceKeys,
-        Boolean(activeCampaignId)
+        Boolean(activeCampaignId),
+        activeCampaignName,
+        scenarioVariableReferences
       ),
-    [scenarioVariablesWithDeviceKeys, activeCampaignId]
+    [
+      scenarioVariablesWithDeviceKeys,
+      activeCampaignId,
+      activeCampaignName,
+      scenarioVariableReferences
+    ]
+  );
+  const pageSummaryWarningText = useMemo(
+    () =>
+      [pageSummary?.warning, pageSummary?.usageWarning]
+        .filter((message): message is string => Boolean(message))
+        .join(' · '),
+    [pageSummary]
   );
   useEffect(() => {
     scenarioVariablesRef.current = scenarioVariables;
@@ -1114,6 +1156,129 @@ export function ControlRecordView({
     if (next !== scenarioVariables) setScenarioVariables(next);
     return next;
   }, [scenarioVariables, declaredDeviceVarKeys]);
+  const canPersistScenarioVariables = Boolean(
+    save.templateContext || save.editingContext || save.orgScenarioContext
+  );
+  const saveScenarioVariablesMutation = useMutation({
+    mutationFn: async (draft: Record<string, any>) => {
+      const next = mergeDeclaredDeviceVarKeys(draft, declaredDeviceVarKeys);
+      const rename = detectSingleVariableRename(
+        scenarioVariablesRef.current,
+        next
+      );
+      const renamedSteps = rename
+        ? (replaceScenarioVariableReferences(
+            flushPendingFlowDetailStep(),
+            rename
+          ) as typeof steps.items)
+        : null;
+      const payloadSteps =
+        renamedSteps && renamedSteps.length > 0
+          ? sanitizeScenarioStepsForApi(renamedSteps)
+          : null;
+
+      if (payloadSteps) {
+        const check = validateScenarioStepsForApi(payloadSteps);
+        if (!check.ok) {
+          throw new Error(check.message);
+        }
+      }
+
+      if (save.templateContext) {
+        const payload: Parameters<typeof scenarioTemplatesApi.update>[1] = {
+          variables: next,
+          ...(payloadSteps ? { steps: payloadSteps } : {})
+        };
+        await scenarioTemplatesApi.update(
+          save.templateContext.templateId,
+          payload
+        );
+        void queryClient.invalidateQueries({
+          queryKey: ['scenario-templates']
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ['scenario-templates', save.templateContext.templateId]
+        });
+        return next;
+      }
+
+      if (savingOrgScenario && save.orgScenarioContext) {
+        if (activeCampaignId) {
+          const detail = await campaignsApi.patchEntity(activeCampaignId, {
+            vars: next
+          });
+          syncCampaignDetailCaches(queryClient, activeCampaignId, detail);
+          return next;
+        }
+
+        const scenarioId = (initialOrgScenarioId ?? '').trim();
+        if (!scenarioId) {
+          throw new Error(tVar('saveUnavailable'));
+        }
+        const bodyPayload = payloadSteps
+          ? buildOrgScenarioBodyPayload(payloadSteps, next)
+          : await orgScenariosApi.getBody(scenarioId).then((body) => {
+              const bodyJson = (body.body_json ?? {}) as Record<string, any>;
+              return {
+                ...(Array.isArray(bodyJson.steps)
+                  ? { steps: bodyJson.steps as Record<string, any>[] }
+                  : {}),
+                ...(Array.isArray(bodyJson.nodes)
+                  ? { nodes: bodyJson.nodes as Record<string, any>[] }
+                  : {}),
+                ...(Array.isArray(bodyJson.edges)
+                  ? { edges: bodyJson.edges as Record<string, any>[] }
+                  : {}),
+                variables: next
+              };
+            });
+        const saved = await orgScenariosApi.saveBody(scenarioId, bodyPayload);
+        queryClient.setQueryData(['org-scenarios', scenarioId, 'body'], saved);
+        void queryClient.invalidateQueries({
+          queryKey: ['org-scenarios', scenarioId]
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ['org-scenarios', scenarioId, 'body']
+        });
+        void queryClient.invalidateQueries({ queryKey: ['org-scenarios'] });
+        return next;
+      }
+
+      if (save.editingContext) {
+        const payload: Parameters<typeof scenariosApi.update>[2] = {
+          variables: next
+        };
+        if (payloadSteps) {
+          const payloadGraph = stepsToGraph(payloadSteps);
+          payload.steps = payloadSteps;
+          payload.nodes = payloadGraph.nodes;
+          payload.edges = payloadGraph.edges;
+        }
+        const updated = await scenariosApi.update(
+          save.editingContext.campaignId,
+          save.editingContext.scenarioId,
+          payload
+        );
+        syncSavedScenarioCaches(
+          queryClient,
+          save.editingContext.campaignId,
+          updated
+        );
+        return next;
+      }
+
+      return next;
+    },
+    onSuccess: (next) => {
+      handleScenarioVariablesChange(next);
+      toast.success(
+        canPersistScenarioVariables ? tVar('saveSuccess') : tVar('applySuccess')
+      );
+    },
+    onError: (err) => {
+      toast.error(formatFarmApiError(err, tVar('saveFailed')));
+    }
+  });
   const inlineScenarioDeviceVars = useMemo(() => {
     if (!selectedDeviceId) return null;
     if (deviceVarEnabledByDevice[selectedDeviceId] !== true) return null;
@@ -1267,6 +1432,13 @@ export function ControlRecordView({
         scenarioVariablesWithDeviceKeys
       ),
     [campaignForGlobalVarsQuery.data, scenarioVariablesWithDeviceKeys]
+  );
+  const flowVariablePreviewValues = useMemo(
+    () => ({
+      ...deviceVarGlobalPreview,
+      ...(inlineScenarioDeviceVars ?? {})
+    }),
+    [deviceVarGlobalPreview, inlineScenarioDeviceVars]
   );
   const setCurrentDeviceVarsEnabled = useCallback(
     (enabled: boolean) => {
@@ -1673,6 +1845,9 @@ export function ControlRecordView({
 
   useEffect(() => {
     if (save.editingContext?.variables) {
+      const key = `campaign:${save.editingContext.campaignId}:${save.editingContext.scenarioId}`;
+      if (scenarioVariableHydrationKeyRef.current === key) return;
+      scenarioVariableHydrationKeyRef.current = key;
       const next = flattenVarDefs(save.editingContext.variables);
       scenarioVariablesRef.current = next;
       setScenarioVariables(next);
@@ -1682,11 +1857,14 @@ export function ControlRecordView({
   useEffect(() => {
     if (save.editingContext?.variables) return;
     if (save.orgScenarioContext?.variables) {
+      const key = `org:${save.orgScenarioContext.scenarioId}:${activeCampaignId ?? 'standalone'}`;
+      if (scenarioVariableHydrationKeyRef.current === key) return;
+      scenarioVariableHydrationKeyRef.current = key;
       const next = flattenVarDefs(save.orgScenarioContext.variables);
       scenarioVariablesRef.current = next;
       setScenarioVariables(next);
     }
-  }, [save.editingContext, save.orgScenarioContext]);
+  }, [activeCampaignId, save.editingContext, save.orgScenarioContext]);
 
   useEffect(() => {
     flowSelectedFgIdRef.current = flowSelectedFgId;
@@ -3119,11 +3297,21 @@ export function ControlRecordView({
                             void handleSaveOrgScenario();
                             return;
                           }
-                          steps.openSave();
+                          void save
+                            .saveAsNewOrgScenario(
+                              syncDeviceVarKeysIntoScenarioVariables()
+                            )
+                            .then((created) => {
+                              if (!created?.id) return;
+                              router.push(
+                                ROUTES.ORG_SCENARIOS.DETAIL(created.id)
+                              );
+                            });
                         }}
                         saveDisabled={
                           steps.items.length === 0 ||
                           !canSaveWork ||
+                          save.saving !== null ||
                           save.savingTemplate ||
                           saveOrgBodyMutation.isPending
                         }
@@ -3136,14 +3324,16 @@ export function ControlRecordView({
                               ? saveOrgBodyMutation.isPending
                                 ? 'Đang lưu…'
                                 : 'Lưu'
-                              : 'Lưu'
+                              : save.saving === 'org-new'
+                                ? 'Đang lưu…'
+                                : 'Lưu'
                         }
                         onOpenVariables={() => setVarDialogOpen(true)}
                         variableCount={
                           Object.keys(scenarioVariablesWithDeviceKeys).length
                         }
                         pageSummary={pageSummary?.contextLabel}
-                        pageSummaryWarning={pageSummary?.warning}
+                        pageSummaryWarning={pageSummaryWarningText || undefined}
                         showRecovery={!editingRecoveryScenario}
                         recoveryEnabled={recoveryPolicyEnabled}
                         onOpenRecovery={() => setRecoveryDialogOpen(true)}
@@ -3317,6 +3507,7 @@ export function ControlRecordView({
                                           }
                                         : undefined
                                     }
+                                    availableVariables={scenarioVariableNames}
                                   />
                                 </div>
                               ) : null}
@@ -3399,6 +3590,10 @@ export function ControlRecordView({
                                   }
                                   stepRunStates={stepRunStates}
                                   stepRunResults={stepRunResults}
+                                  availableVariables={scenarioVariableNames}
+                                  variablePreviewValues={
+                                    flowVariablePreviewValues
+                                  }
                                   sessionGateRuntimeContext={
                                     sessionGateRuntimeContext
                                   }
@@ -3426,7 +3621,32 @@ export function ControlRecordView({
         open={varDialogOpen}
         onOpenChange={setVarDialogOpen}
         variables={scenarioVariablesWithDeviceKeys}
-        onVariablesChange={handleScenarioVariablesChange}
+        onVariablesChange={(next) =>
+          saveScenarioVariablesMutation.mutateAsync(next)
+        }
+        buildPageSummary={(next) =>
+          buildControlRecordPageSummary(
+            next,
+            Boolean(activeCampaignId),
+            activeCampaignName,
+            scenarioVariableReferences
+          )
+        }
+        getPageSummarySourceDescription={(summary) =>
+          tVar(
+            summary.sourceKind === 'campaign'
+              ? 'targetOverviewCampaignSourceDescription'
+              : 'targetOverviewScenarioSourceDescription',
+            {
+              target:
+                summary.targetType === 'group'
+                  ? tVar('targetOverviewGroupTarget')
+                  : tVar('targetOverviewPageTarget')
+            }
+          )
+        }
+        savePending={saveScenarioVariablesMutation.isPending}
+        saveDisabled={!canSaveScenarioVariables}
         labels={{
           title: tVar('title'),
           variableCount:
@@ -3437,8 +3657,46 @@ export function ControlRecordView({
               : null,
           headerSubtitleLead: tVar('headerSubtitleLead'),
           headerSubtitleTrail: tVar('headerSubtitleTrail'),
-          pageSummary: pageSummary?.contextLabel,
-          pageSummaryWarning: pageSummary?.warning
+          pageSummaryOverview: pageSummary ?? undefined,
+          pageSummaryOverviewLabels: {
+            title: tVar('targetOverviewTitle'),
+            source: tVar('targetOverviewSource'),
+            targets: tVar('targetOverviewTargets'),
+            flow: tVar('targetOverviewFlow'),
+            flowUsesTarget: tVar('targetOverviewFlowUsesTarget'),
+            flowDoesNotUseTarget: tVar('targetOverviewFlowDoesNotUseTarget'),
+            bindingVariables: tVar('targetOverviewBindingVariables'),
+            unusedVariables: tVar('targetOverviewUnusedVariables'),
+            targetValuePreview: tVar('targetOverviewValuePreview'),
+            catalogTargetSource: tVar('targetOverviewCatalogSource'),
+            manualTargetSource: tVar('targetOverviewManualSource'),
+            catalogTargetHint: tVar('targetOverviewCatalogHint'),
+            manualTargetHint: tVar('targetOverviewManualHint'),
+            pageTarget: tVar('targetOverviewPageTarget'),
+            groupTarget: tVar('targetOverviewGroupTarget')
+          },
+          pageSummaryOverviewSourceDescription: pageSummary
+            ? tVar(
+                pageSummary.sourceKind === 'campaign'
+                  ? 'targetOverviewCampaignSourceDescription'
+                  : 'targetOverviewScenarioSourceDescription',
+                {
+                  target:
+                    pageSummary.targetType === 'group'
+                      ? tVar('targetOverviewGroupTarget')
+                      : tVar('targetOverviewPageTarget')
+                }
+              )
+            : undefined,
+          targetTab: tVar('targetTab'),
+          manualTab: tVar('manualTab'),
+          targetTabTitle: tVar('targetTabTitle'),
+          targetTabDescription: tVar('targetTabDescription'),
+          manualTabTitle: tVar('manualTabTitle'),
+          manualTabDescription: tVar('manualTabDescription'),
+          cancel: tVar('cancel'),
+          save: canPersistScenarioVariables ? tVar('save') : tVar('apply'),
+          saving: tVar('saving')
         }}
       />
 

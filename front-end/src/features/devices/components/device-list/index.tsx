@@ -34,7 +34,7 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { ArrowDownWideNarrow, ArrowUpWideNarrow } from 'lucide-react';
+import { Input } from '@/components/ui/input';
 
 const DEFAULT_FILTER: DeviceFsmFilterKey = 'all';
 
@@ -60,6 +60,7 @@ export function DeviceList() {
   const [statusFilter, setStatusFilter] =
     useState<DeviceFsmFilterKey>(DEFAULT_FILTER);
   const [sortLastSeenDesc, setSortLastSeenDesc] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const { data: relayAgents } = useQuery<RelayAgentOut[]>({
     queryKey: ['relay-agents'],
@@ -87,10 +88,26 @@ export function DeviceList() {
 
   const filteredSortedData = useMemo(() => {
     const isOnline = (d: DeviceOut) => isDeviceOnlineForList(d, relayMap);
+    const normalizedQuery = searchQuery.trim().toLocaleLowerCase(locale);
 
-    const filtered = data.filter((d) =>
-      matchesDeviceFsmFilter(d, statusFilter, isOnline)
-    );
+    const filtered = data.filter((d) => {
+      if (!matchesDeviceFsmFilter(d, statusFilter, isOnline)) return false;
+      if (!normalizedQuery) return true;
+
+      const relay = relayMap[d.relay_id ?? ''] ?? relayMap[d.serial];
+      return [
+        d.name,
+        d.serial,
+        d.adb_serial,
+        d.brand,
+        d.model,
+        d.android_version,
+        relay?.hostname,
+        relay?.relay_id
+      ].some((value) =>
+        value?.toLocaleLowerCase(locale).includes(normalizedQuery)
+      );
+    });
 
     const toTs = (d: DeviceOut) =>
       d.last_seen ? new Date(d.last_seen).getTime() : 0;
@@ -100,7 +117,7 @@ export function DeviceList() {
       return sortLastSeenDesc ? db - da : da - db;
     });
     return sorted;
-  }, [data, relayMap, sortLastSeenDesc, statusFilter]);
+  }, [data, locale, relayMap, searchQuery, sortLastSeenDesc, statusFilter]);
 
   const registeredSerials = useMemo(() => {
     const serials = new Set<string>();
@@ -136,33 +153,38 @@ export function DeviceList() {
     return <p className='text-sm text-destructive'>{t('loadError')}</p>;
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <div className='flex items-center justify-between gap-3'>
-        <div className='flex min-w-0 flex-wrap items-center gap-2'>
-          <h2 className='text-lg font-semibold'>
-            {t('title', { count: devices?.length ?? 0 })}
-          </h2>
-          {user ? (
-            <span
-              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
-                wsLive
-                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                  : 'bg-muted text-muted-foreground'
-              }`}
-              title={
-                wsLive ? t('realtime.connected') : t('realtime.reconnecting')
-              }
-            >
+        <div className='min-w-0'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <h2 className='text-xl font-semibold tracking-tight'>
+              {t('title', { count: devices?.length ?? 0 })}
+            </h2>
+            {user ? (
               <span
-                className={`mr-1.5 inline-block size-1.5 rounded-full ${
+                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
                   wsLive
-                    ? 'bg-emerald-500'
-                    : 'animate-pulse bg-muted-foreground/60'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                    : 'bg-muted text-muted-foreground'
                 }`}
-              />
-              {wsLive ? t('realtime.connected') : t('realtime.reconnecting')}
-            </span>
-          ) : null}
+                title={
+                  wsLive ? t('realtime.connected') : t('realtime.reconnecting')
+                }
+              >
+                <span
+                  className={`mr-1.5 inline-block size-1.5 rounded-full ${
+                    wsLive
+                      ? 'bg-emerald-500'
+                      : 'animate-pulse bg-muted-foreground/60'
+                  }`}
+                />
+                {wsLive ? t('realtime.connected') : t('realtime.reconnecting')}
+              </span>
+            ) : null}
+          </div>
+          <p className='mt-1 text-sm text-muted-foreground'>
+            {t('description')}
+          </p>
         </div>
         <Can object='devices' action='create'>
           <RegisterDeviceDialog
@@ -217,19 +239,23 @@ export function DeviceList() {
 
       {devices?.length ? (
         <DataTable table={table} total={filteredSortedData.length}>
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <div className='flex flex-wrap items-center gap-2'>
-              <div className='flex items-center gap-2'>
-                <span className='text-xs text-muted-foreground'>
-                  {t('filters.statusLabel')}
-                </span>
+          <div className='border-b pb-3'>
+            <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
+              <div className='flex flex-1 flex-col gap-2 sm:flex-row'>
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder={t('filters.searchPlaceholder')}
+                  aria-label={t('filters.searchLabel')}
+                  className='h-9 w-full sm:max-w-md'
+                />
                 <Select
                   value={statusFilter}
                   onValueChange={(v) =>
                     setStatusFilter(v as DeviceFsmFilterKey)
                   }
                 >
-                  <SelectTrigger className='h-8 w-[180px]'>
+                  <SelectTrigger className='h-9 w-full sm:w-[180px]'>
                     <SelectValue placeholder={t('filters.statusPlaceholder')} />
                   </SelectTrigger>
                   <SelectContent>
@@ -244,41 +270,41 @@ export function DeviceList() {
                     </SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-              <Button
-                variant='outline'
-                size='sm'
-                className='h-8'
-                onClick={() => setSortLastSeenDesc((v) => !v)}
-                title={t('filters.sortLastSeen')}
-              >
-                {sortLastSeenDesc ? (
-                  <ArrowDownWideNarrow size={14} className='mr-1.5' />
-                ) : (
-                  <ArrowUpWideNarrow size={14} className='mr-1.5' />
-                )}
-                {t('filters.sortLastSeen')}
-              </Button>
-              {(statusFilter !== DEFAULT_FILTER || !sortLastSeenDesc) && (
                 <Button
-                  variant='ghost'
+                  variant='outline'
                   size='sm'
-                  className='h-8'
-                  onClick={() => {
-                    setStatusFilter(DEFAULT_FILTER);
-                    setSortLastSeenDesc(true);
-                  }}
+                  className='h-9 justify-start sm:justify-center'
+                  onClick={() => setSortLastSeenDesc((v) => !v)}
+                  title={t('filters.sortLastSeen')}
                 >
-                  {t('filters.reset')}
+                  {sortLastSeenDesc
+                    ? t('filters.sortNewest')
+                    : t('filters.sortOldest')}
                 </Button>
-              )}
+                {(searchQuery ||
+                  statusFilter !== DEFAULT_FILTER ||
+                  !sortLastSeenDesc) && (
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='h-9'
+                    onClick={() => {
+                      setSearchQuery('');
+                      setStatusFilter(DEFAULT_FILTER);
+                      setSortLastSeenDesc(true);
+                    }}
+                  >
+                    {t('filters.reset')}
+                  </Button>
+                )}
+              </div>
+              <p className='shrink-0 text-xs text-muted-foreground'>
+                {t('filters.showing', {
+                  count: filteredSortedData.length,
+                  total: devices.length
+                })}
+              </p>
             </div>
-            <p className='text-xs text-muted-foreground'>
-              {t('filters.showing', {
-                count: filteredSortedData.length,
-                total: devices.length
-              })}
-            </p>
           </div>
         </DataTable>
       ) : null}

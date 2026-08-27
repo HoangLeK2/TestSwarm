@@ -244,24 +244,52 @@ export type ScenarioDeviceVariablesBody = {
   vars: Record<string, unknown>;
 };
 
+export type CampaignPage = {
+  items: CampaignOut[];
+  total: number;
+};
+
 export const campaignsApi = {
-  list: () =>
-    farmApi.get<unknown>('/campaigns').then((r) => {
-      if (!Array.isArray(r.data)) {
-        const raw =
-          r.data === null
-            ? 'null'
-            : typeof r.data === 'string'
-              ? r.data.slice(0, 200)
-              : JSON.stringify(r.data).slice(0, 200);
-        throw new Error(`Unexpected /campaigns response (non-array): ${raw}`);
-      }
-      return r.data
-        .map((item) =>
-          normalizeCampaignOut(item as CampaignOut | CampaignEntityOut)
-        )
-        .filter((item): item is CampaignOut => item != null);
-    }),
+  page: (params: { search?: string; limit: number; offset: number }) =>
+    farmApi
+      .get<{ items: unknown[]; total: number }>('/campaigns/page', {
+        params: {
+          limit: params.limit,
+          offset: params.offset,
+          ...(params.search?.trim() ? { search: params.search.trim() } : {})
+        }
+      })
+      .then(
+        (response): CampaignPage => ({
+          total: response.data.total,
+          items: response.data.items
+            .map((item) =>
+              normalizeCampaignOut(item as CampaignOut | CampaignEntityOut)
+            )
+            .filter((item): item is CampaignOut => item != null)
+        })
+      ),
+  list: (search?: string) =>
+    farmApi
+      .get<unknown>('/campaigns', {
+        params: search?.trim() ? { search: search.trim() } : undefined
+      })
+      .then((r) => {
+        if (!Array.isArray(r.data)) {
+          const raw =
+            r.data === null
+              ? 'null'
+              : typeof r.data === 'string'
+                ? r.data.slice(0, 200)
+                : JSON.stringify(r.data).slice(0, 200);
+          throw new Error(`Unexpected /campaigns response (non-array): ${raw}`);
+        }
+        return r.data
+          .map((item) =>
+            normalizeCampaignOut(item as CampaignOut | CampaignEntityOut)
+          )
+          .filter((item): item is CampaignOut => item != null);
+      }),
   create: async (data: CampaignCreate) => {
     const r = await farmApi.post<CampaignOut | CampaignEntityOut>(
       '/campaigns',

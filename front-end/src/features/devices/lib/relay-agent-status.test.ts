@@ -32,6 +32,20 @@ test('relay connection status i18n exists in en and vi', () => {
       );
     }
     assert.match(messages.relayAgentsFeature.onlineSummary, /\{connected\}/);
+    for (const key of [
+      'connectDevice',
+      'disconnectDevice',
+      'connectDeviceSuccess',
+      'connectDeviceFailed',
+      'disconnectDeviceSuccess',
+      'disconnectDeviceFailed'
+    ]) {
+      const label = messages.relayAgentsFeature?.[key];
+      assert.ok(
+        typeof label === 'string' && label.trim().length > 0,
+        `${locale}.relayAgentsFeature.${key}`
+      );
+    }
   }
 });
 

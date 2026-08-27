@@ -22,7 +22,7 @@ import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
 import { AuthInviteEmailBanner } from '@/features/auth/components/auth-invite-email-banner';
 import { useAuthEmailFromQuery } from '@/features/auth/lib/auth-query-defaults';
-import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { formatPublicAuthError } from '@/features/auth/lib/public-auth-error';
 import { cn } from '@/lib/utils';
 
 type FormData = {
@@ -217,7 +217,11 @@ export default function SignUpPage() {
                 aria-hidden='true'
               />
               <span className='leading-relaxed'>
-                {formatFarmApiError(error, tAuth('errors.signUpFailed'))}
+                {formatPublicAuthError(
+                  error,
+                  tAuth('errors.signUpFailed'),
+                  tAuth('errors.serverUnavailable')
+                )}
               </span>
             </div>
           )}

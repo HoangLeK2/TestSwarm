@@ -22,6 +22,9 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { VariableInsertMenu } from '@/components/variable-insert-menu';
+import { getVariableDisplayMetadata } from '@/lib/variable-display-metadata';
+import type { VariableDisplayMetadata } from '@/lib/variable-display-metadata';
 import {
   Popover,
   PopoverContent,
@@ -227,16 +230,55 @@ function countDefined(entries: VarEntry[]) {
   return entries.filter((e) => e.key.trim()).length;
 }
 
+function variableToken(name: string): string {
+  return `\${${name}}`;
+}
+
+function insertToken(raw: string, token: string): string {
+  const current = raw ?? '';
+  if (!current.trim()) return token;
+  const matches = current.match(/\$\{[^}]+\}/g);
+  if (matches?.includes(token)) return current;
+  return `${current} ${token}`.trim();
+}
+
+function translateVariableInfo(
+  t: (key: string, values?: Record<string, string>) => string,
+  key: string | undefined,
+  fallback: string
+) {
+  if (!key) return fallback;
+  try {
+    const translated = t(key);
+    return translated && translated !== key ? translated : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function variableCategoryLabel(
+  metadata: VariableDisplayMetadata,
+  t: (key: string, values?: Record<string, string>) => string
+) {
+  return translateVariableInfo(
+    t,
+    `variableInfo.categories.${metadata.category}`,
+    metadata.category
+  );
+}
+
 function ListTagInput({
   tags,
   onChange,
   disabled,
-  t
+  t,
+  availableVariables = []
 }: {
   tags: string[];
   onChange: (tags: string[]) => void;
   disabled?: boolean;
   t: (key: string) => string;
+  availableVariables?: string[];
 }) {
   const [draft, setDraft] = useState('');
 
@@ -295,6 +337,25 @@ function ListTagInput({
       {tags.length === 0 && disabled && (
         <span className='text-muted-foreground/50'>{t('listEmpty')}</span>
       )}
+      {!disabled && availableVariables.length > 0 ? (
+        <VariableInsertMenu
+          groups={[
+            {
+              label: t('availableVariables'),
+              items: availableVariables.map((name) => ({
+                value: variableToken(name)
+              }))
+            }
+          ]}
+          label={t('insertVariable')}
+          ariaLabel={t('insertVariable')}
+          onInsert={(token) => {
+            if (!tags.includes(token)) onChange([...tags, token]);
+          }}
+          align='end'
+          triggerClassName='ml-auto h-6 min-w-[7.5rem] max-w-[140px] border-border/70 bg-muted/30 px-1.5 text-[10px] text-muted-foreground hover:bg-muted/60'
+        />
+      ) : null}
     </div>
   );
 }
@@ -339,7 +400,8 @@ function VarCard({
   onRemove,
   onCopyToken,
   getValuePlaceholder,
-  t
+  t,
+  availableVariables = []
 }: {
   entry: VarEntry;
   index: number;
@@ -352,12 +414,57 @@ function VarCard({
   onCopyToken: (key: string) => void;
   getValuePlaceholder: (entry: VarEntry) => string;
   t: (key: string, values?: Record<string, string>) => string;
+  availableVariables?: string[];
 }) {
-  const token = entry.key.trim() ? `\${${entry.key}}` : '';
+  const token = entry.key.trim() ? variableToken(entry.key) : '';
   const copied = copiedKey === entry.key;
+  const variableMetadata = entry.key.trim()
+    ? getVariableDisplayMetadata(entry.key)
+    : null;
+  const variableLabel = variableMetadata
+    ? translateVariableInfo(
+        t,
+        variableMetadata.labelKey,
+        variableMetadata.fallbackLabel
+      )
+    : '';
+  const variableDescription = variableMetadata
+    ? translateVariableInfo(t, variableMetadata.descriptionKey, '')
+    : '';
+  const variableOrigin = variableMetadata
+    ? translateVariableInfo(t, variableMetadata.originKey, '')
+    : '';
 
   return (
     <div className='rounded-lg border border-border/60 bg-muted/15 p-3 transition-colors hover:border-border'>
+      {variableMetadata ? (
+        <div className='mb-2 rounded-md border bg-background px-2.5 py-2'>
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+            <span className='min-w-0 truncate text-sm font-medium text-foreground'>
+              {variableLabel}
+            </span>
+            <Badge variant='outline' className='rounded font-normal'>
+              {variableCategoryLabel(variableMetadata, t)}
+            </Badge>
+            <code className='min-w-0 max-w-full truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+              {entry.key}
+            </code>
+          </div>
+          {variableDescription ? (
+            <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+              {variableDescription}
+            </p>
+          ) : null}
+          {variableOrigin ? (
+            <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>
+              <span className='font-medium text-foreground'>
+                {t('variableInfo.originLabel')}:
+              </span>{' '}
+              {variableOrigin}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className='flex items-start gap-2'>
         <Input
           value={entry.key}
@@ -401,17 +508,46 @@ function VarCard({
             onChange={(tags) => onUpdate(index, { listVal: tags })}
             disabled={disabled}
             t={t}
+            availableVariables={availableVariables}
           />
         ) : (
-          <Input
-            type={entry.type === 'number' ? 'number' : 'text'}
-            value={entry.strVal}
-            onChange={(e) => onUpdate(index, { strVal: e.target.value })}
-            placeholder={getValuePlaceholder(entry)}
-            disabled={disabled}
-            title={entry.strVal}
-            className='h-8 w-full text-xs'
-          />
+          <div className='space-y-1.5'>
+            <Input
+              type={
+                entry.type === 'number' && availableVariables.length === 0
+                  ? 'number'
+                  : 'text'
+              }
+              inputMode={entry.type === 'number' ? 'decimal' : undefined}
+              value={entry.strVal}
+              onChange={(e) => onUpdate(index, { strVal: e.target.value })}
+              placeholder={getValuePlaceholder(entry)}
+              disabled={disabled}
+              title={entry.strVal}
+              className='h-8 w-full text-xs'
+            />
+            {!disabled && availableVariables.length > 0 ? (
+              <VariableInsertMenu
+                groups={[
+                  {
+                    label: t('availableVariables'),
+                    items: availableVariables.map((name) => ({
+                      value: variableToken(name)
+                    }))
+                  }
+                ]}
+                label={t('insertVariable')}
+                ariaLabel={t('insertVariable')}
+                onInsert={(token) =>
+                  onUpdate(index, {
+                    strVal: insertToken(entry.strVal, token)
+                  })
+                }
+                fullWidth
+                align='start'
+              />
+            ) : null}
+          </div>
         )}
       </div>
 
@@ -515,6 +651,8 @@ interface Props {
   showToolbar?: boolean;
   /** Hint below the variable list */
   showFooterTip?: boolean;
+  /** Variables that can be inserted into values, not declared as new keys. */
+  availableVariables?: string[];
 }
 
 export function VariableEditor({
@@ -526,7 +664,8 @@ export function VariableEditor({
   allowRemove = true,
   showBuiltins = true,
   showToolbar = true,
-  showFooterTip = true
+  showFooterTip = true,
+  availableVariables = []
 }: Props) {
   const t = useTranslations('components.variableEditor');
   const [entries, setEntries] = useState<VarEntry[]>(() =>
@@ -815,6 +954,7 @@ export function VariableEditor({
               onCopyToken={copyToken}
               getValuePlaceholder={getValuePlaceholder}
               t={t}
+              availableVariables={availableVariables}
             />
           ))}
         </div>

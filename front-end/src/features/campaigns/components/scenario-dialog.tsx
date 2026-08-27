@@ -521,6 +521,10 @@ export function ScenarioDialog({
   const tScenarioValidation = useTranslations(
     'campaignsFeature.scenarioValidation'
   );
+  const variablePreviewValues = useMemo(
+    () => flattenVarDefs(variables),
+    [variables]
+  );
   const confirm = useConfirm();
   const { data: accountGroups = [] } = useAccountGroups();
   const [deviceModel, setDeviceModel] = useState('');
@@ -1429,6 +1433,13 @@ export function ScenarioDialog({
   const resolveVariablesForSave = (): Record<string, any> => {
     return normalizeScenarioVariables(variables) as Record<string, any>;
   };
+  const availableScenarioVariables = useMemo(
+    () =>
+      Object.keys(normalizeScenarioVariables(variables))
+        .filter((key) => key.trim())
+        .sort((a, b) => a.localeCompare(b)),
+    [variables]
+  );
 
   const handleSave = () => {
     if (!canPersistScenario(childStepEditorOpen)) {
@@ -2327,6 +2338,8 @@ export function ScenarioDialog({
                     nestedInDialog
                     onChildStepEditorOpenChange={setChildStepEditorOpen}
                     campaignScenarios={runScenarioCampaignOptions}
+                    availableVariables={availableScenarioVariables}
+                    variablePreviewValues={variablePreviewValues}
                     onRunStep={handleInlineRunStep}
                     stepRunStates={stepRunStates}
                     onStopInlineRun={hardStopPreview}

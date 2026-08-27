@@ -171,7 +171,7 @@ export const contentApi = {
     if (filters?.device_serial != null)
       params.device_serial = filters.device_serial;
     if (filters?.campaign_id != null) params.campaign_id = filters.campaign_id;
-    if (filters?.run_id != null) params.run_id = filters.run_id;
+    if (filters?.run_id != null) params.execution_id = filters.run_id;
     if (filters?.content_hash != null)
       params.content_hash = filters.content_hash;
     if (filters?.parent_id != null) params.parent_id = filters.parent_id;

@@ -58,6 +58,7 @@ export const fetchLiveDevices = createSingleFlight(
     model?: string;
     limit?: number;
     offset?: number;
+    orgId?: string | null;
   }): Promise<Device[]> => {
     const params = new URLSearchParams();
     if (opts?.state) params.set('state', opts.state);
@@ -79,6 +80,7 @@ export const fetchLiveDevices = createSingleFlight(
       limit: opts?.limit ?? null,
       model: opts?.model ?? null,
       offset: opts?.offset ?? null,
+      orgId: opts?.orgId ?? null,
       state: opts?.state ?? null
     })
 );

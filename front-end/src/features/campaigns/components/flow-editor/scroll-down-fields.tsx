@@ -1,6 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
+import { VariableInsertMenu } from '@/components/variable-insert-menu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -61,6 +62,7 @@ export function ScrollDownStepFields({
   availableVariables?: string[];
 }) {
   const t = useTranslations('campaignsFeature.stepEditor.scrollDown');
+  const tStep = useTranslations('campaignsFeature.stepEditor');
 
   const startY = step.start_y_ratio ?? 0.65;
   const endY = step.end_y_ratio ?? 0.47;
@@ -200,23 +202,25 @@ export function ScrollDownStepFields({
             }}
           />
           {availableVariables.length > 0 ? (
-            <select
-              className='mt-1.5 h-8 w-full rounded-md border border-input bg-background px-2 text-[11px]'
-              defaultValue=''
-              onChange={(e) => {
-                const token = e.target.value;
-                if (!token) return;
-                update({ start_x_ratio: token } as Partial<FlowStep>);
-                e.target.value = '';
-              }}
-            >
-              <option value=''>{t('insertVariable')}</option>
-              {availableVariables.map((name) => (
-                <option key={name} value={`\${${name}}`}>
-                  {`\${${name}}`}
-                </option>
-              ))}
-            </select>
+            <div className='mt-1.5'>
+              <VariableInsertMenu
+                groups={[
+                  {
+                    label: tStep('variableInsert.availableVariables'),
+                    items: availableVariables.map((name) => {
+                      const token = `\${${name}}`;
+                      return { value: token };
+                    })
+                  }
+                ]}
+                label={tStep('variableInsert.placeholder')}
+                onInsert={(token) =>
+                  update({ start_x_ratio: token } as Partial<FlowStep>)
+                }
+                fullWidth
+                align='start'
+              />
+            </div>
           ) : null}
         </StepPanelField>
       </StepPanelSection>

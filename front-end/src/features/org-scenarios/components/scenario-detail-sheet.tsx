@@ -1,12 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
   Copy,
   Download,
+  ExternalLink,
+  Link2,
   Play,
   ShieldCheck
 } from 'lucide-react';
@@ -17,6 +20,7 @@ import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { TargetBindingOverview } from '@/components/target-binding-overview';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +48,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Can } from '@/features/auth';
 import { useUser } from '@/features/auth/hooks/use-auth';
+import { campaignsApi } from '@/features/campaigns/services/api';
+import type { CampaignOut } from '@/features/campaigns/types';
+import { buildControlRecordPageSummary } from '@/features/devices/lib/control-record-page-summary';
+import { collectScenarioVariableReferences } from '@/lib/scenario-variable-references';
 import {
   formatFarmApiError,
   formatFarmApiErrorAsync
@@ -75,6 +83,12 @@ type ValidationIssue = {
 };
 
 type DetailT = ReturnType<typeof useTranslations<'orgScenariosFeature.detail'>>;
+
+type CampaignUsage = {
+  campaign: CampaignOut;
+  repeatCount: number;
+  pageSummary: ReturnType<typeof buildControlRecordPageSummary>;
+};
 
 function scenarioStatusLabel(t: DetailT, status: string): string {
   if (status === 'draft') return t('status.draft');
@@ -117,6 +131,13 @@ export function ScenarioDetailSheet({
     scenarioId,
     open && !isTemplate
   );
+  const { data: campaignsForUsage = [], isLoading: campaignUsageLoading } =
+    useQuery({
+      queryKey: ['org-scenario-campaign-usages', scenarioId],
+      queryFn: () => campaignsApi.list(''),
+      enabled: open && !isTemplate && Boolean(scenarioId),
+      staleTime: 15_000
+    });
   const isLoading = isTemplate ? templateLoading : orgLoading;
   const updateMutation = useUpdateOrgScenario();
   const validateMutation = useValidateOrgScenario();
@@ -193,6 +214,35 @@ export function ScenarioDetailSheet({
   const previewKind = isTemplate
     ? (item?.kind ?? 'sequence')
     : (scenario?.kind ?? item?.kind ?? 'sequence');
+  const bodyVariableReferences = useMemo(
+    () => collectScenarioVariableReferences(bodyPayload),
+    [bodyPayload]
+  );
+
+  const campaignUsages = useMemo<CampaignUsage[]>(() => {
+    if (!scenarioId) return [];
+    return campaignsForUsage
+      .map((campaign) => {
+        const ref = (campaign.scenario_refs ?? []).find(
+          (row) => row.scenario_id === scenarioId
+        );
+        if (!ref) return null;
+        return {
+          campaign,
+          repeatCount: ref.repeat_count ?? 1,
+          pageSummary: buildControlRecordPageSummary(
+            (campaign.variables ?? campaign.vars ?? {}) as Record<
+              string,
+              unknown
+            >,
+            true,
+            campaign.name,
+            bodyVariableReferences
+          )
+        };
+      })
+      .filter((row): row is CampaignUsage => row !== null);
+  }, [bodyVariableReferences, campaignsForUsage, scenarioId]);
 
   const handleSaveMeta = () => {
     if (!scenarioId) return;
@@ -419,6 +469,16 @@ export function ScenarioDetailSheet({
                       </p>
                     </div>
                   ) : null}
+                  {!isTemplate ? (
+                    <CampaignUsagePanel
+                      t={t}
+                      loading={campaignUsageLoading}
+                      usages={campaignUsages}
+                      onOpenCampaign={(campaignId) =>
+                        router.push(ROUTES.CAMPAIGNS.DETAIL(campaignId))
+                      }
+                    />
+                  ) : null}
                 </div>
                 <SheetFooter className='shrink-0 gap-2 border-t bg-muted/20 px-6 py-3 sm:justify-end'>
                   {readOnly && item ? (
@@ -512,6 +572,123 @@ export function ScenarioDetailSheet({
         ) : null}
       </SheetContent>
     </Sheet>
+  );
+}
+
+function CampaignUsagePanel({
+  t,
+  loading,
+  usages,
+  onOpenCampaign
+}: {
+  t: DetailT;
+  loading: boolean;
+  usages: CampaignUsage[];
+  onOpenCampaign: (campaignId: string) => void;
+}) {
+  return (
+    <section className='space-y-2 rounded-lg border bg-muted/20 p-3'>
+      <div className='flex items-start gap-2'>
+        <Link2 className='mt-0.5 size-4 shrink-0 text-muted-foreground' />
+        <div className='min-w-0 flex-1'>
+          <h3 className='text-sm font-medium text-foreground'>
+            {t('campaignUsageTitle')}
+          </h3>
+          <p className='mt-0.5 text-xs text-muted-foreground'>
+            {t('campaignUsageHint')}
+          </p>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className='space-y-2'>
+          <Skeleton className='h-12 w-full rounded-md' />
+          <Skeleton className='h-12 w-3/4 rounded-md' />
+        </div>
+      ) : usages.length === 0 ? (
+        <p className='rounded-md border border-dashed bg-background px-3 py-2 text-xs text-muted-foreground'>
+          {t('campaignUsageEmpty')}
+        </p>
+      ) : (
+        <div className='space-y-2'>
+          {usages.map(({ campaign, repeatCount, pageSummary }) => (
+            <div
+              key={campaign.id}
+              className='rounded-md border bg-background px-3 py-2'
+            >
+              <div className='flex flex-wrap items-start justify-between gap-2'>
+                <div className='min-w-0'>
+                  <p className='truncate text-sm font-medium text-foreground'>
+                    {campaign.name}
+                  </p>
+                  <div className='mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground'>
+                    <Badge variant='outline' className='font-normal'>
+                      {campaign.status}
+                    </Badge>
+                    <span>
+                      {t('campaignUsageRepeat', { count: repeatCount })}
+                    </span>
+                  </div>
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  className='h-7 gap-1.5 px-2 text-xs'
+                  onClick={() => onOpenCampaign(campaign.id)}
+                >
+                  <ExternalLink className='size-3.5' />
+                  {t('campaignUsageOpen')}
+                </Button>
+              </div>
+
+              {pageSummary ? (
+                <div className='mt-2 border-t pt-2'>
+                  <TargetBindingOverview
+                    summary={pageSummary}
+                    labels={{
+                      title: t('targetOverviewTitle'),
+                      source: t('targetOverviewSource'),
+                      targets: t('targetOverviewTargets'),
+                      flow: t('targetOverviewFlow'),
+                      flowUsesTarget: t('targetOverviewFlowUsesTarget'),
+                      flowDoesNotUseTarget: t(
+                        'targetOverviewFlowDoesNotUseTarget'
+                      ),
+                      bindingVariables: t('targetOverviewBindingVariables'),
+                      unusedVariables: t('targetOverviewUnusedVariables'),
+                      targetValuePreview: t('targetOverviewValuePreview'),
+                      catalogTargetSource: t('targetOverviewCatalogSource'),
+                      manualTargetSource: t('targetOverviewManualSource'),
+                      catalogTargetHint: t('targetOverviewCatalogHint'),
+                      manualTargetHint: t('targetOverviewManualHint'),
+                      pageTarget: t('targetOverviewPageTarget'),
+                      groupTarget: t('targetOverviewGroupTarget')
+                    }}
+                    sourceDescription={t(
+                      pageSummary.sourceKind === 'campaign'
+                        ? 'targetOverviewCampaignSourceDescription'
+                        : 'targetOverviewScenarioSourceDescription',
+                      {
+                        target:
+                          pageSummary.targetType === 'group'
+                            ? t('targetOverviewGroupTarget')
+                            : t('targetOverviewPageTarget')
+                      }
+                    )}
+                    compact
+                  />
+                </div>
+              ) : (
+                <p className='mt-2 border-t pt-2 text-xs text-muted-foreground'>
+                  {t('campaignUsageNoPages')}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

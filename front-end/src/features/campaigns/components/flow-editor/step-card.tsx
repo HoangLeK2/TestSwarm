@@ -24,6 +24,10 @@ import {
 import { useCampaignFlowI18n } from './flow-i18n';
 import { useImageTemplateUrl } from './image-template-scenario';
 import { StepIcon } from './step-icon';
+import {
+  resolveVariablePreviewText,
+  type VariablePreviewValues
+} from './variable-preview';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
 function stepImageSrc(val: string): string {
@@ -85,6 +89,7 @@ interface Props {
     onMoveUp: () => void;
     onMoveDown: () => void;
   };
+  variablePreviewValues?: VariablePreviewValues;
 }
 
 export function StepCard({
@@ -101,14 +106,16 @@ export function StepCard({
   coordPickActive,
   onTogglePickTapCoords,
   onTogglePickSwipeCoords,
-  reorderControls
+  reorderControls,
+  variablePreviewValues
 }: Props) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
   const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
-  const { target, selectorBadge } = getStepDisplay(step);
+  const { target: rawTarget, selectorBadge } = getStepDisplay(step);
+  const target = resolveVariablePreviewText(rawTarget, variablePreviewValues);
   const category = getStepCategory(step.type);
 
   const title = (step.title as string | undefined)?.trim() || undefined;

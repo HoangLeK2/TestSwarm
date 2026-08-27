@@ -62,6 +62,7 @@ import { SortableFlowRow } from './sortable-flow-row';
 import { FlowStepRail } from './flow-step-rail';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
 import { FlowEditorEditSessionProvider } from './flow-editor-edit-session';
+import type { VariablePreviewValues } from './variable-preview';
 import {
   resolveStepAtPath,
   updateStepAtPath,
@@ -96,6 +97,10 @@ interface Props {
   onChildStepEditorOpenChange?: (open: boolean) => void;
   /** Other scenarios in the same campaign — powers run_scenario picker in the step panel. */
   campaignScenarios?: RunScenarioCampaignOption[];
+  /** Variables declared outside the step tree, e.g. scenario/global variables. */
+  availableVariables?: string[];
+  /** Values used only for UI previews of ${VAR}; execution still uses raw step data. */
+  variablePreviewValues?: VariablePreviewValues;
   /** Enable drag-and-drop registration. Heavy control surfaces can disable it until the user enters sort mode. */
   enableDragDrop?: boolean;
   /** What each step produced on its last inline run, keyed by runKey. */
@@ -106,6 +111,7 @@ interface Props {
 }
 
 const ROOT_SORTABLE_ID = encodeFlowListRef({ kind: 'root' });
+const EMPTY_AVAILABLE_VARIABLES: string[] = [];
 
 export function FlowEditor({
   steps,
@@ -122,6 +128,8 @@ export function FlowEditor({
   nestedInDialog = false,
   onChildStepEditorOpenChange,
   campaignScenarios = [],
+  availableVariables: externalAvailableVariables = EMPTY_AVAILABLE_VARIABLES,
+  variablePreviewValues,
   sessionGateRuntimeContext,
   enableDragDrop = true,
   stepRunResults,
@@ -147,8 +155,16 @@ export function FlowEditor({
     if (step) pendingDetailRef.current = step;
   }, [selectedIndex]);
   const availableVariables = useMemo(
-    () => collectVariableNames(steps),
-    [steps]
+    () =>
+      Array.from(
+        new Set([
+          ...externalAvailableVariables
+            .map((name) => name.trim())
+            .filter(Boolean),
+          ...collectVariableNames(steps)
+        ])
+      ).sort((a, b) => a.localeCompare(b)),
+    [externalAvailableVariables, steps]
   );
 
   const stepIds = useMemo(
@@ -406,6 +422,7 @@ export function FlowEditor({
           campaignScenarios={campaignScenarios}
           sessionGateRuntimeContext={sessionGateRuntimeContext}
           availableVariables={availableVariables}
+          variablePreviewValues={variablePreviewValues}
           reorderMode={virtualReorderMode}
           stepRunResults={stepRunResults}
         />
@@ -443,6 +460,7 @@ export function FlowEditor({
                 setSelectedIndex(null);
               }}
               availableVariables={availableVariables}
+              variablePreviewValues={variablePreviewValues}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
               onRequestCropImage={mirrorActions.cropImage}
@@ -526,6 +544,8 @@ export function FlowEditor({
                         insertChild={insertChild}
                         isDragging={isDragging}
                         nestedInDialog={nestedInDialog}
+                        availableVariables={availableVariables}
+                        variablePreviewValues={variablePreviewValues}
                         onCoordinatePickTargetChange={
                           onCoordinatePickTargetChange
                         }
@@ -729,6 +749,7 @@ function VirtualizedFlowEditor({
   campaignScenarios,
   sessionGateRuntimeContext,
   availableVariables,
+  variablePreviewValues,
   reorderMode,
   stepRunResults
 }: {
@@ -746,6 +767,7 @@ function VirtualizedFlowEditor({
   campaignScenarios: RunScenarioCampaignOption[];
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
   availableVariables: string[];
+  variablePreviewValues?: VariablePreviewValues;
   reorderMode: boolean;
   stepRunResults?: Record<string, StepRunResult>;
 }) {
@@ -860,6 +882,7 @@ function VirtualizedFlowEditor({
               onChange={handleDetailPanelChange}
               onClose={closeDetail}
               availableVariables={availableVariables}
+              variablePreviewValues={variablePreviewValues}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
               onRequestCropImage={mirrorActions.cropImage}
@@ -1086,6 +1109,7 @@ function VirtualizedFlowEditor({
                               }
                             : undefined
                         }
+                        variablePreviewValues={variablePreviewValues}
                       />
                       {runResult && (
                         <StepRunResultStrip
@@ -1356,6 +1380,8 @@ function FlowEditorRow({
   insertChild,
   isDragging,
   nestedInDialog,
+  availableVariables,
+  variablePreviewValues,
   onCoordinatePickTargetChange,
   onRunStep,
   onSelectorPickTargetChange,
@@ -1388,6 +1414,8 @@ function FlowEditorRow({
   ) => void;
   isDragging: boolean;
   nestedInDialog: boolean;
+  availableVariables: string[];
+  variablePreviewValues?: VariablePreviewValues;
   onCoordinatePickTargetChange?: (target: CoordinatePickTarget | null) => void;
   onRunStep?: (step: FlowStep, runKey: string) => void;
   onSelectorPickTargetChange?: (target: SelectorPickTarget | null) => void;
@@ -1445,6 +1473,8 @@ function FlowEditorRow({
             }
             onRunChild={onRunStep ? (s, k) => onRunStep(s, k) : undefined}
             campaignScenarios={campaignScenarios}
+            availableVariables={availableVariables}
+            variablePreviewValues={variablePreviewValues}
             sessionGateRuntimeContext={sessionGateRuntimeContext}
             enableDragDrop={enableDragDrop}
           />
@@ -1511,6 +1541,7 @@ function FlowEditorRow({
                     })
                 : undefined
             }
+            variablePreviewValues={variablePreviewValues}
           />
         )}
       </div>

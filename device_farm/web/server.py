@@ -774,9 +774,12 @@ def create_app(
 
         # Dispose the main event loop's SQLAlchemy engine on shutdown so
         # asyncpg's pool closes deterministically before uvicorn exits.
-        from db.database import dispose_loop_engine
+        from db.database import dispose_edge_ingest_engine, dispose_loop_engine
         lifecycle.register_resource(
             LifecyclePhase.INFRA, "db_loop_engine", dispose_loop_engine,
+        )
+        lifecycle.register_resource(
+            LifecyclePhase.INFRA, "edge_ingest_db", dispose_edge_ingest_engine,
         )
         # Device registry is live-only: populated when agent-boot relay or WS
         # agent connects. Do not hydrate from Redis — stale entries would register

@@ -71,24 +71,6 @@ def test_resolve_parent_from_post_id_map() -> None:
 async def test_process_payload_skips_hierarchy_raw_data_by_default(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_BOOT_INLINE_HIERARCHY_ENABLED", raising=False)
     server = ExtraDataIngestServer()
-    inserted: list[dict] = []
-
-    async def fake_insert(rows):
-        inserted.extend(rows)
-        return {
-            "attempted": len(rows),
-            "inserted": len(rows),
-            "duplicates": 0,
-            "inserted_content_hashes": [rows[0]["content_hash"]],
-        }
-
-    async def fake_prepare(ctx):
-        return ctx
-
-    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
-    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
-    server._writer.lookup_parent_hash_for_post_pid = lambda **_: None  # type: ignore[method-assign]
-
     xml = "<hierarchy><node text='hello' /></hierarchy>"
     monkeypatch.setattr(
         "relay.extra_data.ingest._parse_payload_items",
@@ -116,7 +98,10 @@ async def test_process_payload_skips_hierarchy_raw_data_by_default(monkeypatch) 
     )
 
     assert result["ok"] is True
-    assert "hierarchy_xml" not in inserted[0]["raw_data"]
-    assert inserted[0]["screenshot_path"] is None
+    # The raw item is what device_farm stores as raw_data, so the hierarchy XML
+    # must not be riding along in it by default.
+    shipped = result["persist_batch"]["items"][0]
+    assert "hierarchy_xml" not in shipped
+    assert build_content_item_row(shipped, {})["screenshot_path"] is None
     assert "post_id_map" in result
     assert result["post_id_map"]

@@ -41,6 +41,7 @@ _GRPC_MAX_MESSAGE_BYTES = _env_int(
     lo=1024 * 1024,
 )
 _GRPC_CHANNEL_OPTIONS = [
+    ("grpc.default_compression_algorithm", grpc.Compression.Gzip.value),
     ("grpc.keepalive_time_ms",               10_000),
     ("grpc.keepalive_timeout_ms",              5_000),
     ("grpc.keepalive_permit_without_calls",        1),

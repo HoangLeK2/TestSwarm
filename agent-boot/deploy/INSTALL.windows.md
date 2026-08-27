@@ -25,13 +25,11 @@ Trong `.env`, bắt buộc điền ba giá trị đang để trống:
 
 - `RELAY_API_KEY`
 - `RELAY_ENROLLMENT_TOKEN`
-- `AGENT_BOOT_CONTENT_DATABASE_URL`
 
-`AGENT_BOOT_CONTENT_DB_ENABLED=1` đã được bật để content writer hoạt động.
-Database URL phải là PostgreSQL credential giới hạn quyền, cấp riêng cho khách
-hàng; không dùng tài khoản owner/superuser. Các env vận hành còn lại đã có đầy
-đủ giá trị mặc định trong `.env.example`. Script khởi động sẽ từ chối chạy nếu
-ba giá trị bắt buộc chưa được điền.
+Content extract được gửi về farm trong chính reply relay hiện hữu, nên máy khách
+hàng không cần — và không nhận — PostgreSQL credential nào. Các env vận hành còn
+lại đã có đầy đủ giá trị mặc định trong `.env.example`. Script khởi động sẽ từ
+chối chạy nếu hai giá trị bắt buộc chưa được điền.
 
 WebRTC video cần go2rtc chạy ở host hoặc media node mà container truy cập được.
 Mặc định media adapter publish H264 tại
@@ -135,6 +133,6 @@ docker compose logs -f agent-boot
 | Host có máy, container không thấy | ADB đang localhost-only → restart với `adb -a` |
 | `image not found` | `scripts\docker-load.cmd` |
 | Container restart loop | `docker compose logs`; kiểm tra `.env` (`RELAY_*`) |
-| Content writer báo lỗi kết nối | Kiểm tra `AGENT_BOOT_CONTENT_DATABASE_URL`, firewall/VPN và quyền insert của PostgreSQL role |
+| Content uplink báo lỗi | Kiểm tra kết nối relay và log farm `content_uplink_*` |
 | `exec format error` | Gói này chỉ cho PC Windows x86_64 (amd64). Máy ARM Windows cần gói khác |
 | Docker daemon not running | Mở Docker Desktop, đợi sẵn sàng, rồi thử lại |

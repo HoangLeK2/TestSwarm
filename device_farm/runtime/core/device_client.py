@@ -2590,7 +2590,58 @@ class DeviceClient:
             if result.get("cancelled"):
                 failure["cancelled"] = True
             return failure
-        ingest = result.get("ingest") if isinstance(result.get("ingest"), dict) else result
+        ingest_source = result.get("ingest") if isinstance(result.get("ingest"), dict) else result
+        ingest = dict(ingest_source)
+        persist_batch = ingest.get("persist_batch")
+        if isinstance(persist_batch, dict):
+            from services.content.edge_ingest import (
+                ContentUplinkError,
+                persist_edge_batch,
+            )
+
+            trusted_relay_id = str(result.get("_trusted_relay_id") or "").strip()
+            trusted_context = dict(context)
+            if "item_level" in persist_batch:
+                item_level = int(persist_batch["item_level"])
+                if item_level not in {0, 1, 2}:
+                    return {
+                        "ok": False,
+                        "error": "content_uplink_invalid",
+                        "detail": "invalid item_level",
+                        "route": result.get("route", "relay_u2"),
+                    }
+                trusted_context["item_level"] = item_level
+            captured_at = persist_batch.get("captured_at")
+            if captured_at is not None:
+                trusted_context["captured_at"] = captured_at
+            try:
+                persisted = await persist_edge_batch(
+                    relay_id=trusted_relay_id,
+                    batch=persist_batch,
+                    trusted_context=trusted_context,
+                )
+            except ContentUplinkError as exc:
+                return {
+                    "ok": False,
+                    "error": exc.code,
+                    "detail": str(exc),
+                    "route": result.get("route", "relay_u2"),
+                }
+            except Exception as exc:
+                self._log(
+                    f"edge content uplink failed: {type(exc).__name__}: {exc}",
+                    level=logging.ERROR,
+                )
+                return {
+                    "ok": False,
+                    "error": "content_uplink_unavailable",
+                    "route": result.get("route", "relay_u2"),
+                }
+            ingest["agent_db_ms"] = int(ingest.get("db_ms", 0) or 0)
+            ingest.update(persisted)
+            if bool(context.get("return_items")):
+                ingest["items"] = list(persist_batch.get("items") or [])
+            ingest.pop("persist_batch", None)
         return {
             "ok": True,
             "ingest": ingest,

@@ -555,6 +555,12 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
             "left": "left",
             "right": "right",
         }.get(direction, "up")
+        swipe_duration_s = float(step.get("scroll_duration_s", 0.12) or 0.12)
+        settle_s = max(0.0, float(step.get("scroll_settle_s", 0.35) or 0.35))
+        # Each iteration costs a swipe, the settle that lets the fling stop, and
+        # one presence probe. Budget for all of them or the flow times out
+        # mid-scroll and the step reports "not found" while still moving.
+        flow_budget_s = max(5.0, max_swipes * (swipe_duration_s + settle_s + 0.7) + 2.0)
         try:
             flow_started = time.monotonic()
             flow_result = flow(
@@ -564,11 +570,12 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
                     "direction": flow_direction,
                     "max_swipes": max_swipes,
                     "step_ratio": float(step.get("scroll_step_ratio", 0.4) or 0.4),
-                    "duration": float(step.get("scroll_duration_s", 0.12) or 0.12),
+                    "duration": swipe_duration_s,
+                    "settle_s": settle_s,
                     "width": sc.w,
                     "height": sc.h,
                 },
-                timeout=float(step.get("scroll_to_timeout_s", max(5.0, max_swipes * 0.35)) or 5.0),
+                timeout=float(step.get("scroll_to_timeout_s", flow_budget_s) or flow_budget_s),
             )
             found = bool(flow_result.get("found"))
             swipes_done = int(flow_result.get("swipes") or 0)

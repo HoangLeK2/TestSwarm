@@ -19,6 +19,7 @@ Usage (called from web/server.py at startup):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 import os
@@ -132,6 +133,7 @@ class RelayConnection:
         self._write_queue = write_queue
         # msg_id → Future[dict] for pending ADB command responses
         self._pending: Dict[str, "asyncio.Future[dict]"] = {}
+        self._extra_data_chunks: Dict[str, dict[str, Any]] = {}
 
     async def send_command(
         self,
@@ -237,6 +239,7 @@ class RelayConnection:
             return {"ok": False, "error": f"relay timeout ({timeout}s)"}
         finally:
             self._pending.pop(reply_id, None)
+            self._extra_data_chunks.pop(reply_id, None)
 
     async def send_json_message(self, msg: dict) -> None:
         """Fire-and-forget JSON message (no correlated reply)."""
@@ -246,6 +249,63 @@ class RelayConnection:
         future = self._pending.pop(msg_id, None)
         if future and not future.done():
             future.set_result(result)
+
+    def add_extra_data_chunk(self, msg_id: str, chunk: dict[str, Any]) -> None:
+        """Accumulate one bounded content uplink chunk without resolving early."""
+        if msg_id not in self._pending:
+            return
+        total = int(chunk.get("total") or 0)
+        index = int(chunk.get("index") or 0)
+        state = self._extra_data_chunks.setdefault(
+            msg_id,
+            {"total": total, "parts": {}, "bytes": 0, "error": ""},
+        )
+        if total < 1 or total > 256 or state["total"] != total or not 0 <= index < total:
+            state["error"] = "invalid content uplink chunk sequence"
+            return
+        if index in state["parts"]:
+            state["error"] = "duplicate content uplink chunk"
+            return
+        data_b64 = chunk.get("data_b64")
+        if not isinstance(data_b64, str):
+            state["error"] = "invalid content uplink chunk payload"
+            return
+        try:
+            data = base64.b64decode(data_b64, validate=True)
+        except Exception:
+            state["error"] = "invalid content uplink chunk encoding"
+            return
+        state["bytes"] += len(data)
+        if state["bytes"] > max(1, _env_int("EDGE_INGEST_MAX_BATCH_BYTES", 16_777_216)):
+            state["error"] = "content uplink chunks exceed byte limit"
+            return
+        state["parts"][index] = data
+
+    def resolve_extra_data(self, msg_id: str, result: dict) -> None:
+        """Reassemble an optional chunked persist batch, then resolve normally."""
+        ingest = result.get("ingest")
+        manifest = ingest.get("persist_batch_manifest") if isinstance(ingest, dict) else None
+        if isinstance(manifest, dict):
+            state = self._extra_data_chunks.pop(msg_id, None)
+            expected = int(manifest.get("chunk_count") or 0)
+            if state is None or state.get("error") or len(state["parts"]) != expected:
+                detail = state.get("error") if state else "missing content uplink chunks"
+                self.resolve(msg_id, {"ok": False, "error": detail})
+                return
+            try:
+                batch = loads(b"".join(state["parts"][index] for index in range(expected)))
+            except Exception:
+                self.resolve(msg_id, {"ok": False, "error": "invalid content uplink batch JSON"})
+                return
+            if not isinstance(batch, dict):
+                self.resolve(msg_id, {"ok": False, "error": "invalid content uplink batch"})
+                return
+            rebuilt_ingest = dict(ingest)
+            rebuilt_ingest.pop("persist_batch_manifest", None)
+            rebuilt_ingest["persist_batch"] = batch
+            result = dict(result)
+            result["ingest"] = rebuilt_ingest
+        self.resolve(msg_id, result)
 
     def reject(self, msg_id: str, error: str) -> None:
         future = self._pending.pop(msg_id, None)
@@ -271,6 +331,7 @@ class RelayConnection:
             if not future.done():
                 future.set_result(result)
         self._pending.clear()
+        self._extra_data_chunks.clear()
 
 
 # ── Manager ───────────────────────────────────────────────────────────────────
@@ -631,6 +692,10 @@ class AdbRelayManager:
                 "state":  self._pool_state.get(serial, "available"),
                 **caps,
             })
+        # The agent controls the JSON body, so overwrite (never trust) relay
+        # identity before handing the reply to persistence code.
+        result["_trusted_relay_id"] = conn.relay_id
+        result["_trusted_serial"] = actual
         return result
 
     def allocate_device(self, tags: Optional[list] = None) -> Optional[str]:
@@ -1799,10 +1864,17 @@ class WsRelayAgentSession:
                         },
                     )
 
+                elif mtype == "extra_data_result_chunk":
+                    if conn is not None:
+                        conn.add_extra_data_chunk(msg.get("id", ""), msg)
+
                 elif mtype in _REQUEST_REPLY_TYPES:
                     if conn is None:
                         continue
-                    conn.resolve(msg.get("id", ""), msg)
+                    if mtype == "extra_data_result":
+                        conn.resolve_extra_data(msg.get("id", ""), msg)
+                    else:
+                        conn.resolve(msg.get("id", ""), msg)
 
                 elif mtype == "a11y_ack":
                     if conn is None:

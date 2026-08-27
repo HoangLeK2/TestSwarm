@@ -37,7 +37,7 @@ class _FakeRelayManager:
         return self._reply
 
 
-async def _call(reply, monkeypatch) -> dict:
+async def _call(reply, monkeypatch, *, context=None) -> dict:
     monkeypatch.setattr(
         "runtime.transports.adb_relay_server.get_relay_manager",
         lambda: _FakeRelayManager(reply),
@@ -47,7 +47,7 @@ async def _call(reply, monkeypatch) -> dict:
     return await DeviceClient._extra_data_via_relay_async(
         client,
         strategy="posts",
-        context={},
+        context=context or {},
         timeout=5.0,
         cancel_event=None,
     )
@@ -91,3 +91,56 @@ async def test_success_path_is_unchanged(monkeypatch):
 
     assert out["ok"] is True
     assert out["ingest"] == {"items": [1, 2]}
+
+
+@pytest.mark.asyncio
+async def test_success_path_persists_relay_batch_with_trusted_relay_identity(monkeypatch):
+    calls = []
+
+    async def fake_persist_edge_batch(**kwargs):
+        calls.append(kwargs)
+        return {
+            "attempted_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "inserted_content_hashes": ["hash-1"],
+            "batch_content_hashes": ["hash-1"],
+            "db_ms": 7,
+        }
+
+    monkeypatch.setattr(
+        "services.content.edge_ingest.persist_edge_batch",
+        fake_persist_edge_batch,
+    )
+    batch = {
+        "schema_version": 1,
+        "kind": "content",
+        "items": [{"body": "hello"}],
+        "content_hashes": ["hash-1"],
+        "captured_at": "2026-08-27T01:02:03+00:00",
+    }
+    out = await _call(
+        {
+            "ok": True,
+            "_trusted_relay_id": "relay-server",
+            "ingest": {"parsed_count": 1, "persist_batch": batch, "db_ms": 0},
+        },
+        monkeypatch,
+        context={"collection": "posts", "return_items": True},
+    )
+
+    assert calls == [
+        {
+            "relay_id": "relay-server",
+            "batch": batch,
+            "trusted_context": {
+                "collection": "posts",
+                "return_items": True,
+                "captured_at": "2026-08-27T01:02:03+00:00",
+            },
+        }
+    ]
+    assert out["ok"] is True
+    assert out["ingest"]["inserted_count"] == 1
+    assert out["ingest"]["items"] == [{"body": "hello"}]
+    assert "persist_batch" not in out["ingest"]

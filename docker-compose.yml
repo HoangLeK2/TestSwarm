@@ -230,6 +230,11 @@ services:
       # Web/API pool: 12 persistent + 3 burst connections. With the documented
       # seven activity workers this keeps the full DB budget at 98/100.
       DB_POOL_SIZE: ${DB_POOL_SIZE:-12}
+      EDGE_INGEST_POOL_SIZE: ${EDGE_INGEST_POOL_SIZE:-4}
+      EDGE_INGEST_CONCURRENCY: ${EDGE_INGEST_CONCURRENCY:-4}
+      EDGE_INGEST_QUEUE_TIMEOUT: ${EDGE_INGEST_QUEUE_TIMEOUT:-2}
+      EDGE_INGEST_MAX_BATCH_BYTES: ${EDGE_INGEST_MAX_BATCH_BYTES:-16777216}
+      EDGE_INGEST_MAX_ITEMS: ${EDGE_INGEST_MAX_ITEMS:-5000}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-3}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-5}
       # Each of the seven activity event loops gets a bounded pool; activity slots queue

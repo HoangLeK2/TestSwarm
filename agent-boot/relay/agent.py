@@ -87,6 +87,43 @@ from relay.runtime         import (
 logger = logging.getLogger("relay.agent")
 
 
+def _extra_data_reply_messages(reply: dict[str, Any]) -> list[dict[str, Any]]:
+    """Split a farm-persist batch into bounded messages on the existing stream."""
+    ingest = reply.get("ingest")
+    batch = ingest.get("persist_batch") if isinstance(ingest, dict) else None
+    if not isinstance(batch, dict) or not isinstance(batch.get("items"), list):
+        return [reply]
+    target = max(16_384, int(os.getenv("AGENT_BOOT_CONTENT_UPLINK_CHUNK_BYTES", "524288")))
+    encoded = dumps(batch).encode("utf-8")
+    # Base64 expands by 4/3. Leave room for the JSON message envelope.
+    raw_chunk_size = max(4096, (target - 2048) * 3 // 4)
+    chunks = [encoded[offset:offset + raw_chunk_size] for offset in range(0, len(encoded), raw_chunk_size)] or [b""]
+
+    request_id = str(reply.get("id") or "")
+    messages = [
+        {
+            "type": "extra_data_result_chunk",
+            "id": request_id,
+            "index": index,
+            "total": len(chunks),
+            "data_b64": base64.b64encode(chunk).decode("ascii"),
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+    final = dict(reply)
+    final_ingest = dict(ingest)
+    manifest = {
+        "schema_version": batch.get("schema_version"),
+        "kind": batch.get("kind"),
+        "chunk_count": len(chunks),
+    }
+    final_ingest.pop("persist_batch", None)
+    final_ingest["persist_batch_manifest"] = manifest
+    final["ingest"] = final_ingest
+    messages.append(final)
+    return messages
+
+
 async def _await_executor_completion(future: asyncio.Future[Any]) -> Any:
     """Keep mutation guards active until blocking work really stops."""
     cancelled = False
@@ -3459,7 +3496,13 @@ class RelayAgent:
             detail = str(exc) or type(exc).__name__
             logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, detail)
             reply["error"] = detail
-        await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
+        for message in _extra_data_reply_messages(reply):
+            await bounded_put(
+                send_queue,
+                await dumps_maybe_offload(message),
+                serial=serial,
+                label=str(message.get("type") or "extra_data_result"),
+            )
 
     async def _handle_ocr(
         self,

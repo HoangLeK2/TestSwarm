@@ -800,6 +800,7 @@ export function ControlRecordView({
     Record<string, any>
   >(() => flattenVarDefs(save.editingContext?.variables ?? {}));
   const scenarioVariablesRef = useRef<Record<string, any>>(scenarioVariables);
+  const scenarioVariableHydrationKeyRef = useRef<string | null>(null);
   const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<
     Record<string, string>
   >({});
@@ -1673,6 +1674,9 @@ export function ControlRecordView({
 
   useEffect(() => {
     if (save.editingContext?.variables) {
+      const key = `campaign:${save.editingContext.campaignId}:${save.editingContext.scenarioId}`;
+      if (scenarioVariableHydrationKeyRef.current === key) return;
+      scenarioVariableHydrationKeyRef.current = key;
       const next = flattenVarDefs(save.editingContext.variables);
       scenarioVariablesRef.current = next;
       setScenarioVariables(next);
@@ -1682,11 +1686,14 @@ export function ControlRecordView({
   useEffect(() => {
     if (save.editingContext?.variables) return;
     if (save.orgScenarioContext?.variables) {
+      const key = `org:${save.orgScenarioContext.scenarioId}:${activeCampaignId ?? 'standalone'}`;
+      if (scenarioVariableHydrationKeyRef.current === key) return;
+      scenarioVariableHydrationKeyRef.current = key;
       const next = flattenVarDefs(save.orgScenarioContext.variables);
       scenarioVariablesRef.current = next;
       setScenarioVariables(next);
     }
-  }, [save.editingContext, save.orgScenarioContext]);
+  }, [activeCampaignId, save.editingContext, save.orgScenarioContext]);
 
   useEffect(() => {
     flowSelectedFgIdRef.current = flowSelectedFgId;

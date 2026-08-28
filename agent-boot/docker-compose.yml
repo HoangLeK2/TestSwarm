@@ -67,7 +67,7 @@ services:
       # Push H264 into go2rtc over RTSP. This is the only direction that works
       # once go2rtc lives on a server and this adapter sits behind NAT, so dev
       # uses the same path as prod — only the host in the template differs.
-      MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE: "${MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE:-rtsp://${RTSP_USER:-farm}:${RTSP_PASS:-change-me}@host.docker.internal:8554/{stream_raw}}"
+      MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE: "${MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE:-rtsp://${RTSP_USER:-farm}:${RTSP_PASS:-change-me}@host.docker.internal:${GO2RTC_RTSP_PORT:-8554}/{stream_raw}}"
       # Must stay 0 while publishing: RegisterStream would PUT a *pull* src into
       # go2rtc, and go2rtc would dial back out on the same stream name that the
       # publisher owns.

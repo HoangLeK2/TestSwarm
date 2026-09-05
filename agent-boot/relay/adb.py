@@ -1,13 +1,11 @@
 """
-relay/adb.py — ADB helpers via subprocess.
+relay/adb.py - compatibility facade for scheduled ADB operations.
 
-Uses the `adb` binary directly instead of ppadb so that:
-  - Multiple device operations truly run in parallel (no Python GIL / TCP-to-daemon
-    serialization that ppadb suffers from at 20+ devices).
-  - Each subprocess.run() is independent — one slow device never blocks another.
-  - No dependency on ppadb socket lifecycle management.
+All ADB commands go through the central scheduler/admission controller. The
+default transport still uses the system adb binary; AGENT_BOOT_ADB_TRANSPORT can
+switch selected operations to adbutils or hybrid mode for benchmarking/rollout.
 
-All functions are blocking — call via loop.run_in_executor() from async code.
+All functions are blocking - call via loop.run_in_executor() from async code.
 """
 from __future__ import annotations
 
@@ -28,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
+from relay.adb_scheduler import AdbScheduler, AdbutilsTransport, BinaryAdbTransport
 from relay.device_state import DeviceRegistry
 from relay import runtime as _json
 
@@ -235,6 +234,7 @@ class _PackageState:
 
 
 _ADB_CACHE_LOCK = threading.RLock()
+_ADB_SCHEDULER: AdbScheduler | None = None
 _CAPABILITY_CACHE: dict[str, tuple[float, dict]] = {}
 _PACKAGE_STATE_CACHE: dict[tuple[str, str], tuple[float, _PackageState]] = {}
 _LAN_IP_CACHE: dict[str, tuple[float, str]] = {}
@@ -280,7 +280,7 @@ def _adb_command_stat_key(args: tuple[str, ...]) -> str:
         return "shell"
     if command == "exec-out":
         return "exec_out"
-    if command in {"push", "install", "install-multiple", "uninstall"}:
+    if command in {"push", "pull", "install", "install-multiple", "uninstall"}:
         return command.replace("-", "_")
     if command in {"forward", "reverse"}:
         subcommand = str(args[1]).strip().lower() if len(args) > 1 else ""
@@ -300,6 +300,7 @@ def _record_adb_command_stat(
     lane: AdbLane,
     rc: int | None,
     timed_out: bool = False,
+    transport: str | None = None,
 ) -> None:
     key = _adb_command_stat_key(args)
     lane_name = AdbLane(lane).name.lower()
@@ -312,6 +313,9 @@ def _record_adb_command_stat(
             _ADB_COMMAND_STATS["timeout"] = _ADB_COMMAND_STATS.get("timeout", 0) + 1
         elif rc not in (0, None):
             _ADB_COMMAND_STATS["failed"] = _ADB_COMMAND_STATS.get("failed", 0) + 1
+        if transport:
+            transport_key = f"transport_{transport}"
+            _ADB_COMMAND_STATS[transport_key] = _ADB_COMMAND_STATS.get(transport_key, 0) + 1
 
 
 def adb_command_stats(*, reset: bool = False) -> dict[str, int]:
@@ -320,6 +324,28 @@ def adb_command_stats(*, reset: bool = False) -> dict[str, int]:
         if reset:
             _ADB_COMMAND_STATS.clear()
         return stats
+
+
+def _get_adb_scheduler() -> AdbScheduler:
+    global _ADB_SCHEDULER
+    with _ADB_CACHE_LOCK:
+        if _ADB_SCHEDULER is None:
+            _ADB_SCHEDULER = AdbScheduler(
+                binary=BinaryAdbTransport(
+                    command_builder=_adb_command,
+                    adb_bin=_ADB,
+                ),
+                adbutils=AdbutilsTransport(
+                    server_specs_provider=adb_server_specs_from_env,
+                ),
+            )
+        return _ADB_SCHEDULER
+
+
+def reset_adb_scheduler_for_tests() -> None:
+    global _ADB_SCHEDULER
+    with _ADB_CACHE_LOCK:
+        _ADB_SCHEDULER = None
 
 
 def invalidate_adb_device_cache(
@@ -361,41 +387,21 @@ def _run(
     Run `adb [-s serial] <args>` and return (stdout+stderr, returncode).
     Never raises — all exceptions become ("error", -1) pairs.
     """
-    cmd = _adb_command(*args, serial=serial)
     classified_lane = lane if lane is not None else classify_adb_command(tuple(args))
-    # Suppress macOS MallocStackLogging spam in subprocess output
-    env = _os.environ.copy()
-    env.pop("MallocStackLogging", None)
-    env.pop("MallocStackLoggingDirectory", None)
-    try:
-        with adb_admission(
-            serial=serial,
-            lane=classified_lane,
-        ):
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                check=False,
-                timeout=timeout,
-                env=env,
-            )
-        out = (result.stdout + result.stderr).decode("utf-8", errors="replace")
-        _record_adb_command_stat(tuple(args), lane=classified_lane, rc=result.returncode)
-        return out, result.returncode
-    except subprocess.TimeoutExpired:
-        _record_adb_command_stat(
-            tuple(args),
-            lane=classified_lane,
-            rc=None,
-            timed_out=True,
-        )
-        return f"adb timeout after {timeout}s", -1
-    except FileNotFoundError:
-        _record_adb_command_stat(tuple(args), lane=classified_lane, rc=-1)
-        return f"adb binary not found at {_ADB!r}", -1
-    except Exception as exc:
-        _record_adb_command_stat(tuple(args), lane=classified_lane, rc=-1)
-        return str(exc), -1
+    result = _get_adb_scheduler().run(
+        tuple(args),
+        serial=serial,
+        timeout=timeout,
+        lane=classified_lane,
+    )
+    _record_adb_command_stat(
+        tuple(args),
+        lane=classified_lane,
+        rc=result.returncode,
+        timed_out=result.timed_out,
+        transport=result.transport,
+    )
+    return result.output, result.returncode
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -434,7 +440,7 @@ def dedupe_adb_serials_prefer_usb(serials: list[str]) -> list[str]:
 
 def _list_serials() -> list[str]:
     """Snapshot of currently connected serials (startup / fallback only).
-    Real-time tracking is handled by AdbDeviceWatcher (adb track-devices)."""
+    Real-time tracking is handled by AdbDeviceWatcher."""
     specs = adb_server_specs_from_env()
     if not specs:
         out, _ = _run("devices", timeout=5)
@@ -1146,28 +1152,21 @@ def _run_bytes(
     timeout: int = 30,
 ) -> tuple[bytes, int]:
     """Like _run() but returns raw stdout bytes (for binary data like screencap)."""
-    cmd = _adb_command(*args, serial=serial)
-    env = _os.environ.copy()
-    env.pop("MallocStackLogging", None)
-    env.pop("MallocStackLoggingDirectory", None)
-    try:
-        with adb_admission(
-            serial=serial,
-            lane=classify_adb_command(tuple(args)),
-        ):
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=timeout,
-                env=env,
-            )
-        return result.stdout, result.returncode
-    except subprocess.TimeoutExpired:
-        return b"", -1
-    except Exception:
-        return b"", -1
+    classified_lane = classify_adb_command(tuple(args))
+    result = _get_adb_scheduler().run_bytes(
+        tuple(args),
+        serial=serial,
+        timeout=timeout,
+        lane=classified_lane,
+    )
+    _record_adb_command_stat(
+        tuple(args),
+        lane=classified_lane,
+        rc=result.returncode,
+        timed_out=result.timed_out,
+        transport=result.transport,
+    )
+    return result.output, result.returncode
 
 
 def _first_nonempty(*values: str) -> str:

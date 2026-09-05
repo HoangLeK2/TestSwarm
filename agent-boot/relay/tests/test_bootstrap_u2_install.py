@@ -379,14 +379,35 @@ def test_adb_command_stats_records_command_types(monkeypatch) -> None:
 
     relay_adb._run("shell", "true", serial="serial-1")
     relay_adb._run("forward", "tcp:0", "tcp:7912", serial="serial-1")
+    relay_adb._run("pull", "/sdcard/file.txt", "file.txt", serial="serial-1")
 
     stats = relay_adb.adb_command_stats(reset=True)
 
     assert stats["cmd_shell"] == 1
     assert stats["cmd_forward"] == 1
-    assert stats["lane_default"] == 1
+    assert stats["cmd_pull"] == 1
+    assert stats["lane_default"] == 2
     assert stats["lane_startup"] == 1
     assert relay_adb.adb_command_stats() == {}
+
+
+def test_adb_command_stats_records_bytes_command_types(monkeypatch) -> None:
+    def fake_subprocess_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=["adb"],
+            returncode=0,
+            stdout=b"png",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(relay_adb.subprocess, "run", fake_subprocess_run)
+    relay_adb._run_bytes("exec-out", "screencap", "-p", serial="serial-1")
+
+    stats = relay_adb.adb_command_stats(reset=True)
+
+    assert stats["cmd_exec_out"] == 1
+    assert stats["lane_default"] == 1
+    assert stats["transport_binary"] == 1
 
 
 def test_ensure_u2_input_ime_pins_adb_keyboard(monkeypatch) -> None:

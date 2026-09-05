@@ -121,6 +121,11 @@ starts one durable workflow per running execution:
   `retry` block run one `execute_device_action` per attempt; backoff uses
   `workflow.sleep()` so waits survive worker restart. In-process / fallback
   execution still uses `execute_step_with_retry` inside the executor.
+- **Step traceability:** control-flow handlers carry `__scenario_trace__`
+  through loop/repeat iterations, branches, and `run_scenario` calls. Leaf step
+  events and persisted step rows include `trace.step_path`; control-flow nodes
+  emit only boundary events with `iterations_run`/`stopped_by`, never one event
+  per loop iteration.
 
 `GET /api/execution/runtime` reports `fallback_mode_active` when Temporal is off.
 

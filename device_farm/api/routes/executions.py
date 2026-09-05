@@ -210,6 +210,27 @@ class DLQEntryOut(_BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _resolve_dlq_artifact_refs(refs: dict) -> dict:
+    """Re-sign any ref that carries an object key.
+
+    DLQ entries are triaged hours or days after they open, by which time the
+    presigned URL stored with them has expired. `<name>_object_key` written by
+    dlq_service._carry_object_key survives, so sign from that when present.
+    """
+    if not isinstance(refs, dict):
+        return refs
+    out = dict(refs)
+    for name, object_key in refs.items():
+        if not name.endswith("_object_key"):
+            continue
+        target = name[: -len("_object_key")]
+        content_type = "application/xml" if "hierarchy" in target else "image/png"
+        fresh = _fresh_object_url(object_key, content_type)
+        if fresh:
+            out[target] = fresh
+    return out
+
+
 async def _dlq_entries_to_out(db, entries) -> list[DLQEntryOut]:
     from services.campaign.dlq_message import enrich_dlq_display_messages
 
@@ -218,6 +239,7 @@ async def _dlq_entries_to_out(db, entries) -> list[DLQEntryOut]:
     for entry, display_message in zip(entries, messages, strict=True):
         row = DLQEntryOut.model_validate(entry)
         row.display_message = display_message
+        row.artifact_refs = _resolve_dlq_artifact_refs(row.artifact_refs)
         out.append(row)
     return out
 
@@ -1264,12 +1286,44 @@ def _artifact_proxy_url(artifact_id: str | None) -> str | None:
     return f"/artifacts/{aid}/content"
 
 
+def _fresh_object_url(object_key: str | None, content_type: str) -> str | None:
+    """Sign an object at read time.
+
+    Captures used to store the presigned URL they were given at capture time.
+    That URL expires (1h) but the row holding it does not, so reopening an
+    execution later rendered broken images. Signing here keeps the stored value
+    to the object key, which never goes stale.
+    """
+    key = str(object_key or "").strip()
+    if not key:
+        return None
+    from services.content.artifact_service import presigned_artifact_url
+
+    return presigned_artifact_url(key, content_type=content_type)["url"]
+
+
 _ARTIFACT_REF_FIELDS = (
-    ("screenshot_url", "screenshot", "screenshot_artifact_id", "image/jpeg"),
-    ("hierarchy_url", "hierarchy", "hierarchy_artifact_id", "application/xml"),
-    ("selector_url", "selector", None, "application/xml"),
-    ("element_url", "element", None, "image/jpeg"),
+    ("screenshot_url", "screenshot", "screenshot_artifact_id", "screenshot_object_key", "image/jpeg"),
+    ("hierarchy_url", "hierarchy", "hierarchy_artifact_id", "hierarchy_object_key", "application/xml"),
+    ("selector_url", "selector", None, None, "application/xml"),
+    ("element_url", "element", None, None, "image/jpeg"),
 )
+
+# Payload keys inside step["screenshot"] / step["screenshot_pre"] that have an
+# object key alongside them, for the same re-sign treatment.
+_PAYLOAD_OBJECT_KEYS = {
+    "full": ("screenshot_object_key", "image/png"),
+    "hierarchy": ("hierarchy_object_key", "application/xml"),
+}
+
+
+def _payload_url(payload: dict[str, Any], key: str) -> str | None:
+    object_key_field, content_type = _PAYLOAD_OBJECT_KEYS.get(key, (None, ""))
+    if object_key_field:
+        fresh = _fresh_object_url(payload.get(object_key_field), content_type)
+        if fresh:
+            return fresh
+    return _normalize_artifact_url(payload.get(key))
 
 
 def _artifact_message_for_step(
@@ -1316,11 +1370,7 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
             for key in ("full", "hierarchy", "selector"):
                 if step["screenshot"].get(key):
                     screenshots.append(
-                        (
-                            f"screenshot.{key}",
-                            _normalize_artifact_url(step["screenshot"].get(key)),
-                            {},
-                        )
+                        (f"screenshot.{key}", _payload_url(step["screenshot"], key), {})
                     )
         if isinstance(step.get("screenshot_pre"), dict):
             for key in ("full", "hierarchy", "selector"):
@@ -1328,7 +1378,7 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
                     screenshots.append(
                         (
                             f"screenshot_pre.{key}",
-                            _normalize_artifact_url(step["screenshot_pre"].get(key)),
+                            _payload_url(step["screenshot_pre"], key),
                             {},
                         )
                     )
@@ -1337,11 +1387,22 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
             if not isinstance(art, dict):
                 continue
             art_type = str(art.get("type") or "artifact")
-            for url_key, label, id_key, content_type in _ARTIFACT_REF_FIELDS:
+            for url_key, label, id_key, object_key_field, content_type in _ARTIFACT_REF_FIELDS:
                 artifact_id = str(art.get(id_key) or "").strip() if id_key else ""
                 url = art.get(url_key)
                 proxy_url = _artifact_proxy_url(artifact_id) if artifact_id else None
-                resolved_url = proxy_url or _normalize_artifact_url(url)
+                # Order matters: the artifact proxy is stable and tenant-checked;
+                # a freshly signed object key is stable but public; the stored URL
+                # is a last resort because it may already have expired.
+                resolved_url = (
+                    proxy_url
+                    or (
+                        _fresh_object_url(art.get(object_key_field), content_type)
+                        if object_key_field
+                        else None
+                    )
+                    or _normalize_artifact_url(url)
+                )
                 if not resolved_url:
                     continue
                 metadata: dict[str, Any] = {"content_type": content_type}

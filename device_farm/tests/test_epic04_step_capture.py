@@ -365,6 +365,215 @@ def test_capture_payload_delegates_to_epic06_capture():
     assert out["screenshot_artifact_id"] == "art-1"
 
 
+def test_capture_payload_carries_the_object_key_not_just_a_signed_url():
+    """The stored URL expires; the object key is what survives.
+
+    Captures used to persist the presigned URL they were handed at capture time,
+    so reopening an execution an hour later rendered broken images.
+    """
+    from services.execution import epic06_capture_adapter
+
+    sc = _make_sc()
+
+    class FakeCaptureService:
+        def capture_screenshot(self, _device, *, persist, execution_ctx):
+            return SimpleNamespace(
+                image_bytes=b"\x89PNG\r\n\x1a\n",
+                object_key="org/exec-1/step-0/screenshot_fail.png",
+                sha256="abc123",
+                artifact_id=None,
+            )
+
+    with patch.object(
+        epic06_capture_adapter, "_get_capture_service", lambda: FakeCaptureService()
+    ), patch.object(
+        epic06_capture_adapter, "_store_bytes", lambda *a, **k: "http://r2/expires-soon"
+    ):
+        payload = epic06_capture_adapter.build_step_capture_payload(sc, 0, "tap_fail")
+
+    assert payload["screenshot_object_key"] == "org/exec-1/step-0/screenshot_fail.png"
+
+
+def test_artifact_url_is_signed_at_read_time_from_the_object_key():
+    from api.routes.executions import _extract_step_artifacts
+
+    steps = [
+        {
+            "index": 3,
+            "type": "tap",
+            "ok": False,
+            "artifacts_json": [
+                {
+                    "type": "fail",
+                    "step_index": 3,
+                    "screenshot_url": "http://r2/signed-an-hour-ago?X-Amz-Expires=3600",
+                    "screenshot_object_key": "org/exec-1/step-3/shot.png",
+                }
+            ],
+        }
+    ]
+
+    with patch(
+        "services.content.artifact_service.presigned_artifact_url",
+        return_value={"url": "http://r2/freshly-signed", "expires_at": "", "content_type": ""},
+    ):
+        arts = _extract_step_artifacts("exec-1", "SN1", steps, None)
+
+    assert [a.url for a in arts] == ["http://r2/freshly-signed"]
+
+
+def test_artifact_url_falls_back_to_the_stored_url_for_legacy_rows():
+    """Rows written before the object key existed must still resolve."""
+    from api.routes.executions import _extract_step_artifacts
+
+    steps = [
+        {
+            "index": 1,
+            "type": "tap",
+            "ok": False,
+            "artifacts_json": [
+                {"type": "fail", "step_index": 1, "screenshot_url": "/captures/old.png"}
+            ],
+        }
+    ]
+
+    arts = _extract_step_artifacts("exec-1", "SN1", steps, None)
+
+    assert [a.url for a in arts] == ["/captures/old.png"]
+
+
+def test_artifact_proxy_still_wins_over_a_signed_object_url():
+    """The artifact proxy is tenant-checked; prefer it whenever it exists."""
+    from api.routes.executions import _extract_step_artifacts
+
+    steps = [
+        {
+            "index": 2,
+            "type": "tap",
+            "ok": False,
+            "artifacts_json": [
+                {
+                    "type": "fail",
+                    "step_index": 2,
+                    "screenshot_url": "http://r2/stale",
+                    "screenshot_object_key": "org/exec-1/step-2/shot.png",
+                    "screenshot_artifact_id": "11111111-1111-1111-1111-111111111111",
+                }
+            ],
+        }
+    ]
+
+    arts = _extract_step_artifacts("exec-1", "SN1", steps, None)
+
+    assert [a.url for a in arts] == [
+        "/artifacts/11111111-1111-1111-1111-111111111111/content"
+    ]
+
+
+def test_fail_capture_uses_the_real_step_index_not_the_mini_scenario_zero():
+    """Temporal wraps each step in a 1-step scenario, so the local index is 0.
+
+    Without the offset every capture in a run shared one screenshot cache key,
+    one ``step-0/`` object prefix, and one step number in the UI.
+    """
+    from services.execution import epic06_capture_adapter
+
+    sc = _make_sc()
+    sc.scenario = {"execution_id": "exec-1", "_step_index_offset": 7}
+    seen: list[int] = []
+
+    class FakeCaptureService:
+        def capture_screenshot(self, _device, *, persist, execution_ctx):
+            seen.append(execution_ctx.step_index)
+            return SimpleNamespace(
+                image_bytes=b"\x89PNG\r\n\x1a\n",
+                object_key="k",
+                sha256="h",
+                artifact_id=None,
+            )
+
+    with patch.object(
+        epic06_capture_adapter, "_get_capture_service", lambda: FakeCaptureService()
+    ), patch.object(epic06_capture_adapter, "_store_bytes", lambda *a, **k: "http://r2/x"):
+        payload = epic06_capture_adapter.build_step_capture_payload(sc, 0, "tap_fail")
+
+    assert seen == [7]
+    assert payload["step_index"] == 7
+
+
+def test_failure_screenshot_is_never_served_from_the_cache():
+    """A fail frame must be the screen at the moment of failure.
+
+    The 30s cache is right for pre/post and wrong here: on the Temporal path two
+    steps failing within the window used to get the same picture.
+    """
+    from services.content.extraction import capture_service as extraction_capture
+    from services.content.extraction.models import ExecutionCaptureContext
+
+    extraction_capture.clear_capture_cache()
+    device = MagicMock()
+    device.serial = "SN1"
+    device.take_screenshot.side_effect = [b"\x89PNG\r\n\x1a\n" + b"a", b"\x89PNG\r\n\x1a\n" + b"b"]
+    svc = extraction_capture.ExtractionCaptureService()
+    ctx = ExecutionCaptureContext(
+        execution_id="exec-1", step_index=0, kind="screenshot_fail", org_id="org-1"
+    )
+
+    first = svc.capture_screenshot(device, persist=False, execution_ctx=ctx)
+    second = svc.capture_screenshot(device, persist=False, execution_ctx=ctx)
+
+    assert first.image_bytes != second.image_bytes
+    assert device.take_screenshot.call_count == 2
+
+
+def test_retry_keeps_the_evidence_of_the_attempt_that_failed():
+    """A step that failed then passed used to leave no screenshot at all."""
+    sc = _make_sc()
+    step = {
+        "type": "extract",
+        "id": "x1",
+        "retry": {"max_attempts": 2, "backoff_ms": 0, "jitter": 0},
+    }
+    outcomes = [
+        # retryable=True short-circuits the reason-code check, so the retry does
+        # not depend on which codes the default policy happens to allow.
+        {"ok": False, "message": "boom", "reason_code": "timeout", "retryable": True},
+        {"ok": True},
+    ]
+
+    def fake_post(_sc, _step, _idx, result, *_a, **_k):
+        if not result.get("ok", True):
+            result.setdefault("artifacts", []).append({"type": "post", "attempt": "first"})
+
+    with patch(
+        "services.execution.step_runner.dispatch_step", side_effect=outcomes
+    ), patch("services.execution.step_runner.capture_pre_step"), patch(
+        "services.execution.step_runner.capture_post_step", side_effect=fake_post
+    ), patch("services.execution.step_runner.capture_fail_step"):
+        result, attempts = execute_step_with_retry(sc, step, 0)
+
+    assert result["ok"] is True
+    assert attempts == 2
+    assert [a["attempt"] for a in result.get("artifacts") or []] == ["first"]
+
+
+def test_capture_failure_is_recorded_even_when_capture_is_not_required():
+    """A lost screenshot and a step that never captured one looked identical."""
+    sc = _make_sc()
+    # extract, not wait: capture defaults on for extract steps, so this exercises
+    # a real capture attempt that came back empty rather than one that never ran.
+    step = {"type": "extract", "id": "x1"}
+    step_result: dict = {"index": 0, "type": "extract", "ok": True}
+
+    with patch("services.execution.capture_service._capture_payload", return_value={}):
+        from services.execution.capture_service import capture_before_step
+
+        capture_before_step(sc, step, 0, step_result)
+
+    assert step_result["ok"] is True
+    assert step_result["capture_error"] == {"pre": "empty capture"}
+
+
 def test_epic06_capture_payload_skips_xml_artifact_by_default(monkeypatch):
     from services.execution import epic06_capture_adapter
 

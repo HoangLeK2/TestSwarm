@@ -73,6 +73,31 @@ def uses_epic04_replay(execution: Any) -> bool:
     return bool(meta.get("dlq_replay"))
 
 
+def _set_ref(
+    refs: dict[str, Any],
+    name: str,
+    url: Any,
+    object_key: Any = None,
+    *,
+    overwrite: bool = False,
+) -> None:
+    """Set one ref, keeping its URL and object key from the same source.
+
+    The stored URL is a presigned GET that expires long before a DLQ entry gets
+    triaged, so the read path re-signs from ``<name>_object_key``. Writing the
+    two independently let a URL from one capture end up labelled with another
+    capture's key, which would then render the wrong screenshot.
+    """
+    if not url or (not overwrite and refs.get(name)):
+        return
+    refs[name] = url
+    key = str(object_key or "").strip()
+    if key:
+        refs[f"{name}_object_key"] = key
+    else:
+        refs.pop(f"{name}_object_key", None)
+
+
 def _artifact_refs_from_steps(step_results: list[dict[str, Any]]) -> dict[str, Any]:
     from services.execution.step_store import extract_artifacts_json, normalize_workflow_step_result
 
@@ -82,27 +107,51 @@ def _artifact_refs_from_steps(step_results: list[dict[str, Any]]) -> dict[str, A
     last = normalize_workflow_step_result(failed[-1])
     refs: dict[str, Any] = {}
     for key in ("screenshot_post", "screenshot_pre", "url"):
-        val = last.get(key)
-        if val:
-            refs[key] = val
+        _set_ref(refs, key, last.get(key))
     screenshot = last.get("screenshot")
     if isinstance(screenshot, dict):
-        if screenshot.get("full"):
-            refs["screenshot_post"] = refs.get("screenshot_post") or screenshot.get("full")
-        if screenshot.get("hierarchy"):
-            refs["hierarchy_url"] = screenshot.get("hierarchy")
+        _set_ref(
+            refs,
+            "screenshot_post",
+            screenshot.get("full"),
+            screenshot.get("screenshot_object_key"),
+        )
+        _set_ref(
+            refs,
+            "hierarchy_url",
+            screenshot.get("hierarchy"),
+            screenshot.get("hierarchy_object_key"),
+            overwrite=True,
+        )
     elif isinstance(screenshot, str):
-        refs["screenshot_post"] = refs.get("screenshot_post") or screenshot
+        _set_ref(refs, "screenshot_post", screenshot)
     pre = last.get("screenshot_pre")
-    if isinstance(pre, dict) and pre.get("full"):
-        refs["screenshot_pre"] = refs.get("screenshot_pre") or pre.get("full")
+    if isinstance(pre, dict):
+        _set_ref(
+            refs, "screenshot_pre", pre.get("full"), pre.get("screenshot_object_key")
+        )
     for art in extract_artifacts_json(failed[-1]):
-        art_type = str(art.get("type") or "")
-        if art_type == "fail" and art.get("screenshot_url"):
-            refs["screenshot_fail"] = art.get("screenshot_url")
-            refs["screenshot_post"] = refs.get("screenshot_post") or art.get("screenshot_url")
-        if art.get("hierarchy_url"):
-            refs["hierarchy_url"] = art.get("hierarchy_url")
+        if str(art.get("type") or "") == "fail":
+            _set_ref(
+                refs,
+                "screenshot_fail",
+                art.get("screenshot_url"),
+                art.get("screenshot_object_key"),
+                overwrite=True,
+            )
+            _set_ref(
+                refs,
+                "screenshot_post",
+                art.get("screenshot_url"),
+                art.get("screenshot_object_key"),
+            )
+        _set_ref(
+            refs,
+            "hierarchy_url",
+            art.get("hierarchy_url"),
+            art.get("hierarchy_object_key"),
+            overwrite=True,
+        )
     return refs
 
 

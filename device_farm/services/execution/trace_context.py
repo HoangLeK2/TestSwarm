@@ -26,6 +26,9 @@ _TRACE_KEYS = (
     "repeat_index",
     "repeat_count",
     "step_path",
+    "loop_iter",
+    "loop_id",
+    "branch",
     "step_index",
     "step_id",
     "step_type",
@@ -72,6 +75,80 @@ def trace_from_runtime_context(runtime_context: dict[str, Any] | None) -> dict[s
         return {}
     raw = runtime_context.get(TRACE_CONTEXT_KEY)
     return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _step_segment(
+    step_id: str,
+    *,
+    loop_iter: int | None = None,
+    branch: str | None = None,
+) -> str:
+    segment = str(step_id or "").strip()
+    if loop_iter is not None:
+        segment = f"{segment}#{loop_iter}"
+    if branch:
+        segment = f"{segment}.{branch}"
+    return segment
+
+
+def push_step_path(
+    ctx: dict[str, Any] | None,
+    *,
+    step_id: str,
+    loop_iter: int | None = None,
+    branch: str | None = None,
+    step_type: str | None = None,
+    step_index: int | None = None,
+    scenario_updates: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a new runtime context with one scenario-trace path segment appended."""
+    base_ctx = dict(ctx or {})
+    trace = trace_from_runtime_context(base_ctx)
+    segment = _step_segment(step_id, loop_iter=loop_iter, branch=branch)
+    parent_path = str(trace.get("step_path") or "").strip()
+    if segment:
+        trace["step_path"] = f"{parent_path}/{segment}" if parent_path else segment
+    if loop_iter is not None:
+        trace["loop_iter"] = loop_iter
+        trace["loop_id"] = str(step_id)
+    if branch:
+        trace["branch"] = branch
+    if step_type:
+        trace["step_type"] = step_type
+    if step_index is not None:
+        trace["step_index"] = step_index
+    if step_id:
+        trace["step_id"] = str(step_id)
+    if scenario_updates:
+        trace.update(
+            {
+                key: value
+                for key, value in scenario_updates.items()
+                if value not in (None, "", [], {})
+            }
+        )
+    trace = {
+        key: value
+        for key, value in trace.items()
+        if value not in (None, "", [], {})
+    }
+    base_ctx[TRACE_CONTEXT_KEY] = trace
+    return base_ctx
+
+
+def step_trace_from_context(
+    ctx: dict[str, Any] | None,
+    *,
+    step: dict[str, Any],
+    step_index: int,
+) -> dict[str, Any]:
+    step_id = str(step.get("id") or step.get("_id") or step.get("step_id") or step_index)
+    return push_step_path(
+        ctx,
+        step_id=step_id,
+        step_type=str(step.get("type") or step.get("step_type") or ""),
+        step_index=step_index,
+    )
 
 
 def build_step_trace_context(

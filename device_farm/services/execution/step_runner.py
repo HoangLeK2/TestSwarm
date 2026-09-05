@@ -14,6 +14,12 @@ from services.execution.retry_policy import (
     parse_step_retry_policy,
     record_attempt,
 )
+from services.execution.reason_codes import (
+    HANDLER_EXCEPTION,
+    INCIDENT_RECOVERY_FAILED,
+    STALE_FRAME,
+    STUCK_SCREEN,
+)
 from tasks.scenario.capture import StaleFrameError, capture_fail_step, capture_pre_step, capture_post_step
 from tasks.scenario.steps import dispatch_step
 
@@ -126,7 +132,78 @@ def _record_recovery_failure(
     step_result["recovery_failed_message"] = msg
     if not str(step_result.get("message") or "").strip():
         step_result["message"] = msg
-    step_result.setdefault("reason_code", "incident_recovery_failed")
+    step_result.setdefault("reason_code", INCIDENT_RECOVERY_FAILED)
+
+
+def _carry_capture_evidence(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    """Move capture evidence from a previous result dict into the current one.
+
+    Two places used to drop it. The pre-step capture writes into a result dict
+    that the handler's `merged` then replaces wholesale, and every retry started
+    from a bare dict — so a step that failed twice and then passed left no
+    screenshot behind at all, and a step that failed for good kept only the last
+    attempt's frame.
+    """
+    if not isinstance(src, dict) or src is dst:
+        return dst
+    carried = [a for a in (src.get("artifacts") or []) if isinstance(a, dict)]
+    if carried:
+        existing = [a for a in (dst.get("artifacts") or []) if isinstance(a, dict)]
+        artifacts = carried + [a for a in existing if a not in carried]
+        dst["artifacts"] = artifacts
+        dst["artifacts_json"] = artifacts
+    # screenshot_pre only. capture_error belongs to the attempt that hit it —
+    # carrying it forward would leave a stale error on an attempt whose capture
+    # actually worked.
+    if "screenshot_pre" in src and "screenshot_pre" not in dst:
+        dst["screenshot_pre"] = src["screenshot_pre"]
+    return dst
+
+
+_LEDGER_EVIDENCE_FIELDS = (
+    "type",
+    "step_index",
+    "attempt_index",
+    "captured_at",
+    "screenshot_artifact_id",
+    "screenshot_object_key",
+    "hierarchy_artifact_id",
+    "hierarchy_object_key",
+)
+
+
+def _attach_ledger_evidence(sc: "ScenarioContext", step_result: Dict[str, Any]) -> None:
+    """Point the account action at the screenshot of its own failure.
+
+    The ledger row is written by the step handler; the failure screenshot is
+    taken here, after the handler returns. Nothing connected the two, so
+    ``account_actions.artifact_refs`` was empty on every row that ever existed
+    and the log could name an action without showing what went wrong.
+
+    References only — the artifact rows hold the bytes.
+    """
+    ledger = step_result.get("account_action_ledger")
+    if not isinstance(ledger, dict):
+        return
+    action_id = str(ledger.get("action_id") or "").strip()
+    org_id = str(ledger.get("org_id") or "").strip()
+    if not action_id or not org_id:
+        return
+    from services.execution.step_store import extract_artifacts_json
+
+    refs = [
+        {k: art[k] for k in _LEDGER_EVIDENCE_FIELDS if art.get(k) is not None}
+        for art in extract_artifacts_json(step_result)
+    ]
+    refs = [ref for ref in refs if ref.get("screenshot_artifact_id") or ref.get("screenshot_object_key")]
+    if not refs:
+        return
+    try:
+        from services.account_actions import attach_action_artifacts
+
+        attach_action_artifacts(org_id=org_id, action_id=action_id, artifact_refs=refs)
+    except Exception as exc:  # pragma: no cover - evidence is never fatal
+        log.debug("[%s] ledger evidence attach skipped: %s", sc.serial, exc)
 
 
 def _run_app_popup_watchers(sc: "ScenarioContext", step: Dict[str, Any]) -> list[dict[str, Any]]:
@@ -171,13 +248,18 @@ def execute_step_with_retry(
         step["_account_action_retry_attempt"] = attempt
         cancel_event = _cancel_event(sc)
         if cancel_event is not None and cancel_event.is_set():
-            return {
-                "index": idx,
-                "type": t,
-                "ok": False,
-                "message": f"{t}: cancelled by user",
-                "cancelled": True,
-            }, attempts_used
+            # Same reason as the retry sites: a bare dict here would throw away
+            # the screenshots taken while the step was already failing.
+            return _carry_capture_evidence(
+                {
+                    "index": idx,
+                    "type": t,
+                    "ok": False,
+                    "message": f"{t}: cancelled by user",
+                    "cancelled": True,
+                },
+                step_result,
+            ), attempts_used
         attempts_used = attempt
         original_cancel_event = getattr(sc, "cancel_event", None)
         deadline_event: _StepDeadlineEvent | None = None
@@ -196,7 +278,7 @@ def execute_step_with_retry(
             handler_result = {
                 "ok": False,
                 "message": f"{t}: handler raised: {exc}",
-                "reason_code": "handler_exception",
+                "reason_code": HANDLER_EXCEPTION,
             }
             log.exception(f"[{sc.serial}] step#{idx + 1} handler raised")
         finally:
@@ -208,6 +290,9 @@ def execute_step_with_retry(
 
         merged: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
         merged.update(handler_result)
+        # Carried after update so a handler that sets its own artifacts wins on
+        # conflict but does not erase what the pre-capture already recorded.
+        _carry_capture_evidence(merged, step_result)
         if watcher_events:
             merged["app_popup_watchers"] = watcher_events
         if deadline_event is not None:
@@ -215,7 +300,7 @@ def execute_step_with_retry(
             deadline_event.cancel()
             if timed_out:
                 merged["ok"] = False
-                merged["reason_code"] = "stuck_screen"
+                merged["reason_code"] = STUCK_SCREEN
                 merged["timed_out"] = True
                 merged["recovery_timeout_ms"] = deadline_ms
                 merged["message"] = f"{t}: recovery timeout after {deadline_ms}ms"
@@ -230,7 +315,7 @@ def execute_step_with_retry(
         except StaleFrameError as sfe:
             stale_raised = True
             merged["ok"] = False
-            merged["reason_code"] = "stale_frame"
+            merged["reason_code"] = STALE_FRAME
             merged["retryable"] = True
             merged["message"] = f"{t}: {sfe}"
             log.warning(f"[{sc.serial}] step#{idx + 1}: {sfe}")
@@ -289,7 +374,9 @@ def execute_step_with_retry(
                         step_index=idx + 1,
                         step_type=t,
                     )
-                    step_result = {"index": idx, "type": t, "ok": True}
+                    step_result = _carry_capture_evidence(
+                        {"index": idx, "type": t, "ok": True}, merged
+                    )
                     force_recovery_retry = True
                     capture_pre_step(sc, step, idx, step_result, attempt_index=attempt + 1)
                     step_start_t = time.monotonic()
@@ -344,7 +431,9 @@ def execute_step_with_retry(
                     break
             else:
                 time.sleep(wait_s)
-            step_result = {"index": idx, "type": t, "ok": True}
+            step_result = _carry_capture_evidence(
+                {"index": idx, "type": t, "ok": True}, merged
+            )
             capture_pre_step(sc, step, idx, step_result, attempt_index=attempt + 1)
             step_start_t = time.monotonic()
             continue
@@ -383,6 +472,7 @@ def execute_step_with_retry(
             step_result["recovery_events"] = current_events
         if not step_result.get("ok", True):
             capture_fail_step(sc, step, idx, step_result, attempt_index=attempt)
+            _attach_ledger_evidence(sc, step_result)
         if attempt_records:
             step_result["retry_attempts"] = attempt_records
         break

@@ -45,6 +45,25 @@ def capture_active(sc: "ScenarioContext") -> bool:
     return bool(exec_id)
 
 
+def absolute_step_index(sc: "ScenarioContext", step_idx: int) -> int:
+    """Map a scenario-local step index onto its position in the real run.
+
+    The Temporal path wraps each step in its own 1-step mini-scenario, so
+    ``step_idx`` is always 0 there. Everything keyed on the step index — the
+    screenshot cache, the object key, the step number shown in the UI — collided
+    across the whole run until the offset was carried through.
+    """
+    scenario = getattr(sc, "scenario", None)
+    if not isinstance(scenario, dict):
+        return step_idx
+    offset = scenario.get("_step_index_offset")
+    # Checked rather than coerced: int() on a MagicMock quietly returns 1, which
+    # would shift every index in tests that stub the scenario context.
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        return step_idx
+    return step_idx + offset
+
+
 def _paths(sc: "ScenarioContext", step_idx: int, tag: str) -> tuple[str, str, str]:
     prefix = f"step_{step_idx:03d}_{tag}"
     capture_dir = sc.capture_dir or ""
@@ -111,13 +130,14 @@ def build_step_capture_payload(
     from services.content.extraction.scenario_bridge import execution_capture_ctx
 
     capture = _get_capture_service()
-    prefix, capture_dir, minio_prefix = _paths(sc, step_idx, tag)
+    abs_idx = absolute_step_index(sc, step_idx)
+    prefix, capture_dir, minio_prefix = _paths(sc, abs_idx, tag)
 
     screenshot_kind = _artifact_kind("screenshot", tag)
-    screenshot_ctx = execution_capture_ctx(sc, step_idx, screenshot_kind)
+    screenshot_ctx = execution_capture_ctx(sc, abs_idx, screenshot_kind)
     capture_xml = _step_capture_xml_enabled()
     hierarchy_ctx = (
-        execution_capture_ctx(sc, step_idx, _artifact_kind("hierarchy", tag))
+        execution_capture_ctx(sc, abs_idx, _artifact_kind("hierarchy", tag))
         if capture_xml
         else None
     )
@@ -147,9 +167,15 @@ def build_step_capture_payload(
     result: dict[str, Any] = {
         "full": full_url,
         "content_hash": screenshot_handle.sha256,
+        "step_index": abs_idx,
     }
     if screenshot_handle.artifact_id:
         result["screenshot_artifact_id"] = screenshot_handle.artifact_id
+    # Carry the object key, not just the URL. `full_url` is a presigned GET that
+    # expires while the row it gets written into does not, so an execution opened
+    # an hour later rendered broken images. The read path re-signs from this.
+    if screenshot_handle.object_key:
+        result["screenshot_object_key"] = screenshot_handle.object_key
 
     if capture_xml:
         try:
@@ -172,6 +198,8 @@ def build_step_capture_payload(
                     result["hierarchy"] = xml_url
                 if hier_handle.artifact_id:
                     result["hierarchy_artifact_id"] = hier_handle.artifact_id
+                if hier_handle.object_key:
+                    result["hierarchy_object_key"] = hier_handle.object_key
         except Exception as exc:
             log.debug("hierarchy capture skipped for %s: %s", tag, exc)
 

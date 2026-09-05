@@ -236,12 +236,13 @@ def test_rejects_region_without_real_selector_signal():
         validate_app_automation_profile(raw)
 
 
-def test_rejects_ocr_near_until_ocr_runtime_exists():
+def test_accepts_ocr_near_locator_candidate():
     raw = _minimal_profile()
     raw["semantic_locators"]["future_ocr"] = {"candidates": [{"ocr_near": "Login"}]}
 
-    with pytest.raises(ValidationError, match="reserved for future OCR support"):
-        validate_app_automation_profile(raw)
+    profile = validate_app_automation_profile(raw)
+
+    assert profile.semantic_locators["future_ocr"].candidates[0].ocr_near == "Login"
 
 
 def test_rejects_duplicate_watcher_names():

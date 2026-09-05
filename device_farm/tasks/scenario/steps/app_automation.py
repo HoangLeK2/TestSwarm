@@ -116,6 +116,33 @@ def _resolution_trace(resolution: LocatorResolution) -> Dict[str, Any]:
     }
 
 
+def _locator_uses_ocr(profile: AppAutomationProfile, locator_name: str) -> bool:
+    locator = profile.semantic_locators.get(locator_name)
+    if locator is None:
+        return False
+    return any(bool(candidate.ocr_near) for candidate in locator.candidates)
+
+
+def _ocr_results_for_locator(sc: ScenarioContext) -> list[dict[str, Any]]:
+    device = sc.device
+    if not getattr(device, "ocr_supported", None) or not device.ocr_supported():
+        return []
+    request_ocr = getattr(device, "request_ocr", None)
+    if request_ocr is None:
+        return []
+    reply = request_ocr(
+        languages=["vi", "en"],
+        min_confidence=0.5,
+        want_image_on_empty=False,
+        timeout=10.0,
+        cancel_event=sc.cancel_event,
+    )
+    if not isinstance(reply, dict) or not reply.get("ok"):
+        return []
+    results = reply.get("results") or []
+    return results if isinstance(results, list) else []
+
+
 def _resolve_named_locator(
     sc: ScenarioContext,
     profile: AppAutomationProfile,
@@ -123,12 +150,18 @@ def _resolve_named_locator(
     xml: str,
     snapshot: Any,
 ) -> LocatorResolution:
+    ocr_results = (
+        _ocr_results_for_locator(sc)
+        if _locator_uses_ocr(profile, locator_name)
+        else None
+    )
     return resolve_semantic_locator(
         profile,
         locator_name,
         xml,
         screen=(sc.w, sc.h),
         snapshot=snapshot,
+        ocr_results=ocr_results,
     )
 
 

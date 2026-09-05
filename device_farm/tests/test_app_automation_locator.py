@@ -128,6 +128,64 @@ def test_ambiguous_duplicate_exact_match_fails_closed():
     assert result.candidate_count == 2
 
 
+def test_ocr_near_resolves_ocr_text_bounds():
+    profile = _profile({
+        "ocr_login": {
+            "candidates": [{"ocr_near": "Log in"}],
+        }
+    })
+
+    result = resolve_semantic_locator(
+        profile,
+        "ocr_login",
+        _XML,
+        screen=(1080, 1920),
+        ocr_results=[
+            {"text": "Log in", "bbox": {"x": 420, "y": 812, "w": 110, "h": 42}},
+        ],
+    )
+
+    assert result.matched is True
+    assert result.fallback_level == "ocr_near"
+    assert result.selector is None
+    assert result.bounds == {"left": 420, "top": 812, "right": 530, "bottom": 854}
+
+
+def test_ocr_near_can_target_nearest_hierarchy_class():
+    xml = """
+    <hierarchy>
+      <node text="" resource-id="" class="android.widget.EditText" bounds="[260,90][900,170]" />
+      <node text="" resource-id="com.example:id/password" class="android.widget.EditText" bounds="[260,210][900,290]" />
+    </hierarchy>
+    """
+    profile = _profile({
+        "ocr_password": {
+            "allow_ambiguous": True,
+            "candidates": [
+                {
+                    "ocr_near": "Password",
+                    "target_class": "android.widget.EditText",
+                    "allow_coordinate_fallback": True,
+                }
+            ],
+        }
+    })
+
+    result = resolve_semantic_locator(
+        profile,
+        "ocr_password",
+        xml,
+        screen=(1080, 1920),
+        ocr_results=[
+            {"text": "Password", "bbox": {"x": 40, "y": 220, "w": 140, "h": 50}},
+        ],
+    )
+
+    assert result.matched is True
+    assert result.fallback_level == "ocr_near"
+    assert result.bounds == {"left": 260, "top": 210, "right": 900, "bottom": 290}
+
+
 def test_class_name_filters_combined_direct_candidate():
     xml = """
     <hierarchy>

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -529,7 +531,7 @@ async def test_create_session_redacts_credentials_from_stream_source(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_session_answer_uses_backend_go2rtc_signaling_when_session_is_known(monkeypatch):
+async def test_session_answer_uses_backend_go2rtc_signaling_when_session_is_known(monkeypatch, caplog):
     requests: list[dict] = []
 
     class _Servicer:
@@ -562,6 +564,7 @@ async def test_session_answer_uses_backend_go2rtc_signaling_when_session_is_know
     monkeypatch.setenv("MEDIA_ADAPTER_CONTROL_PLANE", "grpc")
     monkeypatch.setenv("MEDIA_WEBRTC_SIGNALING_PLANE", "backend")
     monkeypatch.setenv("DEVICE_FARM_GO2RTC_URL", "http://go2rtc:1984")
+    monkeypatch.setenv("DEVICE_FARM_GO2RTC_SLOW_ANSWER_MS", "0.1")
     monkeypatch.setattr(
         "runtime.transports.media_adapter_control_servicer.get_media_adapter_servicer",
         lambda: _Servicer(),
@@ -570,11 +573,12 @@ async def test_session_answer_uses_backend_go2rtc_signaling_when_session_is_know
     app = FastAPI()
     app.include_router(build_media_webrtc_router(_Manager(), _config(), db_enabled=False))
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/media/webrtc/sessions/session-1/answer",
-            json={"type": "offer", "sdp": "v=0 offer"},
-        )
+    with caplog.at_level(logging.WARNING, logger="api.routes.media_webrtc"):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/media/webrtc/sessions/session-1/answer",
+                json={"type": "offer", "sdp": "v=0 offer"},
+            )
 
     assert response.status_code == 200
     assert response.json() == {"type": "answer", "sdp": "v=0 go2rtc-answer"}
@@ -585,6 +589,8 @@ async def test_session_answer_uses_backend_go2rtc_signaling_when_session_is_know
             "json": {"type": "offer", "sdp": "v=0 offer"},
         }
     ]
+    assert "go2rtc WebRTC answer stream=device-SERIAL-1" in caplog.text
+    assert "v=0 offer" not in caplog.text
 
 
 @pytest.mark.anyio

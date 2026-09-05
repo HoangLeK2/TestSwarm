@@ -5,10 +5,11 @@
 #   ./scripts/package-docker-release-windows.sh
 #   ./scripts/package-docker-release-windows.sh 0.1.4
 #   REUSE_IMAGE=1 ./scripts/package-docker-release-windows.sh   # explicitly reuse existing amd64 tar
+#   KEEP_IMAGE_TAR=0 ./scripts/package-docker-release-windows.sh # keep only the Windows zip in dist
 #
 # Output:
 #   dist/agent-boot-docker-windows-<version>.zip
-#   dist/agent-boot-image-<version>-amd64.tar.gz   (reused / built)
+#   dist/agent-boot-image-<version>-amd64.tar.gz   (reused / built unless KEEP_IMAGE_TAR=0)
 
 set -euo pipefail
 
@@ -129,6 +130,8 @@ REQUIRED_CUSTOMER_ENV_KEYS=(
   MEDIA_ADAPTER_REMOTE_RTSP_QUEUE
   MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS
   MEDIA_ADAPTER_INPUT_FPS
+  MEDIA_ADAPTER_IDR_MIN_INTERVAL_MS
+  MEDIA_ADAPTER_LANE_IDLE_S
   MEDIA_ADAPTER_OWNS_SCRCPY
   SCRCPY_DEFAULT_MAX_FPS
   SCRCPY_DEFAULT_MAX_WIDTH
@@ -173,7 +176,13 @@ rm -f "$ZIP"
 (cd "$STAGING" && zip -rq "$ZIP" "$NAME")
 
 echo "Created: $ZIP"
-ls -lh "$ZIP" "$IMAGE_AMD64"
+if [[ "${KEEP_IMAGE_TAR:-1}" == "0" ]]; then
+  rm -f "$IMAGE_AMD64"
+  ls -lh "$ZIP"
+  echo "Removed standalone image tar because KEEP_IMAGE_TAR=0: $IMAGE_AMD64"
+else
+  ls -lh "$ZIP" "$IMAGE_AMD64"
+fi
 echo ""
 echo "Windows bundle (amd64 only). Ship:"
 echo "  $(basename "$ZIP")"

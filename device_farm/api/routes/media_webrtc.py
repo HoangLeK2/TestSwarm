@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +17,7 @@ from api.deps import caller_auth_from_request
 from core.config import Config
 from runtime.core import DeviceManager
 
+log = logging.getLogger(__name__)
 MEDIA_ADAPTER_TIMEOUT = httpx.Timeout(1.2, connect=0.25)
 MEDIA_ADAPTER_CLIENT_LIMITS = httpx.Limits(
     max_connections=512,
@@ -143,6 +146,7 @@ def build_media_webrtc_router(
         base = _go2rtc_base()
         if not base:
             raise HTTPException(status_code=503, detail="go2rtc URL is not configured")
+        started = time.perf_counter()
         try:
             response = await _go2rtc_http().post(
                 f"{base}/api/webrtc",
@@ -150,13 +154,16 @@ def build_media_webrtc_router(
                 json=offer,
             )
         except httpx.TimeoutException as exc:
+            _log_go2rtc_answer(stream_name, status_code=None, elapsed_ms=_elapsed_ms(started), error="timeout")
             raise HTTPException(
                 status_code=425,
                 detail="go2rtc media source is not ready",
                 headers={"Retry-After": "0.20"},
             ) from exc
         except httpx.RequestError as exc:
+            _log_go2rtc_answer(stream_name, status_code=None, elapsed_ms=_elapsed_ms(started), error=type(exc).__name__)
             raise HTTPException(status_code=502, detail=f"go2rtc unavailable: {exc}") from exc
+        elapsed_ms = _elapsed_ms(started)
         if response.status_code >= 400:
             # 500 is retryable here, not a hard failure. The stream is declared
             # before the adapter is told to start publishing, so between those
@@ -165,11 +172,18 @@ def build_media_webrtc_router(
             # viewer whose offer lands in that window must retry, not give up —
             # mapping it to 502 turned a normal startup race into a dead player.
             retryable = response.status_code in {404, 408, 425, 500, 502, 503}
+            _log_go2rtc_answer(
+                stream_name,
+                status_code=response.status_code,
+                elapsed_ms=elapsed_ms,
+                error="retryable" if retryable else "rejected",
+            )
             raise HTTPException(
                 status_code=425 if retryable else 502,
                 detail=f"go2rtc rejected WebRTC request: {response.status_code} {response.text.strip()}".strip(),
                 headers={"Retry-After": "0.20"},
             )
+        _log_go2rtc_answer(stream_name, status_code=response.status_code, elapsed_ms=elapsed_ms)
         try:
             data = response.json()
         except ValueError:
@@ -407,6 +421,28 @@ def _go2rtc_signaling_timeout() -> httpx.Timeout:
         GO2RTC_CONNECT_TIMEOUT_SECONDS,
     )
     return httpx.Timeout(total, connect=min(connect, total))
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
+def _log_go2rtc_answer(
+    stream_name: str,
+    *,
+    status_code: int | None,
+    elapsed_ms: int,
+    error: str | None = None,
+) -> None:
+    slow_ms = int(_positive_float_env("DEVICE_FARM_GO2RTC_SLOW_ANSWER_MS", 1500))
+    if error or elapsed_ms >= slow_ms:
+        log.warning(
+            "go2rtc WebRTC answer stream=%s status=%s elapsed_ms=%d error=%s",
+            stream_name,
+            status_code,
+            elapsed_ms,
+            error or "",
+        )
 
 
 _UNSAFE_STREAM_NAME = re.compile(r"[^A-Za-z0-9_.-]+")

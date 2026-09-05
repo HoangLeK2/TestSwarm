@@ -30,6 +30,7 @@ specs are kept under `docs/archive/` for context only.
 | Content, extraction, artifacts | `docs/modules/content-extraction-artifacts.md` | `device_farm/api/routes/content.py`, `device_farm/api/routes/extraction.py`, `device_farm/tasks/scenario/steps/extraction.py` |
 | Accounts and groups | `docs/modules/accounts-groups.md` | `device_farm/api/routes/accounts.py`, `device_farm/api/routes/account_groups.py`, `device_farm/services/account_manager.py` |
 | Notifications and analytics | `docs/modules/notifications-analytics.md` | `device_farm/api/routes/notifications.py`, `device_farm/api/routes/analytics.py`, `device_farm/services/notification_service.py` |
+| Social node contract | `docs/modules/social-node-contract.md` | `device_farm/services/social_actions/*`, `device_farm/tasks/scenario/steps/social_actions.py`, `device_farm/services/scenario_dsl/step_tree.py` |
 | Agent boot and relay | `docs/modules/agent-boot-relay.md` | `agent-boot/*`, `agent-boot/relay/*`, `device_farm/runtime/transports/*` |
 | MCP agent tools | `docs/modules/mcp-agent-tools.md` | `device_farm/mcp/*`, `device_farm/api/routes/device_control/*` |
 | Frontend | `docs/modules/frontend.md` | `front-end/src/features/*`, `front-end/src/app/api/*`, `front-end/generate/openapi.json` |

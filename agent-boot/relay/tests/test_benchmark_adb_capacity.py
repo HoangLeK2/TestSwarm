@@ -35,6 +35,207 @@ def test_adb_server_flags_prefer_socket_host_port() -> None:
     assert flags == ["-H", "host.docker.internal", "-P", "5038"]
 
 
+def test_extract_adb_invocation_removes_binary_server_flags_and_serial() -> None:
+    serial, argv = bench._extract_adb_invocation(
+        [
+            "adb",
+            "-H",
+            "host.docker.internal",
+            "-P",
+            "5038",
+            "-s",
+            "SERIAL1",
+            "shell",
+            "true",
+        ],
+        adb_bin="adb",
+        server_flags=["-H", "host.docker.internal", "-P", "5038"],
+    )
+
+    assert serial == "SERIAL1"
+    assert argv == ("shell", "true")
+
+
+def test_adbutils_transport_runner_adapts_to_completed_process(monkeypatch) -> None:
+    calls: list[tuple[tuple[str, ...], str | None, float]] = []
+
+    class FakeTransport:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def run(
+            self,
+            argv: Sequence[str],
+            *,
+            serial: str | None,
+            timeout: float,
+        ):
+            calls.append((tuple(argv), serial, timeout))
+            return bench.AdbRunResult("ok\n", 0, transport="adbutils")
+
+    monkeypatch.setattr(bench, "AdbutilsTransport", FakeTransport)
+
+    runner = bench._transport_runner(
+        transport="adbutils",
+        adb_bin="adb",
+        server_flags=[],
+    )
+    result = runner(["adb", "-s", "SERIAL1", "shell", "true"], 1.5)
+
+    assert result.returncode == 0
+    assert result.stdout == b"ok\n"
+    assert calls == [(("shell", "true"), "SERIAL1", 1.5)]
+
+
+def test_hybrid_transport_runner_falls_back_to_binary_for_unsupported(
+    monkeypatch,
+) -> None:
+    binary_calls: list[list[str]] = []
+
+    class FakeTransport:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def run(
+            self,
+            argv: Sequence[str],
+            *,
+            serial: str | None,
+            timeout: float,
+        ):
+            return bench.AdbRunResult(
+                "unsupported",
+                -2,
+                transport="adbutils",
+                supported=False,
+            )
+
+    def fake_binary_runner(
+        cmd: Sequence[str],
+        _timeout_s: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        binary_calls.append(list(cmd))
+        return _completed(stdout=b"binary-ok\n")
+
+    monkeypatch.setattr(bench, "AdbutilsTransport", FakeTransport)
+    monkeypatch.setattr(bench, "_subprocess_runner", fake_binary_runner)
+
+    runner = bench._transport_runner(
+        transport="hybrid",
+        adb_bin="adb",
+        server_flags=[],
+    )
+    result = runner(["adb", "-s", "SERIAL1", "install", "-r", "app.apk"], 1.0)
+
+    assert result.returncode == 0
+    assert result.stdout == b"binary-ok\n"
+    assert binary_calls == [["adb", "-s", "SERIAL1", "install", "-r", "app.apk"]]
+
+
+def test_mock_binary_profile_pays_spawn_cost_for_every_command(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(bench.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    runner = bench._mock_runner_factory(
+        delay_ms=1.0,
+        transport="binary",
+        binary_spawn_ms=9.0,
+        adbutils_connect_ms=100.0,
+        adbutils_call_ms=100.0,
+    )
+
+    runner(["adb", "-s", "SERIAL1", "shell", "true"], 1.0)
+    runner(["adb", "-s", "SERIAL1", "shell", "true"], 1.0)
+
+    assert sleeps == [0.010, 0.010]
+
+
+def test_mock_adbutils_profile_reuses_connection_per_serial(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(bench.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    runner = bench._mock_runner_factory(
+        delay_ms=1.0,
+        transport="adbutils",
+        binary_spawn_ms=100.0,
+        adbutils_connect_ms=9.0,
+        adbutils_call_ms=2.0,
+    )
+
+    runner(["adb", "-s", "SERIAL1", "shell", "true"], 1.0)
+    runner(["adb", "-s", "SERIAL1", "shell", "true"], 1.0)
+    runner(["adb", "-s", "SERIAL2", "shell", "true"], 1.0)
+
+    assert sleeps == [0.012, 0.003, 0.012]
+
+
+def test_mock_runner_can_inject_offline_failures() -> None:
+    runner = bench._mock_runner_factory(
+        delay_ms=0,
+        transport="adbutils",
+        offline_every=2,
+    )
+
+    ok = runner(["adb", "-s", "MOCK0001", "shell", "true"], 1.0)
+    offline = runner(["adb", "-s", "MOCK0002", "shell", "true"], 1.0)
+
+    assert ok.returncode == 0
+    assert offline.returncode == 1
+    assert offline.stderr == b"error: device offline\n"
+
+
+def test_fake_adb_subprocess_runner_executes_adb_shim() -> None:
+    adb_bin, runner, tmpdir = bench._fake_adb_subprocess_runner_factory(
+        serials=["MOCK0001"],
+        delay_ms=0,
+        offline_every=0,
+        fail_every=0,
+        timeout_every=0,
+        timeout_sleep_ms=10_000,
+    )
+    try:
+        result = runner([adb_bin, "-s", "MOCK0001", "shell", "true"], 1.0)
+    finally:
+        tmpdir.cleanup()
+
+    assert result.returncode == 0
+    assert result.stdout == b"ok\n"
+
+
+def test_fake_adb_subprocess_runner_can_inject_device_offline() -> None:
+    adb_bin, runner, tmpdir = bench._fake_adb_subprocess_runner_factory(
+        serials=["MOCK0002"],
+        delay_ms=0,
+        offline_every=2,
+        fail_every=0,
+        timeout_every=0,
+        timeout_sleep_ms=10_000,
+    )
+    try:
+        result = runner([adb_bin, "-s", "MOCK0002", "shell", "true"], 1.0)
+    finally:
+        tmpdir.cleanup()
+
+    assert result.returncode == 1
+    assert result.stderr == b"error: device offline\n"
+
+
+def test_fake_adb_subprocess_runner_can_timeout() -> None:
+    adb_bin, runner, tmpdir = bench._fake_adb_subprocess_runner_factory(
+        serials=["MOCK0003"],
+        delay_ms=0,
+        offline_every=0,
+        fail_every=0,
+        timeout_every=3,
+        timeout_sleep_ms=100,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            runner([adb_bin, "-s", "MOCK0003", "shell", "true"], 0.01)
+    finally:
+        tmpdir.cleanup()
+
+
 def test_parse_devices_filters_offline_and_dedupes_usb_preferred() -> None:
     output = """
 List of devices attached

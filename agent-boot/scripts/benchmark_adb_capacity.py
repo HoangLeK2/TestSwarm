@@ -11,8 +11,10 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
@@ -21,6 +23,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import threading
 
+_AGENT_BOOT_ROOT = Path(__file__).resolve().parents[1]
+if str(_AGENT_BOOT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_BOOT_ROOT))
+
+from relay.adb_scheduler import AdbRunResult, AdbutilsTransport
 
 DEFAULT_LEVELS = (1, 2, 4, 8, 12, 16, 24, 32, 48, 64)
 
@@ -130,19 +137,167 @@ def _subprocess_runner(
     )
 
 
-def _mock_runner_factory(*, delay_ms: float = 1.0) -> Runner:
+def _server_specs_from_flags(server_flags: Sequence[str]) -> list[tuple[str, str]]:
+    flags = list(server_flags)
+    try:
+        host = flags[flags.index("-H") + 1]
+        port = flags[flags.index("-P") + 1]
+    except (ValueError, IndexError):
+        return []
+    if host and port.isdigit():
+        return [(host, port)]
+    return []
+
+
+def _extract_adb_invocation(
+    cmd: Sequence[str],
+    *,
+    adb_bin: str,
+    server_flags: Sequence[str],
+) -> tuple[str | None, tuple[str, ...]]:
+    remaining = list(cmd)
+    if remaining and remaining[0] == adb_bin:
+        remaining = remaining[1:]
+    flags = list(server_flags)
+    if flags and remaining[: len(flags)] == flags:
+        remaining = remaining[len(flags):]
+    serial: str | None = None
+    if len(remaining) >= 2 and remaining[0] == "-s":
+        serial = remaining[1]
+        remaining = remaining[2:]
+    return serial, tuple(remaining)
+
+
+def _completed_from_adb_result(
+    result: AdbRunResult,
+) -> subprocess.CompletedProcess[bytes]:
+    payload = result.output.encode("utf-8", errors="replace")
+    if result.returncode == 0:
+        return subprocess.CompletedProcess(
+            args=[result.transport],
+            returncode=0,
+            stdout=payload,
+            stderr=b"",
+        )
+    return subprocess.CompletedProcess(
+        args=[result.transport],
+        returncode=result.returncode,
+        stdout=b"",
+        stderr=payload,
+    )
+
+
+def _transport_runner(
+    *,
+    transport: str,
+    adb_bin: str,
+    server_flags: Sequence[str],
+) -> Runner:
+    mode = transport.strip().lower()
+    if mode == "binary":
+        return _subprocess_runner
+    adbutils_transport = AdbutilsTransport(
+        server_specs_provider=lambda: _server_specs_from_flags(server_flags),
+    )
+
+    def _runner(
+        cmd: Sequence[str],
+        timeout_s: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        serial, argv = _extract_adb_invocation(
+            cmd,
+            adb_bin=adb_bin,
+            server_flags=server_flags,
+        )
+        result = adbutils_transport.run(argv, serial=serial, timeout=timeout_s)
+        if mode == "hybrid" and not result.supported:
+            return _subprocess_runner(cmd, timeout_s)
+        return _completed_from_adb_result(result)
+
+    return _runner
+
+
+def _serial_from_adb_command(cmd: Sequence[str]) -> str | None:
+    parts = list(cmd)
+    try:
+        index = parts.index("-s")
+    except ValueError:
+        return None
+    if index + 1 >= len(parts):
+        return None
+    return parts[index + 1]
+
+
+def _mock_serial_index(serial: str | None) -> int:
+    if not serial:
+        return 0
+    match = re.search(r"(\d+)$", serial)
+    return int(match.group(1)) if match else 0
+
+
+def _mock_serial_matches_every(serial: str | None, every: int) -> bool:
+    if every <= 0:
+        return False
+    index = _mock_serial_index(serial)
+    return index > 0 and index % every == 0
+
+
+def _mock_runner_factory(
+    *,
+    delay_ms: float = 1.0,
+    transport: str = "binary",
+    binary_spawn_ms: float = 8.0,
+    adbutils_connect_ms: float = 5.0,
+    adbutils_call_ms: float = 0.5,
+    offline_every: int = 0,
+    fail_every: int = 0,
+    timeout_every: int = 0,
+    timeout_sleep_ms: float = 10_000.0,
+) -> Runner:
     next_port = 43000
     lock = threading.Lock()
+    connected_serials: set[str] = set()
+    mode = transport.strip().lower()
 
     def _runner(
         cmd: Sequence[str],
         timeout_s: float,
     ) -> subprocess.CompletedProcess[bytes]:
         nonlocal next_port
-        if delay_ms > 0:
-            time.sleep(delay_ms / 1_000)
+        serial = _serial_from_adb_command(cmd)
+        simulated_delay_ms = max(0.0, delay_ms)
+        if mode == "binary":
+            simulated_delay_ms += max(0.0, binary_spawn_ms)
+        elif mode in {"adbutils", "hybrid"}:
+            if serial:
+                with lock:
+                    first_serial_use = serial not in connected_serials
+                    connected_serials.add(serial)
+                if first_serial_use:
+                    simulated_delay_ms += max(0.0, adbutils_connect_ms)
+            simulated_delay_ms += max(0.0, adbutils_call_ms)
+        if _mock_serial_matches_every(serial, timeout_every):
+            simulated_delay_ms += max(0.0, timeout_sleep_ms)
+        if simulated_delay_ms > timeout_s * 1_000:
+            raise subprocess.TimeoutExpired(list(cmd), timeout_s)
+        if simulated_delay_ms > 0:
+            time.sleep(simulated_delay_ms / 1_000)
         if timeout_s <= 0:
             raise subprocess.TimeoutExpired(list(cmd), timeout_s)
+        if _mock_serial_matches_every(serial, offline_every):
+            return subprocess.CompletedProcess(
+                args=list(cmd),
+                returncode=1,
+                stdout=b"",
+                stderr=b"error: device offline\n",
+            )
+        if _mock_serial_matches_every(serial, fail_every):
+            return subprocess.CompletedProcess(
+                args=list(cmd),
+                returncode=1,
+                stdout=b"",
+                stderr=b"error: synthetic adb failure\n",
+            )
         if "forward" in cmd and "tcp:0" in cmd:
             with lock:
                 next_port += 1
@@ -161,6 +316,167 @@ def _mock_runner_factory(*, delay_ms: float = 1.0) -> Runner:
         )
 
     return _runner
+
+
+def _fake_adb_script_text() -> str:
+    return """#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import re
+import sys
+import time
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def _serial_index(serial: str | None) -> int:
+    if not serial:
+        return 0
+    match = re.search(r"(\\d+)$", serial)
+    return int(match.group(1)) if match else 0
+
+
+def _adb_args(argv: list[str]) -> tuple[str | None, list[str]]:
+    serial = None
+    rest: list[str] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item in {"-H", "-P"} and index + 1 < len(argv):
+            index += 2
+            continue
+        if item == "-s" and index + 1 < len(argv):
+            serial = argv[index + 1]
+            index += 2
+            continue
+        rest = argv[index:]
+        break
+    return serial, rest
+
+
+def _is_faulty(serial: str | None, every: int) -> bool:
+    if every <= 0:
+        return False
+    index = _serial_index(serial)
+    return index > 0 and index % every == 0
+
+
+def main() -> int:
+    serial, args = _adb_args(sys.argv[1:])
+    delay_ms = _env_float("FAKE_ADB_DELAY_MS", 0.0)
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000)
+
+    if args and args[0] == "devices":
+        serials = [
+            item for item in os.environ.get("FAKE_ADB_SERIALS", "").split(",")
+            if item
+        ]
+        offline_every = _env_int("FAKE_ADB_OFFLINE_EVERY", 0)
+        extended = "-l" in args
+        print("List of devices attached")
+        for item in serials:
+            state = "offline" if _is_faulty(item, offline_every) else "device"
+            detail = " product:fake model:FakePhone device:fake" if extended else ""
+            print(f"{item}\\t{state}{detail}")
+        return 0
+
+    timeout_every = _env_int("FAKE_ADB_TIMEOUT_EVERY", 0)
+    if _is_faulty(serial, timeout_every):
+        sleep_ms = _env_float("FAKE_ADB_TIMEOUT_SLEEP_MS", 10_000.0)
+        time.sleep(sleep_ms / 1000)
+
+    if _is_faulty(serial, _env_int("FAKE_ADB_OFFLINE_EVERY", 0)):
+        print("error: device offline", file=sys.stderr)
+        return 1
+    if _is_faulty(serial, _env_int("FAKE_ADB_FAIL_EVERY", 0)):
+        print("error: synthetic adb failure", file=sys.stderr)
+        return 1
+
+    if not args:
+        print("Android Debug Bridge version fake")
+        return 0
+
+    command = args[0]
+    if command == "forward" and len(args) >= 3 and args[1] == "tcp:0":
+        port = 43000 + (_serial_index(serial) % 10000)
+        print(port)
+        return 0
+    if command == "forward" and len(args) >= 2 and args[1] == "--list":
+        port = 43000 + (_serial_index(serial) % 10000)
+        if serial:
+            print(f"{serial} tcp:{port} tcp:7912")
+        return 0
+    if command == "forward" and len(args) >= 2 and args[1] == "--remove":
+        return 0
+    if command == "shell":
+        print("ok")
+        return 0
+    if command in {"connect", "disconnect"}:
+        target = args[1] if len(args) > 1 else ""
+        print(f"{command}ed {target}".strip())
+        return 0
+    print("ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
+def _fake_adb_subprocess_runner_factory(
+    *,
+    serials: Sequence[str],
+    delay_ms: float,
+    offline_every: int,
+    fail_every: int,
+    timeout_every: int,
+    timeout_sleep_ms: float,
+) -> tuple[str, Runner, tempfile.TemporaryDirectory[str]]:
+    tmpdir = tempfile.TemporaryDirectory(prefix="df-fake-adb-")
+    adb_path = Path(tmpdir.name) / "adb"
+    adb_path.write_text(_fake_adb_script_text(), encoding="utf-8")
+    adb_path.chmod(0o755)
+    fake_env = {
+        "FAKE_ADB_SERIALS": ",".join(serials),
+        "FAKE_ADB_DELAY_MS": f"{max(0.0, delay_ms)}",
+        "FAKE_ADB_OFFLINE_EVERY": f"{max(0, offline_every)}",
+        "FAKE_ADB_FAIL_EVERY": f"{max(0, fail_every)}",
+        "FAKE_ADB_TIMEOUT_EVERY": f"{max(0, timeout_every)}",
+        "FAKE_ADB_TIMEOUT_SLEEP_MS": f"{max(0.0, timeout_sleep_ms)}",
+    }
+
+    def _runner(
+        cmd: Sequence[str],
+        timeout_s: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        env = os.environ.copy()
+        env.update(fake_env)
+        env.pop("MallocStackLogging", None)
+        env.pop("MallocStackLoggingDirectory", None)
+        return subprocess.run(
+            list(cmd),
+            capture_output=True,
+            check=False,
+            timeout=timeout_s,
+            env=env,
+        )
+
+    return str(adb_path), _runner, tmpdir
 
 
 def parse_adb_devices(output: str, *, include_offline: bool = False) -> list[Device]:
@@ -721,6 +1037,8 @@ def _result_payload(
     *,
     adb_bin: str,
     server_flags: Sequence[str],
+    transport: str,
+    mock_profile: Mapping[str, object] | None,
     workload: str,
     devices: Sequence[Device],
     results: Sequence[LevelResult],
@@ -733,6 +1051,8 @@ def _result_payload(
         "kind": "adb_capacity_benchmark",
         "adb_bin": adb_bin,
         "server_flags": list(server_flags),
+        "transport": transport,
+        "mock_profile": dict(mock_profile or {}),
         "workload": workload,
         "device_count": len(devices),
         "devices": [asdict(device) for device in devices],
@@ -753,6 +1073,15 @@ def main() -> int:
         )
     )
     parser.add_argument("--adb-bin", default=os.getenv("ADB_BIN", "adb"))
+    parser.add_argument(
+        "--transport",
+        choices=("binary", "adbutils", "hybrid"),
+        default=os.getenv("AGENT_BOOT_ADB_TRANSPORT", "binary"),
+        help=(
+            "ADB transport under test. hybrid uses adbutils when supported and "
+            "falls back to the adb binary."
+        ),
+    )
     parser.add_argument(
         "--serial",
         action="append",
@@ -798,10 +1127,61 @@ def main() -> int:
         help="run with N synthetic serials instead of calling adb devices",
     )
     parser.add_argument(
+        "--mock-engine",
+        choices=("direct", "fake-adb"),
+        default="direct",
+        help=(
+            "direct uses an in-process latency model; fake-adb creates a "
+            "temporary adb executable and runs it through subprocess."
+        ),
+    )
+    parser.add_argument(
         "--mock-delay-ms",
         type=float,
         default=1.0,
-        help="per-adb-call delay for --mock-devices",
+        help="base device/service delay per logical command for --mock-devices",
+    )
+    parser.add_argument(
+        "--mock-binary-spawn-ms",
+        type=float,
+        default=8.0,
+        help="extra fork/exec cost per command when --mock-devices uses binary",
+    )
+    parser.add_argument(
+        "--mock-adbutils-connect-ms",
+        type=float,
+        default=5.0,
+        help="one-time connection cost per serial when --mock-devices uses adbutils",
+    )
+    parser.add_argument(
+        "--mock-adbutils-call-ms",
+        type=float,
+        default=0.5,
+        help="extra per-command ADB-server protocol cost for mock adbutils",
+    )
+    parser.add_argument(
+        "--mock-offline-every",
+        type=int,
+        default=0,
+        help="fake-adb: every Nth mock serial returns device offline",
+    )
+    parser.add_argument(
+        "--mock-fail-every",
+        type=int,
+        default=0,
+        help="fake-adb: every Nth mock serial returns a generic adb failure",
+    )
+    parser.add_argument(
+        "--mock-timeout-every",
+        type=int,
+        default=0,
+        help="fake-adb: every Nth mock serial sleeps past the caller timeout",
+    )
+    parser.add_argument(
+        "--mock-timeout-sleep-ms",
+        type=float,
+        default=10_000.0,
+        help="fake-adb sleep duration for --mock-timeout-every",
     )
     parser.add_argument("--max-p95-ms", type=int, default=300)
     parser.add_argument("--max-failure-rate", type=float, default=0.0)
@@ -814,9 +1194,16 @@ def main() -> int:
         parser.error("--iterations-per-device must be >= 1")
     if args.timeout_s <= 0:
         parser.error("--timeout-s must be > 0")
+    if args.mock_engine == "fake-adb" and args.transport != "binary":
+        parser.error("--mock-engine fake-adb currently applies to --transport binary")
 
     server_flags = _adb_server_flags_from_env()
-    runner: Runner = _subprocess_runner
+    runner: Runner = _transport_runner(
+        transport=args.transport,
+        adb_bin=args.adb_bin,
+        server_flags=server_flags,
+    )
+    fake_adb_tmpdir: tempfile.TemporaryDirectory[str] | None = None
     if args.mock_devices:
         if args.mock_devices < 1:
             parser.error("--mock-devices must be >= 1")
@@ -825,7 +1212,27 @@ def main() -> int:
             Device(serial=serial, state="mock", detail="")
             for serial in serials
         ]
-        runner = _mock_runner_factory(delay_ms=args.mock_delay_ms)
+        if args.mock_engine == "fake-adb" and args.transport == "binary":
+            args.adb_bin, runner, fake_adb_tmpdir = _fake_adb_subprocess_runner_factory(
+                serials=serials,
+                delay_ms=args.mock_delay_ms,
+                offline_every=args.mock_offline_every,
+                fail_every=args.mock_fail_every,
+                timeout_every=args.mock_timeout_every,
+                timeout_sleep_ms=args.mock_timeout_sleep_ms,
+            )
+        else:
+            runner = _mock_runner_factory(
+                delay_ms=args.mock_delay_ms,
+                transport=args.transport,
+                binary_spawn_ms=args.mock_binary_spawn_ms,
+                adbutils_connect_ms=args.mock_adbutils_connect_ms,
+                adbutils_call_ms=args.mock_adbutils_call_ms,
+                offline_every=args.mock_offline_every,
+                fail_every=args.mock_fail_every,
+                timeout_every=args.mock_timeout_every,
+                timeout_sleep_ms=args.mock_timeout_sleep_ms,
+            )
     elif args.serial:
         serials = dedupe_serials_prefer_usb(args.serial)
         devices = [
@@ -837,6 +1244,7 @@ def main() -> int:
             adb_bin=args.adb_bin,
             server_flags=server_flags,
             include_offline=args.include_offline,
+            runner=runner,
             timeout_s=args.timeout_s,
         )
         serials = [device.serial for device in devices]
@@ -848,9 +1256,22 @@ def main() -> int:
     operations = build_workload(args.workload)
     print(
         f"ADB capacity benchmark: devices={len(serials)} "
-        f"workload={args.workload} levels={','.join(map(str, args.levels))} "
+        f"transport={args.transport} workload={args.workload} "
+        f"levels={','.join(map(str, args.levels))} "
         f"server_flags={' '.join(server_flags) or '<local>'}"
     )
+    if args.mock_devices:
+        print(
+            "Mock profile: "
+            f"engine={args.mock_engine} "
+            f"base={args.mock_delay_ms:g}ms "
+            f"binary_spawn={args.mock_binary_spawn_ms:g}ms "
+            f"adbutils_connect={args.mock_adbutils_connect_ms:g}ms "
+            f"adbutils_call={args.mock_adbutils_call_ms:g}ms "
+            f"offline_every={args.mock_offline_every} "
+            f"fail_every={args.mock_fail_every} "
+            f"timeout_every={args.mock_timeout_every}"
+        )
     print(
         "Thresholds: "
         f"p95<={args.max_p95_ms}ms "
@@ -881,6 +1302,22 @@ def main() -> int:
     payload = _result_payload(
         adb_bin=args.adb_bin,
         server_flags=server_flags,
+        transport=args.transport,
+        mock_profile=(
+            {
+                "engine": args.mock_engine,
+                "base_delay_ms": args.mock_delay_ms,
+                "binary_spawn_ms": args.mock_binary_spawn_ms,
+                "adbutils_connect_ms": args.mock_adbutils_connect_ms,
+                "adbutils_call_ms": args.mock_adbutils_call_ms,
+                "offline_every": args.mock_offline_every,
+                "fail_every": args.mock_fail_every,
+                "timeout_every": args.mock_timeout_every,
+                "timeout_sleep_ms": args.mock_timeout_sleep_ms,
+            }
+            if args.mock_devices
+            else None
+        ),
         workload=args.workload,
         devices=devices,
         results=results,
@@ -898,6 +1335,8 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"json_output={args.json_output}")
+    if fake_adb_tmpdir is not None:
+        fake_adb_tmpdir.cleanup()
     return 0 if payload["max_passing_concurrency"] else 1
 
 

@@ -155,15 +155,20 @@ với publisher trên cùng tên stream.
 ### 5. Kiểm tra sau khi lên
 
 ```bash
-# Trên cloud: stream đã được tạo và có publisher chưa
-docker compose exec go2rtc wget -qO- http://127.0.0.1:1984/api/streams
-
-# Mong đợi: mỗi máy có 2 producers — placeholder + publisher có remote_addr
+python3 scripts/media_diagnostics.py SERIAL \
+  --samples 3 \
+  --interval 1 \
+  --adapter-url http://127.0.0.1:8878 \
+  --go2rtc-url http://127.0.0.1:1984 \
+  --docker \
+  --env-file deploy.env \
+  --fail-on-warning
 ```
 
-Nếu `producers` chỉ có placeholder: adapter chưa publish được. Xem log
-media-adapter tìm `remote RTSP publish not ready` (sai mật khẩu hoặc firewall
-chặn 8554).
+Mong đợi `classification=healthy` khi đang có browser xem, hoặc `no_consumer`
+khi chưa có browser. Exit `2` nghĩa là một hop media bị stall; exit `3` nghĩa là
+stream đang chạy nhưng runtime config drift so với env file. Xem chi tiết trong
+`docs/runbooks/media-stream-diagnostics.md`.
 
 ## Cạm bẫy
 

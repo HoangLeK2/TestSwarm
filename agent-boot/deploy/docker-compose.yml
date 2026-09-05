@@ -82,7 +82,17 @@ services:
       MEDIA_ADAPTER_CONTROL_HEARTBEAT_SECONDS: ${MEDIA_ADAPTER_CONTROL_HEARTBEAT_SECONDS:-5}
       MEDIA_ADAPTER_ID: ${MEDIA_ADAPTER_ID:-}
       MEDIA_ADAPTER_QUEUE_MAX: ${MEDIA_ADAPTER_QUEUE_MAX:-8}
-      MEDIA_ADAPTER_STALE_PACKET_MS: ${MEDIA_ADAPTER_STALE_PACKET_MS:-160}
+      MEDIA_ADAPTER_STALE_PACKET_MS: ${MEDIA_ADAPTER_STALE_PACKET_MS:-1000}
+      MEDIA_ADAPTER_IDR_MIN_INTERVAL_MS: ${MEDIA_ADAPTER_IDR_MIN_INTERVAL_MS:-3000}
+      MEDIA_ADAPTER_LANE_IDLE_S: ${MEDIA_ADAPTER_LANE_IDLE_S:-120}
+      # WHIP alternative: point the template above at go2rtc's WebRTC ingest
+      # (http://.../api/webrtc?dst=STREAM) and the adapter publishes over WebRTC
+      # instead. Transport is chosen by URL scheme. Buys nack — lost packets are
+      # retransmitted rather than leaving the picture broken until the next
+      # keyframe — at the cost of needing UDP out, which RTSP does not.
+      MEDIA_ADAPTER_WHIP_ICE_SERVERS: ${MEDIA_ADAPTER_WHIP_ICE_SERVERS:-stun:stun.l.google.com:19302}
+      MEDIA_ADAPTER_WHIP_TIMEOUT_MS: ${MEDIA_ADAPTER_WHIP_TIMEOUT_MS:-5000}
+      MEDIA_ADAPTER_WHIP_REDIAL_MS: ${MEDIA_ADAPTER_WHIP_REDIAL_MS:-2000}
       MEDIA_ADAPTER_RTSP_WRITE_QUEUE: ${MEDIA_ADAPTER_RTSP_WRITE_QUEUE:-128}
       # Shallow on purpose: a deep queue sits full when the uplink is the
       # bottleneck, leaving the reader permanently that many packets behind.

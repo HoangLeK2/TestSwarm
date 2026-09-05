@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"devicefarm/media-adapter/internal/adapters/outbound/go2rtc"
+	"devicefarm/media-adapter/internal/adapters/outbound/rtspserver"
 	"devicefarm/media-adapter/internal/adapters/scrcpy"
 	"devicefarm/media-adapter/internal/domain/stream"
 )
@@ -23,6 +24,46 @@ type fakePublisher struct{}
 
 func (fakePublisher) Publish(context.Context, stream.EncodedPacket) error {
 	return nil
+}
+
+type fakePublisherStats struct {
+	stats rtspserver.PublisherStats
+}
+
+func (f fakePublisherStats) Stats() rtspserver.PublisherStats {
+	return f.stats
+}
+
+func TestHandlePublisherStats(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	manager := scrcpy.NewManager(fakePublisher{}, logger)
+	server := NewServer("127.0.0.1:0", manager, logger)
+	server.SetPublisherStatsProvider(fakePublisherStats{
+		stats: rtspserver.PublisherStats{
+			OfferedPackets:    10,
+			EnqueuedPackets:   9,
+			QueueDrops:        1,
+			RTPPacketsWritten: 8,
+			ActiveLanes:       2,
+		},
+	})
+	defer manager.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/rtsp/publisher/status", nil)
+	res := httptest.NewRecorder()
+
+	server.routes().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body rtspserver.PublisherStats
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.OfferedPackets != 10 || body.QueueDrops != 1 || body.ActiveLanes != 2 {
+		t.Fatalf("unexpected publisher stats: %+v", body)
+	}
 }
 
 func TestHandleStreamDecodesSerialPath(t *testing.T) {

@@ -157,6 +157,90 @@ test('buildWorkflowStepRows maps running logs to nested rows by step id', () => 
   assert.equal(rows[1].logEntry?.step_id, 'tap-nested');
 });
 
+test('buildWorkflowStepRows maps nested loop logs by trace step path', () => {
+  const rows = buildWorkflowStepRows({
+    scenarioSteps: [
+      {
+        id: 'gate',
+        type: 'if_variable',
+        then: [
+          {
+            id: 'cycle',
+            type: 'loop',
+            steps: [{ id: 'mark', type: 'set_variable' }]
+          }
+        ],
+        else: [{ id: 'mark', type: 'set_variable' }]
+      }
+    ] as FlowStep[],
+    executedSteps: [
+      {
+        index: 0,
+        step_id: 'mark',
+        step_type: 'set_variable',
+        ok: true,
+        message: null,
+        depth: 2,
+        status: 'completed',
+        trace: {
+          step_path: 'gate.then/cycle#2/mark',
+          loop_iter: 2,
+          branch: 'then'
+        }
+      }
+    ],
+    currentRootIndex: 0,
+    isActive: true
+  });
+
+  const completed = rows.find((row) => row.status === 'completed');
+
+  assert.equal(completed?.pathKey, 'steps.0.then.0.steps.0');
+  assert.equal(completed?.tracePath, 'gate.then/cycle/mark');
+  assert.equal(completed?.logEntry?.trace?.step_path, 'gate.then/cycle#2/mark');
+});
+
+test('normalizeTemporalStepLogEntry promotes persisted trace fields', () => {
+  const row = normalizeTemporalStepLogEntry({
+    step_index: 1,
+    step_type: 'set_variable',
+    status: 'completed',
+    trace: {
+      step_path: 'gate.then/cycle#1/mark',
+      loop_id: 'cycle',
+      loop_iter: 1,
+      branch: 'then'
+    },
+    reason_code: 'ok'
+  });
+
+  assert.equal(row.step_path, 'gate.then/cycle#1/mark');
+  assert.equal(row.loop_id, 'cycle');
+  assert.equal(row.loop_iter, 1);
+  assert.equal(row.branch, 'then');
+  assert.equal(row.reason_code, 'ok');
+});
+
+test('normalizeTemporalStepLogEntry preserves persisted runtime evidence', () => {
+  const row = normalizeTemporalStepLogEntry({
+    step_index: 2,
+    step_type: 'extract_text_ocr',
+    status: 'failed',
+    evidence: {
+      reason_code: 'node_capability_preflight_failed',
+      device_serial: 'phone-001',
+      missing_capabilities: ['has_ocr', 'has_tesseract']
+    }
+  });
+
+  assert.equal(row.evidence?.reason_code, 'node_capability_preflight_failed');
+  assert.equal(row.evidence?.device_serial, 'phone-001');
+  assert.deepEqual(row.evidence?.missing_capabilities, [
+    'has_ocr',
+    'has_tesseract'
+  ]);
+});
+
 test('deriveWorkflowCursor advances past completed root logs when workflow is active', () => {
   const cursor = deriveWorkflowCursor({
     isActive: true,
@@ -229,6 +313,57 @@ test('mergeStepLogEntries prefers running status and combines sources', () => {
 
   assert.equal(merged.length, 3);
   assert.equal(merged[2].status, 'running');
+});
+
+test('mergeStepLogEntries keeps Temporal activity events when status source changes', () => {
+  const merged = mergeStepLogEntries(
+    [
+      {
+        index: 0,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        ok: true,
+        message: 'running',
+        depth: 0,
+        status: 'running',
+        temporal_activity_events: [
+          {
+            event_type: 'temporal.activity.scheduled',
+            state: 'scheduled',
+            activity_id: 'activity-1',
+            activity_attempt: 1
+          }
+        ]
+      }
+    ],
+    [
+      {
+        index: 0,
+        step_id: 'tap-1',
+        step_type: 'tap',
+        ok: true,
+        message: 'done',
+        depth: 0,
+        status: 'completed',
+        temporal_activity_events: [
+          {
+            event_type: 'temporal.activity.completed',
+            state: 'completed',
+            activity_id: 'activity-1',
+            activity_attempt: 1,
+            duration_ms: 900
+          }
+        ]
+      }
+    ]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'completed');
+  assert.deepEqual(
+    merged[0].temporal_activity_events?.map((event) => event.state),
+    ['scheduled', 'completed']
+  );
 });
 
 test('resolveCurrentRootIndex ignores stale zero progress when logs advanced', () => {

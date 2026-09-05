@@ -47,6 +47,36 @@ with workflow.unsafe.imports_passed_through():
         record_attempt,
         step_for_single_attempt,
     )
+    from services.execution.event_types import (
+        STEP_COMPLETED,
+        STEP_FAILED,
+        STEP_STARTED,
+        TEMPORAL_ACTIVITY_COMPLETED,
+        TEMPORAL_ACTIVITY_FAILED,
+        TEMPORAL_ACTIVITY_RETRYING,
+        TEMPORAL_ACTIVITY_SCHEDULED,
+        TEMPORAL_ACTIVITY_STALLED,
+    )
+    from services.execution.reason_codes import (
+        BRANCH_FAILED,
+        CONDITION_EVAL_FAILED,
+        LOOP_INVALID_COUNT,
+        LOOP_ITERATION_FAILED,
+        LOOP_NO_NESTED_STEPS,
+        LOOP_STALLED,
+        SUBSCENARIO_FAILED,
+    )
+    from services.execution.trace_context import (
+        TRACE_CONTEXT_KEY,
+        push_step_path,
+        step_trace_from_context,
+        trace_from_runtime_context,
+    )
+    from temporal.step_activity_policy import (
+        build_batch_activity_policy,
+        build_step_activity_policy,
+        workflow_activity_id,
+    )
     from temporal.shared import (
         MAX_NESTING_DEPTH,
         TASK_QUEUE_NAME,
@@ -152,6 +182,22 @@ def _workflow_failure_message(
     return fallback
 
 
+def _activity_failure_suggests_stall(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return any(
+        token in lowered
+        for token in (
+            "heartbeat",
+            "schedule_to_start",
+            "schedule to start",
+            "start_to_close",
+            "start to close",
+            "timed out",
+            "timeout",
+        )
+    )
+
+
 def _lookup_var(name: str, *dicts: dict[str, Any]) -> Any:
     """Lookup a variable in multiple dicts by priority. Returns None if not found.
 
@@ -184,9 +230,29 @@ _STEP_CHECKPOINT_PATCH = "step-checkpoint-before-continue-as-new-v1"
 _RETRY_ABSOLUTE_INDEX_PATCH = "retry-absolute-step-index-v1"
 _CAMPAIGN_CLAIM_KEEPALIVE_PATCH = "campaign-device-claim-keepalive-v1"
 _CAMPAIGN_CLAIM_KEEPALIVE_MAX_SECONDS = 600
+_CONTROL_FLOW_EVENT_PATCH = "control-flow-boundary-events-v1"
+_STEP_ACTIVITY_POLICY_PATCH = "step-activity-policy-v1"
+_TEMPORAL_ACTIVITY_EVENT_PATCH = "temporal-activity-events-v1"
 
 # Step types that require individual activity calls (cannot be batched).
 # All other step types are "leaf" steps dispatched via execute_device_action_batch.
+#
+# Every entry here flushes the pending batch, so the set is also the main source
+# of activity fan-out. It has been checked for entries that only sit here for
+# historical reasons; there are none:
+#   - `extract` returns ExtractResult.break_requested, which is how
+#     stop_if_no_new ends a crawl loop. DeviceActionBatchResult has no channel
+#     for it, so batching extract would make crawl loops run to their iteration
+#     cap instead of stopping. It also needs _LONG_TIMEOUT, which the batch
+#     timeout (sized per step count) does not give it.
+#   - `save_extraction` writes to the DB on the worker and feeds
+#     __save_extraction_offsets__ back into runtime_context so a retry skips
+#     what it already saved.
+# `run_scenario` is the most frequent step in practice (450 occurrences in one
+# measured campaign) and flushes the batch every time. Batching it means
+# changing where nested scenarios execute — an execution-model change, not a
+# list edit. Note that editing this set at all changes the commands a workflow
+# emits and so needs a patch id for in-flight runs (see _STEP_CHECKPOINT_PATCH).
 _CONTROL_FLOW_TYPES = frozenset({
     "set_variable", "set_var", "break_if",
     "loop", "if", "repeat", "repeat_until",
@@ -194,6 +260,10 @@ _CONTROL_FLOW_TYPES = frozenset({
     "run_scenario",
     "extract", "save_extraction",
 })
+
+
+def _step_id(step: dict[str, Any], idx: int) -> str:
+    return str(step.get("id") or step.get("_id") or step.get("step_id") or idx)
 
 
 def _error_policy(step: dict, cfg: dict) -> str:
@@ -238,6 +308,18 @@ def _first_failed_step_message(step_results: list) -> str:
         if isinstance(entry, dict) and not entry.get("ok", True):
             return str(entry.get("message") or "step failed")
     return ""
+
+
+def _first_failed_step(step_results: list) -> dict[str, Any] | None:
+    for entry in step_results or []:
+        if isinstance(entry, dict) and not entry.get("ok", True):
+            return {
+                key: value
+                for key, value in entry.items()
+                if key in {"index", "type", "step_id", "step_path", "message", "reason_code"}
+                and value is not None
+            }
+    return None
 
 
 def _run_scenario_failure_can_be_ignored(
@@ -299,6 +381,39 @@ def _batch_start_to_close_timeout(
         _BATCH_TIMEOUT_HARD_CAP_SECONDS,
     )
     return timedelta(seconds=total_seconds)
+
+
+def _step_activity_options(
+    inp: "StepsInput",
+    step: dict[str, Any],
+    step_index: int,
+    *,
+    activity_step_type: str | None = None,
+    default_start_to_close_timeout: timedelta,
+    default_retry_policy: RetryPolicy,
+    default_heartbeat_timeout: timedelta,
+) -> dict[str, Any]:
+    if not workflow.patched(_STEP_ACTIVITY_POLICY_PATCH):
+        return {
+            "start_to_close_timeout": default_start_to_close_timeout,
+            "retry_policy": default_retry_policy,
+            "heartbeat_timeout": default_heartbeat_timeout,
+        }
+    policy_step = dict(step)
+    if activity_step_type:
+        policy_step["type"] = activity_step_type
+    policy = build_step_activity_policy(
+        execution_id=inp.execution_id or inp.run_id,
+        step=policy_step,
+        step_index=step_index,
+        default_start_to_close_timeout=default_start_to_close_timeout,
+    )
+    return {
+        "start_to_close_timeout": policy.start_to_close_timeout,
+        "retry_policy": policy.retry_policy,
+        "heartbeat_timeout": policy.heartbeat_timeout,
+        "activity_id": policy.activity_id,
+    }
 
 
 # Outcomes meaning "this step chose not to act", as opposed to "this step could
@@ -789,7 +904,15 @@ class ScenarioStepsWorkflow:
         self._total_steps = 0
         self._current_step = 0
         self._current_step_type = ""
+        self._current_step_id = None
+        self._current_step_path = None
+        self._current_loop_iter = None
         self._current_step_started_at = None
+        self._current_activity_id = None
+        self._current_step_activity_id = None
+        self._current_phase = None
+        self._current_side_effect_class = None
+        self._current_activity_attempt = 0
         self._current_message = ""
         self._running_step = False
 
@@ -856,6 +979,14 @@ class ScenarioStepsWorkflow:
             "current_step": self._current_step,
             "total_steps": self._total_steps,
             "current_step_type": self._current_step_type,
+            "current_step_id": self._current_step_id,
+            "current_step_path": self._current_step_path,
+            "current_loop_iter": self._current_loop_iter,
+            "current_activity_id": self._current_activity_id,
+            "current_step_activity_id": self._current_step_activity_id,
+            "current_phase": self._current_phase,
+            "side_effect_class": self._current_side_effect_class,
+            "activity_attempt": self._current_activity_attempt,
             "current_step_started_at": (
                 self._current_step_started_at.isoformat()
                 if self._current_step_started_at is not None
@@ -866,16 +997,66 @@ class ScenarioStepsWorkflow:
             "message": self._error_message or self._current_message,
         }
 
+    @workflow.query
+    def get_activity_progress(self) -> dict:
+        return {
+            "current_activity_id": self._current_activity_id,
+            "current_step_activity_id": self._current_step_activity_id,
+            "current_phase": self._current_phase,
+            "side_effect_class": self._current_side_effect_class,
+            "activity_attempt": self._current_activity_attempt,
+            "current_step": self._current_step,
+            "current_step_type": self._current_step_type,
+            "current_step_id": self._current_step_id,
+            "current_step_path": self._current_step_path,
+            "current_loop_iter": self._current_loop_iter,
+            "running_step": self._running_step,
+        }
+
     async def _wait_if_paused(self) -> None:
         if self._paused and not self._cancelled:
             await workflow.wait_condition(lambda: not self._paused or self._cancelled)
 
-    def _mark_step_started(self, step_index: int, step_type: str, message: str = "") -> None:
+    def _mark_step_started(
+        self,
+        step_index: int,
+        step_type: str,
+        message: str = "",
+        *,
+        step_id: str | None = None,
+        step_path: str | None = None,
+        loop_iter: int | None = None,
+    ) -> None:
         self._current_step = max(0, step_index)
         self._current_step_type = step_type
+        self._current_step_id = step_id
+        self._current_step_path = step_path
+        self._current_loop_iter = loop_iter
         self._current_step_started_at = workflow.now()
         self._current_message = message
         self._running_step = True
+
+    def _mark_activity_progress(
+        self,
+        *,
+        activity_id: str | None,
+        step_activity_id: str | None = None,
+        phase: str | None = None,
+        side_effect_class: str | None = None,
+        activity_attempt: int = 0,
+    ) -> None:
+        self._current_activity_id = activity_id
+        self._current_step_activity_id = step_activity_id
+        self._current_phase = phase
+        self._current_side_effect_class = side_effect_class
+        self._current_activity_attempt = max(0, int(activity_attempt or 0))
+
+    def _clear_activity_progress(self) -> None:
+        self._current_activity_id = None
+        self._current_step_activity_id = None
+        self._current_phase = None
+        self._current_side_effect_class = None
+        self._current_activity_attempt = 0
 
     def _mark_step_finished(self, entry: dict[str, Any]) -> None:
         try:
@@ -884,8 +1065,127 @@ class ScenarioStepsWorkflow:
             idx = self._current_step
         self._current_step = max(self._current_step, idx + 1)
         self._current_step_type = str(entry.get("type") or self._current_step_type)
+        self._current_step_id = str(entry.get("step_id") or entry.get("id") or self._current_step_id or "")
+        self._current_step_path = str(entry.get("step_path") or self._current_step_path or "")
+        self._current_loop_iter = entry.get("loop_iter", self._current_loop_iter)
         self._current_message = str(entry.get("message") or "")
+        self._clear_activity_progress()
         self._running_step = False
+
+    async def _emit_control_flow_event(
+        self,
+        inp: StepsInput,
+        *,
+        event_type: str,
+        step: dict[str, Any],
+        step_index: int,
+        trace: dict[str, Any] | None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if not inp.execution_id or not workflow.patched(_CONTROL_FLOW_EVENT_PATCH):
+            return
+        try:
+            await workflow.execute_activity(
+                "emit_control_flow_event",
+                {
+                    "execution_id": inp.execution_id,
+                    "campaign_id": inp.campaign_id,
+                    "event_type": event_type,
+                    "step_id": _step_id(step, step_index),
+                    "step_index": step_index,
+                    "step_type": str(step.get("type") or ""),
+                    "depth": inp.depth,
+                    "trace": trace or {},
+                    "payload": payload or {},
+                },
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+                task_queue=control_task_queue(),
+                activity_id=(
+                    workflow_activity_id(
+                        execution_id=inp.execution_id,
+                        activity_name="emit_control_flow_event",
+                        step=step,
+                        step_index=step_index,
+                        qualifier=event_type,
+                    )
+                    if workflow.patched(_STEP_ACTIVITY_POLICY_PATCH)
+                    else None
+                ),
+            )
+        except Exception as exc:
+            if _is_temporal_cancelled_error(exc):
+                raise
+            logging.getLogger(__name__).warning(
+                "emit_control_flow_event failed for execution %s step %s: %s",
+                inp.execution_id,
+                _step_id(step, step_index),
+                _workflow_failure_message(exc),
+            )
+
+    async def _emit_temporal_activity_event(
+        self,
+        inp: StepsInput,
+        *,
+        event_type: str,
+        step: dict[str, Any],
+        step_index: int,
+        trace: dict[str, Any] | None,
+        activity_id: str | None,
+        step_activity_id: str | None = None,
+        phase: str,
+        side_effect_class: str | None,
+        activity_attempt: int,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if not inp.execution_id or not workflow.patched(_TEMPORAL_ACTIVITY_EVENT_PATCH):
+            return
+        step_id = _step_id(step, step_index)
+        event_payload: dict[str, Any] = {
+            "activity_id": activity_id,
+            "step_activity_id": step_activity_id or activity_id,
+            "side_effect_class": side_effect_class,
+            "activity_attempt": activity_attempt,
+            "phase": phase,
+        }
+        for key, value in (payload or {}).items():
+            if value is not None:
+                event_payload[key] = value
+        try:
+            await workflow.execute_activity(
+                "emit_temporal_activity_event",
+                {
+                    "execution_id": inp.execution_id,
+                    "campaign_id": inp.campaign_id,
+                    "event_type": event_type,
+                    "step_id": step_id,
+                    "step_index": step_index,
+                    "step_type": str(step.get("type") or ""),
+                    "depth": inp.depth,
+                    "trace": trace or {},
+                    "payload": event_payload,
+                },
+                start_to_close_timeout=timedelta(seconds=30),
+                schedule_to_start_timeout=timedelta(seconds=60),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+                task_queue=control_task_queue(),
+                activity_id=workflow_activity_id(
+                    execution_id=inp.execution_id,
+                    activity_name="emit_temporal_activity_event",
+                    step=step,
+                    step_index=step_index,
+                    qualifier=f"{event_type}:{activity_attempt}:{activity_id or step_id}",
+                ),
+            )
+        except Exception as exc:
+            if _is_temporal_cancelled_error(exc):
+                raise
+            logging.getLogger(__name__).warning(
+                "emit_temporal_activity_event failed for execution %s activity %s: %s",
+                inp.execution_id,
+                activity_id,
+                _workflow_failure_message(exc),
+            )
 
     @staticmethod
     def _step_result_dict(sr: StepResult, step_index: int) -> dict[str, Any]:
@@ -926,6 +1226,7 @@ class ScenarioStepsWorkflow:
         attempt_records: list[dict[str, Any]] = []
         wf_random = _get_wf_random()
         final_entry: dict[str, Any] | None = None
+        temporal_step_policy_enabled = workflow.patched(_STEP_ACTIVITY_POLICY_PATCH)
 
         for attempt in range(1, policy.max_attempts + 1):
             await self._wait_if_paused()
@@ -943,28 +1244,145 @@ class ScenarioStepsWorkflow:
                 "attempt": attempt,
                 "retry": dict(step.get("retry") or {}),
             }
-            sr: StepResult = await workflow.execute_activity(
-                "execute_device_action",
-                DeviceActionInput(
-                    device_serial=inp.device_serial,
+            activity_id = None
+            activity_attempt = attempt
+            side_effect_class = None
+            start_to_close_timeout = _LONG_TIMEOUT
+            heartbeat_timeout = timedelta(seconds=30)
+            retry_policy = _ACTIVITY_RETRY
+            if temporal_step_policy_enabled:
+                activity_policy = build_step_activity_policy(
+                    execution_id=inp.execution_id or inp.run_id,
                     step=attempt_step,
                     step_index=step_index,
-                    variables=inp.variables,
-                    campaign_vars=inp.campaign_vars,
-                    scenario_config=getattr(inp, "scenario_config", {}),
-                    scenario_registry=inp.scenario_registry,
-                    execution_id=inp.execution_id or inp.run_id,
-                    campaign_id=inp.campaign_id,
-                    depth=inp.depth,
-                    context=dict(runtime_context or {}),
-                ),
-                result_type=StepResult,
-                start_to_close_timeout=_LONG_TIMEOUT,
-                retry_policy=_ACTIVITY_RETRY,
-                heartbeat_timeout=timedelta(seconds=30),
+                    attempt=attempt,
+                    default_start_to_close_timeout=_LONG_TIMEOUT,
+                )
+                activity_id = activity_policy.activity_id
+                activity_attempt = activity_policy.attempt
+                side_effect_class = activity_policy.side_effect_class
+                start_to_close_timeout = activity_policy.start_to_close_timeout
+                heartbeat_timeout = activity_policy.heartbeat_timeout
+                retry_policy = activity_policy.retry_policy
+            self._mark_activity_progress(
+                activity_id=activity_id,
+                step_activity_id=activity_id,
+                phase="scheduled",
+                side_effect_class=side_effect_class,
+                activity_attempt=activity_attempt,
             )
+            activity_started_at = workflow.now()
+            await self._emit_temporal_activity_event(
+                inp,
+                event_type=(
+                    TEMPORAL_ACTIVITY_RETRYING
+                    if activity_attempt > 1
+                    else TEMPORAL_ACTIVITY_SCHEDULED
+                ),
+                step=attempt_step,
+                step_index=step_index,
+                trace=trace_from_runtime_context(runtime_context or {}),
+                activity_id=activity_id,
+                step_activity_id=activity_id,
+                phase="scheduled",
+                side_effect_class=side_effect_class,
+                activity_attempt=activity_attempt,
+            )
+            try:
+                sr: StepResult = await workflow.execute_activity(
+                    "execute_device_action",
+                    DeviceActionInput(
+                        device_serial=inp.device_serial,
+                        step=attempt_step,
+                        step_index=step_index,
+                        variables=inp.variables,
+                        campaign_vars=inp.campaign_vars,
+                        scenario_config=getattr(inp, "scenario_config", {}),
+                        scenario_registry=inp.scenario_registry,
+                        execution_id=inp.execution_id or inp.run_id,
+                        campaign_id=inp.campaign_id,
+                        depth=inp.depth,
+                        context=dict(runtime_context or {}),
+                        activity_id=activity_id,
+                        activity_attempt=activity_attempt,
+                        side_effect_class=side_effect_class,
+                    ),
+                    result_type=StepResult,
+                    start_to_close_timeout=start_to_close_timeout,
+                    retry_policy=retry_policy,
+                    heartbeat_timeout=heartbeat_timeout,
+                    activity_id=activity_id,
+                )
+            except Exception as exc:
+                if _is_temporal_cancelled_error(exc):
+                    raise
+                failure_message = _workflow_failure_message(exc)
+                failure_duration_ms = int(
+                    (workflow.now() - activity_started_at).total_seconds() * 1000
+                )
+                if _activity_failure_suggests_stall(failure_message):
+                    await self._emit_temporal_activity_event(
+                        inp,
+                        event_type=TEMPORAL_ACTIVITY_STALLED,
+                        step=attempt_step,
+                        step_index=step_index,
+                        trace=trace_from_runtime_context(runtime_context or {}),
+                        activity_id=activity_id,
+                        step_activity_id=activity_id,
+                        phase="stalled",
+                        side_effect_class=side_effect_class,
+                        activity_attempt=activity_attempt,
+                        payload={
+                            "ok": False,
+                            "message": failure_message,
+                            "stalled_reason": "temporal_activity_timeout",
+                            "duration_ms": failure_duration_ms,
+                        },
+                    )
+                await self._emit_temporal_activity_event(
+                    inp,
+                    event_type=TEMPORAL_ACTIVITY_FAILED,
+                    step=attempt_step,
+                    step_index=step_index,
+                    trace=trace_from_runtime_context(runtime_context or {}),
+                    activity_id=activity_id,
+                    step_activity_id=activity_id,
+                    phase="failed",
+                    side_effect_class=side_effect_class,
+                    activity_attempt=activity_attempt,
+                    payload={
+                        "ok": False,
+                        "message": failure_message,
+                        "duration_ms": failure_duration_ms,
+                    },
+                )
+                raise
             entry = self._step_result_dict(sr, step_index)
             final_entry = entry
+            await self._emit_temporal_activity_event(
+                inp,
+                event_type=(
+                    TEMPORAL_ACTIVITY_COMPLETED
+                    if entry.get("ok", True)
+                    else TEMPORAL_ACTIVITY_FAILED
+                ),
+                step=attempt_step,
+                step_index=step_index,
+                trace=trace_from_runtime_context(runtime_context or {}),
+                activity_id=activity_id,
+                step_activity_id=activity_id,
+                phase="completed" if entry.get("ok", True) else "failed",
+                side_effect_class=side_effect_class,
+                activity_attempt=activity_attempt,
+                payload={
+                    "ok": bool(entry.get("ok", True)),
+                    "message": entry.get("message"),
+                    "reason_code": entry.get("reason_code"),
+                    "duration_ms": int(
+                        (workflow.now() - activity_started_at).total_seconds() * 1000
+                    ),
+                },
+            )
 
             will_retry = (
                 is_step_failure_retryable(self._retry_check_payload(entry), policy)
@@ -1215,12 +1633,64 @@ class ScenarioStepsWorkflow:
             n = len(_pending_steps)
             orig_steps = list(_pending_steps)      # snapshot before clear
             orig_indices = list(_pending_indices)  # snapshot before clear
+            batch_start_to_close_timeout = _batch_start_to_close_timeout(
+                n,
+                getattr(inp, "scenario_config", {}),
+            )
+            batch_activity_id = None
+            batch_step_activity_ids: list[str] = []
+            batch_side_effect_class = None
+            if workflow.patched(_STEP_ACTIVITY_POLICY_PATCH):
+                batch_policy = build_batch_activity_policy(
+                    execution_id=inp.execution_id or inp.run_id,
+                    steps=orig_steps,
+                    step_indices=orig_indices,
+                    start_to_close_timeout=batch_start_to_close_timeout,
+                )
+                batch_activity_id = batch_policy.activity_id
+                batch_step_activity_ids = batch_policy.step_activity_ids
+                batch_side_effect_class = batch_policy.side_effect_class
+            batch_trace = trace_from_runtime_context(runtime_context)
+            batch_started_at = workflow.now()
             if orig_steps and orig_indices:
                 first_step = orig_steps[0]
                 self._mark_step_started(
                     orig_indices[0],
                     str(first_step.get("type") or ""),
                     f"running batch {len(orig_steps)} step(s)",
+                )
+                self._mark_activity_progress(
+                    activity_id=batch_activity_id,
+                    step_activity_id=(
+                        batch_step_activity_ids[0]
+                        if batch_step_activity_ids
+                        else None
+                    ),
+                    phase="scheduled_batch",
+                    side_effect_class=batch_side_effect_class,
+                    activity_attempt=1,
+                )
+                await self._emit_temporal_activity_event(
+                    inp,
+                    event_type=TEMPORAL_ACTIVITY_SCHEDULED,
+                    step=first_step,
+                    step_index=orig_indices[0],
+                    trace=batch_trace,
+                    activity_id=batch_activity_id,
+                    step_activity_id=(
+                        batch_step_activity_ids[0]
+                        if batch_step_activity_ids
+                        else None
+                    ),
+                    phase="scheduled_batch",
+                    side_effect_class=batch_side_effect_class,
+                    activity_attempt=1,
+                    payload={
+                        "batch_size": len(orig_steps),
+                        "batch_first_step_index": orig_indices[0],
+                        "batch_last_step_index": orig_indices[-1],
+                        "batch_step_activity_ids": batch_step_activity_ids,
+                    },
                 )
             try:
                 batch_result: DeviceActionBatchResult = await workflow.execute_activity(
@@ -1238,15 +1708,16 @@ class ScenarioStepsWorkflow:
                         campaign_id=inp.campaign_id,
                         depth=inp.depth,
                         context=dict(runtime_context),
+                        activity_id=batch_activity_id,
+                        step_activity_ids=batch_step_activity_ids,
+                        side_effect_class=batch_side_effect_class,
                     ),
                     result_type=DeviceActionBatchResult,
-                    start_to_close_timeout=_batch_start_to_close_timeout(
-                        n,
-                        getattr(inp, "scenario_config", {}),
-                    ),
+                    start_to_close_timeout=batch_start_to_close_timeout,
                     retry_policy=_DEVICE_ACTION_RETRY,
                     # Extract/comment steps can run minutes; keep margin over 5s heartbeat loop.
                     heartbeat_timeout=timedelta(seconds=60),
+                    activity_id=batch_activity_id,
                 )
             except Exception as exc:
                 if _is_temporal_cancelled_error(exc):
@@ -1258,6 +1729,66 @@ class ScenarioStepsWorkflow:
                     exc,
                     fallback=f"{failed_type}: activity failed before returning a step result",
                 )
+                failed_duration_ms = int(
+                    (workflow.now() - batch_started_at).total_seconds() * 1000
+                )
+                if _activity_failure_suggests_stall(failed_message):
+                    await self._emit_temporal_activity_event(
+                        inp,
+                        event_type=TEMPORAL_ACTIVITY_STALLED,
+                        step=failed_step,
+                        step_index=failed_orig_idx if failed_orig_idx >= 0 else 0,
+                        trace=batch_trace,
+                        activity_id=batch_activity_id,
+                        step_activity_id=(
+                            batch_step_activity_ids[0]
+                            if batch_step_activity_ids
+                            else None
+                        ),
+                        phase="stalled_batch",
+                        side_effect_class=batch_side_effect_class,
+                        activity_attempt=1,
+                        payload={
+                            "ok": False,
+                            "message": failed_message,
+                            "stalled_reason": "temporal_activity_timeout",
+                            "duration_ms": failed_duration_ms,
+                            "batch_size": len(orig_steps),
+                            "batch_first_step_index": failed_orig_idx,
+                            "batch_last_step_index": orig_indices[-1]
+                            if orig_indices
+                            else failed_orig_idx,
+                            "batch_step_activity_ids": batch_step_activity_ids,
+                        },
+                    )
+                await self._emit_temporal_activity_event(
+                    inp,
+                    event_type=TEMPORAL_ACTIVITY_FAILED,
+                    step=failed_step,
+                    step_index=failed_orig_idx if failed_orig_idx >= 0 else 0,
+                    trace=batch_trace,
+                    activity_id=batch_activity_id,
+                    step_activity_id=(
+                        batch_step_activity_ids[0]
+                        if batch_step_activity_ids
+                        else None
+                    ),
+                    phase="failed_batch",
+                    side_effect_class=batch_side_effect_class,
+                    activity_attempt=1,
+                    payload={
+                        "ok": False,
+                        "message": failed_message,
+                        "duration_ms": failed_duration_ms,
+                        "batch_size": len(orig_steps),
+                        "batch_first_step_index": failed_orig_idx,
+                        "batch_last_step_index": orig_indices[-1]
+                        if orig_indices
+                        else failed_orig_idx,
+                        "batch_step_activity_ids": batch_step_activity_ids,
+                    },
+                )
+                self._clear_activity_progress()
                 _pending_steps.clear()
                 _pending_indices.clear()
                 if len(orig_steps) > 1:
@@ -1271,11 +1802,60 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 return False, failed_message, failed_orig_idx
+            batch_failure_index = batch_result.first_failure_index
+            if batch_failure_index < 0:
+                for rel_idx, result in enumerate(batch_result.results):
+                    if isinstance(result, dict) and not bool(result.get("ok", True)):
+                        batch_failure_index = rel_idx
+                        break
+            batch_event_ok = (
+                batch_failure_index < 0
+                and not batch_result.cancelled_mid_batch
+            )
+            if orig_steps and orig_indices:
+                await self._emit_temporal_activity_event(
+                    inp,
+                    event_type=(
+                        TEMPORAL_ACTIVITY_COMPLETED
+                        if batch_event_ok
+                        else TEMPORAL_ACTIVITY_FAILED
+                    ),
+                    step=orig_steps[0],
+                    step_index=orig_indices[0],
+                    trace=batch_trace,
+                    activity_id=batch_activity_id,
+                    step_activity_id=(
+                        batch_step_activity_ids[0]
+                        if batch_step_activity_ids
+                        else None
+                    ),
+                    phase="completed_batch" if batch_event_ok else "failed_batch",
+                    side_effect_class=batch_side_effect_class,
+                    activity_attempt=1,
+                    payload={
+                        "ok": batch_event_ok,
+                        "duration_ms": int(
+                            (workflow.now() - batch_started_at).total_seconds()
+                            * 1000
+                        ),
+                        "batch_size": len(orig_steps),
+                        "batch_first_step_index": orig_indices[0],
+                        "batch_last_step_index": orig_indices[-1],
+                        "batch_step_activity_ids": batch_step_activity_ids,
+                        "paused_mid_batch": batch_result.paused_mid_batch,
+                        "cancelled_mid_batch": batch_result.cancelled_mid_batch,
+                    },
+                )
             _pending_steps.clear()
             _pending_indices.clear()
             if batch_result.context:
                 previous_context_vars = runtime_context.get("vars")
+                parent_trace = trace_from_runtime_context(runtime_context)
                 runtime_context = {**runtime_context, **batch_result.context}
+                if parent_trace:
+                    runtime_context[TRACE_CONTEXT_KEY] = parent_trace
+                else:
+                    runtime_context.pop(TRACE_CONTEXT_KEY, None)
                 context_vars = batch_result.context.get("vars")
                 if isinstance(context_vars, dict):
                     previous = (
@@ -1404,6 +1984,15 @@ class ScenarioStepsWorkflow:
                             },
                             start_to_close_timeout=timedelta(seconds=60),
                             retry_policy=RetryPolicy(maximum_attempts=3),
+                            activity_id=(
+                                workflow_activity_id(
+                                    execution_id=inp.execution_id,
+                                    activity_name="persist_step_checkpoint",
+                                    qualifier=idx,
+                                )
+                                if workflow.patched(_STEP_ACTIVITY_POLICY_PATCH)
+                                else None
+                            ),
                         )
                         carried_count = checkpointed_steps + len(carried)
                         carried = []
@@ -1434,7 +2023,33 @@ class ScenarioStepsWorkflow:
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")
-            self._mark_step_started(idx, str(step_type or ""))
+            step_trace_context = step_trace_from_context(runtime_context, step=step, step_index=idx)
+            step_trace = trace_from_runtime_context(step_trace_context)
+            step = {
+                **step,
+                **{
+                    key: value
+                    for key, value in step_trace.items()
+                    if key in {
+                        "step_path",
+                        "loop_iter",
+                        "loop_id",
+                        "branch",
+                        "step_id",
+                        "step_type",
+                        "depth",
+                    }
+                },
+            }
+            step_path = step_trace.get("step_path")
+            step_loop_iter = step_trace.get("loop_iter")
+            self._mark_step_started(
+                idx,
+                str(step_type or ""),
+                step_id=_step_id(step, idx),
+                step_path=str(step_path) if step_path is not None else None,
+                loop_iter=step_loop_iter if isinstance(step_loop_iter, int) else None,
+            )
 
             # ── Flush pending batch before any control-flow step ─────────────
             # Leaf steps accumulate in _pending_steps; control-flow types force
@@ -1491,9 +2106,15 @@ class ScenarioStepsWorkflow:
                             campaign_id=inp.campaign_id,
                         ),
                         result_type=bool,
-                        start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
-                        heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
-                        retry_policy=_ACTIVITY_RETRY,
+                        **_step_activity_options(
+                            inp,
+                            step,
+                            idx,
+                            activity_step_type="evaluate_legacy_condition",
+                            default_start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                            default_retry_policy=_ACTIVITY_RETRY,
+                            default_heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+                        ),
                     )
                     if cond_met:
                         break_requested = True
@@ -1508,13 +2129,32 @@ class ScenarioStepsWorkflow:
 
             # ── loop ─────────────────────────────────────────────────────────
             if step_type == "loop":
-                ok, msg, sub_results, runtime_context = await self._handle_loop(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, sub_results, runtime_context, control_payload = await self._handle_loop(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({
+                entry = {
                     "index": idx, "type": "loop", "ok": ok,
                     "message": msg, "sub_results": sub_results,
-                })
+                    "trace": step_trace,
+                    **control_payload,
+                }
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={k: v for k, v in entry.items() if k != "sub_results"},
+                )
+                _append(entry)
                 steps_executed += 1
                 if not ok:
                     action, early = await self._apply_error_policy(
@@ -1528,10 +2168,27 @@ class ScenarioStepsWorkflow:
 
             # ── if (generic condition) ────────────────────────────────────────
             if step_type == "if":
-                ok, msg, runtime_context, child_break = await self._handle_if(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, runtime_context, child_break, control_payload = await self._handle_if(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({"index": idx, "type": "if", "ok": ok, "message": msg})
+                entry = {"index": idx, "type": "if", "ok": ok, "message": msg, "trace": step_trace, **control_payload}
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload=entry,
+                )
+                _append(entry)
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -1549,13 +2206,32 @@ class ScenarioStepsWorkflow:
 
             # ── repeat ───────────────────────────────────────────────────────
             if step_type == "repeat":
-                ok, msg, sub_results, runtime_context = await self._handle_repeat(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, sub_results, runtime_context, control_payload = await self._handle_repeat(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({
+                entry = {
                     "index": idx, "type": "repeat", "ok": ok,
                     "message": msg, "sub_results": sub_results,
-                })
+                    "trace": step_trace,
+                    **control_payload,
+                }
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={k: v for k, v in entry.items() if k != "sub_results"},
+                )
+                _append(entry)
                 steps_executed += 1
                 if not ok:
                     action, early = await self._apply_error_policy(
@@ -1569,10 +2245,27 @@ class ScenarioStepsWorkflow:
 
             # ── repeat_until ─────────────────────────────────────────────────
             if step_type == "repeat_until":
-                ok, msg, runtime_context = await self._handle_repeat_until(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, runtime_context, control_payload = await self._handle_repeat_until(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({"index": idx, "type": "repeat_until", "ok": ok, "message": msg})
+                entry = {"index": idx, "type": "repeat_until", "ok": ok, "message": msg, "trace": step_trace, **control_payload}
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload=entry,
+                )
+                _append(entry)
                 steps_executed += 1
                 if not ok:
                     action, early = await self._apply_error_policy(
@@ -1586,10 +2279,27 @@ class ScenarioStepsWorkflow:
 
             # ── if_element ───────────────────────────────────────────────────
             if step_type == "if_element":
-                ok, msg, runtime_context, child_break = await self._handle_if_element(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, runtime_context, child_break, control_payload = await self._handle_if_element(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({"index": idx, "type": "if_element", "ok": ok, "message": msg})
+                entry = {"index": idx, "type": "if_element", "ok": ok, "message": msg, "trace": step_trace, **control_payload}
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload=entry,
+                )
+                _append(entry)
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -1607,10 +2317,27 @@ class ScenarioStepsWorkflow:
 
             # ── if_variable ──────────────────────────────────────────────────
             if step_type == "if_variable":
-                ok, msg, runtime_context, child_break = await self._handle_if_variable(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, runtime_context, child_break, control_payload = await self._handle_if_variable(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({"index": idx, "type": "if_variable", "ok": ok, "message": msg})
+                entry = {"index": idx, "type": "if_variable", "ok": ok, "message": msg, "trace": step_trace, **control_payload}
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload=entry,
+                )
+                _append(entry)
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -1628,10 +2355,27 @@ class ScenarioStepsWorkflow:
 
             # ── random_pick ──────────────────────────────────────────────────
             if step_type == "random_pick":
-                ok, msg, runtime_context, child_break = await self._handle_random_pick(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, runtime_context, child_break, control_payload = await self._handle_random_pick(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                _append({"index": idx, "type": "random_pick", "ok": ok, "message": msg})
+                entry = {"index": idx, "type": "random_pick", "ok": ok, "message": msg, "trace": step_trace, **control_payload}
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload=entry,
+                )
+                _append(entry)
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -1649,13 +2393,31 @@ class ScenarioStepsWorkflow:
 
             # ── run_scenario ────────────────────────────────────────────────
             if step_type == "run_scenario":
-                ok, msg, sub_results, runtime_context = await self._handle_run_scenario(
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_STARTED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={"ok": True},
+                )
+                ok, msg, sub_results, runtime_context, control_payload = await self._handle_run_scenario(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
                 entry = {
                     "index": idx, "type": "run_scenario", "ok": ok,
                     "message": msg, "sub_results": sub_results,
+                    "trace": step_trace,
+                    **control_payload,
                 }
+                await self._emit_control_flow_event(
+                    inp,
+                    event_type=STEP_COMPLETED if ok else STEP_FAILED,
+                    step=step,
+                    step_index=idx,
+                    trace=step_trace,
+                    payload={k: v for k, v in entry.items() if k != "sub_results"},
+                )
                 steps_executed += 1
                 if not ok:
                     policy = _error_policy(step, inp.scenario_config or {})
@@ -1685,13 +2447,21 @@ class ScenarioStepsWorkflow:
 
             # ── extract — writes to context (posts / text_nodes) ─────────────
             if step_type == "extract":
+                extract_activity_policy = None
+                if workflow.patched(_STEP_ACTIVITY_POLICY_PATCH):
+                    extract_activity_policy = build_step_activity_policy(
+                        execution_id=inp.execution_id or inp.run_id,
+                        step=step,
+                        step_index=idx,
+                        default_start_to_close_timeout=_LONG_TIMEOUT,
+                    )
                 extract_result: ExtractResult = await workflow.execute_activity(
                     "execute_extract",
                     ExtractInput(
                         device_serial=inp.device_serial,
                         step=step,
                         step_index=idx,
-                        context=runtime_context,
+                        context=step_trace_context,
                         scenario_config=inp.scenario_config,
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
@@ -1699,16 +2469,39 @@ class ScenarioStepsWorkflow:
                         user_id=inp.campaign_vars.get("__USER_ID__"),
                     ),
                     result_type=ExtractResult,
-                    start_to_close_timeout=_LONG_TIMEOUT,
-                    retry_policy=_ACTIVITY_RETRY,
-                    heartbeat_timeout=timedelta(seconds=30),
+                    start_to_close_timeout=(
+                        extract_activity_policy.start_to_close_timeout
+                        if extract_activity_policy is not None
+                        else _LONG_TIMEOUT
+                    ),
+                    retry_policy=(
+                        extract_activity_policy.retry_policy
+                        if extract_activity_policy is not None
+                        else _ACTIVITY_RETRY
+                    ),
+                    heartbeat_timeout=(
+                        extract_activity_policy.heartbeat_timeout
+                        if extract_activity_policy is not None
+                        else timedelta(seconds=30)
+                    ),
+                    activity_id=(
+                        extract_activity_policy.activity_id
+                        if extract_activity_policy is not None
+                        else None
+                    ),
                 )
+                parent_trace = trace_from_runtime_context(runtime_context)
                 runtime_context = {**runtime_context, **extract_result.context}
+                if parent_trace:
+                    runtime_context[TRACE_CONTEXT_KEY] = parent_trace
+                else:
+                    runtime_context.pop(TRACE_CONTEXT_KEY, None)
                 _append({
                     "index": idx, "type": "extract",
                     "ok": extract_result.ok,
                     "message": _with_persist_metrics(extract_result.message, extract_result.details),
                     "details": extract_result.details,
+                    "trace": step_trace,
                 })
                 steps_executed += 1
                 if extract_result.break_requested:
@@ -1726,13 +2519,21 @@ class ScenarioStepsWorkflow:
 
             # ── save_extraction ──────────────────────────────────────────────
             if step_type == "save_extraction":
+                save_activity_policy = None
+                if workflow.patched(_STEP_ACTIVITY_POLICY_PATCH):
+                    save_activity_policy = build_step_activity_policy(
+                        execution_id=inp.execution_id or inp.run_id,
+                        step=step,
+                        step_index=idx,
+                        default_start_to_close_timeout=timedelta(seconds=120),
+                    )
                 save_result: StepResult = await workflow.execute_activity(
                     "execute_save_extraction",
                     SaveExtractionInput(
                         device_serial=inp.device_serial,
                         step=step,
                         step_index=idx,
-                        context=runtime_context,
+                        context=step_trace_context,
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
                         execution_id=inp.execution_id,
@@ -1745,20 +2546,43 @@ class ScenarioStepsWorkflow:
                         campaign_vars=dict(inp.campaign_vars or {}),
                     ),
                     result_type=StepResult,
-                    start_to_close_timeout=timedelta(seconds=120),
-                    retry_policy=_ACTIVITY_RETRY,
-                    heartbeat_timeout=timedelta(seconds=60),
+                    start_to_close_timeout=(
+                        save_activity_policy.start_to_close_timeout
+                        if save_activity_policy is not None
+                        else timedelta(seconds=120)
+                    ),
+                    retry_policy=(
+                        save_activity_policy.retry_policy
+                        if save_activity_policy is not None
+                        else _ACTIVITY_RETRY
+                    ),
+                    heartbeat_timeout=(
+                        save_activity_policy.heartbeat_timeout
+                        if save_activity_policy is not None
+                        else timedelta(seconds=60)
+                    ),
+                    activity_id=(
+                        save_activity_policy.activity_id
+                        if save_activity_policy is not None
+                        else None
+                    ),
                 )
                 # Apply offset update returned by the activity so retries skip processed items.
+                parent_trace = trace_from_runtime_context(runtime_context)
                 if save_result.details and "updated_offsets" in save_result.details:
                     offsets = dict(runtime_context.get("__save_extraction_offsets__") or {})
                     offsets.update(save_result.details["updated_offsets"])
                     runtime_context = {**runtime_context, "__save_extraction_offsets__": offsets}
+                if parent_trace:
+                    runtime_context[TRACE_CONTEXT_KEY] = parent_trace
+                else:
+                    runtime_context.pop(TRACE_CONTEXT_KEY, None)
                 _append({
                     "index": idx, "type": "save_extraction",
                     "ok": save_result.ok,
                     "message": _with_persist_metrics(save_result.message, save_result.details),
                     "details": save_result.details,
+                    "trace": step_trace,
                 })
                 steps_executed += 1
                 if not save_result.ok:
@@ -1783,7 +2607,7 @@ class ScenarioStepsWorkflow:
                     inp,
                     step,
                     idx,
-                    runtime_context=runtime_context,
+                    runtime_context=step_trace_context,
                 )
                 _append(entry)
                 steps_executed += 1
@@ -1824,7 +2648,7 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, list, dict]:
+    ) -> tuple[bool, str, list, dict, dict[str, Any]]:
         """Handle loop step: count or while condition, supports break_if."""
         count_raw = step.get("count")
         while_cond = step.get("while")
@@ -1832,25 +2656,45 @@ class ScenarioStepsWorkflow:
         sub_steps = step.get("steps") or []
 
         if not sub_steps:
-            return False, "loop: no nested steps", [], runtime_context
+            return (
+                False,
+                "loop: no nested steps",
+                [],
+                runtime_context,
+                {"reason_code": LOOP_NO_NESTED_STEPS, "stopped_by": "config"},
+            )
 
         if count_raw is not None:
             try:
                 # count is explicit — max_iterations applies to while-only loops.
                 iterations = int(count_raw)
             except (TypeError, ValueError):
-                return False, f"loop: invalid count={count_raw!r}", [], runtime_context
+                return (
+                    False,
+                    f"loop: invalid count={count_raw!r}",
+                    [],
+                    runtime_context,
+                    {"reason_code": LOOP_INVALID_COUNT, "stopped_by": "config"},
+                )
             use_while = False
         elif while_cond:
             iterations = max_iterations
             use_while = True
         else:
-            return False, "loop: must specify either 'count' or 'while'", [], runtime_context
+            return (
+                False,
+                "loop: must specify either 'count' or 'while'",
+                [],
+                runtime_context,
+                {"reason_code": LOOP_INVALID_COUNT, "stopped_by": "config"},
+            )
 
         sub_results: list[dict[str, Any]] = []
         sub_result_state: dict[str, Any] = {}
         actual_iters = 0
-        ctx = dict(runtime_context)
+        parent_ctx = dict(runtime_context)
+        parent_trace = trace_from_runtime_context(runtime_context)
+        ctx = dict(parent_ctx)
         loop_var = str(step.get("loop_var") or "").strip()
 
         # Campaigns run their loops here, not in tasks/scenario/steps/control_flow.py
@@ -1873,26 +2717,77 @@ class ScenarioStepsWorkflow:
             runtime_vars["__LOOP_ITER__"] = i
             if loop_var:
                 runtime_vars[loop_var] = i
+            ctx = push_step_path(
+                parent_ctx,
+                step_id=_step_id(step, idx),
+                loop_iter=i,
+                step_type="loop",
+                step_index=idx,
+            )
+            self._mark_step_started(
+                idx,
+                "loop",
+                f"loop iteration {i}",
+                step_id=_step_id(step, idx),
+                step_path=trace_from_runtime_context(ctx).get("step_path"),
+                loop_iter=i,
+            )
             ctx["_loop_iter"] = i
 
             if use_while:
-                cond_met: bool = await workflow.execute_activity(
-                    "evaluate_legacy_condition",
-                    LegacyConditionCheckInput(
-                        device_serial=inp.device_serial,
-                        condition=while_cond,
-                        runtime_vars=runtime_vars,
-                        context=ctx,
-                        execution_id=inp.execution_id or inp.run_id,
-                        campaign_id=inp.campaign_id,
-                    ),
-                    result_type=bool,
-                    start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
-                    heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
-                    retry_policy=_ACTIVITY_RETRY,
-                )
+                try:
+                    cond_met: bool = await workflow.execute_activity(
+                        "evaluate_legacy_condition",
+                        LegacyConditionCheckInput(
+                            device_serial=inp.device_serial,
+                            condition=while_cond,
+                            runtime_vars=runtime_vars,
+                            context=ctx,
+                            execution_id=inp.execution_id or inp.run_id,
+                            campaign_id=inp.campaign_id,
+                        ),
+                        result_type=bool,
+                        **_step_activity_options(
+                            inp,
+                            step,
+                            idx,
+                            activity_step_type="evaluate_legacy_condition",
+                            default_start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                            default_retry_policy=_ACTIVITY_RETRY,
+                            default_heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+                        ),
+                    )
+                except Exception as exc:
+                    if _is_temporal_cancelled_error(exc):
+                        raise
+                    ctx.pop("_loop_iter", None)
+                    _finish_sub_results(sub_results, sub_result_state)
+                    return (
+                        False,
+                        f"loop: condition evaluation failed — {_workflow_failure_message(exc)}",
+                        sub_results,
+                        parent_ctx,
+                        {
+                            "reason_code": CONDITION_EVAL_FAILED,
+                            "iterations_run": actual_iters,
+                            "stopped_by": "condition_error",
+                            "idle_streak": idle_streak,
+                        },
+                    )
                 if not cond_met:
-                    break
+                    ctx.pop("_loop_iter", None)
+                    _finish_sub_results(sub_results, sub_result_state)
+                    return (
+                        True,
+                        f"loop: {actual_iters} iteration(s) completed",
+                        sub_results,
+                        parent_ctx,
+                        {
+                            "iterations_run": actual_iters,
+                            "stopped_by": "condition",
+                            "idle_streak": idle_streak,
+                        },
+                    )
 
             child_result = await self._execute_child_steps(inp, sub_steps, runtime_vars, ctx)
             _append_sub_result(
@@ -1902,10 +2797,28 @@ class ScenarioStepsWorkflow:
             )
             actual_iters += 1
             runtime_vars.update(child_result.runtime_vars)
-            ctx = {**ctx, **child_result.context}
+            parent_ctx = {**parent_ctx, **child_result.context}
+            parent_ctx.pop("_loop_iter", None)
+            if parent_trace:
+                parent_ctx[TRACE_CONTEXT_KEY] = parent_trace
+            else:
+                parent_ctx.pop(TRACE_CONTEXT_KEY, None)
+            ctx = {**parent_ctx, TRACE_CONTEXT_KEY: trace_from_runtime_context(ctx)}
 
             if child_result.break_requested:
-                break
+                ctx.pop("_loop_iter", None)
+                _finish_sub_results(sub_results, sub_result_state)
+                return (
+                    True,
+                    f"loop: {actual_iters} iteration(s) completed",
+                    sub_results,
+                    parent_ctx,
+                    {
+                        "iterations_run": actual_iters,
+                        "stopped_by": "break",
+                        "idle_streak": idle_streak,
+                    },
+                )
 
             if not child_result.success:
                 ctx.pop("_loop_iter", None)
@@ -1914,7 +2827,15 @@ class ScenarioStepsWorkflow:
                     False,
                     f"loop: iteration {i} failed — {child_result.failed_message}",
                     sub_results,
-                    ctx,
+                    parent_ctx,
+                    {
+                        "reason_code": LOOP_ITERATION_FAILED,
+                        "iterations_run": actual_iters,
+                        "failed_iteration": i,
+                        "stopped_by": "child_failure",
+                        "idle_streak": idle_streak,
+                        "nested_failure": _first_failed_step(child_result.step_results),
+                    },
                 )
 
             # Back off after an iteration that touched nothing. workflow.sleep,
@@ -1940,12 +2861,28 @@ class ScenarioStepsWorkflow:
                                 f"screen is probably not the one this loop expects"
                             ),
                             sub_results,
-                            ctx,
+                            parent_ctx,
+                            {
+                                "reason_code": LOOP_STALLED,
+                                "iterations_run": actual_iters,
+                                "stopped_by": "stall",
+                                "idle_streak": idle_streak,
+                            },
                         )
 
         ctx.pop("_loop_iter", None)
         _finish_sub_results(sub_results, sub_result_state)
-        return True, f"loop: {actual_iters} iteration(s) completed", sub_results, ctx
+        return (
+            True,
+            f"loop: {actual_iters} iteration(s) completed",
+            sub_results,
+            parent_ctx,
+            {
+                "iterations_run": actual_iters,
+                "stopped_by": "count" if not use_while else "condition",
+                "idle_streak": idle_streak,
+            },
+        )
 
     async def _handle_if(
         self,
@@ -1954,47 +2891,93 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, dict, bool]:
+    ) -> tuple[bool, str, dict, bool, dict[str, Any]]:
         """Handle generic 'if' step using _evaluate_condition."""
         condition = step.get("condition") or {}
         then_steps = step.get("then") or []
         else_steps = step.get("else") or []
 
         if not condition:
-            return False, "if: missing condition", runtime_context, False
+            return (
+                False,
+                "if: missing condition",
+                runtime_context,
+                False,
+                {"reason_code": CONDITION_EVAL_FAILED},
+            )
 
-        cond_met: bool = await workflow.execute_activity(
-            "evaluate_legacy_condition",
-            LegacyConditionCheckInput(
-                device_serial=inp.device_serial,
-                condition=condition,
-                runtime_vars=runtime_vars,
-                context=runtime_context,
-                execution_id=inp.execution_id or inp.run_id,
-                campaign_id=inp.campaign_id,
-            ),
-            result_type=bool,
-            start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
-            heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
-            retry_policy=_ACTIVITY_RETRY,
-        )
+        try:
+            cond_met: bool = await workflow.execute_activity(
+                "evaluate_legacy_condition",
+                LegacyConditionCheckInput(
+                    device_serial=inp.device_serial,
+                    condition=condition,
+                    runtime_vars=runtime_vars,
+                    context=runtime_context,
+                    execution_id=inp.execution_id or inp.run_id,
+                    campaign_id=inp.campaign_id,
+                ),
+                result_type=bool,
+                **_step_activity_options(
+                    inp,
+                    step,
+                    idx,
+                    activity_step_type="evaluate_legacy_condition",
+                    default_start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                    default_retry_policy=_ACTIVITY_RETRY,
+                    default_heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+                ),
+            )
+        except Exception as exc:
+            if _is_temporal_cancelled_error(exc):
+                raise
+            return (
+                False,
+                f"if: condition evaluation failed — {_workflow_failure_message(exc)}",
+                runtime_context,
+                False,
+                {"reason_code": CONDITION_EVAL_FAILED},
+            )
 
         branch_steps = then_steps if cond_met else else_steps
         branch_name = "then" if cond_met else "else"
+        payload = {"branch": branch_name, "condition_met": cond_met}
 
         if not branch_steps:
-            return True, f"if: no {branch_name} steps, skip", runtime_context, False
+            return True, f"if: no {branch_name} steps, skip", runtime_context, False, payload
 
+        branch_context = push_step_path(
+            runtime_context,
+            step_id=_step_id(step, idx),
+            branch=branch_name,
+            step_type="if",
+            step_index=idx,
+        )
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars, runtime_context,
+            inp, branch_steps, runtime_vars, branch_context,
         )
         runtime_vars.update(child_result.runtime_vars)
         merged_ctx = {**runtime_context, **child_result.context}
+        parent_trace = trace_from_runtime_context(runtime_context)
+        if parent_trace:
+            merged_ctx[TRACE_CONTEXT_KEY] = parent_trace
+        else:
+            merged_ctx.pop(TRACE_CONTEXT_KEY, None)
 
         if not child_result.success:
-            return False, f"if: {branch_name} branch failed — {child_result.failed_message}", merged_ctx, False
+            return (
+                False,
+                f"if: {branch_name} branch failed — {child_result.failed_message}",
+                merged_ctx,
+                False,
+                {
+                    **payload,
+                    "reason_code": BRANCH_FAILED,
+                    "nested_failure": _first_failed_step(child_result.step_results),
+                },
+            )
 
-        return True, f"if: executed {branch_name}", merged_ctx, child_result.break_requested
+        return True, f"if: executed {branch_name}", merged_ctx, child_result.break_requested, payload
 
     async def _handle_repeat(
         self,
@@ -2003,30 +2986,47 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, list, dict]:
+    ) -> tuple[bool, str, list, dict, dict[str, Any]]:
         """Handle repeat step: loop N times with optional delay."""
         count_raw = step.get("count")
         delay = float(step.get("delay_between", 0.0) or 0.0)
         sub_steps = step.get("steps") or []
 
         if count_raw is None:
-            return False, "repeat: missing count", [], runtime_context
+            return False, "repeat: missing count", [], runtime_context, {"reason_code": LOOP_INVALID_COUNT, "stopped_by": "config"}
         if not sub_steps:
-            return False, "repeat: no nested steps", [], runtime_context
+            return False, "repeat: no nested steps", [], runtime_context, {"reason_code": LOOP_NO_NESTED_STEPS, "stopped_by": "config"}
 
         try:
             count = int(count_raw)
         except (TypeError, ValueError):
-            return False, f"repeat: invalid count={count_raw!r}", [], runtime_context
+            return False, f"repeat: invalid count={count_raw!r}", [], runtime_context, {"reason_code": LOOP_INVALID_COUNT, "stopped_by": "config"}
 
         count = min(count, 10_000)
         sub_results: list[dict[str, Any]] = []
         sub_result_state: dict[str, Any] = {}
         actual_iters = 0
-        ctx = dict(runtime_context)
+        parent_ctx = dict(runtime_context)
+        parent_trace = trace_from_runtime_context(runtime_context)
+        ctx = dict(parent_ctx)
 
         for i in range(count):
             runtime_vars["__LOOP_INDEX__"] = i
+            ctx = push_step_path(
+                parent_ctx,
+                step_id=_step_id(step, idx),
+                loop_iter=i,
+                step_type="repeat",
+                step_index=idx,
+            )
+            self._mark_step_started(
+                idx,
+                "repeat",
+                f"repeat iteration {i}",
+                step_id=_step_id(step, idx),
+                step_path=trace_from_runtime_context(ctx).get("step_path"),
+                loop_iter=i,
+            )
 
             child_result = await self._execute_child_steps(inp, sub_steps, runtime_vars, ctx)
             actual_iters += 1
@@ -2042,20 +3042,46 @@ class ScenarioStepsWorkflow:
                     False,
                     f"repeat: iteration {i} failed — {child_result.failed_message}",
                     sub_results,
-                    ctx,
+                    parent_ctx,
+                    {
+                        "reason_code": LOOP_ITERATION_FAILED,
+                        "iterations_run": actual_iters,
+                        "failed_iteration": i,
+                        "stopped_by": "child_failure",
+                        "nested_failure": _first_failed_step(child_result.step_results),
+                    },
                 )
 
             runtime_vars.update(child_result.runtime_vars)
-            ctx = {**ctx, **child_result.context}
+            parent_ctx = {**parent_ctx, **child_result.context}
+            parent_ctx.pop("_loop_iter", None)
+            if parent_trace:
+                parent_ctx[TRACE_CONTEXT_KEY] = parent_trace
+            else:
+                parent_ctx.pop(TRACE_CONTEXT_KEY, None)
 
             if child_result.break_requested:
+                _finish_sub_results(sub_results, sub_result_state)
+                return (
+                    True,
+                    f"repeat: {actual_iters} iteration(s) completed",
+                    sub_results,
+                    parent_ctx,
+                    {"iterations_run": actual_iters, "stopped_by": "break"},
+                )
                 break
 
             if delay > 0 and i < count - 1:
                 await workflow.sleep(min(delay, 300.0))
 
         _finish_sub_results(sub_results, sub_result_state)
-        return True, f"repeat: {actual_iters} iteration(s) completed", sub_results, ctx
+        return (
+            True,
+            f"repeat: {actual_iters} iteration(s) completed",
+            sub_results,
+            parent_ctx,
+            {"iterations_run": actual_iters, "stopped_by": "count"},
+        )
 
     async def _handle_repeat_until(
         self,
@@ -2064,7 +3090,7 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, dict]:
+    ) -> tuple[bool, str, dict, dict[str, Any]]:
         """Handle repeat_until: loop until condition met or max iterations.
 
         Semantics: CHECK condition → if met, exit immediately (zero body iterations);
@@ -2080,46 +3106,111 @@ class ScenarioStepsWorkflow:
         sub_steps = step.get("steps") or []
 
         if not condition:
-            return False, "repeat_until: missing condition", runtime_context
+            return False, "repeat_until: missing condition", runtime_context, {"reason_code": CONDITION_EVAL_FAILED}
         if not sub_steps:
-            return False, "repeat_until: no nested steps", runtime_context
+            return False, "repeat_until: no nested steps", runtime_context, {"reason_code": LOOP_NO_NESTED_STEPS, "stopped_by": "config"}
 
-        ctx = dict(runtime_context)
+        parent_ctx = dict(runtime_context)
+        parent_trace = trace_from_runtime_context(runtime_context)
+        ctx = dict(parent_ctx)
+        actual_iters = 0
 
         for i in range(max_iter):
             runtime_vars["__LOOP_INDEX__"] = i
-
-            condition_met: bool = await workflow.execute_activity(
-                "evaluate_condition",
-                ConditionCheckInput(
-                    device_serial=inp.device_serial,
-                    condition=condition,
-                    runtime_vars=runtime_vars,
-                    execution_id=inp.execution_id or inp.run_id,
-                    campaign_id=inp.campaign_id,
-                ),
-                result_type=bool,
-                start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
-                heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
-                retry_policy=_ACTIVITY_RETRY,
+            ctx = push_step_path(
+                parent_ctx,
+                step_id=_step_id(step, idx),
+                loop_iter=i,
+                step_type="repeat_until",
+                step_index=idx,
+            )
+            self._mark_step_started(
+                idx,
+                "repeat_until",
+                f"repeat_until iteration {i}",
+                step_id=_step_id(step, idx),
+                step_path=trace_from_runtime_context(ctx).get("step_path"),
+                loop_iter=i,
             )
 
+            try:
+                condition_met: bool = await workflow.execute_activity(
+                    "evaluate_condition",
+                    ConditionCheckInput(
+                        device_serial=inp.device_serial,
+                        condition=condition,
+                        runtime_vars=runtime_vars,
+                        execution_id=inp.execution_id or inp.run_id,
+                        campaign_id=inp.campaign_id,
+                    ),
+                    result_type=bool,
+                    **_step_activity_options(
+                        inp,
+                        step,
+                        idx,
+                        activity_step_type="evaluate_condition",
+                        default_start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                        default_retry_policy=_ACTIVITY_RETRY,
+                        default_heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+                    ),
+                )
+            except Exception as exc:
+                if _is_temporal_cancelled_error(exc):
+                    raise
+                return (
+                    False,
+                    f"repeat_until: condition evaluation failed — {_workflow_failure_message(exc)}",
+                    parent_ctx,
+                    {
+                        "reason_code": CONDITION_EVAL_FAILED,
+                        "iterations_run": actual_iters,
+                        "stopped_by": "condition_error",
+                    },
+                )
+
             if condition_met:
-                return True, f"repeat_until: condition met after {i} iteration(s)", ctx
+                return (
+                    True,
+                    f"repeat_until: condition met after {i} iteration(s)",
+                    parent_ctx,
+                    {"iterations_run": actual_iters, "stopped_by": "condition"},
+                )
 
             child_result = await self._execute_child_steps(inp, sub_steps, runtime_vars, ctx)
+            actual_iters += 1
 
             if not child_result.success:
                 return (
                     False,
                     f"repeat_until: iteration {i} failed — {child_result.failed_message}",
-                    ctx,
+                    parent_ctx,
+                    {
+                        "reason_code": LOOP_ITERATION_FAILED,
+                        "iterations_run": actual_iters,
+                        "failed_iteration": i,
+                        "stopped_by": "child_failure",
+                        "nested_failure": _first_failed_step(child_result.step_results),
+                    },
                 )
 
             runtime_vars.update(child_result.runtime_vars)
-            ctx = {**ctx, **child_result.context}
+            parent_ctx = {**parent_ctx, **child_result.context}
+            parent_ctx.pop("_loop_iter", None)
+            if parent_trace:
+                parent_ctx[TRACE_CONTEXT_KEY] = parent_trace
+            else:
+                parent_ctx.pop(TRACE_CONTEXT_KEY, None)
 
-        return False, f"repeat_until: max_iterations ({max_iter}) reached", ctx
+        return (
+            False,
+            f"repeat_until: max_iterations ({max_iter}) reached",
+            parent_ctx,
+            {
+                "reason_code": LOOP_STALLED,
+                "iterations_run": actual_iters,
+                "stopped_by": "max_iterations",
+            },
+        )
 
     async def _handle_if_element(
         self,
@@ -2128,7 +3219,7 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, dict, bool]:
+    ) -> tuple[bool, str, dict, bool, dict[str, Any]]:
         """Handle if_element: branch based on element existence."""
         by = str(step.get("by") or "")
         value = str(step.get("value") or "").strip()
@@ -2137,38 +3228,78 @@ class ScenarioStepsWorkflow:
         else_steps = step.get("else") or []
 
         if not by or not value:
-            return False, "if_element: missing by/value", runtime_context, False
+            return False, "if_element: missing by/value", runtime_context, False, {"reason_code": CONDITION_EVAL_FAILED}
 
-        check_result: ElementCheckResult = await workflow.execute_activity(
-            "check_element_exists",
-            ElementCheckInput(
-                device_serial=inp.device_serial,
-                by=by, value=value, timeout=timeout,
-                execution_id=inp.execution_id or inp.run_id,
-                campaign_id=inp.campaign_id,
-            ),
-            result_type=ElementCheckResult,
-            start_to_close_timeout=timedelta(seconds=timeout + 10),
-            heartbeat_timeout=timedelta(seconds=timeout + 10),
-            retry_policy=_ACTIVITY_RETRY,
-        )
+        try:
+            check_result: ElementCheckResult = await workflow.execute_activity(
+                "check_element_exists",
+                ElementCheckInput(
+                    device_serial=inp.device_serial,
+                    by=by, value=value, timeout=timeout,
+                    execution_id=inp.execution_id or inp.run_id,
+                    campaign_id=inp.campaign_id,
+                ),
+                result_type=ElementCheckResult,
+                **_step_activity_options(
+                    inp,
+                    step,
+                    idx,
+                    activity_step_type="check_element_exists",
+                    default_start_to_close_timeout=timedelta(seconds=timeout + 10),
+                    default_retry_policy=_ACTIVITY_RETRY,
+                    default_heartbeat_timeout=timedelta(seconds=timeout + 10),
+                ),
+            )
+        except Exception as exc:
+            if _is_temporal_cancelled_error(exc):
+                raise
+            return (
+                False,
+                f"if_element: condition evaluation failed — {_workflow_failure_message(exc)}",
+                runtime_context,
+                False,
+                {"reason_code": CONDITION_EVAL_FAILED},
+            )
 
         branch_steps = then_steps if check_result.found else else_steps
         branch_name = "then" if check_result.found else "else"
+        payload = {"branch": branch_name, "condition_met": bool(check_result.found)}
 
         if not branch_steps:
-            return True, f"if_element(found={check_result.found}): no {branch_name} steps, skip", runtime_context, False
+            return True, f"if_element(found={check_result.found}): no {branch_name} steps, skip", runtime_context, False, payload
 
+        branch_context = push_step_path(
+            runtime_context,
+            step_id=_step_id(step, idx),
+            branch=branch_name,
+            step_type="if_element",
+            step_index=idx,
+        )
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars, runtime_context,
+            inp, branch_steps, runtime_vars, branch_context,
         )
         runtime_vars.update(child_result.runtime_vars)
         merged_ctx = {**runtime_context, **child_result.context}
+        parent_trace = trace_from_runtime_context(runtime_context)
+        if parent_trace:
+            merged_ctx[TRACE_CONTEXT_KEY] = parent_trace
+        else:
+            merged_ctx.pop(TRACE_CONTEXT_KEY, None)
 
         if not child_result.success:
-            return False, f"if_element: {branch_name} branch failed — {child_result.failed_message}", merged_ctx, False
+            return (
+                False,
+                f"if_element: {branch_name} branch failed — {child_result.failed_message}",
+                merged_ctx,
+                False,
+                {
+                    **payload,
+                    "reason_code": BRANCH_FAILED,
+                    "nested_failure": _first_failed_step(child_result.step_results),
+                },
+            )
 
-        return True, f"if_element(found={check_result.found}): executed {branch_name}", merged_ctx, child_result.break_requested
+        return True, f"if_element(found={check_result.found}): executed {branch_name}", merged_ctx, child_result.break_requested, payload
 
     async def _handle_if_variable(
         self,
@@ -2177,14 +3308,14 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, dict, bool]:
+    ) -> tuple[bool, str, dict, bool, dict[str, Any]]:
         """Handle if_variable: branch based on variable value."""
         name = str(step.get("name") or "")
         then_steps = step.get("then") or []
         else_steps = step.get("else") or []
 
         if not name:
-            return False, "if_variable: missing name", runtime_context, False
+            return False, "if_variable: missing name", runtime_context, False, {"reason_code": CONDITION_EVAL_FAILED}
 
         raw_val = _lookup_var(name, runtime_vars, inp.variables, inp.campaign_vars)
         str_val = str(raw_val) if raw_val is not None else ""
@@ -2208,20 +3339,43 @@ class ScenarioStepsWorkflow:
 
         branch_steps = then_steps if condition_met else else_steps
         branch_name = "then" if condition_met else "else"
+        payload = {"branch": branch_name, "condition_met": condition_met}
 
         if not branch_steps:
-            return True, f"if_variable({name}={str_val!r}): no {branch_name} steps, skip", runtime_context, False
+            return True, f"if_variable({name}={str_val!r}): no {branch_name} steps, skip", runtime_context, False, payload
 
+        branch_context = push_step_path(
+            runtime_context,
+            step_id=_step_id(step, idx),
+            branch=branch_name,
+            step_type="if_variable",
+            step_index=idx,
+        )
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars, runtime_context,
+            inp, branch_steps, runtime_vars, branch_context,
         )
         runtime_vars.update(child_result.runtime_vars)
         merged_ctx = {**runtime_context, **child_result.context}
+        parent_trace = trace_from_runtime_context(runtime_context)
+        if parent_trace:
+            merged_ctx[TRACE_CONTEXT_KEY] = parent_trace
+        else:
+            merged_ctx.pop(TRACE_CONTEXT_KEY, None)
 
         if not child_result.success:
-            return False, f"if_variable: {branch_name} branch failed", merged_ctx, False
+            return (
+                False,
+                f"if_variable: {branch_name} branch failed",
+                merged_ctx,
+                False,
+                {
+                    **payload,
+                    "reason_code": BRANCH_FAILED,
+                    "nested_failure": _first_failed_step(child_result.step_results),
+                },
+            )
 
-        return True, f"if_variable({name}={str_val!r}): executed {branch_name}", merged_ctx, child_result.break_requested
+        return True, f"if_variable({name}={str_val!r}): executed {branch_name}", merged_ctx, child_result.break_requested, payload
 
     async def _handle_random_pick(
         self,
@@ -2230,31 +3384,55 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, dict, bool]:
+    ) -> tuple[bool, str, dict, bool, dict[str, Any]]:
         """Handle random_pick: weighted random branch selection."""
         branches = step.get("branches") or []
         if not branches:
-            return False, "random_pick: no branches", runtime_context, False
+            return False, "random_pick: no branches", runtime_context, False, {"reason_code": BRANCH_FAILED}
 
         weights = [max(1, int(b.get("weight", 1))) for b in branches]
         wf_random = _get_wf_random()
         chosen_idx = wf_random.choices(range(len(branches)), weights=weights, k=1)[0]
         chosen = branches[chosen_idx]
         branch_steps = chosen.get("steps") or []
+        branch_name = f"branch{chosen_idx}"
+        payload = {"branch": branch_name, "branch_index": chosen_idx}
 
         if not branch_steps:
-            return True, f"random_pick: branch {chosen_idx} has no steps, skip", runtime_context, False
+            return True, f"random_pick: branch {chosen_idx} has no steps, skip", runtime_context, False, payload
 
+        branch_context = push_step_path(
+            runtime_context,
+            step_id=_step_id(step, idx),
+            branch=branch_name,
+            step_type="random_pick",
+            step_index=idx,
+        )
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars, runtime_context,
+            inp, branch_steps, runtime_vars, branch_context,
         )
         runtime_vars.update(child_result.runtime_vars)
         merged_ctx = {**runtime_context, **child_result.context}
+        parent_trace = trace_from_runtime_context(runtime_context)
+        if parent_trace:
+            merged_ctx[TRACE_CONTEXT_KEY] = parent_trace
+        else:
+            merged_ctx.pop(TRACE_CONTEXT_KEY, None)
 
         if not child_result.success:
-            return False, f"random_pick: branch {chosen_idx} failed", merged_ctx, False
+            return (
+                False,
+                f"random_pick: branch {chosen_idx} failed",
+                merged_ctx,
+                False,
+                {
+                    **payload,
+                    "reason_code": BRANCH_FAILED,
+                    "nested_failure": _first_failed_step(child_result.step_results),
+                },
+            )
 
-        return True, f"random_pick: executed branch {chosen_idx}", merged_ctx, child_result.break_requested
+        return True, f"random_pick: executed branch {chosen_idx}", merged_ctx, child_result.break_requested, payload
 
     async def _handle_run_scenario(
         self,
@@ -2263,7 +3441,7 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict,
         runtime_context: dict,
         idx: int,
-    ) -> tuple[bool, str, list, dict]:
+    ) -> tuple[bool, str, list, dict, dict[str, Any]]:
         """Handle run_scenario as in-workflow control flow.
 
         This keeps campaign-level scenario sequences on one device strictly
@@ -2276,7 +3454,13 @@ class ScenarioStepsWorkflow:
         scenario_ref = scenario_id or scenario_name
 
         if not scenario_ref:
-            return False, "run_scenario: missing scenario_id or scenario_name", [], runtime_context
+            return (
+                False,
+                "run_scenario: missing scenario_id or scenario_name",
+                [],
+                runtime_context,
+                {"reason_code": SUBSCENARIO_FAILED},
+            )
 
         stack = list(runtime_context.get("__scenario_call_stack__") or [])
         if scenario_ref in stack:
@@ -2285,6 +3469,7 @@ class ScenarioStepsWorkflow:
                 f"run_scenario: circular reference detected: {scenario_ref!r}",
                 [],
                 runtime_context,
+                {"reason_code": SUBSCENARIO_FAILED},
             )
 
         registry = inp.scenario_registry or {}
@@ -2313,6 +3498,7 @@ class ScenarioStepsWorkflow:
                 f"run_scenario: sub-scenario not found: {scenario_ref!r}",
                 [],
                 runtime_context,
+                {"reason_code": SUBSCENARIO_FAILED},
             )
 
         override_vars = step.get("variables") or {}
@@ -2321,32 +3507,29 @@ class ScenarioStepsWorkflow:
         merged_vars = {**(sub_def.get("variables") or {}), **override_vars}
         child_vars = {**inp.variables, **merged_vars}
         sub_steps = sub_def.get("steps") or []
-        parent_trace = runtime_context.get("__scenario_trace__")
-        trace = dict(parent_trace) if isinstance(parent_trace, dict) else {}
-        trace.update(
-            {
-                "scenario_id": scenario_id or sub_def.get("id"),
-                "scenario_name": (
-                    scenario_name
-                    or str(sub_def.get("name") or "").strip()
-                    or scenario_ref
-                ),
-                "scenario_ref_index": step.get("scenario_ref_index"),
-                "scenario_sequence_index": step.get("scenario_sequence_index"),
-                "repeat_index": step.get("repeat_index"),
-                "repeat_count": step.get("repeat_count"),
-            }
-        )
-        trace = {
-            key: value
-            for key, value in trace.items()
-            if value not in (None, "", [], {})
+        scenario_updates = {
+            "scenario_id": scenario_id or sub_def.get("id"),
+            "scenario_name": (
+                scenario_name
+                or str(sub_def.get("name") or "").strip()
+                or scenario_ref
+            ),
+            "scenario_ref_index": step.get("scenario_ref_index"),
+            "scenario_sequence_index": step.get("scenario_sequence_index"),
+            "repeat_index": step.get("repeat_index"),
+            "repeat_count": step.get("repeat_count"),
         }
+        traced_context = push_step_path(
+            runtime_context,
+            step_id=_step_id(step, idx),
+            step_type="run_scenario",
+            step_index=idx,
+            scenario_updates=scenario_updates,
+        )
 
         child_context = {
-            **runtime_context,
+            **traced_context,
             "__scenario_call_stack__": [*stack, scenario_ref],
-            "__scenario_trace__": trace,
         }
         child_result = await self._execute_child_steps(
             inp,
@@ -2357,6 +3540,11 @@ class ScenarioStepsWorkflow:
         )
 
         merged_ctx = {**runtime_context, **child_result.context}
+        parent_trace = trace_from_runtime_context(runtime_context)
+        if parent_trace:
+            merged_ctx[TRACE_CONTEXT_KEY] = parent_trace
+        else:
+            merged_ctx.pop(TRACE_CONTEXT_KEY, None)
         merged_ctx.pop("__scenario_call_stack__", None)
 
         child_failed = (not child_result.success) or _step_results_have_failure(
@@ -2372,6 +3560,15 @@ class ScenarioStepsWorkflow:
                 f"run_scenario: sub-scenario {scenario_ref!r} failed — {failed_message}",
                 child_result.step_results,
                 merged_ctx,
+                {
+                    "reason_code": SUBSCENARIO_FAILED,
+                    "nested_failure": _first_failed_step(child_result.step_results),
+                    **{
+                        key: value
+                        for key, value in scenario_updates.items()
+                        if value not in (None, "", [], {})
+                    },
+                },
             )
 
         return (
@@ -2379,6 +3576,14 @@ class ScenarioStepsWorkflow:
             f"run_scenario: {scenario_ref!r} completed ({child_result.steps_executed} steps)",
             child_result.step_results,
             merged_ctx,
+            {
+                "sub_steps_executed": child_result.steps_executed,
+                **{
+                    key: value
+                    for key, value in scenario_updates.items()
+                    if value not in (None, "", [], {})
+                },
+            },
         )
 
     # ── Inline step execution (no child workflow spawn) ──────────────────

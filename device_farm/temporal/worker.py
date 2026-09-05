@@ -110,6 +110,8 @@ async def create_temporal_worker(
         _activities.heartbeat_campaign_device_claim,
         _activities.finalize_campaign,
         _activities.persist_step_checkpoint,
+        _activities.emit_control_flow_event,
+        _activities.emit_temporal_activity_event,
         _account_state_activities.process_expired_account_cooldowns,
         prepare_continuous_crawl_target,
         finalize_continuous_crawl,

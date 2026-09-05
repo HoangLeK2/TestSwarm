@@ -1,5 +1,10 @@
 import type { FlowStep } from '../components/scenario-steps/types';
-import type { StepLogEntry } from '../types';
+import type { StepLogEntry, TemporalActivityEventSummary } from '../types';
+import {
+  executionTraceFromLog,
+  executionTraceFromRecord,
+  normalizeTracePathForMatch
+} from './execution-trace';
 
 export type WorkflowStepRowStatus =
   | 'pending'
@@ -12,6 +17,7 @@ export type FlatWorkflowStep = {
   flatIndex: number;
   depth: number;
   pathKey: string;
+  tracePath: string;
   branchLabel?: string;
   rootIndex: number;
   localIndex: number;
@@ -31,6 +37,7 @@ export type WorkflowStepRows = WorkflowStepRow[] & {
 type ChildList = {
   listKey: string;
   branchLabel: string;
+  traceBranch?: string;
   steps: FlowStep[];
 };
 
@@ -57,6 +64,7 @@ function childLists(step: FlowStep): ChildList[] {
     out.push({
       listKey: 'then',
       branchLabel: 'monitorStepBranchThen',
+      traceBranch: 'then',
       steps: rec.then
     });
   }
@@ -64,6 +72,7 @@ function childLists(step: FlowStep): ChildList[] {
     out.push({
       listKey: 'else',
       branchLabel: 'monitorStepBranchElse',
+      traceBranch: 'else',
       steps: rec.else
     });
   }
@@ -72,6 +81,7 @@ function childLists(step: FlowStep): ChildList[] {
     out.push({
       listKey: `branches.${branchIndex}`,
       branchLabel: 'monitorStepBranchRandom',
+      traceBranch: `branch${branchIndex}`,
       steps: branch.steps
     });
   });
@@ -79,11 +89,21 @@ function childLists(step: FlowStep): ChildList[] {
   return out;
 }
 
+function stepTraceSegment(step: FlowStep, index: number): string {
+  const raw = step as FlowStep & {
+    id?: unknown;
+    _id?: unknown;
+    step_id?: unknown;
+  };
+  return String(raw.id ?? raw._id ?? raw.step_id ?? index).trim();
+}
+
 function pushSteps(
   steps: FlowStep[],
   out: FlatWorkflowStep[],
   depth: number,
   parentPath: string,
+  parentTracePath: string,
   rootIndex: number,
   branchLabel?: string
 ): void {
@@ -93,11 +113,16 @@ function pushSteps(
 
     const ownRootIndex = depth === 0 ? index : rootIndex;
     const pathKey = `${parentPath}.${index}`;
+    const segment = stepTraceSegment(step, index);
+    const tracePath = parentTracePath
+      ? `${parentTracePath}/${segment}`
+      : segment;
     out.push({
       step,
       flatIndex: out.length,
       depth,
       pathKey,
+      tracePath,
       branchLabel,
       rootIndex: ownRootIndex,
       localIndex: index
@@ -109,6 +134,9 @@ function pushSteps(
         out,
         depth + 1,
         `${pathKey}.${childList.listKey}`,
+        childList.traceBranch
+          ? `${tracePath}.${childList.traceBranch}`
+          : tracePath,
         ownRootIndex,
         childList.branchLabel
       );
@@ -118,7 +146,7 @@ function pushSteps(
 
 export function flattenWorkflowSteps(steps: FlowStep[]): FlatWorkflowStep[] {
   const out: FlatWorkflowStep[] = [];
-  pushSteps(steps, out, 0, 'steps', 0);
+  pushSteps(steps, out, 0, 'steps', '', 0);
   return out;
 }
 
@@ -266,6 +294,19 @@ export function normalizeTemporalStepLogEntry(
     raw.details && typeof raw.details === 'object'
       ? (raw.details as Record<string, unknown>)
       : undefined;
+  const evidence =
+    raw.evidence && typeof raw.evidence === 'object'
+      ? (raw.evidence as Record<string, unknown>)
+      : details?.evidence && typeof details.evidence === 'object'
+        ? (details.evidence as Record<string, unknown>)
+        : undefined;
+  const temporalActivityEvents = Array.isArray(raw.temporal_activity_events)
+    ? (raw.temporal_activity_events.filter(
+        (item): item is TemporalActivityEventSummary =>
+          Boolean(item) && typeof item === 'object'
+      ) as TemporalActivityEventSummary[])
+    : undefined;
+  const traceSummary = executionTraceFromRecord(raw);
   return {
     index: Number(raw.index ?? raw.step_index ?? 0),
     occurrence_key:
@@ -286,8 +327,15 @@ export function normalizeTemporalStepLogEntry(
     exit_code: typeof raw.exit_code === 'number' ? raw.exit_code : null,
     save_as: typeof raw.save_as === 'string' ? raw.save_as : null,
     output_truncated: Boolean(raw.output_truncated),
+    step_path: traceSummary.stepPath,
+    loop_id: traceSummary.loopId,
+    loop_iter: traceSummary.loopIter,
+    branch: traceSummary.branch,
+    reason_code: traceSummary.reasonCode,
+    evidence,
     details: trace ? { ...(details ?? {}), trace } : details,
-    trace
+    trace,
+    temporal_activity_events: temporalActivityEvents
   };
 }
 
@@ -308,12 +356,29 @@ export function mergeStepLogEntries(
         map.set(key, entry);
         continue;
       }
+      const mergedTemporalActivityEvents = mergeTemporalActivityEvents(
+        existing.temporal_activity_events,
+        entry.temporal_activity_events
+      );
       if (entry.status === 'running') {
-        map.set(key, entry);
+        map.set(key, {
+          ...entry,
+          temporal_activity_events: mergedTemporalActivityEvents
+        });
         continue;
       }
       if (existing.status === 'running') {
-        map.set(key, entry);
+        map.set(key, {
+          ...entry,
+          temporal_activity_events: mergedTemporalActivityEvents
+        });
+        continue;
+      }
+      if (mergedTemporalActivityEvents) {
+        map.set(key, {
+          ...existing,
+          temporal_activity_events: mergedTemporalActivityEvents
+        });
       }
     }
   }
@@ -325,11 +390,29 @@ export function mergeStepLogEntries(
   );
 }
 
+function mergeTemporalActivityEvents(
+  first?: TemporalActivityEventSummary[],
+  second?: TemporalActivityEventSummary[]
+): TemporalActivityEventSummary[] | undefined {
+  const merged = [...(first ?? []), ...(second ?? [])];
+  if (merged.length === 0) return undefined;
+
+  const bySignature = new Map<string, TemporalActivityEventSummary>();
+  for (const event of merged) {
+    const signature = `${event.event_type}:${event.activity_id ?? ''}:${
+      event.step_activity_id ?? ''
+    }:${event.activity_attempt ?? ''}:${event.occurred_at ?? ''}`;
+    bySignature.set(signature, event);
+  }
+  return Array.from(bySignature.values()).slice(-8);
+}
+
 function logType(log: StepLogEntry): string {
   return log.step_type || log.type || '';
 }
 
 function logPath(log: StepLogEntry): string | null {
+  const traceSummary = executionTraceFromLog(log);
   const details = log.details ?? {};
   const raw =
     (log as StepLogEntry & { path_key?: unknown; step_path?: unknown })
@@ -340,7 +423,7 @@ function logPath(log: StepLogEntry): string | null {
     details.path;
   if (typeof raw === 'string' && raw.trim()) return raw;
   if (Array.isArray(raw)) return raw.join('.');
-  return null;
+  return traceSummary.stepPath;
 }
 
 function logStepId(log: StepLogEntry): string | null {
@@ -355,42 +438,123 @@ function matchesType(flat: FlatWorkflowStep, log: StepLogEntry): boolean {
   return !type || flat.step.type === type;
 }
 
+function addIndex(
+  index: Map<string, FlatWorkflowStep[]>,
+  key: string | null | undefined,
+  flat: FlatWorkflowStep
+): void {
+  if (!key) return;
+  const rows = index.get(key);
+  if (rows) {
+    rows.push(flat);
+    return;
+  }
+  index.set(key, [flat]);
+}
+
+function flatStepId(flat: FlatWorkflowStep): string | null {
+  const step = flat.step as FlowStep & {
+    id?: unknown;
+    _id?: unknown;
+    step_id?: unknown;
+  };
+  const raw = step.id ?? step._id ?? step.step_id;
+  return typeof raw === 'string' && raw.trim() ? raw : null;
+}
+
+function depthLocalKey(
+  depth: number,
+  localIndex: number,
+  type: string
+): string {
+  return `${depth}:${localIndex}:${type}`;
+}
+
+function rootKey(rootIndex: number, type: string): string {
+  return `${rootIndex}:${type}`;
+}
+
+function indexedLookup(
+  index: Map<string, FlatWorkflowStep[]>,
+  keys: Array<string | null | undefined>
+): FlatWorkflowStep[] {
+  const out: FlatWorkflowStep[] = [];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (!key) continue;
+    for (const row of index.get(key) ?? []) {
+      if (seen.has(row.pathKey)) continue;
+      seen.add(row.pathKey);
+      out.push(row);
+    }
+  }
+  return out;
+}
+
 function assignLogs(
   flatSteps: FlatWorkflowStep[],
   logs: StepLogEntry[]
 ): Map<string, StepLogEntry> {
   const assigned = new Map<string, StepLogEntry>();
   const used = new Set<string>();
+  const byPath = new Map<string, FlatWorkflowStep[]>();
+  const byTracePath = new Map<string, FlatWorkflowStep[]>();
+  const byStepId = new Map<string, FlatWorkflowStep[]>();
+  const byDepthLocal = new Map<string, FlatWorkflowStep[]>();
+  const byRoot = new Map<string, FlatWorkflowStep[]>();
+
+  for (const flat of flatSteps) {
+    const normalizedTracePath = normalizeTracePathForMatch(flat.tracePath);
+    addIndex(byPath, flat.pathKey, flat);
+    addIndex(byTracePath, flat.tracePath, flat);
+    addIndex(byTracePath, normalizedTracePath, flat);
+    addIndex(byStepId, flatStepId(flat), flat);
+    addIndex(
+      byDepthLocal,
+      depthLocalKey(flat.depth, flat.localIndex, ''),
+      flat
+    );
+    addIndex(
+      byDepthLocal,
+      depthLocalKey(flat.depth, flat.localIndex, flat.step.type),
+      flat
+    );
+    if (flat.depth === 0) {
+      addIndex(byRoot, rootKey(flat.rootIndex, ''), flat);
+      addIndex(byRoot, rootKey(flat.rootIndex, flat.step.type), flat);
+    }
+  }
 
   for (const log of logs) {
     const explicitPath = logPath(log);
-    let candidates = explicitPath
-      ? flatSteps.filter((flat) => flat.pathKey === explicitPath)
-      : [];
+    const normalizedExplicitPath = normalizeTracePathForMatch(explicitPath);
+    let candidates = explicitPath ? indexedLookup(byPath, [explicitPath]) : [];
+    if (candidates.length === 0 && explicitPath) {
+      candidates = indexedLookup(byTracePath, [
+        explicitPath,
+        normalizedExplicitPath
+      ]);
+    }
 
     const stepId = candidates.length === 0 ? logStepId(log) : null;
     if (stepId) {
-      candidates = flatSteps.filter(
-        (flat) => String((flat.step as { id?: unknown }).id ?? '') === stepId
-      );
+      candidates = byStepId.get(stepId) ?? [];
     }
 
     if (candidates.length === 0) {
-      candidates = flatSteps.filter(
-        (flat) =>
-          flat.depth === (log.depth ?? 0) &&
-          flat.localIndex === log.index &&
-          matchesType(flat, log)
-      );
+      const type = logType(log);
+      candidates = indexedLookup(byDepthLocal, [
+        depthLocalKey(log.depth ?? 0, log.index, type),
+        type ? null : depthLocalKey(log.depth ?? 0, log.index, '')
+      ]).filter((flat) => matchesType(flat, log));
     }
 
     if (candidates.length === 0 && (log.depth ?? 0) === 0) {
-      candidates = flatSteps.filter(
-        (flat) =>
-          flat.depth === 0 &&
-          flat.rootIndex === log.index &&
-          matchesType(flat, log)
-      );
+      const type = logType(log);
+      candidates = indexedLookup(byRoot, [
+        rootKey(log.index, type),
+        type ? null : rootKey(log.index, '')
+      ]).filter((flat) => matchesType(flat, log));
     }
 
     if (candidates.length === 0) continue;
@@ -409,6 +573,7 @@ function placeholderRows(logs: StepLogEntry[]): WorkflowStepRows {
     flatIndex: index,
     depth: log.depth ?? 0,
     pathKey: `log.${index}`,
+    tracePath: log.step_path ?? `log.${index}`,
     rootIndex: log.index,
     localIndex: log.index,
     logEntry: log,

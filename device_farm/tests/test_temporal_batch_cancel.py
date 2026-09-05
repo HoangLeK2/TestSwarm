@@ -13,11 +13,17 @@ from temporal.shared import DeviceActionBatchInput, DeviceActionBatchResult
 @pytest.fixture(autouse=True)
 def _isolate_campaign_claim_database():
     """These batch-unit tests do not exercise campaign claim persistence."""
+    from services import execution_pause_flags
+
+    execution_pause_flags._LOCAL.clear()
+    execution_pause_flags._CANCEL_LOCAL.clear()
     with patch(
         "temporal.activities._heartbeat_campaign_device_claim",
         AsyncMock(),
     ):
         yield
+    execution_pause_flags._LOCAL.clear()
+    execution_pause_flags._CANCEL_LOCAL.clear()
 
 
 def test_device_action_batch_temporal_retry_is_single_attempt():
@@ -73,6 +79,56 @@ def test_device_action_batch_timeout_includes_recovery_deadline_margin():
     )
 
     assert timeout == timedelta(seconds=990)
+
+
+def test_activity_batch_heartbeat_falls_back_to_legacy_string():
+    from temporal.activities import _activity_batch_heartbeat
+
+    inp = DeviceActionBatchInput(
+        device_serial="SN001",
+        steps=[{"type": "tap_position"}],
+        step_indices=[7],
+        execution_id="exec-1",
+    )
+
+    assert _activity_batch_heartbeat(inp, phase="running", position=0) == "batch:0/1"
+
+
+def test_activity_batch_heartbeat_structured_payload():
+    from temporal.activities import _activity_batch_heartbeat
+
+    inp = DeviceActionBatchInput(
+        device_serial="SN001",
+        steps=[{"type": "tap_position"}],
+        step_indices=[7],
+        execution_id="exec-1",
+        campaign_id="camp-1",
+        activity_id="batch:exec-1:7",
+        step_activity_ids=["step:exec-1:7"],
+        side_effect_class="mixed_batch",
+    )
+
+    heartbeat = _activity_batch_heartbeat(
+        inp,
+        phase="emit_finished",
+        position=0,
+        step={"type": "tap_position"},
+        step_index=7,
+    )
+
+    assert heartbeat == {
+        "activity_id": "batch:exec-1:7",
+        "step_activity_id": "step:exec-1:7",
+        "execution_id": "exec-1",
+        "campaign_id": "camp-1",
+        "device_serial": "SN001",
+        "step_index": 7,
+        "step_type": "tap_position",
+        "position": 0,
+        "count": 1,
+        "phase": "emit_finished",
+        "side_effect_class": "mixed_batch",
+    }
 
 
 @pytest.mark.asyncio
@@ -187,6 +243,68 @@ async def test_execute_device_action_batch_uses_single_u2_batch_for_touch_primit
     assert result.first_failure_index == -1
     assert [item["index"] for item in result.results] == [3, 4]
     assert all(item["ok"] for item in result.results)
+
+
+@pytest.mark.asyncio
+async def test_execute_device_action_batch_emits_structured_heartbeats():
+    from temporal.activities import DeviceActivities
+
+    activities = DeviceActivities()
+    inp = DeviceActionBatchInput(
+        device_serial="SN001",
+        steps=[{"id": "tap-main", "type": "tap_position", "pos": "top_center"}],
+        step_indices=[3],
+        execution_id="exec-1",
+        campaign_id="camp-1",
+        activity_id="batch:exec-1:tap-main",
+        step_activity_ids=["step:exec-1:tap-main"],
+        side_effect_class="mixed_batch",
+    )
+
+    mock_device = MagicMock()
+    mock_device.model = "test"
+    mock_device.screen_width = 1000
+    mock_device.screen_height = 2000
+    mock_device.ensure_u2_healthy = MagicMock()
+    mock_device._batch_enabled = MagicMock(return_value=True)
+    mock_device.u2_batch = MagicMock(return_value=[{"op": "click", "ok": True}])
+
+    with (
+        patch("temporal.activities._get_device", return_value=mock_device),
+        patch("temporal.activities._validate_serial"),
+        patch("temporal.activities._emit_step_events_for_activity", AsyncMock()),
+        patch("temporal.activities.activity") as mock_activity,
+        patch(
+            "services.execution_pause_flags.is_execution_cancelled_async",
+            AsyncMock(return_value=False),
+        ),
+        patch(
+            "services.execution_pause_flags.is_execution_paused_async",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        mock_activity.heartbeat = MagicMock()
+        mock_activity.is_cancelled = MagicMock(return_value=False)
+        result = await activities.execute_device_action_batch(inp)
+
+    assert result.first_failure_index == -1
+    heartbeats = [
+        call.args[0]
+        for call in mock_activity.heartbeat.call_args_list
+        if call.args and isinstance(call.args[0], dict)
+    ]
+    assert {heartbeat["phase"] for heartbeat in heartbeats} >= {
+        "started",
+        "running",
+        "u2_batch",
+        "emit_started",
+        "emit_finished",
+    }
+    finished = next(h for h in heartbeats if h["phase"] == "emit_finished")
+    assert finished["activity_id"] == "batch:exec-1:tap-main"
+    assert finished["step_activity_id"] == "step:exec-1:tap-main"
+    assert finished["step_index"] == 3
+    assert finished["step_type"] == "tap_position"
 
 
 @pytest.mark.asyncio

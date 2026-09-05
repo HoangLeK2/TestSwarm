@@ -24,6 +24,7 @@ from db.crud.execution import (
 from db.crud.execution_dlq import list_dlq_entries
 from db.models.execution import Execution
 from services.activity_logger import log_activity
+from services.temporal_orchestrator import TemporalExecutionOrchestrator
 
 log = logging.getLogger(__name__)
 
@@ -114,19 +115,9 @@ async def _list_campaign_running_workflow_ids(
     temporal_client: Any,
     campaign_id: str,
 ) -> list[str]:
-    if temporal_client is None:
-        return []
-    ids: list[str] = []
-    wf_query = (
-        f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" '
-        f'AND ExecutionStatus="Running"'
-    )
-    async for wf in temporal_client.list_workflows(wf_query):
-        # Top-level workflows only (skip :steps children in listing if present)
-        if wf.id.endswith(":steps"):
-            continue
-        ids.append(wf.id)
-    return ids
+    return await TemporalExecutionOrchestrator(
+        temporal_client
+    ).list_running_campaign_workflow_ids(campaign_id)
 
 
 def _union_workflow_ids(*sources: list[str]) -> list[str]:
@@ -148,37 +139,13 @@ async def _resolve_workflow_ids_for_execution(
     campaign_scan_ids: list[str] | None = None,
 ) -> list[str]:
     """Workflow IDs to signal for one execution — meta first, then device-derived IDs."""
-    from db.crud.execution import list_execution_devices
-
-    ids = _workflow_ids_for_execution(
+    return await TemporalExecutionOrchestrator(
+        temporal_client
+    ).resolve_workflow_ids_for_execution(
+        db,
         execution,
-        _workflow_ids_from_meta(execution.meta),
+        campaign_scan_ids=campaign_scan_ids,
     )
-    # A fan-out dispatch names its workflow after the execution, and the
-    # dispatcher does not record that name in meta. Every ID this resolver
-    # produced therefore belonged to a workflow that does not exist, and
-    # _signal_one swallows a signal to a missing workflow — so pause, resume and
-    # cancel all reported success while reaching nothing. Resume was the visible
-    # casualty: the workflow parks on wait_condition for a resume signal that
-    # never arrived, so the scenario never continued.
-    #
-    # Added as an extra candidate rather than a replacement: legacy campaign runs
-    # really are campaign:<id>:device:<serial>:scenario:… and must still be
-    # signalled. Signalling an ID that does not exist costs one swallowed RPC.
-    fallback_ids = _union_workflow_ids(ids, [_exec_workflow_id(execution)])
-    if ids:
-        return fallback_ids
-
-    if not execution.campaign_id:
-        return fallback_ids
-
-    devices = await list_execution_devices(db, execution.id)
-    serials = [d.serial for d in devices if d.serial]
-    expected = _expected_workflow_ids(execution.campaign_id, serials)
-    if expected:
-        return _union_workflow_ids(fallback_ids, expected)
-
-    return _union_workflow_ids(fallback_ids, list(campaign_scan_ids or []))
 
 
 async def _resolve_workflow_ids_for_campaign(
@@ -188,36 +155,9 @@ async def _resolve_workflow_ids_for_campaign(
     temporal_client: Any | None,
 ) -> list[str]:
     """One union of workflow IDs for a campaign fan-out (single Temporal pass)."""
-    chunks: list[list[str]] = []
-    for ex in executions:
-        chunks.append(
-            _workflow_ids_for_execution(ex, _workflow_ids_from_meta(ex.meta))
-        )
-
-    # See _resolve_workflow_ids_for_execution: the fan-out workflow is named
-    # after the execution and that name is not in meta, so without these the
-    # campaign-level signals reach nothing. Kept out of `chunks` on purpose —
-    # `any(chunks)` below decides whether the device-derived legacy IDs are still
-    # needed, and it has to keep reading only what meta actually knows.
-    exec_ids = [_exec_workflow_id(ex) for ex in executions]
-
-    scan_ids: list[str] = []
-    if temporal_client is not None:
-        scan_ids = _workflow_ids_for_campaign(
-            campaign_id,
-            await _list_campaign_running_workflow_ids(temporal_client, campaign_id),
-        )
-
-    if not any(chunks) and not scan_ids:
-        from db.crud.execution import list_execution_devices
-
-        all_serials: list[str] = []
-        for ex in executions:
-            devices = await list_execution_devices(db, ex.id)
-            all_serials.extend(d.serial for d in devices if d.serial)
-        chunks.append(_expected_workflow_ids(campaign_id, all_serials))
-
-    return _union_workflow_ids(*chunks, scan_ids, exec_ids)
+    return await TemporalExecutionOrchestrator(
+        temporal_client
+    ).resolve_workflow_ids_for_campaign(db, campaign_id, executions)
 
 
 _SIGNAL_CONCURRENCY = 32
@@ -228,34 +168,10 @@ async def _signal_workflow_ids(
     workflow_ids: list[str],
     action: ControlAction,
 ) -> int:
-    if not workflow_ids or temporal_client is None:
-        return 0
-
-    from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
-
-    signal_map = {
-        "pause": (ScenarioWorkflow.pause, ScenarioStepsWorkflow.pause),
-        "resume": (ScenarioWorkflow.resume, ScenarioStepsWorkflow.resume),
-        "cancel": (ScenarioWorkflow.cancel_scenario, ScenarioStepsWorkflow.cancel_scenario),
-    }
-    parent_sig, child_sig = signal_map[action]
-    sem = asyncio.Semaphore(_SIGNAL_CONCURRENCY)
-
-    async def _signal_one(target_id: str, sig) -> None:
-        async with sem:
-            try:
-                handle = temporal_client.get_workflow_handle(target_id)
-                await handle.signal(sig)
-            except Exception as exc:
-                log.debug("workflow %s %s: %s", target_id, action, exc)
-
-    tasks = []
-    for wf_id in workflow_ids:
-        tasks.append(_signal_one(wf_id, parent_sig))
-        tasks.append(_signal_one(f"{wf_id}:steps", child_sig))
-
-    await asyncio.gather(*tasks, return_exceptions=True)
-    return len(workflow_ids)
+    return await TemporalExecutionOrchestrator(temporal_client).signal_workflow_ids(
+        workflow_ids,
+        action,
+    )
 
 
 def _record_control_metrics(action: ControlAction, *, effective: bool, elapsed_sec: float) -> None:

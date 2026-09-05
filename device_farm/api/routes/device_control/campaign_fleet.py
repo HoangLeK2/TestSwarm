@@ -59,6 +59,94 @@ _WORKFLOW_CONTEXT_RE = re.compile(
 _INTERRUPT_TEMPORAL_DEADLINE_S = 3.0
 _INTERRUPT_CANCEL_TIMEOUT_S = 1.0
 _INTERRUPT_CANCEL_CONCURRENCY = 16
+_ACTIVITY_STALL_SOFT_MS = {
+    "read": 45_000,
+    "device_effect": 120_000,
+    "social_effect": 180_000,
+    "io_effect": 180_000,
+    "mixed_batch": 180_000,
+}
+_ACTIVITY_STALL_HARD_MS = {
+    "read": 120_000,
+    "device_effect": 300_000,
+    "social_effect": 600_000,
+    "io_effect": 600_000,
+    "mixed_batch": 600_000,
+}
+_ACTIVITY_STALL_DEFAULT_SOFT_MS = 90_000
+_ACTIVITY_STALL_DEFAULT_HARD_MS = 300_000
+
+
+def _classify_activity_progress(
+    *,
+    status: str | None,
+    running_step: bool,
+    elapsed_ms: int,
+    activity_id: str | None,
+    phase: str | None,
+    side_effect_class: str | None,
+    activity_attempt: int,
+) -> dict[str, object]:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "cancelled":
+        return {
+            "activity_state": "cancelled",
+            "stalled_reason": None,
+            "stalled_after_ms": 0,
+            "stalled_threshold_ms": None,
+            "activity_retrying": activity_attempt > 1,
+        }
+    if normalized_status in {"paused", "paused_on_error"}:
+        return {
+            "activity_state": "paused",
+            "stalled_reason": None,
+            "stalled_after_ms": 0,
+            "stalled_threshold_ms": None,
+            "activity_retrying": activity_attempt > 1,
+        }
+    if not running_step and not activity_id and not phase:
+        return {
+            "activity_state": "idle",
+            "stalled_reason": None,
+            "stalled_after_ms": 0,
+            "stalled_threshold_ms": None,
+            "activity_retrying": activity_attempt > 1,
+        }
+
+    side_effect = str(side_effect_class or "").strip().lower()
+    soft_ms = _ACTIVITY_STALL_SOFT_MS.get(
+        side_effect,
+        _ACTIVITY_STALL_DEFAULT_SOFT_MS,
+    )
+    hard_ms = _ACTIVITY_STALL_HARD_MS.get(
+        side_effect,
+        _ACTIVITY_STALL_DEFAULT_HARD_MS,
+    )
+    phase_text = str(phase or "").strip().lower()
+    state = "scheduled" if phase_text.startswith("scheduled") else "running"
+    reason = None
+
+    if elapsed_ms >= hard_ms:
+        state = "timed_out"
+        reason = "heartbeat_timeout_risk"
+    elif elapsed_ms >= soft_ms:
+        state = "possibly_stalled"
+        if phase_text.startswith("scheduled"):
+            reason = "no_worker_pickup_or_activity_heartbeat_gap"
+        elif side_effect == "io_effect":
+            reason = "long_io_action"
+        elif side_effect == "read":
+            reason = "long_read_action"
+        else:
+            reason = "long_device_action"
+
+    return {
+        "activity_state": state,
+        "stalled_reason": reason,
+        "stalled_after_ms": max(0, elapsed_ms - soft_ms) if reason else 0,
+        "stalled_threshold_ms": soft_ms,
+        "activity_retrying": activity_attempt > 1,
+    }
 
 
 def _add_interrupt_workflow_id(out: list[str], workflow_id: str | None) -> None:
@@ -897,19 +985,44 @@ def build_campaign_fleet_router(
             effective_current_step = progress.current_step
             effective_total_steps = progress.total_steps
             effective_step_type = progress.current_step_type
+            effective_step_id = progress.current_step_id
+            effective_step_path = progress.current_step_path
+            effective_loop_iter = progress.current_loop_iter
             effective_message = progress.message
             current_step_started_at = None
             current_step_elapsed_ms = 0
             running_step = False
+            current_activity_id = None
+            current_step_activity_id = None
+            current_phase = None
+            side_effect_class = None
+            activity_attempt = 0
             if child_progress:
                 status = child_progress.get("status") or status
                 effective_current_step = int(child_progress.get("current_step") or 0)
                 effective_total_steps = int(child_progress.get("total_steps") or 0) or progress.total_steps
                 effective_step_type = str(child_progress.get("current_step_type") or "")
+                effective_step_id = child_progress.get("current_step_id")
+                effective_step_path = child_progress.get("current_step_path")
+                effective_loop_iter = child_progress.get("current_loop_iter")
                 effective_message = str(child_progress.get("message") or "")
                 current_step_started_at = child_progress.get("current_step_started_at")
                 current_step_elapsed_ms = int(child_progress.get("current_step_elapsed_ms") or 0)
                 running_step = bool(child_progress.get("running_step"))
+                current_activity_id = child_progress.get("current_activity_id")
+                current_step_activity_id = child_progress.get("current_step_activity_id")
+                current_phase = child_progress.get("current_phase")
+                side_effect_class = child_progress.get("side_effect_class")
+                activity_attempt = int(child_progress.get("activity_attempt") or 0)
+            activity_diagnostics = _classify_activity_progress(
+                status=status,
+                running_step=running_step,
+                elapsed_ms=current_step_elapsed_ms,
+                activity_id=current_activity_id,
+                phase=current_phase,
+                side_effect_class=side_effect_class,
+                activity_attempt=activity_attempt,
+            )
 
             return {
                 "workflow_id": workflow_id,
@@ -917,6 +1030,9 @@ def build_campaign_fleet_router(
                 "current_step": effective_current_step,
                 "total_steps": effective_total_steps,
                 "current_step_type": effective_step_type,
+                "current_step_id": effective_step_id,
+                "current_step_path": effective_step_path,
+                "current_loop_iter": effective_loop_iter,
                 "loop_iteration": progress.loop_iteration,
                 "message": error_message or effective_message,
                 "device_serial": progress.device_serial,
@@ -924,6 +1040,12 @@ def build_campaign_fleet_router(
                 "current_step_started_at": current_step_started_at,
                 "current_step_elapsed_ms": current_step_elapsed_ms,
                 "running_step": running_step,
+                "current_activity_id": current_activity_id,
+                "current_step_activity_id": current_step_activity_id,
+                "current_phase": current_phase,
+                "side_effect_class": side_effect_class,
+                "activity_attempt": activity_attempt,
+                **activity_diagnostics,
             }
         except Exception as exc:
             return JSONResponse(

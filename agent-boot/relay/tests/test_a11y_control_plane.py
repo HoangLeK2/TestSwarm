@@ -467,6 +467,44 @@ def test_a11y_dump_hierarchy_rejects_non_xml(monkeypatch):
     assert data["xml"] == ""
 
 
+def test_a11y_dump_hierarchy_forwards_profile_options(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+    calls = []
+
+    def _fake_u2_http(serial, method, path, body, content_type, timeout):
+        calls.append((serial, method, path, timeout))
+        return {
+            "ok": True,
+            "status": 200,
+            "body": "<hierarchy><node /></hierarchy>",
+            "content_type": "text/xml",
+        }
+
+    monkeypatch.setattr(agent, "_do_u2_http", _fake_u2_http)
+
+    ok, err, data = agent._execute_dump_hierarchy(
+        "s1",
+        {
+            "timeout": 1.0,
+            "attempts": 1,
+            "compressed": True,
+            "root_in_active": True,
+            "max_depth": 24,
+            "pretty": True,
+        },
+    )
+
+    assert ok is True
+    assert err == ""
+    assert data["xml"].startswith("<hierarchy")
+    assert calls[0][2] == "/dump/hierarchy?compressed=1&root_in_active=1&max_depth=24&pretty=1"
+
+
 @pytest.mark.asyncio
 async def test_a11y_inflight_duplicate_seq_rejected(monkeypatch):
     agent = RelayAgent(

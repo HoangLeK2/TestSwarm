@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from relay.agent import RelayAgent, _extra_data_reply_messages
+from relay.extra_data.collector import _dump_action
 
 
 class _FakeIngest:
@@ -48,6 +49,22 @@ class _FakeExecutor:
 
     async def with_session(self, serial: str, coro):
         return await coro()
+
+
+def test_extra_data_dump_action_forwards_profile_root_in_active() -> None:
+    action = _dump_action(
+        {
+            "hierarchy_root_in_active": True,
+            "hierarchy_verify_root_in_active": False,
+            "hierarchy_verify_compressed": True,
+            "hierarchy_verify_max_depth": 24,
+        },
+        profile="verify",
+    )
+
+    assert action["compressed"] is True
+    assert action["root_in_active"] is False
+    assert action["max_depth"] == 24
 
 
 def test_extra_data_persist_batch_is_chunked_and_manifested(monkeypatch) -> None:

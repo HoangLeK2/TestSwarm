@@ -23,6 +23,7 @@ import uuid
 from collections import OrderedDict
 from concurrent.futures import Future
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 from relay.adb           import (
     _list_serials, _adb_connect, _adb_shell,
@@ -169,6 +170,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _atx_forward_host() -> str:
     """Host for adb-forwarded atx-agent ports.
 
@@ -219,6 +228,30 @@ def _looks_like_hierarchy_xml(body: str) -> bool:
         or s == '<?xml version="1.0" encoding="UTF-8"?><hierarchy />'
         or s.endswith("<hierarchy />")
     )
+
+
+def _dump_hierarchy_path_from_options(
+    *,
+    compressed: bool = False,
+    root_in_active: bool = False,
+    max_depth: Any = None,
+    pretty: Any = None,
+) -> str:
+    params: dict[str, str] = {}
+    if compressed:
+        params["compressed"] = "1"
+    if root_in_active:
+        params["root_in_active"] = "1"
+    if max_depth is not None:
+        try:
+            params["max_depth"] = str(max(1, min(int(max_depth), 100)))
+        except (TypeError, ValueError):
+            pass
+    if pretty is not None:
+        params["pretty"] = "1" if bool(pretty) else "0"
+    if not params:
+        return "/dump/hierarchy"
+    return f"/dump/hierarchy?{urlencode(params)}"
 
 
 SCRCPY_RESTART_WINDOW_SECONDS = 120.0
@@ -1840,11 +1873,15 @@ class RelayAgent:
             bounded_put_nowait(send_queue, self._hb_cache_payload, label="heartbeat")
             return
 
+        ocr_available = _ocr_available()
+        image_match_available = _image_match_available()
         caps_list = []
         for s in serials:
             ctx = self._registry.get(s)
             if ctx and ctx.capabilities:
                 c = ctx.capabilities
+                has_u2 = bool(c.get("u2", False))
+                has_stf = bool(c.get("stf", False))
                 caps_list.append({
                     "serial":          s,
                     "android_version": c.get("android_version", ""),
@@ -1860,14 +1897,22 @@ class RelayAgent:
                     "screen_width":    c.get("screen_width", 0),
                     "screen_height":   c.get("screen_height", 0),
                     "ram_gb":          c.get("ram_gb", 0),
-                    "has_u2":          bool(c.get("u2", False)),
-                    "has_stf":         bool(c.get("stf", False)),
+                    "has_u2":          has_u2,
+                    "has_stf":         has_stf,
                     # Lets the farm route OCR here instead of failing on a
                     # host whose image has no tesseract yet. Host-level, but
                     # reported per device because that is the shape the farm
                     # already looks capabilities up by.
-                    "has_ocr":         _ocr_available(),
-                    "has_image_match": _image_match_available(),
+                    "has_ocr":         ocr_available,
+                    "has_tesseract":   ocr_available,
+                    "has_image_match": image_match_available,
+                    "has_opencv":      image_match_available,
+                    "supports_advanced_gestures": has_u2 or has_stf,
+                    "supports_clipboard": True,
+                    "supports_file_ops": True,
+                    "supports_install_apk": True,
+                    "supports_screenshot": True,
+                    "supports_shell": True,
                     "tags":            list(c.get("tags", [])),
                 })
 
@@ -2360,11 +2405,18 @@ class RelayAgent:
         serial: str,
         timeout: float,
         compressed: bool = False,
+        *,
+        root_in_active: bool = False,
+        max_depth: Any = None,
+        pretty: Any = None,
     ) -> str:
         """Fast path: atx-agent GET /dump/hierarchy (~4–5s on device). Empty → caller falls back to u2."""
-        path = "/dump/hierarchy"
-        if compressed:
-            path = f"{path}?compressed=1"
+        path = _dump_hierarchy_path_from_options(
+            compressed=compressed,
+            root_in_active=root_in_active,
+            max_depth=max_depth,
+            pretty=pretty,
+        )
         r = self._do_u2_http(
             serial,
             "GET",
@@ -2419,10 +2471,16 @@ class RelayAgent:
             if remaining <= 0.2:
                 break
             req_timeout = max(1.0, min(total_timeout, remaining))
+            path = _dump_hierarchy_path_from_options(
+                compressed=_truthy(payload.get("compressed", False)),
+                root_in_active=_truthy(payload.get("root_in_active", False)),
+                max_depth=payload.get("max_depth"),
+                pretty=payload.get("pretty") if "pretty" in payload else None,
+            )
             r = self._do_u2_http(
                 serial,
                 "GET",
-                "/dump/hierarchy",
+                path,
                 "",
                 "application/json",
                 req_timeout,

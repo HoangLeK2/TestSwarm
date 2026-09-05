@@ -1026,12 +1026,52 @@ async def test_dump_hierarchy_forwards_optional_dump_kwargs(event_loop, mock_dev
 
     result = await exc.run_batch(
         "serial",
-        [{"op": "dump_hierarchy", "compressed": True, "pretty": True, "max_depth": 20}],
+        [
+            {
+                "op": "dump_hierarchy",
+                "compressed": True,
+                "pretty": True,
+                "max_depth": 20,
+                "root_in_active": True,
+            }
+        ],
     )
 
     assert result["ok"] is True
     assert result["results"][0]["value"] == "<hierarchy />"
-    mock_device.dump_hierarchy.assert_called_once_with(compressed=True, pretty=True, max_depth=20)
+    mock_device.dump_hierarchy.assert_called_once_with(
+        compressed=True,
+        pretty=True,
+        max_depth=20,
+        root_in_active=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_reply_is_dead_session_marker(event_loop):
+    pool = AsyncMock()
+    calls = 0
+
+    async def _run_locked(serial: str, fn):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Remote end closed connection without response")
+        return fn(MagicMock())
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
+    pool.evict = AsyncMock()
+
+    value = await u2_exec_mod._run_with_retry(
+        pool,
+        event_loop,
+        "serial",
+        lambda _dev: "ok",
+    )
+
+    assert value == "ok"
+    pool.evict.assert_awaited_once_with("serial")
+    assert calls == 2
 
 
 @pytest.mark.asyncio
@@ -1052,6 +1092,108 @@ async def test_dump_hierarchy_prefers_http_dump(event_loop, mock_device):
     assert result["ok"] is True
     assert result["results"][0]["value"] == xml
     mock_device.dump_hierarchy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dump_hierarchy_http_dump_receives_extended_kwargs(event_loop, mock_device):
+    pool = AsyncMock()
+
+    async def _run_locked(serial: str, fn):
+        return fn(mock_device)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
+    xml = '<?xml version="1.0"?><hierarchy><node /></hierarchy>'
+    calls = []
+
+    def http_dump(serial, timeout, compressed, **kwargs):
+        calls.append((serial, timeout, compressed, kwargs))
+        return xml
+
+    exc = U2Executor(pool=pool, loop=event_loop, http_dump=http_dump)
+
+    result = await exc.run_batch(
+        "serial",
+        [
+            {
+                "op": "dump_hierarchy",
+                "timeout": 5.0,
+                "compressed": True,
+                "root_in_active": True,
+                "max_depth": 24,
+            }
+        ],
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["value"] == xml
+    assert calls == [("serial", 5.0, True, {"root_in_active": True, "max_depth": 24})]
+    mock_device.dump_hierarchy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dump_hierarchy_extended_kwargs_fallback_to_u2_when_http_callback_is_legacy(
+    event_loop,
+    mock_device,
+):
+    pool = AsyncMock()
+
+    async def _run_locked(serial: str, fn):
+        return fn(mock_device)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
+    mock_device.dump_hierarchy.return_value = "<hierarchy><node /></hierarchy>"
+    calls = []
+
+    def http_dump(serial, timeout, compressed):
+        calls.append((serial, timeout, compressed))
+        return "<hierarchy><legacy /></hierarchy>"
+
+    exc = U2Executor(pool=pool, loop=event_loop, http_dump=http_dump)
+
+    result = await exc.run_batch(
+        "serial",
+        [{"op": "dump_hierarchy", "compressed": True, "root_in_active": True}],
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["value"] == "<hierarchy><node /></hierarchy>"
+    assert calls == []
+    mock_device.dump_hierarchy.assert_called_once_with(
+        compressed=True,
+        root_in_active=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dump_hierarchy_cache_is_scoped_by_profile_kwargs(event_loop, mock_device):
+    pool = AsyncMock()
+
+    async def _run_locked(serial: str, fn):
+        return fn(mock_device)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
+    calls = []
+
+    def http_dump(serial, timeout, compressed, **kwargs):
+        calls.append((compressed, dict(kwargs)))
+        return f'<hierarchy><node text="{len(calls)}" /></hierarchy>'
+
+    exc = U2Executor(pool=pool, loop=event_loop, http_dump=http_dump)
+
+    first = await exc.run_batch("serial", [{"op": "dump_hierarchy", "compressed": True}])
+    second = await exc.run_batch(
+        "serial",
+        [{"op": "dump_hierarchy", "compressed": True, "root_in_active": True}],
+    )
+    third = await exc.run_batch("serial", [{"op": "dump_hierarchy", "compressed": True}])
+
+    assert first["results"][0]["value"] == '<hierarchy><node text="1" /></hierarchy>'
+    assert second["results"][0]["value"] == '<hierarchy><node text="2" /></hierarchy>'
+    assert third["results"][0]["value"] == '<hierarchy><node text="1" /></hierarchy>'
+    assert calls == [
+        (True, {}),
+        (True, {"root_in_active": True}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -2022,6 +2164,40 @@ async def test_dump_hierarchy_breaker_drops_background_visible_bypasses(event_lo
     assert "breaker open" in dropped["error"]
     assert visible["ok"] is False
     assert "read timeout" in visible["error"]
+    stats = exc.stats_snapshot(reset=False)
+    assert stats["breaker_drops"] == 1
+    assert stats["breaker_opens"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_dump_hierarchy_breaker_isolated_per_serial(event_loop):
+    pool = AsyncMock()
+    pool.evict = AsyncMock()
+    calls: list[str] = []
+
+    def http_dump(serial: str, _timeout: float, _compressed: bool) -> str:
+        calls.append(serial)
+        if serial == "phone-B":
+            raise TimeoutError("empty reply from server")
+        return f'<hierarchy><node text="{serial}" /></hierarchy>'
+
+    exc = U2Executor(pool=pool, loop=event_loop, http_dump=http_dump)
+
+    for _index in range(u2_exec_mod.U2_BREAKER_FAILURES):
+        failed = await exc.run_batch("phone-B", [{"op": "dump_hierarchy"}])
+        assert failed["ok"] is False
+
+    phone_c = await exc.run_batch("phone-C", [{"op": "dump_hierarchy"}])
+    phone_b_dropped = await exc.run_batch("phone-B", [{"op": "dump_hierarchy"}])
+
+    assert phone_c["ok"] is True
+    assert 'text="phone-C"' in phone_c["results"][0]["value"]
+    assert phone_b_dropped["ok"] is False
+    assert "breaker open serial=phone-B" in phone_b_dropped["error"]
+    assert "phone-C" not in phone_b_dropped["error"]
+    assert calls.count("phone-B") == u2_exec_mod.U2_BREAKER_FAILURES
+    assert calls.count("phone-C") == 1
+    assert "phone-C" not in exc._breaker
     stats = exc.stats_snapshot(reset=False)
     assert stats["breaker_drops"] == 1
     assert stats["breaker_opens"] >= 1

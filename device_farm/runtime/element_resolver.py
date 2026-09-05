@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -359,6 +360,92 @@ def _try_roi_match(
 
 
 # ---------------------------------------------------------------------------
+# Phase 1.4: Whitespace-normalized text match
+# ---------------------------------------------------------------------------
+
+_TEXT_LIKE_BY = frozenset({
+    "text", "description", "content-desc", "accessibility id",
+})
+
+
+def phase_text_normalized(
+    device: "DeviceClient",
+    by: str,
+    value: str,
+    screen_w: int,
+    screen_h: int,
+) -> Optional[ResolveResult]:
+    """
+    Rescue a text/description selector that missed only on whitespace.
+
+    UiSelector compares strings byte-exact *on the device*, and Facebook emits
+    NBSP (U+00A0) inside group names. A selector carrying a plain space (or the
+    other way round) then never matches and burns the whole implicit-wait
+    timeout. Normalizing our side alone would break whichever direction is
+    currently working — Python is the only place that sees both strings, so the
+    comparison happens here.
+
+    Nodes whose raw text equals ``value`` exactly are skipped: phase_selector
+    already saw those and declined them (e.g. matched outside the recorded
+    hint), and this phase must not launder that refusal.
+
+    Returns None when more than one distinct element matches — a skipped
+    candidate costs one retry, a wrong tap can wreck the account.
+    """
+    from runtime.xml_utils import parse_xml
+    from services.scenario_selector import normalize_match_text
+
+    if str(by or "").replace("_", "-").strip().lower() not in _TEXT_LIKE_BY:
+        return None
+    target = normalize_match_text(value)
+    if not target:
+        return None
+
+    xml = device.hierarchy_xml(force_refresh=True)
+    if not xml:
+        return None
+    try:
+        root = parse_xml(xml)
+    except Exception as exc:
+        log.debug("[resolver] normalized-text parse failed: %s", exc)
+        return None
+    if root is None:
+        return None
+
+    rects: List[Tuple[int, int, int, int]] = []
+    for node in root.iter():
+        for attr in ("text", "content-desc"):
+            raw = node.get(attr)
+            if not raw or raw == value:
+                continue
+            if normalize_match_text(raw) == target:
+                rect = _parse_bounds(node.get("bounds"))
+                if rect is not None:
+                    rects.append(rect)
+                break
+
+    rects = _innermost(rects)
+    if not rects:
+        return None
+    if len(rects) > 1:
+        log.warning(
+            "[resolver] normalized text %r matches %d elements — refusing to tap",
+            target, len(rects),
+        )
+        return None
+
+    left, top, right, bottom = rects[0]
+    return ResolveResult(
+        hit=True,
+        x=max(0, min(screen_w - 1, (left + right) // 2)),
+        y=max(0, min(screen_h - 1, (top + bottom) // 2)),
+        bounds={"left": left, "top": top, "right": right, "bottom": bottom},
+        method="text_normalized",
+        message=f"whitespace-normalized {by}={value!r}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase 1.5: Self-healing (alternative selector from XML at recorded position)
 # ---------------------------------------------------------------------------
 
@@ -479,6 +566,35 @@ def _scale_to_device(
     except Exception as exc:
         log.debug("[resolver] screenshot scale failed, using raw coords: %s", exc)
     return cx, cy
+
+
+_BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+
+
+def _parse_bounds(raw: Optional[str]) -> Optional[Tuple[int, int, int, int]]:
+    """Parse an Android bounds attribute '[l,t][r,b]' → (l, t, r, b)."""
+    m = _BOUNDS_RE.search(raw) if raw else None
+    return (int(m[1]), int(m[2]), int(m[3]), int(m[4])) if m else None
+
+
+def _innermost(
+    rects: List[Tuple[int, int, int, int]],
+) -> List[Tuple[int, int, int, int]]:
+    """Drop duplicates and any rect that strictly contains another rect.
+
+    Android hangs the same visible string on a clickable wrapper *and* its
+    TextView child. Those are one element, not two candidates — refusing them
+    as ambiguous would throw away every legitimate match.
+    """
+    uniq = list(dict.fromkeys(rects))
+    return [
+        a for a in uniq
+        if not any(
+            b is not a
+            and a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
+            for b in uniq
+        )
+    ]
 
 
 def _make_bounds(cx: int, cy: int, pad: int, w: int, h: int) -> Dict[str, int]:

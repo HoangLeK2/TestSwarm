@@ -4,12 +4,12 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from db.database import Base
 from tenancy.models import TenantScopedModel
 from .enums import CampaignStatus
-from .utils import _now, _uuid
+from .utils import _now, _uuid, normalize_variable_spaces
 
 
 class Campaign(TenantScopedModel, Base):
@@ -102,6 +102,12 @@ class Campaign(TenantScopedModel, Base):
         cascade="all, delete-orphan",
     )
 
+    @validates("variables")
+    def _clean_variables(self, _key: str, value):
+        # An NBSP pasted from a Facebook group name makes every selector built
+        # from that variable miss for the whole implicit-wait timeout.
+        return normalize_variable_spaces(value)
+
     def __repr__(self) -> str:  # pragma: no cover - repr
         return f"<Campaign {self.name} status={self.status}>"
 
@@ -179,6 +185,10 @@ class Scenario(Base):
     )
 
     campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="scenarios")
+
+    @validates("variables")
+    def _clean_variables(self, _key: str, value):
+        return normalize_variable_spaces(value)
 
 
 class CampaignTag(Base):

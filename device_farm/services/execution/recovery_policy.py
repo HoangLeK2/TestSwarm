@@ -54,6 +54,12 @@ class RecoveryPolicy:
     enabled: bool = False
     max_total_attempts: int = 0
     max_attempts_per_step: int = 0
+    # Wall-clock ceiling for everything recovery does to ONE step. The per-rule
+    # attempt counters bound how many playbooks run, not how long they take:
+    # each playbook is a full nested scenario whose own taps can each wait out
+    # an 8s selector timeout. Six leaf steps averaged 103s of recovery before
+    # this existed.
+    max_step_recovery_ms: int = 30_000
     rules: tuple[RecoveryRule, ...] = field(default_factory=tuple)
 
 
@@ -212,6 +218,12 @@ def parse_recovery_policy(raw: Any) -> RecoveryPolicy:
             max_value=10_000,
         ),
         max_attempts_per_step=_int(raw.get("max_attempts_per_step"), 2, min_value=0, max_value=20),
+        max_step_recovery_ms=_int(
+            raw.get("max_step_recovery_ms"),
+            30_000,
+            min_value=0,  # 0 disables the ceiling
+            max_value=600_000,
+        ),
         rules=tuple(rules),
     )
 
@@ -226,6 +238,7 @@ def dump_recovery_policy(policy: Any) -> dict[str, Any]:
         "enabled": parsed.enabled,
         "max_total_attempts": parsed.max_total_attempts,
         "max_attempts_per_step": parsed.max_attempts_per_step,
+        "max_step_recovery_ms": parsed.max_step_recovery_ms,
         "rules": [
             {
                 "id": rule.id,

@@ -332,6 +332,64 @@ def test_build_execution_step_payload_maps_fields():
     assert payload["effective_config_json"]["step_id"] == "s1"
 
 
+def test_unannotated_failure_is_classified_before_it_reaches_error_json():
+    """Most failure paths hand-build {index,type,ok,message} and never call
+    annotate_step_failure — the touch-primitive fast path, the activity-raised
+    path in _flush_batch, and every control-flow entry. error_json used to
+    arrive holding nothing but `message`, so failure_class was unqueryable."""
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"id": "s9", "type": "tap_selector"},
+        {
+            "index": 9,
+            "type": "tap_selector",
+            "ok": False,
+            "message": "selector text='Nhóm' not found, no fallback position",
+        },
+    )
+    assert payload["error_json"]["failure_class"] == "business_selector_miss"
+    assert payload["error_json"]["reason_code"] == "selector_not_found"
+
+
+def test_no_control_channel_classifies_as_device_lost():
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"type": "open_url"},
+        {
+            "index": 0,
+            "type": "open_url",
+            "ok": False,
+            "message": "open_url: no control channel available for serial=ABC",
+        },
+    )
+    assert payload["error_json"]["failure_class"] == "device_lost"
+
+
+def test_stale_ok_reason_code_does_not_survive_on_a_failed_step():
+    # extraction.py defaults its diagnostic reason_code to "ok"; 15 failed rows
+    # carried it into the DB, where it means nothing.
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"type": "fb_tap_comment_button"},
+        {
+            "index": 3,
+            "type": "fb_tap_comment_button",
+            "ok": False,
+            "message": "comment button not tappable",
+            "reason_code": "ok",
+        },
+    )
+    assert payload["error_json"].get("reason_code") != "ok"
+    assert payload["error_json"]["failure_class"] == "unknown"
+
+
+def test_passed_step_is_not_classified():
+    payload = build_execution_step_payload(
+        "exec-1", {"type": "wait"}, {"index": 0, "type": "wait", "ok": True}
+    )
+    assert payload["error_json"] == {}
+
+
 def test_failed_execution_step_payload_keeps_nested_extra_data_diagnostic():
     step = {"id": "run-child", "type": "run_scenario", "scenario_id": "child-1"}
     result = {

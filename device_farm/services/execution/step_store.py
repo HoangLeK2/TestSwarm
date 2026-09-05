@@ -26,6 +26,7 @@ _ARTIFACT_HEAVY_KEYS = frozenset({
 _ERROR_DETAIL_KEYS = (
     "message",
     "reason_code",
+    "capture_error",
     "failure_class",
     "retry_hint",
     "operator_summary",
@@ -118,6 +119,17 @@ def build_execution_step_payload(
     step_id = step.get("id") or step.get("_id") or flat.get("step_id") or flat.get("id")
     error_json: dict[str, Any] = {}
     if not ok:
+        # Classify here rather than at each construction site. Only the general
+        # batch path runs a step through step_runner (which annotates); the
+        # touch-primitive fast path, the activity-raised path, and every
+        # hand-built control-flow entry assemble {index,type,ok,message} by
+        # hand, so error_json arrived holding nothing but `message`. Every
+        # writer routes through this builder, so one call covers them all.
+        from services.campaign.failure_classification import annotate_step_failure
+
+        annotate_step_failure(
+            flat, step_type=str(flat.get("type") or step.get("type") or "")
+        )
         error_json = {
             k: flat.get(k)
             for k in _ERROR_DETAIL_KEYS

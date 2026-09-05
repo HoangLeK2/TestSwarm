@@ -671,6 +671,7 @@ def _execute_tap(
     """
     from runtime.element_resolver import (
         ElementResolver, phase_selector, phase_image, phase_ratio, phase_healing,
+        phase_text_normalized,
     )
     from services.scenario_selector import (
         ScenarioSelectorSpec,
@@ -765,6 +766,13 @@ def _execute_tap(
                 u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, device=device,
             ),
             allow_moved_selector=allow_moved_selector,
+        ))
+
+    # Whitespace-tolerant rescue before healing: a NBSP on either side makes
+    # UiSelector miss and burn the full implicit wait for nothing.
+    if use_selector_phase and effective_by and effective_value:
+        phases.append(lambda: phase_text_normalized(
+            device, effective_by, effective_value, w, h,
         ))
 
     if (

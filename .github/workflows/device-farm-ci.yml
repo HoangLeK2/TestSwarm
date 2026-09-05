@@ -1,0 +1,102 @@
+name: Device Farm CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: device-farm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-regression:
+    name: Backend Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: device_farm/uv.lock
+
+      - name: Install backend dependencies
+        working-directory: device_farm
+        run: uv sync --extra dev
+
+      - name: Run backend gate
+        run: scripts/devops/quality-gate.sh backend
+
+  campaign-regression:
+    name: Campaign Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: device_farm/uv.lock
+
+      - name: Install backend dependencies
+        working-directory: device_farm
+        run: uv sync --extra dev
+
+      - name: Run campaign gate
+        run: scripts/devops/quality-gate.sh campaign
+
+  frontend-build:
+    name: Frontend Typecheck And Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8.6.10
+
+      - name: Install frontend dependencies
+        working-directory: front-end
+        run: pnpm install --frozen-lockfile
+
+      - name: Run frontend gate
+        run: scripts/devops/quality-gate.sh frontend
+
+  compose-preflight:
+    name: Compose Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare local env template
+        run: cp .env.example .env
+
+      - name: Validate Compose config
+        run: scripts/devops/quality-gate.sh compose

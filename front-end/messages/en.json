@@ -560,6 +560,10 @@
     "nav_group_daily_operations": "Daily operations",
     "nav_group_preparation": "Preparation",
     "nav_group_admin_monitoring": "Admin & monitoring",
+    "nav_group_admin_overview": "Overview & audit",
+    "nav_group_admin_workspace": "Workspaces & access",
+    "nav_group_admin_data": "Accounts & content",
+    "nav_group_admin_infrastructure": "Infrastructure",
     "admin_console": "Admin console",
     "admin_workspaces": "Admin workspaces",
     "admin_workspace_access": "Workspace access",
@@ -1974,6 +1978,7 @@
       "runStarted": "Running scenario on {count} device(s)",
       "campaignDone": "Campaign finished",
       "fleetDone": "Fleet done: {done}/{total} devices",
+      "back": "Back",
       "deleteConfirm": "Delete this campaign? Historical tasks remain in logs, but campaign will be removed from list.",
       "deleteSuccess": "Campaign deleted",
       "deleteFailed": "Delete campaign failed",
@@ -5157,6 +5162,7 @@
     "actions": "Actions",
     "no_results": "No results",
     "error_loading_data": "Error loading data",
+    "more_pages": "More pages",
     "open_menu": "Open menu",
     "rows_per_page": "Rows per page",
     "page_info": "Page {current} of {total} ({count} results)",
@@ -6339,10 +6345,16 @@
       "statuses": {
         "active": "Active",
         "archived": "Archived",
+        "busy": "Busy",
+        "connecting": "Connecting",
+        "dead": "Dead",
         "disabled": "Disabled",
+        "disconnected": "Disconnected",
+        "error": "Error",
         "offline": "Offline",
         "online": "Online",
         "paired": "Paired",
+        "ready": "Ready",
         "stale": "Stale",
         "suspended": "Suspended",
         "unassigned": "Unassigned",
@@ -6388,10 +6400,16 @@
       "agentsByWorkspace": "Agents by workspace",
       "emptyWorkspaceData": "No workspace data.",
       "emptyAgentData": "No agent data.",
-      "healthWarnings": "Health warnings",
-      "offlineAgents": "Offline agents",
-      "staleAgents": "Stale agents",
-      "unassignedDevices": "Unassigned devices",
+      "attention": {
+        "title": "Needs attention",
+        "summary": "{count} items to check",
+        "clear": "No items need attention",
+        "offlineAgents": "Disconnected agents",
+        "offlineAgentsDetail": "Relay hosts are offline",
+        "staleAgents": "Agents with stale heartbeat",
+        "staleAgentsDetail": "No recent heartbeat",
+        "viewAgents": "Agents"
+      },
       "scope": {
         "workspace": "Admin scope",
         "allWorkspaces": "All workspaces"
@@ -6641,10 +6659,10 @@
       },
       "table": {
         "workspace": "Workspace",
+        "unknownWorkspace": "Unknown workspace",
         "account": "Account",
         "platform": "Platform",
         "state": "State",
-        "usage": "Today / total",
         "lastUsed": "Last used",
         "updated": "Updated"
       }
@@ -6669,11 +6687,11 @@
       },
       "table": {
         "workspace": "Workspace",
+        "unknownWorkspace": "Unknown workspace",
         "content": "Content",
         "type": "Type",
         "author": "Author",
         "device": "Device",
-        "execution": "Execution",
         "extracted": "Extracted"
       }
     },
@@ -6718,6 +6736,7 @@
         "created": "Workspace admin created",
         "updated": "Workspace admin updated",
         "assigned": "Workspace admin assigned",
+        "assignmentsUpdated": "Assignments updated: {assigned} added, {removed} removed, {skipped} skipped",
         "passwordReset": "Temporary password reset"
       },
       "secret": {
@@ -6799,6 +6818,10 @@
         "lastSeen": "Last seen",
         "version": "Version",
         "devices": "Devices",
+        "noDevices": "No phones seen",
+        "deviceCount": "{count} phone",
+        "deviceCountWithMore": "{count} phones · +{remaining} more",
+        "viewDevices": "View phones",
         "actions": "Actions"
       },
       "actions": {
@@ -6858,6 +6881,21 @@
         "online": "Online",
         "offline": "Offline",
         "disabled": "Disabled"
+      },
+      "phoneViewer": {
+        "title": "Agent phones",
+        "agent": "Agent",
+        "managedBy": "Managing workspace",
+        "phones": "Phones",
+        "searchPlaceholder": "Search serial, name, model",
+        "empty": "No matching phones.",
+        "close": "Close",
+        "table": {
+          "phone": "Phone",
+          "status": "Status",
+          "assignedTo": "Assigned workspace",
+          "lastSeen": "Last seen"
+        }
       },
       "phoneAllocation": {
         "title": "Allocate phones",

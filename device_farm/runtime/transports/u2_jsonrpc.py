@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import json
 import logging
@@ -931,42 +933,59 @@ class U2JsonRpcClient:
 
     def screenshot(self, timeout: float = 10.0, max_width: int = 800, quality: int = 70) -> Optional[bytes]:
         """
-        Capture screenshot via u2 HTTP API (GET /screenshot/0).
+        Capture screenshot via uiautomator-server JSON-RPC.
         Returns JPEG bytes, resized to max_width if needed.
         Returns None on failure.
 
         NOTE (routing):
-        - If self._session is requests.Session: local u2 wrapper path.
-        - If self._session is _RelaySession: u2 wrapper via agent-boot relay.
+        - Primary path uses takeScreenshot(scale, quality), which returns a
+          base64 JPEG from the JSON-RPC uiautomator-server.
+        - Fallback keeps the old atx-agent GET /screenshot/0 path for older
+          servers or deployments where the JSON-RPC method is unavailable.
         """
+        img_bytes: bytes | None = None
         try:
-            with self._http_lock:
-                r = self._session.get(self._base + "/screenshot/0", timeout=timeout)
-            if r.status_code != 200:
-                logger.warning("U2 screenshot failed: HTTP %d", r.status_code)
-                return None
-            img_bytes = r.content
-            if not img_bytes:
-                return None
-            # Resize + re-encode to JPEG if needed
-            try:
-                from PIL import Image
-                import io
-                img = Image.open(io.BytesIO(img_bytes))
-                w, h = img.size
-                if max_width > 0 and w > max_width:
-                    ratio = max_width / w
-                    new_h = int(h * ratio)
-                    img = img.resize((max_width, new_h), Image.LANCZOS)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=quality)
-                return buf.getvalue()
-            except ImportError:
-                # PIL not available — return raw bytes as-is
-                return img_bytes
+            data = self._rpc("takeScreenshot", 1, int(quality), _timeout=timeout)
+            if isinstance(data, bytes):
+                data = data.decode("ascii", "ignore")
+            if isinstance(data, str) and data.strip():
+                try:
+                    img_bytes = base64.b64decode(data, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    logger.debug("U2 JSON-RPC screenshot decode error: %s", exc)
+                    img_bytes = None
         except Exception as exc:
-            logger.debug("U2 screenshot error: %s", exc)
+            logger.debug("U2 JSON-RPC screenshot error: %s", exc)
+
+        if img_bytes is None:
+            try:
+                with self._http_lock:
+                    r = self._session.get(self._base + "/screenshot/0", timeout=timeout)
+                if r.status_code != 200:
+                    logger.warning("U2 screenshot failed: HTTP %d", r.status_code)
+                    return None
+                img_bytes = r.content
+            except Exception as exc:
+                logger.debug("U2 screenshot error: %s", exc)
+                return None
+        if not img_bytes:
             return None
+        # Resize + re-encode to JPEG if needed
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(img_bytes))
+            w, h = img.size
+            if max_width > 0 and w > max_width:
+                ratio = max_width / w
+                new_h = int(h * ratio)
+                img = img.resize((max_width, new_h), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality)
+            return buf.getvalue()
+        except ImportError:
+            # PIL not available — return raw bytes as-is
+            return img_bytes
 
     @property
     def device_info(self) -> Dict[str, Any]:

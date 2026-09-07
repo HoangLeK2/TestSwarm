@@ -371,6 +371,36 @@ async def test_workspace_admin_summary_uses_real_workspace_data(session_factory)
 
 
 @pytest.mark.asyncio
+async def test_workspace_admin_summary_excludes_archived_agents(session_factory):
+    """Archived duplicates are hidden from the agent list — don't count them here."""
+    await _seed_workspace(session_factory)
+    set_current_org_id(None)
+    async with session_factory() as db:
+        db.add(
+            RelayAgent(
+                id="ra-archived",
+                org_id="org-1",
+                relay_id="relay-archived",
+                hostname="host-a",
+                ip="10.0.0.2",
+                version="0.3.0",
+                serials=[],
+                status="archived",
+                created_at=NOW,
+            )
+        )
+        await db.commit()
+    app = _app(session_factory, _user(org_role="admin"))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        summary = await client.get("/api/admin/dashboard/summary")
+        agents = await client.get("/api/admin/agents")
+
+    assert summary.json()["totalAgents"] == agents.json()["total"] == 1
+    assert summary.json()["agentsByWorkspace"][0]["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_workspace_admin_routes_reject_regular_member(session_factory):
     await _seed_workspace(session_factory)
     app = _app(session_factory, _user(org_role="member"))

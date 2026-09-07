@@ -8,7 +8,6 @@ import {
   useState
 } from 'react';
 import {
-  ArrowRightLeft,
   Edit,
   KeyRound,
   LogIn,
@@ -53,6 +52,11 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
 import { Textarea } from '@/components/ui/textarea';
 import {
   AlertDialog,
@@ -89,6 +93,8 @@ import {
 } from '../services/admin-api';
 
 const ALL = '__all__';
+// Smaller than ADMIN_PAGE_SIZE so the phone table stays inside the dialog's max-h.
+const DIALOG_DEVICE_PAGE_SIZE = 10;
 type ResetPasswordTarget = Pick<AdminUserOut, 'user_id' | 'email' | 'name'>;
 
 function dateLabel(value?: string | null) {
@@ -134,6 +140,21 @@ function WorkspaceOverviewCard({
         <p className='mt-1 text-xs text-muted-foreground'>{detail}</p>
       ) : null}
     </div>
+  );
+}
+
+function ActionTooltip({
+  label,
+  children
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side='top'>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -303,12 +324,6 @@ export function AdminWorkspacesPage() {
                 </Link>
               </Button>
             ) : null}
-            <Button asChild variant='outline'>
-              <Link href={ROUTES.ADMIN.AGENTS}>
-                <ArrowRightLeft className='mr-2 size-4' />
-                {t('allocatePhones')}
-              </Link>
-            </Button>
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className='mr-2 size-4' />
               {t('newWorkspace')}
@@ -493,75 +508,85 @@ export function AdminWorkspacesPage() {
                           {t('actions.details')}
                         </Button>
                         {isSuperadmin ? (
+                          <ActionTooltip
+                            label={
+                              workspace.kind === 'pool'
+                                ? t('actions.unmarkPool')
+                                : t('actions.markPool')
+                            }
+                          >
+                            <Button
+                              size='icon'
+                              variant='ghost'
+                              className='size-8'
+                              aria-label={
+                                workspace.kind === 'pool'
+                                  ? t('actions.unmarkPool')
+                                  : t('actions.markPool')
+                              }
+                              disabled={updateMutation.isPending}
+                              onClick={() =>
+                                updateMutation.mutate({
+                                  id: workspace.id,
+                                  body: {
+                                    kind:
+                                      workspace.kind === 'pool'
+                                        ? 'tenant'
+                                        : 'pool'
+                                  }
+                                })
+                              }
+                            >
+                              <Server
+                                className={cn(
+                                  'size-4',
+                                  workspace.kind === 'pool'
+                                    ? 'text-sky-600 dark:text-sky-400'
+                                    : undefined
+                                )}
+                              />
+                            </Button>
+                          </ActionTooltip>
+                        ) : null}
+                        <ActionTooltip label={t('actions.edit')}>
                           <Button
                             size='icon'
                             variant='ghost'
                             className='size-8'
-                            aria-label={
-                              workspace.kind === 'pool'
-                                ? t('actions.unmarkPool')
-                                : t('actions.markPool')
+                            aria-label={t('actions.edit')}
+                            onClick={() => setEditWorkspace(workspace)}
+                          >
+                            <Edit className='size-4' />
+                          </Button>
+                        </ActionTooltip>
+                        <ActionTooltip label={t('actions.resetOwnerPassword')}>
+                          <Button
+                            size='icon'
+                            variant='ghost'
+                            className='size-8'
+                            aria-label={t('actions.resetOwnerPassword')}
+                            disabled={
+                              resetPasswordMutation.isPending ||
+                              !workspace.owner
                             }
-                            title={
-                              workspace.kind === 'pool'
-                                ? t('actions.unmarkPool')
-                                : t('actions.markPool')
-                            }
-                            disabled={updateMutation.isPending}
                             onClick={() =>
-                              updateMutation.mutate({
-                                id: workspace.id,
-                                body: {
-                                  kind:
-                                    workspace.kind === 'pool'
-                                      ? 'tenant'
-                                      : 'pool'
-                                }
-                              })
+                              resetPasswordMutation.mutate(workspace.id)
                             }
                           >
-                            <Server
-                              className={cn(
-                                'size-4',
-                                workspace.kind === 'pool'
-                                  ? 'text-sky-600 dark:text-sky-400'
-                                  : undefined
-                              )}
-                            />
+                            <KeyRound className='size-4' />
                           </Button>
-                        ) : null}
-                        <Button
-                          size='icon'
-                          variant='ghost'
-                          className='size-8'
-                          aria-label={t('actions.edit')}
-                          onClick={() => setEditWorkspace(workspace)}
-                        >
-                          <Edit className='size-4' />
-                        </Button>
-                        <Button
-                          size='icon'
-                          variant='ghost'
-                          className='size-8'
-                          aria-label={t('actions.resetOwnerPassword')}
-                          disabled={
-                            resetPasswordMutation.isPending || !workspace.owner
-                          }
-                          onClick={() =>
-                            resetPasswordMutation.mutate(workspace.id)
-                          }
-                        >
-                          <KeyRound className='size-4' />
-                        </Button>
-                        <Button
-                          size='icon'
-                          variant='ghost'
-                          className='size-8 text-destructive hover:text-destructive'
-                          aria-label={t('actions.archive')}
-                          onClick={() => setArchiveWorkspace(workspace)}
-                        >
-                          <Trash2 className='size-4' />
-                        </Button>
+                        </ActionTooltip>
+                        <ActionTooltip label={t('actions.archive')}>
+                          <Button
+                            size='icon'
+                            variant='ghost'
+                            className='size-8 text-destructive hover:text-destructive'
+                            aria-label={t('actions.archive')}
+                            onClick={() => setArchiveWorkspace(workspace)}
+                          >
+                            <Trash2 className='size-4' />
+                          </Button>
+                        </ActionTooltip>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -598,7 +623,6 @@ export function AdminWorkspacesPage() {
       />
       <WorkspaceEditDialog
         workspace={editWorkspace}
-        isSuperadmin={isSuperadmin}
         pending={updateMutation.isPending || lifecycleMutation.isPending}
         onClose={() => setEditWorkspace(null)}
         onSubmit={(id, body) => updateMutation.mutate({ id, body })}
@@ -754,14 +778,12 @@ function WorkspaceCreateDialog({
 
 function WorkspaceEditDialog({
   workspace,
-  isSuperadmin,
   pending,
   onClose,
   onSubmit,
   onLifecycle
 }: {
   workspace: AdminWorkspaceOut | null;
-  isSuperadmin: boolean;
   pending: boolean;
   onClose: () => void;
   onSubmit: (id: string, body: Partial<AdminWorkspaceOut>) => void;
@@ -801,30 +823,6 @@ function WorkspaceEditDialog({
                   setDraft({ ...draft, businessEmail: e.target.value })
                 }
               />
-            </Field>
-            <Field label={t('plan')}>
-              <Input
-                value={active.plan}
-                onChange={(e) => setDraft({ ...draft, plan: e.target.value })}
-              />
-            </Field>
-            <Field label={t('kind')}>
-              <Select
-                value={active.kind}
-                disabled={!isSuperadmin}
-                onValueChange={(value) => setDraft({ ...draft, kind: value })}
-              >
-                <SelectTrigger className='w-full'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='tenant'>{t('kindTenant')}</SelectItem>
-                  <SelectItem value='pool'>{t('kindPool')}</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className='mt-1.5 text-xs text-muted-foreground'>
-                {t('kindHint')}
-              </p>
             </Field>
             <Field label={t('status')}>
               <Select
@@ -897,10 +895,18 @@ function WorkspaceAccessDialog({
   const tCommon = useTranslations('adminConsole.workspaces.common');
   const qc = useQueryClient();
   const workspaceId = workspace?.id ?? '';
+  const [deviceOffset, setDeviceOffset] = useState(0);
+  useEffect(() => setDeviceOffset(0), [workspaceId]);
   const workspaceDevices = useQuery({
-    queryKey: ['admin-workspace-detail-devices', workspaceId],
-    queryFn: () => adminApi.listDevices({ workspaceId, offset: 0, limit: 10 }),
+    queryKey: ['admin-workspace-detail-devices', workspaceId, deviceOffset],
+    queryFn: () =>
+      adminApi.listDevices({
+        workspaceId,
+        offset: deviceOffset,
+        limit: DIALOG_DEVICE_PAGE_SIZE
+      }),
     enabled: !!workspaceId,
+    placeholderData: (previous) => previous,
     refetchInterval: 20_000
   });
   const updateOwnerMutation = useMutation({
@@ -925,7 +931,8 @@ function WorkspaceAccessDialog({
       >
         <DialogContent className='max-h-[90vh] overflow-y-auto sm:max-w-4xl'>
           <DialogHeader>
-            <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            {/* pr-10 keeps the action clear of DialogContent's absolute close button. */}
+            <div className='flex flex-col gap-3 pr-10 sm:flex-row sm:items-center sm:justify-between'>
               <DialogTitle>{t('title')}</DialogTitle>
               {workspace ? (
                 <Button size='sm' onClick={() => onEnterWorkspace(workspace)}>
@@ -1103,6 +1110,12 @@ function WorkspaceAccessDialog({
                       ) : null}
                     </TableBody>
                   </Table>
+                  <AdminPagination
+                    offset={deviceOffset}
+                    limit={DIALOG_DEVICE_PAGE_SIZE}
+                    total={workspaceDevices.data?.total ?? 0}
+                    onOffsetChange={setDeviceOffset}
+                  />
                 </div>
               </div>
 

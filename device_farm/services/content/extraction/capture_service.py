@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from services.content.extraction.models import (
     CaptureError,
@@ -57,6 +57,58 @@ def _png_bytes(raw: bytes) -> bytes:
             code="CAPTURE_FORMAT_INVALID",
             details={"error": str(exc)},
         ) from exc
+
+
+def _diagnostic_png_from_hierarchy(device: Any, serial: str, kind: str) -> bytes | None:
+    hierarchy = None
+    try:
+        hierarchy = device.hierarchy_xml(force_refresh=True)
+    except TypeError:
+        try:
+            hierarchy = device.hierarchy_xml()
+        except Exception:
+            hierarchy = None
+    except Exception:
+        hierarchy = None
+    if not hierarchy:
+        return None
+    text = str(hierarchy)
+    tokens: list[str] = []
+    for marker in ('text="', 'content-desc="', 'resource-id="'):
+        start = 0
+        while len(tokens) < 18:
+            idx = text.find(marker, start)
+            if idx < 0:
+                break
+            idx += len(marker)
+            end = text.find('"', idx)
+            if end < 0:
+                break
+            value = text[idx:end].strip()
+            if value and value not in tokens:
+                tokens.append(value[:120])
+            start = end + 1
+    lines = [
+        "Device Farm failure evidence",
+        "Screenshot unavailable; using UI hierarchy snapshot.",
+        f"serial: {serial}",
+        f"kind: {kind}",
+        "",
+        "Visible hierarchy tokens:",
+        *(tokens or ["<no text/content-desc/resource-id tokens>"]),
+    ]
+    width, height = 900, 1200
+    image = Image.new("RGB", (width, height), color=(248, 250, 252))
+    draw = ImageDraw.Draw(image)
+    y = 32
+    for line in lines:
+        draw.text((32, y), line, fill=(15, 23, 42))
+        y += 30
+        if y > height - 40:
+            break
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
 
 
 def _object_key(ctx: ExecutionCaptureContext, ext: str) -> str:
@@ -119,6 +171,30 @@ class ExtractionCaptureService:
             )
 
         raw = device.take_screenshot()
+        if not raw and kind.endswith("_fail"):
+            request_frames = getattr(device, "request_stream_jpeg_frames", None)
+            if callable(request_frames):
+                try:
+                    request_frames(duration_s=2.0)
+                    deadline = time.monotonic() + 1.5
+                    while not raw and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                        raw = device.take_screenshot()
+                except Exception:
+                    raw = None
+            fresh_capture = getattr(device, "capture_screenshot", None)
+            if not raw and callable(fresh_capture):
+                try:
+                    raw = fresh_capture(
+                        allow_ws_u2_fallback=True,
+                        skip_cache=True,
+                    )
+                except TypeError:
+                    raw = fresh_capture()
+                if not isinstance(raw, (bytes, bytearray)):
+                    raw = None
+            if not raw:
+                raw = _diagnostic_png_from_hierarchy(device, serial, kind)
         if not raw:
             raise CaptureError("device screenshot unavailable", code="DEVICE_OFFLINE")
 

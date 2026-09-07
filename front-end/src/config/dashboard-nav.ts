@@ -73,8 +73,8 @@ const PREPARATION_GROUP: NavGroupDef = {
   ]
 };
 
-const ADMIN_MONITORING_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_admin_monitoring',
+const ADMIN_OVERVIEW_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_overview',
   items: [
     {
       titleKey: 'admin_console',
@@ -83,6 +83,19 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
       permission: { object: 'organizations', action: 'read' },
       adminConsoleOnly: true
     },
+    {
+      titleKey: 'admin_audit',
+      url: ROUTES.ADMIN.AUDIT,
+      icon: 'history',
+      permission: { object: 'analytics', action: 'read' },
+      adminConsoleOnly: true
+    }
+  ]
+};
+
+const ADMIN_WORKSPACE_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_workspace',
+  items: [
     {
       titleKey: 'admin_workspaces',
       url: ROUTES.ADMIN.WORKSPACES,
@@ -98,6 +111,20 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
       adminConsoleOnly: true
     },
     {
+      titleKey: 'admin_workspace_admins',
+      url: ROUTES.ADMIN.WORKSPACE_ADMINS,
+      icon: 'usersGroup',
+      roles: ['superadmin'],
+      permission: { object: 'organizations', action: 'manage' },
+      adminConsoleOnly: true
+    }
+  ]
+};
+
+const ADMIN_DATA_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_data',
+  items: [
+    {
       titleKey: 'admin_accounts',
       url: ROUTES.ADMIN.ACCOUNTS,
       icon: 'user',
@@ -110,15 +137,13 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
       icon: 'stats',
       permission: { object: 'content', action: 'read' },
       adminConsoleOnly: true
-    },
-    {
-      titleKey: 'admin_workspace_admins',
-      url: ROUTES.ADMIN.WORKSPACE_ADMINS,
-      icon: 'usersGroup',
-      roles: ['superadmin'],
-      permission: { object: 'organizations', action: 'manage' },
-      adminConsoleOnly: true
-    },
+    }
+  ]
+};
+
+const ADMIN_INFRASTRUCTURE_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_infrastructure',
+  items: [
     {
       titleKey: 'admin_agents',
       url: ROUTES.ADMIN.AGENTS,
@@ -132,13 +157,6 @@ const ADMIN_MONITORING_GROUP: NavGroupDef = {
       icon: 'smartphone',
       permission: { object: 'devices', action: 'read' },
       adminConsoleOnly: true
-    },
-    {
-      titleKey: 'admin_audit',
-      url: ROUTES.ADMIN.AUDIT,
-      icon: 'history',
-      permission: { object: 'analytics', action: 'read' },
-      adminConsoleOnly: true
     }
   ]
 };
@@ -150,8 +168,7 @@ const WORKSPACE_MONITORING_GROUP: NavGroupDef = {
       titleKey: 'devices_manage',
       url: ROUTES.DEVICES.MANAGE,
       icon: 'smartphone',
-      permission: { object: 'devices', action: 'read' },
-      adminConsoleOnly: true
+      permission: { object: 'devices', action: 'manage' }
     },
     {
       titleKey: 'schedules',
@@ -229,7 +246,12 @@ export const DASHBOARD_MAIN_NAV_GROUPS = [
   WORKSPACE_MONITORING_GROUP
 ] as const;
 
-export const ADMIN_CENTER_NAV_GROUPS = [ADMIN_MONITORING_GROUP] as const;
+export const ADMIN_CENTER_NAV_GROUPS = [
+  ADMIN_OVERVIEW_GROUP,
+  ADMIN_WORKSPACE_GROUP,
+  ADMIN_DATA_GROUP,
+  ADMIN_INFRASTRUCTURE_GROUP
+] as const;
 
 export const DASHBOARD_SETTINGS_NAV_GROUPS = [
   ORGANIZATION_GROUP,

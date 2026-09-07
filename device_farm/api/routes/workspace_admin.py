@@ -442,7 +442,12 @@ async def _workspace_counts(db: DB, workspace_ids: list[str]) -> dict[str, dict[
     agent_rows = (
         await db.execute(
             select(agent_table.c.org_id, func.count())
-            .where(agent_table.c.org_id.in_(workspace_ids))
+            .where(
+                agent_table.c.org_id.in_(workspace_ids),
+                # Archived rows are superseded duplicates — the agent list hides
+                # them, so counting them here shows a total nobody can click to.
+                agent_table.c.status != "archived",
+            )
             .group_by(agent_table.c.org_id)
         )
     ).all()
@@ -1401,7 +1406,8 @@ async def admin_workspace_summary(
         agent_health_rows = (
             await db.execute(
                 select(agent_table.c.status, agent_table.c.last_heartbeat_at).where(
-                    agent_table.c.org_id.in_(workspace_ids)
+                    agent_table.c.org_id.in_(workspace_ids),
+                    agent_table.c.status != "archived",
                 )
             )
         ).all()

@@ -91,6 +91,38 @@ function dateLabel(value?: string | null) {
   return value ? new Date(value).toLocaleString() : '-';
 }
 
+function AgentPhonesSummary({
+  agent,
+  onView
+}: {
+  agent: AdminAgentOut;
+  onView: () => void;
+}) {
+  const t = useTranslations('adminConsole.agents.table');
+  const hasDevices = agent.deviceCount > 0 || agent.serials.length > 0;
+
+  if (!hasDevices) {
+    return (
+      <span className='text-sm text-muted-foreground'>{t('noDevices')}</span>
+    );
+  }
+
+  return (
+    <div className='flex min-w-[120px] items-center'>
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        className='h-8 px-2.5'
+        onClick={onView}
+      >
+        <Smartphone className='mr-1.5 size-3.5' />
+        {t('viewDevices')}
+      </Button>
+    </div>
+  );
+}
+
 export function AdminAgentsPage() {
   const t = useTranslations('adminConsole.agents');
   const qc = useQueryClient();
@@ -103,6 +135,9 @@ export function AdminAgentsPage() {
   const [deleteAgent, setDeleteAgent] = useState<AdminAgentOut | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [phoneAgent, setPhoneAgent] = useState<AdminAgentOut | null>(null);
+  const [viewPhonesAgent, setViewPhonesAgent] = useState<AdminAgentOut | null>(
+    null
+  );
   const [secret, setSecret] = useState<string | null>(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(
     new Set()
@@ -496,7 +531,10 @@ export function AdminAgentsPage() {
                           {agent.version || '-'}
                         </TableCell>
                         <TableCell className='py-2'>
-                          {agent.deviceCount}
+                          <AgentPhonesSummary
+                            agent={agent}
+                            onView={() => setViewPhonesAgent(agent)}
+                          />
                         </TableCell>
                         <TableCell className='py-2'>
                           <div className='flex flex-nowrap justify-end gap-1'>
@@ -700,6 +738,10 @@ export function AdminAgentsPage() {
         agent={phoneAgent}
         onClose={() => setPhoneAgent(null)}
       />
+      <AgentPhonesViewDialog
+        agent={viewPhonesAgent}
+        onClose={() => setViewPhonesAgent(null)}
+      />
       <AlertDialog
         open={!!deleteAgent}
         onOpenChange={(open) => !open && setDeleteAgent(null)}
@@ -764,6 +806,153 @@ export function AdminAgentsPage() {
         onClose={() => setSecret(null)}
       />
     </div>
+  );
+}
+
+const PHONE_VIEW_PAGE_SIZE = 10;
+
+function AgentPhonesViewDialog({
+  agent,
+  onClose
+}: {
+  agent: AdminAgentOut | null;
+  onClose: () => void;
+}) {
+  const t = useTranslations('adminConsole.agents.phoneViewer');
+  const [phoneSearch, setPhoneSearch] = useState('');
+  const [phoneOffset, setPhoneOffset] = useState(0);
+
+  useEffect(() => {
+    setPhoneSearch('');
+    setPhoneOffset(0);
+  }, [agent?.relay_id]);
+
+  useEffect(() => {
+    setPhoneOffset(0);
+  }, [phoneSearch]);
+
+  const phoneParams = useMemo(
+    () => ({
+      search: phoneSearch || undefined,
+      offset: phoneOffset,
+      limit: PHONE_VIEW_PAGE_SIZE
+    }),
+    [phoneOffset, phoneSearch]
+  );
+
+  const phones = useQuery({
+    queryKey: ['admin-agent-phones-view', agent?.relay_id, phoneParams],
+    queryFn: () => adminApi.listAgentPhones(agent?.relay_id || '', phoneParams),
+    enabled: !!agent
+  });
+
+  const displayedPhones = phones.data?.items ?? [];
+
+  return (
+    <Dialog open={!!agent} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className='flex h-[min(640px,calc(100vh-2rem))] w-[calc(100vw-2rem)] !max-w-[920px] flex-col gap-0 overflow-hidden p-0'>
+        <DialogHeader className='border-b px-5 py-4'>
+          <DialogTitle>{t('title')}</DialogTitle>
+        </DialogHeader>
+        {agent ? (
+          <div className='flex min-h-0 flex-1 flex-col'>
+            <div className='grid gap-2 border-b bg-muted/30 px-5 py-3 md:grid-cols-3'>
+              <div className='min-w-0'>
+                <p className='text-xs font-medium text-muted-foreground'>
+                  {t('agent')}
+                </p>
+                <p className='truncate font-medium'>
+                  {agent.name || agent.relay_id}
+                </p>
+              </div>
+              <div className='min-w-0'>
+                <p className='text-xs font-medium text-muted-foreground'>
+                  {t('managedBy')}
+                </p>
+                <p className='truncate font-medium'>
+                  {agent.workspaceName || agent.workspaceId}
+                </p>
+              </div>
+              <div className='min-w-0'>
+                <p className='text-xs font-medium text-muted-foreground'>
+                  {t('phones')}
+                </p>
+                <p className='font-medium'>
+                  {phones.data?.total ?? agent.deviceCount}
+                </p>
+              </div>
+            </div>
+
+            <div className='border-b p-3'>
+              <SearchField
+                value={phoneSearch}
+                onChange={setPhoneSearch}
+                placeholder={t('searchPlaceholder')}
+              />
+            </div>
+
+            {phones.isError ? (
+              <div className='p-4'>
+                <AdminErrorState
+                  message={formatAdminApiError(phones.error)}
+                  onRetry={() => void phones.refetch()}
+                />
+              </div>
+            ) : null}
+
+            <div className='min-h-0 flex-1 overflow-auto p-3'>
+              <div className='overflow-hidden rounded-md border'>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('table.phone')}</TableHead>
+                      <TableHead>{t('table.status')}</TableHead>
+                      <TableHead>{t('table.assignedTo')}</TableHead>
+                      <TableHead>{t('table.lastSeen')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {phones.isLoading ? (
+                      <AdminTableSkeleton columns={4} />
+                    ) : null}
+                    {displayedPhones.map((phone) => (
+                      <AgentPhoneViewRow key={phone.serial} phone={phone} />
+                    ))}
+                    {!phones.isLoading && displayedPhones.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={4}
+                          className='h-24 text-center text-sm text-muted-foreground'
+                        >
+                          {t('empty')}
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+                <AdminPagination
+                  offset={phones.data?.offset ?? phoneOffset}
+                  limit={phones.data?.limit ?? PHONE_VIEW_PAGE_SIZE}
+                  total={phones.data?.total ?? 0}
+                  onOffsetChange={setPhoneOffset}
+                />
+              </div>
+            </div>
+
+            <DialogFooter className='border-t p-3'>
+              <Button
+                type='button'
+                variant='outline'
+                className='h-9'
+                onClick={onClose}
+              >
+                {t('close')}
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1259,6 +1448,33 @@ function AgentPhoneAllocationDialog({
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AgentPhoneViewRow({ phone }: { phone: AdminAgentPhoneOut }) {
+  const t = useTranslations('adminConsole.agents.phoneAllocation');
+  return (
+    <TableRow>
+      <TableCell>
+        <div className='min-w-[180px]'>
+          <p className='font-medium'>
+            {phone.name || phone.model || phone.serial}
+          </p>
+          <p className='font-mono text-xs text-muted-foreground'>
+            {phone.serial}
+          </p>
+        </div>
+      </TableCell>
+      <TableCell>
+        <StatusBadge value={phone.state || phone.status} />
+      </TableCell>
+      <TableCell className='text-sm text-muted-foreground'>
+        {phone.assignedWorkspaceName || phone.assignedWorkspaceId || t('pool')}
+      </TableCell>
+      <TableCell className='text-sm text-muted-foreground'>
+        {dateLabel(phone.last_seen)}
+      </TableCell>
+    </TableRow>
   );
 }
 

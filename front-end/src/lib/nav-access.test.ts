@@ -377,6 +377,36 @@ test('admin sidebar exposes workspace accounts and collected results', () => {
   assert.match(adminContentRouteRule, /orgRoles:\s*\['admin'\]/);
 });
 
+test('main sidebar exposes device management for device owners', () => {
+  const routeRules = readFileSync(
+    new URL('./rbac/route-permissions.ts', import.meta.url),
+    'utf8'
+  );
+  const navConfig = readFileSync(
+    new URL('../config/dashboard-nav.ts', import.meta.url),
+    'utf8'
+  );
+  const devicesManageNavItem =
+    navConfig.match(/\{\s*titleKey:\s*'devices_manage',[\s\S]*?\n\s*\}/)?.[0] ??
+    '';
+  const devicesManageRouteRule =
+    routeRules.match(
+      /\{\s*prefix:\s*ROUTES\.DEVICES\.MANAGE,[\s\S]*?\n\s*\}/
+    )?.[0] ?? '';
+
+  assert.match(devicesManageNavItem, /url:\s*ROUTES\.DEVICES\.MANAGE/);
+  assert.match(
+    devicesManageNavItem,
+    /permission:\s*\{\s*object:\s*'devices',\s*action:\s*'manage'\s*\}/
+  );
+  assert.doesNotMatch(devicesManageNavItem, /adminConsoleOnly:\s*true/);
+  assert.match(
+    devicesManageRouteRule,
+    /permission:\s*\{\s*object:\s*'devices',\s*action:\s*'manage'\s*\}/
+  );
+  assert.doesNotMatch(devicesManageRouteRule, /orgRoles:/);
+});
+
 test('workspace access route and nav require organization management', () => {
   const routeRules = readFileSync(
     new URL('./rbac/route-permissions.ts', import.meta.url),

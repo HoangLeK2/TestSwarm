@@ -31,22 +31,12 @@ import {
   StatusBadge
 } from './admin-shared';
 import { useAdminWorkspaceScope } from '../hooks/use-admin-workspace-scope';
-import {
-  adminApi,
-  type AdminAccountOut,
-  formatAdminApiError
-} from '../services/admin-api';
+import { adminApi, formatAdminApiError } from '../services/admin-api';
 
 const ALL = '__all__';
 
 function dateLabel(value?: string | null) {
   return value ? new Date(value).toLocaleString() : '-';
-}
-
-function usageLabel(account: AdminAccountOut) {
-  const today = Number(account.usage_today_minutes ?? 0);
-  const total = Number(account.total_usage_minutes ?? 0);
-  return `${Math.round(today)}m / ${Math.round(total)}m`;
 }
 
 export function AdminAccountsPage() {
@@ -153,22 +143,18 @@ export function AdminAccountsPage() {
                   <TableHead>{t('table.account')}</TableHead>
                   <TableHead>{t('table.platform')}</TableHead>
                   <TableHead>{t('table.state')}</TableHead>
-                  <TableHead>{t('table.usage')}</TableHead>
                   <TableHead>{t('table.lastUsed')}</TableHead>
                   <TableHead>{t('table.updated')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {accounts.isLoading ? <AdminTableSkeleton columns={7} /> : null}
+                {accounts.isLoading ? <AdminTableSkeleton columns={6} /> : null}
                 {accounts.data?.items.map((account) => (
                   <TableRow key={account.id}>
                     <TableCell>
                       <div className='min-w-[180px]'>
                         <p className='font-medium'>
-                          {account.workspaceName || account.workspaceId}
-                        </p>
-                        <p className='text-xs text-muted-foreground'>
-                          {account.workspaceId}
+                          {account.workspaceName || t('table.unknownWorkspace')}
                         </p>
                       </div>
                     </TableCell>
@@ -189,9 +175,6 @@ export function AdminAccountsPage() {
                     <TableCell>
                       <StatusBadge value={account.state} />
                     </TableCell>
-                    <TableCell className='text-sm tabular-nums'>
-                      {usageLabel(account)}
-                    </TableCell>
                     <TableCell className='text-sm text-muted-foreground'>
                       {dateLabel(account.last_used_at)}
                     </TableCell>
@@ -203,7 +186,7 @@ export function AdminAccountsPage() {
                 {!accounts.isLoading && accounts.data?.items.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={6}
                       className='h-28 text-center text-sm text-muted-foreground'
                     >
                       {t('empty')}

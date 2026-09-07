@@ -52,42 +52,41 @@ export function AdminPageHeader({
   );
 }
 
+const STATUS_TONE = {
+  ok: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300',
+  warn: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300',
+  bad: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300',
+  muted:
+    'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300'
+} as const;
+
+// Covers account/workspace statuses plus runtime.core.device_client.DeviceState.
+// Unlisted values fall back to the raw string with no tone — safe, but it means
+// a new backend state shows up untranslated, so add it here when one lands.
+const STATUS_TONES: Record<string, keyof typeof STATUS_TONE> = {
+  online: 'ok',
+  active: 'ok',
+  ready: 'ok',
+  busy: 'warn',
+  stale: 'warn',
+  suspended: 'warn',
+  connecting: 'warn',
+  dead: 'bad',
+  error: 'bad',
+  offline: 'muted',
+  disabled: 'muted',
+  archived: 'muted',
+  disconnected: 'muted'
+};
+
 export function StatusBadge({ value }: { value?: string | null }) {
   const t = useTranslations('adminConsole.common.statuses');
   const status = (value || 'unknown').toLowerCase();
-  const label =
-    status === 'online'
-      ? t('online')
-      : status === 'active'
-        ? t('active')
-        : status === 'stale'
-          ? t('stale')
-          : status === 'suspended'
-            ? t('suspended')
-            : status === 'offline'
-              ? t('offline')
-              : status === 'disabled'
-                ? t('disabled')
-                : status === 'archived'
-                  ? t('archived')
-                  : status === 'paired'
-                    ? t('paired')
-                    : status === 'unassigned'
-                      ? t('unassigned')
-                      : status === 'unknown'
-                        ? t('unknown')
-                        : status;
-  const className =
-    status === 'online' || status === 'active'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300'
-      : status === 'stale' || status === 'suspended'
-        ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300'
-        : status === 'offline' || status === 'disabled' || status === 'archived'
-          ? 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300'
-          : '';
+  const key = status as Parameters<typeof t>[0];
+  const tone = STATUS_TONES[status];
   return (
-    <Badge variant='outline' className={className}>
-      {label}
+    <Badge variant='outline' className={tone ? STATUS_TONE[tone] : ''}>
+      {t.has(key) ? t(key) : status}
     </Badge>
   );
 }

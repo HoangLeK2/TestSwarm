@@ -7,6 +7,8 @@ Run: pytest tests/test_u2_jsonrpc.py -v
 from __future__ import annotations
 
 import json
+import base64
+import io
 import threading
 import time
 import unittest
@@ -742,6 +744,44 @@ class TestPingVerify(unittest.TestCase):
         self.client._rpc = Mock(return_value=None)
         with self.assertRaises(RuntimeError):
             self.client.verify()
+
+
+class TestScreenshot(unittest.TestCase):
+
+    def setUp(self):
+        self.client = _make_client()
+
+    @staticmethod
+    def _jpeg_b64(color=(1, 2, 3)) -> str:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 3), color).save(buf, format="JPEG", quality=80)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def test_screenshot_uses_jsonrpc_take_screenshot_first(self):
+        self.client._rpc = Mock(return_value=self._jpeg_b64())
+        self.client._session.get = Mock()
+
+        result = self.client.screenshot(timeout=7.0, quality=75)
+
+        self.assertIsInstance(result, bytes)
+        self.client._rpc.assert_called_once_with(
+            "takeScreenshot", 1, 75, _timeout=7.0
+        )
+        self.client._session.get.assert_not_called()
+
+    def test_screenshot_falls_back_to_atx_endpoint_when_jsonrpc_unavailable(self):
+        self.client._rpc = Mock(side_effect=RuntimeError("method not found"))
+        resp = Mock(status_code=200, content=base64.b64decode(self._jpeg_b64()))
+        self.client._session.get = Mock(return_value=resp)
+
+        result = self.client.screenshot(timeout=7.0, quality=75)
+
+        self.assertIsInstance(result, bytes)
+        self.client._session.get.assert_called_once_with(
+            "http://127.0.0.1:9008/screenshot/0", timeout=7.0
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -563,6 +563,10 @@
     "nav_group_daily_operations": "Vận hành hằng ngày",
     "nav_group_preparation": "Chuẩn bị tài nguyên",
     "nav_group_admin_monitoring": "Quản trị & giám sát",
+    "nav_group_admin_overview": "Tổng quan & nhật ký",
+    "nav_group_admin_workspace": "Workspace & phân quyền",
+    "nav_group_admin_data": "Account & nội dung",
+    "nav_group_admin_infrastructure": "Hạ tầng",
     "admin_console": "Bảng quản trị",
     "admin_workspaces": "Quản lý workspace",
     "admin_workspace_access": "Phân quyền workspace",
@@ -1994,6 +1998,7 @@
       "runStarted": "Đang chạy kịch bản trên {count} thiết bị",
       "campaignDone": "Chiến dịch đã chạy xong",
       "fleetDone": "Chạy hàng loạt xong: {done}/{total} thiết bị",
+      "back": "Quay lại",
       "deleteConfirm": "Xoá chiến dịch này? Các tác vụ lịch sử vẫn giữ trong nhật ký, nhưng chiến dịch sẽ biến mất khỏi danh sách.",
       "deleteSuccess": "Đã xoá chiến dịch",
       "deleteFailed": "Xoá chiến dịch thất bại",
@@ -5065,6 +5070,7 @@
     "viewDetails": "Xem chi tiết",
     "no_results": "Không có kết quả",
     "error_loading_data": "Lỗi khi tải dữ liệu",
+    "more_pages": "Thêm trang",
     "open_menu": "Mở menu",
     "rows_per_page": "Hàng mỗi trang",
     "page_info": "Trang {current} / {total} ({count} kết quả)",
@@ -5871,10 +5877,16 @@
       "statuses": {
         "active": "Đang hoạt động",
         "archived": "Đã lưu trữ",
+        "busy": "Đang bận",
+        "connecting": "Đang kết nối",
+        "dead": "Mất kết nối",
         "disabled": "Đã vô hiệu hóa",
+        "disconnected": "Đã ngắt kết nối",
+        "error": "Lỗi",
         "offline": "Ngoại tuyến",
         "online": "Trực tuyến",
         "paired": "Đã ghép nối",
+        "ready": "Sẵn sàng",
         "stale": "Quá hạn",
         "suspended": "Đã tạm dừng",
         "unassigned": "Chưa gán",
@@ -5920,10 +5932,16 @@
       "agentsByWorkspace": "Agent theo workspace",
       "emptyWorkspaceData": "Chưa có dữ liệu workspace.",
       "emptyAgentData": "Chưa có dữ liệu agent.",
-      "healthWarnings": "Cảnh báo sức khỏe",
-      "offlineAgents": "Agent ngoại tuyến",
-      "staleAgents": "Agent quá hạn",
-      "unassignedDevices": "Thiết bị chưa gán",
+      "attention": {
+        "title": "Cần xử lý",
+        "summary": "{count} mục cần kiểm tra",
+        "clear": "Không có mục cần xử lý",
+        "offlineAgents": "Agent mất kết nối",
+        "offlineAgentsDetail": "Host relay đang offline",
+        "staleAgents": "Agent quá hạn heartbeat",
+        "staleAgentsDetail": "Lâu chưa gửi tín hiệu",
+        "viewAgents": "Agent"
+      },
       "scope": {
         "workspace": "Phạm vi quản trị",
         "allWorkspaces": "Tất cả workspace"
@@ -6173,10 +6191,10 @@
       },
       "table": {
         "workspace": "Workspace",
+        "unknownWorkspace": "Không rõ workspace",
         "account": "Account",
         "platform": "Nền tảng",
         "state": "Trạng thái",
-        "usage": "Hôm nay / tổng",
         "lastUsed": "Dùng gần nhất",
         "updated": "Cập nhật"
       }
@@ -6201,11 +6219,11 @@
       },
       "table": {
         "workspace": "Workspace",
+        "unknownWorkspace": "Không rõ workspace",
         "content": "Nội dung",
         "type": "Loại",
         "author": "Tác giả",
         "device": "Thiết bị",
-        "execution": "Execution",
         "extracted": "Thu thập lúc"
       }
     },
@@ -6250,6 +6268,7 @@
         "created": "Đã tạo workspace admin",
         "updated": "Đã cập nhật workspace admin",
         "assigned": "Đã gán workspace admin",
+        "assignmentsUpdated": "Đã cập nhật phân quyền: thêm {assigned}, bỏ {removed}, bỏ qua {skipped}",
         "passwordReset": "Đã cấp lại mật khẩu tạm thời"
       },
       "secret": {
@@ -6331,6 +6350,10 @@
         "lastSeen": "Lần thấy cuối",
         "version": "Phiên bản",
         "devices": "Thiết bị",
+        "noDevices": "Chưa thấy phone",
+        "deviceCount": "{count} phone",
+        "deviceCountWithMore": "{count} phone · +{remaining} khác",
+        "viewDevices": "Xem phone",
         "actions": "Thao tác"
       },
       "actions": {
@@ -6390,6 +6413,21 @@
         "online": "Trực tuyến",
         "offline": "Ngoại tuyến",
         "disabled": "Đã vô hiệu hóa"
+      },
+      "phoneViewer": {
+        "title": "Phone của agent",
+        "agent": "Agent",
+        "managedBy": "Workspace quản lý",
+        "phones": "Phone",
+        "searchPlaceholder": "Tìm serial, tên, model",
+        "empty": "Không có phone phù hợp.",
+        "close": "Đóng",
+        "table": {
+          "phone": "Phone",
+          "status": "Trạng thái",
+          "assignedTo": "Workspace sử dụng",
+          "lastSeen": "Lần thấy cuối"
+        }
       },
       "phoneAllocation": {
         "title": "Phân bổ phone",

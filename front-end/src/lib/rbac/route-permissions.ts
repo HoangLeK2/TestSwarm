@@ -76,8 +76,7 @@ export const DASHBOARD_ROUTE_ACCESS: readonly RouteAccessRule[] = [
   },
   {
     prefix: ROUTES.DEVICES.MANAGE,
-    permission: { object: 'devices', action: 'read' },
-    orgRoles: ['admin']
+    permission: { object: 'devices', action: 'manage' }
   },
   {
     prefix: ROUTES.DEVICES.ROOT,

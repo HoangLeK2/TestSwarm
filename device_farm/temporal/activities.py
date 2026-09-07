@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from temporalio import activity
@@ -531,6 +532,85 @@ def _u2_batch_failure_results(exc: BaseException) -> list[dict[str, Any]]:
     if not isinstance(results, list):
         return []
     return [item for item in results if isinstance(item, dict)]
+
+
+def _nested_step_results_for_failure_capture(step: dict[str, Any]) -> list[dict[str, Any]]:
+    children: list[dict[str, Any]] = []
+    sub_results = step.get("sub_results")
+    if isinstance(sub_results, list):
+        children.extend(s for s in sub_results if isinstance(s, dict))
+    sub_result = step.get("sub_result")
+    if isinstance(sub_result, dict):
+        step_results = sub_result.get("step_results")
+        if isinstance(step_results, list):
+            children.extend(s for s in step_results if isinstance(s, dict))
+    details = step.get("details")
+    if isinstance(details, dict):
+        step_results = details.get("step_results") or details.get("sub_step_results")
+        if isinstance(step_results, list):
+            children.extend(s for s in step_results if isinstance(s, dict))
+    return children
+
+
+def _last_failed_leaf_for_failure_capture(
+    step_results: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    failed = [s for s in step_results if isinstance(s, dict) and not s.get("ok", True)]
+    if not failed:
+        return None
+    last = failed[-1]
+    nested = _last_failed_leaf_for_failure_capture(
+        _nested_step_results_for_failure_capture(last)
+    )
+    return nested or last
+
+
+def _capture_missing_failure_evidence(
+    *,
+    step_results: list[dict[str, Any]],
+    execution_id: str,
+    device_serial: str,
+    org_id: str,
+) -> None:
+    from services.campaign.dlq_service import _artifact_refs_from_steps
+
+    if _artifact_refs_from_steps(step_results):
+        return
+    failed = _last_failed_leaf_for_failure_capture(step_results)
+    if not failed:
+        return
+    device = _get_device(device_serial)
+    step_type = str(failed.get("type") or "unknown")
+    scenario = {
+        "execution_id": execution_id,
+        "_execution_id": execution_id,
+        "org_id": org_id,
+        "capture_steps": True,
+        "capture_mode": "error_only",
+        "_campaign_vars": {"__ORG_ID__": org_id},
+    }
+    sc = SimpleNamespace(
+        device=device,
+        serial=device_serial,
+        capture_enabled=True,
+        capture_dir=None,
+        execution_id=execution_id,
+        scenario=scenario,
+    )
+    step = {
+        "type": step_type,
+        "id": failed.get("step_id") or failed.get("id"),
+    }
+    from services.execution.capture_service import capture_on_fail
+
+    try:
+        capture_on_fail(sc, step, int(failed.get("index") or 0), failed)
+    except Exception as exc:
+        capture_error = failed.get("capture_error")
+        if not isinstance(capture_error, dict):
+            capture_error = {}
+            failed["capture_error"] = capture_error
+        capture_error["fail"] = str(exc)
 
 
 def _primitive_touch_batch_size(inp: DeviceActionBatchInput) -> int:
@@ -2721,6 +2801,22 @@ class DeviceActivities:
                         if device:
                             _device_id = device.id
                             finished_at = datetime.now(_tz.utc)
+                            if not success and step_results:
+                                try:
+                                    _capture_missing_failure_evidence(
+                                        step_results=step_results,
+                                        execution_id=execution_id,
+                                        device_serial=device_serial,
+                                        org_id=org_id_epic,
+                                    )
+                                except Exception as exc:
+                                    log.warning(
+                                        "finalize_campaign: failure screenshot capture failed "
+                                        "(%s/%s): %s",
+                                        execution_id,
+                                        device_serial,
+                                        exc,
+                                    )
                             try:
                                 await persist_execution_steps_from_results(
                                     db,

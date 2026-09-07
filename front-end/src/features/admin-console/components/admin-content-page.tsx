@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Database, FileText } from 'lucide-react';
+import { Database } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -151,21 +151,17 @@ export function AdminContentPage() {
                   <TableHead>{t('table.type')}</TableHead>
                   <TableHead>{t('table.author')}</TableHead>
                   <TableHead>{t('table.device')}</TableHead>
-                  <TableHead>{t('table.execution')}</TableHead>
                   <TableHead>{t('table.extracted')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {content.isLoading ? <AdminTableSkeleton columns={7} /> : null}
+                {content.isLoading ? <AdminTableSkeleton columns={6} /> : null}
                 {content.data?.items.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>
                       <div className='min-w-[180px]'>
                         <p className='font-medium'>
-                          {item.workspaceName || item.workspaceId}
-                        </p>
-                        <p className='text-xs text-muted-foreground'>
-                          {item.workspaceId}
+                          {item.workspaceName || t('table.unknownWorkspace')}
                         </p>
                       </div>
                     </TableCell>
@@ -175,11 +171,8 @@ export function AdminContentPage() {
                         <p className='line-clamp-2 break-words text-sm font-medium'>
                           {previewText(item.title, item.body)}
                         </p>
-                        <p className='mt-1 flex items-center gap-1 text-xs text-muted-foreground'>
-                          <FileText className='size-3 shrink-0' />
-                          <span className='min-w-0 truncate'>
-                            {item.collection} · {item.content_hash}
-                          </span>
+                        <p className='mt-1 truncate text-xs text-muted-foreground'>
+                          {item.collection}
                         </p>
                       </div>
                     </TableCell>
@@ -193,9 +186,6 @@ export function AdminContentPage() {
                       {item.device_serial || '-'}
                     </TableCell>
                     <TableCell className='text-sm text-muted-foreground'>
-                      {item.execution_id || item.campaign_id || '-'}
-                    </TableCell>
-                    <TableCell className='text-sm text-muted-foreground'>
                       {dateLabel(item.extracted_at || item.created_at)}
                     </TableCell>
                   </TableRow>
@@ -203,7 +193,7 @@ export function AdminContentPage() {
                 {!content.isLoading && content.data?.items.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={6}
                       className='h-28 text-center text-sm text-muted-foreground'
                     >
                       {t('empty')}

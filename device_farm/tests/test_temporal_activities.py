@@ -21,6 +21,7 @@ import pytest
 
 from temporal.activities import (
     _SERIAL_RE,
+    _capture_missing_failure_evidence,
     _generate_totp,
     _validate_serial,
     _xml_has_element,
@@ -43,6 +44,48 @@ def test_generate_totp_matches_rfc6238_sha1_vector():
     secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 
     assert _generate_totp(secret, now=59, digits=8) == "94287082"
+
+
+def test_capture_missing_failure_evidence_attaches_to_nested_failed_leaf(monkeypatch):
+    step_results = [
+        {
+            "index": 0,
+            "type": "run_scenario",
+            "ok": False,
+            "message": "run_scenario failed",
+            "sub_results": [
+                {
+                    "index": 4,
+                    "type": "if_variable",
+                    "ok": False,
+                    "message": "if_variable: then branch failed",
+                }
+            ],
+        }
+    ]
+
+    monkeypatch.setattr("temporal.activities._get_device", lambda serial: MockDevice(serial=serial))
+
+    def fake_capture(_sc, _step, _idx, step_result, *, attempt_index=1):
+        step_result["artifacts"] = [
+            {
+                "type": "fail",
+                "screenshot_url": "http://minio/fail.png",
+                "screenshot_object_key": "captures/fail.png",
+            }
+        ]
+
+    monkeypatch.setattr("services.execution.capture_service.capture_on_fail", fake_capture)
+
+    _capture_missing_failure_evidence(
+        step_results=step_results,
+        execution_id="exec-1",
+        device_serial="SN1",
+        org_id="org-1",
+    )
+
+    nested = step_results[0]["sub_results"][0]
+    assert nested["artifacts"][0]["screenshot_url"] == "http://minio/fail.png"
 
 
 class MockU2:

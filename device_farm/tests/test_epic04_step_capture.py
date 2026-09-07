@@ -295,6 +295,41 @@ def test_fail_capture_dlq_refs_from_temporal_details():
     assert refs["hierarchy_url"] == "http://minio/fail.xml"
 
 
+def test_dlq_refs_include_nested_run_scenario_failure_artifacts():
+    step_results = [
+        {
+            "index": 0,
+            "type": "run_scenario",
+            "ok": False,
+            "message": "run_scenario: sub-scenario failed",
+            "sub_results": [
+                {
+                    "index": 4,
+                    "type": "if_variable",
+                    "ok": False,
+                    "message": "if_variable: then branch failed",
+                    "artifacts": [
+                        {
+                            "type": "fail",
+                            "screenshot_url": "http://minio/nested-fail.jpg",
+                            "screenshot_object_key": "captures/nested-fail.png",
+                            "hierarchy_url": "http://minio/nested-fail.xml",
+                            "hierarchy_object_key": "captures/nested-fail.xml",
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    refs = _artifact_refs_from_steps(step_results)
+
+    assert refs["screenshot_fail"] == "http://minio/nested-fail.jpg"
+    assert refs["screenshot_fail_object_key"] == "captures/nested-fail.png"
+    assert refs["hierarchy_url"] == "http://minio/nested-fail.xml"
+    assert refs["hierarchy_url_object_key"] == "captures/nested-fail.xml"
+
+
 def test_require_capture_failure_fails_step():
     sc = _make_sc()
     step = {"type": "wait", "require_capture": True, "id": "w1"}
@@ -524,6 +559,72 @@ def test_failure_screenshot_is_never_served_from_the_cache():
 
     assert first.image_bytes != second.image_bytes
     assert device.take_screenshot.call_count == 2
+
+
+def test_failure_screenshot_falls_back_to_fresh_capture_when_cache_empty():
+    from services.content.extraction import capture_service as extraction_capture
+    from services.content.extraction.models import ExecutionCaptureContext
+
+    extraction_capture.clear_capture_cache()
+    device = MagicMock()
+    device.serial = "SN1"
+    device.take_screenshot.return_value = None
+    device.capture_screenshot.return_value = b"\x89PNG\r\n\x1a\n" + b"fresh"
+    svc = extraction_capture.ExtractionCaptureService()
+    ctx = ExecutionCaptureContext(
+        execution_id="exec-1", step_index=0, kind="screenshot_fail", org_id="org-1"
+    )
+
+    shot = svc.capture_screenshot(device, persist=False, execution_ctx=ctx)
+
+    assert shot.image_bytes
+    device.capture_screenshot.assert_called_once_with(
+        allow_ws_u2_fallback=True,
+        skip_cache=True,
+    )
+
+
+def test_failure_screenshot_requests_stream_frame_before_fresh_capture():
+    from services.content.extraction import capture_service as extraction_capture
+    from services.content.extraction.models import ExecutionCaptureContext
+
+    extraction_capture.clear_capture_cache()
+    device = MagicMock()
+    device.serial = "SN1"
+    device.take_screenshot.side_effect = [None, None, b"\x89PNG\r\n\x1a\n" + b"frame"]
+    svc = extraction_capture.ExtractionCaptureService()
+    ctx = ExecutionCaptureContext(
+        execution_id="exec-1", step_index=0, kind="screenshot_fail", org_id="org-1"
+    )
+
+    shot = svc.capture_screenshot(device, persist=False, execution_ctx=ctx)
+
+    assert shot.image_bytes
+    device.request_stream_jpeg_frames.assert_called_once_with(duration_s=2.0)
+    device.capture_screenshot.assert_not_called()
+
+
+def test_failure_screenshot_uses_hierarchy_diagnostic_when_transport_unavailable():
+    from services.content.extraction import capture_service as extraction_capture
+    from services.content.extraction.models import ExecutionCaptureContext
+
+    extraction_capture.clear_capture_cache()
+    device = MagicMock()
+    device.serial = "SN1"
+    device.take_screenshot.return_value = None
+    device.capture_screenshot.return_value = None
+    device.hierarchy_xml.return_value = (
+        '<hierarchy><node text="Facebook" content-desc="Home" /></hierarchy>'
+    )
+    svc = extraction_capture.ExtractionCaptureService()
+    ctx = ExecutionCaptureContext(
+        execution_id="exec-1", step_index=0, kind="screenshot_fail", org_id="org-1"
+    )
+
+    shot = svc.capture_screenshot(device, persist=False, execution_ctx=ctx)
+
+    assert shot.image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    device.hierarchy_xml.assert_called_once_with(force_refresh=True)
 
 
 def test_retry_keeps_the_evidence_of_the_attempt_that_failed():

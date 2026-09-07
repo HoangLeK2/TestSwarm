@@ -98,13 +98,40 @@ def _set_ref(
         refs.pop(f"{name}_object_key", None)
 
 
+def _nested_step_results(step: dict[str, Any]) -> list[dict[str, Any]]:
+    children: list[dict[str, Any]] = []
+    direct_children = step.get("sub_results")
+    if isinstance(direct_children, list):
+        children.extend(s for s in direct_children if isinstance(s, dict))
+    sub_result = step.get("sub_result")
+    if isinstance(sub_result, dict):
+        child_steps = sub_result.get("step_results")
+        if isinstance(child_steps, list):
+            children.extend(s for s in child_steps if isinstance(s, dict))
+    details = step.get("details")
+    if isinstance(details, dict):
+        child_steps = details.get("step_results") or details.get("sub_step_results")
+        if isinstance(child_steps, list):
+            children.extend(s for s in child_steps if isinstance(s, dict))
+    return children
+
+
+def _last_failed_leaf(step_results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    failed = [s for s in step_results if isinstance(s, dict) and not s.get("ok", True)]
+    if not failed:
+        return None
+    last = failed[-1]
+    nested = _last_failed_leaf(_nested_step_results(last))
+    return nested or last
+
+
 def _artifact_refs_from_steps(step_results: list[dict[str, Any]]) -> dict[str, Any]:
     from services.execution.step_store import extract_artifacts_json, normalize_workflow_step_result
 
-    failed = [s for s in step_results if not s.get("ok", True)]
-    if not failed:
+    failed_step = _last_failed_leaf(step_results)
+    if not failed_step:
         return {}
-    last = normalize_workflow_step_result(failed[-1])
+    last = normalize_workflow_step_result(failed_step)
     refs: dict[str, Any] = {}
     for key in ("screenshot_post", "screenshot_pre", "url"):
         _set_ref(refs, key, last.get(key))
@@ -130,7 +157,7 @@ def _artifact_refs_from_steps(step_results: list[dict[str, Any]]) -> dict[str, A
         _set_ref(
             refs, "screenshot_pre", pre.get("full"), pre.get("screenshot_object_key")
         )
-    for art in extract_artifacts_json(failed[-1]):
+    for art in extract_artifacts_json(last):
         if str(art.get("type") or "") == "fail":
             _set_ref(
                 refs,

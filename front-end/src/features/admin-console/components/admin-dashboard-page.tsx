@@ -4,18 +4,16 @@ import { useMemo } from 'react';
 import {
   Activity,
   AlertTriangle,
-  ArrowRightLeft,
   Building2,
-  LogIn,
   Server,
   ShieldCheck,
   SquareArrowOutUpRight,
-  Smartphone
+  type LucideIcon
 } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useQuery } from '@tanstack/react-query';
 import { ROUTES } from '@/config/routes';
-import { Link, useRouter } from '@/i18n/navigation';
+import { Link } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -26,19 +24,13 @@ import {
   TableRow
 } from '@/components/ui/table';
 import { formatDate, getLocaleByNextLocale } from '@/lib/format';
-import type { ProtoOrganization } from '@/features/device-farm';
-import { useOrganization } from '@/features/organization/hooks/use-organization';
 import {
   AdminErrorState,
   AdminPageHeader,
   AdminWorkspaceScopeSelect,
   StatusBadge
 } from './admin-shared';
-import {
-  adminApi,
-  type AdminWorkspaceOut,
-  formatAdminApiError
-} from '../services/admin-api';
+import { adminApi, formatAdminApiError } from '../services/admin-api';
 import { useAdminWorkspaceScope } from '../hooks/use-admin-workspace-scope';
 
 function Metric({
@@ -63,27 +55,51 @@ function Metric({
   );
 }
 
-function workspaceToOrganization(
-  workspace: AdminWorkspaceOut
-): ProtoOrganization {
-  return {
-    id: workspace.id,
-    businessName: workspace.businessName,
-    businessEmail: workspace.businessEmail ?? null,
-    businessLogo: workspace.businessLogo ?? null,
-    slug: workspace.slug,
-    status: workspace.status,
-    plan: workspace.plan,
-    created_at: workspace.created_at
-  };
+function AttentionItem({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  href,
+  action
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: number;
+  detail: string;
+  href: string;
+  action: string;
+}) {
+  const hasIssue = value > 0;
+  return (
+    <div className='grid grid-cols-[1fr_auto_auto] items-center gap-3 px-4 py-3 text-sm'>
+      <div className='flex min-w-0 items-center gap-2'>
+        <Icon className='size-4 shrink-0 text-muted-foreground' />
+        <span className='min-w-0'>
+          <span className='block truncate font-medium'>{label}</span>
+          <span className='block truncate text-xs text-muted-foreground'>
+            {detail}
+          </span>
+        </span>
+      </div>
+      <span
+        className={`text-right font-semibold tabular-nums ${
+          hasIssue ? 'text-foreground' : 'text-muted-foreground'
+        }`}
+      >
+        {value}
+      </span>
+      <Button asChild variant='ghost' size='sm' className='h-8 px-2'>
+        <Link href={href}>{action}</Link>
+      </Button>
+    </div>
+  );
 }
 
 export function AdminDashboardPage() {
   const t = useTranslations('adminConsole.dashboard');
   const locale = getLocaleByNextLocale(useLocale());
   const scope = useAdminWorkspaceScope();
-  const router = useRouter();
-  const { setCurrentOrg } = useOrganization();
   const workspaceParams = useMemo(
     () => ({
       workspaceId: scope.scopedWorkspaceId,
@@ -97,16 +113,14 @@ export function AdminDashboardPage() {
     queryFn: () => adminApi.summary({ workspaceId: scope.scopedWorkspaceId }),
     refetchInterval: 30_000
   });
+  const offlineAgents = summary.data?.offlineAgents ?? 0;
+  const staleAgents = summary.data?.staleAgents ?? 0;
+  const attentionTotal = offlineAgents + staleAgents;
   const workspaces = useQuery({
     queryKey: ['admin-dashboard-workspaces', workspaceParams],
     queryFn: () => adminApi.listWorkspaces(workspaceParams),
     refetchInterval: 30_000
   });
-  const enterWorkspace = (workspace: AdminWorkspaceOut) => {
-    setCurrentOrg(workspaceToOrganization(workspace));
-    router.push(ROUTES.DEVICES.ROOT);
-  };
-
   return (
     <div className='min-h-full bg-muted/20'>
       <AdminPageHeader
@@ -166,6 +180,38 @@ export function AdminDashboardPage() {
         </div>
 
         <section className='rounded-md border bg-background'>
+          <div className='flex flex-col gap-1 border-b px-4 py-3 md:flex-row md:items-center md:justify-between'>
+            <div className='flex min-w-0 items-center gap-2'>
+              <Activity className='size-4 shrink-0 text-muted-foreground' />
+              <h2 className='text-sm font-semibold'>{t('attention.title')}</h2>
+            </div>
+            <p className='text-xs text-muted-foreground'>
+              {attentionTotal > 0
+                ? t('attention.summary', { count: attentionTotal })
+                : t('attention.clear')}
+            </p>
+          </div>
+          <div className='divide-y'>
+            <AttentionItem
+              icon={Server}
+              label={t('attention.offlineAgents')}
+              value={offlineAgents}
+              detail={t('attention.offlineAgentsDetail')}
+              href={ROUTES.ADMIN.AGENTS}
+              action={t('attention.viewAgents')}
+            />
+            <AttentionItem
+              icon={AlertTriangle}
+              label={t('attention.staleAgents')}
+              value={staleAgents}
+              detail={t('attention.staleAgentsDetail')}
+              href={ROUTES.ADMIN.AGENTS}
+              action={t('attention.viewAgents')}
+            />
+          </div>
+        </section>
+
+        <section className='rounded-md border bg-background'>
           <div className='flex flex-col gap-3 border-b px-4 py-3 lg:flex-row lg:items-center lg:justify-between'>
             <div className='flex min-w-0 items-center gap-2'>
               <Building2 className='size-4 shrink-0 text-muted-foreground' />
@@ -189,12 +235,6 @@ export function AdminDashboardPage() {
                   </Link>
                 </Button>
               ) : null}
-              <Button asChild variant='outline' size='sm'>
-                <Link href={ROUTES.ADMIN.AGENTS}>
-                  <ArrowRightLeft className='mr-2 size-4' />
-                  {t('workspaceOverview.allocatePhones')}
-                </Link>
-              </Button>
               <Button asChild size='sm'>
                 <Link href={ROUTES.ADMIN.WORKSPACES}>
                   <SquareArrowOutUpRight className='mr-2 size-4' />
@@ -229,16 +269,13 @@ export function AdminDashboardPage() {
                   <TableHead className='min-w-[130px]'>
                     {t('workspaceOverview.table.updated')}
                   </TableHead>
-                  <TableHead className='text-right'>
-                    {t('workspaceOverview.table.action')}
-                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {workspaces.isLoading ? (
                   Array.from({ length: 5 }).map((_, index) => (
                     <TableRow key={index}>
-                      <TableCell colSpan={9}>
+                      <TableCell colSpan={8}>
                         <div className='h-6 animate-pulse rounded bg-muted' />
                       </TableCell>
                     </TableRow>
@@ -293,22 +330,12 @@ export function AdminDashboardPage() {
                           locale
                         )}
                       </TableCell>
-                      <TableCell className='text-right'>
-                        <Button
-                          variant='ghost'
-                          size='sm'
-                          onClick={() => enterWorkspace(workspace)}
-                        >
-                          <LogIn className='mr-2 size-4' />
-                          {t('workspaceOverview.enterWorkspace')}
-                        </Button>
-                      </TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={8}
                       className='h-24 text-center text-sm text-muted-foreground'
                     >
                       {t('workspaceOverview.empty')}
@@ -373,44 +400,6 @@ export function AdminDashboardPage() {
             </div>
           </section>
         </div>
-
-        <section className='rounded-md border bg-background'>
-          <div className='flex items-center gap-2 border-b px-4 py-3'>
-            <Activity className='size-4 text-muted-foreground' />
-            <h2 className='text-sm font-semibold'>{t('healthWarnings')}</h2>
-          </div>
-          <div className='grid gap-3 p-4 md:grid-cols-3'>
-            <div className='flex items-center justify-between rounded-md border p-3 text-sm'>
-              <span className='flex items-center gap-2'>
-                <Server className='size-4 text-muted-foreground' />
-                {t('offlineAgents')}
-              </span>
-              <StatusBadge
-                value={
-                  (summary.data?.offlineAgents ?? 0) > 0 ? 'offline' : 'online'
-                }
-              />
-            </div>
-            <div className='flex items-center justify-between rounded-md border p-3 text-sm'>
-              <span className='flex items-center gap-2'>
-                <AlertTriangle className='size-4 text-muted-foreground' />
-                {t('staleAgents')}
-              </span>
-              <span className='font-medium'>
-                {summary.data?.staleAgents ?? 0}
-              </span>
-            </div>
-            <div className='flex items-center justify-between rounded-md border p-3 text-sm'>
-              <span className='flex items-center gap-2'>
-                <Smartphone className='size-4 text-muted-foreground' />
-                {t('unassignedDevices')}
-              </span>
-              <span className='font-medium'>
-                {summary.data?.unassignedDevices ?? 0}
-              </span>
-            </div>
-          </div>
-        </section>
       </div>
     </div>
   );

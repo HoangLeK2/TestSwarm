@@ -95,6 +95,7 @@ async def change_password(
 
     await record_password_history(db, user.id, user.hashed_password)
     user.hashed_password = hash_password(body.new_password)
+    user.must_change_password = False
     await db.flush()
 
     await emit_security_event(

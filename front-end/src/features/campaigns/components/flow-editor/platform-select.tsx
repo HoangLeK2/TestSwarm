@@ -9,10 +9,14 @@ type Option = {
   label: string;
   supported: boolean;
   coverage: string;
+  capabilityIds: string[];
+  executionMode?: string;
+  facets: Record<string, string | string[]>;
+  genericRecipes: string[];
 };
 
 type Props = {
-  /** Current value; falls back to facebook, matching the backend default. */
+  /** Current value; auto means the runtime must resolve from scenario context. */
   value?: string;
   onChange: (platform: string) => void;
   /** Step type to check support against — omit when checking an entity instead. */
@@ -46,12 +50,23 @@ export function PlatformSelect({
       ? optionsForStep(stepType)
       : [];
 
-  const current = value ?? 'facebook';
+  const current = value ?? 'auto';
   const supported = options.filter((o) => o.supported);
+  const selected = options.find((o) => o.value === current);
+  const facetSummary = selected
+    ? Object.entries(selected.facets)
+        .slice(0, 3)
+        .map(
+          ([key, value]) =>
+            `${key}: ${Array.isArray(value) ? value.join(', ') : value}`
+        )
+        .join(' · ')
+    : '';
 
   // Never hide the current value, even if the backend stopped supporting it —
   // otherwise editing an old scenario would silently rewrite its platform.
-  const hasCurrent = options.some((o) => o.value === current);
+  const hasCurrent =
+    current === 'auto' || options.some((o) => o.value === current);
 
   return (
     <F label={label ?? t('label')}>
@@ -61,6 +76,7 @@ export function PlatformSelect({
         disabled={isLoading || isError}
         onChange={(e) => onChange(e.target.value)}
       >
+        <option value='auto'>{t('autoOption')}</option>
         {!hasCurrent && <option value={current}>{current}</option>}
         {options.map((o) => (
           <option key={o.value} value={o.value} disabled={!o.supported}>
@@ -74,9 +90,35 @@ export function PlatformSelect({
           {t('loadError', { platform: current })}
         </p>
       )}
-      {!isLoading && !isError && supported.length === 1 && (
+      {!isLoading &&
+        !isError &&
+        current !== 'auto' &&
+        supported.length === 1 && (
+          <p className='mt-1 text-[11px] text-muted-foreground'>
+            {t('onlySupported', { platform: supported[0].label })}
+          </p>
+        )}
+      {!isLoading && !isError && current === 'auto' && (
         <p className='mt-1 text-[11px] text-muted-foreground'>
-          {t('onlySupported', { platform: supported[0].label })}
+          {t('autoHint')}
+        </p>
+      )}
+      {!isLoading && !isError && selected?.supported && (
+        <p className='mt-1 text-[11px] text-muted-foreground'>
+          {t(
+            selected.executionMode === 'generic_recipe'
+              ? 'selectedRecipe'
+              : 'selectedAdapter',
+            {
+              platform: selected.label,
+              capability:
+                selected.capabilityIds[0] ?? stepType ?? entity ?? 'platform',
+              details:
+                facetSummary ||
+                selected.genericRecipes.join(', ') ||
+                selected.coverage
+            }
+          )}
         </p>
       )}
     </F>

@@ -1239,16 +1239,20 @@ class TestExecutionCRUD:
     @pytest.mark.asyncio
     async def test_upsert_execution_result_creates_new(self):
         from db.crud.execution import upsert_execution_result
-        from db.models.execution import ExecutionResult
+        from db.models.execution import Execution, ExecutionResult
 
         db = AsyncMock()
         db.add = MagicMock()
         db.flush = AsyncMock()
 
-        # scalar_one_or_none returns None → create path
-        mock_result = AsyncMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=None)
-        db.execute = AsyncMock(return_value=mock_result)
+        # First lookup misses ExecutionResult; second lookup finds the parent Execution.
+        missing_result = AsyncMock()
+        missing_result.scalar_one_or_none = MagicMock(return_value=None)
+        execution_result = AsyncMock()
+        execution_result.scalar_one_or_none = MagicMock(
+            return_value=Execution(id="exec-1", org_id="org-1", run_type="campaign_run")
+        )
+        db.execute = AsyncMock(side_effect=[missing_result, execution_result])
 
         er = await upsert_execution_result(
             db,
@@ -1260,6 +1264,7 @@ class TestExecutionCRUD:
         )
 
         assert isinstance(er, ExecutionResult)
+        assert er.org_id == "org-1"
         assert er.status == "passed"
         assert er.passed_steps == [{"index": 0}]
         db.add.assert_called_once_with(er)

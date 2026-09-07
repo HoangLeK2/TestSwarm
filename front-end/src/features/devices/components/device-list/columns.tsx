@@ -37,8 +37,6 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
-import { normalizeNavUserRole } from '@/lib/nav-access';
-import { useAuthContext } from '@/features/auth/providers/auth-provider';
 import { ROUTES } from '@/config/routes';
 import {
   DropdownMenu,
@@ -77,10 +75,7 @@ function DeviceActionsCell({
   const qc = useQueryClient();
   const { currentOrg } = useOrganization();
   const perms = useResourcePermissions('devices');
-  const { user } = useAuthContext();
-  const platformRole = normalizeNavUserRole(user?.role);
-  const canReviveDead =
-    platformRole === 'admin' || platformRole === 'superadmin';
+  const canReviveDead = perms.canManage;
 
   const handleDelete = async () => {
     const ok = await confirm({
@@ -354,7 +349,7 @@ export function getDeviceColumns({
               className={`size-1.5 rounded-full ${relay.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`}
             />
             <span className='font-mono text-[11px]'>
-              {relay.hostname || relay.relay_id}
+              {relay.name || relay.relay_id}
             </span>
           </div>
         );

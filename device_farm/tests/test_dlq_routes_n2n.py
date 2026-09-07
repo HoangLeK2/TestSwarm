@@ -26,6 +26,7 @@ from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.execution import Execution
 from tenancy.context import set_current_org_id, tenant_context
+from tests.tenancy_test_support import seed_casbin_policy_tables
 
 
 @pytest_asyncio.fixture
@@ -33,6 +34,7 @@ async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await seed_casbin_policy_tables(conn)
     yield eng
     await eng.dispose()
 
@@ -91,6 +93,7 @@ async def _seed(session_factory, exec_id: str, campaign_id: str, user_id: str = 
                     id=exec_id,
                     run_type="campaign_run",
                     status="failed",
+                    org_id="org-1",
                     campaign_id=campaign_id,
                     user_id=user_id,
                     created_at=datetime.now(timezone.utc),
@@ -178,10 +181,11 @@ async def test_dlq_route_other_user_campaign_returns_empty(session_factory):
                 )
             )
             s.add(
-                Execution(
-                    id="exec-theirs",
-                    run_type="campaign_run",
-                    status="failed",
+                    Execution(
+                        id="exec-theirs",
+                        run_type="campaign_run",
+                        status="failed",
+                        org_id="org-2",
                     campaign_id="camp-theirs",
                     user_id="u2",
                     created_at=datetime.now(timezone.utc),
@@ -309,10 +313,11 @@ async def test_retry_no_campaign_id_returns_400_and_reverts(session_factory):
     # Execution with campaign_id=None
     async with session_factory() as s:
         s.add(
-            Execution(
-                id="exec-orphan",
-                run_type="test_run",
-                status="failed",
+                Execution(
+                    id="exec-orphan",
+                    run_type="test_run",
+                    status="failed",
+                    org_id="org-1",
                 campaign_id=None,
                 user_id="u1",
                 created_at=datetime.now(timezone.utc),

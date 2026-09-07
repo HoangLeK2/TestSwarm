@@ -74,7 +74,7 @@ def test_nested_session_gate_reads_account_from_effective_variable_context(
     sc = SimpleNamespace(
         var_ctx=VariableContext(scenario_vars={"__ACCOUNT_ID__": "account-1"}),
         ctx={"vars": {}},
-        scenario={"steps": [{"type": "platform_session_gate"}]},
+        scenario={"platform": "facebook", "steps": [{"type": "platform_session_gate"}]},
         execution_id=None,
         serial="SERIAL1",
         cancel_event=None,

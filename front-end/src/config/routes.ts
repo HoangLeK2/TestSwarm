@@ -3,6 +3,7 @@ export const ROUTES = {
     SIGN_IN: '/auth/sign-in',
     SIGN_UP: '/auth/sign-up',
     ACCEPT_INVITE: '/auth/accept-invite',
+    CHANGE_PASSWORD: '/auth/change-password',
     FORGOT_PASSWORD: '/auth/forgot-password',
     RESET_PASSWORD: '/auth/reset-password',
     VERIFY_EMAIL: '/auth/verify-email',
@@ -118,6 +119,17 @@ export const ROUTES = {
     ROOT: '/dashboard/analytics',
     ACTIVITY: '/dashboard/analytics?tab=activity',
     AUDIT: '/dashboard/analytics?tab=audit'
+  },
+  ADMIN: {
+    ROOT: '/dashboard/admin',
+    WORKSPACES: '/dashboard/admin/workspaces',
+    WORKSPACE_ACCESS: '/dashboard/admin/workspace-access',
+    ACCOUNTS: '/dashboard/admin/accounts',
+    CONTENT: '/dashboard/admin/content',
+    WORKSPACE_ADMINS: '/dashboard/admin/workspace-admins',
+    AGENTS: '/dashboard/admin/agents',
+    DEVICES: '/dashboard/admin/devices',
+    AUDIT: '/dashboard/admin/audit'
   },
   MCP: {
     ROOT: '/dashboard/settings/mcp',

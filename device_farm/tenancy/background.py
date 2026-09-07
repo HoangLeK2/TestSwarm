@@ -16,6 +16,8 @@ class DeviceRef:
     name: str
     brand: str = ""
     model: str = ""
+    managed_by_org_id: str | None = None
+    managed_by_relay_id: str | None = None
 
 
 async def lookup_device_by_key(
@@ -29,7 +31,8 @@ async def lookup_device_by_key(
         await db.execute(
             text(
                 """
-                SELECT id, serial, user_id, org_id, name, brand, model
+                SELECT id, serial, user_id, org_id, name, brand, model,
+                       managed_by_org_id, managed_by_relay_id
                 FROM devices
                 WHERE device_key = :device_key
                 LIMIT 1
@@ -48,6 +51,8 @@ async def lookup_device_by_key(
         name=row[4] or "",
         brand=row[5] or "",
         model=row[6] or "",
+        managed_by_org_id=row[7],
+        managed_by_relay_id=row[8],
     )
 
 
@@ -62,7 +67,8 @@ async def lookup_device_by_serial(
         await db.execute(
             text(
                 """
-                SELECT id, serial, user_id, org_id, name, brand, model
+                SELECT id, serial, user_id, org_id, name, brand, model,
+                       managed_by_org_id, managed_by_relay_id
                 FROM devices
                 WHERE serial = :serial OR adb_serial = :serial
                 LIMIT 1
@@ -81,6 +87,8 @@ async def lookup_device_by_serial(
         name=row[4] or "",
         brand=row[5] or "",
         model=row[6] or "",
+        managed_by_org_id=row[7],
+        managed_by_relay_id=row[8],
     )
 
 
@@ -127,7 +135,7 @@ async def list_device_serials_for_user(
             )
         )
         return {str(r[0]) for r in rows.fetchall()}
-    if effective_org:
+    if role == "superadmin" and effective_org:
         rows = await db.execute(
             text(
                 """
@@ -139,6 +147,33 @@ async def list_device_serials_for_user(
                 """
             ),
             {"org_id": effective_org},
+        )
+        return {str(r[0]) for r in rows.fetchall()}
+    if effective_org:
+        rows = await db.execute(
+            text(
+                """
+                SELECT serial
+                FROM devices
+                WHERE (
+                    org_id = :org_id
+                    OR (
+                        managed_by_org_id = :org_id
+                        AND EXISTS (
+                            SELECT 1
+                            FROM organization_members
+                            WHERE organization_id = :org_id
+                              AND user_id = :user_id
+                              AND role = 'admin'
+                              AND COALESCE(status, 'active') = 'active'
+                        )
+                    )
+                )
+                  AND serial IS NOT NULL
+                  AND serial <> ''
+                """
+            ),
+            {"org_id": effective_org, "user_id": user_id},
         )
         return {str(r[0]) for r in rows.fetchall()}
     rows = await db.execute(
@@ -167,7 +202,8 @@ async def lookup_device_by_id(
         await db.execute(
             text(
                 """
-                SELECT id, serial, user_id, org_id, name, brand, model
+                SELECT id, serial, user_id, org_id, name, brand, model,
+                       managed_by_org_id, managed_by_relay_id
                 FROM devices
                 WHERE id = :device_id
                 LIMIT 1
@@ -186,6 +222,8 @@ async def lookup_device_by_id(
         name=row[4] or "",
         brand=row[5] or "",
         model=row[6] or "",
+        managed_by_org_id=row[7],
+        managed_by_relay_id=row[8],
     )
 
 

@@ -27,6 +27,7 @@ export type VirtualFlowRow =
       branch: 'then' | 'else' | 'loop' | 'pick';
       count: number;
       depth: number;
+      insertPath: BracketChildRef[];
       scopes: VirtualFlowScope[];
     }
   | {
@@ -94,6 +95,7 @@ function projectList(
         branch: 'loop',
         count: body.length,
         depth: depth + 1,
+        insertPath: [...path, { listKey: 'steps', ci: body.length }],
         scopes: nestedScopes
       });
       projectList(body, 'steps', path, depth + 1, nestedScopes, rows);
@@ -120,6 +122,7 @@ function projectList(
         branch: 'then',
         count: thenSteps.length,
         depth: depth + 1,
+        insertPath: [...path, { listKey: 'then', ci: thenSteps.length }],
         scopes: nestedScopes
       });
       projectList(thenSteps, 'then', path, depth + 1, nestedScopes, rows);
@@ -130,6 +133,7 @@ function projectList(
         branch: 'else',
         count: elseSteps.length,
         depth: depth + 1,
+        insertPath: [...path, { listKey: 'else', ci: elseSteps.length }],
         scopes: nestedScopes
       });
       projectList(elseSteps, 'else', path, depth + 1, nestedScopes, rows);
@@ -158,6 +162,7 @@ function projectList(
           branch: 'pick',
           count: branchSteps.length,
           depth: depth + 1,
+          insertPath: [...path, { listKey: branchKey, ci: branchSteps.length }],
           scopes: nestedScopes
         });
         projectList(

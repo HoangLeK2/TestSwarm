@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from relay.adb_admission import AdbLane, adb_admission, classify_adb_command
+from relay.adb_routes import AdbEndpoint, DeviceRoute, route_table
 from relay.adb_scheduler import AdbScheduler, AdbutilsTransport, BinaryAdbTransport
 from relay.device_state import DeviceRegistry
 from relay import runtime as _json
@@ -35,7 +36,6 @@ logger = logging.getLogger("relay.adb")
 # ── adb binary ────────────────────────────────────────────────────────────────
 
 _ADB: str = shutil.which("adb") or "adb"
-_SERIAL_ADB_SERVER: dict[str, tuple[str, str]] = {}
 
 
 def _parse_adb_server(value: str) -> tuple[str, str] | None:
@@ -78,12 +78,35 @@ def adb_server_specs_from_env() -> list[tuple[str, str]]:
     return []
 
 
+def configured_adb_endpoints() -> list[AdbEndpoint]:
+    return [AdbEndpoint(host, int(port)) for host, port in adb_server_specs_from_env()]
+
+
+def _multi_endpoint() -> bool:
+    """True when more than one ADB server is configured.
+
+    Single-endpoint deployments (the default) skip routing entirely: there is
+    nothing to look up and nothing to rediscover.
+    """
+    return len(adb_server_specs_from_env()) > 1
+
+
 def _remember_serial_adb_server(serial: str, host: str, port: str) -> None:
-    serial = str(serial or "").strip()
-    if not serial:
-        return
-    with _ADB_CACHE_LOCK:
-        _SERIAL_ADB_SERVER[serial] = (host, port)
+    route_table.set(serial, AdbEndpoint(host, int(port)))
+
+
+def sync_adb_endpoint_serials(host: str, port: str, snapshot: dict[str, str]) -> None:
+    """Apply one ADB server's full device snapshot to the route table."""
+    route_table.sync_endpoint(AdbEndpoint(host, int(port)), snapshot)
+
+
+def _endpoint_for_serial(serial: Optional[str] = None) -> AdbEndpoint | None:
+    if serial:
+        route = route_table.get(serial)
+        if route is not None:
+            return route.endpoint
+    endpoints = configured_adb_endpoints()
+    return endpoints[0] if endpoints else None
 
 
 def _adb_server_flags_from_env(serial: Optional[str] = None) -> list[str]:
@@ -91,19 +114,58 @@ def _adb_server_flags_from_env(serial: Optional[str] = None) -> list[str]:
 
     Some adb client builds do not reliably honor ADB_SERVER_SOCKET for every
     subprocess invocation. Passing -H/-P keeps recovery commands on the same
-    host ADB server that the Docker entrypoint already checked.
+    host ADB server that the Docker entrypoint already checked. With several
+    servers configured, the per-serial route decides which one.
     """
-    if serial:
-        with _ADB_CACHE_LOCK:
-            cached = _SERIAL_ADB_SERVER.get(serial)
-        if cached:
-            return ["-H", cached[0], "-P", cached[1]]
+    endpoint = _endpoint_for_serial(serial)
+    return endpoint.flags if endpoint else []
 
-    specs = adb_server_specs_from_env()
-    if specs:
-        host, port = specs[0]
-        return ["-H", host, "-P", port]
-    return []
+
+# `error: device 'X' not found` is emitted by the ADB *server* before the
+# command reaches the phone, so it means "wrong endpoint", not "command
+# failed" — and retrying it after rerouting cannot double-apply a tap or an
+# install. `device offline` is deliberately excluded: the device is on this
+# endpoint, just not usable yet.
+_ROUTE_MISS_RE = re.compile(
+    r"^error: (?:device (?:'[^']*' )?not found|no devices?/emulators? found)",
+    re.MULTILINE,
+)
+
+
+def _looks_like_route_miss(output: str, returncode: int) -> bool:
+    return returncode != 0 and bool(_ROUTE_MISS_RE.search(output or ""))
+
+
+def _discover_route(serial: str) -> AdbEndpoint | None:
+    """Scan configured ADB servers for one serial (cache-miss path only).
+
+    Bounded: at most one `adb devices` per configured endpoint, and
+    single-flighted per serial by the route table, so a burst of concurrent
+    commands for an unknown serial produces one scan, not one per command.
+    """
+    for endpoint in configured_adb_endpoints():
+        # A scan started for another serial populates the whole endpoint, so
+        # re-check before paying for one of our own.
+        known = route_table.get(serial)
+        if known is not None:
+            return known.endpoint
+        # Host-level admission (serial=None) keeps concurrent cold-start scans
+        # from fanning out into one `adb devices` process per unknown serial.
+        with adb_admission(serial=None, lane=AdbLane.MAINTENANCE):
+            out, rc = _run_raw([*endpoint.flags, "devices"], timeout=5)
+        if rc != 0:
+            logger.debug(
+                "adb devices failed during discovery adb_host=%s adb_port=%d error=%s",
+                endpoint.host,
+                endpoint.port,
+                (out or "").strip()[:120],
+            )
+            continue
+        found = _parse_adb_devices_output(out)
+        route_table.sync_endpoint(endpoint, {s: "device" for s in found})
+        if serial in found:
+            return endpoint
+    return None
 
 
 def _adb_command(*args: str, serial: Optional[str] = None) -> list[str]:
@@ -326,6 +388,11 @@ def adb_command_stats(*, reset: bool = False) -> dict[str, int]:
         return stats
 
 
+def _adbutils_endpoint_for_serial(serial: Optional[str]) -> tuple[str, int] | None:
+    endpoint = _endpoint_for_serial(serial) if serial else None
+    return (endpoint.host, endpoint.port) if endpoint else None
+
+
 def _get_adb_scheduler() -> AdbScheduler:
     global _ADB_SCHEDULER
     with _ADB_CACHE_LOCK:
@@ -337,6 +404,7 @@ def _get_adb_scheduler() -> AdbScheduler:
                 ),
                 adbutils=AdbutilsTransport(
                     server_specs_provider=adb_server_specs_from_env,
+                    endpoint_provider=_adbutils_endpoint_for_serial,
                 ),
             )
         return _ADB_SCHEDULER
@@ -377,6 +445,14 @@ def invalidate_adb_device_cache(
     if endpoint is not None:
         _run("forward", "--remove", f"tcp:{endpoint[1]}", serial=serial, timeout=5)
 
+
+def _ensure_route(serial: Optional[str]) -> "DeviceRoute | None":
+    """Cache-first routing: resolve an unknown serial once, before dispatch."""
+    if serial and _multi_endpoint():
+        return route_table.resolve(serial, _discover_route)
+    return None
+
+
 def _run(
     *args: str,
     serial: Optional[str] = None,
@@ -388,12 +464,28 @@ def _run(
     Never raises — all exceptions become ("error", -1) pairs.
     """
     classified_lane = lane if lane is not None else classify_adb_command(tuple(args))
+    route = _ensure_route(serial)
     result = _get_adb_scheduler().run(
         tuple(args),
         serial=serial,
         timeout=timeout,
         lane=classified_lane,
     )
+    # Reroute only a route we actually trusted. A serial that was already
+    # unresolvable a moment ago was just scanned for — don't scan again.
+    if route is not None and _looks_like_route_miss(result.output, result.returncode):
+        rerouted = route_table.invalidate_and_resolve(
+            serial,
+            _discover_route,
+            reason="device_not_found",
+        )
+        if rerouted is not None:
+            result = _get_adb_scheduler().run(
+                tuple(args),
+                serial=serial,
+                timeout=timeout,
+                lane=classified_lane,
+            )
     _record_adb_command_stat(
         tuple(args),
         lane=classified_lane,
@@ -441,20 +533,28 @@ def dedupe_adb_serials_prefer_usb(serials: list[str]) -> list[str]:
 def _list_serials() -> list[str]:
     """Snapshot of currently connected serials (startup / fallback only).
     Real-time tracking is handled by AdbDeviceWatcher."""
-    specs = adb_server_specs_from_env()
-    if not specs:
+    endpoints = configured_adb_endpoints()
+    if not endpoints:
         out, _ = _run("devices", timeout=5)
         return dedupe_adb_serials_prefer_usb(_parse_adb_devices_output(out))
 
     serials: list[str] = []
-    for host, port in specs:
-        out, rc = _run_raw(["-H", host, "-P", port, "devices"], timeout=5)
+    for endpoint in endpoints:
+        out, rc = _run_raw([*endpoint.flags, "devices"], timeout=5)
         if rc != 0:
-            logger.debug("adb devices failed host=%s port=%s output=%s", host, port, out)
+            # One dead ADB server must not hide the devices on the others.
+            logger.debug(
+                "adb devices failed adb_host=%s adb_port=%d output=%s",
+                endpoint.host,
+                endpoint.port,
+                out,
+            )
             continue
-        for serial in _parse_adb_devices_output(out):
-            _remember_serial_adb_server(serial, host, port)
-            serials.append(serial)
+        found = _parse_adb_devices_output(out)
+        # Full snapshot for this endpoint — also drops routes for serials that
+        # disappeared from it, so a device that moved is not stuck on the old port.
+        route_table.sync_endpoint(endpoint, {s: "device" for s in found})
+        serials.extend(found)
     return dedupe_adb_serials_prefer_usb(serials)
 
 
@@ -591,10 +691,16 @@ def _device_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
     return bool(out.strip())
 
 
-def _atx_forward_host() -> str:
+def _atx_forward_host(serial: Optional[str] = None) -> str:
     override = _os.environ.get("ATX_FORWARD_HOST", "").strip()
     if override:
         return override
+    # The forward lives on the ADB server that owns the device, so with several
+    # servers on different hosts the routed host is the only correct one.
+    if serial:
+        route = route_table.get(serial)
+        if route is not None:
+            return route.endpoint.host
     sock = _os.environ.get("ADB_SERVER_SOCKET", "").strip()
     if sock.startswith("tcp:"):
         rest = sock[4:]
@@ -627,7 +733,7 @@ def _parse_atx_forward_list(output: str) -> dict[str, tuple[str, int]]:
         port_raw = local.removeprefix("tcp:")
         if not port_raw.isdigit():
             continue
-        forwards[serial] = (_atx_forward_host(), int(port_raw))
+        forwards[serial] = (_atx_forward_host(serial), int(port_raw))
     return forwards
 
 
@@ -744,7 +850,7 @@ def _ensure_atx_forward_endpoint(serial: str) -> tuple[str, int] | None:
                 f"adb forward returned no port: {(out or '').strip()}",
             )
             return None
-        endpoint = (_atx_forward_host(), port)
+        endpoint = (_atx_forward_host(serial), port)
         with _ADB_CACHE_LOCK:
             _ATX_FORWARD_CACHE[serial] = endpoint
             _ATX_FORWARD_FAIL_COUNT.pop(serial, None)
@@ -1153,12 +1259,28 @@ def _run_bytes(
 ) -> tuple[bytes, int]:
     """Like _run() but returns raw stdout bytes (for binary data like screencap)."""
     classified_lane = classify_adb_command(tuple(args))
+    route = _ensure_route(serial)
     result = _get_adb_scheduler().run_bytes(
         tuple(args),
         serial=serial,
         timeout=timeout,
         lane=classified_lane,
     )
+    # stdout is binary, so the wrong-endpoint verdict comes from result.error
+    # (adb's stderr) rather than the payload. Same policy as _run().
+    if route is not None and _looks_like_route_miss(result.error, result.returncode):
+        rerouted = route_table.invalidate_and_resolve(
+            serial,
+            _discover_route,
+            reason="device_not_found",
+        )
+        if rerouted is not None:
+            result = _get_adb_scheduler().run_bytes(
+                tuple(args),
+                serial=serial,
+                timeout=timeout,
+                lane=classified_lane,
+            )
     _record_adb_command_stat(
         tuple(args),
         lane=classified_lane,

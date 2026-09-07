@@ -147,7 +147,9 @@ services:
           cpus: '6.0'
           memory: 6G
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-device_farm}}
+      # DATABASE_URL comes from env_file only — see the note in
+      # docker-compose.yml: interpolating it here let an exported host-side
+      # value (localhost:5433) win over .env and break the container.
       DB_HOST: ${DB_HOST:-host.docker.internal}
       DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-device_farm}

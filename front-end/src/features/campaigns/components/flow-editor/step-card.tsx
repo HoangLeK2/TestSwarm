@@ -6,6 +6,7 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
   Crosshair,
   MousePointerClick,
   Move,
@@ -28,6 +29,9 @@ import {
   resolveVariablePreviewText,
   type VariablePreviewValues
 } from './variable-preview';
+import { analyzeStepConfiguration } from '../../lib/step-configuration-status';
+import type { StepVariableLineage } from '../../lib/step-variable-lineage';
+import { scenarioLintIssueSeverity } from '../../lib/scenario-lint-preflight';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
 function stepImageSrc(val: string): string {
@@ -57,6 +61,7 @@ function TapImageThumb({ step }: { step: FlowStep }) {
   const { url, forget } = useImageTemplateUrl(templateKey);
   if (!url) return null;
   return (
+    // eslint-disable-next-line @next/next/no-img-element -- object-storage template thumbnails are already pre-sized.
     <img
       src={url}
       alt=''
@@ -90,6 +95,7 @@ interface Props {
     onMoveDown: () => void;
   };
   variablePreviewValues?: VariablePreviewValues;
+  variableLineage?: StepVariableLineage;
 }
 
 export function StepCard({
@@ -107,10 +113,17 @@ export function StepCard({
   onTogglePickTapCoords,
   onTogglePickSwipeCoords,
   reorderControls,
-  variablePreviewValues
+  variablePreviewValues,
+  variableLineage
 }: Props) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
+  const tConfig = useTranslations(
+    'campaignsFeature.stepEditor.configurationStatus'
+  );
+  const tLineage = useTranslations(
+    'campaignsFeature.stepEditor.variableLineage'
+  );
   const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
   const typeName = formatStepLabelForCard(getStepTypeName(step.type));
@@ -132,6 +145,13 @@ export function StepCard({
       ? tFlow('runScenario.cardPickHint')
       : '';
   const secondRowMain = title || target || runScenarioEmptyHint;
+  const configurationStatus = analyzeStepConfiguration(step);
+  const configurationIssueCount = configurationStatus.issues.length;
+  const variableIssueCount = variableLineage?.issues.length ?? 0;
+  const variableCriticalIssueCount =
+    variableLineage?.issues.filter(
+      (issue) => scenarioLintIssueSeverity(issue) === 'critical'
+    ).length ?? 0;
 
   const categoryLabel =
     category === 'flow' ? tFlow('categoryFlow') : tFlow('categoryAction');
@@ -214,6 +234,51 @@ export function StepCard({
             >
               {categoryLabel}
             </span>
+            {configurationStatus.state !== 'complete' && (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md px-1.5 py-px text-[9px] font-medium',
+                  configurationStatus.state === 'missing'
+                    ? 'bg-destructive/10 text-destructive'
+                    : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                )}
+                title={tConfig(
+                  configurationStatus.state === 'missing'
+                    ? 'cardMissingTitle'
+                    : 'cardWarningTitle',
+                  { count: configurationIssueCount }
+                )}
+              >
+                <AlertTriangle size={9} />
+                {tConfig(
+                  configurationStatus.state === 'missing'
+                    ? 'cardMissing'
+                    : 'cardWarning',
+                  { count: configurationIssueCount }
+                )}
+              </span>
+            )}
+            {variableIssueCount > 0 && (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md px-1.5 py-px text-[9px] font-medium',
+                  variableCriticalIssueCount > 0
+                    ? 'bg-destructive/10 text-destructive'
+                    : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                )}
+                title={tLineage('cardWarningTitle', {
+                  count: variableIssueCount
+                })}
+              >
+                <AlertTriangle size={9} />
+                {variableCriticalIssueCount > 0
+                  ? tLineage('cardCritical', {
+                      count: variableIssueCount,
+                      critical: variableCriticalIssueCount
+                    })
+                  : tLineage('cardWarning', { count: variableIssueCount })}
+              </span>
+            )}
             {!title && selectorBadge && (
               <span className='rounded-md bg-muted px-1.5 py-px font-mono text-[9px] text-muted-foreground'>
                 {selectorBadge}
@@ -250,6 +315,7 @@ export function StepCard({
           (() => {
             const imgSrc = step.type === 'tap' ? getTapStepImage(step) : '';
             return imgSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element -- inline step screenshots may be data URLs.
               <img
                 src={imgSrc}
                 alt=''

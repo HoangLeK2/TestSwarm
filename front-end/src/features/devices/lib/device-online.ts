@@ -25,7 +25,11 @@ export function resolveDeviceRelay(
 ): RelayAgentOut | undefined {
   return (
     (device.relay_id ? relayMap[device.relay_id] : undefined) ??
+    (device.managed_by_relay_id
+      ? relayMap[device.managed_by_relay_id]
+      : undefined) ??
     relayMap[device.serial] ??
+    (device.relay_serial ? relayMap[device.relay_serial] : undefined) ??
     (device.adb_serial ? relayMap[device.adb_serial] : undefined) ??
     (device.adb_ip ? relayMap[device.adb_ip] : undefined)
   );

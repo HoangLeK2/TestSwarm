@@ -28,6 +28,7 @@ import { DeviceVarsFacebookTargetForm } from '@/components/device-vars-facebook-
 import { DeviceVarsJsonPanel } from '@/components/device-vars-json-panel';
 import { TargetBindingOverview } from '@/components/target-binding-overview';
 import type { TargetBindingOverviewLabels } from '@/components/target-binding-overview';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { isDeviceTargetFormControlledKey } from '@/components/device-vars-target-form-model';
@@ -290,36 +291,40 @@ export function ControlRecordVariablesDialog({
 
               <TabsContent
                 value='targets'
-                className='mt-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'
+                className='mt-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch] lg:overflow-hidden lg:pr-0 lg:[&>div]:h-full lg:[&>div]:min-h-0'
               >
-                <div className='grid min-w-0 gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]'>
-                  <div className='min-w-0 space-y-3'>
-                    <div className='rounded-lg border bg-muted/20 p-3'>
-                      <p className='text-sm font-medium text-foreground'>
-                        {labels.targetTabTitle}
-                      </p>
-                      <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
-                        {labels.targetTabDescription}
-                      </p>
+                <div className='grid min-w-0 gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]'>
+                  <ScrollArea className='min-w-0 lg:h-full lg:min-h-0'>
+                    <div className='space-y-3 pr-3'>
+                      <div className='rounded-lg border bg-muted/20 p-3'>
+                        <p className='text-sm font-medium text-foreground'>
+                          {labels.targetTabTitle}
+                        </p>
+                        <p className='mt-1 text-xs leading-relaxed text-muted-foreground'>
+                          {labels.targetTabDescription}
+                        </p>
+                      </div>
+                      {draftPageSummary ? (
+                        <TargetBindingOverview
+                          summary={draftPageSummary}
+                          labels={labels.pageSummaryOverviewLabels}
+                          sourceDescription={
+                            getPageSummarySourceDescription?.(
+                              draftPageSummary
+                            ) ?? labels.pageSummaryOverviewSourceDescription
+                          }
+                          compact
+                        />
+                      ) : null}
                     </div>
-                    {draftPageSummary ? (
-                      <TargetBindingOverview
-                        summary={draftPageSummary}
-                        labels={labels.pageSummaryOverviewLabels}
-                        sourceDescription={
-                          getPageSummarySourceDescription?.(draftPageSummary) ??
-                          labels.pageSummaryOverviewSourceDescription
-                        }
-                        compact
-                      />
-                    ) : null}
-                  </div>
+                  </ScrollArea>
 
-                  <section className='min-w-0 rounded-lg border bg-background p-3'>
+                  <section className='min-w-0 rounded-lg border bg-background p-3 lg:min-h-0 lg:overflow-hidden'>
                     <DeviceVarsFacebookTargetForm
                       vars={draftVariables}
                       disabled={isSaving}
                       size='default'
+                      fillHeight
                       onChange={setDraftVariables}
                     />
                   </section>

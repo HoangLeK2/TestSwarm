@@ -89,8 +89,8 @@ export function ControlRecordHierarchyPanel({
     <>
       <div
         className={cn(
-          'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-          open ? 'w-[280px]' : 'w-0 overflow-hidden'
+          'flex shrink-0 flex-col border-r border-border/70 bg-background shadow-sm transition-all duration-200',
+          open ? 'w-[300px]' : 'w-0 overflow-hidden'
         )}
       >
         <div className='min-h-0 flex-1 overflow-hidden'>
@@ -239,7 +239,7 @@ export function ControlRecordHierarchyPanel({
           type='button'
           onClick={onToggleCollapsed}
           className={cn(
-            'relative z-10 flex shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+            'relative z-10 flex shrink-0 items-center justify-center border-r border-border/60 bg-background/95 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground',
             collapsed ? 'w-7' : 'w-4'
           )}
           title={collapsed ? t('expandHierarchy') : t('collapseHierarchy')}

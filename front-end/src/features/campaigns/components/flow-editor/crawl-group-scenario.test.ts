@@ -45,7 +45,9 @@ function assertAllStepsHaveType(steps: FlowStep[], label: string): void {
 const FB_GROUP_STEPS = loadJsonSteps(
   'device_farm/scenarios/fb_group_crawl.json'
 );
-const CRAWL_GROUP_STEPS = loadJsonSteps('agent-boot/dist/Crawl group 3.json');
+const CRAWL_GROUP_STEPS = loadJsonSteps(
+  'front-end/src/features/campaigns/components/flow-editor/fixtures/crawl-group-3.json'
+);
 
 const REQUIRED_CRAWL_TYPES = [
   'loop',

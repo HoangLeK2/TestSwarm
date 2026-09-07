@@ -70,6 +70,11 @@ import { triggerBlobDownload } from '@/features/content/lib/download';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import {
+  ADMIN_ALL_WORKSPACES,
+  useAdminWorkspaceScope
+} from '@/features/admin-console/hooks/use-admin-workspace-scope';
+import { AdminWorkspaceScopeSelect } from '@/features/admin-console/components/admin-shared';
 
 function exportActivitiesCsv(
   activities: ActivityLogItem[],
@@ -1484,7 +1489,17 @@ const ACTION_FILTER_OPTIONS = [
   'account.action'
 ] as const;
 
-export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
+export function ActivityFeed({
+  embedded = false,
+  adminMode = false,
+  title,
+  description
+}: {
+  embedded?: boolean;
+  adminMode?: boolean;
+  title?: string;
+  description?: string;
+}) {
   const tPage = useTranslations('analyticsFeature.dashboard');
   const tActivity = useTranslations('analyticsFeature.activity');
   const locale = useLocale();
@@ -1497,6 +1512,7 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(
     null
   );
+  const adminScope = useAdminWorkspaceScope();
 
   useEffect(() => {
     setAccountId(accountIdFromUrl);
@@ -1506,15 +1522,28 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
   const query = useMemo(
     () => ({
       action: actionFilter === 'all' ? undefined : actionFilter,
-      device_serial: deviceSerial.trim() || undefined,
-      account_id: accountId.trim() || undefined,
+      workspaceId: adminMode ? adminScope.scopedWorkspaceId : undefined,
+      device_serial: adminMode ? undefined : deviceSerial.trim() || undefined,
+      account_id: adminMode ? undefined : accountId.trim() || undefined,
       offset: page * PAGE_SIZE,
       limit: PAGE_SIZE
     }),
-    [accountId, actionFilter, deviceSerial, page]
+    [
+      accountId,
+      actionFilter,
+      adminMode,
+      adminScope.scopedWorkspaceId,
+      deviceSerial,
+      page
+    ]
   );
 
-  const { data, isLoading, error, refetch, isFetching } = useActivityLog(query);
+  const { data, isLoading, error, refetch, isFetching } = useActivityLog(
+    query,
+    {
+      adminMode
+    }
+  );
   const activities = useMemo(() => data?.activities ?? [], [data?.activities]);
   const total = data?.total ?? activities.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -1553,10 +1582,13 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
 
   const resetFilters = useCallback(() => {
     setActionFilter('all');
+    if (adminMode) {
+      adminScope.setWorkspaceId(ADMIN_ALL_WORKSPACES);
+    }
     setDeviceSerial('');
     setAccountId('');
     setPage(0);
-  }, []);
+  }, [adminMode, adminScope]);
 
   return (
     <div className='space-y-4'>
@@ -1569,7 +1601,10 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
             </p>
           </div>
         ) : (
-          <Heading title={tPage('title')} description={tPage('subtitle')} />
+          <Heading
+            title={title ?? tPage('title')}
+            description={description ?? tPage('subtitle')}
+          />
         )}
         <div className='flex flex-wrap gap-2'>
           <Button
@@ -1647,37 +1682,60 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
               </SelectContent>
             </Select>
           </div>
-          <div className='space-y-1'>
-            <label className='text-[11px] text-muted-foreground'>
-              {tActivity('filterDevice')}
-            </label>
-            <Input
-              className='h-8 w-[180px]'
-              placeholder={tActivity('filterDevicePlaceholder')}
-              value={deviceSerial}
-              onChange={(e) => {
-                setDeviceSerial(e.target.value);
-                setPage(0);
-              }}
-            />
-          </div>
-          <div className='space-y-1'>
-            <label className='text-[11px] text-muted-foreground'>
-              {tActivity('filterAccount')}
-            </label>
-            <Input
-              className='h-8 w-[220px]'
-              placeholder={tActivity('filterAccountPlaceholder')}
-              value={accountId}
-              onChange={(e) => {
-                setAccountId(e.target.value);
-                setPage(0);
-              }}
-            />
-          </div>
+          {adminMode ? (
+            <div className='space-y-1'>
+              <label className='text-[11px] text-muted-foreground'>
+                {tActivity('filterWorkspace')}
+              </label>
+              <AdminWorkspaceScopeSelect
+                value={adminScope.workspaceId}
+                onChange={(value) => {
+                  adminScope.setWorkspaceId(value);
+                  setPage(0);
+                }}
+                workspaces={adminScope.workspaces}
+                allowGlobalScope={adminScope.allowGlobalScope}
+                workspaceLabel={tActivity('filterWorkspace')}
+                allWorkspacesLabel={tActivity('filterAllWorkspaces')}
+                triggerClassName='h-8 w-[260px]'
+              />
+            </div>
+          ) : null}
+          {!adminMode ? (
+            <>
+              <div className='space-y-1'>
+                <label className='text-[11px] text-muted-foreground'>
+                  {tActivity('filterDevice')}
+                </label>
+                <Input
+                  className='h-8 w-[180px]'
+                  placeholder={tActivity('filterDevicePlaceholder')}
+                  value={deviceSerial}
+                  onChange={(e) => {
+                    setDeviceSerial(e.target.value);
+                    setPage(0);
+                  }}
+                />
+              </div>
+              <div className='space-y-1'>
+                <label className='text-[11px] text-muted-foreground'>
+                  {tActivity('filterAccount')}
+                </label>
+                <Input
+                  className='h-8 w-[220px]'
+                  placeholder={tActivity('filterAccountPlaceholder')}
+                  value={accountId}
+                  onChange={(e) => {
+                    setAccountId(e.target.value);
+                    setPage(0);
+                  }}
+                />
+              </div>
+            </>
+          ) : null}
           {(actionFilter !== 'all' ||
-            deviceSerial.trim() ||
-            accountId.trim()) && (
+            (adminMode && adminScope.workspaceId !== ADMIN_ALL_WORKSPACES) ||
+            (!adminMode && (deviceSerial.trim() || accountId.trim()))) && (
             <Button
               variant='ghost'
               size='sm'

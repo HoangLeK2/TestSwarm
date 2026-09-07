@@ -37,6 +37,9 @@ class AdbRunBytesResult:
     timed_out: bool = False
     transport: str = "unknown"
     supported: bool = True
+    # stdout is binary here, so adb's diagnostics have to be carried separately.
+    # Without this the caller cannot tell "wrong ADB server" from "empty frame".
+    error: str = ""
 
 
 class AdbTransport(Protocol):
@@ -136,10 +139,16 @@ class BinaryAdbTransport:
                 -1,
                 timed_out=True,
                 transport=self.name,
+                error=f"adb timeout after {timeout:g}s",
             )
-        except Exception:
-            return AdbRunBytesResult(b"", -1, transport=self.name)
-        return AdbRunBytesResult(result.stdout, result.returncode, transport=self.name)
+        except Exception as exc:
+            return AdbRunBytesResult(b"", -1, transport=self.name, error=str(exc))
+        return AdbRunBytesResult(
+            result.stdout,
+            result.returncode,
+            transport=self.name,
+            error=result.stderr.decode("utf-8", errors="replace"),
+        )
 
 
 class AdbutilsTransport:
@@ -150,9 +159,14 @@ class AdbutilsTransport:
         *,
         server_specs_provider: Callable[[], list[tuple[str, str]]],
         client_factory: Callable[..., object] | None = None,
+        endpoint_provider: Callable[[str | None], tuple[str, int] | None] | None = None,
     ) -> None:
         self._server_specs_provider = server_specs_provider
         self._client_factory = client_factory
+        # Resolves serial → (host, port). Without it every command would land on
+        # the first configured server, which is wrong as soon as a second ADB
+        # server is configured.
+        self._endpoint_provider = endpoint_provider
         self._clients: dict[tuple[str, int], object] = {}
 
     def run(
@@ -218,8 +232,8 @@ class AdbutilsTransport:
             if command == "shell":
                 return self._shell_bytes(args_tuple[1:], serial=serial, timeout=timeout)
             return self._unsupported_bytes(args_tuple)
-        except Exception:
-            return AdbRunBytesResult(b"", -1, transport=self.name)
+        except Exception as exc:
+            return AdbRunBytesResult(b"", -1, transport=self.name, error=str(exc))
 
     def _unsupported(self, args: Sequence[str]) -> AdbRunResult:
         command = " ".join(args) if args else "<empty>"
@@ -238,8 +252,8 @@ class AdbutilsTransport:
             supported=False,
         )
 
-    def _client(self, *, timeout: float) -> object:
-        host, port = self._primary_server()
+    def _client(self, *, timeout: float, serial: str | None = None) -> object:
+        host, port = self._server_for(serial)
         key = (host, int(port))
         client = self._clients.get(key)
         if client is None:
@@ -253,6 +267,13 @@ class AdbutilsTransport:
 
         return AdbClient
 
+    def _server_for(self, serial: str | None) -> tuple[str, int]:
+        if serial and self._endpoint_provider is not None:
+            endpoint = self._endpoint_provider(serial)
+            if endpoint is not None:
+                return endpoint[0], int(endpoint[1])
+        return self._primary_server()
+
     def _primary_server(self) -> tuple[str, int]:
         specs = self._server_specs_provider()
         if specs:
@@ -261,7 +282,7 @@ class AdbutilsTransport:
         return "127.0.0.1", 5037
 
     def _device(self, serial: str, *, timeout: float) -> object:
-        client = self._client(timeout=timeout)
+        client = self._client(timeout=timeout, serial=serial)
         return client.device(serial=serial)
 
     def _devices(self, args: Sequence[str], *, timeout: float) -> AdbRunResult:
@@ -382,7 +403,7 @@ class AdbutilsTransport:
     ) -> AdbRunResult:
         device = self._device(serial, timeout=timeout)
         if tuple(argv) == ("--list",):
-            client = self._client(timeout=timeout)
+            client = self._client(timeout=timeout, serial=serial)
             items = client.forward_list(serial=serial)
             lines: list[str] = []
             for item in items:

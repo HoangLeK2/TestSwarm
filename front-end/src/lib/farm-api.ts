@@ -281,11 +281,26 @@ farmApi.interceptors.response.use(
       if (retried) return retried;
     }
 
+    if (
+      err.response?.status === 403 &&
+      err.response?.data?.detail?.code === 'PASSWORD_CHANGE_REQUIRED' &&
+      typeof window !== 'undefined'
+    ) {
+      const pathname = window.location.pathname;
+      if (!/\/auth\/change-password/i.test(pathname)) {
+        const locale =
+          pathname.split('/')[1] && /^[a-z]{2}$/i.test(pathname.split('/')[1])
+            ? pathname.split('/')[1]
+            : 'vi';
+        window.location.href = `/${locale}/auth/change-password`;
+      }
+    }
+
     if (err.response?.status === 401 && !original._retry) {
       const pathname =
         typeof window !== 'undefined' ? window.location.pathname : '';
       const isAuthPage =
-        /\/auth\/(sign-in|sign-up|forgot-password|reset-password|verify-email)/i.test(
+        /\/auth\/(sign-in|sign-up|change-password|forgot-password|reset-password|verify-email)/i.test(
           pathname
         );
       if (isAuthPage) {

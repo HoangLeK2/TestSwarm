@@ -57,6 +57,7 @@ type Props = {
    * screenshot from disk (or the template already stored) is the only source.
    */
   allowFilePick?: boolean;
+  copyScope?: 'tapImage' | 'verifyScreen';
 };
 
 function dataUrlToFile(dataUrl: string, name: string): File {
@@ -74,9 +75,10 @@ export function ImageTemplateDialog({
   scenarioId,
   frameDataUrl,
   onPicked,
-  allowFilePick = false
+  allowFilePick = false,
+  copyScope = 'tapImage'
 }: Props) {
-  const t = useTranslations('campaignsFeature.stepEditor.tapImage');
+  const t = useTranslations(`campaignsFeature.stepEditor.${copyScope}`);
   const [cropped, setCropped] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');

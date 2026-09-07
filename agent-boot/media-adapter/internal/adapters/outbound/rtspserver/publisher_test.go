@@ -452,6 +452,23 @@ func TestRemoteOverflowDrainsQueueAndRequestsKeyframe(t *testing.T) {
 	}
 }
 
+// The drain above only protects a keyframe if the queue can hold one. Every
+// deployment shipped RemoteQueueSize=32 against a ~85-packet keyframe, so the
+// drain discarded the frame it existed to save and the IDR it asked for came
+// back oversized — a drop loop that ran with a perfectly healthy uplink.
+// Customer .env files still carry 32, so the floor has to live here.
+func TestNewFloorsRemoteQueueToHoldOneAccessUnit(t *testing.T) {
+	publisher := New(Config{
+		RTSPAddress:     "127.0.0.1:0",
+		RemoteQueueSize: 32,
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	t.Cleanup(func() { _ = publisher.Close(context.Background()) })
+
+	if got := publisher.cfg.RemoteQueueSize; got != minRemoteQueueSize {
+		t.Fatalf("RemoteQueueSize=%d, want %d — 32 cannot hold one keyframe", got, minRemoteQueueSize)
+	}
+}
+
 // A lane used to live until Publisher.Close, so every device that ever streamed
 // kept a goroutine and a queue for the life of the process.
 func TestLaneClosesAfterIdle(t *testing.T) {

@@ -102,7 +102,7 @@ async def test_run_content_stats_enforces_run_campaign_ownership():
 
     with (
         patch.object(route, "_get_campaign_or_404", AsyncMock(return_value=campaign)),
-        patch("db.crud.execution.get_execution", AsyncMock(return_value=wrong_run)),
+        patch("api.execution_access.get_execution", AsyncMock(return_value=wrong_run)),
     ):
         with pytest.raises(HTTPException) as exc:
             await route.run_content_stats("camp-1", "run-1", db, user)
@@ -168,7 +168,10 @@ def test_cors_uses_allowlist_without_regex():
     manager.all_devices.return_value = []
     queue = MagicMock(spec=TaskQueue)
     config = Config(
-        web=WebConfig(cors_allowed_origins=["https://app.example.com"]),
+        web=WebConfig(
+            cors_allow_all=False,
+            cors_allowed_origins=["https://app.example.com"],
+        ),
     )
     app = create_app(manager, queue, config, templates_dir="templates", static_dir=".", front_end_dist=None)
     cors_middleware = next(m for m in app.user_middleware if m.cls.__name__ == "CORSMiddleware")
@@ -181,7 +184,7 @@ def test_campaign_fleet_workflow_endpoints_enforce_ownership_guard():
 
     target = Path(__file__).resolve().parents[1] / "api" / "routes" / "device_control" / "campaign_fleet.py"
     content = target.read_text(encoding="utf-8")
-    assert "await _assert_workflow_owned(db, workflow_id, user.id)" in content
+    assert "await _assert_workflow_owned(db, workflow_id, user)" in content
     assert "await _assert_campaign_owned(db, campaign_id, user.id)" in content
 
 

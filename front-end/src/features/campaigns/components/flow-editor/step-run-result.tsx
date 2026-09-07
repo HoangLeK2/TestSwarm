@@ -1,7 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, Copy, Check } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Code2,
+  Copy
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { humanizeSessionGateMessage } from '../../lib/session-gate-message';
@@ -27,6 +34,60 @@ type Props = {
 
 const COLLAPSED_CHARS = 120;
 
+type RunResultTranslator = ReturnType<typeof useTranslations>;
+
+function quotedField(message: string, fieldNames: string[]): string | null {
+  for (const field of fieldNames) {
+    const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = message.match(new RegExp(`${escaped}=['"]([^'"]+)['"]`, 'i'));
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
+export function humanizeStepRunMessage(
+  message: string | undefined,
+  t: RunResultTranslator
+): string | null {
+  const text = message?.trim();
+  if (!text) return null;
+
+  if (text.includes('comment_sheet_not_open')) {
+    return t('messages.commentSheetNotOpen');
+  }
+
+  if (/^edge\s+extra_data\s+failed:/i.test(text)) {
+    return t('messages.extraDataFailed');
+  }
+
+  if (/^scroll_to\s+found\b/i.test(text)) {
+    const target = quotedField(text, [
+      'description',
+      'text',
+      'content-desc',
+      'contentDescription',
+      'resource-id',
+      'resourceId'
+    ]);
+    const count = Number(text.match(/after\s+(\d+)\s+swipe\(s\)/i)?.[1] ?? 0);
+    if (target && count > 0) {
+      return t('messages.scrollToFoundWithTarget', { target, count });
+    }
+    if (target) return t('messages.scrollToFoundTargetOnly', { target });
+    if (count > 0) return t('messages.scrollToFound', { count });
+  }
+
+  if (/selector\s+not\s+found|element\s+not\s+found/i.test(text)) {
+    return t('messages.selectorNotFound');
+  }
+
+  if (/timeout|timed out/i.test(text)) {
+    return t('messages.timeout');
+  }
+
+  return null;
+}
+
 /**
  * Outcome strip under a step card after a test run.
  *
@@ -38,6 +99,7 @@ export function StepRunResultStrip({ result, action }: Props) {
   const tGate = useTranslations('executionMessages');
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
 
   const text = result.textPreview ?? '';
   const hasValue = !!result.savedAs;
@@ -45,6 +107,15 @@ export function StepRunResultStrip({ result, action }: Props) {
   const canExpand = text.length > COLLAPSED_CHARS;
   const shown =
     expanded || !canExpand ? text : `${text.slice(0, COLLAPSED_CHARS)}…`;
+  const friendlyMessage =
+    humanizeSessionGateMessage(result.message, tGate) ??
+    humanizeStepRunMessage(result.message, t);
+  const fallbackMessage = result.ok
+    ? t('completeFallback')
+    : t('failedFallback');
+  const primaryMessage = friendlyMessage ?? fallbackMessage;
+  const hasTechnicalMessage =
+    Boolean(result.message) && result.message !== primaryMessage;
 
   const copy = async () => {
     try {
@@ -59,14 +130,43 @@ export function StepRunResultStrip({ result, action }: Props) {
   return (
     <div
       className={cn(
-        'mt-1 rounded-md border px-2 py-1.5 text-[11px] leading-relaxed',
+        'mt-1 rounded-md border px-2.5 py-2 text-[11px] leading-relaxed',
         result.ok
-          ? 'border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20'
+          ? 'border-emerald-500/25 bg-emerald-50/45 dark:bg-emerald-950/20'
           : 'border-destructive/30 bg-destructive/5'
       )}
     >
-      <div className='flex items-start gap-1.5'>
+      <div className='flex items-start gap-2'>
+        <span
+          className={cn(
+            'mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-background ring-1',
+            result.ok
+              ? 'text-emerald-700 ring-emerald-200 dark:text-emerald-300 dark:ring-emerald-900'
+              : 'text-destructive ring-destructive/20'
+          )}
+        >
+          {result.ok ? (
+            <CheckCircle2 className='size-3.5' aria-hidden />
+          ) : (
+            <AlertCircle className='size-3.5' aria-hidden />
+          )}
+        </span>
         <div className='min-w-0 flex-1'>
+          <div className='flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5'>
+            <span className='font-medium text-foreground'>
+              {hasValue
+                ? t('savedTitle')
+                : result.ok
+                  ? t('okTitle')
+                  : t('errorTitle')}
+            </span>
+            {hasValue && (
+              <span className='text-muted-foreground'>
+                {t('savedTo', { variable: result.savedAs ?? '' })}
+              </span>
+            )}
+          </div>
+
           {hasValue && (
             <div className='flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5'>
               <code className='rounded bg-background/70 px-1 font-mono text-[10px] text-foreground'>
@@ -87,7 +187,7 @@ export function StepRunResultStrip({ result, action }: Props) {
 
           {text ? (
             <>
-              <p className='mt-0.5 whitespace-pre-wrap break-words font-mono text-[11px] text-foreground'>
+              <p className='mt-1 whitespace-pre-wrap break-words rounded border border-border/60 bg-background/75 px-2 py-1 font-mono text-[11px] text-foreground'>
                 {shown}
               </p>
               {/* The tail never left the runtime, so expanding cannot reveal it
@@ -102,10 +202,28 @@ export function StepRunResultStrip({ result, action }: Props) {
               )}
             </>
           ) : (
-            <p className='text-muted-foreground' title={result.message}>
-              {humanizeSessionGateMessage(result.message, tGate) ??
-                result.message}
+            <p className='mt-0.5 text-muted-foreground' title={result.message}>
+              {primaryMessage}
             </p>
+          )}
+
+          {hasTechnicalMessage && (
+            <div className='mt-1.5'>
+              <button
+                type='button'
+                className='inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background px-2 text-[10px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                onClick={() => setShowTechnical((value) => !value)}
+                aria-expanded={showTechnical}
+              >
+                <Code2 className='size-3' aria-hidden />
+                {showTechnical ? t('hideTechnical') : t('showTechnical')}
+              </button>
+              {showTechnical && (
+                <pre className='mt-1 max-h-24 overflow-auto rounded-md border border-border/70 bg-background/80 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground'>
+                  {result.message}
+                </pre>
+              )}
+            </div>
           )}
         </div>
 

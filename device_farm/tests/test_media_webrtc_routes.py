@@ -639,3 +639,130 @@ async def test_session_answer_can_force_adapter_signaling(monkeypatch):
             "offer": {"type": "offer", "sdp": "v=0 offer"},
         }
     ]
+
+
+class _StreamStatus:
+    """Minimal stand-in for relay_pb2.MediaStreamStatus."""
+
+    def __init__(self, serial: str, last_frame_unix_ms: int) -> None:
+        self.serial = serial
+        self.stream_name = f"device-{serial}"
+        self.stream_source = ""
+        self.active = True
+        self.connected = True
+        self.width = 216
+        self.height = 480
+        self.frames = 1
+        self.bytes = 1
+        self.keyframes = 1
+        self.publish_errors = 0
+        self.last_frame_unix_ms = last_frame_unix_ms
+        self.error = ""
+
+
+def test_frozen_stream_keeps_its_first_progress_mark():
+    """A frozen pipeline repeats one frame timestamp; the mark must not move."""
+    from runtime.transports.media_adapter_control_servicer import _merge_stream_progress
+
+    first = _merge_stream_progress({}, [_StreamStatus("serial-1", 1_000)])
+    mark = first["serial-1"]["frame_progress_unix_ms"]
+    assert mark > 0
+
+    second = _merge_stream_progress(first, [_StreamStatus("serial-1", 1_000)])
+    assert second["serial-1"]["frame_progress_unix_ms"] == mark
+
+    third = _merge_stream_progress(second, [_StreamStatus("serial-1", 2_000)])
+    assert third["serial-1"]["frame_progress_unix_ms"] >= mark
+    assert third["serial-1"]["last_frame_unix_ms"] == 2_000
+
+
+def test_kick_serials_closes_only_the_adapters_serving_them():
+    import asyncio
+
+    from runtime.transports.media_adapter_control_servicer import (
+        MediaAdapterConnection,
+        MediaAdapterControlServicer,
+    )
+
+    servicer = MediaAdapterControlServicer(api_key="")
+    keep_q: asyncio.Queue = asyncio.Queue()
+    drop_q: asyncio.Queue = asyncio.Queue()
+    keep = MediaAdapterConnection("media-keep", keep_q)
+    keep.serials = {"SN-OTHER"}
+    drop = MediaAdapterConnection("media-drop", drop_q)
+    drop.serials = {"SN001"}
+    servicer._conns = {"media-keep": keep, "media-drop": drop}
+    servicer._serial_index = {"SN-OTHER": "media-keep", "SN001": "media-drop"}
+
+    assert servicer.kick_serials(["SN001"]) == 1
+    assert set(servicer._conns) == {"media-keep"}
+    assert servicer._serial_index == {"SN-OTHER": "media-keep"}
+    assert drop_q.get_nowait() is None
+    assert keep_q.empty()
+
+    assert servicer.kick_serials([]) == 0
+
+
+def test_media_serial_index_skips_suspended_phones():
+    """An adapter may report a phone whose agent an admin switched off."""
+    import asyncio
+
+    from runtime.transports.agent_suspension import get_agent_suspension_registry
+    from runtime.transports.media_adapter_control_servicer import (
+        MediaAdapterConnection,
+        MediaAdapterControlServicer,
+    )
+
+    registry = get_agent_suspension_registry()
+    registry.replace([("agt-1", ["SN-OFF"])])
+    try:
+        servicer = MediaAdapterControlServicer(api_key="")
+        conn = MediaAdapterConnection("media-1", asyncio.Queue())
+        conn.serials = {"SN-OFF", "SN-ON"}
+        servicer._conns = {"media-1": conn}
+        servicer._index_allowed_serials("media-1", conn.serials)
+
+        # The suspended phone is simply absent, so nothing can synthesise it.
+        assert servicer.stream_for_serial("SN-OFF") is None
+        assert servicer.online_serials_snapshot() == {"SN-ON"}
+
+        registry.resume("agt-1", ["SN-OFF"])
+        servicer.reindex_serials()
+        assert servicer.online_serials_snapshot() == {"SN-OFF", "SN-ON"}
+    finally:
+        registry.replace([])
+
+
+def test_repeated_heartbeats_do_not_relog_a_steady_parked_state(caplog):
+    """Heartbeats arrive every few seconds; only a change is worth a log line."""
+    import asyncio
+    import logging
+
+    from runtime.transports.agent_suspension import get_agent_suspension_registry
+    from runtime.transports.media_adapter_control_servicer import (
+        MediaAdapterConnection,
+        MediaAdapterControlServicer,
+    )
+
+    registry = get_agent_suspension_registry()
+    registry.replace([("agt-1", ["SN-OFF"])])
+    try:
+        servicer = MediaAdapterControlServicer(api_key="")
+        conn = MediaAdapterConnection("media-1", asyncio.Queue())
+        conn.serials = {"SN-OFF"}
+        servicer._conns = {"media-1": conn}
+
+        with caplog.at_level(logging.INFO, logger="media_adapter_control"):
+            for _ in range(5):
+                servicer._index_allowed_serials("media-1", conn.serials)
+            parked_lines = [r for r in caplog.records if "parked" in r.getMessage()]
+            assert len(parked_lines) == 1
+
+            caplog.clear()
+            registry.resume("agt-1", ["SN-OFF"])
+            for _ in range(3):
+                servicer._index_allowed_serials("media-1", conn.serials)
+            resumed = [r for r in caplog.records if "resumed" in r.getMessage()]
+            assert len(resumed) == 1
+    finally:
+        registry.replace([])

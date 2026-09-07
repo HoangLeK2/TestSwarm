@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import os
 import secrets
@@ -46,8 +47,12 @@ def _mark_request_execute(orm_execute_state) -> None:
 def _install_request_write_tracking(session: AsyncSession) -> None:
     sync_session = session.sync_session
     sync_session.info[_REQUEST_WRITE_ATTEMPTED] = False
-    event.listen(sync_session, "before_flush", _mark_request_flush)
-    event.listen(sync_session, "do_orm_execute", _mark_request_execute)
+    try:
+        event.listen(sync_session, "before_flush", _mark_request_flush)
+        event.listen(sync_session, "do_orm_execute", _mark_request_execute)
+    except Exception:
+        # Test doubles and non-SQLAlchemy session adapters cannot emit ORM events.
+        _remove_request_write_tracking(session)
 
 
 def _remove_request_write_tracking(session: AsyncSession) -> None:
@@ -101,8 +106,12 @@ DB = Annotated[AsyncSession, Depends(_get_db)]
 async def _release_request_read_transaction(db: AsyncSession) -> None:
     """Return a read-only auth/RBAC connection to the pool before route work."""
     try:
-        in_transaction = bool(db.in_transaction())
+        in_transaction = db.in_transaction()
     except Exception:
+        return
+    if inspect.isawaitable(in_transaction):
+        with contextlib.suppress(Exception):
+            in_transaction.close()
         return
     if in_transaction:
         await db.commit()
@@ -238,7 +247,8 @@ async def _get_current_user(
 
 async def _get_current_admin(user: User = Depends(_get_current_user)) -> User:
     org_role = str(getattr(user, "org_role", "") or "").strip().lower()
-    if not is_superadmin(user) and org_role not in ("owner", "admin"):
+    system_role = str(getattr(user, "role", "") or "").strip().lower()
+    if not is_superadmin(user) and org_role != "admin" and system_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
     return user
 
@@ -248,8 +258,29 @@ CurrentUser = Annotated[User, Depends(_get_current_user)]
 AdminUser = Annotated[User, Depends(_get_current_admin)]
 
 
+def _allows_temporary_password_user(request: Request) -> bool:
+    """Only allow account bootstrap endpoints until a temporary password is changed."""
+    path = request.url.path.rstrip("/")
+    method = request.method.upper()
+    return (
+        (method == "GET" and path == "/api/auth/me")
+        or (method == "POST" and path == "/api/auth/logout")
+        or (method == "POST" and path == "/api/me/change-password")
+    )
+
+
+def _raise_password_change_required() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "PASSWORD_CHANGE_REQUIRED"},
+    )
+
+
 def require_permission(obj: str, act: str):
     async def _require_permission(request: Request, user: CurrentUser, db: DB) -> None:
+        if getattr(user, "must_change_password", False) and not _allows_temporary_password_user(request):
+            _raise_password_change_required()
+
         domain = permission_domain(user)
         enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
         if not enforcer.enforce(str(user.id), domain, obj, act):
@@ -276,6 +307,24 @@ def require_permission(obj: str, act: str):
         await _release_request_read_transaction(db)
 
     return _require_permission
+
+
+def require_permission_or_admin(obj: str, act: str):
+    permission_dependency = require_permission(obj, act)
+
+    async def _require_permission_or_admin(request: Request, user: CurrentUser, db: DB) -> None:
+        if getattr(user, "must_change_password", False) and not _allows_temporary_password_user(request):
+            _raise_password_change_required()
+
+        org_role = str(getattr(user, "org_role", "") or "").strip().lower()
+        system_role = str(getattr(user, "role", "") or "").strip().lower()
+        if is_superadmin(user) or org_role == "admin" or system_role == "admin":
+            await _release_request_read_transaction(db)
+            return
+
+        await permission_dependency(request, user, db)
+
+    return _require_permission_or_admin
 
 
 def _token_from_request(request: Request) -> str:
@@ -351,6 +400,9 @@ def require_request_permission(db_enabled: bool, obj: str, act: str):
 
     async def _require_request_permission(request: Request, db: DB) -> None:
         user = await _current_user_from_request(request, db)
+        if getattr(user, "must_change_password", False) and not _allows_temporary_password_user(request):
+            _raise_password_change_required()
+
         domain = permission_domain(user)
         enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
         if not enforcer.enforce(str(user.id), domain, obj, act):

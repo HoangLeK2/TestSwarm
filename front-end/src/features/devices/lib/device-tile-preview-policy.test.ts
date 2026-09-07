@@ -6,7 +6,9 @@ import {
   isGridH264Enabled,
   isGridWebRtcPreviewEnabled,
   isDevicePreviewStreamEligible,
+  isPreviewFrameStale,
   nextSnapshotRetryDelayMs,
+  SNAPSHOT_FAILURES_BEFORE_STALE,
   selectDeviceTilePreviewMode
 } from './device-tile-preview-policy';
 
@@ -101,4 +103,39 @@ test('detects media-plane preview independently from agent/control state', () =>
   assert.equal(hasMediaPlanePreview({ media_stream_active: true }), true);
   assert.equal(hasMediaPlanePreview({ media_stream_connected: true }), true);
   assert.equal(hasMediaPlanePreview({}), false);
+});
+
+test('drops a painted frame once the media plane stops moving', () => {
+  assert.equal(
+    isPreviewFrameStale({
+      streamStatus: 'stale',
+      consecutiveSnapshotFailures: 0
+    }),
+    true
+  );
+  assert.equal(
+    isPreviewFrameStale({
+      streamStatus: 'ready',
+      consecutiveSnapshotFailures: 0
+    }),
+    false
+  );
+});
+
+test('tolerates one dropped snapshot poll before blanking the tile', () => {
+  assert.equal(
+    isPreviewFrameStale({
+      streamStatus: 'ready',
+      consecutiveSnapshotFailures: 1
+    }),
+    false
+  );
+  assert.equal(
+    isPreviewFrameStale({
+      streamStatus: 'ready',
+      consecutiveSnapshotFailures: SNAPSHOT_FAILURES_BEFORE_STALE
+    }),
+    true
+  );
+  assert.equal(isPreviewFrameStale({ consecutiveSnapshotFailures: 0 }), false);
 });

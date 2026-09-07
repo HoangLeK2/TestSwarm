@@ -8,7 +8,7 @@ import {
   type PermissionAction,
   type PermissionObject
 } from '@/lib/rbac';
-import { normalizeNavUserRole } from '@/lib/nav-access';
+import { normalizeNavOrgRole, normalizeNavUserRole } from '@/lib/nav-access';
 import { useCan } from '../hooks/use-permission';
 import { useUser } from '../hooks/use-auth';
 
@@ -36,14 +36,21 @@ export function PermissionGuard({
   const requiredObject = object ?? rule?.permission?.object;
   const requiredAction = object ? action : (rule?.permission?.action ?? action);
   const requiredRoles = rule?.roles;
+  const requiredOrgRoles = rule?.orgRoles;
+  const userRole = normalizeNavUserRole(user?.role);
+  const orgRole = normalizeNavOrgRole(user?.orgRole);
 
-  const roleAllowed =
-    !requiredRoles || requiredRoles.includes(normalizeNavUserRole(user?.role));
+  const roleAllowed = !requiredRoles || requiredRoles.includes(userRole);
+
+  const orgRoleAllowed =
+    !requiredOrgRoles ||
+    userRole === 'superadmin' ||
+    (orgRole ? requiredOrgRoles.includes(orgRole) : false);
 
   const permissionAllowed =
     !requiredObject || can(requiredObject, requiredAction);
 
-  const allowed = roleAllowed && permissionAllowed;
+  const allowed = roleAllowed && orgRoleAllowed && permissionAllowed;
 
   useEffect(() => {
     if (isLoading || !ready) return;

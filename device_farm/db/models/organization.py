@@ -17,12 +17,20 @@ class Organization(Base):
     business_name: Mapped[str] = mapped_column(String(255), nullable=False)
     business_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     business_logo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     slug: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, unique=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active", server_default="active"
     )
     plan: Mapped[str] = mapped_column(
         String(20), nullable=False, default="standard", server_default="standard"
+    )
+    # 'pool' = runs relay hosts and hands phones out; 'tenant' = uses them.
+    # Only a pool workspace may own an agent activation code, because the
+    # enrolling workspace becomes devices.managed_by_org_id for every phone
+    # allocated from that host.
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="tenant", server_default="tenant"
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -68,4 +76,3 @@ class OrganizationMember(Base):
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="members")
     user: Mapped["User"] = relationship("User", back_populates="memberships")
-

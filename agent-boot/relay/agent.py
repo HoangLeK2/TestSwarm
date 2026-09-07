@@ -428,19 +428,32 @@ def _u2_warm_allowed_reason(reason: str) -> bool:
     return reason in {"explicit-bootstrap"}
 
 
-def load_or_create_relay_id() -> str:
-    """Stable relay identity across restarts (persisted under AGENT_BOOT_STATE_DIR)."""
+def load_relay_id() -> str:
+    """Read the server-issued relay id, "" if this host has not been enrolled yet.
+
+    The agent never invents an identity: a hostname is a container ID in Docker
+    and a fresh uuid is a fresh row in the admin console. The server issues the
+    id at register time and we persist whatever it hands back.
+    """
     try:
-        os.makedirs(_STATE_DIR, exist_ok=True)
+        if os.path.exists(_RELAY_ID_FILE):
+            return open(_RELAY_ID_FILE).read().strip()
     except OSError:
         pass
-    if os.path.exists(_RELAY_ID_FILE):
-        rid = open(_RELAY_ID_FILE).read().strip()
-        if rid:
-            return rid
-    rid = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
-    with open(_RELAY_ID_FILE, "w") as f:
-        f.write(rid)
+    return ""
+
+
+def save_relay_id(relay_id: str) -> str:
+    """Persist the server-issued id under AGENT_BOOT_STATE_DIR."""
+    rid = (relay_id or "").strip()
+    if not rid:
+        return ""
+    try:
+        os.makedirs(_STATE_DIR, exist_ok=True)
+        with open(_RELAY_ID_FILE, "w") as f:
+            f.write(rid)
+    except OSError as exc:
+        logger.warning("could not persist relay id %s: %s", rid, exc)
     return rid
 
 
@@ -481,6 +494,9 @@ class RelayAgent:
         self._relay_id  = relay_id
         self._relay_mode = relay_mode.lower().strip()
         self._enrollment_token = (enrollment_token or "").strip()
+        # Set once the control channel's RegisterAck hands us a server-issued id.
+        # The relay stream must not register before that or it registers as "".
+        self._identity_ready = asyncio.Event()
 
         if self._relay_mode == "grpc":
             # Accept "host:port" or "grpc://host:port" → strip scheme
@@ -1026,6 +1042,11 @@ class RelayAgent:
     async def _connect_and_stream(self) -> None:
         import websockets  # type: ignore
 
+        # Legacy WS transport has no RegisterAck to carry a server-issued id and
+        # creates no agent row, so it keeps a locally persisted fallback id.
+        if not self._relay_id:
+            self._relay_id = save_relay_id(f"ws-{uuid.uuid4().hex[:12]}")
+
         headers: dict = {}
         if self._api_key:
             headers["x-relay-api-key"] = self._api_key
@@ -1163,6 +1184,9 @@ class RelayAgent:
             # re-registered after every reconnect so control routing remains
             # stable while media stays outside backend gRPC.
             async def _register_relay_stream() -> str:
+                # The control channel and this stream start in parallel; without
+                # this gate the stream can register under an empty relay_id.
+                await asyncio.wait_for(self._identity_ready.wait(), timeout=30.0)
                 serials = self._registry.online_serials
                 register_msg = dumps({
                     "type":     "register",

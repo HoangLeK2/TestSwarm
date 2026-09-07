@@ -93,8 +93,10 @@ scripts\docker-up.cmd ps
 scripts\docker-up.cmd down
 ```
 
-Relay ID tự sinh được lưu trong Docker volume `agent-boot-state`, nên vẫn giữ
-nguyên sau `down`/`up`. Chỉ `docker compose down -v` mới xóa identity này.
+Relay ID do server cấp khi đăng ký lần đầu và lưu ở thư mục `./state` cạnh
+`docker-compose.yml`, nên giữ nguyên qua `down`, `down -v` và nâng cấp image.
+Mất luôn thư mục đó cũng không sinh máy mới: server nhận lại đúng hàng cũ theo
+activation code. Tên máy đặt trong admin console, agent không bao giờ ghi đè.
 Compose dùng **1 image / 2 container**:
 
 - `agent-boot`: relay control/u2/gRPC.

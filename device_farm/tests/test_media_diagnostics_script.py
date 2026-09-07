@@ -163,6 +163,50 @@ def test_docker_warnings_detect_secret_and_candidate_drift_without_leaking_value
     assert "running-secret" not in repr(sanitized)
 
 
+def test_inspect_docker_does_not_warn_when_the_running_password_matches(monkeypatch) -> None:
+    # The test above hand-builds diagnostics, so it never saw what the real
+    # pipeline produces: inspect_docker used to redact the password before
+    # comparing it, and the drift warning fired on every healthy deployment —
+    # exit 3 for anyone running the documented --fail-on-warning preflight.
+    def fake_inspect(container: str):
+        if "go2rtc" in container:
+            return media_diagnostics.FetchResult(
+                ok=True,
+                data={
+                    "Config": {
+                        "Image": "go2rtc:test",
+                        "Cmd": [
+                            "go2rtc",
+                            '{"rtsp":{"username":"farm","password":"shared-secret"},'
+                            '"webrtc":{"candidates":["127.0.0.1:8555"]}}',
+                        ],
+                    },
+                    "NetworkSettings": {"Ports": {}},
+                },
+            )
+        return media_diagnostics.FetchResult(
+            ok=True,
+            data={
+                "Config": {
+                    "Image": "agent-boot:test",
+                    "Env": [
+                        "MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED=0",
+                        "MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE=rtsp://farm:shared-secret@host:8554/{stream_raw}",
+                    ],
+                }
+            },
+        )
+
+    monkeypatch.setattr(media_diagnostics, "docker_inspect", fake_inspect)
+
+    result = media_diagnostics.inspect_docker(
+        "go2rtc", "media-adapter", {"RTSP_USER": "farm", "RTSP_PASS": "shared-secret"}
+    )
+
+    assert not any("password does not match" in warning for warning in result["warnings"])
+    assert "shared-secret" not in repr(result)
+
+
 def test_load_env_file_preserves_candidate_list_quotes(tmp_path: Path) -> None:
     env_file = tmp_path / "deploy.env"
     env_file.write_text(

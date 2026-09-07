@@ -13,6 +13,7 @@ import { packageFromCurrentApp, type DeviceOpsConfig } from './device-ops-rail';
 import { ControlRecordTopBar } from './control-record/control-record-top-bar';
 import { ControlRecordHierarchyPanel } from './control-record/control-record-hierarchy-panel';
 import { ControlRecordMirrorPanel } from './control-record/control-record-mirror-panel';
+import { ScenarioWorkbenchShell } from './control-record/scenario-workbench-shell';
 import type { ImageTemplatePick } from '@/features/campaigns/components/flow-editor/image-template-dialog';
 import {
   ImageTemplateScenarioProvider,
@@ -31,12 +32,6 @@ import {
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup
-} from '@/components/ui/resizable';
 import {
   formatDeviceVarsJson,
   mergeCampaignScenarioVariables,
@@ -118,7 +113,10 @@ import {
   campaignPerDeviceOverrides,
   campaignVariables,
   campaignsApi,
+  scenarioDeviceCapabilitiesApi,
+  scenarioSchemaApi,
   scenariosApi,
+  type ScenarioCapabilityPreflightOut,
   type ScenarioDeviceVariablesOut
 } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
@@ -143,6 +141,17 @@ import { humanizeSessionGateMessage } from '@/features/campaigns/lib/session-gat
 import { canPersistScenario } from '@/features/campaigns/components/flow-editor/nested-step-edit';
 import { deriveNestedInlineRunStates } from '@/features/campaigns/components/flow-editor/inline-run-key';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
+import { deviceCapabilityMapFromDevice } from '@/features/campaigns/lib/node-capabilities';
+import {
+  scenarioCapabilityIssueSummary,
+  scenarioCapabilityWarningSummary
+} from '@/features/campaigns/lib/scenario-capability-preflight';
+import {
+  scenarioLintPreflightForInlineRun,
+  scenarioLintPreflightForSteps,
+  scenarioLintSummary,
+  type ScenarioLintPreflightResult
+} from '@/features/campaigns/lib/scenario-lint-preflight';
 import {
   findSelectorForTreeNode,
   findSelectorInXml,
@@ -201,6 +210,7 @@ import {
 } from '../lib/control-record-preview-steps';
 import { syncCampaignDetailCaches } from '../lib/control-record-cache';
 import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-api';
+import { useConfirm } from '@/providers/modal-provider';
 
 const MAX_MULTI_CONTROL_DEVICES = 20;
 const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
@@ -241,6 +251,13 @@ export function ControlRecordView({
   const tVar = useTranslations('components.variableEditor');
   const tRecovery = useTranslations('campaignsFeature.recoveryPolicy');
   const tGate = useTranslations('executionMessages');
+  const tCapabilityPreflight = useTranslations(
+    'campaignsFeature.capabilityPreflight'
+  );
+  const tScenarioLintPreflight = useTranslations(
+    'devicesControlRecord.scenarioLintPreflight'
+  );
+  const confirm = useConfirm();
   const router = useRouter();
   useControlRecordChunkReloadGuard();
 
@@ -334,12 +351,16 @@ export function ControlRecordView({
       toast.error(tOrg('sequenceOnlyNoGraph'));
       return;
     }
-    if (steps.items.length === 0) {
+    const latestSteps = await lintCurrentScenarioBeforePersist(
+      tScenarioLintPreflight('saveContext')
+    );
+    if (!latestSteps) return;
+    if (latestSteps.length === 0) {
       toast.warning(tOrg('saveOrgNoSteps'));
       return;
     }
     const body = buildOrgScenarioBodyPayload(
-      flushPendingFlowDetailStep(),
+      latestSteps,
       syncDeviceVarKeysIntoScenarioVariables()
     );
     const check = validateScenarioStepsForApi(body.steps ?? []);
@@ -444,6 +465,29 @@ export function ControlRecordView({
     device.selectedSerial,
     rawSelectedDeviceForControl
   ]);
+  const { data: scenarioSchema } = useQuery({
+    queryKey: ['scenario-schema'],
+    queryFn: scenarioSchemaApi.get,
+    staleTime: 300_000
+  });
+  const { data: selectedCapabilitySnapshot } = useQuery({
+    queryKey: [
+      'scenario-device-capabilities',
+      selectedDeviceForControl?.serial ?? ''
+    ],
+    queryFn: () =>
+      scenarioDeviceCapabilitiesApi.get(selectedDeviceForControl?.serial ?? ''),
+    enabled: Boolean(selectedDeviceForControl?.serial),
+    staleTime: 15_000,
+    refetchInterval: 15_000
+  });
+  const selectedDeviceCapabilities = useMemo(
+    () => ({
+      ...(deviceCapabilityMapFromDevice(selectedDeviceForControl) ?? {}),
+      ...(selectedCapabilitySnapshot?.capabilities ?? {})
+    }),
+    [selectedDeviceForControl, selectedCapabilitySnapshot?.capabilities]
+  );
   const selectedPrimarySerial = selectedDeviceForControl?.serial ?? null;
   const {
     leftCollapsed,
@@ -591,6 +635,10 @@ export function ControlRecordView({
   const [stepRunResults, setStepRunResults] = useState<
     Record<string, StepRunResult>
   >({});
+  const [scenarioPreflight, setScenarioPreflight] =
+    useState<ScenarioCapabilityPreflightOut | null>(null);
+  const [scenarioPreflightChecking, setScenarioPreflightChecking] =
+    useState(false);
   const stepRunAbortRef = useRef<AbortController | null>(null);
   // Track active SSE preview trace so unmount (navigation away) can both
   // abort the fetch AND hit the server's explicit cancel endpoint — the SSE
@@ -1296,6 +1344,16 @@ export function ControlRecordView({
     deviceVarEnabledByDevice,
     deviceVarsParseMsgs
   ]);
+  const scenarioLintInitialVariables = useMemo(() => {
+    const names = new Set<string>();
+    for (const key of Object.keys(scenarioVariablesWithDeviceKeys)) {
+      if (key.trim()) names.add(key);
+    }
+    for (const key of Object.keys(inlineScenarioDeviceVars ?? {})) {
+      if (key.trim()) names.add(key);
+    }
+    return Array.from(names);
+  }, [scenarioVariablesWithDeviceKeys, inlineScenarioDeviceVars]);
   const hasEnabledDeviceVars = useMemo(
     () => Object.values(deviceVarEnabledByDevice).some(Boolean),
     [deviceVarEnabledByDevice]
@@ -1931,21 +1989,132 @@ export function ControlRecordView({
     return () => window.removeEventListener('keydown', onKey);
   }, [showFlowUi]);
 
+  const formatScenarioLintIssue = useCallback(
+    (issue: ScenarioLintPreflightResult['issues'][number], index: number) => {
+      return tScenarioLintPreflight(`issues.${issue.kind}`, {
+        index: index + 1,
+        variable: issue.variable,
+        source: issue.source,
+        producerStepType: issue.producerStepType ?? '',
+        producerPathKey: issue.producerPathKey ?? ''
+      });
+    },
+    [tScenarioLintPreflight]
+  );
+
+  const confirmScenarioLintPreflight = useCallback(
+    async (result: ScenarioLintPreflightResult, context: string) => {
+      if (!result.issues.length) return true;
+
+      if (!result.hasCritical) {
+        const summary = scenarioLintSummary(result.warningIssues, {
+          moreLabel: (count) =>
+            tScenarioLintPreflight('summaryMore', { count }),
+          formatIssue: formatScenarioLintIssue
+        });
+        toast.warning(tScenarioLintPreflight('warningToast', { summary }));
+        return true;
+      }
+
+      const summary = scenarioLintSummary(result.criticalIssues, {
+        moreLabel: (count) => tScenarioLintPreflight('summaryMore', { count }),
+        formatIssue: formatScenarioLintIssue
+      });
+      return confirm({
+        title: tScenarioLintPreflight('confirmTitle'),
+        description: tScenarioLintPreflight('confirmDescription', {
+          context,
+          count: result.criticalIssues.length,
+          summary
+        }),
+        confirmText: tScenarioLintPreflight('confirmRun'),
+        cancelText: tScenarioLintPreflight('cancelRun'),
+        confirmVariant: 'destructive',
+        zIndex: 10_000
+      });
+    },
+    [confirm, formatScenarioLintIssue, tScenarioLintPreflight]
+  );
+
+  const ensureScenarioCapabilityPreflight = useCallback(
+    async (serial: string, scenario: Record<string, unknown>) => {
+      setScenarioPreflightChecking(true);
+      try {
+        const result = await scenarioDeviceCapabilitiesApi.preflight(
+          serial,
+          scenario
+        );
+        setScenarioPreflight(result);
+        if (!result.preflight.ok) {
+          const summary = scenarioCapabilityIssueSummary(result.preflight, {
+            moreLabel: (count) => tCapabilityPreflight('summaryMore', { count })
+          });
+          toast.error(
+            summary
+              ? tCapabilityPreflight('stepBlockedToast', { summary })
+              : tCapabilityPreflight('stepBlockedToastFallback')
+          );
+          return false;
+        }
+        const warning = scenarioCapabilityWarningSummary(result.preflight, {
+          moreLabel: (count) => tCapabilityPreflight('summaryMore', { count })
+        });
+        if (warning) {
+          toast.warning(
+            tCapabilityPreflight('warningToast', { summary: warning })
+          );
+        }
+        return true;
+      } catch (error) {
+        toast.error(
+          formatFarmApiError(error, tCapabilityPreflight('stepFailedFallback'))
+        );
+        return false;
+      } finally {
+        setScenarioPreflightChecking(false);
+      }
+    },
+    [tCapabilityPreflight]
+  );
+
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
       const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
-        toast.warning('Chưa chọn thiết bị');
+        toast.warning(t('workbench.noDeviceTitle'));
         return;
       }
       if (flowRunningFgIdsRef.current.has(fgId)) return;
+      const payload = preparePreviewStepPayload(step);
+      const lintOk = await confirmScenarioLintPreflight(
+        scenarioLintPreflightForSteps(
+          [payload as FlowStep],
+          scenarioLintInitialVariables
+        ),
+        tScenarioLintPreflight('flowLeafContext')
+      );
+      if (!lintOk) return;
       flowRunningFgIdsRef.current.add(fgId);
+      const preflightOk = await ensureScenarioCapabilityPreflight(serial, {
+        steps: [payload]
+      });
+      if (!preflightOk) {
+        flowRunningFgIdsRef.current.delete(fgId);
+        setFlowRunStates((s) => ({ ...s, [fgId]: 'error' }));
+        setTimeout(() => {
+          setFlowRunStates((s) => {
+            const n = { ...s };
+            if (n[fgId] !== 'running') delete n[fgId];
+            return n;
+          });
+        }, 2800);
+        return;
+      }
       setFlowRunStates((s) => ({ ...s, [fgId]: 'running' }));
       flowRunLeafAbortRef.current?.abort();
       const ctrl = new AbortController();
       flowRunLeafAbortRef.current = ctrl;
       const runId = previewSession.beginRun();
-      const payload = preparePreviewStepPayload(step);
       try {
         await previewScenarioStream(
           serial,
@@ -1987,7 +2156,12 @@ export function ControlRecordView({
       selectedDeviceForControl?.serial,
       scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
-      previewSession
+      scenarioLintInitialVariables,
+      previewSession,
+      confirmScenarioLintPreflight,
+      t,
+      tScenarioLintPreflight,
+      ensureScenarioCapabilityPreflight
     ]
   );
 
@@ -2065,6 +2239,25 @@ export function ControlRecordView({
     return commitFlowDetailStep(fgId, latest);
   }, [commitFlowDetailStep, steps]);
 
+  const lintCurrentScenarioBeforePersist = useCallback(
+    async (context: string): Promise<FlowStep[] | null> => {
+      const latestSteps = flushPendingFlowDetailStep() as FlowStep[];
+      const lintOk = await confirmScenarioLintPreflight(
+        scenarioLintPreflightForSteps(
+          latestSteps,
+          scenarioLintInitialVariables
+        ),
+        context
+      );
+      return lintOk ? latestSteps : null;
+    },
+    [
+      confirmScenarioLintPreflight,
+      flushPendingFlowDetailStep,
+      scenarioLintInitialVariables
+    ]
+  );
+
   const flowWorkbench = useMemo(
     () => ({
       deviceSerial: selectedDeviceForControl?.serial ?? null,
@@ -2079,24 +2272,50 @@ export function ControlRecordView({
     async (step: FlowStep, runKey: string) => {
       const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
-        toast.warning('Chưa chọn thiết bị');
+        toast.warning(t('workbench.noDeviceTitle'));
         return;
       }
       if (stepRunStates[runKey] === 'running') return;
-      stepRunAbortRef.current?.abort();
-      const ctrl = new AbortController();
-      stepRunAbortRef.current = ctrl;
-      const runId = previewSession.beginRun();
       const label = /^\d+$/.test(runKey)
         ? `Bước ${Number(runKey) + 1}`
         : 'Bước';
-      setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
       // Ref synced every render — always read tree after mirror pick, not stale StepCard closure.
       const payload = prepareInlinePreviewStep(
         stepsItemsRef.current as FlowStep[],
         runKey,
         step
       );
+      const lintOk = await confirmScenarioLintPreflight(
+        scenarioLintPreflightForInlineRun(
+          stepsItemsRef.current as FlowStep[],
+          runKey,
+          payload as FlowStep,
+          scenarioLintInitialVariables
+        ),
+        tScenarioLintPreflight('inlineStepContext')
+      );
+      if (!lintOk) return;
+      const preflightOk = await ensureScenarioCapabilityPreflight(serial, {
+        steps: [payload]
+      });
+      if (!preflightOk) {
+        setStepRunStates((s) => ({ ...s, [runKey]: 'error' }));
+        setTimeout(
+          () =>
+            setStepRunStates((s) => {
+              const n = { ...s };
+              delete n[runKey];
+              return n;
+            }),
+          3000
+        );
+        return;
+      }
+      stepRunAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      stepRunAbortRef.current = ctrl;
+      const runId = previewSession.beginRun();
+      setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
       try {
         await previewScenarioStream(
           serial,
@@ -2176,7 +2395,12 @@ export function ControlRecordView({
       stepRunStates,
       scenarioVariablesWithDeviceKeys,
       inlineScenarioDeviceVars,
+      scenarioLintInitialVariables,
       previewSession,
+      confirmScenarioLintPreflight,
+      ensureScenarioCapabilityPreflight,
+      t,
+      tScenarioLintPreflight,
       tGate
     ]
   );
@@ -2185,14 +2409,27 @@ export function ControlRecordView({
     async (step: FlowStep) => {
       const serial = selectedDeviceForControl?.serial?.trim();
       if (!serial) {
-        toast.warning('Chưa chọn thiết bị');
+        toast.warning(t('workbench.noDeviceTitle'));
         return;
       }
+      const payload = preparePreviewStepPayload(step);
+      const lintOk = await confirmScenarioLintPreflight(
+        scenarioLintPreflightForSteps(
+          [payload as FlowStep],
+          scenarioLintInitialVariables
+        ),
+        tScenarioLintPreflight('deviceOpContext')
+      );
+      if (!lintOk) return;
+      const preflightOk = await ensureScenarioCapabilityPreflight(serial, {
+        steps: [payload]
+      });
+      if (!preflightOk) return;
       const runId = previewSession.beginRun();
       try {
         await previewScenarioStream(
           serial,
-          [preparePreviewStepPayload(step)],
+          [payload],
           previewSession.makeStreamHandler(runId, serial, (event) => {
             if (event.event === 'step_done' && !event.ok) {
               toast.error(
@@ -2219,7 +2456,12 @@ export function ControlRecordView({
       activeScenarioId,
       selectedDeviceForControl?.serial,
       inlineScenarioDeviceVars,
+      scenarioLintInitialVariables,
       previewSession,
+      confirmScenarioLintPreflight,
+      ensureScenarioCapabilityPreflight,
+      t,
+      tScenarioLintPreflight,
       scenarioVariablesWithDeviceKeys
     ]
   );
@@ -2851,6 +3093,197 @@ export function ControlRecordView({
     wsDisconnected: t('wsDisconnected')
   };
 
+  const handlePrimarySave = async () => {
+    if (!canPersistScenario(childStepEditorOpen)) {
+      toast.info(
+        'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
+      );
+      return;
+    }
+    if (savingOrgScenario) {
+      void handleSaveOrgScenario();
+      return;
+    }
+
+    const latestSteps = await lintCurrentScenarioBeforePersist(
+      tScenarioLintPreflight('saveContext')
+    );
+    if (!latestSteps) return;
+    const nextVariables = syncDeviceVarKeysIntoScenarioVariables();
+    if (save.templateContext) {
+      await save.saveToTemplate(nextVariables);
+      return;
+    }
+    const created = await save.saveAsNewOrgScenario(nextVariables);
+    if (!created?.id) return;
+    router.push(ROUTES.ORG_SCENARIOS.DETAIL(created.id));
+  };
+
+  const handleSaveAsNewCampaignScenario = async () => {
+    const latestSteps = await lintCurrentScenarioBeforePersist(
+      tScenarioLintPreflight('saveContext')
+    );
+    if (!latestSteps) return;
+    await save.saveAsNew(
+      save.selectedCampaignId!,
+      syncDeviceVarKeysIntoScenarioVariables(),
+      saveAccountGroupId || null
+    );
+  };
+
+  const handleSaveToCampaignScenario = async (scenarioId: string) => {
+    const latestSteps = await lintCurrentScenarioBeforePersist(
+      tScenarioLintPreflight('saveContext')
+    );
+    if (!latestSteps) return;
+    await save.saveTo(
+      save.selectedCampaignId!,
+      scenarioId,
+      syncDeviceVarKeysIntoScenarioVariables(),
+      saveAccountGroupId || null
+    );
+  };
+
+  const scenarioPreflightProblem =
+    scenarioPreflightChecking || scenarioPreflight
+      ? {
+          state: scenarioPreflightChecking
+            ? ('checking' as const)
+            : scenarioPreflight && !scenarioPreflight.preflight.ok
+              ? ('blocked' as const)
+              : ('ready' as const),
+          title: scenarioPreflightChecking
+            ? tCapabilityPreflight('checkingTitle')
+            : scenarioPreflight?.preflight.ok
+              ? tCapabilityPreflight('stepOkTitle')
+              : tCapabilityPreflight('stepBlockedTitle'),
+          description: scenarioPreflight?.preflight.ok
+            ? scenarioCapabilityWarningSummary(scenarioPreflight.preflight, {
+                moreLabel: (count) =>
+                  tCapabilityPreflight('summaryMore', { count })
+              }) || tCapabilityPreflight('stepReadyDescription')
+            : scenarioPreflight
+              ? scenarioCapabilityIssueSummary(scenarioPreflight.preflight, {
+                  moreLabel: (count) =>
+                    tCapabilityPreflight('summaryMore', { count })
+                }) || tCapabilityPreflight('stepMissingDescription')
+              : tCapabilityPreflight('checkingStepDescription')
+        }
+      : null;
+  const workbenchMode = playerMode ? 'run' : 'build';
+  const workbenchPhoneTitle = selectedDevice
+    ? selectedDevice.name || selectedDevice.serial
+    : t('workbench.noDeviceTitle');
+  const workbenchPhoneMeta = selectedDevice
+    ? `${selectedDevice.serial} · ${selectedDevice.state || 'UNKNOWN'}`
+    : undefined;
+  const workbenchSequenceTitle = playerMode
+    ? t('workbench.runTitle')
+    : showFlowUi
+      ? t('workbench.flowTitle')
+      : t('workbench.listTitle');
+  const workbenchSequenceMeta = playerMode
+    ? t('workbench.runMeta')
+    : showFlowUi
+      ? t('workbench.flowMeta', { count: steps.items.length })
+      : t('workbench.listMeta', { count: steps.items.length });
+  const editorToolbar = (
+    <ControlRecordEditorToolbar
+      showClosePicker={hasMultiFollowers && stepPickerOpen}
+      onClosePicker={() => setStepPickerOpen(false)}
+      pollingXml={record.pollingXml}
+      recording={record.recording}
+      onToggleRecording={() => void record.toggleRecording()}
+      hasSelectedDevice={Boolean(selectedDevice)}
+      selectedDeviceBusy={
+        selectedDevice
+          ? isManualControlBlockedByAutomation(selectedDevice)
+          : false
+      }
+      onOpenPlayer={() => setPlayerMode(true)}
+      onOpenJson={() => setJsonDialogOpen(true)}
+      hasSteps={steps.items.length > 0}
+      onSave={() => void handlePrimarySave()}
+      saveDisabled={
+        steps.items.length === 0 ||
+        !canSaveWork ||
+        save.saving !== null ||
+        save.savingTemplate ||
+        saveOrgBodyMutation.isPending
+      }
+      saveLabel={
+        save.templateContext
+          ? save.savingTemplate
+            ? t('templateSaving')
+            : t('templateSave')
+          : savingOrgScenario
+            ? saveOrgBodyMutation.isPending
+              ? t('workbench.saving')
+              : t('workbench.save')
+            : save.saving === 'org-new'
+              ? t('workbench.saving')
+              : t('workbench.save')
+      }
+      onOpenVariables={() => setVarDialogOpen(true)}
+      variableCount={Object.keys(scenarioVariablesWithDeviceKeys).length}
+      pageSummary={pageSummary?.contextLabel}
+      pageSummaryWarning={pageSummaryWarningText || undefined}
+      showRecovery={!editingRecoveryScenario}
+      recoveryEnabled={recoveryPolicyEnabled}
+      onOpenRecovery={() => setRecoveryDialogOpen(true)}
+      onOpenDeviceVars={() => setDeviceVarDialogOpen(true)}
+      deviceVarsEnabled={Boolean(
+        hasEnabledDeviceVars && canManageDeviceVars && selectedDeviceId
+      )}
+      deviceVarsDisabled={!canOpenDeviceVarsDialog}
+      flowEnabled={ENABLE_FLOWGRAM_CONTROL_UI}
+      flowMode={flowMode}
+      onToggleFlowMode={() => {
+        if (!flowMode) {
+          flowStepsRef.current = steps.items;
+          setFlowCanvasKey((k) => k + 1);
+        } else {
+          steps.setItems(flowStepsRef.current);
+        }
+        setFlowMode((v) => !v);
+      }}
+      variant='workbench'
+      labels={{
+        closePickerTitle: t('multiControl.closePicker'),
+        startRecording: t('startRecording'),
+        stopRecording: t('stopRecording'),
+        tryRun: t('workbench.tryRunOnDevice'),
+        busyTitle: t('workbench.deviceBusyTryRun'),
+        jsonTooltip: t('workbench.jsonTooltip'),
+        variables: t('variablesLabel'),
+        variablesTooltip:
+          pageSummary?.settingsText ??
+          t('workbench.variablesTooltip', { variable: '${VAR}' }),
+        recoveryTitle: tRecovery('controlRecordTitle'),
+        recoveryEnabledBadge: tRecovery('enabledBadge'),
+        recoveryTooltip: activeCampaignId
+          ? tRecovery('controlRecordTooltip')
+          : tRecovery('controlRecordNoCampaignTooltip'),
+        deviceVars: t('workbench.deviceVars'),
+        deviceVarsTooltip: !canManageDeviceVars
+          ? savingOrgScenario
+            ? t('workbench.deviceVarsTooltip.reopenCampaign')
+            : t('workbench.deviceVarsTooltip.openInCampaign')
+          : !hasCampaignDevices
+            ? t('workbench.deviceVarsTooltip.addDeviceFirst')
+            : t('workbench.deviceVarsTooltip.attachedTo', {
+                device: selectedDeviceLabel
+              }),
+        helpTooltip: t('tooltipScenarioSection'),
+        flowSwitchToList: t('flowSwitchToList'),
+        flowSwitchToFlow: t('flowSwitchToFlow'),
+        flowListLabel: t('flowListLabel'),
+        flowFlowLabel: t('flowFlowLabel'),
+        settings: t('settings')
+      }}
+    />
+  );
+
   const content = (
     <div className='flex h-[calc(100vh-80px)] min-h-0 flex-col overflow-hidden bg-background'>
       <SafeModeBanner className='mx-3 mt-2' poll={false} />
@@ -2996,626 +3429,453 @@ export function ControlRecordView({
         </div>
       ) : null}
 
-      {/* ── Main: cây XML + mirror + editor (Danh sách hoặc Flow cùng khung) ── */}
-      <div
-        className={cn(
-          'flex flex-1 overflow-hidden max-md:hidden',
-          !selectedDevice && 'hidden'
-        )}
+      <ScenarioWorkbenchShell
+        hasSelectedDevice={Boolean(selectedDevice)}
+        showEditorPanel={showEditorPanel}
+        hierarchyOpen={treePanelOpen}
+        mode={workbenchMode}
+        phoneTitle={workbenchPhoneTitle}
+        phoneMeta={workbenchPhoneMeta}
+        sequenceTitle={workbenchSequenceTitle}
+        sequenceMeta={workbenchSequenceMeta}
+        toolbar={editorToolbar}
+        problem={scenarioPreflightProblem}
+        hierarchy={
+          <ControlRecordHierarchyPanel
+            open={treePanelOpen}
+            hiddenForMultiFollowers={hasMultiFollowers}
+            safeHierarchy={safeHierarchy}
+            xml={hierarchyXml}
+            loading={hierarchyLoading}
+            deviceActive={Boolean(
+              selectedDevice?.state &&
+                !['DISCONNECTED', 'DEAD'].includes(
+                  String(selectedDevice.state).toUpperCase()
+                )
+            )}
+            wsConnected={Boolean(device.wsConnected)}
+            onNodeSelect={handleTreeNodeSelect}
+            selectedNodeId={selectedNodeId}
+            onRefresh={handleHierarchyRefresh}
+            autoRefresh={hierarchyAutoRefresh}
+            onAutoRefreshChange={setHierarchyAutoRefresh}
+            selectorBy={selector.by}
+            selectorValue={selector.value}
+            onTapSelector={() =>
+              selector.tap({ multiSerials: activeMultiSerials })
+            }
+            onAddStepFromSelector={addStepFromSelector}
+            canExecuteDevice={canExecuteDevice}
+            hasSelectedDevice={Boolean(selectedDevice)}
+            safeReadOnly={safeReadOnly}
+            collapsed={leftCollapsed}
+            onToggleCollapsed={() => setLeftCollapsed(!leftCollapsed)}
+            selectorBarHint={t('selectorBarHint')}
+          />
+        }
+        phone={
+          <ControlRecordMirrorPanel
+            ref={mirrorColRef}
+            selectedDevice={selectedDevice}
+            logsBySerial={device.logs}
+            wsMode={device.mode}
+            wsSend={mirrorWsSend}
+            onToggleMode={recordHandleToggleMode}
+            onRestart={recordHandleRestart}
+            onTap={mirrorOnTap}
+            onSwipe={mirrorOnSwipe}
+            highlightBounds={highlightBounds}
+            mirrorInputLocked={mirrorInputLocked}
+            canExecuteDevice={canExecuteDevice}
+            onTakeControl={handleTakeControl}
+            deviceOps={mirrorDeviceOps}
+            captureFrameRef={captureFrameRef}
+            regionSelect={regionSelect}
+            hasMultiFollowers={hasMultiFollowers}
+            multiFocusMode={multiFocusMode}
+            selectedMultiFollowerDevices={selectedMultiFollowerDevices}
+            onPromoteFollower={promoteMultiFollower}
+            recording={record.recording}
+            onToggleRecording={() => void record.toggleRecording()}
+            onOpenPlayer={() => setPlayerMode(true)}
+            onOpenStepPicker={() => setStepPickerOpen(true)}
+            fillWidth
+            labels={{
+              startRecording: t('startRecording'),
+              stopRecording: t('stopRecording'),
+              tryRun: t('workbench.tryRunOnDevice'),
+              openPicker: t('multiControl.openPicker'),
+              selectDevice: t('workbench.selectDeviceFromHeader')
+            }}
+          />
+        }
       >
-        <ControlRecordHierarchyPanel
-          open={treePanelOpen}
-          hiddenForMultiFollowers={hasMultiFollowers}
-          safeHierarchy={safeHierarchy}
-          xml={hierarchyXml}
-          loading={hierarchyLoading}
-          deviceActive={Boolean(
-            selectedDevice?.state &&
-              !['DISCONNECTED', 'DEAD'].includes(
-                String(selectedDevice.state).toUpperCase()
-              )
-          )}
-          wsConnected={Boolean(device.wsConnected)}
-          onNodeSelect={handleTreeNodeSelect}
-          selectedNodeId={selectedNodeId}
-          onRefresh={handleHierarchyRefresh}
-          autoRefresh={hierarchyAutoRefresh}
-          onAutoRefreshChange={setHierarchyAutoRefresh}
-          selectorBy={selector.by}
-          selectorValue={selector.value}
-          onTapSelector={() =>
-            selector.tap({ multiSerials: activeMultiSerials })
-          }
-          onAddStepFromSelector={addStepFromSelector}
-          canExecuteDevice={canExecuteDevice}
-          hasSelectedDevice={Boolean(selectedDevice)}
-          safeReadOnly={safeReadOnly}
-          collapsed={leftCollapsed}
-          onToggleCollapsed={() => setLeftCollapsed(!leftCollapsed)}
-          selectorBarHint={t('selectorBarHint')}
-        />
-
-        <ResizablePanelGroup
-          key={showEditorPanel ? 'mirror-editor' : 'mirror-only'}
-          direction='horizontal'
-          className='min-w-0 flex-1'
-        >
-          <ResizablePanel
-            id='control-record-mirror'
-            order={1}
-            defaultSize={showEditorPanel ? 36 : 100}
-            minSize={showEditorPanel ? 24 : 100}
-            maxSize={showEditorPanel ? 52 : 100}
-          >
-            <ControlRecordMirrorPanel
-              ref={mirrorColRef}
-              selectedDevice={selectedDevice}
-              logsBySerial={device.logs}
-              wsMode={device.mode}
-              wsSend={mirrorWsSend}
-              onToggleMode={recordHandleToggleMode}
-              onRestart={recordHandleRestart}
-              onTap={mirrorOnTap}
-              onSwipe={mirrorOnSwipe}
-              highlightBounds={highlightBounds}
-              mirrorInputLocked={mirrorInputLocked}
-              canExecuteDevice={canExecuteDevice}
-              onTakeControl={handleTakeControl}
-              deviceOps={mirrorDeviceOps}
-              captureFrameRef={captureFrameRef}
-              regionSelect={regionSelect}
-              hasMultiFollowers={hasMultiFollowers}
-              multiFocusMode={multiFocusMode}
-              selectedMultiFollowerDevices={selectedMultiFollowerDevices}
-              onPromoteFollower={promoteMultiFollower}
-              recording={record.recording}
-              onToggleRecording={() => void record.toggleRecording()}
-              onOpenPlayer={() => setPlayerMode(true)}
-              onOpenStepPicker={() => setStepPickerOpen(true)}
-              fillWidth
-              labels={{
-                startRecording: t('startRecording'),
-                stopRecording: t('stopRecording'),
-                tryRun: t('tryRun'),
-                openPicker: t('multiControl.openPicker'),
-                selectDevice: 'Chọn thiết bị từ thanh trên'
-              }}
-            />
-          </ResizablePanel>
-
-          {/* ── COL 3: Recording / scenario editor ─────────────────────── */}
-          {showEditorPanel ? (
-            <>
-              <ResizableHandle
-                withHandle
-                className='z-20 w-1 bg-border/70 hover:bg-primary/40 focus-visible:bg-primary/40'
+        <div className='flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background'>
+          {playerMode && selectedDevice ? (
+            /* Player mode — fill column; list scrolls inside ScenarioPlayer */
+            <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
+              <ScenarioPlayer
+                serial={selectedDevice.serial}
+                onClose={() =>
+                  guardWhilePreviewActive(() => setPlayerMode(false))
+                }
+                onPlayingChange={handlePlayerPlayingChange}
+                registerStop={registerPlayerStop}
+                preloadedSteps={
+                  steps.items.length > 0 ? (steps.items as any[]) : undefined
+                }
+                preloadedName={save.editingContext?.name}
+                preloadedVariables={scenarioVariablesWithDeviceKeys}
+                preloadedScenarioId={activeScenarioId}
+                preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
+                preloadedAccountGroupId={
+                  saveAccountGroupId ||
+                  save.editingContext?.accountGroupId ||
+                  null
+                }
+                deviceBusy={
+                  (selectedDevice.state || '').replace('DeviceState.', '') ===
+                  'BUSY'
+                }
               />
-              <ResizablePanel
-                id='control-record-editor'
-                order={2}
-                defaultSize={64}
-                minSize={48}
-              >
-                <div className='flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background'>
-                  {playerMode && selectedDevice ? (
-                    /* Player mode — fill column; list scrolls inside ScenarioPlayer */
-                    <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
-                      <ScenarioPlayer
-                        serial={selectedDevice.serial}
-                        onClose={() =>
-                          guardWhilePreviewActive(() => setPlayerMode(false))
-                        }
-                        onPlayingChange={handlePlayerPlayingChange}
-                        registerStop={registerPlayerStop}
-                        preloadedSteps={
-                          steps.items.length > 0
-                            ? (steps.items as any[])
-                            : undefined
-                        }
-                        preloadedName={save.editingContext?.name}
-                        preloadedVariables={scenarioVariablesWithDeviceKeys}
-                        preloadedScenarioId={activeScenarioId}
-                        preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
-                        preloadedAccountGroupId={
-                          saveAccountGroupId ||
-                          save.editingContext?.accountGroupId ||
-                          null
-                        }
-                        deviceBusy={
-                          (selectedDevice.state || '').replace(
-                            'DeviceState.',
-                            ''
-                          ) === 'BUSY'
-                        }
-                      />
+            </div>
+          ) : (
+            <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+              {/* Selector pick banner */}
+              {selectorPickTarget && (
+                <div className='flex shrink-0 gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                  <Crosshair className='mt-0.5 size-3.5 shrink-0 text-amber-600' />
+                  <div className='min-w-0 flex-1'>
+                    <div className='flex items-center gap-2'>
+                      <p className='min-w-0 flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                        {pickCycle && pickCycle.total > 1
+                          ? t('pickSelectorCycleHint', {
+                              index: pickCycle.index,
+                              total: pickCycle.total
+                            })
+                          : t('pickSelectorBanner')}
+                      </p>
+                      {pickCycle && pickCycle.total > 1 && (
+                        <div className='flex shrink-0 items-center gap-0.5'>
+                          <button
+                            type='button'
+                            aria-label={t('workbench.previousCandidate')}
+                            className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
+                            onClick={() =>
+                              applyCandidateAtIndex(
+                                pickCycleIndexRef.current - 1
+                              )
+                            }
+                          >
+                            <ChevronLeft className='size-3.5' />
+                          </button>
+                          <span className='min-w-[34px] text-center font-mono text-[10px] text-amber-800 dark:text-amber-300'>
+                            {pickCycle.index}/{pickCycle.total}
+                          </span>
+                          <button
+                            type='button'
+                            aria-label={t('workbench.nextCandidate')}
+                            className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
+                            onClick={() =>
+                              applyCandidateAtIndex(
+                                pickCycleIndexRef.current + 1
+                              )
+                            }
+                          >
+                            <ChevronRight className='size-3.5' />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {pickSelectorWarning && (
+                      <div className='mt-1 flex items-center gap-1 text-[10px] text-amber-900 dark:text-amber-200'>
+                        <AlertCircle className='size-3 shrink-0' />
+                        <span className='min-w-0'>{pickSelectorWarning}</span>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type='button'
+                    className='shrink-0 self-start text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                    onClick={() => setSelectorPickTarget(null)}
+                  >
+                    {t('workbench.cancel')}
+                  </button>
+                </div>
+              )}
+
+              {coordinatePickTarget?.mode === 'tap_point' && (
+                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                  <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                    {t('workbench.tapCoordinateBanner')}
+                  </p>
+                  <button
+                    type='button'
+                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                    onClick={() => setCoordinatePickTarget(null)}
+                  >
+                    {t('workbench.cancel')}
+                  </button>
+                </div>
+              )}
+
+              {coordinatePickTarget?.mode === 'swipe_segment' && (
+                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                  <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                    {t('workbench.swipeCoordinateBanner')}
+                  </p>
+                  <button
+                    type='button'
+                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                    onClick={() => setCoordinatePickTarget(null)}
+                  >
+                    {t('workbench.cancel')}
+                  </button>
+                </div>
+              )}
+
+              {showFlowUi && flowCoordPick && (
+                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                  <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                    {flowCoordPick.kind === 'tap'
+                      ? t('workbench.flowTapCoordinateBanner')
+                      : t('workbench.flowSwipeCoordinateBanner')}
+                  </p>
+                  <button
+                    type='button'
+                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                    onClick={() => setFlowCoordPick(null)}
+                  >
+                    {t('workbench.cancel')}
+                  </button>
+                </div>
+              )}
+
+              {showFlowUi && flowSelectorPickFgId && (
+                <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                  <Crosshair className='size-3.5 shrink-0 text-amber-600' />
+                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                    {t('workbench.flowSelectorBanner')}
+                  </p>
+                  <button
+                    type='button'
+                    className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                    onClick={() => setFlowSelectorPickFgId(null)}
+                  >
+                    {t('workbench.cancel')}
+                  </button>
+                </div>
+              )}
+
+              {/* Flow editor */}
+              <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+                <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
+                  {steps.items.length === 0 ? (
+                    <EmptyNodePicker
+                      templates={templatesQuery.data}
+                      templatesLoading={templatesQuery.isLoading}
+                      onPreviewTemplate={(tpl) => {
+                        setScenarioVariables((prev) =>
+                          mergeTemplateVariablesIntoEditor(prev, tpl.variables)
+                        );
+                        setPreviewTemplate(tpl);
+                      }}
+                      onAddFlow={steps.addFlow}
+                      onAddWait={steps.addWait}
+                    />
+                  ) : showFlowUi ? (
+                    <div className='flex h-full min-h-[240px] flex-col overflow-hidden bg-background lg:flex-row'>
+                      <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
+                        <FlowgramCanvas
+                          key={`flow-${flowCanvasKey}`}
+                          steps={steps.items as any}
+                          workbench={flowWorkbench}
+                          onFlowCtx={(ctx) => {
+                            flowCtxRef.current = ctx;
+                          }}
+                          onStepsChange={(newSteps) => {
+                            if (flowDetailSyncingRef.current) return;
+                            flowStepsRef.current = newSteps as any;
+                            steps.setItems(newSteps as any);
+                            const selectedFgId = flowSelectedFgIdRef.current;
+                            if (selectedFgId) {
+                              const selected = findStepByFlowgramId(
+                                newSteps,
+                                selectedFgId
+                              );
+                              setFlowDetailStep(
+                                selected
+                                  ? (JSON.parse(
+                                      JSON.stringify(selected)
+                                    ) as FlowStep)
+                                  : null
+                              );
+                            }
+                          }}
+                        />
+                        {!flowDetailStep ? (
+                          <div className='pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md border border-border/70 bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur'>
+                            <MousePointerClick className='size-3.5 shrink-0' />
+                            <span>{t('workbench.selectStepToConfigure')}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                      {flowDetailStep ? (
+                        <div className='max-h-[min(42vh,360px)] w-full shrink-0 overflow-y-auto border-t border-border bg-background lg:max-h-none lg:w-[min(100%,360px)] lg:border-l lg:border-t-0'>
+                          <StepDetailPanel
+                            step={flowDetailStep}
+                            onChange={handleFlowDetailChange}
+                            nodeCapabilities={scenarioSchema?.node_capabilities}
+                            deviceCapabilities={selectedDeviceCapabilities}
+                            onClose={() => {
+                              flushPendingFlowDetailStep();
+                              const ctx = flowCtxRef.current;
+                              if (ctx) {
+                                ctx.selection.selection = [];
+                              } else {
+                                setFlowSelectedFgId(null);
+                              }
+                            }}
+                            onRequestPickSelector={
+                              flowSelectedFgId &&
+                              isSelectorPickableStep(flowDetailStep)
+                                ? () => {
+                                    setFlowSelectorPickFgId(flowSelectedFgId);
+                                    setSelectorPickTarget(null);
+                                    setFlowCoordPick(null);
+                                    setCoordinatePickTarget(null);
+                                    toast.info(
+                                      t('workbench.pickSelectorToast')
+                                    );
+                                  }
+                                : undefined
+                            }
+                            onRequestCropImage={requestCropImage}
+                            onRequestPickTapCoords={
+                              flowSelectedFgId
+                                ? () => {
+                                    setFlowCoordPick({
+                                      fgId: flowSelectedFgId,
+                                      kind: 'tap'
+                                    });
+                                    setCoordinatePickTarget(null);
+                                    setFlowSelectorPickFgId(null);
+                                    toast.info(t('workbench.pickTapToast'));
+                                  }
+                                : undefined
+                            }
+                            onRequestPickSwipeCoords={
+                              flowSelectedFgId
+                                ? () => {
+                                    setFlowCoordPick({
+                                      fgId: flowSelectedFgId,
+                                      kind: 'swipe'
+                                    });
+                                    setCoordinatePickTarget(null);
+                                    setFlowSelectorPickFgId(null);
+                                    toast.info(t('workbench.pickSwipeToast'));
+                                  }
+                                : undefined
+                            }
+                            availableVariables={scenarioVariableNames}
+                          />
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
-                    <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-                      {/* Selector pick banner */}
-                      {selectorPickTarget && (
-                        <div className='flex shrink-0 gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                          <Crosshair className='mt-0.5 size-3.5 shrink-0 text-amber-600' />
-                          <div className='min-w-0 flex-1'>
-                            <div className='flex items-center gap-2'>
-                              <p className='min-w-0 flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                                {pickCycle && pickCycle.total > 1
-                                  ? t('pickSelectorCycleHint', {
-                                      index: pickCycle.index,
-                                      total: pickCycle.total
-                                    })
-                                  : t('pickSelectorBanner')}
-                              </p>
-                              {pickCycle && pickCycle.total > 1 && (
-                                <div className='flex shrink-0 items-center gap-0.5'>
-                                  <button
-                                    type='button'
-                                    aria-label='prev'
-                                    className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
-                                    onClick={() =>
-                                      applyCandidateAtIndex(
-                                        pickCycleIndexRef.current - 1
-                                      )
-                                    }
-                                  >
-                                    <ChevronLeft className='size-3.5' />
-                                  </button>
-                                  <span className='min-w-[34px] text-center font-mono text-[10px] text-amber-800 dark:text-amber-300'>
-                                    {pickCycle.index}/{pickCycle.total}
-                                  </span>
-                                  <button
-                                    type='button'
-                                    aria-label='next'
-                                    className='rounded p-0.5 text-amber-700 hover:bg-amber-200/50 dark:text-amber-400'
-                                    onClick={() =>
-                                      applyCandidateAtIndex(
-                                        pickCycleIndexRef.current + 1
-                                      )
-                                    }
-                                  >
-                                    <ChevronRight className='size-3.5' />
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                            {pickSelectorWarning && (
-                              <div className='mt-1 flex items-center gap-1 text-[10px] text-amber-900 dark:text-amber-200'>
-                                <AlertCircle className='size-3 shrink-0' />
-                                <span className='min-w-0'>
-                                  {pickSelectorWarning}
-                                </span>
-                              </div>
-                            )}
+                    <div className='flex h-full min-h-0 flex-col overflow-hidden bg-background'>
+                      <div className='flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-2.5 py-1.5'>
+                        <div className='min-w-0 truncate text-[11px] font-medium text-muted-foreground'>
+                          {flowSortMode
+                            ? t('workbench.sorting')
+                            : t('stepCount', { count: steps.items.length })}
+                        </div>
+                        <div className='flex shrink-0 items-center gap-2'>
+                          <div className='flex h-7 overflow-hidden rounded-md border border-border/60 bg-background p-0.5'>
+                            <button
+                              type='button'
+                              className={`flex items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors ${
+                                flowSortMode
+                                  ? 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
+                                  : 'bg-primary text-primary-foreground shadow-sm'
+                              }`}
+                              onClick={() => setFlowSortMode(false)}
+                            >
+                              <ListTree className='size-3.5' />
+                              {t('workbench.viewMode')}
+                            </button>
+                            <button
+                              type='button'
+                              className={`flex items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors ${
+                                flowSortMode
+                                  ? 'bg-primary text-primary-foreground shadow-sm'
+                                  : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
+                              }`}
+                              onClick={() => setFlowSortMode(true)}
+                            >
+                              <Move className='size-3.5' />
+                              {t('workbench.sortMode')}
+                            </button>
                           </div>
-                          <button
-                            type='button'
-                            className='shrink-0 self-start text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
-                            onClick={() => setSelectorPickTarget(null)}
-                          >
-                            Huỷ
-                          </button>
-                        </div>
-                      )}
-
-                      {coordinatePickTarget?.mode === 'tap_point' && (
-                        <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                          <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                          <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                            CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện
-                            thoại). Esc hoặc Huỷ để thoát.
-                          </p>
-                          <button
-                            type='button'
-                            className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                            onClick={() => setCoordinatePickTarget(null)}
-                          >
-                            Huỷ
-                          </button>
-                        </div>
-                      )}
-
-                      {coordinatePickTarget?.mode === 'swipe_segment' && (
-                        <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                          <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                          <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                            Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc
-                            hoặc Huỷ để thoát.
-                          </p>
-                          <button
-                            type='button'
-                            className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                            onClick={() => setCoordinatePickTarget(null)}
-                          >
-                            Huỷ
-                          </button>
-                        </div>
-                      )}
-
-                      {showFlowUi && flowCoordPick && (
-                        <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                          <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                          <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                            {flowCoordPick.kind === 'tap'
-                              ? 'FLOW — chạm mirror để gán toạ độ cho bước đang chọn. Esc để huỷ.'
-                              : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
-                          </p>
-                          <button
-                            type='button'
-                            className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                            onClick={() => setFlowCoordPick(null)}
-                          >
-                            Huỷ
-                          </button>
-                        </div>
-                      )}
-
-                      {showFlowUi && flowSelectorPickFgId && (
-                        <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                          <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                          <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                            FLOW — chạm phần tử trên mirror để gán selector cho
-                            node đang chọn (cần XML cây bên trái). Esc để hủy.
-                          </p>
-                          <button
-                            type='button'
-                            className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
-                            onClick={() => setFlowSelectorPickFgId(null)}
-                          >
-                            Huỷ
-                          </button>
-                        </div>
-                      )}
-
-                      <ControlRecordEditorToolbar
-                        showClosePicker={hasMultiFollowers && stepPickerOpen}
-                        onClosePicker={() => setStepPickerOpen(false)}
-                        pollingXml={record.pollingXml}
-                        recording={record.recording}
-                        onToggleRecording={() => void record.toggleRecording()}
-                        hasSelectedDevice={Boolean(selectedDevice)}
-                        selectedDeviceBusy={
-                          selectedDevice
-                            ? isManualControlBlockedByAutomation(selectedDevice)
-                            : false
-                        }
-                        onOpenPlayer={() => setPlayerMode(true)}
-                        onOpenJson={() => setJsonDialogOpen(true)}
-                        hasSteps={steps.items.length > 0}
-                        onSave={() => {
-                          if (!canPersistScenario(childStepEditorOpen)) {
-                            toast.info(
-                              'Đóng trình chỉnh sửa bước để áp dụng thay đổi trước khi lưu.'
-                            );
-                            return;
-                          }
-                          if (save.templateContext) {
-                            save.saveToTemplate(
-                              syncDeviceVarKeysIntoScenarioVariables()
-                            );
-                            return;
-                          }
-                          if (savingOrgScenario) {
-                            void handleSaveOrgScenario();
-                            return;
-                          }
-                          void save
-                            .saveAsNewOrgScenario(
-                              syncDeviceVarKeysIntoScenarioVariables()
-                            )
-                            .then((created) => {
-                              if (!created?.id) return;
-                              router.push(
-                                ROUTES.ORG_SCENARIOS.DETAIL(created.id)
-                              );
-                            });
-                        }}
-                        saveDisabled={
-                          steps.items.length === 0 ||
-                          !canSaveWork ||
-                          save.saving !== null ||
-                          save.savingTemplate ||
-                          saveOrgBodyMutation.isPending
-                        }
-                        saveLabel={
-                          save.templateContext
-                            ? save.savingTemplate
-                              ? t('templateSaving')
-                              : t('templateSave')
-                            : savingOrgScenario
-                              ? saveOrgBodyMutation.isPending
-                                ? 'Đang lưu…'
-                                : 'Lưu'
-                              : save.saving === 'org-new'
-                                ? 'Đang lưu…'
-                                : 'Lưu'
-                        }
-                        onOpenVariables={() => setVarDialogOpen(true)}
-                        variableCount={
-                          Object.keys(scenarioVariablesWithDeviceKeys).length
-                        }
-                        pageSummary={pageSummary?.contextLabel}
-                        pageSummaryWarning={pageSummaryWarningText || undefined}
-                        showRecovery={!editingRecoveryScenario}
-                        recoveryEnabled={recoveryPolicyEnabled}
-                        onOpenRecovery={() => setRecoveryDialogOpen(true)}
-                        onOpenDeviceVars={() => setDeviceVarDialogOpen(true)}
-                        deviceVarsEnabled={Boolean(
-                          hasEnabledDeviceVars &&
-                            canManageDeviceVars &&
-                            selectedDeviceId
-                        )}
-                        deviceVarsDisabled={!canOpenDeviceVarsDialog}
-                        flowEnabled={ENABLE_FLOWGRAM_CONTROL_UI}
-                        flowMode={flowMode}
-                        onToggleFlowMode={() => {
-                          if (!flowMode) {
-                            flowStepsRef.current = steps.items;
-                            setFlowCanvasKey((k) => k + 1);
-                          } else {
-                            steps.setItems(flowStepsRef.current);
-                          }
-                          setFlowMode((v) => !v);
-                        }}
-                        labels={{
-                          closePickerTitle: t('multiControl.closePicker'),
-                          startRecording: t('startRecording'),
-                          stopRecording: t('stopRecording'),
-                          tryRun: t('tryRun'),
-                          busyTitle:
-                            'Thiết bị đang chạy campaign — không cho chạy thử',
-                          jsonTooltip: 'Xem JSON',
-                          variables: 'Biến',
-                          variablesTooltip:
-                            pageSummary?.settingsText ??
-                            'Chỉnh biến — giá trị thay thế cho ${VAR} khi chạy thử bước',
-                          recoveryTitle: tRecovery('controlRecordTitle'),
-                          recoveryEnabledBadge: tRecovery('enabledBadge'),
-                          recoveryTooltip: activeCampaignId
-                            ? tRecovery('controlRecordTooltip')
-                            : tRecovery('controlRecordNoCampaignTooltip'),
-                          deviceVars: 'Biến thiết bị',
-                          deviceVarsTooltip: !canManageDeviceVars
-                            ? savingOrgScenario
-                              ? 'Mở lại từ Campaign → Mở (URL cần orgScenarioId + campaignId)'
-                              : 'Mở trong ngữ cảnh chiến dịch để thiết lập'
-                            : !hasCampaignDevices
-                              ? 'Thêm thiết bị vào chiến dịch trước'
-                              : `Đang gắn cho: ${selectedDeviceLabel}`,
-                          helpTooltip: t('tooltipScenarioSection'),
-                          flowSwitchToList: t('flowSwitchToList'),
-                          flowSwitchToFlow: t('flowSwitchToFlow'),
-                          flowListLabel: t('flowListLabel'),
-                          flowFlowLabel: t('flowFlowLabel'),
-                          settings: t('settings')
-                        }}
-                      />
-
-                      {/* Flow editor */}
-                      <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-                        <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
-                          {steps.items.length === 0 ? (
-                            <EmptyNodePicker
-                              templates={templatesQuery.data}
-                              templatesLoading={templatesQuery.isLoading}
-                              onPreviewTemplate={(tpl) => {
-                                setScenarioVariables((prev) =>
-                                  mergeTemplateVariablesIntoEditor(
-                                    prev,
-                                    tpl.variables
-                                  )
-                                );
-                                setPreviewTemplate(tpl);
-                              }}
-                              onAddFlow={steps.addFlow}
-                              onAddWait={steps.addWait}
-                            />
-                          ) : showFlowUi ? (
-                            <div className='flex h-full min-h-[240px] flex-col overflow-hidden bg-background lg:flex-row'>
-                              <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
-                                <FlowgramCanvas
-                                  key={`flow-${flowCanvasKey}`}
-                                  steps={steps.items as any}
-                                  workbench={flowWorkbench}
-                                  onFlowCtx={(ctx) => {
-                                    flowCtxRef.current = ctx;
-                                  }}
-                                  onStepsChange={(newSteps) => {
-                                    if (flowDetailSyncingRef.current) return;
-                                    flowStepsRef.current = newSteps as any;
-                                    steps.setItems(newSteps as any);
-                                    const selectedFgId =
-                                      flowSelectedFgIdRef.current;
-                                    if (selectedFgId) {
-                                      const selected = findStepByFlowgramId(
-                                        newSteps,
-                                        selectedFgId
-                                      );
-                                      setFlowDetailStep(
-                                        selected
-                                          ? (JSON.parse(
-                                              JSON.stringify(selected)
-                                            ) as FlowStep)
-                                          : null
-                                      );
-                                    }
-                                  }}
+                          {selectedDevice &&
+                            Object.values(stepRunStates).some(
+                              (st) => st === 'running'
+                            ) && (
+                              <Button
+                                type='button'
+                                size='sm'
+                                variant='outline'
+                                className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
+                                onClick={handleStopInlineRun}
+                              >
+                                <Square
+                                  className='size-3'
+                                  fill='currentColor'
                                 />
-                                {!flowDetailStep ? (
-                                  <div className='pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md border border-border/70 bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur'>
-                                    <MousePointerClick className='size-3.5 shrink-0' />
-                                    <span>Chọn một bước để cấu hình</span>
-                                  </div>
-                                ) : null}
-                              </div>
-                              {flowDetailStep ? (
-                                <div className='max-h-[min(42vh,360px)] w-full shrink-0 overflow-y-auto border-t border-border bg-background lg:max-h-none lg:w-[min(100%,360px)] lg:border-l lg:border-t-0'>
-                                  <StepDetailPanel
-                                    step={flowDetailStep}
-                                    onChange={handleFlowDetailChange}
-                                    onClose={() => {
-                                      flushPendingFlowDetailStep();
-                                      const ctx = flowCtxRef.current;
-                                      if (ctx) {
-                                        ctx.selection.selection = [];
-                                      } else {
-                                        setFlowSelectedFgId(null);
-                                      }
-                                    }}
-                                    onRequestPickSelector={
-                                      flowSelectedFgId &&
-                                      isSelectorPickableStep(flowDetailStep)
-                                        ? () => {
-                                            setFlowSelectorPickFgId(
-                                              flowSelectedFgId
-                                            );
-                                            setSelectorPickTarget(null);
-                                            setFlowCoordPick(null);
-                                            setCoordinatePickTarget(null);
-                                            toast.info(
-                                              'Chạm phần tử trên mirror để gán selector'
-                                            );
-                                          }
-                                        : undefined
-                                    }
-                                    onRequestCropImage={requestCropImage}
-                                    onRequestPickTapCoords={
-                                      flowSelectedFgId
-                                        ? () => {
-                                            setFlowCoordPick({
-                                              fgId: flowSelectedFgId,
-                                              kind: 'tap'
-                                            });
-                                            setCoordinatePickTarget(null);
-                                            setFlowSelectorPickFgId(null);
-                                            toast.info(
-                                              'Chạm mirror để gán toạ độ cho bước này'
-                                            );
-                                          }
-                                        : undefined
-                                    }
-                                    onRequestPickSwipeCoords={
-                                      flowSelectedFgId
-                                        ? () => {
-                                            setFlowCoordPick({
-                                              fgId: flowSelectedFgId,
-                                              kind: 'swipe'
-                                            });
-                                            setCoordinatePickTarget(null);
-                                            setFlowSelectorPickFgId(null);
-                                            toast.info(
-                                              'Vuốt trên mirror để gán swipe_ratio'
-                                            );
-                                          }
-                                        : undefined
-                                    }
-                                    availableVariables={scenarioVariableNames}
-                                  />
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <div className='flex h-full min-h-0 flex-col overflow-hidden bg-background'>
-                              <div className='flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-2.5 py-1.5'>
-                                <div className='min-w-0 truncate text-[11px] font-medium text-muted-foreground'>
-                                  {flowSortMode
-                                    ? 'Đang sắp xếp'
-                                    : `${steps.items.length} bước`}
-                                </div>
-                                <div className='flex shrink-0 items-center gap-2'>
-                                  <div className='flex h-7 overflow-hidden rounded-md border border-border/60 bg-background p-0.5'>
-                                    <button
-                                      type='button'
-                                      className={`flex items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors ${
-                                        flowSortMode
-                                          ? 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
-                                          : 'bg-primary text-primary-foreground shadow-sm'
-                                      }`}
-                                      onClick={() => setFlowSortMode(false)}
-                                    >
-                                      <ListTree className='size-3.5' />
-                                      Xem
-                                    </button>
-                                    <button
-                                      type='button'
-                                      className={`flex items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors ${
-                                        flowSortMode
-                                          ? 'bg-primary text-primary-foreground shadow-sm'
-                                          : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'
-                                      }`}
-                                      onClick={() => setFlowSortMode(true)}
-                                    >
-                                      <Move className='size-3.5' />
-                                      Sắp xếp
-                                    </button>
-                                  </div>
-                                  {selectedDevice &&
-                                    Object.values(stepRunStates).some(
-                                      (st) => st === 'running'
-                                    ) && (
-                                      <Button
-                                        type='button'
-                                        size='sm'
-                                        variant='outline'
-                                        className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
-                                        onClick={handleStopInlineRun}
-                                      >
-                                        <Square
-                                          className='size-3'
-                                          fill='currentColor'
-                                        />
-                                        Dừng chạy thử
-                                      </Button>
-                                    )}
-                                </div>
-                              </div>
-                              <div className='min-h-0 flex-1 overflow-hidden [&>div]:h-full'>
-                                <FlowEditor
-                                  steps={steps.items as FlowStep[]}
-                                  onChange={handleFlowStepsChange}
-                                  maxHeight='100%'
-                                  selectorPickTarget={selectorPickTarget}
-                                  onSelectorPickTargetChange={
-                                    setSelectorPickTarget
-                                  }
-                                  coordinatePickTarget={coordinatePickTarget}
-                                  onCoordinatePickTargetChange={
-                                    setCoordinatePickTargetSafe
-                                  }
-                                  onRunStep={
-                                    selectedDevice ? handleRunStep : undefined
-                                  }
-                                  onStopInlineRun={
-                                    selectedDevice
-                                      ? handleStopInlineRun
-                                      : undefined
-                                  }
-                                  stepRunStates={stepRunStates}
-                                  stepRunResults={stepRunResults}
-                                  availableVariables={scenarioVariableNames}
-                                  variablePreviewValues={
-                                    flowVariablePreviewValues
-                                  }
-                                  sessionGateRuntimeContext={
-                                    sessionGateRuntimeContext
-                                  }
-                                  onChildStepEditorOpenChange={
-                                    setChildStepEditorOpen
-                                  }
-                                  enableDragDrop={false}
-                                  virtualReorderMode={flowSortMode}
-                                />
-                              </div>
-                            </div>
-                          )}
+                                {t('workbench.stopInlineRun')}
+                              </Button>
+                            )}
                         </div>
+                      </div>
+                      <div className='min-h-0 flex-1 overflow-hidden [&>div]:h-full'>
+                        <FlowEditor
+                          steps={steps.items as FlowStep[]}
+                          onChange={handleFlowStepsChange}
+                          maxHeight='100%'
+                          selectorPickTarget={selectorPickTarget}
+                          onSelectorPickTargetChange={setSelectorPickTarget}
+                          coordinatePickTarget={coordinatePickTarget}
+                          onCoordinatePickTargetChange={
+                            setCoordinatePickTargetSafe
+                          }
+                          onRunStep={selectedDevice ? handleRunStep : undefined}
+                          onStopInlineRun={
+                            selectedDevice ? handleStopInlineRun : undefined
+                          }
+                          stepRunStates={stepRunStates}
+                          stepRunResults={stepRunResults}
+                          availableVariables={scenarioVariableNames}
+                          variablePreviewValues={flowVariablePreviewValues}
+                          nodeCapabilities={scenarioSchema?.node_capabilities}
+                          deviceCapabilities={selectedDeviceCapabilities}
+                          sessionGateRuntimeContext={sessionGateRuntimeContext}
+                          onChildStepEditorOpenChange={setChildStepEditorOpen}
+                          enableDragDrop={false}
+                          virtualReorderMode={flowSortMode}
+                          detailMode='inline'
+                        />
                       </div>
                     </div>
                   )}
                 </div>
-              </ResizablePanel>
-            </>
-          ) : null}
-        </ResizablePanelGroup>
-      </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </ScenarioWorkbenchShell>
 
       <ControlRecordVariablesDialog
         open={varDialogOpen}
@@ -3913,13 +4173,7 @@ export function ControlRecordView({
                 <Button
                   variant='default'
                   className='w-full justify-start gap-2'
-                  onClick={() =>
-                    save.saveAsNew(
-                      save.selectedCampaignId!,
-                      syncDeviceVarKeysIntoScenarioVariables(),
-                      saveAccountGroupId || null
-                    )
-                  }
+                  onClick={() => void handleSaveAsNewCampaignScenario()}
                   disabled={save.saving !== null}
                 >
                   <Plus size={13} />
@@ -3937,14 +4191,7 @@ export function ControlRecordView({
                         key={s.id}
                         variant='outline'
                         className='h-auto w-full flex-col items-start justify-start py-2 text-left'
-                        onClick={() =>
-                          save.saveTo(
-                            save.selectedCampaignId!,
-                            s.id,
-                            syncDeviceVarKeysIntoScenarioVariables(),
-                            saveAccountGroupId || null
-                          )
-                        }
+                        onClick={() => void handleSaveToCampaignScenario(s.id)}
                         disabled={save.saving !== null}
                       >
                         <span className='font-medium'>

@@ -298,7 +298,7 @@ async def start_grpc_server(
     from .agent_control_servicer import AgentControlServicer, set_control_servicer
     ctrl_servicer = AgentControlServicer()
     if control_callbacks is not None:
-        ctrl_servicer.set_persistence_callbacks(*control_callbacks)
+        ctrl_servicer.set_persistence_callbacks(*control_callbacks[:3])
     set_control_servicer(ctrl_servicer)
     relay_pb2_grpc.add_AgentControlServiceServicer_to_server(ctrl_servicer, server)
 
@@ -309,9 +309,16 @@ async def start_grpc_server(
     )
     media_servicer = MediaAdapterControlServicer(api_key=api_key or "")
     if control_callbacks is not None:
-        media_servicer.set_register_callback(control_callbacks[0])
+        # Media adapters get a verify-only callback: they authenticate but must
+        # not create agent rows. Older 3-tuples fall back to the agent callback.
+        media_servicer.set_register_callback(
+            control_callbacks[3] if len(control_callbacks) > 3 else control_callbacks[0]
+        )
     set_media_adapter_servicer(media_servicer)
-    relay_pb2_grpc.add_MediaAdapterControlServiceServicer_to_server(media_servicer, server)
+    if hasattr(server, "add_generic_rpc_handlers"):
+        relay_pb2_grpc.add_MediaAdapterControlServiceServicer_to_server(
+            media_servicer, server
+        )
     env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
     is_prod_like = env_name in {"prod", "production", "staging"}
     tls_ready = bool(tls_cert_file and tls_key_file)

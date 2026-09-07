@@ -122,7 +122,33 @@ def run_scenario_on_device(
         "_campaign_vars": {"__USER_ID__": str(user_id)} if user_id else {},
         "_run_hash_scope": run_id,
     }
+    from services.scenario_node_preflight import (
+        preflight_scenario_node_capabilities,
+        scenario_node_preflight_error_payload,
+    )
+
+    preflight = preflight_scenario_node_capabilities(device, scenario)
+    if not preflight.ok:
+        return scenario_node_preflight_error_payload(preflight)
     return run_scenario_task(device, scenario, on_step_done=on_step_done, cancel_event=cancel_event)
+
+
+def _scenario_node_preflight_response(
+    device: Any,
+    scenario: Dict[str, Any],
+) -> JSONResponse | None:
+    from services.scenario_node_preflight import (
+        preflight_scenario_node_capabilities,
+        scenario_node_preflight_error_payload,
+    )
+
+    preflight = preflight_scenario_node_capabilities(device, scenario)
+    if preflight.ok:
+        return None
+    return JSONResponse(
+        scenario_node_preflight_error_payload(preflight),
+        status_code=400,
+    )
 
 
 def _resolve_user_id_from_request(request: Request) -> Optional[str]:
@@ -374,6 +400,16 @@ async def _execute_scenario_body(
             {"error": "steps must be a non-empty array"},
             status_code=400,
         )
+    device = manager.get_device(serial)
+    if not device:
+        return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+    scenario = {
+        "steps": body.steps,
+        "variables": body.variables or {},
+    }
+    preflight_response = _scenario_node_preflight_response(device, scenario)
+    if preflight_response is not None:
+        return preflight_response
     loop = asyncio.get_running_loop()
     import functools
     trace_id = f"scn-{uuid4().hex[:10]}"
@@ -453,6 +489,15 @@ def build_scenarios_router(
             user_id,
             auth_ctx.org_id if auth_ctx else None,
         )
+        preflight_response = _scenario_node_preflight_response(
+            device,
+            {
+                "steps": body.steps,
+                "variables": body.variables or {},
+            },
+        )
+        if preflight_response is not None:
+            return preflight_response
 
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)

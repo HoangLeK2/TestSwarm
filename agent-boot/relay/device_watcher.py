@@ -21,7 +21,7 @@ import re
 import threading
 from typing import Awaitable, Callable, Protocol
 
-from relay.adb import _remember_serial_adb_server, adb_server_specs_from_env
+from relay.adb import adb_server_specs_from_env, sync_adb_endpoint_serials
 
 logger = logging.getLogger("relay.watcher")
 
@@ -311,10 +311,10 @@ class AdbDeviceWatcher:
 
     async def _apply(self, new_snapshot: dict[str, str], *, key: str = "default") -> None:
         if key != "default" and ":" in key:
+            # Full snapshot from one ADB server: claims routes for its devices
+            # and releases routes for serials that left it (moved port / gone).
             host, port = key.rsplit(":", 1)
-            for serial, state in new_snapshot.items():
-                if state == "device":
-                    _remember_serial_adb_server(serial, host, port)
+            sync_adb_endpoint_serials(host, port, new_snapshot)
         old = dict(self._snapshot)
         if key == "default":
             self._snapshot = dict(new_snapshot)

@@ -82,6 +82,40 @@ async def test_has_image_match_survives_the_capability_whitelist(monkeypatch):
     assert manager.get_capabilities("dev-2")["has_image_match"] is False
 
 
+@pytest.mark.asyncio
+async def test_node_registry_capabilities_survive_the_capability_whitelist(monkeypatch):
+    manager = AdbRelayManager()
+
+    async def fake_sync_caps(serial: str, caps: dict) -> None:
+        return None
+
+    monkeypatch.setattr(manager, "_sync_caps_to_redis", fake_sync_caps)
+    manager.update_capabilities([
+        {
+            "serial": "dev-1",
+            "has_tesseract": True,
+            "has_opencv": True,
+            "supports_advanced_gestures": True,
+            "supports_clipboard": True,
+            "supports_file_ops": True,
+            "supports_install_apk": True,
+            "supports_screenshot": True,
+            "supports_shell": True,
+        }
+    ])
+    await asyncio.sleep(0)
+
+    caps = manager.get_capabilities("dev-1")
+    assert caps["has_tesseract"] is True
+    assert caps["has_opencv"] is True
+    assert caps["supports_advanced_gestures"] is True
+    assert caps["supports_clipboard"] is True
+    assert caps["supports_file_ops"] is True
+    assert caps["supports_install_apk"] is True
+    assert caps["supports_screenshot"] is True
+    assert caps["supports_shell"] is True
+
+
 def test_every_agent_reply_type_is_dispatchable():
     """Reply types are matched against a hardcoded set on both transports.
 

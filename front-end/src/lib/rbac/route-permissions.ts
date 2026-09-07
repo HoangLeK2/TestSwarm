@@ -1,16 +1,63 @@
 import { ROUTES } from '@/config/routes';
 import type { NavUserRole } from '@/lib/nav-access';
-import type { PermissionRequirement } from './types';
+import type { OrgRole, PermissionRequirement } from './types';
 
 export type RouteAccessRule = {
   prefix: string;
   permission?: PermissionRequirement;
   /** Platform-role gate for surfaces outside org RBAC (e.g. global org directory). */
   roles?: readonly NavUserRole[];
+  /** Organization-role gate for workspace admin surfaces; superadmin bypasses this. */
+  orgRoles?: readonly OrgRole[];
 };
 
 /** Longest-prefix wins — order entries from most specific to least specific. */
 export const DASHBOARD_ROUTE_ACCESS: readonly RouteAccessRule[] = [
+  {
+    prefix: ROUTES.ADMIN.AUDIT,
+    permission: { object: 'analytics', action: 'read' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.AGENTS,
+    permission: { object: 'relay-agents', action: 'read' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.DEVICES,
+    permission: { object: 'devices', action: 'read' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.WORKSPACE_ADMINS,
+    permission: { object: 'organizations', action: 'manage' },
+    roles: ['superadmin']
+  },
+  {
+    prefix: ROUTES.ADMIN.WORKSPACE_ACCESS,
+    permission: { object: 'organizations', action: 'manage' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.ACCOUNTS,
+    permission: { object: 'accounts', action: 'read' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.CONTENT,
+    permission: { object: 'content', action: 'read' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.WORKSPACES,
+    permission: { object: 'organizations', action: 'read' },
+    orgRoles: ['admin']
+  },
+  {
+    prefix: ROUTES.ADMIN.ROOT,
+    permission: { object: 'organizations', action: 'read' },
+    orgRoles: ['admin']
+  },
   {
     prefix: ROUTES.DASHBOARD.ORGANIZATION_LIST,
     roles: ['superadmin']
@@ -29,7 +76,8 @@ export const DASHBOARD_ROUTE_ACCESS: readonly RouteAccessRule[] = [
   },
   {
     prefix: ROUTES.DEVICES.MANAGE,
-    permission: { object: 'devices', action: 'read' }
+    permission: { object: 'devices', action: 'read' },
+    orgRoles: ['admin']
   },
   {
     prefix: ROUTES.DEVICES.ROOT,

@@ -76,3 +76,44 @@ test('branch rows carry their meaning, not their wording', () => {
 
   assert.deepEqual(branches, ['then', 'else', 'loop']);
 });
+
+test('branch rows expose append insert paths for loop, if, and random branches', () => {
+  const rows = projectVirtualFlowRows([
+    { type: 'loop', steps: [] },
+    { type: 'if_variable', then: [], else: [{ type: 'wait', seconds: 1 }] },
+    {
+      type: 'random_pick',
+      branches: [
+        { weight: 1, steps: [] },
+        { weight: 1, steps: [{ type: 'wait', seconds: 2 }] }
+      ]
+    }
+  ] as FlowStep[]);
+
+  const branchPaths = rows
+    .filter((row) => row.kind === 'branch')
+    .map((row) => (row.kind === 'branch' ? row.insertPath : []));
+
+  assert.deepEqual(branchPaths, [
+    [
+      { listKey: 'steps', ci: 0 },
+      { listKey: 'steps', ci: 0 }
+    ],
+    [
+      { listKey: 'steps', ci: 1 },
+      { listKey: 'then', ci: 0 }
+    ],
+    [
+      { listKey: 'steps', ci: 1 },
+      { listKey: 'else', ci: 1 }
+    ],
+    [
+      { listKey: 'steps', ci: 2 },
+      { listKey: 'branches.0', ci: 0 }
+    ],
+    [
+      { listKey: 'steps', ci: 2 },
+      { listKey: 'branches.1', ci: 1 }
+    ]
+  ]);
+});

@@ -9,10 +9,11 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.deps import _get_current_user, _get_db
+from api.auth.rbac import clear_rbac_cache
 from api.routes.auth import router as auth_router
 from api.routes.me import router as me_router
 from api.routes.organizations import router as org_router
@@ -32,6 +33,48 @@ async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                "CREATE TABLE casbin_policy_revision "
+                "(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)"
+            )
+        )
+        await conn.execute(
+            text("INSERT INTO casbin_policy_revision (id, revision) VALUES (1, 1)")
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE casbin_rule (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ptype VARCHAR(32) NOT NULL,
+                    v0 VARCHAR(255),
+                    v1 VARCHAR(255),
+                    v2 VARCHAR(255),
+                    v3 VARCHAR(255),
+                    v4 VARCHAR(255),
+                    v5 VARCHAR(255)
+                )
+                """
+            )
+        )
+        for role, obj, act in (
+            ("operator", "me", "read"),
+            ("member", "me", "read"),
+            ("member", "organizations", "read"),
+            ("owner", "me", "read"),
+            ("owner", "organizations", "(read|create|update|delete|manage)"),
+        ):
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3)
+                    VALUES ('p', :role, '*', :obj, :act)
+                    """
+                ),
+                {"role": role, "obj": obj, "act": act},
+            )
+        clear_rbac_cache()
     yield eng
     await eng.dispose()
 
@@ -71,6 +114,7 @@ async def _seed_user(
     failed_login_count: int = 0,
     locked_until: datetime | None = None,
     member_role: str = "member",
+    must_change_password: bool = False,
 ) -> User:
     now = datetime.now(timezone.utc)
     async with session_factory() as session:
@@ -89,6 +133,7 @@ async def _seed_user(
             org_id=org_id,
             failed_login_count=failed_login_count,
             locked_until=locked_until,
+            must_change_password=must_change_password,
         )
         session.add_all([org, user])
         await session.flush()
@@ -153,6 +198,42 @@ async def test_login_success_returns_tokens_and_audit(session_factory):
             )
         ).scalars().all()
         assert len(audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_me_exposes_must_change_password_for_temporary_password_user(session_factory):
+    await _seed_user(session_factory, must_change_password=True)
+    app = _build_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        login = await client.post(
+            "/api/auth/login",
+            json={"email": "alice@acme.example", "password": PASS},
+        )
+        me = await client.get(
+            "/api/auth/me",
+            headers=_auth_headers(login.json()["access_token"]),
+        )
+
+    assert me.status_code == 200
+    assert me.json()["mustChangePassword"] is True
+
+
+@pytest.mark.asyncio
+async def test_temporary_password_user_must_change_password_before_other_api(session_factory):
+    await _seed_user(session_factory, must_change_password=True)
+    app = _build_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        login = await client.post(
+            "/api/auth/login",
+            json={"email": "alice@acme.example", "password": PASS},
+        )
+        blocked = await client.get(
+            "/api/me/organization",
+            headers=_auth_headers(login.json()["access_token"]),
+        )
+
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "PASSWORD_CHANGE_REQUIRED"
 
 
 @pytest.mark.asyncio
@@ -267,6 +348,28 @@ async def test_change_password_weak_rejected(session_factory):
         )
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "WEAK_PASSWORD"
+
+
+@pytest.mark.asyncio
+async def test_change_password_clears_temporary_password_requirement(session_factory):
+    await _seed_user(session_factory, must_change_password=True)
+    app = _build_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        login = await client.post(
+            "/api/auth/login",
+            json={"email": "alice@acme.example", "password": PASS},
+        )
+        resp = await client.post(
+            "/api/me/change-password",
+            json={"current_password": PASS, "new_password": "NewStr0ng!Pass#456"},
+            headers=_auth_headers(login.json()["access_token"]),
+        )
+
+    assert resp.status_code == 204
+    async with session_factory() as session:
+        row = await session.get(User, "user-alice")
+        assert row is not None
+        assert row.must_change_password is False
 
 
 @pytest.mark.asyncio

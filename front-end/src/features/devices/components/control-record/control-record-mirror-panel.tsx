@@ -201,6 +201,7 @@ export const ControlRecordMirrorPanel = forwardRef<
               deviceOps={deviceOps}
               captureFrameRef={captureFrameRef}
               regionSelect={regionSelect}
+              mirrorSize={fillWidth ? 'workbench' : 'default'}
             />
           </div>
         )

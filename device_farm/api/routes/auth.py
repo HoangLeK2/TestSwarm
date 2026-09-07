@@ -102,6 +102,8 @@ async def register(body: RegisterRequest, db: DB):
         role=user.role,
         api_key=user.api_key,
         orgRole=org_role,
+        defaultOrgId=getattr(user, "default_org_id", None),
+        mustChangePassword=bool(getattr(user, "must_change_password", False)),
     )
 
 
@@ -316,4 +318,5 @@ async def me(db: DB, user: CurrentUser):
         api_key=user.api_key,
         orgRole=org_role,
         defaultOrgId=getattr(user, "default_org_id", None),
+        mustChangePassword=bool(getattr(user, "must_change_password", False)),
     )

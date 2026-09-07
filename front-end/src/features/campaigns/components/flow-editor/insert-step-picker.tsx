@@ -13,6 +13,13 @@ import { createDefaultStep, type FlowStep } from '../scenario-steps/types';
 import { findInsertMenuItem, type InsertMenuGroupKey } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
+import {
+  nodeCapabilityReadiness,
+  type DeviceCapabilityMap,
+  type NodeCapabilityReadiness,
+  type NodeCapabilityRegistry
+} from '../../lib/node-capabilities';
+import type { StepTreeInsertLocation } from '../../lib/step-tree-intelligence';
 
 const RECENT_STORAGE_KEY = 'device-farm.flow-insert-recent';
 const MAX_RECENT = 3;
@@ -24,6 +31,7 @@ type ListedItem = {
   label: string;
   description: string;
   groupLabel?: string;
+  readiness?: NodeCapabilityReadiness;
 };
 
 function loadRecentTypes(): string[] {
@@ -50,11 +58,22 @@ function pushRecentType(type: string) {
 
 function StepPickerRow({
   item,
+  statusLabel,
   onSelect
 }: {
   item: ListedItem;
+  statusLabel?: string;
   onSelect: () => void;
 }) {
+  const tone =
+    item.readiness?.kind === 'missing'
+      ? 'border-destructive/30 bg-destructive/5 text-destructive'
+      : item.readiness?.kind === 'unknown'
+        ? 'border-amber-500/35 bg-amber-50/70 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200'
+        : item.readiness?.kind === 'ready'
+          ? 'border-emerald-500/30 bg-emerald-50/70 text-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-200'
+          : 'border-border bg-muted/50 text-muted-foreground';
+
   return (
     <button
       type='button'
@@ -77,6 +96,21 @@ function StepPickerRow({
         <span className='block text-sm font-medium leading-snug text-foreground'>
           {item.label}
         </span>
+        {statusLabel && item.readiness ? (
+          <span
+            className={cn(
+              'mt-1 inline-flex max-w-full rounded-md border px-1.5 py-0.5 text-[10px] font-medium leading-none',
+              tone
+            )}
+            title={[
+              ...item.readiness.missing,
+              ...item.readiness.unknown,
+              ...item.readiness.required
+            ].join(', ')}
+          >
+            {statusLabel}
+          </span>
+        ) : null}
         {item.description ? (
           <span className='mt-0.5 block text-[11px] leading-relaxed text-muted-foreground'>
             {item.description}
@@ -97,13 +131,19 @@ export function InsertStepPicker({
   onInsert,
   contentSide = 'right',
   contentAlign = 'start',
-  sideOffset = 10
+  sideOffset = 10,
+  nodeCapabilities,
+  deviceCapabilities,
+  insertLocation
 }: {
   trigger: ReactNode;
   onInsert: (step: FlowStep) => void;
   contentSide?: 'top' | 'right' | 'bottom' | 'left';
   contentAlign?: 'start' | 'center' | 'end';
   sideOffset?: number;
+  nodeCapabilities?: NodeCapabilityRegistry;
+  deviceCapabilities?: DeviceCapabilityMap;
+  insertLocation?: StepTreeInsertLocation;
 }) {
   const { getInsertMenu, tInsert } = useCampaignFlowI18n();
   const insertMenu = getInsertMenu();
@@ -117,6 +157,31 @@ export function InsertStepPicker({
   const [category, setCategory] = useState<InsertMenuGroupKey>(defaultCategory);
   const [recentVersion, setRecentVersion] = useState(0);
 
+  const withReadiness = useCallback(
+    <T extends { type: string }>(
+      item: T
+    ): T & { readiness?: NodeCapabilityReadiness } => {
+      const capability = nodeCapabilities?.[item.type];
+      return capability
+        ? {
+            ...item,
+            readiness: nodeCapabilityReadiness(capability, deviceCapabilities)
+          }
+        : item;
+    },
+    [deviceCapabilities, nodeCapabilities]
+  );
+
+  const statusLabel = useCallback(
+    (readiness?: NodeCapabilityReadiness) => {
+      if (!readiness) return '';
+      return tInsert(
+        `capabilityStatus.${readiness.kind}` as 'capabilityStatus.ready'
+      );
+    },
+    [tInsert]
+  );
+
   const recentItems = useMemo(() => {
     void recentVersion;
     return loadRecentTypes()
@@ -126,8 +191,9 @@ export function InsertStepPicker({
         type: item.type,
         label: item.label,
         description: item.description
-      }));
-  }, [insertMenu, recentVersion]);
+      }))
+      .map(withReadiness);
+  }, [insertMenu, recentVersion, withReadiness]);
 
   const listedItems = useMemo((): ListedItem[] => {
     const q = query.trim().toLowerCase();
@@ -140,18 +206,15 @@ export function InsertStepPicker({
             item.description.toLowerCase().includes(q) ||
             item.type.toLowerCase().includes(q)
           ) {
-            out.push({
-              ...item,
-              groupLabel: group.group
-            });
+            out.push(withReadiness({ ...item, groupLabel: group.group }));
           }
         }
       }
       return out;
     }
     const group = insertMenu.find((g) => g.groupKey === category);
-    return group?.items ?? [];
-  }, [insertMenu, query, category]);
+    return (group?.items ?? []).map(withReadiness);
+  }, [insertMenu, query, category, withReadiness]);
 
   const recentTypeSet = useMemo(
     () => new Set(recentItems.map((i) => i.type)),
@@ -178,6 +241,12 @@ export function InsertStepPicker({
     id: g.groupKey,
     label: tInsert(`tabs.${g.groupKey}` as 'tabs.actions')
   }));
+  const insertLocationLabel = insertLocation
+    ? tInsert(
+        `insertContext.${insertLocation.labelKey}` as 'insertContext.rootSequence',
+        insertLocation.labelValues
+      )
+    : '';
 
   return (
     <Popover
@@ -201,6 +270,13 @@ export function InsertStepPicker({
           <p className='mt-0.5 text-[11px] text-muted-foreground'>
             {tInsert('pickerSubtitle')}
           </p>
+          {insertLocationLabel ? (
+            <p className='mt-1 text-[10px] font-medium text-muted-foreground'>
+              {tInsert('insertContext.label', {
+                location: insertLocationLabel
+              })}
+            </p>
+          ) : null}
           <div className='relative mt-2.5'>
             <Search className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
             <Input
@@ -252,6 +328,7 @@ export function InsertStepPicker({
                     <StepPickerRow
                       key={`recent-${item.type}`}
                       item={item}
+                      statusLabel={statusLabel(item.readiness)}
                       onSelect={() => handleSelect(item.type)}
                     />
                   ))}
@@ -270,6 +347,7 @@ export function InsertStepPicker({
                 <StepPickerRow
                   key={item.type}
                   item={item}
+                  statusLabel={statusLabel(item.readiness)}
                   onSelect={() => handleSelect(item.type)}
                 />
               ))}

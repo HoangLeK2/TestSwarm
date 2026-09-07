@@ -80,6 +80,72 @@ def test_device_health_projection_does_not_trust_stale_ready_state_without_trans
 
     assert health["overall"] == "offline"
     assert health["command"]["status"] == "unavailable"
+    # active+connected is a claim, not evidence: without a frame the stream has
+    # not started, whatever the adapter says.
+    assert health["stream"]["status"] == "starting"
+
+
+def test_device_health_projection_marks_frozen_stream_stale_not_ready():
+    """agent-boot died, adapter still says connected — the badge must not say ready."""
+    evaluated_at = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    frozen_ms = int(evaluated_at.timestamp() * 1000) - 60_000
+
+    health = _device_health_projection(
+        {
+            "state": "READY",
+            "agent_connected": False,
+            "stf_connected": False,
+            "media_adapter_connected": True,
+            "media_stream_active": True,
+            "media_stream_connected": True,
+            "media_stream_last_frame_unix_ms": frozen_ms,
+            "media_stream_frame_progress_unix_ms": frozen_ms,
+        },
+        evaluated_at=evaluated_at,
+    )
+
+    assert health["stream"]["status"] == "stale"
+    assert health["stream"]["reason"] == "stream_frame_stale"
+
+
+def test_device_health_projection_keeps_moving_stream_ready():
+    evaluated_at = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    now_ms = int(evaluated_at.timestamp() * 1000)
+
+    health = _device_health_projection(
+        {
+            "state": "READY",
+            "agent_connected": True,
+            "media_adapter_connected": True,
+            "media_stream_active": True,
+            "media_stream_connected": True,
+            "media_stream_last_frame_unix_ms": now_ms - 1_000,
+            "media_stream_frame_progress_unix_ms": now_ms - 1_000,
+        },
+        evaluated_at=evaluated_at,
+    )
+
+    assert health["stream"]["status"] == "ready"
+    assert health["stream"]["reason"] is None
+
+
+def test_device_health_projection_ignores_adapter_clock_ahead_of_server():
+    """Adapter clocks drift; the server-side progress mark is what decides."""
+    evaluated_at = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    now_ms = int(evaluated_at.timestamp() * 1000)
+
+    health = _device_health_projection(
+        {
+            "state": "READY",
+            "agent_connected": True,
+            "media_stream_active": True,
+            "media_stream_connected": True,
+            "media_stream_last_frame_unix_ms": now_ms - 3_600_000,
+            "media_stream_frame_progress_unix_ms": now_ms - 2_000,
+        },
+        evaluated_at=evaluated_at,
+    )
+
     assert health["stream"]["status"] == "ready"
 
 

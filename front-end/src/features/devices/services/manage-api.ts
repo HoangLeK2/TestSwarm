@@ -18,6 +18,9 @@ export type DeviceOut = {
   last_seen: string | null;
   created_at: string;
   adb_serial: string | null;
+  relay_serial?: string | null;
+  managed_by_org_id?: string | null;
+  managed_by_relay_id?: string | null;
   adb_ip: string | null;
   adb_port: number;
   tags?: string;
@@ -31,6 +34,11 @@ export type DeviceListParams = {
   q?: string;
   state?: string;
   sort?: 'last_seen_at' | '-last_seen_at';
+};
+
+export type AllocatedDeviceListParams = {
+  q?: string;
+  limit?: number;
 };
 
 export type DeviceListOut = {
@@ -146,6 +154,30 @@ export const devicesApi = {
     farmApi
       .post<DeviceOut>('/devices/register', body ?? {})
       .then((r) => r.data),
+  listAllocated: ({ q, limit = 50 }: AllocatedDeviceListParams = {}) =>
+    farmApi
+      .get<DeviceOut[]>('/devices/allocated', {
+        params: {
+          q: q || undefined,
+          limit
+        },
+        timeout: DEVICE_POLL_TIMEOUT_MS
+      })
+      .then((r) => r.data),
+  claimAllocated: (deviceId: string) =>
+    farmApi
+      .post<DeviceOut>(`/devices/${encodeURIComponent(deviceId)}/claim`)
+      .then((r) => {
+        clearDeviceListCache();
+        return r.data;
+      }),
+  connectManagedAgent: (deviceId: string, body?: { wsBaseUrl?: string }) =>
+    farmApi
+      .post<RelayCommandOut>(
+        `/devices/${encodeURIComponent(deviceId)}/connect-via-managed-agent`,
+        body ?? {}
+      )
+      .then((r) => r.data),
   sessions: (deviceId: string) =>
     farmApi
       .get<SessionOut[]>(`/devices/${deviceId}/sessions`)
@@ -199,6 +231,7 @@ export const devicesApi = {
 
 export type RelayAgentOut = {
   relay_id: string;
+  name?: string;
   hostname: string;
   ip: string;
   version: string;

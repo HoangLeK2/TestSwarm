@@ -593,7 +593,7 @@ function RelayAgentCard({
         <div className='min-w-0 space-y-1'>
           <div className='flex flex-wrap items-center gap-2'>
             <p className='truncate text-sm font-semibold'>
-              {agent.hostname || agent.relay_id}
+              {agent.name || agent.relay_id}
             </p>
             <RelayAgentStatusBadge state={connectionState} />
           </div>

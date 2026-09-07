@@ -9,6 +9,7 @@ from typing import Any
 from services.social_ext.contract import (
     CONNECTION_KINDS,
     DEFAULT_CONNECTION_KIND,
+    SOCIAL_CAPABILITY_SCHEMAS,
     SOCIAL_ENTITIES,
     SOCIAL_STEP_TYPES,
     ExtractionStrategySchema,
@@ -117,6 +118,21 @@ class SocialPlatformRegistry:
         unknown_entities = sorted(set(extension.scenario_lib.entities) - SOCIAL_ENTITIES)
         if unknown_entities:
             raise ValueError(f"PLUGIN_ENTITY_UNKNOWN: {name}: {unknown_entities}")
+        unknown_capabilities = sorted(
+            set(extension.scenario_lib.capabilities) - set(SOCIAL_CAPABILITY_SCHEMAS)
+        )
+        if unknown_capabilities:
+            raise ValueError(f"PLUGIN_CAPABILITY_UNKNOWN: {name}: {unknown_capabilities}")
+        for capability_id in extension.scenario_lib.capabilities:
+            schema = SOCIAL_CAPABILITY_SCHEMAS[capability_id]
+            unsupported_steps = sorted(
+                set(schema.step_types) - set(extension.scenario_lib.step_types)
+            )
+            if unsupported_steps:
+                raise ValueError(
+                    f"PLUGIN_CAPABILITY_STEP_MISSING: {name}: "
+                    f"{capability_id}: {unsupported_steps}"
+                )
         with self._lock:
             updated = dict(self._extensions)
             updated[name] = extension
@@ -221,6 +237,14 @@ class SocialPlatformRegistry:
             "coverage": ext.coverage,
             "step_types": list(ext.scenario_lib.step_types),
             "entities": list(ext.scenario_lib.entities),
+            "capabilities": {
+                capability_id: asdict(support)
+                for capability_id, support in ext.scenario_lib.capabilities.items()
+            },
+            "capability_schemas": {
+                capability_id: asdict(SOCIAL_CAPABILITY_SCHEMAS[capability_id])
+                for capability_id in ext.scenario_lib.capabilities
+            },
             "extraction_strategies": {
                 entity: asdict(schema)
                 for entity, schema in ext.scenario_lib.strategies.items()

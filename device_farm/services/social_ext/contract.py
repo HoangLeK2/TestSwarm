@@ -104,6 +104,28 @@ class ExtractionStrategySchema:
 
 
 @dataclass(frozen=True, slots=True)
+class SocialCapabilitySchema:
+    id: str
+    step_types: list[str]
+    input_schema_version: int = 1
+    output_schema_version: int = 1
+    requires_account: bool = False
+    mutates_platform_state: bool = False
+    safe_generic_recipes: list[str] = field(default_factory=list)
+    facets: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformCapabilitySupport:
+    status: str = "active"
+    execution_mode: str = "adapter_code"
+    facets: dict[str, str | list[str]] = field(default_factory=dict)
+    generic_recipes: list[str] = field(default_factory=list)
+    provider_fields: list[dict[str, Any]] = field(default_factory=list)
+    unsupported_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class PlatformScenarioLib:
     """Which platform-neutral steps and entities this platform can actually run.
 
@@ -114,6 +136,7 @@ class PlatformScenarioLib:
     step_types: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
     strategies: dict[str, ExtractionStrategySchema] = field(default_factory=dict)
+    capabilities: dict[str, PlatformCapabilitySupport] = field(default_factory=dict)
     templates: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -124,6 +147,82 @@ class PlatformScenarioLib:
 # assuming Facebook's two-sided model.
 CONNECTION_KINDS: frozenset[str] = frozenset({"friend_request", "follow"})
 DEFAULT_CONNECTION_KIND = "friend_request"
+
+
+SOCIAL_CAPABILITY_SCHEMAS: dict[str, SocialCapabilitySchema] = {
+    "platform.session.check": SocialCapabilitySchema(
+        id="platform.session.check",
+        step_types=["platform_session_gate"],
+        facets=["session_surface", "login_state_markers"],
+    ),
+    "social.target.lease": SocialCapabilitySchema(
+        id="social.target.lease",
+        step_types=["lease_connection_candidate"],
+        requires_account=True,
+        safe_generic_recipes=["database_lease"],
+        facets=["target_entity", "connection_kind"],
+    ),
+    "social.target.select": SocialCapabilitySchema(
+        id="social.target.select",
+        step_types=["social_select_target"],
+        facets=["target_type", "locator_strategy", "profile_surface", "post_surface"],
+    ),
+    "social.visible_people.connect": SocialCapabilitySchema(
+        id="social.visible_people.connect",
+        step_types=["social_connect_visible_people"],
+        requires_account=True,
+        mutates_platform_state=True,
+        facets=["connection_kind", "common_context_markers"],
+    ),
+    "social.comments.open": SocialCapabilitySchema(
+        id="social.comments.open",
+        step_types=[
+            "social_open_comments",
+            "social_find_comment_button",
+            "social_tap_comment_target",
+            "social_apply_comment_filter",
+        ],
+        facets=["comment_surface", "comment_filter_modes", "locator_strategy"],
+    ),
+    "social.content.scan": SocialCapabilitySchema(
+        id="social.content.scan",
+        step_types=[
+            "social_scan_posts_interact",
+            "social_open_author_from_post_match",
+            "social_open_commenter_from_post_match",
+        ],
+        requires_account=True,
+        mutates_platform_state=True,
+        facets=["content_surface", "comment_surface", "profile_surface"],
+    ),
+    "social.content.interact": SocialCapabilitySchema(
+        id="social.content.interact",
+        step_types=["content_interaction"],
+        requires_account=True,
+        mutates_platform_state=True,
+        facets=["content_actions", "comment_surface"],
+    ),
+    "social.connection.request": SocialCapabilitySchema(
+        id="social.connection.request",
+        step_types=["connection_request"],
+        requires_account=True,
+        mutates_platform_state=True,
+        facets=["connection_kind", "profile_surface"],
+    ),
+    "social.community.membership": SocialCapabilitySchema(
+        id="social.community.membership",
+        step_types=["community_membership"],
+        requires_account=True,
+        mutates_platform_state=True,
+        facets=["community_surface", "membership_state"],
+    ),
+    "social.connections.sync": SocialCapabilitySchema(
+        id="social.connections.sync",
+        step_types=["social_sync_connections"],
+        requires_account=True,
+        facets=["connection_kind", "metric"],
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)

@@ -325,10 +325,11 @@ async def test_import_body_into_existing_allows_same_name(session_factory):
     assert imported.json()["scenario_id"] == scenario_id
     assert after == before
     assert detail.json()["body_json"]["steps"][0]["id"] == "old"
-    dup_via_create = await client.post(
-        "/api/scenarios/import",
-        files={"file": ("same.yaml", exported.content, "application/x-yaml")},
-    )
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        dup_via_create = await client.post(
+            "/api/scenarios/import",
+            files={"file": ("same.yaml", exported.content, "application/x-yaml")},
+        )
     assert dup_via_create.status_code == 409
     assert dup_via_create.json()["detail"]["code"] == "SCENARIO_NAME_DUPLICATE"
 

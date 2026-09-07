@@ -56,7 +56,24 @@ for (const [locale, messages] of [
       getInsertMenuForUi(flowInsertTranslator(messages))
     );
   });
+
+  test(`social action labels exist for ${locale}`, () => {
+    const labels = messages.campaignsFeature?.stepEditor?.socialActions;
+    for (const key of ['like', 'comment', 'share', 'request', 'join']) {
+      assert.equal(typeof labels?.[key], 'string', `${locale}.${key}`);
+    }
+  });
 }
+
+test('social action options expose protocol values without hardcoded labels', () => {
+  const options = getSocialActionOptions('content_interaction');
+
+  assert.deepEqual(
+    options.map((option) => option.value),
+    ['like', 'comment', 'share']
+  );
+  assert.equal('label' in options[0]!, false);
+});
 
 for (const [type, action] of [
   ['content_interaction', 'like'],
@@ -67,7 +84,7 @@ for (const [type, action] of [
     const step = createDefaultStep(type);
 
     assert.equal(step.type, type);
-    assert.equal(step.platform, 'facebook');
+    assert.equal(step.platform, 'auto');
     assert.equal(step.action, action);
     assert.equal(step.timeout, 6);
     assert.equal(step.poll, 0.4);
@@ -96,18 +113,18 @@ test('creates a default people target resolver', () => {
 
   assert.equal(step.type, 'social_select_target');
   assert.equal(step.target_type, 'person');
-  assert.equal(step.platform, 'facebook');
+  assert.equal(step.platform, 'auto');
   assert.equal(step.save_as, '_people_target');
   assert.equal(step.min_score, 80);
   assert.equal(step.require_unique, true);
   assert.deepEqual(step.required_keywords, []);
 });
 
-test('creates a default Facebook visible common-context connector', () => {
+test('creates a default visible common-context connector', () => {
   const step = createDefaultStep('social_connect_visible_people');
 
   assert.equal(step.type, 'social_connect_visible_people');
-  assert.equal(step.platform, 'facebook');
+  assert.equal(step.platform, 'auto');
   assert.equal(step.save_as, '_visible_connection_action');
   assert.equal(step.min_score, 40);
   assert.equal(step.require_common, true);
@@ -118,11 +135,11 @@ test('creates a default Facebook visible common-context connector', () => {
   ]);
 });
 
-test('creates a default Facebook post feed scanner', () => {
+test('creates a default social content feed scanner', () => {
   const step = createDefaultStep('social_scan_posts_interact');
 
   assert.equal(step.type, 'social_scan_posts_interact');
-  assert.equal(step.platform, 'facebook');
+  assert.equal(step.platform, 'auto');
   assert.equal(step.save_as, '_post_scan');
   assert.equal(step.target_count, 1);
   assert.equal(step.max_scrolls, 6);
@@ -135,7 +152,7 @@ test('creates a default social author-from-post resolver', () => {
   const step = createDefaultStep('social_open_author_from_post_match');
 
   assert.equal(step.type, 'social_open_author_from_post_match');
-  assert.equal(step.platform, 'facebook');
+  assert.equal(step.platform, 'auto');
   assert.equal(step.source_var, '_post_scan');
   assert.equal(step.action_index, 0);
   assert.equal(step.save_as, '_people_target');
@@ -148,7 +165,7 @@ test('creates a default social commenter-from-post resolver', () => {
   const step = createDefaultStep('social_open_commenter_from_post_match');
 
   assert.equal(step.type, 'social_open_commenter_from_post_match');
-  assert.equal(step.platform, 'facebook');
+  assert.equal(step.platform, 'auto');
   assert.equal(step.source_var, '_post_scan');
   assert.equal(step.action_index, 0);
   assert.equal(step.save_as, '_people_target');
@@ -160,9 +177,38 @@ test('creates a default social commenter-from-post resolver', () => {
 });
 
 test('content interaction exposes like, comment, and share choices', () => {
-  assert.deepEqual(getSocialActionOptions('content_interaction'), [
-    { value: 'like', label: 'Thích bài viết' },
-    { value: 'comment', label: 'Bình luận' },
-    { value: 'share', label: 'Chia sẻ' }
-  ]);
+  assert.deepEqual(
+    getSocialActionOptions('content_interaction').map((option) => option.value),
+    ['like', 'comment', 'share']
+  );
+});
+
+test('content interaction filters actions from provider facets', () => {
+  assert.deepEqual(
+    getSocialActionOptions('content_interaction', {
+      content_actions: ['comment']
+    }).map((option) => option.value),
+    ['comment']
+  );
+
+  assert.deepEqual(
+    getSocialActionOptions('content_interaction', {
+      content_actions: 'like,share'
+    }).map((option) => option.value),
+    ['like', 'share']
+  );
+});
+
+test('social comment helper nodes default to auto platform', () => {
+  for (const type of [
+    'social_open_comments',
+    'social_find_comment_button',
+    'social_tap_comment_target',
+    'social_apply_comment_filter'
+  ]) {
+    const step = createDefaultStep(type);
+
+    assert.equal(step.type, type);
+    assert.equal(step.platform, 'auto');
+  }
 });

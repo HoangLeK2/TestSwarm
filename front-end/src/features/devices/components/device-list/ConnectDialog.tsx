@@ -39,10 +39,10 @@ function resolveRelayPushTarget(
 ): { relayId: string; serial: string } | null {
   const serial = isPendingDevice(device)
     ? (device.adb_serial ?? '').trim()
-    : (device.serial ?? '').trim();
+    : (device.relay_serial ?? device.adb_serial ?? device.serial ?? '').trim();
   if (!serial) return null;
 
-  let relayId = (device.relay_id ?? '').trim();
+  let relayId = (device.relay_id ?? device.managed_by_relay_id ?? '').trim();
   if (!relayId && relayMap) {
     const agent =
       (device.adb_serial ? relayMap[device.adb_serial] : undefined) ??
@@ -95,6 +95,9 @@ export function ConnectDialog({
   const qc = useQueryClient();
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [pushingUrl, setPushingUrl] = useState(false);
+  const allocatedUnclaimed = Boolean(
+    !isPendingDevice(device) && device.managed_by_relay_id && !device.user_id
+  );
   const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(
     null
   );
@@ -194,14 +197,26 @@ export function ConnectDialog({
     if (!relayPush || !device) return;
     setPushingUrl(true);
     try {
-      const res = await relayAgentsApi.pushConnectUrl(
-        relayPush.relayId,
-        relayPush.serial,
-        {
-          deviceId: isPendingDevice(device) ? device.id : undefined,
-          wsBaseUrl: getDeviceAgentWsBase()
-        }
-      );
+      const activeDevice = allocatedUnclaimed
+        ? await devicesApi.claimAllocated(device.id)
+        : device;
+      if (allocatedUnclaimed) {
+        invalidateDeviceFleetQueries(qc);
+      }
+      const res = activeDevice.managed_by_relay_id
+        ? await devicesApi.connectManagedAgent(activeDevice.id, {
+            wsBaseUrl: getDeviceAgentWsBase()
+          })
+        : await relayAgentsApi.pushConnectUrl(
+            relayPush.relayId,
+            relayPush.serial,
+            {
+              deviceId: isPendingDevice(activeDevice)
+                ? activeDevice.id
+                : undefined,
+              wsBaseUrl: getDeviceAgentWsBase()
+            }
+          );
       if (!res.ok) {
         toast.error(res.error || t('errorPushToPhone'));
         return;

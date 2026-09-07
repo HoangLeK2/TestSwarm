@@ -21,6 +21,10 @@ from runtime.core import DeviceManager, TaskQueue
 
 _OFFLINE_LIVE_STATES = {"DISCONNECTED", "DEAD"}
 _CONNECTING_LIVE_STATES = {"CONNECTING"}
+# A frozen scrcpy pipeline keeps reporting active+connected, so "video ready"
+# without a moving frame counter is the one badge an operator must not trust:
+# the dashboard would keep painting the last frame of a phone that is gone.
+_STREAM_FRAME_STALE_MS = 15_000
 _LIVE_DEVICE_INFO_KEY = "_live_device_info"
 
 
@@ -47,9 +51,24 @@ def _device_health_projection(
     stream_active = bool(device.get("media_stream_active"))
     stream_connected = bool(device.get("media_stream_connected"))
     last_frame_ms = _cap_int(device.get("media_stream_last_frame_unix_ms"), 0)
+    frame_progress_ms = _cap_int(device.get("media_stream_frame_progress_unix_ms"), 0)
     if stream_active and stream_connected:
-        stream_status = "ready"
-        stream_reason = None
+        # Server-clock progress mark when available; the adapter's own frame
+        # timestamp is the skew-prone fallback for adapters that never sent one.
+        age_ms = (
+            int(now.timestamp() * 1000) - frame_progress_ms
+            if frame_progress_ms > 0
+            else (int(now.timestamp() * 1000) - last_frame_ms if last_frame_ms > 0 else None)
+        )
+        if last_frame_ms <= 0:
+            stream_status = "starting"
+            stream_reason = "waiting_first_frame"
+        elif age_ms is not None and age_ms >= _STREAM_FRAME_STALE_MS:
+            stream_status = "stale"
+            stream_reason = "stream_frame_stale"
+        else:
+            stream_status = "ready"
+            stream_reason = None
     elif media_connected:
         stream_status = "starting"
         stream_reason = "waiting_first_frame"
@@ -223,7 +242,7 @@ def _relay_online_for_live_device(
 ) -> bool:
     """Return the transport signal that should keep a live-grid device online."""
     if requires_relay:
-        return _relay_online_for_serial(serial, ctrl=ctrl)
+        return _relay_online_for_serial(serial, relay=relay, ctrl=ctrl)
     return _relay_online_for_serial(serial, relay=relay, ctrl=ctrl)
 
 
@@ -620,6 +639,9 @@ def _apply_media_adapter_status(
     last_frame = _cap_int(stream.get("last_frame_unix_ms"), 0)
     if last_frame > 0:
         device["media_stream_last_frame_unix_ms"] = last_frame
+    frame_progress = _cap_int(stream.get("frame_progress_unix_ms"), 0)
+    if frame_progress > 0:
+        device["media_stream_frame_progress_unix_ms"] = frame_progress
 
 
 def _verify_token_only(request: Request) -> None:
@@ -718,7 +740,7 @@ async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optio
 async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
     try:
         from services import redis_store
-        from services.manual_takeover import is_manual_takeover_local
+        from services.manual_takeover import is_manual_takeover_active
     except Exception:
         return
 
@@ -727,11 +749,10 @@ async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
         return
 
     scenario_by_serial: dict[str, int] = {}
-    manual_by_serial = {
-        serial: is_manual_takeover_local(serial)
-        for serial in serials
-        if serial
-    }
+    manual_by_serial = {}
+    for serial in serials:
+        if serial:
+            manual_by_serial[serial] = await is_manual_takeover_active(serial)
     redis_client = redis_store.client() if redis_store.enabled() else None
     if redis_client is not None:
         redis_serials = [serial for serial in serials if serial]
@@ -740,7 +761,7 @@ async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
                 redis_store.key(f"device:{serial}:scenario_active")
                 for serial in redis_serials
             ]
-            scenario_values = await redis_client.mget(scenario_keys)
+            scenario_values = await _redis_read_many(redis_client, scenario_keys)
             scenario_by_serial.update(
                 {
                     serial: _cap_int(value, 0)
@@ -754,7 +775,7 @@ async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
                 redis_store.key(f"device:{serial}:manual_takeover")
                 for serial in redis_serials
             ]
-            manual_values = await redis_client.mget(manual_keys)
+            manual_values = await _redis_read_many(redis_client, manual_keys)
             manual_by_serial.update(
                 {
                     serial: manual_by_serial.get(serial, False) or value is not None
@@ -775,6 +796,16 @@ async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
         d["manual_takeover_active"] = bool(
             manual_by_serial.get(serial, d.get("manual_takeover_active"))
         )
+
+
+async def _redis_read_many(redis_client, keys: list[str]) -> list:
+    mget = getattr(redis_client, "mget", None)
+    if callable(mget):
+        return list(await mget(keys))
+    get = getattr(redis_client, "get", None)
+    if not callable(get):
+        return [None for _ in keys]
+    return [await get(key) for key in keys]
 
 
 def build_public_router(
@@ -886,6 +917,16 @@ def build_public_router(
                 control_online_serials=control_online_serials,
                 requires_relay=requires_relay,
             )
+            if not relay_online:
+                relay_online = any(
+                    _relay_online_for_live_device(
+                        alias,
+                        relay=relay,
+                        ctrl=ctrl,
+                        requires_relay=requires_relay,
+                    )
+                    for alias in aliases
+                )
             _apply_realtime_connectivity(
                 d,
                 relay_online=relay_online,

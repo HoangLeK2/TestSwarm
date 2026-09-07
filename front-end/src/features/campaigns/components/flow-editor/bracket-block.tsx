@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronRight,
   Crosshair,
+  AlertTriangle,
   Loader2,
   Play,
   Square,
@@ -76,6 +77,16 @@ import { shouldUseStepEditOverlay } from './nested-step-edit';
 import { useFlowEditorEditSession } from './flow-editor-edit-session';
 import { useMirrorStepActions } from './use-mirror-step-actions';
 import type { VariablePreviewValues } from './variable-preview';
+import type {
+  DeviceCapabilityMap,
+  NodeCapabilityRegistry
+} from '../../lib/node-capabilities';
+import {
+  insertLocationForChildList,
+  stepTreePathKey,
+  type StepTreePathSegment
+} from '../../lib/step-tree-intelligence';
+import type { StepVariableLineage } from '../../lib/step-variable-lineage';
 
 const EMPTY_AVAILABLE_VARIABLES: string[] = [];
 
@@ -123,11 +134,15 @@ interface BracketBlockProps {
    * Empty array (default) = this IS a root step.
    */
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
+  lineagePath?: StepTreePathSegment[];
   campaignScenarios?: RunScenarioCampaignOption[];
   availableVariables?: string[];
   variablePreviewValues?: VariablePreviewValues;
+  nodeCapabilities?: NodeCapabilityRegistry;
+  deviceCapabilities?: DeviceCapabilityMap;
   sessionGateRuntimeContext?: SessionGateRuntimeContext;
   enableDragDrop?: boolean;
+  variableLineageByPathKey?: Map<string, StepVariableLineage>;
 }
 
 // ── ChildStepList ────────────────────────────────────────────────────────────
@@ -207,6 +222,26 @@ function BranchLane({
   );
 }
 
+function toStepTreePath(
+  pathFromRoot: Array<{ listKey: string; childIndex: number }> | undefined
+): StepTreePathSegment[] {
+  return (pathFromRoot ?? []).map((segment) => ({
+    listKey: segment.listKey,
+    ci: segment.childIndex
+  }));
+}
+
+function childLineage(
+  lineageByPathKey: Map<string, StepVariableLineage> | undefined,
+  lineageParentPath: StepTreePathSegment[] | undefined,
+  listKey: string,
+  childIndex: number
+): StepVariableLineage | undefined {
+  return lineageByPathKey?.get(
+    stepTreePathKey([...(lineageParentPath ?? []), { listKey, ci: childIndex }])
+  );
+}
+
 interface ChildStepListProps {
   steps: FlowStep[];
   listKey: string;
@@ -227,13 +262,17 @@ interface ChildStepListProps {
   onRunChild?: (step: FlowStep, runKey: string) => void;
   rootStepIndex?: number;
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
+  lineageParentPath?: StepTreePathSegment[];
   nestedInDialog?: boolean;
   stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
   onStopInlineRun?: () => void;
   campaignScenarios?: RunScenarioCampaignOption[];
   availableVariables?: string[];
   variablePreviewValues?: VariablePreviewValues;
+  nodeCapabilities?: NodeCapabilityRegistry;
+  deviceCapabilities?: DeviceCapabilityMap;
   enableDragDrop?: boolean;
+  variableLineageByPathKey?: Map<string, StepVariableLineage>;
 }
 
 function ChildStepList({
@@ -256,13 +295,17 @@ function ChildStepList({
   onRunChild,
   rootStepIndex,
   pathFromRoot,
+  lineageParentPath,
   nestedInDialog,
   stepRunStates = {},
   onStopInlineRun,
   campaignScenarios = [],
   availableVariables = EMPTY_AVAILABLE_VARIABLES,
   variablePreviewValues,
-  enableDragDrop = true
+  nodeCapabilities,
+  deviceCapabilities,
+  enableDragDrop = true,
+  variableLineageByPathKey
 }: ChildStepListProps) {
   const tBracket = useTranslations('campaignsFeature.flowBracket');
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
@@ -319,6 +362,10 @@ function ChildStepList({
               ...(pathFromRoot ?? []),
               { listKey, childIndex: ci }
             ];
+            const nestedLineagePath = [
+              ...(lineageParentPath ?? toStepTreePath(pathFromRoot)),
+              { listKey, ci }
+            ];
             const bracketRunKey = encodeScenarioInlineRunKey(
               rootStepIndex ?? parentStepIndex,
               nestedPath
@@ -328,6 +375,13 @@ function ChildStepList({
                 <InsertGap
                   label={insertionLabel}
                   onInsert={(s) => onInsertChild(listKey, ci, s)}
+                  nodeCapabilities={nodeCapabilities}
+                  deviceCapabilities={deviceCapabilities}
+                  insertLocation={insertLocationForChildList(
+                    pathFromRoot,
+                    listKey,
+                    ci
+                  )}
                 />
                 <MaybeSortableFlowRow id={rowId} enabled={enableDragDrop}>
                   {(dragHandle, isDragging) => (
@@ -341,6 +395,7 @@ function ChildStepList({
                           stepIndex={ci}
                           rootStepIndex={rootStepIndex}
                           pathFromRoot={nestedPath}
+                          lineagePath={nestedLineagePath}
                           selected={false}
                           selectedChild={null}
                           onSelectSelf={() => {
@@ -388,7 +443,10 @@ function ChildStepList({
                           campaignScenarios={campaignScenarios}
                           availableVariables={availableVariables}
                           variablePreviewValues={variablePreviewValues}
+                          nodeCapabilities={nodeCapabilities}
+                          deviceCapabilities={deviceCapabilities}
                           enableDragDrop={enableDragDrop}
+                          variableLineageByPathKey={variableLineageByPathKey}
                         />
                       </div>
                     </div>
@@ -438,6 +496,13 @@ function ChildStepList({
               <InsertGap
                 label={insertionLabel}
                 onInsert={(s) => onInsertChild(listKey, ci, s)}
+                nodeCapabilities={nodeCapabilities}
+                deviceCapabilities={deviceCapabilities}
+                insertLocation={insertLocationForChildList(
+                  pathFromRoot,
+                  listKey,
+                  ci
+                )}
               />
               <MaybeSortableFlowRow id={rowId} enabled={enableDragDrop}>
                 {(dragHandle, isDragging) => (
@@ -496,6 +561,12 @@ function ChildStepList({
                             ? () => onToggleCoordinatePick(childSwipeCoord)
                             : undefined
                         }
+                        variableLineage={childLineage(
+                          variableLineageByPathKey,
+                          lineageParentPath,
+                          listKey,
+                          ci
+                        )}
                       />
                     </div>
                   </div>
@@ -507,6 +578,14 @@ function ChildStepList({
         <InsertGap
           label={insertionLabel}
           onInsert={(s) => onInsertChild(listKey, steps.length, s)}
+          nodeCapabilities={nodeCapabilities}
+          deviceCapabilities={deviceCapabilities}
+          persistent
+          insertLocation={insertLocationForChildList(
+            pathFromRoot,
+            listKey,
+            steps.length
+          )}
         />
       </SortableContext>
       {steps.length === 0 && (
@@ -550,14 +629,21 @@ export function BracketBlock({
   onStopInlineRun,
   rootStepIndex,
   pathFromRoot,
+  lineagePath,
   campaignScenarios = [],
   availableVariables = EMPTY_AVAILABLE_VARIABLES,
   variablePreviewValues,
+  nodeCapabilities,
+  deviceCapabilities,
   sessionGateRuntimeContext,
-  enableDragDrop = true
+  enableDragDrop = true,
+  variableLineageByPathKey
 }: BracketBlockProps) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
   const tField = useTranslations('campaignsFeature.stepEditor.stepFields');
+  const tLineage = useTranslations(
+    'campaignsFeature.stepEditor.variableLineage'
+  );
   const { getStepTypeName, getVariableDisplayName, getStepSummary } =
     useCampaignFlowI18n();
   const [collapsed, setCollapsed] = useState(false);
@@ -679,6 +765,15 @@ export function BracketBlock({
   // Effective root info — for nested blocks, rootStepIndex differs from stepIndex
   const effectiveRootIndex = rootStepIndex ?? stepIndex;
   const effectivePath = pathFromRoot ?? [];
+  const effectiveLineagePath =
+    lineagePath ??
+    (effectivePath.length > 0
+      ? toStepTreePath(effectivePath)
+      : [{ listKey: 'steps', ci: stepIndex }]);
+  const selfVariableLineage = variableLineageByPathKey?.get(
+    stepTreePathKey(effectiveLineagePath)
+  );
+  const selfVariableIssueCount = selfVariableLineage?.issues.length ?? 0;
 
   // Pick target pointing to THIS block's step (for if_element condition picking)
   const selfPickPath: SelectorPickTarget = {
@@ -721,13 +816,17 @@ export function BracketBlock({
     onRunChild,
     rootStepIndex: effectiveRootIndex,
     pathFromRoot: effectivePath,
+    lineageParentPath: effectiveLineagePath,
     nestedInDialog,
     stepRunStates,
     onStopInlineRun,
     campaignScenarios,
     availableVariables,
     variablePreviewValues,
-    enableDragDrop
+    nodeCapabilities,
+    deviceCapabilities,
+    enableDragDrop,
+    variableLineageByPathKey
   };
 
   return (
@@ -746,6 +845,14 @@ export function BracketBlock({
               variablePreviewValues={variablePreviewValues}
               campaignScenarios={campaignScenarios}
               runtimeContext={sessionGateRuntimeContext}
+              nodeCapabilities={nodeCapabilities}
+              deviceCapabilities={deviceCapabilities}
+              variableLineage={childLineage(
+                variableLineageByPathKey,
+                effectiveLineagePath,
+                editingChildPath.listKey,
+                editingChildPath.ci
+              )}
               onRequestCropImage={mirrorActions.cropImage}
               onRequestPickRegion={mirrorActions.pickRegion}
               onRequestPickSelector={
@@ -834,6 +941,14 @@ export function BracketBlock({
                 variablePreviewValues={variablePreviewValues}
                 campaignScenarios={campaignScenarios}
                 runtimeContext={sessionGateRuntimeContext}
+                nodeCapabilities={nodeCapabilities}
+                deviceCapabilities={deviceCapabilities}
+                variableLineage={childLineage(
+                  variableLineageByPathKey,
+                  effectiveLineagePath,
+                  editingChildPath.listKey,
+                  editingChildPath.ci
+                )}
                 onRequestCropImage={mirrorActions.cropImage}
                 onRequestPickRegion={mirrorActions.pickRegion}
                 onRequestPickSelector={
@@ -977,6 +1092,17 @@ export function BracketBlock({
           ) : (
             <span className='min-w-0 flex-1 truncate text-[11px] text-muted-foreground'>
               {summary}
+            </span>
+          )}
+          {selfVariableIssueCount > 0 && (
+            <span
+              className='inline-flex shrink-0 items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-px text-[9px] font-medium text-amber-700 dark:text-amber-300'
+              title={tLineage('cardWarningTitle', {
+                count: selfVariableIssueCount
+              })}
+            >
+              <AlertTriangle size={9} />
+              {tLineage('cardWarning', { count: selfVariableIssueCount })}
             </span>
           )}
 

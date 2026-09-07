@@ -179,7 +179,11 @@ services:
           cpus: '6.0'
           memory: 6G
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-device_farm}}
+      # DATABASE_URL comes from env_file only. Interpolating ${DATABASE_URL}
+      # here let a shell that had the host-side value exported
+      # (localhost:5433 — see README) override .env at `up` time, and inside
+      # the container that address is nothing. DB_HOST/DB_PORT below are the
+      # fallback db/database.py builds from when the URL is absent.
       DB_HOST: ${DB_HOST:-host.docker.internal}
       DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-device_farm}

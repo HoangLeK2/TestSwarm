@@ -14,7 +14,9 @@ import {
   executionRuntimeApi,
   executionsApi,
   normalizeCampaignOut,
+  scenarioDeviceCapabilitiesApi,
   scenariosApi,
+  scenarioSchemaApi,
   tasksApi,
   workflowsApi,
   type CampaignDispatchIn,
@@ -59,6 +61,9 @@ const KEYS = {
   devices: (id: string) => ['campaigns', id, 'devices'] as const,
   scenarios: (campaignId: string) =>
     ['campaigns', campaignId, 'scenarios'] as const,
+  scenarioSchema: ['scenario-schema'] as const,
+  scenarioDeviceCapabilities: (serial: string) =>
+    ['scenario-device-capabilities', serial] as const,
   executionRuntime: ['execution-runtime'] as const
 };
 
@@ -122,6 +127,27 @@ export function useExecutionRuntime() {
     queryKey: KEYS.executionRuntime,
     queryFn: executionRuntimeApi.get,
     staleTime: 60_000
+  });
+}
+
+export function useScenarioSchema() {
+  return useQuery({
+    queryKey: KEYS.scenarioSchema,
+    queryFn: scenarioSchemaApi.get,
+    staleTime: 300_000
+  });
+}
+
+export function useScenarioDeviceCapabilities(
+  serial: string | null | undefined
+) {
+  const normalizedSerial = (serial ?? '').trim();
+  return useQuery({
+    queryKey: KEYS.scenarioDeviceCapabilities(normalizedSerial),
+    queryFn: () => scenarioDeviceCapabilitiesApi.get(normalizedSerial),
+    enabled: normalizedSerial.length > 0,
+    staleTime: 15_000,
+    refetchInterval: 15_000
   });
 }
 

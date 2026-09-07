@@ -138,6 +138,31 @@ async def test_invite_organization_member_denied_for_non_owner(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_invite_workspace_admin_denied_for_workspace_owner(monkeypatch):
+    app = FastAPI()
+    app.include_router(organization_routes.router)
+
+    user = _user(org_role="owner")
+
+    async def fake_db():
+        yield object()
+
+    app.dependency_overrides[deps._get_current_user] = lambda: user
+    app.dependency_overrides[deps._get_db] = fake_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/organizations/members",
+            json={"email": "admin@example.com", "role": "admin"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "WORKSPACE_ADMIN_SUPERADMIN_ONLY"
+
+
+@pytest.mark.asyncio
 async def test_update_organization_member_assigns_supervisor(monkeypatch):
     app = FastAPI()
     app.include_router(organization_routes.router)
@@ -196,6 +221,31 @@ async def test_update_organization_member_assigns_supervisor(monkeypatch):
     body = response.json()
     assert body["email"] == "staff@example.com"
     assert body["role"] == "supervisor"
+
+
+@pytest.mark.asyncio
+async def test_update_workspace_admin_role_denied_for_workspace_owner(monkeypatch):
+    app = FastAPI()
+    app.include_router(organization_routes.router)
+
+    user = _user(org_role="owner")
+
+    async def fake_db():
+        yield object()
+
+    app.dependency_overrides[deps._get_current_user] = lambda: user
+    app.dependency_overrides[deps._get_db] = fake_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.patch(
+            "/organizations/members/user-2",
+            json={"role": "admin"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "WORKSPACE_ADMIN_SUPERADMIN_ONLY"
 
 
 @pytest.mark.asyncio

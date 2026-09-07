@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.crud import device_reserve_session as reserve_repo
@@ -25,7 +26,7 @@ from services.device_reserve.exceptions import (
 from services.device_state.exceptions import DeviceNotAvailableError, IllegalDeviceTransitionError
 from services.device_state.service import ApplyOutcome, DeviceStateService
 from services.security_audit import emit_security_event
-from tenancy.context import use_tenant_scope
+from tenancy.context import get_current_org_id, tenant_context, use_tenant_scope
 
 log = logging.getLogger(__name__)
 
@@ -344,8 +345,44 @@ async def auto_release_expired_sessions(
 ) -> int:
     """Release timed-out sessions; returns count released."""
     ts = now or datetime.now(timezone.utc)
-    candidates = await reserve_repo.list_expired_active_sessions(db, limit=limit, now=ts)
     released = 0
+
+    if get_current_org_id() is None:
+        result = await db.execute(
+            text(
+                """
+                SELECT DISTINCT org_id
+                  FROM device_reserve_sessions
+                 WHERE released_at IS NULL
+                   AND org_id IS NOT NULL
+                 LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        org_ids = [str(row[0]) for row in result.fetchall() if row[0]]
+        for org_id in org_ids:
+            remaining = limit - released
+            if remaining <= 0:
+                break
+            with tenant_context(org_id):
+                candidates = await reserve_repo.list_expired_active_sessions(
+                    db,
+                    limit=remaining,
+                    now=ts,
+                )
+                for session in candidates:
+                    try:
+                        if await try_auto_release_session(db, session.id, now=ts):
+                            released += 1
+                    except Exception:
+                        # DB errors abort the transaction; stop the batch so the caller can rollback.
+                        return released
+            if released >= limit:
+                break
+        return released
+
+    candidates = await reserve_repo.list_expired_active_sessions(db, limit=limit, now=ts)
     for session in candidates:
         try:
             if await try_auto_release_session(db, session.id, now=ts):

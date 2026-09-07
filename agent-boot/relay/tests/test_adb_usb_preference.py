@@ -66,7 +66,7 @@ def test_list_serials_scans_all_configured_adb_servers(monkeypatch):
         "ADB_SERVER_SOCKETS",
         "tcp:host.docker.internal:5037,tcp:host.docker.internal:5038",
     )
-    adb_mod._SERIAL_ADB_SERVER.clear()
+    adb_mod.route_table.clear()
 
     def fake_run_raw(args, timeout=5):
         joined = " ".join(args)

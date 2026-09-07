@@ -1,15 +1,14 @@
 import type { NavItem } from '@/types';
 import type { PermissionChecker } from '@/lib/rbac';
-import type { PermissionRequirement } from '@/lib/rbac/types';
+import type { OrgRole, PermissionRequirement } from '@/lib/rbac/types';
 
-/** Matches device_farm UserRole (users.role check constraint). */
-export type NavUserRole = 'superadmin' | 'admin' | 'operator';
+/** Platform navigation role. Workspace admin comes from RBAC permissions. */
+export type NavUserRole = 'superadmin' | 'operator';
 
 export function normalizeNavUserRole(
   role: string | null | undefined
 ): NavUserRole {
   if (role === 'superadmin') return 'superadmin';
-  if (role === 'admin') return 'admin';
   return 'operator';
 }
 
@@ -17,15 +16,35 @@ export function isSuperadminRole(role: string | null | undefined): boolean {
   return normalizeNavUserRole(role) === 'superadmin';
 }
 
+export function normalizeNavOrgRole(
+  role: string | null | undefined
+): OrgRole | null {
+  if (role === 'owner') return 'owner';
+  if (role === 'admin') return 'admin';
+  if (role === 'member') return 'member';
+  if (role === 'supervisor') return 'supervisor';
+  return null;
+}
+
 export type NavAccessContext = {
   userRole: NavUserRole;
+  orgRole?: OrgRole | null;
   can: PermissionChecker['can'];
 };
+
+/** Who the admin console belongs to. Also decides where login lands. */
+export function canUseAdminConsole(
+  ctx: Pick<NavAccessContext, 'userRole' | 'orgRole'>
+): boolean {
+  return ctx.userRole === 'superadmin' || ctx.orgRole === 'admin';
+}
 
 function canSeeNavItem(item: NavItem, ctx: NavAccessContext): boolean {
   if (item.roles?.length) {
     if (!item.roles.includes(ctx.userRole)) return false;
   }
+
+  if (item.adminConsoleOnly && !canUseAdminConsole(ctx)) return false;
 
   if (item.permission) {
     return ctx.can(item.permission.object, item.permission.action);

@@ -107,6 +107,9 @@ async def _insert_superadmin_user(
     if "failed_login_count" in columns:
         insert_cols.append("failed_login_count")
         insert_vals.append("0")
+    if "must_change_password" in columns:
+        insert_cols.append("must_change_password")
+        insert_vals.append("FALSE")
     await conn.execute(
         text(f"""
             INSERT INTO users ({", ".join(insert_cols)})

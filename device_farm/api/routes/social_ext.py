@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from api.deps import CurrentUser, require_permission
+from common.node_catalog import build_node_catalog
+from services.social_ext.contract import SOCIAL_CAPABILITY_SCHEMAS
 from services.social_ext.registry import SocialPlatformRegistry, get_social_platform_registry
 
 router = APIRouter(prefix="/social-ext", tags=["social-ext"])
@@ -38,10 +40,19 @@ def _platform_summary(ext) -> dict[str, Any]:
         "enabled_by_default": ext.enabled_by_default,
         "step_type_count": len(ext.scenario_lib.step_types),
         "entity_count": len(ext.scenario_lib.entities),
+        "capability_count": len(ext.scenario_lib.capabilities),
         # Full lists so a client can build a capability matrix in one request
         # instead of fanning out to /platforms/{p}/steps per platform.
         "step_types": list(ext.scenario_lib.step_types),
         "entities": list(ext.scenario_lib.entities),
+        "capabilities": {
+            capability_id: asdict(support)
+            for capability_id, support in ext.scenario_lib.capabilities.items()
+        },
+        "capability_schemas": {
+            capability_id: asdict(SOCIAL_CAPABILITY_SCHEMAS[capability_id])
+            for capability_id in ext.scenario_lib.capabilities
+        },
         "storage_owner": "agent-boot",
         "raw_data_owner": "agent-boot",
         "parser_module": ext.content_schema.parser_module,
@@ -56,6 +67,15 @@ def _platform_summary(ext) -> dict[str, Any]:
 async def list_social_platforms(request: Request, _: CurrentUser):
     registry = _registry(request)
     return {"platforms": [_platform_summary(ext) for ext in registry.list_platforms()]}
+
+
+@router.get(
+    "/node-catalog",
+    dependencies=[Depends(require_permission("social-ext", "read"))],
+)
+async def get_social_node_catalog(request: Request, _: CurrentUser):
+    registry = _registry(request)
+    return build_node_catalog(registry)
 
 
 @router.get(

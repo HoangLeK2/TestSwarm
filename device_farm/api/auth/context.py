@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Optional
 
 from jose import JWTError, ExpiredSignatureError, jwt
@@ -14,7 +15,7 @@ from auth.secret_versioning import (
     all_verify_materials,
     verify_material_for_kid,
 )
-from core.security import jwt_algorithm
+from core.security import jwt_algorithm, jwt_secret_key
 
 
 @dataclass(frozen=True)
@@ -98,7 +99,10 @@ def decode_access_token(raw_token: str) -> AuthContext:
             raise AuthError("mcp token store unavailable") from exc
         record = lookup_token(raw_token)
         return _auth_context_from_mcp_record(raw_token, record)
-    header = jwt.get_unverified_header(raw_token)
+    try:
+        header = jwt.get_unverified_header(raw_token)
+    except JWTError as exc:
+        raise AuthError(f"invalid token: {exc}") from exc
     kid = header.get("kid")
     candidates = []
     if kid:
@@ -107,7 +111,11 @@ def decode_access_token(raw_token: str) -> AuthContext:
         except JwtKeyRevokedError as exc:
             raise TokenRevokedKeyError(str(exc)) from exc
     else:
-        candidates = all_verify_materials()
+        candidates = [SimpleNamespace(secret=jwt_secret_key())]
+        try:
+            candidates.extend(all_verify_materials())
+        except Exception:
+            pass
 
     payload = None
     last_exc: Exception | None = None

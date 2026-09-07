@@ -143,7 +143,7 @@ tiên). Máy khách chạy image cũ sẽ crash-loop chứ không phải chỉ t
 ```bash
 MEDIA_ADAPTER_GO2RTC_RTSP_PUBLISH_TEMPLATE=rtsp://farm:<RTSP_PASS>@device-farm.tommadethis.app:8554/{stream_raw}
 MEDIA_ADAPTER_GO2RTC_REGISTER_ENABLED=0
-MEDIA_ADAPTER_REMOTE_RTSP_QUEUE=32
+MEDIA_ADAPTER_REMOTE_RTSP_QUEUE=256
 MEDIA_ADAPTER_CONTROL_GRPC_SERVER=grpc-device-farm.tommadethis.app:443
 MEDIA_ADAPTER_CONTROL_GRPC_TLS=true
 ```

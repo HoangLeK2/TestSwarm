@@ -7,18 +7,34 @@ import { FLOW_ROW_DRAG_GUTTER_CLASS } from './flow-row-gutter';
 import type { FlowStep } from '../scenario-steps/types';
 import { InsertStepPicker } from './insert-step-picker';
 import { useCampaignFlowI18n } from './flow-i18n';
+import type {
+  DeviceCapabilityMap,
+  NodeCapabilityRegistry
+} from '../../lib/node-capabilities';
+import type { StepTreeInsertLocation } from '../../lib/step-tree-intelligence';
 
 interface Props {
   onInsert: (step: FlowStep) => void;
   label?: string;
+  nodeCapabilities?: NodeCapabilityRegistry;
+  deviceCapabilities?: DeviceCapabilityMap;
+  insertLocation?: StepTreeInsertLocation;
 }
 
-export function InsertButton({ onInsert }: Props) {
+export function InsertButton({
+  onInsert,
+  nodeCapabilities,
+  deviceCapabilities,
+  insertLocation
+}: Props) {
   const { tInsert } = useCampaignFlowI18n();
   return (
     <div className='flex min-h-7 justify-end py-0.5 pr-0.5'>
       <InsertStepPicker
         onInsert={onInsert}
+        nodeCapabilities={nodeCapabilities}
+        deviceCapabilities={deviceCapabilities}
+        insertLocation={insertLocation}
         contentSide='right'
         contentAlign='start'
         trigger={
@@ -44,7 +60,10 @@ export function InsertGap({
   onInsert,
   alignWithDragHandle = true,
   label,
-  persistent = false
+  persistent = false,
+  nodeCapabilities,
+  deviceCapabilities,
+  insertLocation
 }: Props & { alignWithDragHandle?: boolean; persistent?: boolean }) {
   const { tInsert } = useCampaignFlowI18n();
 
@@ -56,6 +75,9 @@ export function InsertGap({
       <div className='px-0.5 pb-1 pt-1.5'>
         <InsertStepPicker
           onInsert={onInsert}
+          nodeCapabilities={nodeCapabilities}
+          deviceCapabilities={deviceCapabilities}
+          insertLocation={insertLocation}
           contentSide='bottom'
           contentAlign='center'
           sideOffset={6}
@@ -94,6 +116,9 @@ export function InsertGap({
       <div className='flex shrink-0 items-center gap-1 px-0.5'>
         <InsertStepPicker
           onInsert={onInsert}
+          nodeCapabilities={nodeCapabilities}
+          deviceCapabilities={deviceCapabilities}
+          insertLocation={insertLocation}
           contentSide='bottom'
           contentAlign='center'
           sideOffset={6}

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from api.routes import admin, auth, campaigns, devices, organizations, users
+from api.routes import admin, auth, campaigns, devices, organizations, users, workspace_admin
 from api.routes.me import router as me_router
 from api.routes.sessions import router as sessions_router
 from api.routes.scenario_templates import router as scenario_templates_router
@@ -35,6 +35,8 @@ api_router.include_router(auth.router)
 api_router.include_router(me_router)
 api_router.include_router(sessions_router)
 api_router.include_router(admin.router)
+api_router.include_router(workspace_admin.router)
+api_router.include_router(device_reserve_router)
 api_router.include_router(devices.router)
 api_router.include_router(users.router)
 api_router.include_router(campaigns.router)
@@ -51,7 +53,6 @@ api_router.include_router(artifacts_router)
 api_router.include_router(schedules_router)
 api_router.include_router(executions_router)
 api_router.include_router(relay_agents_router)
-api_router.include_router(device_reserve_router)
 api_router.include_router(notifications_router)
 api_router.include_router(analytics_router)
 api_router.include_router(preview_router)

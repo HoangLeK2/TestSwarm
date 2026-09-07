@@ -14,6 +14,10 @@ export type TokenResponse = {
   token_type: string;
   expires_in?: number;
 };
+export type ChangePasswordPayload = {
+  current_password: string;
+  new_password: string;
+};
 export type UserOut = {
   id: string;
   email: string;
@@ -22,6 +26,7 @@ export type UserOut = {
   api_key: string;
   orgRole?: string | null;
   defaultOrgId?: string | null;
+  mustChangePassword?: boolean;
 };
 
 const AUTH_REQUEST_TIMEOUT_MS = 15_000;
@@ -55,5 +60,13 @@ export const authApi = {
         { refresh_token: refreshToken ?? null },
         { timeout: AUTH_REQUEST_TIMEOUT_MS, _skip429Retry: true }
       )
+      .then((r) => r.data),
+
+  changePassword: (data: ChangePasswordPayload) =>
+    farmApi
+      .post('/me/change-password', data, {
+        timeout: AUTH_REQUEST_TIMEOUT_MS,
+        _skip429Retry: true
+      })
       .then((r) => r.data)
 };

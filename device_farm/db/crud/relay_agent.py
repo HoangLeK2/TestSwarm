@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,9 @@ from db.models.relay_agent import RelayAgent, RelayAgentToken
 from db.models.utils import _now, _uuid
 from tenancy.context import tenant_context
 
+log = logging.getLogger(__name__)
 
+RELAY_ID_PREFIX = "agt_"
 RELAY_AGENT_TOKEN_PREFIX = "dfra_"
 RELAY_AGENT_TOKEN_BYTES = 32
 RELAY_AGENT_TOKEN_PREFIX_CHARS = 13
@@ -129,6 +132,67 @@ async def revoke_relay_agent_token(db: AsyncSession, *, token_id: str, user_id: 
     return result.scalar_one_or_none() is not None
 
 
+def mint_relay_id() -> str:
+    """Server-issued, opaque agent identity. Never derived from client input."""
+    return f"{RELAY_ID_PREFIX}{secrets.token_hex(6)}"
+
+
+async def resolve_relay_identity(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    token_id: str,
+    proposed_relay_id: str,
+) -> str:
+    """Pick the relay_id a registering agent gets. Empty string means refuse.
+
+    The agent's proposal is honoured only when it already names a row in this
+    org — identity belongs to the server. One activation code binds one machine,
+    so the token is also the anchor that hands the original row back to an agent
+    that lost its state directory (fresh container, wiped volume, reinstall).
+    """
+    table = RelayAgent.__table__
+    proposed = (proposed_relay_id or "").strip()
+    if proposed:
+        known = (
+            await db.execute(
+                select(table.c.relay_id)
+                .where(table.c.org_id == org_id, table.c.relay_id == proposed)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if known:
+            return str(known)
+        log.warning(
+            "relay register: ignoring unknown relay_id=%s (server issues identity)",
+            proposed,
+        )
+
+    bound = (
+        await db.execute(
+            select(table.c.relay_id, table.c.status)
+            .where(
+                table.c.org_id == org_id,
+                table.c.enrollment_token_id == token_id,
+                table.c.status != "archived",
+            )
+            .order_by(
+                func.coalesce(table.c.last_heartbeat_at, table.c.connected_at).desc()
+            )
+        )
+    ).all()
+    if not bound:
+        return mint_relay_id()
+    if any(row.status == "online" for row in bound):
+        log.warning(
+            "relay register refused: activation token %s is already bound to an "
+            "online agent — one code enrols one machine",
+            token_id,
+        )
+        return ""
+    return str(bound[0].relay_id)
+
+
 async def upsert_relay_agent(
     db: AsyncSession,
     *,
@@ -140,6 +204,7 @@ async def upsert_relay_agent(
     serials: list[str],
     user_id: Optional[str] = None,
     enrollment_token_id: Optional[str] = None,
+    name: str = "",
 ) -> RelayAgent:
     now = _now()
     stmt = (
@@ -148,6 +213,9 @@ async def upsert_relay_agent(
             id=_uuid(),
             org_id=org_id,
             relay_id=relay_id,
+            # `name` is written at row birth only — never in the conflict update,
+            # so an admin rename survives every reconnect.
+            name=name,
             hostname=hostname,
             ip=ip,
             version=version,
@@ -168,7 +236,13 @@ async def upsert_relay_agent(
                 "ip":                ip,
                 "version":           version,
                 "serials":           list(serials),
-                "status":            "online",
+                # An admin turning an agent off must outlast the agent's own
+                # reconnect loop; a plain "online" here resurrected it seconds
+                # later and the tenant kept driving the phones.
+                "status":            case(
+                    (RelayAgent.__table__.c.status == "disabled", "disabled"),
+                    else_="online",
+                ),
                 "user_id":           user_id,
                 "enrollment_token_id": enrollment_token_id,
                 "connected_at":      now,
@@ -179,20 +253,7 @@ async def upsert_relay_agent(
         .returning(RelayAgent)
     )
     result = await db.execute(stmt)
-    row = result.scalar_one()
-    # One physical host should not leave many stale "online" rows when relay_id changes.
-    if hostname and ip:
-        await db.execute(
-            update(RelayAgent)
-            .where(
-                RelayAgent.relay_id != relay_id,
-                RelayAgent.hostname == hostname,
-                RelayAgent.ip == ip,
-                RelayAgent.status == "online",
-            )
-            .values(status="offline", disconnected_at=now)
-        )
-    return row
+    return result.scalar_one()
 
 
 async def update_relay_heartbeat(
@@ -212,8 +273,65 @@ async def mark_relay_offline(db: AsyncSession, relay_id: str) -> None:
     await db.execute(
         update(RelayAgent)
         .where(RelayAgent.relay_id == relay_id)
-        .values(status="offline", disconnected_at=_now(), serials=[])
+        .values(
+            # Disconnecting must not clear an admin's "disabled": that is how a
+            # kicked agent laundered itself back to a re-registerable state.
+            status=case(
+                (RelayAgent.status == "disabled", "disabled"),
+                else_="offline",
+            ),
+            disconnected_at=_now(),
+            # `serials` is the last known phone list, not a liveness signal —
+            # liveness comes from the transports. Clearing it here threw away
+            # the only serial → agent map, so a disable could no longer tell the
+            # media plane which phones must go dark.
+        )
     )
+
+
+async def disabled_relay_entries(db: AsyncSession) -> list[tuple[str, list[str]]]:
+    """(relay_id, serials) for every disabled agent — rebuilds the registry."""
+    table = RelayAgent.__table__
+    rows = (
+        await db.execute(
+            select(table.c.relay_id, table.c.serials).where(
+                table.c.status == "disabled"
+            )
+        )
+    ).all()
+    return [(str(relay_id), list(serials or [])) for relay_id, serials in rows]
+
+
+async def disabled_relay_serials(db: AsyncSession) -> set[str]:
+    """Serials owned by disabled agents (unscoped — used by gRPC register paths).
+
+    Read as a small set rather than a per-serial query: disabled agents are rare
+    and this runs once per adapter registration, not per frame.
+    """
+    table = RelayAgent.__table__
+    rows = (
+        await db.execute(
+            select(table.c.serials).where(table.c.status == "disabled")
+        )
+    ).all()
+    out: set[str] = set()
+    for (serials,) in rows:
+        for serial in serials or []:
+            cleaned = str(serial).strip()
+            if cleaned and not cleaned.startswith("pending-"):
+                out.add(cleaned)
+    return out
+
+
+async def relay_agent_is_disabled(db: AsyncSession, relay_id: str) -> bool:
+    """Unscoped check for the gRPC register path (no tenant context there)."""
+    table = RelayAgent.__table__
+    status = (
+        await db.execute(
+            select(table.c.status).where(table.c.relay_id == relay_id).limit(1)
+        )
+    ).scalar_one_or_none()
+    return str(status or "") == "disabled"
 
 
 async def list_relay_agents(

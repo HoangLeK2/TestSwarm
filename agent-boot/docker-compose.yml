@@ -93,9 +93,12 @@ services:
       MEDIA_ADAPTER_WHIP_TIMEOUT_MS: "${MEDIA_ADAPTER_WHIP_TIMEOUT_MS:-5000}"
       MEDIA_ADAPTER_WHIP_REDIAL_MS: "${MEDIA_ADAPTER_WHIP_REDIAL_MS:-2000}"
       MEDIA_ADAPTER_RTSP_WRITE_QUEUE: "${MEDIA_ADAPTER_RTSP_WRITE_QUEUE:-128}"
-      # Shallow on purpose: a deep queue sits full when the uplink is the
-      # bottleneck, leaving the reader permanently that many packets behind.
-      MEDIA_ADAPTER_REMOTE_RTSP_QUEUE: "${MEDIA_ADAPTER_REMOTE_RTSP_QUEUE:-32}"
+      # Must hold one access unit. A keyframe packetises to ~85 RTP packets, so
+      # the 32 this used to default to discarded every keyframe and then asked
+      # for an IDR that overflowed in turn — a drop loop on a healthy uplink.
+      # Overflow drains the backlog rather than sitting full, so depth costs
+      # burst memory, not steady-state latency. rtspserver.New clamps below 256.
+      MEDIA_ADAPTER_REMOTE_RTSP_QUEUE: "${MEDIA_ADAPTER_REMOTE_RTSP_QUEUE:-256}"
       MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS: "${MEDIA_ADAPTER_REMOTE_RTSP_TIMEOUT_MS:-1500}"
       MEDIA_ADAPTER_INPUT_FPS: "${MEDIA_ADAPTER_INPUT_FPS:-15}"
       MEDIA_ADAPTER_OWNS_SCRCPY: "${MEDIA_ADAPTER_OWNS_SCRCPY:-1}"

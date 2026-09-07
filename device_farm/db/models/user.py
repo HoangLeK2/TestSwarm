@@ -24,6 +24,7 @@ class User(Base):
     # Platform-wide role only (superadmin / support / system). Org RBAC uses organization_members.role.
     role: Mapped[str] = mapped_column(String(20), default=SystemUserRole.SYSTEM)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     default_org_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("organizations.id", ondelete="RESTRICT"),
@@ -66,4 +67,3 @@ class User(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - repr
         return f"<User {self.email} role={self.role}>"
-

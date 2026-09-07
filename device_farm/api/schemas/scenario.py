@@ -530,10 +530,21 @@ class WaitStableStep(StepBase):
 
 class VerifyScreenStep(StepBase):
     type: Literal["verify_screen"]
-    screenshot: str = Field(min_length=10)  # base64 JPEG
+    template_key: Optional[str] = None  # object-storage key for cropped/uploaded image
+    template_screen_w: Optional[int] = Field(None, ge=1)
+    template_screen_h: Optional[int] = Field(None, ge=1)
+    screenshot: Optional[str] = Field(None, min_length=10)  # legacy base64 JPEG
     ssim_threshold: float = Field(0.75, ge=0.0, le=1.0)
     timeout: float = Field(8.0, ge=0.1, le=60)
     poll: float = Field(0.5, ge=0.1, le=10)
+
+    @model_validator(mode="after")
+    def require_reference_image(self) -> "VerifyScreenStep":
+        if not (self.template_key and self.template_key.strip()) and not (
+            self.screenshot and self.screenshot.strip()
+        ):
+            raise ValueError("verify_screen requires template_key or screenshot")
+        return self
 
 class DismissPopupStep(StepBase):
     type: Literal["dismiss_popup"]
@@ -732,7 +743,6 @@ class ExtractStep(StepBase):
     # When collection is set, auto-save extracted data after extraction.
     # Replaces the need for a separate save_extraction step.
     collection: Optional[str] = None
-    platform: Optional[str] = None
     content_type: Optional[str] = None
     dedupe_field: Optional[str] = None
     tags: Optional[TagsOrStr] = None
@@ -755,8 +765,9 @@ class ExtractStep(StepBase):
 
 
 class SocialActionStepBase(StepBase):
-    platform: str = Field("facebook", min_length=1, max_length=64)
+    platform: str = Field("auto", min_length=1, max_length=64)
     action: str
+    comment_text: Optional[str] = Field(None, max_length=2000)
     timeout: float = Field(6.0, ge=0.1, le=60.0)
     poll: float = Field(0.4, ge=0.05, le=10.0)
     verify_timeout: float = Field(5.0, ge=0.1, le=60.0)

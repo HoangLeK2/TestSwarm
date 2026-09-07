@@ -53,8 +53,12 @@ export const quickActions = (
 function SidebarMainMenu({ isSettingsPage }: { isSettingsPage: boolean }) {
   const t = useTranslations('navigation');
   const tCommon = useTranslations('common');
-  const { baseItems, settingItems } = useNavItems();
   const pathname = usePathname();
+  const { baseItems, settingItems } = useNavItems({
+    adminCenter:
+      pathname === ROUTES.ADMIN.ROOT ||
+      pathname.startsWith(`${ROUTES.ADMIN.ROOT}/`)
+  });
   const { open } = useSidebar();
   const router = useRouter();
 

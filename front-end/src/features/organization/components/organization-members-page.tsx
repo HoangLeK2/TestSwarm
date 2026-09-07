@@ -13,6 +13,10 @@ import {
   type OrganizationMemberOut
 } from '../hooks/use-organization-members';
 import { OrganizationInviteMemberDialog } from './organization-invite-member-dialog';
+import {
+  isEditableOrganizationMemberRole,
+  organizationMemberRoleLabelKey
+} from '../lib/organization-member-role';
 import { usePermission } from '@/features/auth/hooks/use-permission';
 import { useUser } from '@/features/auth';
 import { Badge } from '@/components/ui/badge';
@@ -47,9 +51,7 @@ import { formatOrgMemberInviteError } from '../lib/format-org-invite-error';
 type AssignableOrgRole = 'member' | 'supervisor';
 
 function roleLabel(role: string, t: (key: string) => string): string {
-  if (role === 'owner') return t('owner');
-  if (role === 'supervisor') return t('supervisor');
-  return t('staff');
+  return t(organizationMemberRoleLabelKey(role));
 }
 
 function MemberRoleCell({
@@ -69,11 +71,15 @@ function MemberRoleCell({
   const t = useTranslations('organization.memberManagement');
   const role = member.role;
   const editable =
-    canManage && role !== 'owner' && member.userId !== currentUserId;
+    canManage &&
+    isEditableOrganizationMemberRole(role) &&
+    member.userId !== currentUserId;
 
   if (!editable) {
     return (
-      <Badge variant={role === 'owner' ? 'default' : 'secondary'}>
+      <Badge
+        variant={role === 'owner' || role === 'admin' ? 'default' : 'secondary'}
+      >
         {roleLabel(role, t)}
       </Badge>
     );
@@ -216,7 +222,7 @@ export function OrganizationMembersPage() {
                         })}
                       </span>
                       {canManage &&
-                      member.role !== 'owner' &&
+                      isEditableOrganizationMemberRole(member.role) &&
                       member.userId !== user?.id ? (
                         <Button
                           type='button'

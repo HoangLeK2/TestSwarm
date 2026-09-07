@@ -97,6 +97,28 @@ type publisherCounters struct {
 	streamsReady      atomic.Uint64
 }
 
+// minRemoteQueueSize is the floor for Config.RemoteQueueSize, counted in RTP
+// packets. One access unit has to fit, or enqueueRemote's overflow drain
+// destroys the keyframe it was meant to protect.
+//
+// A keyframe at 1260x2800 packetises to roughly 85 RTP packets, and every
+// deployment shipped RemoteQueueSize=32. Measured on one device over 242s:
+// 39 keyframes, 35 remote resyncs, 1120 evicted packets — exactly 35x the
+// 32-slot queue. Each overflow then asked the device for a fresh IDR, which
+// arrived as another oversized keyframe and overflowed in turn, so the drop
+// loop sustained itself with the uplink perfectly healthy (write_errors=0).
+// Below one access unit this is not a shallow queue, it is a keyframe shredder.
+//
+// The old "shallow on purpose" reasoning feared a deep queue sitting full and
+// adding permanent latency. Draining the whole backlog on overflow is what
+// makes that impossible: the queue resynchronises to now rather than staying
+// behind, so depth costs burst memory, not steady-state lag.
+//
+// ponytail: flat packet count, not derived from frame geometry — the publisher
+// has no resolution at config time. ~3x the measured keyframe; raise it if a
+// larger panel still reports remote_resyncs.
+const minRemoteQueueSize = 256
+
 func New(cfg Config, logger *slog.Logger) *Publisher {
 	if cfg.RTSPAddress == "" {
 		cfg.RTSPAddress = ":8556"
@@ -115,8 +137,8 @@ func New(cfg Config, logger *slog.Logger) *Publisher {
 	if cfg.WriteQueueSize <= 0 {
 		cfg.WriteQueueSize = 128
 	}
-	if cfg.RemoteQueueSize <= 0 {
-		cfg.RemoteQueueSize = 256
+	if cfg.RemoteQueueSize < minRemoteQueueSize {
+		cfg.RemoteQueueSize = minRemoteQueueSize
 	}
 	if cfg.RemoteTimeout <= 0 {
 		cfg.RemoteTimeout = 1500 * time.Millisecond

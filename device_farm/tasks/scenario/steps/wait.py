@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import OrderedDict
 from typing import Any, Dict
 
 from tasks.scenario.steps import register_step
@@ -14,6 +15,25 @@ from tasks.scenario.utils import (
 from services.scenario_selector import selector_summary
 
 log = logging.getLogger(__name__)
+
+_VERIFY_TEMPLATE_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
+_VERIFY_TEMPLATE_CACHE_MAX = 32
+
+
+def _load_verify_template(template_key: str) -> bytes | None:
+    cached = _VERIFY_TEMPLATE_CACHE.get(template_key)
+    if cached is not None:
+        _VERIFY_TEMPLATE_CACHE.move_to_end(template_key)
+        return cached
+
+    from services import minio_store
+
+    data = minio_store.get_object_bytes(template_key)
+    if data:
+        _VERIFY_TEMPLATE_CACHE[template_key] = data
+        while len(_VERIFY_TEMPLATE_CACHE) > _VERIFY_TEMPLATE_CACHE_MAX:
+            _VERIFY_TEMPLATE_CACHE.popitem(last=False)
+    return data
 
 
 @register_step("wait")
@@ -133,16 +153,48 @@ def handle_dismiss_popup(sc: ScenarioContext, step: Dict[str, Any], idx: int, re
 @register_step("verify_screen")
 def handle_verify_screen(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
     screenshot_b64 = str(step.get("screenshot") or "").strip()
+    template_key = str(step.get("template_key") or "").strip()
     vs_threshold = float(step.get("ssim_threshold", 0.75) or 0.75)
     vs_timeout = float(step.get("timeout", 8.0) or 8.0)
     vs_poll = float(step.get("poll", 0.5) or 0.5)
-    if not screenshot_b64:
+    if not screenshot_b64 and not template_key:
         result["ok"] = False
-        result["message"] = "verify_screen: no screenshot provided"
+        result["message"] = "verify_screen: no screenshot/template provided"
         return
     try:
-        from runtime.visual_anchor import wait_for_screen_match, _b64_to_bytes
-        recorded_jpeg = _b64_to_bytes(screenshot_b64)
+        from runtime.visual_anchor import (
+            wait_for_element_image,
+            wait_for_screen_match,
+            _b64_to_bytes,
+        )
+        if template_key:
+            recorded_jpeg = _load_verify_template(template_key)
+            if not recorded_jpeg:
+                result["ok"] = False
+                result["message"] = f"verify_screen: template not found ({template_key})"
+                return
+            match = wait_for_element_image(
+                sc.device.take_screenshot,
+                recorded_jpeg,
+                timeout=vs_timeout,
+                poll=vs_poll,
+                threshold=vs_threshold,
+            )
+            if match:
+                _cx, _cy, confidence = match
+                result["image_confidence"] = round(confidence, 3)
+                result["message"] = (
+                    f"verify_screen: image confidence={confidence:.3f} ≥ {vs_threshold}"
+                )
+            else:
+                result["ok"] = False
+                result["image_confidence"] = 0.0
+                result["message"] = (
+                    f"verify_screen FAILED: image confidence < {vs_threshold}"
+                )
+            return
+        else:
+            recorded_jpeg = _b64_to_bytes(screenshot_b64)
         matched, ssim = wait_for_screen_match(
             sc.device.take_screenshot, recorded_jpeg,
             timeout=vs_timeout, poll=vs_poll,

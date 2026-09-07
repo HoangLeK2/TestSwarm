@@ -1,0 +1,152 @@
+{
+  "scenario": {
+    "body": {
+      "steps": [
+        {
+          "type": "tap_selector",
+          "by": "text",
+          "value": "Facebook"
+        },
+        {
+          "type": "input_text",
+          "text": "${GROUP_NAME}",
+          "via": "u2"
+        },
+        {
+          "type": "key",
+          "key": "enter"
+        },
+        {
+          "type": "scroll_down",
+          "repeats": 2,
+          "start_x_ratio": 0.18
+        },
+        {
+          "type": "loop",
+          "count": 10,
+          "steps": [
+            {
+              "type": "wait",
+              "seconds": 1
+            },
+            {
+              "type": "if_element",
+              "by": "text",
+              "value": "Posts",
+              "timeout": 2,
+              "then": [
+                {
+                  "type": "tap_selector",
+                  "by": "text",
+                  "value": "Posts"
+                }
+              ],
+              "else": [
+                {
+                  "type": "wait",
+                  "seconds": 0.2
+                }
+              ]
+            },
+            {
+              "type": "extract",
+              "edge_extra_data": true,
+              "extract_profile": "balanced",
+              "open_post_before_extract": true,
+              "require_open_post_detail": true,
+              "open_post_press_back_after_extract": false,
+              "collection": "fb_group_posts",
+              "platform": "facebook",
+              "content_type": "fb_post",
+              "dedupe_field": "post_key",
+              "tags": "group,crawl,${GROUP_NAME}",
+              "entity": "posts",
+              "entity_version": "posts:v1"
+            },
+            {
+              "type": "scroll_down",
+              "repeats": 1,
+              "start_x_ratio": 0.68,
+              "start_y_ratio": 0.65,
+              "end_y_ratio": 0.47,
+              "ignore_error": true
+            },
+            {
+              "type": "social_find_comment_button",
+              "timeout": 5,
+              "require_post_before_comment": true,
+              "comment_filter": "all_comments",
+              "switch_to_all_comments": true,
+              "ignore_error": true,
+              "platform": "facebook"
+            },
+            {
+              "type": "social_tap_comment_target",
+              "post_tap_wait_s": 0.35,
+              "ignore_error": true,
+              "platform": "facebook"
+            },
+            {
+              "type": "social_apply_comment_filter",
+              "comment_filter": "all_comments",
+              "switch_to_all_comments": true,
+              "comment_filter_settle_s": 0.45,
+              "comment_filter_step_pause_s": 0.35,
+              "comment_filter_post_select_s": 0.85,
+              "platform": "facebook"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.3
+            },
+            {
+              "type": "extract",
+              "edge_extra_data": true,
+              "extract_profile": "balanced",
+              "parent_post_id_var": "_comment_parent_pid",
+              "require_verified_parent": true,
+              "collection": "fb_group_posts",
+              "platform": "facebook",
+              "content_type": "fb_comment",
+              "dedupe_field": "comment_key",
+              "tags": "group,comment,${GROUP_NAME}",
+              "save_parent_id_var": "_active_comment_parent_hash",
+              "item_level": 1,
+              "entity": "comments",
+              "entity_version": "comments:v1"
+            },
+            {
+              "type": "key",
+              "key": "back"
+            },
+            {
+              "type": "wait",
+              "seconds": 0.5
+            },
+            {
+              "type": "dismiss_popup",
+              "retries": 1
+            },
+            {
+              "type": "scroll_down",
+              "repeats": 1,
+              "start_x_ratio": 0.18
+            },
+            {
+              "type": "wait",
+              "seconds": 1
+            },
+            {
+              "type": "dismiss_popup",
+              "retries": 2
+            }
+          ]
+        },
+        {
+          "type": "key",
+          "key": "home"
+        }
+      ]
+    }
+  }
+}

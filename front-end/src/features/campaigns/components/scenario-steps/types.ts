@@ -75,6 +75,7 @@ export type ActionType =
   | 'tap_image'
   | 'tap'
   | 'tap_ratio'
+  | 'tap_xml_match'
   | 'swipe_ratio'
   | 'tap_selector'
   | 'wait_element'
@@ -331,7 +332,7 @@ export function getStepLabel(step: FlowStep): string {
     case 'login_if_needed':
       return `login_if_needed ${step.profile?.package || ''}`;
     case 'platform_session_gate':
-      return `Phiên Facebook · ${step.phase === 'confirm' ? 'xác nhận sau đăng nhập' : 'kiểm tra trước'}`;
+      return `Phiên nền tảng · ${step.phase === 'confirm' ? 'xác nhận sau đăng nhập' : 'kiểm tra trước'}`;
     case 'fill_form':
       return `fill_form ${step.recipe || ''}`;
     case 'assert_app_state':
@@ -374,26 +375,26 @@ export function getStepLabel(step: FlowStep): string {
     }
     case 'social_select_target':
       return step.target_type === 'post'
-        ? `Xác minh post · ${step.display_text || step.search || step.save_as || '_post_target'}`
+        ? `Xác minh nội dung · ${step.display_text || step.search || step.save_as || '_post_target'}`
         : `Xác minh profile · ${step.display_name || step.search || step.save_as || '_people_target'}`;
     case 'social_connect_visible_people':
-      return `Kết bạn người có điểm chung · điểm >= ${step.min_score ?? 40}`;
+      return `Kết nối người có điểm chung · điểm >= ${step.min_score ?? 40}`;
     case 'social_scan_posts_interact':
-      return `Scan post · ${step.target_count ?? 1} bài · ${step.keywords || 'mọi keyword'}`;
+      return `Quét nội dung · ${step.target_count ?? 1} mục · ${step.keywords || 'mọi keyword'}`;
     case 'social_open_author_from_post_match':
-      return `${step.platform ?? 'facebook'} · mở author từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
+      return `${step.platform ?? 'auto'} · mở tác giả từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
     case 'social_open_commenter_from_post_match':
-      return `${step.platform ?? 'facebook'} · mở commenter từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
+      return `${step.platform ?? 'auto'} · mở người bình luận từ ${step.source_var ?? '_post_scan'}[${step.action_index ?? 0}]`;
     case 'content_interaction':
-      return `${step.platform ?? 'facebook'} · ${step.action ?? 'like'}`;
+      return `${step.platform ?? 'auto'} · ${step.action ?? 'like'}`;
     case 'connection_request':
-      return `${step.platform ?? 'facebook'} · gửi lời mời`;
+      return `${step.platform ?? 'auto'} · gửi yêu cầu kết nối`;
     case 'lease_source_target':
-      return `${step.platform ?? 'facebook'} · ${step.entity_type ?? 'post'} · ${step.keywords || step.search || 'tất cả'}`;
+      return `${step.platform ?? 'auto'} · ${step.entity_type ?? 'post'} · ${step.keywords || step.search || 'tất cả'}`;
     case 'lease_connection_candidate':
-      return `${step.platform ?? 'facebook'} · ready_to_connect`;
+      return `${step.platform ?? 'auto'} · ready_to_connect`;
     case 'community_membership':
-      return `${step.platform ?? 'facebook'} · tham gia nhóm`;
+      return `${step.platform ?? 'auto'} · tham gia cộng đồng`;
     default:
       return step.type;
   }
@@ -420,17 +421,17 @@ export const ALL_STEP_TYPES: {
   { value: 'extract_text_ocr', label: 'extract_text_ocr', group: 'action' },
   {
     value: 'social_find_comment_button',
-    label: 'Tìm nút Bình luận (FB)',
+    label: 'Tìm mục tiêu bình luận',
     group: 'action'
   },
   {
     value: 'content_interaction',
-    label: 'Tương tác bài viết',
+    label: 'Tương tác nội dung',
     group: 'action'
   },
   {
     value: 'connection_request',
-    label: 'Gửi lời mời kết bạn',
+    label: 'Gửi yêu cầu kết nối',
     group: 'action'
   },
   {
@@ -440,47 +441,47 @@ export const ALL_STEP_TYPES: {
   },
   {
     value: 'lease_connection_candidate',
-    label: 'Lấy ứng viên kết bạn',
+    label: 'Lấy ứng viên kết nối',
     group: 'action'
   },
   {
     value: 'community_membership',
-    label: 'Tham gia nhóm',
+    label: 'Tham gia cộng đồng',
     group: 'action'
   },
   {
     value: 'social_select_target',
-    label: 'Xác minh mục tiêu (profile / bài viết)',
+    label: 'Xác minh mục tiêu (profile / nội dung)',
     group: 'action'
   },
   {
     value: 'social_connect_visible_people',
-    label: 'Kết bạn người có điểm chung',
+    label: 'Kết nối người đang thấy',
     group: 'action'
   },
   {
     value: 'social_scan_posts_interact',
-    label: 'Scan và tương tác post',
+    label: 'Quét và tương tác nội dung',
     group: 'action'
   },
   {
     value: 'social_open_author_from_post_match',
-    label: 'Mở author từ post match',
+    label: 'Mở tác giả đã khớp',
     group: 'action'
   },
   {
     value: 'social_open_commenter_from_post_match',
-    label: 'Mở commenter từ post match',
+    label: 'Mở người bình luận đã khớp',
     group: 'action'
   },
   {
     value: 'social_tap_comment_target',
-    label: 'Bấm target Bình luận (FB)',
+    label: 'Bấm mục tiêu bình luận',
     group: 'action'
   },
   {
     value: 'social_apply_comment_filter',
-    label: 'Áp dụng bộ lọc bình luận (FB)',
+    label: 'Áp dụng bộ lọc bình luận',
     group: 'action'
   },
   { value: 'tap_position', label: 'tap_position', group: 'action' },
@@ -500,7 +501,7 @@ export const ALL_STEP_TYPES: {
   { value: 'login_if_needed', label: 'login_if_needed', group: 'action' },
   {
     value: 'platform_session_gate',
-    label: 'Kiểm tra phiên Facebook',
+    label: 'Kiểm tra phiên nền tảng',
     group: 'action'
   },
   { value: 'fill_form', label: 'fill_form', group: 'action' },
@@ -518,7 +519,6 @@ export const ALL_STEP_TYPES: {
     label: 'extract_text_hierarchy',
     group: 'action'
   },
-  { value: 'extract_text_ocr', label: 'extract_text_ocr', group: 'action' },
   { value: 'extract_text_ai', label: 'extract_text_ai', group: 'action' },
   {
     value: 'extract_screen_data',
@@ -695,6 +695,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
+        platform: 'auto',
         timeout: 6,
         poll: 0.4,
         dedupe_field: 'post_key',
@@ -712,6 +713,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
+        platform: 'auto',
         timeout: 6,
         poll: 0.4,
         dedupe_field: 'post_key',
@@ -723,6 +725,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
+        platform: 'auto',
         post_tap_wait_s: 0.35,
         ignore_error: true
       };
@@ -730,6 +733,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
+        platform: 'auto',
         comment_filter: 'all_comments',
         switch_to_all_comments: true,
         comment_filter_settle_s: 0.45,
@@ -740,7 +744,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         target_type: 'person',
         search: '',
         display_name: '',
@@ -757,7 +761,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         min_score: 40,
         require_common: true,
         common_keywords: ['bạn chung', 'mutual friends', 'cùng nhóm'],
@@ -775,7 +779,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         keywords: [],
         match_mode: 'any',
         comment_text: '',
@@ -791,7 +795,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         source_var: '_post_scan',
         action_index: 0,
         required_keywords: [],
@@ -817,7 +821,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         source_var: '_post_scan',
         action_index: 0,
         required_keywords: [],
@@ -846,7 +850,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         action: 'like',
         timeout: 6,
         poll: 0.4,
@@ -857,7 +861,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         entity_type: 'post',
         action_type: 'content_interaction',
         action: 'like',
@@ -865,12 +869,12 @@ export function createDefaultStep(
         keywords: ''
       };
     case 'lease_connection_candidate':
-      return { ...base, type, platform: 'facebook' };
+      return { ...base, type, platform: 'auto' };
     case 'connection_request':
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         action: 'request',
         timeout: 6,
         poll: 0.4,
@@ -881,7 +885,7 @@ export function createDefaultStep(
       return {
         ...base,
         type,
-        platform: 'facebook',
+        platform: 'auto',
         action: 'join',
         timeout: 6,
         poll: 0.4,
@@ -989,7 +993,7 @@ export function createDefaultStep(
       return {
         ...base,
         type: 'verify_screen',
-        screenshot: '',
+        template_key: '',
         ssim_threshold: 0.75,
         timeout: 8,
         poll: 0.5
@@ -1091,8 +1095,8 @@ export function createDefaultStep(
         stop_if_no_new: true,
         no_new_threshold: 30,
         collection: '${SAVE_COLLECTION}',
-        platform: 'facebook',
-        content_type: 'fb_post',
+        platform: 'auto',
+        content_type: 'post',
         dedupe_field: 'post_key'
       };
     case 'use_source_pool':
@@ -1105,8 +1109,8 @@ export function createDefaultStep(
         statuses: ['candidate', 'active', 'available'],
         allocation_policy: 'one_per_device'
       };
-    // Shortcut — creates an `extract` step preset for FB comments. Mirrors the
-    // split Facebook comment templates; users can still tweak fields later.
+    // Shortcut for the Facebook comments adapter. Mirrors the split comment
+    // templates; users can still tweak fields later.
     case 'extract_comments':
       return {
         ...base,
@@ -1138,7 +1142,7 @@ export function createDefaultStep(
         save_parent_id_var: '_active_comment_parent_hash',
         item_level: 1
       };
-    // Shortcut — creates an `extract` step preset for FB posts (group feed).
+    // Shortcut for the Facebook post adapter used by the legacy group feed preset.
     case 'extract_posts':
       return {
         ...base,

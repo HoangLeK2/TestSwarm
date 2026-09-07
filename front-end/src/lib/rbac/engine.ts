@@ -53,7 +53,45 @@ const MANAGE: readonly PermissionAction[] = [
 /** Static policy table — keep in sync with device_farm/api/auth/rbac_policy.csv */
 const RBAC_POLICIES: readonly RbacPolicyRow[] = [
   { role: 'superadmin', object: '*', actions: FULL_ACCESS },
-  { role: 'admin', object: '*', actions: FULL_ACCESS },
+  {
+    role: 'admin',
+    object: 'organizations',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  { role: 'admin', object: 'devices', actions: MANAGE },
+  { role: 'admin', object: 'campaigns', actions: MANAGE },
+  { role: 'admin', object: 'executions', actions: MANAGE },
+  {
+    role: 'admin',
+    object: 'scenario-templates',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  {
+    role: 'admin',
+    object: 'scenarios',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  { role: 'admin', object: 'accounts', actions: MANAGE },
+  { role: 'admin', object: 'account-groups', actions: MANAGE },
+  {
+    role: 'admin',
+    object: 'device-groups',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  { role: 'admin', object: 'schedules', actions: MANAGE },
+  {
+    role: 'admin',
+    object: 'relay-agents',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  { role: 'admin', object: 'notifications', actions: MANAGE },
+  {
+    role: 'admin',
+    object: 'content',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  { role: 'admin', object: 'analytics', actions: READ_ONLY },
+  { role: 'admin', object: 'mcp', actions: ['read', 'manage'] },
   { role: 'operator', object: 'organizations', actions: ['read', 'create'] },
   { role: 'owner', object: 'organizations', actions: MANAGE },
   { role: 'member', object: 'organizations', actions: READ_ONLY },
@@ -146,12 +184,15 @@ const checkerCache = new Map<string, PermissionChecker>();
 
 function normalizePlatformRole(role: string | null | undefined): PlatformRole {
   if (role === 'superadmin') return 'superadmin';
-  if (role === 'admin') return 'admin';
+  if (role === 'support') return 'support';
+  if (role === 'system') return 'system';
+  if (role === 'platform-admin') return 'platform-admin';
   return 'operator';
 }
 
 function normalizeOrgRole(role: string | null | undefined): OrgRole | null {
   if (role === 'owner') return 'owner';
+  if (role === 'admin') return 'admin';
   if (role === 'member') return 'member';
   if (role === 'supervisor') return 'supervisor';
   return null;
@@ -160,6 +201,9 @@ function normalizeOrgRole(role: string | null | undefined): OrgRole | null {
 /** Same role union as device_farm/api/auth/rbac.roles_for_user. */
 export function rolesForIdentity(identity: RbacIdentity): readonly string[] {
   const roles = new Set<string>([identity.role]);
+  if (identity.role === 'system' || identity.role === 'support') {
+    roles.add('operator');
+  }
   if (identity.orgRole) roles.add(identity.orgRole);
   return Array.from(roles).sort();
 }

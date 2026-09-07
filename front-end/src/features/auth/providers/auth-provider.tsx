@@ -22,7 +22,8 @@ function meToSessionUser(
     givenName: me.name,
     role: me.role,
     orgRole: me.orgRole ?? null,
-    defaultOrgId: me.defaultOrgId ?? null
+    defaultOrgId: me.defaultOrgId ?? null,
+    mustChangePassword: Boolean(me.mustChangePassword)
   };
 }
 

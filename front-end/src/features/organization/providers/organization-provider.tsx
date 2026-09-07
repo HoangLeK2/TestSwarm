@@ -4,10 +4,13 @@ import React from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ProtoOrganization } from '@/features/device-farm';
 import { useAuthContext } from '@/features/auth/providers/auth-provider';
+import { authApi } from '@/features/auth/services/api';
 import {
   DEVICES_LIST_KEY,
   FLEET_STATS_KEY
 } from '@/features/devices/lib/device-query-keys';
+import { tokenStorage } from '@/lib/token-storage';
+import { createPendingOrganizationShell } from '../lib/organization-shell';
 import { reconcileCurrentOrganization } from '../lib/pick-default-organization';
 import { useOrganizationsQuery } from '../hooks/use-organizations';
 
@@ -31,7 +34,12 @@ export function OrganizationProvider({
   children: React.ReactNode;
 }) {
   const queryClient = useQueryClient();
-  const { pending: authPending, user } = useAuthContext();
+  const { pending: authPending, user, setUser } = useAuthContext();
+  const getStoredOrgId = React.useCallback(() => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim() || null;
+  }, []);
+  const bootstrapOrgId = getStoredOrgId() || user?.defaultOrgId || null;
   const {
     data: organizationData,
     isFetching,
@@ -39,7 +47,10 @@ export function OrganizationProvider({
     isPending,
     isError,
     refetch
-  } = useOrganizationsQuery();
+  } = useOrganizationsQuery({
+    enabled: !authPending && Boolean(user),
+    ensureId: bootstrapOrgId
+  });
   const organizations = React.useMemo(
     () => organizationData ?? [],
     [organizationData]
@@ -59,19 +70,26 @@ export function OrganizationProvider({
       !organizationData || isLoading || isPending || isFetching || isError;
 
     if (!organizations.length) {
-      if (queryInFlightOrUnreliable) return;
+      if (queryInFlightOrUnreliable) {
+        setCurrentOrgState((prev) => {
+          if (prev?.id) return prev;
+          return createPendingOrganizationShell({
+            defaultOrgId: user.defaultOrgId,
+            storedOrgId: getStoredOrgId(),
+            userEmail: user.email
+          });
+        });
+        return;
+      }
       setCurrentOrgState(null);
       return;
     }
 
     setCurrentOrgState((prev) => {
-      const storedId =
-        typeof window !== 'undefined'
-          ? localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim() || null
-          : null;
+      const storedId = getStoredOrgId();
 
       return reconcileCurrentOrganization(organizations, prev, storedId, {
-        preferredOrgId: user?.defaultOrgId,
+        preferredOrgId: storedId || user?.defaultOrgId,
         userEmail: user?.email
       });
     });
@@ -83,6 +101,8 @@ export function OrganizationProvider({
     isPending,
     organizationData,
     organizations,
+    getStoredOrgId,
+    bootstrapOrgId,
     user,
     user?.defaultOrgId,
     user?.email
@@ -108,6 +128,64 @@ export function OrganizationProvider({
       localStorage.removeItem(CURRENT_ORG_STORAGE_KEY);
     }
   }, [currentOrg?.id]);
+
+  React.useEffect(() => {
+    if (authPending || !user || !currentOrg?.id) return;
+
+    let cancelled = false;
+    const currentUser = user;
+
+    async function refreshSessionForCurrentOrg() {
+      try {
+        const me = await authApi.me();
+        if (cancelled) return;
+
+        const nextUser = {
+          id: me.id,
+          email: me.email,
+          givenName: me.name,
+          picture: currentUser.picture ?? null,
+          role: me.role,
+          orgRole: me.orgRole ?? null,
+          defaultOrgId: me.defaultOrgId ?? null,
+          mustChangePassword: Boolean(me.mustChangePassword)
+        };
+        const unchanged =
+          nextUser.id === currentUser.id &&
+          nextUser.email === currentUser.email &&
+          nextUser.givenName === currentUser.givenName &&
+          nextUser.picture === (currentUser.picture ?? null) &&
+          nextUser.role === currentUser.role &&
+          nextUser.orgRole === currentUser.orgRole &&
+          nextUser.defaultOrgId === currentUser.defaultOrgId &&
+          nextUser.mustChangePassword === currentUser.mustChangePassword;
+        if (unchanged) return;
+
+        tokenStorage.setUser(nextUser);
+        setUser(nextUser);
+      } catch {
+        // Keep the existing auth snapshot; route requests still carry the active org header.
+      }
+    }
+
+    void refreshSessionForCurrentOrg();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authPending,
+    currentOrg?.id,
+    setUser,
+    user,
+    user?.defaultOrgId,
+    user?.email,
+    user?.givenName,
+    user?.id,
+    user?.mustChangePassword,
+    user?.orgRole,
+    user?.picture,
+    user?.role
+  ]);
 
   React.useEffect(() => {
     if (!currentOrg?.id) return;

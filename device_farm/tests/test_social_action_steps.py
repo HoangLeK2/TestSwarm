@@ -99,7 +99,7 @@ def _context(device: _FakeDevice) -> SimpleNamespace:
         ctx={"vars": {}},
         var_ctx=_FakeVarContext(),
         capture_dir=None,
-        scenario={},
+        scenario={"platform": "facebook"},
         execution_id=None,
     )
 
@@ -184,7 +184,20 @@ def test_observe_ledger_failure_never_changes_social_behavior(monkeypatch) -> No
     assert result["matched_label"] == "like"
 
 
-def test_enabled_finalization_failure_fails_result_after_tap(monkeypatch) -> None:
+def test_enabled_finalization_failure_does_not_undo_a_tap_that_happened(
+    monkeypatch,
+) -> None:
+    """Finalization runs after the tap, so failing the step here is a lie.
+
+    This used to assert ok=False. That made the campaign retry an action already
+    performed on the phone — on connection_request it re-sent friend requests to
+    the same people. The step reports what the phone did; the audit gap surfaces
+    through account_action_ledger_error, the record-failed counter, and
+    reconciliation closing the still-open claim.
+
+    The claim-before-tap path keeps failing closed — see
+    test_enabled_ledger_claims_before_tap_and_fails_closed.
+    """
     from tasks.scenario.steps import dispatch_step
 
     monkeypatch.setenv("ACCOUNT_ACTION_LEDGER_MODE", "enabled")
@@ -212,9 +225,9 @@ def test_enabled_finalization_failure_fails_result_after_tap(monkeypatch) -> Non
     result = dispatch_step(_context(device), _ledger_step(), 0)
 
     assert events == ["prepare", "tap", "finalize"]
-    assert result["ok"] is False
-    assert result["outcome"] == "ledger_finalize_failed"
+    assert result["ok"] is True
     assert result["action_performed"] is True
+    assert "commit failed" in result["account_action_ledger_error"]
 
 
 def test_tap_failure_finalizes_with_actual_action_state(monkeypatch) -> None:
@@ -589,6 +602,109 @@ def test_fb_connect_visible_people_batch_saves_sent_counters(
     saved = sc.var_ctx.values["_visible_connection_action"]
     assert saved["sent_count"] == 2
     assert saved["verified_targets"][0]["target_id"] == "ui:candidate-1"
+
+
+def _batch_flow_result(count: int) -> dict:
+    return {
+        "verified": True,
+        "batch": True,
+        "target_type": "person",
+        "source": "visible_people_surface",
+        "target_count": count,
+        "sent_count": count,
+        "eligible_count": count,
+        "sent": [
+            {
+                "verified": True,
+                "target_type": "person",
+                "source": "visible_people_surface",
+                "target_id": f"ui:candidate-{i}",
+                "display_name": f"Person {i}",
+                "matched_common": ["ban chung"],
+                "action_bounds": [600, 120, 900, 200],
+            }
+            for i in range(count)
+        ],
+    }
+
+
+def test_visible_people_batch_writes_the_ledger_in_one_session(monkeypatch) -> None:
+    """One call for the whole batch, not prepare+finalize per person.
+
+    Each of those opened its own session, and every session builds and disposes
+    an engine — 20 people cost 40 Postgres connections for bookkeeping alone.
+    """
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setenv("ACCOUNT_ACTION_LEDGER_MODE", "enabled")
+    monkeypatch.setattr(
+        "services.account_actions.resolve_action_identity",
+        lambda **_: {"account_id": "account-1", "execution_id": "e1", "step_id": "s1"},
+    )
+    monkeypatch.setattr(
+        "services.account_actions.prepare_action",
+        lambda **_: pytest.fail("per-target prepare_action must not be used"),
+    )
+    calls: list[dict] = []
+
+    def fake_record(**kwargs):
+        calls.append(kwargs)
+        return [
+            {"action_id": f"act-{i}", "org_id": "org-1", "status": "succeeded"}
+            for i, _ in enumerate(kwargs["entries"])
+        ]
+
+    monkeypatch.setattr("services.account_actions.record_applied_actions", fake_record)
+
+    device = _FakeDevice(_xml())
+    device.flow_result = _batch_flow_result(3)
+
+    result = dispatch_step(
+        _context(device),
+        {"type": "social_connect_visible_people", "platform": "facebook"},
+        0,
+    )
+
+    assert result["ok"] is True
+    assert len(calls) == 1, "the batch must not fan out into one call per person"
+    assert len(calls[0]["entries"]) == 3
+    assert [e["target"]["target_id"] for e in calls[0]["entries"]] == [
+        "ui:candidate-0",
+        "ui:candidate-1",
+        "ui:candidate-2",
+    ]
+    assert len(result["account_action_ledgers"]) == 3
+
+
+def test_visible_people_batch_ledger_failure_does_not_resend_requests(
+    monkeypatch,
+) -> None:
+    """The requests are already out; failing the step made the campaign repeat them."""
+    from tasks.scenario.steps import dispatch_step
+
+    monkeypatch.setenv("ACCOUNT_ACTION_LEDGER_MODE", "enabled")
+    monkeypatch.setattr(
+        "services.account_actions.resolve_action_identity",
+        lambda **_: {"account_id": "account-1", "execution_id": "e1", "step_id": "s1"},
+    )
+    monkeypatch.setattr(
+        "services.account_actions.record_applied_actions",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    device = _FakeDevice(_xml())
+    device.flow_result = _batch_flow_result(2)
+
+    result = dispatch_step(
+        _context(device),
+        {"type": "social_connect_visible_people", "platform": "facebook"},
+        0,
+    )
+
+    assert result["ok"] is True
+    assert result["action_performed"] is True
+    assert result["sent_count"] == 2
+    assert "db down" in result["account_action_ledger_error"]
 
 
 def test_social_select_target_skips_and_defers_unverified_candidate(

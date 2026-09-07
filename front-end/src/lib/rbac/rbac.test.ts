@@ -8,13 +8,36 @@ import {
   isSuperadminIdentity
 } from './engine.ts';
 
-test('createPermissionChecker allows admin all permissions', () => {
+test('createPermissionChecker lets workspace admins operate assigned workspaces', () => {
+  clearPermissionCheckerCache();
+  const checker = createPermissionChecker(
+    identityFromSession({ role: 'operator', orgRole: 'admin' })
+  );
+  assert.equal(checker.can('devices', 'read'), true);
+  assert.equal(checker.can('devices', 'manage'), true);
+  assert.equal(checker.can('devices', 'create'), true);
+  assert.equal(checker.can('devices', 'execute'), true);
+  assert.equal(checker.can('organizations', 'create'), true);
+  assert.equal(checker.can('organizations', 'update'), true);
+  assert.equal(checker.can('organizations', 'delete'), true);
+  assert.equal(checker.can('relay-agents', 'manage'), true);
+  assert.equal(checker.can('analytics', 'read'), true);
+  assert.equal(checker.can('campaigns', 'create'), true);
+  assert.equal(checker.can('campaigns', 'execute'), true);
+  assert.equal(checker.can('accounts', 'manage'), true);
+  assert.equal(checker.can('schedules', 'execute'), true);
+  assert.equal(checker.can('device-groups', 'manage'), true);
+  assert.equal(checker.can('scenarios', 'update'), true);
+});
+
+test('createPermissionChecker ignores legacy platform admin role', () => {
   clearPermissionCheckerCache();
   const checker = createPermissionChecker(
     identityFromSession({ role: 'admin' })
   );
-  assert.equal(checker.can('devices', 'read'), true);
-  assert.equal(checker.can('devices', 'manage'), true);
+  assert.equal(checker.can('organizations', 'read'), true);
+  assert.equal(checker.can('organizations', 'manage'), false);
+  assert.equal(checker.can('devices', 'manage'), false);
 });
 
 test('createPermissionChecker allows superadmin all permissions', () => {

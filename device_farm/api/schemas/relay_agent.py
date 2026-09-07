@@ -18,6 +18,7 @@ class RelayAgentOut(BaseModel):
     relay_id: str
     user_id: Optional[str] = None
     enrollment_token_id: Optional[str] = None
+    name: str = ""
     hostname: str
     ip: str
     version: str

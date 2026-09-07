@@ -80,6 +80,7 @@ def _ctx(device: _BenchDevice) -> SimpleNamespace:
             "_active_comment_anchor_verified": True,
         },
         scenario={
+            "platform": "facebook",
             "_execution_id": "exec",
             "_campaign_id": "camp",
             "_campaign_vars": {"__USER_ID__": "user"},
@@ -117,7 +118,9 @@ def test_social_open_comments_handler_benchmark(monkeypatch) -> None:
     monkeypatch.setattr(control_flow.time, "sleep", lambda _s: None)
     device = _BenchDevice()
     sc = _ctx(device)
-    sc.ctx.pop("_active_comment_parent_source", None)
+    sc.ctx.pop("_active_comment_parent_hash", None)
+    sc.ctx.pop("_comment_parent_pid", None)
+    sc.ctx.pop("_active_comment_anchor_verified", None)
     step = {
         "type": "social_open_comments",
         "pre_scroll": True,

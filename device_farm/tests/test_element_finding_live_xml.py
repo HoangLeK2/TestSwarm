@@ -27,7 +27,7 @@ def _load_live_xml() -> str:
 
 def _device_with_xml(xml: str) -> DeviceClient:
     device = DeviceClient.__new__(DeviceClient)
-    device.hierarchy_xml = Mock(side_effect=lambda force_refresh=False: xml)
+    device.hierarchy_xml = Mock(side_effect=lambda **_kwargs: xml)
     device.screen_width = _SCREEN_W
     device.screen_height = _SCREEN_H
     return device

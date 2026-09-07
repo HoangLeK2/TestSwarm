@@ -12,6 +12,19 @@ from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.failure_details import attach_nested_failure_details
 from tasks.scenario.utils import _evaluate_condition, _eval_ru_condition, _wait_for_element
+from services.execution.reason_codes import (
+    BRANCH_FAILED,
+    CONDITION_EVAL_FAILED,
+    LOOP_INVALID_COUNT,
+    LOOP_ITERATION_FAILED,
+    LOOP_NO_NESTED_STEPS,
+    LOOP_STALLED,
+)
+from services.execution.trace_context import (
+    TRACE_CONTEXT_KEY,
+    push_step_path,
+    trace_from_runtime_context,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +97,48 @@ def _run_nested(sc: ScenarioContext, nested_steps: list, extra_scenario_keys: di
         isolate_variables=False,
         extra_scenario_keys=extra_scenario_keys,
     )
+
+
+def _step_id(step: Dict[str, Any], idx: int) -> str:
+    return str(step.get("id") or step.get("_id") or step.get("step_id") or idx)
+
+
+def _control_parent_trace(step: Dict[str, Any], sc: ScenarioContext) -> Dict[str, Any]:
+    trace = step.get("_scenario_parent_trace")
+    return dict(trace) if isinstance(trace, dict) else trace_from_runtime_context(sc.ctx)
+
+
+def _push_child_trace(
+    sc: ScenarioContext,
+    step: Dict[str, Any],
+    idx: int,
+    *,
+    loop_iter: int | None = None,
+    branch: str | None = None,
+) -> Dict[str, Any]:
+    parent_trace = _control_parent_trace(step, sc)
+    base = dict(sc.ctx)
+    if parent_trace:
+        base[TRACE_CONTEXT_KEY] = parent_trace
+    else:
+        base.pop(TRACE_CONTEXT_KEY, None)
+    traced = push_step_path(
+        base,
+        step_id=_step_id(step, idx),
+        loop_iter=loop_iter,
+        branch=branch,
+        step_type=str(step.get("type") or ""),
+        step_index=idx,
+    )
+    sc.ctx[TRACE_CONTEXT_KEY] = trace_from_runtime_context(traced)
+    return parent_trace
+
+
+def _restore_trace(sc: ScenarioContext, parent_trace: Dict[str, Any]) -> None:
+    if parent_trace:
+        sc.ctx[TRACE_CONTEXT_KEY] = parent_trace
+    else:
+        sc.ctx.pop(TRACE_CONTEXT_KEY, None)
 
 
 # Outcomes that mean "this step chose not to act", as opposed to "this step
@@ -193,18 +248,29 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
 
     if not nested_steps:
         result["ok"] = False
+        result["reason_code"] = LOOP_NO_NESTED_STEPS
+        result["stopped_by"] = "config"
         result["message"] = "loop: no nested steps"
         return
 
     if count is not None:
         # count is explicit — do not cap with max_iterations (that field is while-only).
-        iterations = int(count)
+        try:
+            iterations = int(count)
+        except (TypeError, ValueError):
+            result["ok"] = False
+            result["reason_code"] = LOOP_INVALID_COUNT
+            result["stopped_by"] = "config"
+            result["message"] = f"loop: invalid count={count!r}"
+            return
         use_while = False
     elif while_cond:
         iterations = max_iterations
         use_while = True
     else:
         result["ok"] = False
+        result["reason_code"] = LOOP_INVALID_COUNT
+        result["stopped_by"] = "config"
         result["message"] = "loop: must specify either 'count' or 'while'"
         return
 
@@ -229,13 +295,26 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
             break
         if duration_deadline is not None and time.monotonic() >= duration_deadline:
             break
-        if use_while and not _evaluate_condition(sc.device, while_cond, sc.ctx):
-            break
+        if use_while:
+            try:
+                if not _evaluate_condition(sc.device, while_cond, sc.ctx):
+                    result["stopped_by"] = "condition"
+                    break
+            except Exception as exc:
+                result["ok"] = False
+                result["reason_code"] = CONDITION_EVAL_FAILED
+                result["stopped_by"] = "condition_error"
+                result["message"] = f"loop: condition evaluation failed — {exc}"
+                break
+        parent_trace = _push_child_trace(sc, step, idx, loop_iter=i)
         sc.ctx["_loop_iter"] = i
         sc.var_ctx.set("_loop_iter", i)
         if loop_var:
             sc.var_ctx.set(loop_var, i)
-        nested_result = _run_nested(sc, nested_steps)
+        try:
+            nested_result = _run_nested(sc, nested_steps)
+        finally:
+            _restore_trace(sc, parent_trace)
         _append_sub_result(
             sub_results,
             sub_result_state,
@@ -247,6 +326,20 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
             break
         if not nested_result.get("success"):
             result["ok"] = False
+            failed_steps = nested_result.get("step_results") or []
+            failed_step = next(
+                (
+                    item
+                    for item in failed_steps
+                    if isinstance(item, dict) and not item.get("ok", True)
+                ),
+                {},
+            )
+            result["reason_code"] = (
+                failed_step.get("reason_code") or LOOP_ITERATION_FAILED
+            )
+            result["failed_iteration"] = i
+            result["stopped_by"] = "child_failure"
             attach_nested_failure_details(result, nested_result)
             result["message"] = (
                 f"loop: iteration {i} failed — {nested_result.get('failed_message', '')}"
@@ -271,7 +364,9 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
                     # not idle — it is lost, and saying ok here is the exact
                     # silence this guard exists to break.
                     result["ok"] = False
+                    result["reason_code"] = LOOP_STALLED
                     result["outcome"] = "stalled"
+                    result["stopped_by"] = "stall"
                     result["stalled_after"] = idle_streak
                     result["message"] = (
                         f"loop: stopped after {idle_streak} consecutive iteration(s) "
@@ -294,10 +389,13 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     sc.ctx.pop("_loop_iter", None)
     _finish_sub_results(sub_results, sub_result_state)
     result["iterations"] = actual_iters
+    result["iterations_run"] = actual_iters
+    result.setdefault("idle_streak", idle_streak)
     result["sub_results"] = sub_results
     if duration_seconds > 0:
         result["duration_seconds"] = duration_seconds
     if result.get("ok", True):
+        result.setdefault("stopped_by", "count" if not use_while else "condition")
         result["message"] = f"loop: {actual_iters} iteration(s)"
 
 
@@ -365,20 +463,32 @@ def handle_if(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[
 
     if not condition:
         result["ok"] = False
+        result["reason_code"] = CONDITION_EVAL_FAILED
         result["message"] = "if: missing condition"
         return
 
-    cond_met = _evaluate_condition(sc.device, condition, sc.ctx)
+    try:
+        cond_met = _evaluate_condition(sc.device, condition, sc.ctx)
+    except Exception as exc:
+        result["ok"] = False
+        result["reason_code"] = CONDITION_EVAL_FAILED
+        result["message"] = f"if: condition evaluation failed — {exc}"
+        return
     branch_steps = then_steps if cond_met else else_steps
     branch_name = "then" if cond_met else "else"
 
     if branch_steps:
-        branch_result = _run_nested(sc, branch_steps)
+        parent_trace = _push_child_trace(sc, step, idx, branch=branch_name)
+        try:
+            branch_result = _run_nested(sc, branch_steps)
+        finally:
+            _restore_trace(sc, parent_trace)
         result["branch"] = branch_name
         result["condition_met"] = cond_met
         result["sub_result"] = branch_result
         if not branch_result.get("success"):
             result["ok"] = False
+            result["reason_code"] = BRANCH_FAILED
             attach_nested_failure_details(result, branch_result)
             result["message"] = f"if: {branch_name} branch failed"
         else:
@@ -409,16 +519,22 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
 
     if count is None:
         result["ok"] = False
+        result["reason_code"] = LOOP_INVALID_COUNT
+        result["stopped_by"] = "config"
         result["message"] = "repeat: missing count"
         return
     if not sub_steps:
         result["ok"] = False
+        result["reason_code"] = LOOP_NO_NESTED_STEPS
+        result["stopped_by"] = "config"
         result["message"] = "repeat: no nested steps"
         return
     try:
         n = int(count)
     except (TypeError, ValueError):
         result["ok"] = False
+        result["reason_code"] = LOOP_INVALID_COUNT
+        result["stopped_by"] = "config"
         result["message"] = f"repeat: invalid count={count!r}"
         return
 
@@ -430,7 +546,11 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
             _mark_cancelled(result, "repeat: cancelled by user")
             break
         sc.var_ctx.set("__LOOP_INDEX__", i)
-        iter_res = _run_nested(sc, sub_steps)
+        parent_trace = _push_child_trace(sc, step, idx, loop_iter=i)
+        try:
+            iter_res = _run_nested(sc, sub_steps)
+        finally:
+            _restore_trace(sc, parent_trace)
         actual_iters += 1
         _append_sub_result(
             sub_results,
@@ -442,6 +562,9 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
             break
         if not iter_res.get("success"):
             result["ok"] = False
+            result["reason_code"] = LOOP_ITERATION_FAILED
+            result["failed_iteration"] = i
+            result["stopped_by"] = "child_failure"
             attach_nested_failure_details(result, iter_res)
             result["message"] = f"repeat: iteration {i} failed — {iter_res.get('failed_message', '')}"
             break
@@ -457,6 +580,9 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
         result["message"] = f"repeat: {n} iteration(s) completed"
     _finish_sub_results(sub_results, sub_result_state)
     result["iterations"] = actual_iters
+    result["iterations_run"] = actual_iters
+    if result.get("ok", True):
+        result.setdefault("stopped_by", "count")
     result["sub_results"] = sub_results
 
 
@@ -468,10 +594,13 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
 
     if not condition:
         result["ok"] = False
+        result["reason_code"] = CONDITION_EVAL_FAILED
         result["message"] = "repeat_until: missing condition"
         return
     if not sub_steps:
         result["ok"] = False
+        result["reason_code"] = LOOP_NO_NESTED_STEPS
+        result["stopped_by"] = "config"
         result["message"] = "repeat_until: no nested steps"
         return
 
@@ -482,25 +611,43 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
             _mark_cancelled(result, "repeat_until: cancelled by user")
             break
         sc.var_ctx.set("__LOOP_INDEX__", i)
-        if _eval_ru_condition(sc.device, condition, sc.var_ctx):
-            condition_met = True
+        try:
+            if _eval_ru_condition(sc.device, condition, sc.var_ctx):
+                condition_met = True
+                result["stopped_by"] = "condition"
+                break
+        except Exception as exc:
+            result["ok"] = False
+            result["reason_code"] = CONDITION_EVAL_FAILED
+            result["stopped_by"] = "condition_error"
+            result["message"] = f"repeat_until: condition evaluation failed — {exc}"
             break
-        iter_res = _run_nested(sc, sub_steps)
+        parent_trace = _push_child_trace(sc, step, idx, loop_iter=i)
+        try:
+            iter_res = _run_nested(sc, sub_steps)
+        finally:
+            _restore_trace(sc, parent_trace)
         actual_iters += 1
         if _cancelled(sc):
             _mark_cancelled(result, "repeat_until: cancelled by user")
             break
         if not iter_res.get("success"):
             result["ok"] = False
+            result["reason_code"] = LOOP_ITERATION_FAILED
+            result["failed_iteration"] = i
+            result["stopped_by"] = "child_failure"
             attach_nested_failure_details(result, iter_res)
             result["message"] = f"repeat_until: iteration {i} failed — {iter_res.get('failed_message', '')}"
             break
     else:
         if not condition_met:
             result["ok"] = False
+            result["reason_code"] = LOOP_STALLED
+            result["stopped_by"] = "max_iterations"
             result["message"] = f"repeat_until: max_iterations ({max_iter}) reached without condition"
 
     result["iterations"] = actual_iters
+    result["iterations_run"] = actual_iters
     if condition_met:
         result["message"] = f"repeat_until: condition met after {actual_iters} iteration(s)"
 
@@ -516,6 +663,7 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
 
     if spec is None or spec.is_empty():
         result["ok"] = False
+        result["reason_code"] = CONDITION_EVAL_FAILED
         result["message"] = "if_element: missing selector"
         return
 
@@ -537,10 +685,15 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
     result["branch"] = branch_name
 
     if branch_steps:
-        sub = _run_nested(sc, branch_steps)
+        parent_trace = _push_child_trace(sc, step, idx, branch=branch_name)
+        try:
+            sub = _run_nested(sc, branch_steps)
+        finally:
+            _restore_trace(sc, parent_trace)
         result["sub_result"] = sub
         if not sub.get("success"):
             result["ok"] = False
+            result["reason_code"] = BRANCH_FAILED
             attach_nested_failure_details(result, sub)
             result["message"] = f"if_element: {branch_name} branch failed"
         else:
@@ -649,25 +802,15 @@ def _has_verified_existing_comment_parent(ctx: Dict[str, Any]) -> bool:
 
 
 def _reject_unsupported_platform(
-    step: Dict[str, Any], result: Dict[str, Any], step_type: str
+    sc: ScenarioContext, step: Dict[str, Any], result: Dict[str, Any], step_type: str
 ) -> bool:
     """Fail the step when the requested platform does not implement it.
 
     Returns True when the caller should stop.
     """
-    from services.platform_readiness import DEFAULT_PLATFORM
-    from services.social_ext import supports_step
+    from tasks.scenario.steps.platform_resolution import resolve_supported_step_platform
 
-    platform = str(step.get("platform") or DEFAULT_PLATFORM).strip().casefold()
-    result["platform"] = platform
-    if supports_step(platform, step_type):
-        return False
-    result["ok"] = False
-    result["outcome"] = "unsupported_platform"
-    result["message"] = (
-        f"{step_type}: platform {platform!r} does not implement this step"
-    )
-    return True
+    return resolve_supported_step_platform(sc, step, step_type, result) is None
 
 
 @register_step("social_find_comment_button")
@@ -675,7 +818,7 @@ def handle_social_find_comment_button(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Resolve the visible comment button on the current screen without tapping."""
-    if _reject_unsupported_platform(step, result, "social_find_comment_button"):
+    if _reject_unsupported_platform(sc, step, result, "social_find_comment_button"):
         return
     from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import (
@@ -722,7 +865,7 @@ def handle_social_tap_comment_target(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Tap the cached comment target and verify that comments opened."""
-    if _reject_unsupported_platform(step, result, "social_tap_comment_target"):
+    if _reject_unsupported_platform(sc, step, result, "social_tap_comment_target"):
         return
     from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import request_edge_comment_target
@@ -809,7 +952,7 @@ def handle_social_apply_comment_filter(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Apply the comment filter after the comment sheet is open."""
-    if _reject_unsupported_platform(step, result, "social_apply_comment_filter"):
+    if _reject_unsupported_platform(sc, step, result, "social_apply_comment_filter"):
         return
     from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import (
@@ -884,7 +1027,7 @@ def handle_social_open_comments(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Resolve the visible comment button via agent-boot, then tap locally."""
-    if _reject_unsupported_platform(step, result, "social_open_comments"):
+    if _reject_unsupported_platform(sc, step, result, "social_open_comments"):
         return
     from services.scenario_step_contract import normalize_social_comment_step
     from tasks.scenario.steps.extraction import (
@@ -1147,6 +1290,7 @@ def handle_if_variable(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
 
     if not name:
         result["ok"] = False
+        result["reason_code"] = CONDITION_EVAL_FAILED
         result["message"] = "if_variable: missing name"
         return
     if not then_steps and not else_steps:
@@ -1181,10 +1325,15 @@ def handle_if_variable(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     result["branch"] = branch_name
 
     if branch_steps:
-        sub = _run_nested(sc, branch_steps)
+        parent_trace = _push_child_trace(sc, step, idx, branch=branch_name)
+        try:
+            sub = _run_nested(sc, branch_steps)
+        finally:
+            _restore_trace(sc, parent_trace)
         result["sub_result"] = sub
         if not sub.get("success"):
             result["ok"] = False
+            result["reason_code"] = BRANCH_FAILED
             attach_nested_failure_details(result, sub)
             result["message"] = f"if_variable: {branch_name} branch failed"
         else:
@@ -1198,6 +1347,7 @@ def handle_random_pick(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     branches = step.get("branches") or []
     if not branches:
         result["ok"] = False
+        result["reason_code"] = BRANCH_FAILED
         result["message"] = "random_pick: no branches"
         return
 
@@ -1205,16 +1355,23 @@ def handle_random_pick(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
     chosen_idx = random.choices(range(len(branches)), weights=weights, k=1)[0]
     chosen = branches[chosen_idx]
     branch_steps = chosen.get("steps") or []
+    branch_name = f"branch{chosen_idx}"
     result["chosen_branch"] = chosen_idx
+    result["branch"] = branch_name
 
     if not branch_steps:
         result["message"] = f"random_pick: branch {chosen_idx} has no steps, skip"
         return
 
-    sub = _run_nested(sc, branch_steps)
+    parent_trace = _push_child_trace(sc, step, idx, branch=branch_name)
+    try:
+        sub = _run_nested(sc, branch_steps)
+    finally:
+        _restore_trace(sc, parent_trace)
     result["sub_result"] = sub
     if not sub.get("success"):
         result["ok"] = False
+        result["reason_code"] = BRANCH_FAILED
         attach_nested_failure_details(result, sub)
         result["message"] = f"random_pick: branch {chosen_idx} failed"
     else:

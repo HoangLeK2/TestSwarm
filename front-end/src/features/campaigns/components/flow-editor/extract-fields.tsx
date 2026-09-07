@@ -260,10 +260,10 @@ function saveDefaultsForEntity(entity: string): {
   dedupe_field: string;
 } {
   if (entity === 'comments') {
-    return { content_type: 'fb_comment', dedupe_field: 'comment_key' };
+    return { content_type: 'comment', dedupe_field: 'comment_key' };
   }
   if (entity === 'posts') {
-    return { content_type: 'fb_post', dedupe_field: 'post_key' };
+    return { content_type: 'post', dedupe_field: 'post_key' };
   }
   return { content_type: 'text', dedupe_field: 'text' };
 }
@@ -335,14 +335,16 @@ function applyExtractEntitySwitch(
     if (entity !== 'comments') {
       delete next.save_parent_id_var;
     }
-    next.platform = entity === 'text_nodes' ? 'ui' : 'facebook';
+    next.platform = entity === 'text_nodes' ? 'ui' : (step.platform ?? 'auto');
   }
 
   return next;
 }
 
 function labelPlatform(platform: string | undefined, t: (k: string) => string) {
-  if (!platform || platform === 'facebook') return t('savePlatformFacebook');
+  if (!platform || platform === 'auto') return t('savePlatformAuto');
+  if (platform === 'facebook') return t('savePlatformFacebook');
+  if (platform === 'ui') return t('savePlatformUi');
   return platform;
 }
 
@@ -352,6 +354,8 @@ function labelContentType(
   t: (k: string) => string
 ) {
   const ct = contentType ?? saveDefaultsForEntity(entity).content_type;
+  if (ct === 'comment') return t('saveContentTypeGenericComment');
+  if (ct === 'post') return t('saveContentTypeGenericPost');
   if (ct === 'fb_comment') return t('saveContentTypeComment');
   if (ct === 'fb_post') return t('saveContentTypeGroupPost');
   if (ct === 'text') return t('saveContentTypeText');
@@ -1185,8 +1189,8 @@ export function ExtractStepFields({
                     <F label={t('saveSummaryPlatform')}>
                       <Input
                         className='h-9 text-xs'
-                        placeholder='facebook'
-                        value={step.platform ?? 'facebook'}
+                        placeholder='auto'
+                        value={step.platform ?? 'auto'}
                         onChange={(e) =>
                           update({ platform: e.target.value || undefined })
                         }
@@ -1203,6 +1207,12 @@ export function ExtractStepFields({
                           update({ content_type: e.target.value || undefined })
                         }
                       >
+                        <option value='post'>
+                          {t('saveContentTypeGenericPost')}
+                        </option>
+                        <option value='comment'>
+                          {t('saveContentTypeGenericComment')}
+                        </option>
                         <option value='fb_post'>
                           {t('saveContentTypeGroupPost')}
                         </option>

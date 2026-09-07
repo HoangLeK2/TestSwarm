@@ -17,6 +17,8 @@ export interface NavItem {
   roles?: readonly NavUserRole[];
   /** RBAC gate — hidden when caller lacks this permission (see lib/rbac). */
   permission?: PermissionRequirement;
+  /** Sidebar scope for workspace-admin operators: show only admin console leaves. */
+  adminConsoleOnly?: boolean;
 }
 
 export interface NavItemWithChildren extends NavItem {

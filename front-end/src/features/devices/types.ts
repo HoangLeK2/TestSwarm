@@ -23,6 +23,8 @@ export interface Device {
   media_stream_name?: string;
   media_stream_source?: string;
   media_stream_last_frame_unix_ms?: number;
+  /** Server-clock stamp of when the adapter's frame counter last moved. */
+  media_stream_frame_progress_unix_ms?: number;
   relay_scrcpy_enabled?: boolean;
   /** >0 when a Temporal scenario/campaign is actively driving this device */
   scenario_active?: number;
@@ -48,7 +50,8 @@ export interface DeviceHealth {
     reason?: string | null;
   };
   stream: {
-    status: 'ready' | 'starting' | 'unavailable' | 'error';
+    /** 'stale' = channel still claims to be up but no new frames are arriving. */
+    status: 'ready' | 'starting' | 'stale' | 'unavailable' | 'error';
     observed_at?: string | null;
     reason?: string | null;
   };

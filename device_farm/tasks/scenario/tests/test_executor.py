@@ -105,6 +105,78 @@ class TestScenarioExecutor:
         failed = [r for r in result["step_results"] if not r.get("ok")]
         assert len(failed) >= 1
 
+    def test_capability_preflight_fails_before_running_steps(self):
+        from tasks.scenario.context import ScenarioContext
+        from tasks.scenario.executor import ScenarioExecutor
+        from tasks.scenario.steps import _STEP_HANDLERS
+
+        class NoOcrDevice:
+            serial = "test"
+            screen_width = 1080
+            screen_height = 1920
+            u2 = None
+
+            def ocr_supported(self):
+                return False
+
+        calls = {"wait": 0}
+
+        def wait_handler(_sc, _step, _idx, _result):
+            calls["wait"] += 1
+
+        sc = ScenarioContext.from_args(
+            NoOcrDevice(),
+            {
+                "steps": [
+                    {"type": "extract_text_ocr", "save_as": "text"},
+                    {"type": "wait", "seconds": 0},
+                ]
+            },
+        )
+
+        with patch.dict(_STEP_HANDLERS, {"wait": wait_handler}):
+            result = ScenarioExecutor(sc).run()
+
+        assert result["success"] is False
+        assert result["steps_executed"] == 0
+        assert result["step_results"][0]["type"] == "capability_preflight"
+        assert result["step_results"][0]["reason_code"] == "NODE_CAPABILITY_UNAVAILABLE"
+        assert calls["wait"] == 0
+
+    def test_capability_preflight_can_be_disabled_for_legacy_runs(self):
+        from tasks.scenario.context import ScenarioContext
+        from tasks.scenario.executor import ScenarioExecutor
+        from tasks.scenario.steps import _STEP_HANDLERS
+
+        class NoOcrDevice:
+            serial = "test"
+            screen_width = 1080
+            screen_height = 1920
+            u2 = None
+
+            def ocr_supported(self):
+                return False
+
+        calls = {"extract": 0}
+
+        def extract_handler(_sc, _step, _idx, result):
+            calls["extract"] += 1
+            result["message"] = "legacy path"
+
+        sc = ScenarioContext.from_args(
+            NoOcrDevice(),
+            {
+                "capability_preflight": False,
+                "steps": [{"type": "extract_text_ocr", "save_as": "text"}],
+            },
+        )
+
+        with patch.dict(_STEP_HANDLERS, {"extract_text_ocr": extract_handler}):
+            result = ScenarioExecutor(sc).run()
+
+        assert result["success"] is True
+        assert calls["extract"] == 1
+
     def test_u2_http_502_step_retries_without_declared_retry_policy(self):
         from tasks.scenario.executor import ScenarioExecutor
         from tasks.scenario.steps import _STEP_HANDLERS

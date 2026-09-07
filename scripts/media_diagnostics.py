@@ -319,7 +319,13 @@ def inspect_docker(go2rtc_container: str, adapter_container: str, env_values: di
         else {"ok": False, "error": adapter.error},
         "warnings": [],
     }
-    diagnostics["warnings"] = docker_config_warnings(diagnostics, env_values)
+    # Compare first, redact second. sanitize() rewrites the running password to
+    # a placeholder, so warnings computed after it compared that placeholder
+    # against the real env value and the drift warning fired on every healthy
+    # deployment — which made --fail-on-warning exit 3 unconditionally.
+    warnings = docker_config_warnings(diagnostics, env_values)
+    diagnostics = sanitize(diagnostics)
+    diagnostics["warnings"] = warnings
     return diagnostics
 
 
@@ -384,7 +390,8 @@ def summarize_go2rtc_container(data: Any) -> dict[str, Any]:
         "ok": True,
         "image": data.get("Config", {}).get("Image"),
         "ports": data.get("NetworkSettings", {}).get("Ports") or {},
-        "command_config": sanitize(config),
+        # Raw: inspect_docker redacts once, after the drift comparison.
+        "command_config": config,
     }
 
 
@@ -395,7 +402,8 @@ def summarize_env_container(data: Any, keys: tuple[str, ...]) -> dict[str, Any]:
     return {
         "ok": True,
         "image": data.get("Config", {}).get("Image"),
-        "env": sanitize({key: env.get(key) for key in keys if key in env}),
+        # Raw: inspect_docker redacts once, after the drift comparison.
+        "env": {key: env.get(key) for key in keys if key in env},
     }
 
 

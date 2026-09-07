@@ -68,11 +68,11 @@ async def test_adbutils_track_loop_applies_snapshot_and_remembers_server(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("AGENT_BOOT_ADB_STREAM_TRANSPORT", "adbutils")
-    remembered: list[tuple[str, str, str]] = []
+    synced: list[tuple[str, str, dict[str, str]]] = []
     monkeypatch.setattr(
         device_watcher,
-        "_remember_serial_adb_server",
-        lambda serial, host, port: remembered.append((serial, host, port)),
+        "sync_adb_endpoint_serials",
+        lambda host, port, snapshot: synced.append((host, port, dict(snapshot))),
     )
     connection = _FakeConnection(["PHONE1\tdevice\nPHONE2\toffline\n"])
     clients: list[_FakeAdbutilsClient] = []
@@ -102,7 +102,9 @@ async def test_adbutils_track_loop_applies_snapshot_and_remembers_server(
         )
 
     assert events == [("PHONE1", "device"), ("PHONE2", "offline")]
-    assert remembered == [("PHONE1", "adb-host", "5038")]
+    assert synced == [
+        ("adb-host", "5038", {"PHONE1": "device", "PHONE2": "offline"}),
+    ]
     assert connection.commands == ["host:track-devices"]
     assert connection.closed
     assert clients[0].host == "adb-host"

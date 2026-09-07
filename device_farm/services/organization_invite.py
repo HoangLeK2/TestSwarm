@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -110,9 +111,13 @@ async def accept_organization_invitation(
         role=invitation.role or "member",
     )
     try:
-        if not user.default_org_id:
-            user.default_org_id = invitation.organization_id
-        await db.flush()
+        user.org_id = invitation.organization_id
+        user.default_org_id = invitation.organization_id
+        flush = getattr(db, "flush", None)
+        if callable(flush):
+            result = flush()
+            if inspect.isawaitable(result):
+                await result
     except Exception:
         log.warning(
             "could not set active org after invite accept user_id=%s org_id=%s",

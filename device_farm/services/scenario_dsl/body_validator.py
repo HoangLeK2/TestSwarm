@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,11 @@ from services.scenario_dsl.models import BodyValidationIssue, BodyValidationResu
 from services.scenario_dsl.step_contract import normalize_body_steps
 from services.scenario_dsl.step_family import DEFAULT_NESTING_DEPTH_LIMIT
 from services.scenario_dsl.step_registry import StepRegistry
+from services.scenario_dsl.step_tree import (
+    assign_missing_step_ids,
+    find_duplicate_step_ids,
+    find_steps_missing_id,
+)
 
 _SCENARIO_BODY_VALIDATE_FAIL: Any = None
 _SUPPORTED_FAMILIES = StepRegistry.supported_families()
@@ -91,21 +95,74 @@ def _check_required_step_fields(
 
 
 def _check_duplicate_step_ids(
-    step_items: list[tuple[dict[str, Any], str]],
+    body: dict[str, Any],
+    kind: str,
     result: BodyValidationResult,
 ) -> None:
-    ids = [str(s[0].get("id")) for s in step_items if s[0].get("id")]
-    counts = Counter(ids)
-    for sid, count in counts.items():
-        if count > 1:
-            result.add(
-                BodyValidationIssue(
-                    code=C.DUPLICATE_STEP_ID,
-                    message=f"Duplicate step id {sid!r}",
-                    location="scenario",
-                    details={"step_id": sid, "count": count},
-                )
+    """Reject a repeated id anywhere in the tree, not just at the root.
+
+    The account-action ledger keys a claim by step id, so two steps sharing one
+    id are one action as far as idempotency is concerned: the second send is
+    dropped as already done, silently. Nesting hides nothing from that — a
+    duplicate inside a loop body costs a friend request per cycle.
+    """
+    root = _body_root_key(kind)
+    for sid, locations in find_duplicate_step_ids(body.get(root), root=root).items():
+        result.add(
+            BodyValidationIssue(
+                code=C.DUPLICATE_STEP_ID,
+                message=f"Duplicate step id {sid!r}",
+                location="scenario",
+                details={
+                    "step_id": sid,
+                    "count": len(locations),
+                    "locations": locations,
+                },
             )
+        )
+
+
+def _body_root_key(kind: str) -> str:
+    return "steps" if kind == ScenarioKind.SEQUENCE.value else "nodes"
+
+
+def _fill_missing_step_ids(body: dict[str, Any], kind: str) -> None:
+    """Derive an id for every authored step that arrived without one.
+
+    Runs before any check, so "this step has no id" stops being a thing a body
+    can be rejected for — it is a thing normalization fixes. Only the editor
+    ever minted ids (`createDefaultStep` → nanoid); an imported body, a seeded
+    builtin and an AI-compiled scenario all arrived without them, and the step
+    id is what the durable ledger keys a claim by and what a trace is read
+    back through.
+    """
+    root = _body_root_key(kind)
+    steps = body.get(root)
+    if isinstance(steps, list):
+        body[root] = assign_missing_step_ids(steps, root=root)
+
+
+def _check_nested_step_ids(
+    body: dict[str, Any],
+    kind: str,
+    result: BodyValidationResult,
+) -> None:
+    """Assert what `_fill_missing_step_ids` just guaranteed.
+
+    Nothing should ever reach here, which is the point: if a container key is
+    added to the runtime without being added to the traversal, this is what
+    says so instead of a step silently running without an id.
+    """
+    root = _body_root_key(kind)
+    for item in find_steps_missing_id(body.get(root), root=root):
+        result.add(
+            BodyValidationIssue(
+                code=C.INVALID_STEP_SHAPE,
+                message="step id is required",
+                location=item.location,
+                details={"step_type": item.step_type, "depth": item.depth},
+            )
+        )
 
 
 def _check_step_types(step_items: list[tuple[dict[str, Any], str]], result: BodyValidationResult) -> None:
@@ -220,9 +277,12 @@ class ScenarioBodyValidator:
             record_validation_failures([issue.code for issue in result.errors])
             return result
 
+        _fill_missing_step_ids(body, self.kind)
+
         step_items = _collect_step_like_objects(body, self.kind)
         _check_required_step_fields(step_items, result)
-        _check_duplicate_step_ids(step_items, result)
+        _check_duplicate_step_ids(body, self.kind, result)
+        _check_nested_step_ids(body, self.kind, result)
         _check_step_types(step_items, result)
         if self.kind == ScenarioKind.GRAPH.value:
             _check_graph_edges(body, result)

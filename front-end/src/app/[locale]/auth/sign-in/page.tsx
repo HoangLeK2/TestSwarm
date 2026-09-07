@@ -213,16 +213,6 @@ export default function SignInPage() {
             {tAuth('orContinueWith')}
           </span>
         </div>
-
-        <p className='text-center text-sm text-muted-foreground'>
-          {tAuth('dontHaveAccount')}{' '}
-          <Link
-            href={ROUTES.AUTH.SIGN_UP}
-            className='font-medium text-primary transition-colors hover:text-primary/80 hover:underline'
-          >
-            {tAuth('signUp')}
-          </Link>
-        </p>
       </div>
     </div>
   );

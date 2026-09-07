@@ -167,7 +167,9 @@ export function formatActivityStatus(
   const key = `statusLabels.${status}` as const;
   try {
     const translated = t(key);
-    if (translated !== key) return translated;
+    if (translated !== key && !translated.endsWith(`.${key}`)) {
+      return translated;
+    }
   } catch {
     // missing key — fall through
   }

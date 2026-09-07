@@ -5,6 +5,7 @@ before the DB REST router (so `/api/devices/live` is not swallowed by `/api/devi
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,6 +19,8 @@ from db import crud as repo
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, TaskQueue
 
+
+log = logging.getLogger(__name__)
 
 _OFFLINE_LIVE_STATES = {"DISCONNECTED", "DEAD"}
 _CONNECTING_LIVE_STATES = {"CONNECTING"}
@@ -665,7 +668,7 @@ def _verify_token_only(request: Request) -> None:
 
 
 async def _get_live_device_map(
-    request: Request, db_enabled: bool
+    request: Request, db_enabled: bool, *, with_active_runs: bool = False
 ) -> Optional[dict[str, dict[str, object]]]:
     if not db_enabled:
         return None
@@ -714,6 +717,8 @@ async def _get_live_device_map(
                 aliases.add(adb_ip)
                 aliases.add(f"{adb_ip}:{adb_port}")
             out[serial] = {
+                "id": str(getattr(device, "id", "") or ""),
+                "active_run": None,
                 "name": name,
                 "brand": brand,
                 "model": model,
@@ -727,6 +732,13 @@ async def _get_live_device_map(
                 ),
                 "last_seen": getattr(device, "last_seen", None),
             }
+        if with_active_runs:
+            try:
+                await _attach_live_active_runs(db, out, org_id)
+            except Exception:
+                # A missing run label costs a filter option; failing the poll
+                # costs the whole grid.
+                log.debug("live active run lookup failed", exc_info=True)
         return out
 
 
@@ -735,6 +747,101 @@ async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optio
     if device_map is None:
         return None
     return set(device_map.keys())
+
+
+async def _attach_live_active_runs(db, devices_by_serial: dict, org_id) -> None:
+    """Label each registered device with the run currently executing on it.
+
+    Runs on the session `_get_live_device_map` already holds: the fleet grid
+    re-polls this endpoint every few seconds per open tab, and a second pool
+    checkout per poll is the shape that exhausted the pool before (see
+    scripts/repro_sse_pool_realistic.py).
+
+    Scoped by org rather than by a device-id IN list so the org+status index
+    carries it — the IN list grows with the fleet, which is the case that has
+    to stay cheap.
+
+    `/devices/{serial}/running-workflows` answers the same question per device,
+    but it also calls Temporal and expands scenario bodies; the grid only needs
+    the run's name.
+
+    ponytail: one query pair per poll, no caching. If poll rate becomes the
+    bottleneck, cache per org with a TTL below the 5s client refresh.
+    """
+    serial_by_device_id = {
+        str(info.get("id") or ""): serial
+        for serial, info in devices_by_serial.items()
+        if str(info.get("id") or "")
+    }
+    if not serial_by_device_id or not org_id:
+        return
+
+    from sqlalchemy import select
+
+    from db.models.campaign import Campaign
+    from db.models.execution import Execution, ExecutionDevice
+
+    rows = (
+        await db.execute(
+            select(
+                ExecutionDevice.device_id,
+                Execution.id,
+                Execution.campaign_id,
+                Execution.scenario_id,
+                # Two keys, not the whole `meta` document: a fan-out campaign
+                # has one execution per device, so selecting the blob would pull
+                # a JSON document per phone on every poll to read one name.
+                Execution.meta["org_scenario_name"].as_string(),
+                Execution.meta["scenario_name"].as_string(),
+            )
+            .join(ExecutionDevice, ExecutionDevice.execution_id == Execution.id)
+            .where(
+                Execution.org_id == str(org_id),
+                Execution.status.in_(("running", "paused")),
+            )
+            .order_by(Execution.created_at.desc())
+        )
+    ).all()
+    if not rows:
+        return
+
+    campaign_ids = {str(row[2]) for row in rows if row[2]}
+    campaign_names: dict[str, str] = {}
+    if campaign_ids:
+        campaign_names = {
+            str(cid): str(name or "")
+            for cid, name in (
+                await db.execute(
+                    select(Campaign.id, Campaign.name).where(
+                        Campaign.id.in_(sorted(campaign_ids))
+                    )
+                )
+            ).all()
+        }
+
+    for (
+        device_id,
+        execution_id,
+        campaign_id,
+        scenario_id,
+        org_scenario_name,
+        scenario_name,
+    ) in rows:
+        serial = serial_by_device_id.get(str(device_id))
+        if not serial:
+            continue
+        info = devices_by_serial.get(serial)
+        # Newest first: a device carrying two live executions is labelled by the
+        # one it most recently joined, not by an older run that may be stuck.
+        if info is None or info.get("active_run") is not None:
+            continue
+        info["active_run"] = {
+            "execution_id": str(execution_id),
+            "campaign_id": str(campaign_id) if campaign_id else None,
+            "campaign_name": campaign_names.get(str(campaign_id or "")) or None,
+            "scenario_id": str(scenario_id) if scenario_id else None,
+            "scenario_name": org_scenario_name or scenario_name or None,
+        }
 
 
 async def _enrich_live_manual_control_state(devices: list[dict]) -> None:
@@ -851,7 +958,9 @@ def build_public_router(
         media_online_lookup = media_online_serials or None
         media_stream_lookup = media_streams or None
 
-        allowed_devices = await _get_live_device_map(request, db_enabled)
+        allowed_devices = await _get_live_device_map(
+            request, db_enabled, with_active_runs=True
+        )
         devices = [d.status_dict() for d in manager.all_devices()]
         if allowed_devices is not None:
             alias_index = _build_live_device_alias_index(allowed_devices)
@@ -958,6 +1067,10 @@ def build_public_router(
         for d in devices:
             info = d.pop(_LIVE_DEVICE_INFO_KEY, None)
             heartbeat_at = info.get("last_seen") if isinstance(info, dict) else None
+            # Always emit the key, null included: the dashboard merges each
+            # snapshot over the previous one, so an omitted key leaves the
+            # finished run painted on the tile until a reload.
+            d["active_run"] = info.get("active_run") if isinstance(info, dict) else None
             d["health"] = _device_health_projection(d, heartbeat_at=heartbeat_at)
         if state:
             devices = [d for d in devices if d.get("state", "").upper() == state.upper()]

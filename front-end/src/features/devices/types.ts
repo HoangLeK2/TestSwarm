@@ -32,7 +32,17 @@ export interface Device {
   usage_state?: string;
   /** True after operator paused automation to take manual control. */
   manual_takeover_active?: boolean;
+  /** Campaign/scenario currently executing on this device, null when idle. */
+  active_run?: DeviceActiveRun | null;
   health?: DeviceHealth;
+}
+
+export interface DeviceActiveRun {
+  execution_id: string;
+  campaign_id?: string | null;
+  campaign_name?: string | null;
+  scenario_id?: string | null;
+  scenario_name?: string | null;
 }
 
 export type DeviceHealthStatus =

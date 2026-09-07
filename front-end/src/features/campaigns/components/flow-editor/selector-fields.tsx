@@ -53,7 +53,7 @@ function normalizeSelectorByForUi(
 }
 
 function valueInsertRowClassName() {
-  return 'flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-2';
+  return 'flex min-w-0 gap-2';
 }
 
 function insertToken(raw: string, token: string): string {
@@ -137,7 +137,7 @@ function VariableInsertSelect({
       label={t('variableInsert.placeholder')}
       onInsert={onInsert}
       align='end'
-      triggerClassName='w-full shrink-0 sm:w-[13rem]'
+      triggerClassName='h-9 w-auto shrink-0 px-2 text-[11px]'
     />
   );
 }
@@ -685,8 +685,6 @@ export function SelectorFields({
         ) : undefined
       }
     >
-      <StepPanelHint>{tSel('autoFillHint')}</StepPanelHint>
-
       <StepPanelField label={tSel('byLabel')}>
         <SelectorBySelect
           value={by}
@@ -694,10 +692,6 @@ export function SelectorFields({
           tSel={tSel}
         />
       </StepPanelField>
-
-      {DESCRIPTION_SELECTOR_BYS.has(by) ? (
-        <StepPanelHint>{tSel('byDescriptionHint')}</StepPanelHint>
-      ) : null}
 
       <StepPanelField label={tSel('valueLabel')}>
         <div className={valueInsertRowClassName()}>

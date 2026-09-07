@@ -2987,13 +2987,13 @@
       "selector": {
         "sectionTitle": "Tìm phần tử trên màn hình",
         "pickFromScreen": "Chọn từ màn hình",
-        "autoFillHint": "Dùng «Chọn từ màn hình» hoặc ghi record — hệ thống tự điền loại widget, app và các điều kiện khớp. Bạn chỉ cần chỉnh giá trị chính (text, id…).",
+        "autoFillHint": "Chọn từ màn hình để tự điền, chỉ chỉnh giá trị khi cần.",
         "byLabel": "Cách nhận diện",
-        "byDescriptionHint": "Khớp nhãn ẩn content-desc trên widget Android — dùng cho trình đọc màn hình, không phải chữ bạn nhìn thấy. Facebook thường gắn tên nhóm + trạng thái (vd «Claude VN, Công khai · 315K») vào nhãn này. Không tìm thấy phần tử → thử «Văn bản hiển thị (text)».",
-        "valueLabel": "Giá trị cần khớp",
-        "valuePlaceholder": "VD: Đăng nhập, com.app:id/btn_login hoặc {varToken}",
-        "clickableLabel": "Chỉ phần tử có thể chạm (nút / link)",
-        "clickableDescription": "Thuộc tính Android clickable=true — bật khi cần chạm đúng nút có phản hồi, tránh chạm nhầm dòng chữ chỉ để đọc (label). Tự bật khi chọn từ màn hình nếu phần tử đó là nút.",
+        "byDescriptionHint": "Khớp content-desc ẩn. Nếu không đúng, thử Text.",
+        "valueLabel": "Giá trị",
+        "valuePlaceholder": "Nhập text/id hoặc {varToken}",
+        "clickableLabel": "Chỉ nút / link",
+        "clickableDescription": "Bật khi cần bấm phần tử. Tắt nếu chỉ đọc chữ.",
         "advancedTitle": "Tinh chỉnh (không bắt buộc)",
         "advancedHasValues": "{count} điều kiện",
         "advancedIntro": "Phần lớn bước chỉ cần «Cách nhận diện» và «Giá trị» ở trên. Mở mục này khi chạm nhầm, có nhiều nút giống nhau, hoặc sau khi chọn từ màn hình mà cần xem lại bộ lọc tự điền.",
@@ -4735,6 +4735,19 @@
     "refreshErrorTitle": "Không thể cập nhật dữ liệu mới",
     "refreshErrorHint": "Dữ liệu gần nhất vẫn được giữ lại.",
     "retry": "Thử lại",
+    "filters": {
+      "searchPlaceholder": "Tìm serial, tên, mẫu máy hoặc kịch bản",
+      "allStatuses": "Tất cả trạng thái",
+      "activityIdle": "Đang rảnh",
+      "activityRunning": "Đang chạy kịch bản",
+      "activityManual": "Điều khiển tay / đang giữ",
+      "activityUnavailable": "Không kết nối được",
+      "allRuns": "Tất cả kịch bản",
+      "clear": "Xoá bộ lọc",
+      "matchCount": "Khớp {count}/{total} thiết bị",
+      "emptyTitle": "Không có thiết bị nào khớp bộ lọc",
+      "emptyHint": "Thử serial, tên, mẫu máy hoặc kịch bản khác, hoặc bỏ lọc trạng thái."
+    },
     "health": {
       "agentLabel": "Agent",
       "streamLabel": "Video",
@@ -5589,6 +5602,7 @@
         "queued": "Hàng đợi",
         "active": "Hoạt động",
         "inactive": "Ngưng",
+        "offline": "Offline",
         "succeeded": "Thành công"
       },
       "releaseReasonLabels": {

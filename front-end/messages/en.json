@@ -2985,13 +2985,13 @@
       "selector": {
         "sectionTitle": "Find on-screen element",
         "pickFromScreen": "Pick from screen",
-        "autoFillHint": "Use “Pick from screen” or recording — class, app, and match rules are filled automatically. You usually only edit the main value (text, id…).",
+        "autoFillHint": "Pick from screen to autofill; edit the value only when needed.",
         "byLabel": "Match by",
-        "byDescriptionHint": "Matches the Android widget’s hidden content-desc label (screen-reader text), not necessarily what you see on screen. Facebook often puts group name + status here (e.g. “Claude VN, Public · 315K”). If the step fails, try “Visible text” instead.",
-        "valueLabel": "Value to match",
-        "valuePlaceholder": "e.g. Sign in, com.app:id/btn_login or {varToken}",
-        "clickableLabel": "Only tappable elements (buttons / links)",
-        "clickableDescription": "Android clickable=true — enable when you need a real button/link, not static label text. Auto-set when picking a tappable element from the screen.",
+        "byDescriptionHint": "Matches hidden content-desc. If wrong, try Text.",
+        "valueLabel": "Value",
+        "valuePlaceholder": "Enter text/id or {varToken}",
+        "clickableLabel": "Buttons / links only",
+        "clickableDescription": "Enable for tappable elements. Disable for text-only labels.",
         "advancedTitle": "Fine-tuning (optional)",
         "advancedHasValues": "{count} rules",
         "advancedIntro": "Most steps only need “Match by” and “Value” above. Open this when the tap misses, several similar elements exist, or you want to review auto-filled filters from screen pick.",
@@ -4731,6 +4731,19 @@
     "refreshErrorTitle": "Could not refresh data",
     "refreshErrorHint": "The last successful data is still shown.",
     "retry": "Retry",
+    "filters": {
+      "searchPlaceholder": "Search serial, name, model or scenario",
+      "allStatuses": "All activity",
+      "activityIdle": "Free",
+      "activityRunning": "Running a scenario",
+      "activityManual": "Manual / reserved",
+      "activityUnavailable": "Unreachable",
+      "allRuns": "All scenarios",
+      "clear": "Clear filters",
+      "matchCount": "{count}/{total} devices match",
+      "emptyTitle": "No device matches the filters",
+      "emptyHint": "Try another serial, name, model or scenario, or clear the activity filter."
+    },
     "health": {
       "agentLabel": "Agent",
       "streamLabel": "Video",
@@ -6057,6 +6070,7 @@
         "queued": "Queued",
         "active": "Active",
         "inactive": "Inactive",
+        "offline": "Offline",
         "succeeded": "Succeeded"
       },
       "releaseReasonLabels": {
